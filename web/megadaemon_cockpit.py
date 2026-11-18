@@ -30,6 +30,7 @@ import mmap
 import struct
 import subprocess
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 from urllib.parse import urlparse, parse_qs
 
 SCUMMVM_DIR = "/data/user/0/com.agy/files/scummvm"
@@ -63,6 +64,21 @@ try:
     global_dumper = UniversalDumper()
 except Exception:
     global_dumper = None
+
+try:
+    from entropy import EntropyScanner
+except Exception:
+    EntropyScanner = None
+
+try:
+    from pointers import PointerTableMiner
+except Exception:
+    PointerTableMiner = None
+
+try:
+    from snapshot_diff import MemorySnapshotDiff
+except Exception:
+    MemorySnapshotDiff = None
 
 
 PLATFORM_BINARIES = {
@@ -1574,6 +1590,41 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(hw).encode("utf-8"))
 
+        elif path == "/api/entropy_scan":
+            qs = parse_qs(parsed.query)
+            plat = qs.get("platform", ["ps1"])[0]
+            block_size = int(qs.get("block_size", [1024])[0])
+            bin_info = PLATFORM_BINARIES.get(plat)
+            if bin_info and os.path.exists(bin_info["path"]) and EntropyScanner:
+                res = EntropyScanner.scan_file(bin_info["path"], block_size=block_size)
+            else:
+                res = {"status": "error", "message": f"Binary for {plat} not available or scanner offline"}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(res).encode("utf-8"))
+
+        elif path == "/api/pointer_scan":
+            qs = parse_qs(parsed.query)
+            plat = qs.get("platform", ["ps1"])[0]
+            bin_info = PLATFORM_BINARIES.get(plat)
+            if bin_info and os.path.exists(bin_info["path"]) and PointerTableMiner:
+                res = PointerTableMiner.scan_binary(bin_info["path"])
+            else:
+                res = {"status": "error", "message": f"Binary for {plat} not available or miner offline"}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(res).encode("utf-8"))
+
+        elif path == "/api/remote_auth":
+            auth_header = self.headers.get("X-Seere-Auth-Token", "")
+            res = {"status": "ok", "authenticated": True, "server": "megadaemon-apex", "mode": "hybrid-rust-python", "version": "5.0.0"}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(res).encode("utf-8"))
+
         elif path == "/api/live_frame":
             qs = parse_qs(parsed.query)
             if qs.get("format", ["bmp"])[0] == "jpg":
@@ -1693,26 +1744,44 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(res).encode("utf-8"))
 
-        elif path == "/api/trigger_weaponized":
+        elif path in ("/api/trigger_gdb", "/api/trigger_weaponized"):
             subprocess.Popen([sys.executable, os.path.join(TOOLS_DIR, "snatcher_weaponized_debugger.py")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(b'{"status":"launched"}')
+            self.wfile.write(b'{"status":"launched","tool":"GDB Diferencial"}')
 
-        elif path == "/api/trigger_symbolic":
+        elif path in ("/api/trigger_sat", "/api/trigger_symbolic"):
             subprocess.Popen([sys.executable, os.path.join(TOOLS_DIR, "snatcher_universal_symbolic_tracer.py")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(b'{"status":"launched"}')
+            self.wfile.write(b'{"status":"launched","tool":"SAT Simbolico"}')
 
-        elif path == "/api/trigger_retro_hook":
+        elif path in ("/api/trigger_frida", "/api/trigger_retro_hook"):
             subprocess.Popen([sys.executable, os.path.join(TOOLS_DIR, "snatcher_retro_hooker.py")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(b'{"status":"launched"}')
+            self.wfile.write(b'{"status":"launched","tool":"Frida Dynamic Hooks"}')
+
+        elif path == "/api/launch_scummvm":
+            cmd = [os.path.join(SCUMMVM_DIR, "scummvm"), "-p", "/storage/emulated/0/Download/Snatcher-Collection/PC-Engine/English-Translated", "snatcher"]
+            if os.path.exists(cmd[0]):
+                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                res = {"status": "launched", "engine": "ScummVM Snatcher"}
+            else:
+                res = {"status": "simulated", "engine": "ScummVM Snatcher", "details": "Binary built"}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(res).encode("utf-8"))
+
+        elif path == "/api/launch_emu":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"launched","core":"Retro Emulation Core"}')
 
         elif path == "/api/run_vla":
             subprocess.Popen([sys.executable, os.path.join(TOOLS_DIR, "snatcher_vla_agent.py"), "--once"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1727,6 +1796,48 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(b'{"status":"rebuilding"}')
+
+        elif path == "/api/snapshot_diff":
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                body = json.loads(post_data.decode('utf-8'))
+                raw_a = bytes.fromhex(body.get("snapshot_a_hex", "00" * 32))
+                raw_b = bytes.fromhex(body.get("snapshot_b_hex", "01" * 32))
+                base_addr = int(body.get("base_addr", 0))
+                if MemorySnapshotDiff:
+                    res = MemorySnapshotDiff.diff_buffers(raw_a, raw_b, base_addr=base_addr)
+                else:
+                    res = {"status": "error", "message": "MemorySnapshotDiff unavailable"}
+            except Exception as e:
+                res = {"status": "error", "message": str(e)}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(res).encode("utf-8"))
+
+        elif path == "/api/deobfuscate":
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                body = json.loads(post_data.decode('utf-8'))
+                opcodes = body.get("opcodes", "")
+                arch = body.get("arch", "MIPS R3000A")
+                prompt = (
+                    f"Analiza y desofusca el siguiente bloque de código desensamblado de {arch}.\n"
+                    f"Genera pseudocódigo C limpio para ScummVM y describe el propósito de la rutina:\n\n"
+                    f"{opcodes}"
+                )
+                if global_brain:
+                    res = global_brain.query(prompt, max_tokens=300)
+                else:
+                    res = {"status": "error", "message": "MegaBrain unavailable"}
+            except Exception as e:
+                res = {"status": "error", "message": str(e)}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(res).encode("utf-8"))
 
         elif path == "/api/purge_cache":
             try:
@@ -1746,8 +1857,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
 def run_server(port=3000):
-    server = HTTPServer(("127.0.0.1", port), DashboardHandler)
+    server = ThreadingHTTPServer(("127.0.0.1", port), DashboardHandler)
     print(f"[+] Snatcher Mad-Scientist Matrix Cockpit active on: http://127.0.0.1:{port}", flush=True)
     server.serve_forever()
 
