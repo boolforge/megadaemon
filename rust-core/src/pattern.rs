@@ -14,7 +14,7 @@ pub struct PatternResult {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum PatternByte {
+pub enum PatternByte {
     Exact(u8),
     Wildcard,
 }

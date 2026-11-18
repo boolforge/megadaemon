@@ -306,6 +306,8 @@ def handle_chat_query(user_message, model_choice="local", privacy_mode=True, att
     sys.path.insert(0, TOOLS_DIR)
     try:
         import parasite_llm_router
+        import importlib
+        importlib.reload(parasite_llm_router)
         router = parasite_llm_router.get_router()
         prompt = user_message
         if attachment:
@@ -327,8 +329,12 @@ def handle_chat_query(user_message, model_choice="local", privacy_mode=True, att
         if res.get("status") == "OK":
             audit = ""
             if res.get("tool_executions"):
-                tools_str = ", ".join(f"{t['tool']} ({t.get('cmd', t.get('offset', ''))})" for t in res["tool_executions"])
-                audit = f"[Root Tools: {tools_str}]\n"
+                tool_lines = []
+                for t in res["tool_executions"]:
+                    tname = t.get("tool", "TOOL")
+                    arg = t.get("cmd") or t.get("query") or t.get("path") or t.get("task") or t.get("offset") or ""
+                    tool_lines.append(f"{tname}: {arg}" if arg else tname)
+                audit = f"[Ejecución de Herramientas: {', '.join(tool_lines)}]\n\n"
             response_text = f"{audit}{res['response']}"
         else:
             response_text = res.get("response", "Error procesando consulta local.")
@@ -372,12 +378,25 @@ def ensure_live_shm(platform="segacd"):
         except Exception:
             pass
 
+ACTIVE_TARGET = "segacd"
+
 def handle_runner_control(target, action):
+    global ACTIVE_TARGET
     target = target.lower() if target else "scummvm"
     if target not in RUNNER_STATES:
         target = "scummvm"
     
-    if action == "launch":
+    if action == "select":
+        ACTIVE_TARGET = target
+        return {
+            "status": "SELECTED",
+            "target": target,
+            "action": "select",
+            "active_target": ACTIVE_TARGET,
+            "runners": RUNNER_STATES,
+            "message": f"Target activo fijado a {target.upper()}."
+        }
+    elif action in ("launch", "start"):
         RUNNER_STATES[target]["status"] = "ACTIVE"
         RUNNER_STATES[target]["pid"] = 30000 + (abs(hash(target)) % 5000)
         ensure_live_shm(target)
@@ -387,6 +406,17 @@ def handle_runner_control(target, action):
             "action": "launch",
             "pid": RUNNER_STATES[target]["pid"],
             "message": f"Runner {target.upper()} launched with zero-copy VLA SHM hook."
+        }
+    elif action == "restart":
+        RUNNER_STATES[target]["status"] = "ACTIVE"
+        RUNNER_STATES[target]["pid"] = 30000 + (abs(hash(target)) % 5000)
+        ensure_live_shm(target)
+        return {
+            "status": "ACTIVE",
+            "target": target,
+            "action": "restart",
+            "pid": RUNNER_STATES[target]["pid"],
+            "message": f"Runner {target.upper()} reiniciado con zero-copy SHM."
         }
     elif action == "stop":
         RUNNER_STATES[target]["status"] = "STOPPED"
@@ -401,6 +431,7 @@ def handle_runner_control(target, action):
         return {
             "status": RUNNER_STATES[target]["status"],
             "target": target,
+            "active_target": ACTIVE_TARGET,
             "pid": RUNNER_STATES[target]["pid"],
             "runners": RUNNER_STATES
         }

@@ -16,8 +16,9 @@ checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "megadaemon-core"
-version = "6.0.0"
+version = "11.0.0"
 dependencies = [
+ "libc",
  "memmap2",
  "serde",
  "serde_json",

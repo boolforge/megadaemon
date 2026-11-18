@@ -1,0 +1,21 @@
+root ::= act | resp
+act ::= "A: " opform
+opform ::= "$ " shell | "? " query | "W " query | "C " path "#" num | "G " rx "#" path | "M " math | "@ " task | "S " shm | "K " mem | "! " lesson | "ASK " askq | "NONE " reason
+resp ::= "R: " [^\n]{1,400}
+
+key ::= [A-Za-z0-9_.\-]{1,32}
+val ::= [^\n]{1,200}
+off ::= [0-9]{1,8} | "0x" [0-9a-fA-F]{1,8}
+num ::= [0-9]{1,6}
+hexb ::= [0-9a-fA-F]{2,120}
+rx ::= [^\n#]{1,120}
+path ::= [^\n#]{1,180}
+math ::= [0-9a-fA-FxX+\-*/%() ]{1,60}
+shell ::= [^\n]{1,200}
+query ::= [^\n]{1,120}
+task ::= [^\n]{1,200}
+lesson ::= [^\n]{1,140}
+askq ::= [^\n]{1,160}
+reason ::= [^\n]{1,80}
+shm ::= "i" | "r " off " " num | "w " off " " hexb
+mem ::= "l" | "g " key | "d " key | "s " key "=" val

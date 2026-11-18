@@ -360,6 +360,15 @@
             <div class="channel-item" data-channel="control-center" onclick="switchChannel('control-center')">
                 <span>🚀</span><span>central-de-mando</span>
             </div>
+            <div class="channel-item" data-channel="rom-locator" onclick="switchChannel('rom-locator')">
+                <span>🎯</span><span>rom-locator-db</span>
+            </div>
+            <div class="channel-item" data-channel="runners-hub" onclick="switchChannel('runners-hub')">
+                <span>⚔️</span><span>runners-emuladores</span>
+            </div>
+            <div class="channel-item" data-channel="reverse-pipeline" onclick="switchChannel('reverse-pipeline')">
+                <span>🔬</span><span>pipeline-re-decomp</span>
+            </div>
             <div class="channel-item" data-channel="minidaemon-thermal" onclick="switchChannel('minidaemon-thermal')">
                 <span>🌡️</span><span>minidaemon-thermal</span>
             </div>
@@ -647,8 +656,15 @@
                     </div>
                 </div>
                 <div class="action-card">
-                    <div class="action-card-title">🧠 Diagnósticos & Mejoras del LLM Local (127.0.0.1:8080)</div>
+                    <div class="action-card-title">🧠 Diagnósticos & Mejoras del LLM Local (SEERE v11 GBNF + KV-Pinned)</div>
                     <pre class="hex-box" id="md-findings-box" style="white-space:pre-wrap;">// Esperando telemetría del MiniDaemon...</pre>
+                </div>
+                <div class="action-card" style="border-left: 4px solid var(--accent); margin-top:12px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                        <div class="action-card-title">⚡ Exynos 2100 NPU (26-TOPS /dev/vertex10 + EDEN FFI + KleidiAI SDOT)</div>
+                        <button class="pill-btn" onclick="probeExynosNpu()">🔍 Sondear NPU & Fijar Cores 4-7</button>
+                    </div>
+                    <pre class="hex-box" id="npu-telemetry-box" style="white-space:pre-wrap; margin-top:8px;">Pulsa "Sondear NPU" para verificar dlopen(/vendor/lib64/libeden_wrapper.so), /dev/vertex10 y KleidiAI SDOT en Rust.</pre>
                 </div>
             </div>
 
@@ -703,6 +719,97 @@
                         <div class="action-card-title" style="color:var(--text-header);">⚪ BACKLOG PRIORIZADO</div>
                         <div id="roadmapBacklogList" style="display:flex; flex-direction:column; gap:8px; margin-top:8px;"></div>
                     </div>
+            </div>
+
+            <!-- PANEL 13: ROM LOCATOR & TARGET SELECTOR -->
+            <div class="view-panel" id="panel-rom-locator">
+                <div style="font-weight:bold; color:var(--text-header); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                    <span>🎯 QUERY MEGADAEMON ROM LOCATOR & TARGET SELECTOR</span>
+                    <button class="pill-btn" onclick="queryRomLocator(true)">🔍 Escanear ROMs (Refresh)</button>
+                </div>
+                <div class="action-card" style="border-left: 4px solid var(--accent); margin-top:12px;">
+                    <div class="action-card-title">Base de Datos de ROMs & Binarios Snatcher</div>
+                    <div class="action-card-desc">Exploración automática en almacenamiento compartido (`/storage/emulated/0/Download/Snatcher-Collection`). Permite fijar el target activo para runners, emuladores y desensambladores con un solo clic.</div>
+                    <div style="margin-top:8px; font-size:0.85rem; font-weight:bold; color:var(--accent);" id="activeTargetBanner">Target Activo: SEGACD (Motorola 68000)</div>
+                </div>
+                <div class="control-grid" id="romListContainer" style="margin-top:12px;">
+                    <div class="action-card">Cargando base de datos de ROMs...</div>
+                </div>
+            </div>
+
+            <!-- PANEL 14: RUNNERS & EMULADORES WEAPONIZADOS -->
+            <div class="view-panel" id="panel-runners-hub">
+                <div style="font-weight:bold; color:var(--text-header); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                    <span>⚔️ RUNNERS HUB & EMULADORES WEAPONIZADOS (SHM HOOKS)</span>
+                    <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                        <button class="pill-btn" onclick="runParallelTest()">⚔️ Test Paralelo ScummVM vs Emu</button>
+                        <button class="pill-btn" onclick="loadRunnersHub()">🔄 Actualizar Estados</button>
+                    </div>
+                </div>
+                <div class="action-card" style="border-left: 4px solid var(--accent); margin-top:12px;">
+                    <div class="action-card-title">Gestión de Procesos & Tareas Autónomas</div>
+                    <div class="action-card-desc">Activa, pausa o reinicia los runners en segundo plano. Cada runner emite telemetría directa al bus SHM de 1024 KB a 60 FPS en sincronización de bus sin copia.</div>
+                </div>
+                <div class="control-grid" id="runnersContainer" style="margin-top:12px;">
+                    <div class="action-card">Cargando estados de runners...</div>
+                </div>
+                <div class="action-card" style="margin-top:16px;">
+                    <div class="action-card-title">Registro de Ejecución & Paridad de Telemetría</div>
+                    <pre class="hex-box" id="runnersLogBox" style="min-height:120px;">Listo. Selecciona un runner o ejecuta un test paralelo.</pre>
+                </div>
+            </div>
+
+            <!-- PANEL 15: PIPELINE AVANZADO DE INGENIERÍA INVERSA -->
+            <div class="view-panel" id="panel-reverse-pipeline">
+                <div style="font-weight:bold; color:var(--text-header); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                    <span>🔬 PIPELINE AUTOMATIZADO DE INGENIERÍA INVERSA & DESCOMPILACIÓN</span>
+                    <button class="pill-btn" onclick="triggerAction('megacycle')">⚡ MegaCycle 16-Fases</button>
+                </div>
+                <div class="control-grid" style="margin-top:12px;">
+                    <div class="action-card">
+                        <div class="action-card-title">🔬 Desensamblado Dinámico</div>
+                        <div class="action-card-desc">Desensambla el punto de entrada activo (M68K, Z80, HuC6280, SH-2, MIPS).</div>
+                        <button class="pill-btn" onclick="runReverseAction('disassemble')">🔬 Desensamblar</button>
+                    </div>
+                    <div class="action-card">
+                        <div class="action-card-title">📊 Escaneo de Entropía Shannon</div>
+                        <div class="action-card-desc">Calcula la densidad de información y detecta bloques comprimidos o cifrados.</div>
+                        <button class="pill-btn" onclick="runReverseAction('entropy')">📊 Calcular Entropía</button>
+                    </div>
+                    <div class="action-card">
+                        <div class="action-card-title">🎯 Localizador de Punteros & Tablas</div>
+                        <div class="action-card-desc">Rastrea tablas de salto y referencias relativas a scripts de diálogo.</div>
+                        <button class="pill-btn" onclick="runReverseAction('pointers')">🎯 Escanear Punteros</button>
+                    </div>
+                    <div class="action-card">
+                        <div class="action-card-title">🧩 Escaneo de AOB Patrones Hex</div>
+                        <div class="action-card-desc">Busca firmas de bytes (`Array of Bytes`) y funciones de renderizado.</div>
+                        <button class="pill-btn" onclick="runReverseAction('pattern')">🧩 Escanear Patrón</button>
+                    </div>
+                    <div class="action-card">
+                        <div class="action-card-title">🔓 Desofuscación de Textos Snatcher</div>
+                        <div class="action-card-desc">Aplica algoritmo XOR dinámico sobre bloques de script ofuscados.</div>
+                        <button class="pill-btn" onclick="runReverseAction('deobfuscate')">🔓 Desofuscar</button>
+                    </div>
+                    <div class="action-card">
+                        <div class="action-card-title">📦 Extractor Universal Dumper</div>
+                        <div class="action-card-desc">Extrae sub-archivos empaquetados en contenedores propietarios.</div>
+                        <button class="pill-btn" onclick="runReverseAction('dumper')">📦 Extraer Assets</button>
+                    </div>
+                    <div class="action-card">
+                        <div class="action-card-title">📑 Diff de Snapshots de RAM</div>
+                        <div class="action-card-desc">Compara dos capturas de memoria SHM para aislar variables modificadas.</div>
+                        <button class="pill-btn" onclick="runReverseAction('snapshot_diff')">📑 Comparar Snapshots</button>
+                    </div>
+                    <div class="action-card">
+                        <div class="action-card-title">❄️ Congelador de Memoria</div>
+                        <div class="action-card-desc">Bloquea direcciones de memoria para pruebas de invulnerabilidad o scripts.</div>
+                        <button class="pill-btn" onclick="runReverseAction('freeze')">❄️ Inspeccionar Locks</button>
+                    </div>
+                </div>
+                <div class="action-card" style="margin-top:16px;">
+                    <div class="action-card-title">Consola de Salida del Pipeline</div>
+                    <pre class="hex-box" id="pipelineOutputBox" style="min-height:160px;">Listo. Selecciona una acción de ingeniería inversa arriba.</pre>
                 </div>
             </div>
         </div>
@@ -887,9 +994,15 @@
             if (channelId === 'hex-viewer') loadHexDump(currentHexOffset);
             if (channelId === 'devlog-hitos') loadDevlog();
             if (channelId === 'roadmap-backlog') loadRoadmap();
+            if (channelId === 'rom-locator') queryRomLocator(false);
+            if (channelId === 'runners-hub') loadRunnersHub();
+            if (channelId === 'reverse-pipeline') loadReversePipeline();
         }
 
-        function switchPlatform(platKey) {
+        let activeTargetKey = 'segacd';
+
+        async function switchPlatform(platKey) {
+            activeTargetKey = platKey;
             document.querySelectorAll('.server-icon').forEach(el => {
                 el.classList.toggle('active', el.getAttribute('data-plat') === platKey);
             });
@@ -897,12 +1010,19 @@
                 el.classList.toggle('active', el.getAttribute('data-plat') === platKey);
             });
 
+            const banner = document.getElementById('activeTargetBanner');
+            if (banner) banner.innerText = 'Target Activo: ' + platKey.toUpperCase();
+
             const hexSel = document.getElementById('hexPlatSelect');
-            if (hexSel) {
-                hexSel.value = platKey;
-                switchChannel('hex-viewer');
-                loadHexDump(0);
-            }
+            if (hexSel) hexSel.value = platKey;
+
+            try {
+                await fetch('/api/runners/control', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ action: 'select', target: platKey })
+                });
+            } catch(e) { console.error(e); }
         }
 
         // =====================================================================
@@ -1274,9 +1394,235 @@
                             brBadge.innerText = '🔴 LOCAL LLM OFFLINE';
                         }
                     }
-                } catch (e) {}
-            } catch (e) {}
+        // =====================================================================
+        // 8. ROM LOCATOR & TARGET SELECTOR
+        // =====================================================================
+        async function queryRomLocator(forceRefresh) {
+            const container = document.getElementById('romListContainer');
+            if (!container) return;
+            container.innerHTML = '<div class="action-card">Escaneando almacenamiento y buscando ROMs...</div>';
+            try {
+                const res = await fetch('/api/locate_roms' + (forceRefresh ? '?refresh=1' : ''));
+                const data = await res.json();
+                const roms = data.discovered_roms || {};
+                const keys = Object.keys(roms);
+                if (keys.length === 0) {
+                    container.innerHTML = '<div class="action-card" style="color:var(--warning);">No se detectaron ROMs en /storage/emulated/0/Download/Snatcher-Collection.</div>';
+                    return;
+                }
+                const platNames = {
+                    'segacd': 'Sega CD (MegaCD M68K)',
+                    'pce': 'PC Engine CD-ROM² (HuC6280)',
+                    'saturn': 'Sega Saturn (Dual SH-2)',
+                    'ps1': 'PlayStation 1 (MIPS R3000A)',
+                    'msx2': 'MSX2 (Z80 / V9938)',
+                    'pc88': 'PC-8801 MKII SR (Z80 / OPNA)',
+                    'scummvm': 'ScummVM Snatcher Engine Core'
+                };
+                container.innerHTML = keys.map(k => {
+                    const r = roms[k];
+                    const sz = (r.size_bytes / (1024 * 1024)).toFixed(2);
+                    const isTarget = (k === activeTargetKey);
+                    return `
+                        <div class="action-card" style="border-left: 4px solid ${isTarget ? 'var(--accent)' : 'var(--text-muted)'};">
+                            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+                                <div class="action-card-title">${platNames[k] || k.toUpperCase()}</div>
+                                <span class="badge ${isTarget ? 'accent' : 'muted'}">${isTarget ? '🎯 TARGET ACTIVO' : k.toUpperCase()}</span>
+                            </div>
+                            <div style="font-size:0.8rem; color:var(--text-header); margin-top:4px; word-break:break-all;"><b>Archivo:</b> ${r.filename}</div>
+                            <div style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;"><b>Ruta:</b> ${r.path}</div>
+                            <div style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;"><b>Tamaño:</b> ${sz} MB | <b>Acceso:</b> 🟢 ${r.readable ? 'Lectura OK' : 'No legible'}</div>
+                            <div style="margin-top:10px; display:flex; gap:8px;">
+                                <button class="pill-btn" onclick="selectRomTarget('${k}', '${r.path}')" style="background:${isTarget ? 'var(--accent)' : 'var(--bg-card)'}; color:${isTarget ? 'var(--bg-main)' : 'var(--text-main)'};">🎯 Fijar como Target</button>
+                                <button class="pill-btn" onclick="inspectRomHex('${k}')">🔬 Ver Hex</button>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (e) {
+                container.innerHTML = `<div class="action-card" style="color:var(--danger);">Error consultando ROM locator: ${e.message}</div>`;
+            }
         }
+
+        function selectRomTarget(platKey, path) {
+            switchPlatform(platKey);
+            const banner = document.getElementById('activeTargetBanner');
+            if (banner) banner.innerText = `Target Activo: ${platKey.toUpperCase()} (${path})`;
+            queryRomLocator(false);
+        }
+
+        function inspectRomHex(platKey) {
+            switchPlatform(platKey);
+            switchChannel('hex-viewer');
+        }
+
+        // =====================================================================
+        // 9. RUNNERS HUB & EMULADORES WEAPONIZADOS
+        // =====================================================================
+        async function loadRunnersHub() {
+            const container = document.getElementById('runnersContainer');
+            if (!container) return;
+            try {
+                const res = await fetch('/api/runners/control', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ action: 'status' })
+                });
+                const data = await res.json();
+                const runners = data.runners || {};
+                const platDescs = {
+                    'scummvm': 'ScummVM Engine Re-implementation (C++)',
+                    'segacd': 'Genesis Plus GX Weaponized (M68K/Sub-CPU)',
+                    'pce': 'Mednafen PCE Engine Weaponized (HuC6280)',
+                    'saturn': 'YabaSanshiro Weaponized (Dual SH-2)',
+                    'ps1': 'DuckStation Weaponized (MIPS R3000A)',
+                    'msx2': 'fMSX Weaponized (Z80 / V9938)',
+                    'pc88': 'Quasi88 Weaponized (Z80 / YM2608 OPNA)'
+                };
+
+                container.innerHTML = Object.keys(runners).map(k => {
+                    const r = runners[k];
+                    const isActive = r.status === 'ACTIVE';
+                    const isReady = r.status === 'READY';
+                    const statusClass = isActive ? 'accent' : (isReady ? 'muted' : 'danger');
+                    return `
+                        <div class="action-card" style="border-left: 4px solid ${isActive ? 'var(--accent)' : 'var(--border-subtle)'};">
+                            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+                                <div class="action-card-title">${k.toUpperCase()} Runner</div>
+                                <span class="badge ${statusClass}">● ${r.status}</span>
+                            </div>
+                            <div style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">${platDescs[k] || ''}</div>
+                            <div style="font-size:0.75rem; color:var(--text-header); margin-top:4px;"><b>PID:</b> ${r.pid || '--'} | <b>SHM Link:</b> 🟢 ${r.vla_hook ? '1024KB VLA Hook' : 'Off'}</div>
+                            <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+                                <button class="pill-btn" onclick="controlRunner('${k}', 'launch')">▶️ Iniciar</button>
+                                <button class="pill-btn" onclick="controlRunner('${k}', 'stop')">⏹️ Detener</button>
+                                <button class="pill-btn" onclick="controlRunner('${k}', 'restart')">🔄 Reiniciar</button>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (e) {
+                container.innerHTML = `<div class="action-card" style="color:var(--danger);">Error cargando runners: ${e.message}</div>`;
+            }
+        }
+
+        async function controlRunner(target, action) {
+            const logBox = document.getElementById('runnersLogBox');
+            if (logBox) logBox.innerText = `Ejecutando acción '${action}' en runner '${target}'...`;
+            try {
+                const res = await fetch('/api/runners/control', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ action: action, target: target })
+                });
+                const data = await res.json();
+                if (logBox) logBox.innerText = JSON.stringify(data, null, 2);
+                loadRunnersHub();
+            } catch (e) {
+                if (logBox) logBox.innerText = `Error: ${e.message}`;
+            }
+        }
+
+        async function runParallelTest() {
+            const logBox = document.getElementById('runnersLogBox');
+            if (logBox) logBox.innerText = `Ejecutando test de comparación paralela masiva: ScummVM vs ${activeTargetKey.toUpperCase()}...`;
+            try {
+                const res = await fetch('/api/runners/parallel_test', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ target: activeTargetKey })
+                });
+                const data = await res.json();
+                if (logBox) {
+                    logBox.innerText = `=== RESULTADO DE TEST PARALELO WEAPONIZADO ===\n` +
+                        `• Plataforma comparada: ${data.target}\n` +
+                        `• Estado: ${data.status}\n` +
+                        `• Paridad de ejecución ScummVM: ${data.scummvm_parity}\n` +
+                        `• Cuadros sincronizados en SHM: ${data.delta_frames} frames\n` +
+                        `• Opcodes coincidentes: ${data.matching_opcodes}\n` +
+                        `• Divergencias AOB: ${data.aob_divergences}\n` +
+                        `• Mensaje: ${data.message}`;
+                }
+                loadRunnersHub();
+            } catch (e) {
+                if (logBox) logBox.innerText = `Error en test paralelo: ${e.message}`;
+            }
+        }
+
+        // =====================================================================
+        // 10. REVERSE ENGINEERING & DECOMPILATION PIPELINE
+        // =====================================================================
+        function loadReversePipeline() {
+            const outBox = document.getElementById('pipelineOutputBox');
+            if (outBox && outBox.innerText.includes('Listo')) {
+                outBox.innerText = `Pipeline de ingeniería inversa listo. Target activo actual: ${activeTargetKey.toUpperCase()}.\nPresiona cualquiera de los módulos arriba para disparar el análisis automático.`;
+            }
+        }
+
+        async function runReverseAction(action) {
+            const outBox = document.getElementById('pipelineOutputBox');
+            if (outBox) outBox.innerText = `Ejecutando módulo de ingeniería inversa [${action.toUpperCase()}] sobre target '${activeTargetKey}'...`;
+            try {
+                let res, data;
+                if (action === 'disassemble') {
+                    res = await fetch('/api/disassemble?platform=' + activeTargetKey);
+                    data = await res.json();
+                } else if (action === 'entropy') {
+                    res = await fetch('/api/entropy_scan?platform=' + activeTargetKey);
+                    data = await res.json();
+                } else if (action === 'pointers') {
+                    res = await fetch('/api/pointer_scan?platform=' + activeTargetKey);
+                    data = await res.json();
+                } else if (action === 'pattern') {
+                    res = await fetch('/api/pattern_scan', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ pattern: 'SNATCH', platform: activeTargetKey })
+                    });
+                    data = await res.json();
+                } else if (action === 'deobfuscate') {
+                    res = await fetch('/api/deobfuscate', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ platform: activeTargetKey })
+                    });
+                    data = await res.json();
+                } else if (action === 'dumper') {
+                    res = await fetch('/api/dumper_extract', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ action: 'extract', platform: activeTargetKey })
+                    });
+                    data = await res.json();
+                } else if (action === 'snapshot_diff') {
+                    res = await fetch('/api/snapshot_diff', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ platform: activeTargetKey })
+                    });
+                    data = await res.json();
+                } else if (action === 'freeze') {
+                    res = await fetch('/api/memory_freeze');
+                    data = await res.json();
+                }
+                if (outBox) outBox.innerText = JSON.stringify(data, null, 2);
+            } catch (e) {
+                if (outBox) outBox.innerText = `Error ejecutando ${action}: ${e.message}`;
+            }
+        }
+
+        async function probeExynosNpu() {
+            const box = document.getElementById('npu-telemetry-box');
+            if (box) box.innerText = 'Sondeando /dev/vertex10, dlopen(/vendor/lib64/libeden_wrapper.so) y afinidad KleidiAI Cores 4-7 en Rust...';
+            try {
+                const res = await fetch('/api/npu_status');
+                const data = await res.json();
+                if (box) box.innerText = JSON.stringify(data, null, 2);
+            } catch (e) {
+                if (box) box.innerText = 'Error en sondeo NPU: ' + e.message;
+            }
+        }
+
         setInterval(updateAllTelemetry, 3500);
         updateAllTelemetry();
     </script>

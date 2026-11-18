@@ -1,14 +1,15 @@
 [package]
 name = "megadaemon-core"
-version = "6.0.0"
+version = "11.0.0"
 edition = "2021"
 authors = ["MegaDaemon Engineering Team <megadaemon@agy.internal>"]
-description = "Native ARM64 High-Performance Reverse Engineering and Telemetry Engine for MegaDaemon v6.0 Apex"
+description = "Native ARM64 High-Performance Reverse Engineering, SEERE v11 GBNF Harness, Exynos 2100 NPU FFI Bridge, and Multi-Threaded Cockpit Server"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 memmap2 = "0.9"
+libc = "0.2"
 
 [profile.release]
 opt-level = 3

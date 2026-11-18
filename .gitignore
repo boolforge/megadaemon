@@ -5,6 +5,10 @@ client-seere/target/
 client-malphas/target/
 extracted/
 *.tmp
+*.lock
+state/audit.ndjson*
+state/cache.json*
+uploads/
 media/clip_*
 rust-core/target/
 scummvm.ini

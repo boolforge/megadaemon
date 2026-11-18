@@ -1,0 +1,9 @@
+[
+  {
+    "id": "task-1794997319765",
+    "prompt": "a otro llm para que analice la descompilaci\u00f3n de Snatcher en C++",
+    "timestamp": 1794997319.7656481,
+    "status": "QUEUED_FOR_SUPERIOR_AGENT",
+    "origin": "SEERE_LOCAL_HARNESS"
+  }
+]

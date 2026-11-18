@@ -1,0 +1,1 @@
+root ::= ("SI" | "NO" | "0" | "1" | "DEPENDE DEL CONTEXTO")
