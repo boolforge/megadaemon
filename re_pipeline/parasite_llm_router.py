@@ -1,21 +1,16 @@
 #!/usr/bin/env python3
 """
 =============================================================================
-SNATCHER PARASITIC LLM ROUTER & MULTI-MODEL COGNITIVE POLICY (v3.0)
+SEERE PHOENIX // AUTONOMOUS AGENTIC LLM ROUTER (v6.5 APEX)
 =============================================================================
-High-resilience, zero-cost parasitic cognitive intelligence layer for
-autonomous Snatcher reverse-engineering, bug hunting, and VLA playtesting.
+Autonomous, zero-cost cognitive intelligence layer for real-time systems
+reverse engineering, memory inspection, and root-level orchestration.
 
-Providers Supported ($0.00 Cost Guarantee):
-  1. Tier 0 [LOCAL]: Qwen 2.5 Coder 0.5B on 127.0.0.1:8080 (100% Offline, Zero-Leak Privacy).
-  2. Tier 1 [CLOUD-A]: Pollinations.ai (Rotating open AI endpoints, 0 API keys).
-  3. Tier 2 [CLOUD-B]: HuggingFace Public Serverless Free Models (Qwen/Llama open inference).
-  4. Tier 3 [CLOUD-C]: OpenRouter Free Tier (:free models).
-  5. Tier 4 [FALLBACK]: Local Rule-Based Reflex Heuristics.
-
-Privacy Mode:
-  When privacy_mode is TRUE, all network queries are strictly blocked and only
-  the local on-device Exynos 2100 instance on 127.0.0.1:8080 is queried.
+Core Architecture:
+  1. Tier 0 [LOCAL PRIMARY]: Qwen 2.5 Coder 0.5B on 127.0.0.1:8080 (100% Offline).
+  2. Native Root Tool Execution: Native capability to invoke `rish -c` with uid=0.
+  3. Zero-Copy SHM Reader: Direct memory introspection of snatcher_vla_shm.bin.
+  4. Multi-Turn ReAct Loop: Thought -> Tool Action -> Observation -> Final Analysis.
 =============================================================================
 """
 
@@ -25,245 +20,185 @@ import time
 import json
 import urllib.request
 import urllib.parse
+import subprocess
 
 LOCAL_LLM_URL = "http://127.0.0.1:8080/v1/chat/completions"
-POLLINATIONS_URL = "https://text.pollinations.ai/"
+SHM_PATH = "/data/local/tmp/snatcher_vla_shm.bin"
+
+AGENT_SYSTEM_PROMPT = """Eres SEERE PHOENIX, un agente avanzado de ingeniería inversa y análisis de sistemas ejecutándose directamente en Android 14 ARM64 (Exynos 2100).
+Tienes acceso a herramientas nativas con permisos elevados de root (uid=0) a través de Shizuku.
+Tus respuestas deben ser técnicas, precisas, analíticas, concisas y en español.
+
+HERRAMIENTAS DISPONIBLES:
+1. Para ejecutar comandos del sistema o diagnóstico como root:
+   ROOT_EXEC: <comando bash>
+   Ejemplo: ROOT_EXEC: id
+
+2. Para inspeccionar bytes de memoria compartida SHM (1024 KB):
+   READ_SHM: <offset_hex> <bytes_dec>
+   Ejemplo: READ_SHM: 0x0000 64
+
+Si necesitas información real del sistema, EMITE EXCLUSIVAMENTE LA LÍNEA DE LA HERRAMIENTA. Si no la requieres, responde directamente con tu análisis técnico conciso."""
+
 
 class ParasiteLLMRouter:
-    """Parasitic LLM router rotating through free local & cloud providers."""
-
     def __init__(self):
-        self.last_pollinations_call = 0
-        self.cooldown_pollinations = 5.0 # Gentle cooldown for public endpoints
+        self.privacy_mode = True  # Default strictly local offline
         self.total_queries = 0
         self.tier_stats = {
             "tier0_local": 0,
-            "tier1_pollinations": 0,
-            "tier2_hf": 0,
-            "tier3_openrouter": 0,
-            "tier4_fallback": 0
-        }
-        self.privacy_mode = False
-
-    def set_privacy_mode(self, enabled: bool):
-        self.privacy_mode = bool(enabled)
-
-    def list_providers(self):
-        return [
-            {
-                "id": "local",
-                "name": "Qwen 2.5 Coder 0.5B (Local On-Device Exynos 2100)",
-                "type": "local",
-                "privacy": "100% Offline / Zero-Data Leak",
-                "cost": "$0.00",
-                "status": "ONLINE (127.0.0.1:8080)",
-                "quota": "Unlimited / No Limits"
-            },
-            {
-                "id": "pollinations",
-                "name": "Pollinations.ai Free Public Gateway",
-                "type": "cloud",
-                "privacy": "Open Public Gateway",
-                "cost": "$0.00",
-                "status": "ONLINE",
-                "quota": "Rotativo Ilimitado (Zero API Key)"
-            },
-            {
-                "id": "openrouter_free",
-                "name": "OpenRouter Free Tier (:free models)",
-                "type": "cloud",
-                "privacy": "Free SaaS Proxy",
-                "cost": "$0.00",
-                "status": "ONLINE",
-                "quota": "DeepSeek-R1, Qwen 2.5 Coder 32B, Llama 3.3 70B (:free)"
-            },
-            {
-                "id": "groq_free",
-                "name": "Groq Cloud Free Tier (LPUs ultra-rápidos)",
-                "type": "cloud",
-                "privacy": "Cloud API",
-                "cost": "$0.00",
-                "status": "AVAILABLE",
-                "quota": "30 RPM / 14,400 RPD (Llama 3.3 70B @ 300+ tok/s)"
-            },
-            {
-                "id": "cloudflare_workers_ai",
-                "name": "Cloudflare Workers AI",
-                "type": "cloud",
-                "privacy": "Cloud API",
-                "cost": "$0.00",
-                "status": "AVAILABLE",
-                "quota": "10,000 Neurons / día gratis (Qwen, Llama 3.3)"
-            },
-            {
-                "id": "github_models",
-                "name": "GitHub Models (Free Tier)",
-                "type": "cloud",
-                "privacy": "Cloud API (Personal Access Token)",
-                "cost": "$0.00",
-                "status": "AVAILABLE",
-                "quota": "150 req/día (GPT-4o-mini, Llama 3.3 70B, Phi-3)"
-            },
-            {
-                "id": "huggingface_free",
-                "name": "Hugging Face Inference API Serverless",
-                "type": "cloud",
-                "privacy": "Cloud API",
-                "cost": "$0.00",
-                "status": "AVAILABLE",
-                "quota": "Rate-limited gratis para miles de modelos"
-            },
-            {
-                "id": "duckduckgo_ai",
-                "name": "DuckDuckGo AI Chat (Anonymous Gateway)",
-                "type": "cloud",
-                "privacy": "Anonymous Free Proxy",
-                "cost": "$0.00",
-                "status": "AVAILABLE",
-                "quota": "Ilimitado sin registro (Claude 3 Haiku, Llama 3.3)"
-            },
-            {
-                "id": "google_ai_studio",
-                "name": "Google AI Studio Free Tier",
-                "type": "cloud",
-                "privacy": "Free Tier API",
-                "cost": "$0.00",
-                "status": "AVAILABLE",
-                "quota": "15 RPM gratis (Gemini 2.0 Flash / Pro)"
-            },
-            {
-                "id": "mistral_free",
-                "name": "Mistral AI La Plateforme (Free Experiment)",
-                "type": "cloud",
-                "privacy": "Free Tier API",
-                "cost": "$0.00",
-                "status": "AVAILABLE",
-                "quota": "Codestral, Mistral-Small gratis"
-            },
-            {
-                "id": "hybrid",
-                "name": "Híbrido Multi-Tier (Local Fast Triage + Cloud Deep Reasoning)",
-                "type": "hybrid",
-                "privacy": "Dynamic Balanced",
-                "cost": "$0.00",
-                "status": "ONLINE",
-                "quota": "Auto-enrutamiento según latencia y privacidad"
-            }
-        ]
-
-    def query(self, prompt, system_prompt=None, max_tokens=128, temperature=0.3, force_provider=None):
-        self.total_queries += 1
-        sys_msg = system_prompt or "You are the cybernetic Snatcher VLA intelligence running on Samsung Exynos 2100. Provide concise, expert tactical answers in Spanish."
-
-        # If Privacy Mode is active or local is explicitly requested:
-        if self.privacy_mode or force_provider == "local":
-            local_res = self._query_local_qwen(prompt, sys_msg, max_tokens, temperature)
-            if local_res:
-                self.tier_stats["tier0_local"] += 1
-                return {
-                    "provider": "Qwen 2.5 Coder 0.5B (Local Exynos 2100)",
-                    "tier": 0,
-                    "response": local_res,
-                    "privacy": "100% OFFLINE",
-                    "cost": "$0.00"
-                }
-            # Fallback to local heuristic without network
-            self.tier_stats["tier4_fallback"] += 1
-            return {
-                "provider": "Local Reflex Heuristic Fallback",
-                "tier": 4,
-                "response": self._heuristic_fallback(prompt),
-                "privacy": "100% OFFLINE",
-                "cost": "$0.00"
-            }
-
-        # If cloud is explicitly requested or default hybrid order:
-        if force_provider == "pollinations" or force_provider is None or force_provider == "hybrid":
-            now = time.time()
-            if (now - self.last_pollinations_call) >= self.cooldown_pollinations:
-                cloud_res = self._query_pollinations(prompt, sys_msg)
-                if cloud_res:
-                    self.last_pollinations_call = time.time()
-                    self.tier_stats["tier1_pollinations"] += 1
-                    return {
-                        "provider": "Pollinations.ai (Free Cloud LLM)",
-                        "tier": 1,
-                        "response": cloud_res,
-                        "privacy": "CLOUD",
-                        "cost": "$0.00"
-                    }
-
-        # Attempt Tier 0: High-speed local Qwen 2.5 Coder
-        local_res = self._query_local_qwen(prompt, sys_msg, max_tokens, temperature)
-        if local_res:
-            self.tier_stats["tier0_local"] += 1
-            return {
-                "provider": "Qwen 2.5 Coder 0.5B (Local Exynos 2100)",
-                "tier": 0,
-                "response": local_res,
-                "privacy": "100% OFFLINE",
-                "cost": "$0.00"
-            }
-
-        # Fallback to reflex heuristics
-        self.tier_stats["tier4_fallback"] += 1
-        return {
-            "provider": "Reflex Heuristic Fallback",
-            "tier": 4,
-            "response": self._heuristic_fallback(prompt),
-            "privacy": "100% OFFLINE",
-            "cost": "$0.00"
+            "tier1_agent_root": 0,
+            "tier2_error": 0
         }
 
-    def _query_local_qwen(self, prompt, sys_msg, max_tokens, temperature):
+    def execute_root_tool(self, cmd):
+        """Execute a bash command via Shizuku rish with root privileges."""
+        try:
+            res = subprocess.run(
+                ["rish", "-c", cmd],
+                capture_output=True,
+                text=True,
+                timeout=12
+            )
+            out = res.stdout.strip()
+            err = res.stderr.strip()
+            # Clean up Shizuku welcome message
+            if "Entering shell..." in err:
+                err = err.replace("Entering shell...", "").strip()
+            result = out if out else err
+            return result if result else "(comando ejecutado sin salida)"
+        except subprocess.TimeoutExpired:
+            return "ERROR: Tiempo de espera agotado (12s) en comando root."
+        except Exception as e:
+            return f"ERROR ejecutando comando root: {e}"
+
+    def read_shm_memory(self, offset_str, size_str):
+        """Read arbitrary bytes from the live VLA SHM buffer."""
+        try:
+            offset = int(offset_str, 16) if offset_str.startswith("0x") else int(offset_str)
+            size = min(int(size_str), 1024)
+            if not os.path.exists(SHM_PATH):
+                return f"ERROR: Búfer SHM no encontrado en {SHM_PATH}"
+            with open(SHM_PATH, "rb") as f:
+                f.seek(offset)
+                data = f.read(size)
+            hex_dump = " ".join(f"{b:02X}" for b in data)
+            ascii_dump = "".join(chr(b) if 32 <= b <= 126 else "." for b in data)
+            return f"SHM[0x{offset:06X}..+{size}B]:\nHEX:   {hex_dump}\nASCII: {ascii_dump}"
+        except Exception as e:
+            return f"ERROR leyendo SHM: {e}"
+
+    def _call_llama(self, messages, max_tokens=96, temperature=0.2):
+        """Query llama-server endpoint on port 8080."""
         payload = {
             "model": "qwen2.5-coder",
-            "messages": [
-                {"role": "system", "content": sys_msg},
-                {"role": "user", "content": prompt}
-            ],
-            "max_tokens": max_tokens or 80,
+            "messages": messages,
+            "max_tokens": max_tokens,
             "temperature": temperature
         }
-        try:
-            req = urllib.request.Request(
-                LOCAL_LLM_URL,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"}
-            )
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                return data["choices"][0]["message"]["content"].strip()
-        except Exception:
-            return None
+        req = urllib.request.Request(
+            LOCAL_LLM_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data["choices"][0]["message"]["content"].strip()
 
-    def _query_pollinations(self, prompt, sys_msg):
-        combined = f"{sys_msg}\n\nPregunta: {prompt}\nResponde en 1 o 2 oraciones."
-        url = POLLINATIONS_URL + urllib.parse.quote(combined)
-        try:
-            req = urllib.request.Request(
-                url,
-                headers={"User-Agent": "SnatcherVLA/3.0 (Android; Linux aarch64)"}
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                text = resp.read().decode("utf-8").strip()
-                if text and "Free limit reached" not in text and "SERVICE_UNAVAILABLE" not in text:
-                    return text
-        except Exception:
-            pass
-        return None
+    def query_agent(self, prompt, allow_tools=True, max_turns=3):
+        """
+        Autonomous ReAct Agent Loop:
+        Executes real tools on demand and feeds observations back to the LLM.
+        """
+        self.total_queries += 1
+        start_time = time.time()
+        tool_audit = []
 
-    def _heuristic_fallback(self, prompt):
-        p = prompt.lower()
-        if "turbocycle" in p or "vla" in p or "shm" in p:
-            return "Control de ciclo de fotogramas nominal. Memoria compartida SHM avanzando a 60 FPS con sincronización de bus."
-        if "audio" in p or "orejas" in p or "sonido" in p:
-            return "Espectrograma de audio verificado: formantes de voz de Norio Wakamoto y jingle de Konami SCC sincronizados."
-        if "phone" in p or "telefono" in p or "videophone" in p:
-            return "Llamada entrante detectada. Responder inmediatamente mediante Botón Confirmar."
-        if "investigate" in p or "junker" in p or "examinar" in p:
-            return "Examinar escenario principal y consultar con Metal Gear para nuevas pistas."
-        return "Avanzar diálogo y sincronizar con ciclo de reloj de hardware."
+        messages = [
+            {"role": "system", "content": AGENT_SYSTEM_PROMPT},
+            {"role": "user", "content": "Verifica si eres root con id"},
+            {"role": "assistant", "content": "ROOT_EXEC: id"},
+            {"role": "user", "content": "OBSERVACIÓN DEL SISTEMA (root):\nuid=0(root) gid=0(root) groups=0(root)\n\nCon esta información, continúa el análisis o concluye."},
+            {"role": "assistant", "content": "Acceso root confirmado en el entorno Android. UID y GID establecidos en 0 (root)."},
+            {"role": "user", "content": prompt}
+        ]
+
+        final_response = ""
+        try:
+            for turn in range(max_turns):
+                model_reply = self._call_llama(messages, max_tokens=96)
+
+                # Check for ROOT_EXEC tool trigger
+                if allow_tools and "ROOT_EXEC:" in model_reply:
+                    lines = model_reply.split("\n")
+                    exec_cmd = None
+                    for line in lines:
+                        if "ROOT_EXEC:" in line:
+                            exec_cmd = line.split("ROOT_EXEC:")[1].strip()
+                            break
+                    if exec_cmd:
+                        tool_out = self.execute_root_tool(exec_cmd)
+                        tool_audit.append({"tool": "ROOT_EXEC", "cmd": exec_cmd, "output": tool_out[:300]})
+                        messages.append({"role": "assistant", "content": f"ROOT_EXEC: {exec_cmd}"})
+                        messages.append({"role": "user", "content": f"OBSERVACIÓN DEL SISTEMA (root):\n{tool_out}\n\nCon esta información, continúa el análisis o concluye."})
+                        self.tier_stats["tier1_agent_root"] += 1
+                        continue
+
+                # Check for READ_SHM tool trigger
+                if allow_tools and "READ_SHM:" in model_reply:
+                    parts = model_reply.split("READ_SHM:")[1].strip().split()
+                    if len(parts) >= 2:
+                        tool_out = self.read_shm_memory(parts[0], parts[1])
+                        tool_audit.append({"tool": "READ_SHM", "offset": parts[0], "size": parts[1], "output": tool_out[:300]})
+                        messages.append({"role": "assistant", "content": f"READ_SHM: {parts[0]} {parts[1]}"})
+                        messages.append({"role": "user", "content": f"OBSERVACIÓN DE MEMORIA (SHM):\n{tool_out}\n\nCon esta información, continúa el análisis o concluye."})
+                        self.tier_stats["tier1_agent_root"] += 1
+                        continue
+
+                # Normal text completion
+                final_response = model_reply
+                break
+
+            if not final_response:
+                final_response = model_reply
+
+            latency = int((time.time() - start_time) * 1000)
+            self.tier_stats["tier0_local"] += 1
+
+            return {
+                "status": "OK",
+                "provider": "Qwen 2.5 Coder 0.5B (Local ReAct Agent)",
+                "response": final_response,
+                "tool_executions": tool_audit,
+                "latency_ms": latency,
+                "privacy": "100% OFFLINE (Root Shizuku Active)"
+            }
+
+        except urllib.error.URLError as e:
+            self.tier_stats["tier2_error"] += 1
+            return {
+                "status": "ERROR",
+                "provider": "Local Host 127.0.0.1:8080",
+                "response": f"Fallo de conexión con llama-server (127.0.0.1:8080): {e}. Asegúrese de que el daemon esté activo.",
+                "tool_executions": [],
+                "latency_ms": int((time.time() - start_time) * 1000),
+                "privacy": "OFFLINE"
+            }
+        except Exception as e:
+            self.tier_stats["tier2_error"] += 1
+            return {
+                "status": "ERROR",
+                "provider": "Local Agent Engine",
+                "response": f"Error interno en ejecución del agente: {e}",
+                "tool_executions": [],
+                "latency_ms": int((time.time() - start_time) * 1000),
+                "privacy": "OFFLINE"
+            }
+
+    def query(self, prompt, system_prompt=None, max_tokens=128, temperature=0.3, force_provider=None):
+        """Standard query interface for backwards compatibility with MegaDaemon."""
+        return self.query_agent(prompt, allow_tools=True)
+
 
 _GLOBAL_ROUTER = None
 
@@ -273,22 +208,23 @@ def get_router():
         _GLOBAL_ROUTER = ParasiteLLMRouter()
     return _GLOBAL_ROUTER
 
-def query_parasite_router(prompt, system_prompt=None, preferred_tier=0, privacy_mode=False):
+
+def query_parasite_router(prompt, preferred_tier=0, privacy_mode=True):
+    """Bridge for megadaemon_cockpit and legacy endpoints."""
     router = get_router()
-    router.set_privacy_mode(privacy_mode)
-    force_p = "local" if (preferred_tier == 0 or privacy_mode) else ("pollinations" if preferred_tier == 1 else None)
-    res = router.query(prompt, system_prompt=system_prompt, force_provider=force_p)
-    return res.get("response", "Sin respuesta")
+    res = router.query_agent(prompt)
+    if res.get("status") == "OK":
+        audit = ""
+        if res.get("tool_executions"):
+            tools_str = ", ".join(f"{t['tool']} ({t.get('cmd', t.get('offset', ''))})" for t in res["tool_executions"])
+            audit = f"[Root Tools: {tools_str}]\n"
+        return f"{audit}{res['response']}"
+    return res.get("response", "Error procesando consulta con el agente local")
+
 
 if __name__ == "__main__":
-    print("=" * 70)
-    print("  SNATCHER PARASITIC LLM ROUTER TEST v3.0")
-    print("=" * 70)
-    router = ParasiteLLMRouter()
-    for prov in router.list_providers():
-        print(f"[{prov['id']}] {prov['name']} - {prov['privacy']} ({prov['status']})")
-    print("-" * 70)
-    res = router.query("Explica el papel de Gillian Seed en Snatcher.", force_provider="local")
-    print(f"[+] Provider: {res['provider']} (Tier {res['tier']}, Privacy: {res.get('privacy')})")
-    print(f"[+] Answer: {res['response']}")
-    print("=" * 70)
+    router = get_router()
+    test_query = sys.argv[1] if len(sys.argv) > 1 else "Comprueba si tienes permisos root con el comando id y muestra el paquete de Seere."
+    print(f"=== TESTING SEERE PHOENIX AGENT: '{test_query}' ===")
+    res = router.query_agent(test_query)
+    print(json.dumps(res, indent=2, ensure_ascii=False))
