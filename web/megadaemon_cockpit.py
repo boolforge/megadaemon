@@ -100,6 +100,12 @@ try:
 except Exception:
     RomLocator = None
 
+try:
+    from memory_freezer import MemoryFreezer
+    freezer = MemoryFreezer()
+except Exception:
+    freezer = None
+
 
 PLATFORM_BINARIES = {
     "pce": {"name": "PC Engine", "path": os.path.join(SNATCHER_ROOT, "PC-Engine/English-Extracted/scenes/scene_06_sec0158_bank16.bin"), "arch": "HuC6280 @ 7.16MHz"},
@@ -1710,6 +1716,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"plugins": plugs, "total": len(plugs)}).encode("utf-8"))
 
+        elif path == "/api/memory_freeze":
+            locks = freezer.list_locks() if freezer else []
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"locks": locks, "count": len(locks)}).encode("utf-8"))
+
         elif path == "/api/remote_auth":
             auth_header = self.headers.get("X-Seere-Auth-Token", "")
             res = {"status": "ok", "authenticated": True, "server": "megadaemon-apex", "mode": "hybrid-rust-python", "version": "6.0.0"}
@@ -1947,6 +1960,39 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     res = plugin_registry.execute_hook(plug_name, hook_name, *args)
                 else:
                     res = {"status": "error", "message": "PluginRegistry offline"}
+            except Exception as e:
+                res = {"status": "error", "message": str(e)}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(res).encode("utf-8"))
+
+        elif path == "/api/memory_freeze":
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                body = json.loads(post_data.decode('utf-8'))
+                action = body.get("action", "add")
+                lock_id = body.get("lock_id", f"lock_{int(time.time()*1000)}")
+                if not freezer:
+                    res = {"status": "error", "message": "MemoryFreezer offline"}
+                elif action == "add":
+                    target = body.get("target", SHM_FILE)
+                    offset = int(body.get("offset", 0))
+                    val_hex = body.get("value_hex", "00")
+                    desc = body.get("description", "")
+                    val_bytes = bytes.fromhex(val_hex)
+                    res = freezer.add_lock(lock_id, target, offset, val_bytes, desc)
+                elif action == "remove":
+                    res = freezer.remove_lock(lock_id)
+                elif action == "toggle":
+                    active = body.get("active")
+                    res = freezer.toggle_lock(lock_id, active)
+                elif action == "clear":
+                    freezer.clear()
+                    res = {"status": "ok", "message": "All locks cleared"}
+                else:
+                    res = {"status": "error", "message": f"Unknown action: {action}"}
             except Exception as e:
                 res = {"status": "error", "message": str(e)}
             self.send_response(200)
