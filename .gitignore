@@ -5,3 +5,4 @@ client-seere/target/
 client-malphas/target/
 extracted/
 *.tmp
+media/clip_*
