@@ -1,4 +1,7 @@
-use crate::{deobfuscate, disasm, entropy, freezer, npu_bridge, pattern, pointers, rom_locator, seere_v11, shm, snapshot};
+use crate::{
+    bindiff, cfg_lifter, crypto_scan, deobfuscate, disasm, entropy, freezer, hw_mapper, npu_bridge,
+    pattern, pointers, rea_assistant, rom_locator, seere_v11, shm, snapshot, unifier,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -71,14 +74,14 @@ fn resolve_target_file(plat: &str) -> (String, String, String) {
     if let Some(entry) = rom_locator::resolve_binary(&key) {
         return (entry.path, entry.platform_name, entry.arch);
     }
-    let (name, arch, _) = rom_locator::platform_metadata(&key);
+    let (name, arch, _, _, _) = rom_locator::platform_metadata(&key);
     let fallback = match key.as_str() {
-        "ps1" => "/storage/emulated/0/Download/Snatcher-Collection/PlayStation/English-Translated/Extracted-Files/SLPS_001.54",
-        "saturn" => "/storage/emulated/0/Download/Snatcher-Collection/Sega-Saturn/Original-Japan/MAIN_L.BIN",
-        "pce" => "/storage/emulated/0/Download/Snatcher-Collection/PC-Engine/English-Extracted/scenes/scene_06_sec0158_bank16.bin",
-        "msx2" => "/storage/emulated/0/Download/Snatcher-Collection/MSX2/Extracted-Files/Disk0/SNATCHER.COM",
-        "pc88" => "/storage/emulated/0/Download/Snatcher-Collection/PC88/Disks/Snatcher (1988)(Konami)(Disk 1 of 5)(Program Disk).d88",
-        _ => "/storage/emulated/0/Download/Snatcher-Collection/SegaCD/Original-USA/SUBCODE.BIN",
+        "ps1" => "/data/user/0/com.agy/files/re-research/bin/ps1_slps.bin",
+        "saturn" => "/data/user/0/com.agy/files/re-research/bin/saturn_main.bin",
+        "pce" => "/data/user/0/com.agy/files/re-research/bin/pce_overlay.bin",
+        "msx2" => "/data/user/0/com.agy/files/re-research/bin/msx2_com.bin",
+        "pc88" => "/data/user/0/com.agy/files/re-research/bin/pc88_boot.bin",
+        _ => "/data/user/0/com.agy/files/re-research/bin/scd_subcode.bin",
     };
     (fallback.to_string(), name.to_string(), arch.to_string())
 }
@@ -384,7 +387,48 @@ fn handle_client(mut stream: TcpStream) {
             }
             "/api/memory_freeze" => {
                 let locks = freezer::list_locks();
-                send_json(&mut stream, &json!({ "locks": locks, "count": locks.len(), "engine": "rust-60hz-v11.0" }));
+                send_json(&mut stream, &json!({ "locks": locks, "count": locks.len(), "engine": "rust-60hz-v12.0" }));
+            }
+            "/api/unifier_status" => {
+                let rep = unifier::scan_unified_ecosystem();
+                send_json(&mut stream, &serde_json::to_value(rep).unwrap());
+            }
+            "/api/rea_analyze" => {
+                let plat = qs.get("platform").map(|s| s.as_str()).unwrap_or("segacd");
+                let q = qs.get("query").map(|s| s.as_str()).unwrap_or("");
+                let max_r = qs.get("max").and_then(|s| s.parse::<usize>().ok()).unwrap_or(5);
+                let rep = rea_assistant::analyze_ghidra_corpus(plat, q, max_r);
+                send_json(&mut stream, &serde_json::to_value(rep).unwrap());
+            }
+            "/api/cfg_lift" => {
+                let plat = qs.get("platform").map(|s| s.as_str()).unwrap_or("segacd");
+                let offset = qs.get("offset").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                let count = qs.get("count").and_then(|s| s.parse::<usize>().ok()).unwrap_or(28);
+                let (file_path, plat_name, arch) = resolve_target_file(plat);
+                match cfg_lifter::lift_cfg(plat, &plat_name, &arch, &file_path, offset, count) {
+                    Ok(rep) => send_json(&mut stream, &serde_json::to_value(rep).unwrap()),
+                    Err(e) => send_json(&mut stream, &json!({"status": "error", "message": e})),
+                }
+            }
+            "/api/bindiff" => {
+                let plat = qs.get("platform").map(|s| s.as_str()).unwrap_or("segacd");
+                let rep = bindiff::run_cross_platform_bindiff(plat);
+                send_json(&mut stream, &serde_json::to_value(rep).unwrap());
+            }
+            "/api/hw_mmio" => {
+                let plat = qs.get("platform").map(|s| s.as_str()).unwrap_or("segacd");
+                let (_, _, _, c_path, _) = rom_locator::platform_metadata(&plat.to_lowercase());
+                let sample = fs::read_to_string(c_path)
+                    .map(|s| s[..s.len().min(65536)].to_string())
+                    .unwrap_or_default();
+                let rep = hw_mapper::analyze_text_for_mmio_and_structs(plat, &sample);
+                send_json(&mut stream, &serde_json::to_value(rep).unwrap());
+            }
+            "/api/crypto_scan" => {
+                let plat = qs.get("platform").map(|s| s.as_str()).unwrap_or("segacd");
+                let (file_path, _, _) = resolve_target_file(plat);
+                let rep = crypto_scan::scan_crypto_and_encodings(plat, &file_path);
+                send_json(&mut stream, &serde_json::to_value(rep).unwrap());
             }
             "/api/input" => {
                 let mask = qs.get("mask").and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);

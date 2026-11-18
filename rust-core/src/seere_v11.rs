@@ -23,18 +23,21 @@ pub struct OpSpec {
 }
 
 pub const OP_SPEC: &[OpSpec] = &[
-    OpSpec { tok: "$",    name: "ROOT_EXEC",    help: "shell",        untrusted_ok: false },
-    OpSpec { tok: "?",    name: "WEB_SEARCH",   help: "web search",   untrusted_ok: true  },
-    OpSpec { tok: "W",    name: "WIKI_SEARCH",  help: "wiki search",  untrusted_ok: true  },
-    OpSpec { tok: "C",    name: "CHUNK_READ",   help: "read file",    untrusted_ok: true  },
-    OpSpec { tok: "G",    name: "GREP_FIND",    help: "search files", untrusted_ok: true  },
-    OpSpec { tok: "M",    name: "MATH_EVAL",    help: "math",         untrusted_ok: false },
-    OpSpec { tok: "@",    name: "DELEGATE_LLM", help: "bigger model", untrusted_ok: false },
-    OpSpec { tok: "S",    name: "SHM_OP",       help: "shm",          untrusted_ok: false },
-    OpSpec { tok: "K",    name: "MEM_OP",       help: "mem",          untrusted_ok: false },
-    OpSpec { tok: "!",    name: "NOTE_ADD",     help: "note",         untrusted_ok: false },
-    OpSpec { tok: "ASK",  name: "ASK",          help: "user",         untrusted_ok: false },
-    OpSpec { tok: "NONE", name: "NONE",         help: "stop",         untrusted_ok: false },
+    OpSpec { tok: "$",    name: "ROOT_EXEC",     help: "shell",         untrusted_ok: false },
+    OpSpec { tok: "?",    name: "WEB_SEARCH",    help: "web search",    untrusted_ok: true  },
+    OpSpec { tok: "W",    name: "WIKI_SEARCH",   help: "wiki search",   untrusted_ok: true  },
+    OpSpec { tok: "C",    name: "CHUNK_READ",    help: "read file",     untrusted_ok: true  },
+    OpSpec { tok: "G",    name: "GREP_FIND",     help: "search files",  untrusted_ok: true  },
+    OpSpec { tok: "M",    name: "MATH_EVAL",     help: "math",          untrusted_ok: false },
+    OpSpec { tok: "D",    name: "DISASM_CFG",    help: "cfg+disasm",    untrusted_ok: false },
+    OpSpec { tok: "F",    name: "GHIDRA_FUNC",   help: "ghidra decomp", untrusted_ok: false },
+    OpSpec { tok: "X",    name: "XPLAT_BINDIFF", help: "bindiff+mmio",  untrusted_ok: false },
+    OpSpec { tok: "@",    name: "DELEGATE_LLM",  help: "bigger model",  untrusted_ok: false },
+    OpSpec { tok: "S",    name: "SHM_OP",        help: "shm",           untrusted_ok: false },
+    OpSpec { tok: "K",    name: "MEM_OP",        help: "mem",           untrusted_ok: false },
+    OpSpec { tok: "!",    name: "NOTE_ADD",      help: "note",          untrusted_ok: false },
+    OpSpec { tok: "ASK",  name: "ASK",           help: "user",          untrusted_ok: false },
+    OpSpec { tok: "NONE", name: "NONE",          help: "stop",          untrusted_ok: false },
 ];
 
 pub const ARG_RULES: &str = r#"
@@ -66,6 +69,9 @@ pub fn build_act_grammar() -> String {
             "MATH_EVAL" => format!("\"{} \" math", ch),
             "CHUNK_READ" => format!("\"{} \" path \"#\" num", ch),
             "GREP_FIND" => format!("\"{} \" rx \"#\" path", ch),
+            "DISASM_CFG" => format!("\"{} \" key \"#\" off", ch),
+            "GHIDRA_FUNC" => format!("\"{} \" key \"#\" query", ch),
+            "XPLAT_BINDIFF" => format!("\"{} \" key", ch),
             "ROOT_EXEC" => format!("\"{} \" shell", ch),
             "WEB_SEARCH" | "WIKI_SEARCH" => format!("\"{} \" query", ch),
             "DELEGATE_LLM" => format!("\"{} \" task", ch),
@@ -696,6 +702,9 @@ impl Arsenal {
             },
             "CHUNK_READ" => self.chunk_read(&arg),
             "GREP_FIND" => self.grep_find(&arg),
+            "DISASM_CFG" => self.disasm_cfg(&arg),
+            "GHIDRA_FUNC" => self.ghidra_func(&arg),
+            "XPLAT_BINDIFF" => self.xplat_bindiff(&arg),
             "SHM_INFO" => self.shm_op("i", &arg),
             "READ_SHM" => self.shm_op("r", &arg),
             "WRITE_SHM" => self.shm_op("w", &arg),
@@ -711,6 +720,89 @@ impl Arsenal {
             "NONE" => "NONE_ACK".into(),
             _ => format!("ERR_UNKNOWN_TOOL:{}", tool),
         }
+    }
+
+    pub fn disasm_cfg(&self, arg: &str) -> String {
+        let (plat, off_str) = match arg.find('#') {
+            Some(pos) => (arg[..pos].trim(), arg[pos + 1..].trim()),
+            None => (arg.trim(), "0"),
+        };
+        let off = if off_str.starts_with("0x") || off_str.starts_with("0X") {
+            u64::from_str_radix(&off_str[2..], 16).unwrap_or(0)
+        } else {
+            off_str.parse::<u64>().unwrap_or(0)
+        };
+        if let Some(rom) = crate::rom_locator::resolve_binary(plat) {
+            if let Ok(cfg) = crate::cfg_lifter::lift_cfg(plat, &rom.platform_name, &rom.arch, &rom.path, off, 24) {
+                return compact(
+                    &format!(
+                        "CFG[{} @ 0x{:06X}]: BBs={} Edges={} McCabe={} Calls={:?}\n{}",
+                        rom.platform_name,
+                        cfg.entry_offset,
+                        cfg.total_basic_blocks,
+                        cfg.total_edges,
+                        cfg.cyclomatic_complexity_mccabe,
+                        cfg.call_targets,
+                        cfg.lifted_scummvm_cpp
+                    ),
+                    480,
+                );
+            }
+        }
+        format!("ERR_CFG:{}", arg)
+    }
+
+    pub fn ghidra_func(&self, arg: &str) -> String {
+        let (plat, query) = match arg.find('#') {
+            Some(pos) => (arg[..pos].trim(), arg[pos + 1..].trim()),
+            None => (arg.trim(), ""),
+        };
+        let rep = crate::rea_assistant::analyze_ghidra_corpus(plat, query, 1);
+        if let Some(f) = rep.analyzed_functions.first() {
+            return compact(
+                &format!(
+                    "REA[{} {} -> {} ({})]: {}\nC++:\n{}",
+                    f.platform,
+                    f.original_name,
+                    f.suggested_symbol_name,
+                    f.semantic_category,
+                    f.rea_explanation_es,
+                    f.transpiled_scummvm_cpp
+                ),
+                480,
+            );
+        }
+        format!("ERR_GHIDRA_MISS:{}", arg)
+    }
+
+    pub fn xplat_bindiff(&self, arg: &str) -> String {
+        let plat = if arg.trim().is_empty() { "segacd" } else { arg.trim() };
+        let rep = crate::bindiff::run_cross_platform_bindiff(plat);
+        let summary: Vec<String> = rep
+            .matches
+            .iter()
+            .take(3)
+            .map(|m| {
+                format!(
+                    "{}:{} <-> {}:{} (sim={:.3} [{}])",
+                    m.primary_platform,
+                    m.primary_function,
+                    m.secondary_platform,
+                    m.secondary_function,
+                    m.similarity_score,
+                    m.shared_semantic_domain
+                )
+            })
+            .collect();
+        compact(
+            &format!(
+                "BINDIFF[{} total_compared={}]: {}",
+                rep.primary_platform,
+                rep.total_functions_compared,
+                summary.join(" | ")
+            ),
+            480,
+        )
     }
 
     pub fn exec_root(&self, cmd: &str) -> String {

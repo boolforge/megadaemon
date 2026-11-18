@@ -1,13 +1,15 @@
-# `megadaemon-core` v11.0.0 — Native ARM64 Rust Engine & Cockpit Server
+# `megadaemon-core` v12.0.0 Omega — Native ARM64 Rust Mega-Unifier, REA Assistant & Cockpit Server
 
-Native ARMv8.2-A (`aarch64-linux-android`) binary implementing the **MegaDaemon Cockpit HTTP Server**, **SEERE v11 GBNF Harness**, **Exynos 2100 NPU / EDEN / NNAPI / KleidiAI Hardware Accelerator Bridge**, and **Multi-Architecture Reverse Engineering Suite**.
+Native ARMv8.2-A (`aarch64-linux-android`) binary implementing the **MegaDaemon Cockpit HTTP Server**, **SEERE v12 GBNF Harness (15 Typed Opcodes including `D`, `F`, `X`)**, **REA (Reverse Engineering Assistant) Ghidra 2.71 MB Corpus Indexer**, **CFG Lifter**, **Diaphora Multi-ISA BinDiff**, **Hardware MMIO & Auto-Struct Mapper**, **Shift-JIS / Konami LZSS Scanner**, **Universal 9-Project Ecosystem Unifier**, and **Exynos 2100 NPU / EDEN / NNAPI / KleidiAI Hardware Accelerator Bridge**.
 
-## Modules
-- `src/cockpit_server.rs`: Multi-threaded HTTP server (`127.0.0.1:3000`) serving `web/cockpit_template.html` and 35+ `/api/*` endpoints.
-- `src/seere_v11.rs`: SEERE v11 deterministic harness with `OP_SPEC` single source of truth, typed GBNF grammars (`state/seere.gbnf`), 100% static KV-pinned prompts (`state/seere_prompt_*.txt`), bounded math AST evaluator, literal grounding verifier, and raw TCP OAI client (`127.0.0.1:8080/v1/chat/completions`).
-- `src/npu_bridge.rs`: Dynamic `dlopen`/`dlsym` bridge to `/vendor/lib64/libeden_wrapper.so`, `/vendor/lib64/libeden_ud_npu.so`, `/system/lib64/libneuralnetworks.so`, `/dev/vertex10` (VS4L NPU), and `libggml-cpu.so` (`ggml_cpu_has_dotprod`), with automatic `sched_setaffinity` pinning to Exynos 2100 performance cores `4..=7` (3× Cortex-A78 + 1× Cortex-X1).
-- `src/disasm.rs`: Native disassembler & hex inspector for MIPS R3000A (PS1), Motorola 68000 (Sega CD), Hitachi SH-2 (Saturn), Zilog Z80 (MSX2/PC-8801), and Hudson HuC6280 (PC Engine).
-- `src/rom_locator.rs`: Recursive thread-safe ROM & binary auto-discovery.
-- `src/deobfuscate.rs`: Konami XOR script deobfuscator and asset signature scanner.
-- `src/freezer.rs`: 60 Hz background memory lock manager.
-- `src/entropy.rs`, `src/pattern.rs`, `src/pointers.rs`, `src/snapshot.rs`, `src/shm.rs`: Shannon entropy, wildcard AOB pattern scanner, 32-bit pointer table miner, snapshot diff engine, and zero-copy 1 MB VLA SHM bus.
+## CLI Subcommands
+- `megadaemon-core cockpit [port]`: Launch Native Multi-Threaded Rust Cockpit HTTP Server (default: `3000`).
+- `megadaemon-core unifier`: Audit and unify all 9 projects across `/data/user/0/com.agy/files/`.
+- `megadaemon-core rea <plat> [query] [max]`: Index Ghidra `.c` corpus, classify semantics, annotate MMIO, and transpile to ScummVM C++.
+- `megadaemon-core cfg <plat> [offset] [count]`: Lift Control Flow Graph (Basic Blocks, Edges, McCabe Complexity, Mermaid diagram, Lifted C++).
+- `megadaemon-core bindiff <plat>`: Run Diaphora-style Multi-ISA Cross-Platform Function Matcher across all 6 retro architectures.
+- `megadaemon-core hw-mmio <plat>`: Annotate hardware MMIO registers and reconstruct inferred C `struct` definitions.
+- `megadaemon-core crypto-scan <plat>`: Decode Shift-JIS Japanese strings to UTF-8 and detect compressed Konami LZSS/RLE blocks.
+- `megadaemon-core seere <query>`: Execute SEERE v12 GBNF KV-Pinned Harness in pure Rust.
+- `megadaemon-core seere-selftest`: Run SEERE v12 assertion suites and export shared `seere.gbnf` & `seere_prompt_*.txt`.
+- `megadaemon-core npu-probe`: Probe Exynos 2100 NPU (`/dev/vertex10`, `libeden_wrapper.so`, `libneuralnetworks.so`, KleidiAI SDOT) and pin Cores 4–7.

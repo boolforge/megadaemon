@@ -806,9 +806,39 @@
                         <div class="action-card-desc">Bloquea direcciones de memoria para pruebas de invulnerabilidad o scripts.</div>
                         <button class="pill-btn" onclick="runReverseAction('freeze')">❄️ Inspeccionar Locks</button>
                     </div>
+                    <div class="action-card" style="border-left: 3px solid var(--accent);">
+                        <div class="action-card-title">🧠 REA: Corpus Ghidra 2.7MB .C</div>
+                        <div class="action-card-desc">Indexa funciones C descompiladas por Ghidra, infiere semántica y transpila a C++ ScummVM.</div>
+                        <button class="pill-btn" onclick="runReverseAction('rea')">🧠 Analizar Corpus Ghidra</button>
+                    </div>
+                    <div class="action-card" style="border-left: 3px solid var(--accent);">
+                        <div class="action-card-title">🕸️ CFG Lifter & McCabe</div>
+                        <div class="action-card-desc">Recupera Bloques Básicos, aristas de salto, complejidad McCabe y grafo Mermaid en Rust.</div>
+                        <button class="pill-btn" onclick="runReverseAction('cfg')">🕸️ Levantar CFG & C++</button>
+                    </div>
+                    <div class="action-card" style="border-left: 3px solid var(--accent);">
+                        <div class="action-card-title">⚖️ Diaphora Multi-ISA BinDiff</div>
+                        <div class="action-card-desc">Empareja funciones equivalentes entre PS1, Sega CD, Saturn, PCE, MSX2 y PC-8801.</div>
+                        <button class="pill-btn" onclick="runReverseAction('bindiff')">⚖️ Ejecutar BinDiff</button>
+                    </div>
+                    <div class="action-card" style="border-left: 3px solid var(--accent);">
+                        <div class="action-card-title">🎛️ Mapeador MMIO & Auto-Structs</div>
+                        <div class="action-card-desc">Anota registros hardware (GPU/SPU/GateArray/VDP1/VDP2/V9938) y reconstruye structs C.</div>
+                        <button class="pill-btn" onclick="runReverseAction('hw_mmio')">🎛️ Mapear MMIO & Structs</button>
+                    </div>
+                    <div class="action-card" style="border-left: 3px solid var(--accent);">
+                        <div class="action-card-title">🇯🇵 Shift-JIS & Konami LZSS</div>
+                        <div class="action-card-desc">Decodifica cadenas japonesas Shift-JIS a UTF-8 y detecta sectores comprimidos LZSS/RLE.</div>
+                        <button class="pill-btn" onclick="runReverseAction('crypto_scan')">🇯🇵 Escanear Shift-JIS/LZSS</button>
+                    </div>
+                    <div class="action-card" style="border-left: 3px solid var(--accent);">
+                        <div class="action-card-title">🌐 Mega-Unificador (9 Proyectos)</div>
+                        <div class="action-card-desc">Audita y unifica megadaemon, re-research, dumper-web, snatcher-tools, scummvm y clientes Rust.</div>
+                        <button class="pill-btn" onclick="runReverseAction('unifier')">🌐 Auditar Ecosistema</button>
+                    </div>
                 </div>
                 <div class="action-card" style="margin-top:16px;">
-                    <div class="action-card-title">Consola de Salida del Pipeline</div>
+                    <div class="action-card-title">Consola de Salida del Pipeline (Rust v12.0 Omega)</div>
                     <pre class="hex-box" id="pipelineOutputBox" style="min-height:160px;">Listo. Selecciona una acción de ingeniería inversa arriba.</pre>
                 </div>
             </div>
@@ -1603,6 +1633,24 @@
                     data = await res.json();
                 } else if (action === 'freeze') {
                     res = await fetch('/api/memory_freeze');
+                    data = await res.json();
+                } else if (action === 'rea') {
+                    res = await fetch('/api/rea_analyze?platform=' + activeTargetKey);
+                    data = await res.json();
+                } else if (action === 'cfg') {
+                    res = await fetch('/api/cfg_lift?platform=' + activeTargetKey);
+                    data = await res.json();
+                } else if (action === 'bindiff') {
+                    res = await fetch('/api/bindiff?platform=' + activeTargetKey);
+                    data = await res.json();
+                } else if (action === 'hw_mmio') {
+                    res = await fetch('/api/hw_mmio?platform=' + activeTargetKey);
+                    data = await res.json();
+                } else if (action === 'crypto_scan') {
+                    res = await fetch('/api/crypto_scan?platform=' + activeTargetKey);
+                    data = await res.json();
+                } else if (action === 'unifier') {
+                    res = await fetch('/api/unifier_status');
                     data = await res.json();
                 }
                 if (outBox) outBox.innerText = JSON.stringify(data, null, 2);

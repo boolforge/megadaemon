@@ -1018,6 +1018,46 @@ class Agent:
             cards.append(f"[DELEGACIÓN A OTRO AGENTE]:\n{del_res}")
             audits.append({"turn": 0, "tool": "DELEGATE_LLM", "task": del_task[:50], "arg": del_task[:50], "ok": True})
 
+        # 6. Native Rust v12.0 Omega REA / Ghidra / CFG / BinDiff / Unifier intent
+        rust_bin = "/data/user/0/com.agy/files/megadaemon/rust-core/target/release/megadaemon-core"
+        if os.path.exists(rust_bin):
+            plat_m = re.search(r"\b(ps1|segacd|saturn|pce|msx2|pc88)\b", prompt, re.I)
+            target_plat = plat_m.group(1).lower() if plat_m else "segacd"
+
+            if re.search(r"\b(?:ghidra|descompil\w*|rea|FUN_[0-9a-fA-F]+|transpil\w*)\b", prompt, re.I):
+                fn_m = re.search(r"\b(FUN_[0-9a-fA-F]+)\b", prompt, re.I)
+                q_arg = fn_m.group(1) if fn_m else ""
+                try:
+                    p_rea = subprocess.run([rust_bin, "rea", target_plat, q_arg, "2"], capture_output=True, text=True, timeout=5)
+                    cards.append(f"[ANÁLISIS REA & CORPUS GHIDRA EN RUST NATIVO ({target_plat.upper()})]:\n{compact(p_rea.stdout, 650)}")
+                    audits.append({"turn": 0, "tool": "GHIDRA_FUNC", "arg": f"{target_plat}#{q_arg}", "ok": True})
+                except Exception:
+                    pass
+
+            if re.search(r"\b(?:cfg|flujo\s+de\s+control|mccabe|bloques\s+b[aá]sicos)\b", prompt, re.I):
+                try:
+                    p_cfg = subprocess.run([rust_bin, "cfg", target_plat, "0", "20"], capture_output=True, text=True, timeout=5)
+                    cards.append(f"[CFG LIFTER & COMPLEJIDAD MCCABE EN RUST ({target_plat.upper()})]:\n{compact(p_cfg.stdout, 600)}")
+                    audits.append({"turn": 0, "tool": "DISASM_CFG", "arg": f"{target_plat}#0", "ok": True})
+                except Exception:
+                    pass
+
+            if re.search(r"\b(?:bindiff|diaphora|comparar\s+plataformas|equivalentes)\b", prompt, re.I):
+                try:
+                    p_bd = subprocess.run([rust_bin, "bindiff", target_plat], capture_output=True, text=True, timeout=5)
+                    cards.append(f"[DIAPHORA MULTI-ISA BINDIFF EN RUST ({target_plat.upper()})]:\n{compact(p_bd.stdout, 600)}")
+                    audits.append({"turn": 0, "tool": "XPLAT_BINDIFF", "arg": target_plat, "ok": True})
+                except Exception:
+                    pass
+
+            if re.search(r"\b(?:unificador|unifier|ecosistema|proyectos)\b", prompt, re.I):
+                try:
+                    p_un = subprocess.run([rust_bin, "unifier"], capture_output=True, text=True, timeout=5)
+                    cards.append(f"[MEGA-UNIFICADOR DE ECOSISTEMA (9 PROYECTOS)]:\n{compact(p_un.stdout, 600)}")
+                    audits.append({"turn": 0, "tool": "MEGA_UNIFIER", "arg": "ecosystem", "ok": True})
+                except Exception:
+                    pass
+
         return cards, audits
 
     def run(self, prompt: str, max_turns: int = 4, allow_tools: bool = True,

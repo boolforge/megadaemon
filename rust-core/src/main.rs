@@ -1,27 +1,39 @@
+mod bindiff;
+mod cfg_lifter;
 mod cockpit_server;
+mod crypto_scan;
 mod deobfuscate;
 mod disasm;
 mod entropy;
 mod freezer;
+mod hw_mapper;
 mod npu_bridge;
 mod pattern;
 mod pointers;
+mod rea_assistant;
 mod rom_locator;
 mod seere_v11;
 mod shm;
 mod snapshot;
+mod unifier;
 
 use std::env;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
 
 fn print_usage() {
-    eprintln!("MegaDaemon Native Rust Core v11.0 Apex (ARMv8.2-A + Exynos 2100 NPU)");
+    eprintln!("MegaDaemon Native Rust Core v12.0 Omega (ARMv8.2-A + Exynos 2100 NPU + REA Assistant)");
     eprintln!("Usage: megadaemon-core <command> [args...]");
     eprintln!("Commands:");
     eprintln!("  cockpit [port]                              Launch Native Multi-Threaded Rust Cockpit HTTP Server (default: 3000)");
-    eprintln!("  seere <query>                               Execute SEERE v11 GBNF KV-Pinned Harness in Pure Rust");
-    eprintln!("  seere-selftest                              Run SEERE v11 Assertion Suites & Export Shared GBNF/Prompts");
+    eprintln!("  unifier                                     Scan & Unify All 9 Projects Across the Device Ecosystem");
+    eprintln!("  rea <plat> [query] [max]                    REA Ghidra 2.7MB C Corpus Indexer, Semantic Classifier & ScummVM C++ Transpiler");
+    eprintln!("  cfg <plat> [offset] [count]                 Native Control Flow Graph (CFG) Lifter, McCabe Complexity & Mermaid Generator");
+    eprintln!("  bindiff <plat>                              Multi-ISA Cross-Platform Function Matcher (Diaphora in Rust)");
+    eprintln!("  hw-mmio <plat>                              Hardware MMIO Register Annotator & Auto-Struct Reconstructor");
+    eprintln!("  crypto-scan <plat>                          Shift-JIS Japanese String Decoder & Konami LZSS/RLE Compression Scanner");
+    eprintln!("  seere <query>                               Execute SEERE v12 GBNF KV-Pinned Harness (with D, F, X RE Opcodes)");
+    eprintln!("  seere-selftest                              Run SEERE v12 Assertion Suites & Export Shared GBNF/Prompts");
     eprintln!("  npu-probe                                   Probe Exynos 2100 NPU (/dev/vertex10, EDEN, NNAPI, KleidiAI) & Pin Cores 4-7");
     eprintln!("  locate-roms [refresh]                       Native Multi-Platform ROM & Binary Auto-Discovery");
     eprintln!("  disasm <plat> <file> [offset] [count]       Native Multi-Arch Disassembler (MIPS, M68K, SH-2, Z80, HuC6280)");
@@ -52,6 +64,64 @@ fn main() {
             }
         }
 
+        "unifier" => {
+            let rep = unifier::scan_unified_ecosystem();
+            println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+        }
+
+        "rea" => {
+            let plat = args.get(2).map(|s| s.as_str()).unwrap_or("segacd");
+            let query = args.get(3).map(|s| s.as_str()).unwrap_or("");
+            let max_r = args.get(4).and_then(|s| s.parse::<usize>().ok()).unwrap_or(5);
+            let rep = rea_assistant::analyze_ghidra_corpus(plat, query, max_r);
+            println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+        }
+
+        "cfg" => {
+            let plat = args.get(2).map(|s| s.as_str()).unwrap_or("segacd");
+            let offset = args.get(3).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+            let count = args.get(4).and_then(|s| s.parse::<usize>().ok()).unwrap_or(28);
+            if let Some(rom) = rom_locator::resolve_binary(plat) {
+                match cfg_lifter::lift_cfg(plat, &rom.platform_name, &rom.arch, &rom.path, offset, count) {
+                    Ok(rep) => println!("{}", serde_json::to_string_pretty(&rep).unwrap()),
+                    Err(e) => {
+                        eprintln!("CFG error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                eprintln!("Binary for platform '{}' not found", plat);
+                std::process::exit(1);
+            }
+        }
+
+        "bindiff" => {
+            let plat = args.get(2).map(|s| s.as_str()).unwrap_or("segacd");
+            let rep = bindiff::run_cross_platform_bindiff(plat);
+            println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+        }
+
+        "hw-mmio" => {
+            let plat = args.get(2).map(|s| s.as_str()).unwrap_or("segacd");
+            let (_, _, _, c_path, _) = rom_locator::platform_metadata(&plat.to_lowercase());
+            let sample = fs::read_to_string(c_path)
+                .map(|s| s[..s.len().min(65536)].to_string())
+                .unwrap_or_default();
+            let rep = hw_mapper::analyze_text_for_mmio_and_structs(plat, &sample);
+            println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+        }
+
+        "crypto-scan" => {
+            let plat = args.get(2).map(|s| s.as_str()).unwrap_or("segacd");
+            if let Some(rom) = rom_locator::resolve_binary(plat) {
+                let rep = crypto_scan::scan_crypto_and_encodings(plat, &rom.path);
+                println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+            } else {
+                eprintln!("Binary for platform '{}' not found", plat);
+                std::process::exit(1);
+            }
+        }
+
         "seere" => {
             if args.len() < 3 {
                 eprintln!("Usage: megadaemon-core seere <query>");
@@ -65,7 +135,7 @@ fn main() {
         "seere-selftest" => match seere_v11::selftest() {
             Ok(msg) => println!("{}", msg),
             Err(e) => {
-                eprintln!("SEERE v11 selftest failed: {}", e);
+                eprintln!("SEERE v12 selftest failed: {}", e);
                 std::process::exit(1);
             }
         },
@@ -90,7 +160,7 @@ fn main() {
             let file_path = &args[3];
             let offset = args.get(4).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
             let count = args.get(5).and_then(|s| s.parse::<usize>().ok()).unwrap_or(16);
-            let (plat_name, arch, _) = rom_locator::platform_metadata(plat);
+            let (plat_name, arch, _, _, _) = rom_locator::platform_metadata(plat);
             match disasm::disassemble_file(plat, plat_name, arch, file_path, offset, count) {
                 Ok(rep) => println!("{}", serde_json::to_string(&rep).unwrap()),
                 Err(e) => {

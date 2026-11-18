@@ -1,6 +1,6 @@
 root ::= act | resp
 act ::= "A: " opform
-opform ::= "$ " shell | "? " query | "W " query | "C " path "#" num | "G " rx "#" path | "M " math | "@ " task | "S " shm | "K " mem | "! " lesson | "ASK " askq | "NONE " reason
+opform ::= "$ " shell | "? " query | "W " query | "C " path "#" num | "G " rx "#" path | "M " math | "D " key "#" off | "F " key "#" query | "X " key | "@ " task | "S " shm | "K " mem | "! " lesson | "ASK " askq | "NONE " reason
 resp ::= "R: " [^\n]{1,400}
 
 key ::= [A-Za-z0-9_.\-]{1,32}
