@@ -1,0 +1,18 @@
+[package]
+name = "megadaemon-core"
+version = "6.0.0"
+edition = "2021"
+authors = ["MegaDaemon Engineering Team <megadaemon@agy.internal>"]
+description = "Native ARM64 High-Performance Reverse Engineering and Telemetry Engine for MegaDaemon v6.0 Apex"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+memmap2 = "0.9"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

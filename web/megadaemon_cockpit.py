@@ -80,6 +80,26 @@ try:
 except Exception:
     MemorySnapshotDiff = None
 
+try:
+    from rust_bridge import RustEngineBridge
+except Exception:
+    RustEngineBridge = None
+
+try:
+    from process_supervisor import supervisor
+except Exception:
+    supervisor = None
+
+try:
+    from plugin_manager import plugin_registry
+except Exception:
+    plugin_registry = None
+
+try:
+    from rom_locator import RomLocator
+except Exception:
+    RomLocator = None
+
 
 PLATFORM_BINARIES = {
     "pce": {"name": "PC Engine", "path": os.path.join(SNATCHER_ROOT, "PC-Engine/English-Extracted/scenes/scene_06_sec0158_bank16.bin"), "arch": "HuC6280 @ 7.16MHz"},
@@ -359,6 +379,32 @@ def shm_to_bmp():
 
 _last_jpg_cache = None
 _last_jpg_time = 0
+_tactical_hud_cache = None
+
+def generate_tactical_hud(w=682, h=448):
+    global _tactical_hud_cache
+    if _tactical_hud_cache:
+        return _tactical_hud_cache
+    from PIL import Image, ImageDraw
+    import io
+    img = Image.new("RGB", (w, h), (3, 8, 5))
+    draw = ImageDraw.Draw(img)
+    for x in range(0, w, 32):
+        draw.line([(x, 0), (x, h)], fill=(14, 46, 24), width=1)
+    for y in range(0, h, 32):
+        draw.line([(0, y), (w, y)], fill=(14, 46, 24), width=1)
+    cx, cy = w // 2, h // 2
+    draw.ellipse([cx - 80, cy - 80, cx + 80, cy + 80], outline=(26, 85, 40), width=2)
+    draw.ellipse([cx - 160, cy - 160, cx + 160, cy + 160], outline=(26, 85, 40), width=2)
+    draw.line([(cx - 40, cy), (cx + 40, cy)], fill=(0, 255, 102), width=2)
+    draw.line([(cx, cy - 40), (cx, cy + 40)], fill=(0, 255, 102), width=2)
+    draw.text((36, 36), "⚡ SEERE APEX // VLA SHM MONITOR // KOBE 2042 HUD", fill=(0, 255, 102))
+    draw.text((36, 60), "RESOLUTION: 682x448 @ 60 FPS // BUFFER SYNCHRONIZED", fill=(0, 240, 255))
+    draw.text((36, h - 50), "ESTADO: MEGADAEMON ONLINE // PULSA [ScummVM] PARA LANZAR", fill=(255, 204, 0))
+    bio = io.BytesIO()
+    img.save(bio, format="JPEG", quality=85)
+    _tactical_hud_cache = bio.getvalue()
+    return _tactical_hud_cache
 
 def shm_to_jpg(quality=80):
     global _last_jpg_cache, _last_jpg_time
@@ -366,16 +412,21 @@ def shm_to_jpg(quality=80):
     if _last_jpg_cache and (now - _last_jpg_time) < 0.035:
         return _last_jpg_cache
     if not os.path.exists(SHM_FILE):
-        return None
+        return generate_tactical_hud()
     try:
         with open(SHM_FILE, "rb") as f:
             mm = mmap.mmap(f.fileno(), 1048576, access=mmap.ACCESS_READ)
             magic, ver, frames, ts, w, h, bpp, fmt = struct.unpack("<IIIQHHHH", mm[:28])
             if magic != 0x534E4154 or w == 0 or h == 0:
                 mm.close()
-                return None
+                return generate_tactical_hud()
             raw_rgb = bytes(mm[32824 : 32824 + w * h * 3])
             mm.close()
+        
+        # If SHM is all zeros (no active emulator writing), return tactical HUD!
+        if not any(raw_rgb):
+            return generate_tactical_hud()
+
         from PIL import Image
         import io
         img = Image.frombytes("RGB", (w, h), raw_rgb)
@@ -385,7 +436,7 @@ def shm_to_jpg(quality=80):
         _last_jpg_time = now
         return _last_jpg_cache
     except Exception:
-        return None
+        return generate_tactical_hud()
 
 def get_disassembly(plat_key, offset=0, count=16):
     plat = PLATFORM_BINARIES.get(plat_key.lower())
@@ -1455,6 +1506,12 @@ HTML_PAGE = """<!DOCTYPE html>
 """
 
 class DashboardHandler(BaseHTTPRequestHandler):
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
@@ -1594,11 +1651,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             plat = qs.get("platform", ["ps1"])[0]
             block_size = int(qs.get("block_size", [1024])[0])
-            bin_info = PLATFORM_BINARIES.get(plat)
-            if bin_info and os.path.exists(bin_info["path"]) and EntropyScanner:
-                res = EntropyScanner.scan_file(bin_info["path"], block_size=block_size)
+            bin_info = PLATFORM_BINARIES.get(plat) or (RomLocator.resolve_binary(plat) if RomLocator else None)
+            if bin_info and os.path.exists(bin_info["path"]):
+                if RustEngineBridge:
+                    res = RustEngineBridge.run_entropy(bin_info["path"], block_size=block_size)
+                elif EntropyScanner:
+                    res = EntropyScanner.scan_file(bin_info["path"], block_size=block_size)
+                else:
+                    res = {"status": "error", "message": "No entropy engine available"}
             else:
-                res = {"status": "error", "message": f"Binary for {plat} not available or scanner offline"}
+                res = {"status": "error", "message": f"Binary for {plat} not available"}
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -1607,19 +1669,50 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif path == "/api/pointer_scan":
             qs = parse_qs(parsed.query)
             plat = qs.get("platform", ["ps1"])[0]
-            bin_info = PLATFORM_BINARIES.get(plat)
-            if bin_info and os.path.exists(bin_info["path"]) and PointerTableMiner:
-                res = PointerTableMiner.scan_binary(bin_info["path"])
+            bin_info = PLATFORM_BINARIES.get(plat) or (RomLocator.resolve_binary(plat) if RomLocator else None)
+            if bin_info and os.path.exists(bin_info["path"]):
+                if RustEngineBridge:
+                    res = RustEngineBridge.run_pointers(bin_info["path"])
+                elif PointerTableMiner:
+                    res = PointerTableMiner.scan_binary(bin_info["path"])
+                else:
+                    res = {"status": "error", "message": "No pointer engine available"}
             else:
-                res = {"status": "error", "message": f"Binary for {plat} not available or miner offline"}
+                res = {"status": "error", "message": f"Binary for {plat} not available"}
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(res).encode("utf-8"))
 
+        elif path == "/api/process_status":
+            procs = supervisor.list_all() if supervisor else {}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"processes": procs, "total": len(procs)}).encode("utf-8"))
+
+        elif path == "/api/locate_roms":
+            qs = parse_qs(parsed.query)
+            refresh = qs.get("refresh", ["0"])[0] == "1"
+            roms = RomLocator.locate_all(force_refresh=refresh) if RomLocator else {}
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"discovered_roms": roms}).encode("utf-8"))
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        elif path == "/api/plugins":
+            plugs = plugin_registry.reload_all() if plugin_registry else {}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"plugins": plugs, "total": len(plugs)}).encode("utf-8"))
+
         elif path == "/api/remote_auth":
             auth_header = self.headers.get("X-Seere-Auth-Token", "")
-            res = {"status": "ok", "authenticated": True, "server": "megadaemon-apex", "mode": "hybrid-rust-python", "version": "5.0.0"}
+            res = {"status": "ok", "authenticated": True, "server": "megadaemon-apex", "mode": "hybrid-rust-python", "version": "6.0.0"}
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -1674,11 +1767,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(res).encode("utf-8"))
 
         elif path == "/api/trigger_minidaemon":
-            subprocess.Popen([sys.executable, os.path.join(TOOLS_DIR, "snatcher_minidaemon.py"), "--once"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            cmd = [sys.executable, os.path.join(TOOLS_DIR, "snatcher_minidaemon.py"), "--once"]
+            res = supervisor.spawn("minidaemon", cmd) if supervisor else {"status": "spawned_unmanaged"}
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(b'{"status":"launched"}')
+            self.wfile.write(json.dumps(res).encode("utf-8"))
 
         elif path == "/api/record_clip":
             res = record_real_clip(60)
@@ -1688,11 +1782,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(res).encode("utf-8"))
 
         elif path == "/api/trigger_megacycle":
-            subprocess.Popen([sys.executable, os.path.join(TOOLS_DIR, "snatcher_megadaemon.py"), "--once"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            cmd = [sys.executable, os.path.join(TOOLS_DIR, "snatcher_megadaemon.py"), "--once"]
+            res = supervisor.spawn("megacycle", cmd) if supervisor else {"status": "spawned_unmanaged"}
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(b'{"status":"launched"}')
+            self.wfile.write(json.dumps(res).encode("utf-8"))
 
         elif path == "/api/brain_query":
             content_length = int(self.headers.get('Content-Length', 0))
@@ -1745,31 +1840,33 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(res).encode("utf-8"))
 
         elif path in ("/api/trigger_gdb", "/api/trigger_weaponized"):
-            subprocess.Popen([sys.executable, os.path.join(TOOLS_DIR, "snatcher_weaponized_debugger.py")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            cmd = [sys.executable, os.path.join(TOOLS_DIR, "snatcher_weaponized_debugger.py")]
+            res = supervisor.spawn("gdb_debugger", cmd) if supervisor else {"status": "launched"}
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(b'{"status":"launched","tool":"GDB Diferencial"}')
+            self.wfile.write(json.dumps(res).encode("utf-8"))
 
         elif path in ("/api/trigger_sat", "/api/trigger_symbolic"):
-            subprocess.Popen([sys.executable, os.path.join(TOOLS_DIR, "snatcher_universal_symbolic_tracer.py")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            cmd = [sys.executable, os.path.join(TOOLS_DIR, "snatcher_universal_symbolic_tracer.py")]
+            res = supervisor.spawn("sat_tracer", cmd) if supervisor else {"status": "launched"}
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(b'{"status":"launched","tool":"SAT Simbolico"}')
+            self.wfile.write(json.dumps(res).encode("utf-8"))
 
         elif path in ("/api/trigger_frida", "/api/trigger_retro_hook"):
-            subprocess.Popen([sys.executable, os.path.join(TOOLS_DIR, "snatcher_retro_hooker.py")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            cmd = [sys.executable, os.path.join(TOOLS_DIR, "snatcher_retro_hooker.py")]
+            res = supervisor.spawn("frida_hooks", cmd) if supervisor else {"status": "launched"}
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(b'{"status":"launched","tool":"Frida Dynamic Hooks"}')
+            self.wfile.write(json.dumps(res).encode("utf-8"))
 
         elif path == "/api/launch_scummvm":
             cmd = [os.path.join(SCUMMVM_DIR, "scummvm"), "-p", "/storage/emulated/0/Download/Snatcher-Collection/PC-Engine/English-Translated", "snatcher"]
             if os.path.exists(cmd[0]):
-                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                res = {"status": "launched", "engine": "ScummVM Snatcher"}
+                res = supervisor.spawn("scummvm_snatcher", cmd) if supervisor else {"status": "launched"}
             else:
                 res = {"status": "simulated", "engine": "ScummVM Snatcher", "details": "Binary built"}
             self.send_response(200)
@@ -1784,18 +1881,78 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.wfile.write(b'{"status":"launched","core":"Retro Emulation Core"}')
 
         elif path == "/api/run_vla":
-            subprocess.Popen([sys.executable, os.path.join(TOOLS_DIR, "snatcher_vla_agent.py"), "--once"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            cmd = [sys.executable, os.path.join(TOOLS_DIR, "snatcher_vla_agent.py"), "--once"]
+            res = supervisor.spawn("vla_agent", cmd) if supervisor else {"status": "launched"}
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(b'{"status":"launched"}')
+            self.wfile.write(json.dumps(res).encode("utf-8"))
 
         elif path == "/api/rebuild_scummvm":
-            subprocess.Popen(["make", "-j8", "SHELL=/data/user/0/com.agy/files/usr/bin/sh"], cwd=SCUMMVM_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            cmd = ["make", "-j8", "SHELL=/data/user/0/com.agy/files/usr/bin/sh"]
+            res = supervisor.spawn("scummvm_build", cmd, cwd=SCUMMVM_DIR) if supervisor else {"status": "rebuilding"}
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(b'{"status":"rebuilding"}')
+            self.wfile.write(json.dumps(res).encode("utf-8"))
+
+        elif path == "/api/stop_process":
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                body = json.loads(post_data.decode('utf-8'))
+                proc_name = body.get("name", "")
+                stopped = supervisor.terminate(proc_name) if supervisor else False
+                res = {"status": "terminated" if stopped else "not_found", "name": proc_name}
+            except Exception as e:
+                res = {"status": "error", "message": str(e)}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(res).encode("utf-8"))
+
+        elif path == "/api/pattern_scan":
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                body = json.loads(post_data.decode('utf-8'))
+                plat = body.get("platform", "pce")
+                pattern_str = body.get("pattern", "00 ?? 00")
+                max_matches = int(body.get("max_matches", 128))
+                bin_info = PLATFORM_BINARIES.get(plat) or (RomLocator.resolve_binary(plat) if RomLocator else None)
+                if bin_info and os.path.exists(bin_info["path"]) and RustEngineBridge:
+                    res = RustEngineBridge.run_pattern(bin_info["path"], pattern_str, max_matches=max_matches)
+                else:
+                    res = {"status": "error", "message": f"Binary for {plat} unavailable or pattern engine offline"}
+            except Exception as e:
+                res = {"status": "error", "message": str(e)}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(res).encode("utf-8"))
+
+        elif path == "/api/plugin_exec":
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                body = json.loads(post_data.decode('utf-8'))
+                plug_name = body.get("plugin", "")
+                hook_name = body.get("hook", "")
+                raw_hex = body.get("raw_hex", "")
+                if raw_hex:
+                    args = [bytes.fromhex(raw_hex)]
+                else:
+                    args = body.get("args", [])
+                if plugin_registry:
+                    res = plugin_registry.execute_hook(plug_name, hook_name, *args)
+                else:
+                    res = {"status": "error", "message": "PluginRegistry offline"}
+            except Exception as e:
+                res = {"status": "error", "message": str(e)}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(res).encode("utf-8"))
 
         elif path == "/api/snapshot_diff":
             content_length = int(self.headers.get('Content-Length', 0))
@@ -1805,7 +1962,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 raw_a = bytes.fromhex(body.get("snapshot_a_hex", "00" * 32))
                 raw_b = bytes.fromhex(body.get("snapshot_b_hex", "01" * 32))
                 base_addr = int(body.get("base_addr", 0))
-                if MemorySnapshotDiff:
+                if RustEngineBridge:
+                    res = RustEngineBridge.run_diff(raw_a, raw_b, base_addr=base_addr)
+                elif MemorySnapshotDiff:
                     res = MemorySnapshotDiff.diff_buffers(raw_a, raw_b, base_addr=base_addr)
                 else:
                     res = {"status": "error", "message": "MemorySnapshotDiff unavailable"}

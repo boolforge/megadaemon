@@ -6,3 +6,5 @@ client-malphas/target/
 extracted/
 *.tmp
 media/clip_*
+rust-core/target/
+scummvm.ini
