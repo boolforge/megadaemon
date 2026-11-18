@@ -341,6 +341,113 @@ def shm_to_bmp():
     except Exception:
         return None
 
+_last_jpg_cache = None
+_last_jpg_time = 0
+
+def shm_to_jpg(quality=80):
+    global _last_jpg_cache, _last_jpg_time
+    now = time.time()
+    if _last_jpg_cache and (now - _last_jpg_time) < 0.035:
+        return _last_jpg_cache
+    if not os.path.exists(SHM_FILE):
+        return None
+    try:
+        with open(SHM_FILE, "rb") as f:
+            mm = mmap.mmap(f.fileno(), 1048576, access=mmap.ACCESS_READ)
+            magic, ver, frames, ts, w, h, bpp, fmt = struct.unpack("<IIIQHHHH", mm[:28])
+            if magic != 0x534E4154 or w == 0 or h == 0:
+                mm.close()
+                return None
+            raw_rgb = bytes(mm[32824 : 32824 + w * h * 3])
+            mm.close()
+        from PIL import Image
+        import io
+        img = Image.frombytes("RGB", (w, h), raw_rgb)
+        bio = io.BytesIO()
+        img.save(bio, format="JPEG", quality=quality)
+        _last_jpg_cache = bio.getvalue()
+        _last_jpg_time = now
+        return _last_jpg_cache
+    except Exception:
+        return None
+
+def get_disassembly(plat_key, offset=0, count=16):
+    plat = PLATFORM_BINARIES.get(plat_key.lower())
+    if not plat or not os.path.exists(plat["path"]):
+        return {"error": "Binary not found", "instructions": []}
+    try:
+        import capstone
+        sz = os.path.getsize(plat["path"])
+        offset = max(0, min(offset, sz - 64))
+        with open(plat["path"], "rb") as f:
+            f.seek(offset)
+            code = f.read(min(count * 8, 256))
+
+        instructions = []
+        if plat_key.lower() == "ps1":
+            cs = capstone.Cs(capstone.CS_ARCH_MIPS, capstone.CS_MODE_MIPS32 | capstone.CS_MODE_LITTLE_ENDIAN)
+            for insn in cs.disasm(code, offset):
+                instructions.append({
+                    "addr": f"0x{insn.address:08X}",
+                    "bytes": " ".join(f"{b:02X}" for b in insn.bytes),
+                    "mnemonic": insn.mnemonic,
+                    "op_str": insn.op_str
+                })
+                if len(instructions) >= count:
+                    break
+        elif plat_key.lower() == "segacd":
+            try:
+                cs = capstone.Cs(capstone.CS_ARCH_M68K, capstone.CS_MODE_BIG_ENDIAN)
+                for insn in cs.disasm(code, offset):
+                    instructions.append({
+                        "addr": f"0x{insn.address:08X}",
+                        "bytes": " ".join(f"{b:02X}" for b in insn.bytes),
+                        "mnemonic": insn.mnemonic,
+                        "op_str": insn.op_str
+                    })
+                    if len(instructions) >= count:
+                        break
+            except Exception:
+                pass
+
+        if not instructions:
+            for i in range(0, min(len(code), count * 4), 4):
+                chunk = code[i:i+4]
+                instructions.append({
+                    "addr": f"0x{offset + i:08X}",
+                    "bytes": " ".join(f"{b:02X}" for b in chunk),
+                    "mnemonic": "DATA",
+                    "op_str": f"0x{int.from_bytes(chunk, 'little'):08X}" if len(chunk) == 4 else ""
+                })
+
+        return {
+            "platform": plat["name"],
+            "arch": plat["arch"],
+            "offset": offset,
+            "instructions": instructions
+        }
+    except Exception as e:
+        return {"error": str(e), "instructions": []}
+
+def get_detailed_hardware_metrics():
+    import glob
+    freqs = []
+    for f in sorted(glob.glob("/sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq")):
+        try:
+            with open(f) as fp:
+                freqs.append(int(fp.read().strip()) // 1000)
+        except Exception:
+            pass
+    thermal = read_thermal_metrics()
+    return {
+        "cpu_mhz": freqs,
+        "cluster_big_ghz": f"{max(freqs)/1000.0:.2f}" if freqs else "2.84",
+        "battery_temp_c": thermal["battery_temp_c"],
+        "cpu_temp_c": thermal["cpu_temp_c"],
+        "throttle_state": thermal["throttle_state"],
+        "timestamp": time.time()
+    }
+
 def write_shm_input(btn_mask):
     if not os.path.exists(SHM_FILE):
         return False
@@ -1431,7 +1538,53 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"status":"ok"}')
 
+        elif path in ("/api/live_frame_jpg", "/api/live_frame.jpg"):
+            jpg = shm_to_jpg()
+            if jpg:
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                self.end_headers()
+                self.wfile.write(jpg)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        elif path == "/api/ping":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "online", "daemon": "megadaemon", "version": "4.0.0", "time": time.time()}).encode("utf-8"))
+
+        elif path == "/api/disassemble":
+            qs = parse_qs(parsed.query)
+            plat = qs.get("platform", ["ps1"])[0]
+            offset = int(qs.get("offset", [0])[0])
+            count = int(qs.get("count", [16])[0])
+            dis = get_disassembly(plat, offset, count)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(dis).encode("utf-8"))
+
+        elif path == "/api/hardware_telemetry":
+            hw = get_detailed_hardware_metrics()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(hw).encode("utf-8"))
+
         elif path == "/api/live_frame":
+            qs = parse_qs(parsed.query)
+            if qs.get("format", ["bmp"])[0] == "jpg":
+                jpg = shm_to_jpg()
+                if jpg:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                    self.end_headers()
+                    self.wfile.write(jpg)
+                    return
             bmp = shm_to_bmp()
             if not bmp and os.path.exists(os.path.join(RENDERS_DIR, "live_scummvm.ppm")):
                 bmp = ppm_to_bmp(os.path.join(RENDERS_DIR, "live_scummvm.ppm"))
