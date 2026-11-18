@@ -1,15 +1,16 @@
-# `megadaemon-core` v12.0.0 Omega — Native ARM64 Rust Mega-Unifier, REA Assistant & Cockpit Server
+# `megadaemon-core` v13.0.0 Zenith — 26-Module Pure-Rust ARM64 RE Engine, Swarm Router & MCP Server
 
-Native ARMv8.2-A (`aarch64-linux-android`) binary implementing the **MegaDaemon Cockpit HTTP Server**, **SEERE v12 GBNF Harness (15 Typed Opcodes including `D`, `F`, `X`)**, **REA (Reverse Engineering Assistant) Ghidra 2.71 MB Corpus Indexer**, **CFG Lifter**, **Diaphora Multi-ISA BinDiff**, **Hardware MMIO & Auto-Struct Mapper**, **Shift-JIS / Konami LZSS Scanner**, **Universal 9-Project Ecosystem Unifier**, and **Exynos 2100 NPU / EDEN / NNAPI / KleidiAI Hardware Accelerator Bridge**.
+Native ARM64 (`aarch64-linux-android`) binary implementing MegaDaemon v13.0 Zenith with **zero Python runtime dependencies** on the Web Cockpit and Chat hot paths.
 
 ## CLI Subcommands
-- `megadaemon-core cockpit [port]`: Launch Native Multi-Threaded Rust Cockpit HTTP Server (default: `3000`).
-- `megadaemon-core unifier`: Audit and unify all 9 projects across `/data/user/0/com.agy/files/`.
-- `megadaemon-core rea <plat> [query] [max]`: Index Ghidra `.c` corpus, classify semantics, annotate MMIO, and transpile to ScummVM C++.
-- `megadaemon-core cfg <plat> [offset] [count]`: Lift Control Flow Graph (Basic Blocks, Edges, McCabe Complexity, Mermaid diagram, Lifted C++).
-- `megadaemon-core bindiff <plat>`: Run Diaphora-style Multi-ISA Cross-Platform Function Matcher across all 6 retro architectures.
-- `megadaemon-core hw-mmio <plat>`: Annotate hardware MMIO registers and reconstruct inferred C `struct` definitions.
-- `megadaemon-core crypto-scan <plat>`: Decode Shift-JIS Japanese strings to UTF-8 and detect compressed Konami LZSS/RLE blocks.
-- `megadaemon-core seere <query>`: Execute SEERE v12 GBNF KV-Pinned Harness in pure Rust.
-- `megadaemon-core seere-selftest`: Run SEERE v12 assertion suites and export shared `seere.gbnf` & `seere_prompt_*.txt`.
-- `megadaemon-core npu-probe`: Probe Exynos 2100 NPU (`/dev/vertex10`, `libeden_wrapper.so`, `libneuralnetworks.so`, KleidiAI SDOT) and pin Cores 4–7.
+- `megadaemon-core cockpit [port]`: Launch 100% Pure-Rust Multi-Threaded Cockpit HTTP Server (default: `3000`).
+- `megadaemon-core mcp-server`: Run Antigravity JSON-RPC 2.0 MCP Server over stdio (`minimax_chat`, `swarm_chat`, `megadaemon_die_binwalk`, `megadaemon_rizin`, `megadaemon_cirx_analyze`, `megadaemon_mba_simplify`, `megadaemon_npu_cv`).
+- `megadaemon-core chat <model_id> <prompt>`: Query MiniMax M2.7/M2.5, GitHub Models, Pollinations, Free Swarm, Hybrid, or Local SEERE v12.
+- `megadaemon-core die-binwalk <file>`: Run Detect It Easy + Binwalk + Scalpel + Bulk Extractor + Comtype Scanner (`memmap2`).
+- `megadaemon-core cirx-ssa [mas]`: Execute LTO-Decomp v3.4 CIRX Micro-RTL SSA, Risk Score §6.1, MAS Track Routing, Closure Lemma §15.2, and SMT-LIB 2 export.
+- `megadaemon-core mba <expr>`: Simplify obfuscated MBA expressions and opaque predicates (D810/Goomba).
+- `megadaemon-core kaitai <file> [template] [offset]`: Evaluate ImHex/Kaitai binary struct templates.
+- `megadaemon-core rizin <file> [mode] [arch]`: Run native ARM64 Rizin 0.9.1 analysis (zero JVM).
+- `megadaemon-core frida <mode> <module> <sym_or_off> [proc]`: Generate Frida DBI scripts (`attach`, `stalker`, `native_call`, `android_jni`, `tenet_mem`).
+- `megadaemon-core npu-cv` / `npu-probe`: Probe Exynos 2100 NPU, Mali-G78, KleidiAI, CPU thermals, and VLA CV ROIs.
+- `megadaemon-core unifier` | `rea` | `cfg` | `bindiff` | `hw-mmio` | `crypto-scan` | `seere` | `seere-selftest` | `locate-roms` | `disasm` | `hex` | `deobfuscate` | `dumper` | `entropy` | `pattern` | `pointers` | `diff` | `shm-status` | `shm-frame-bmp`.

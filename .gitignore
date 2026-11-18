@@ -12,3 +12,10 @@ uploads/
 media/clip_*
 rust-core/target/
 scummvm.ini
+state/providers.json
+state/api_keys.json
+state/*.key
+re_pipeline/llm_config.json
+.env
+*.secret
+

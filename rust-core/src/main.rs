@@ -1,20 +1,28 @@
 mod bindiff;
+mod binwalk_die;
 mod cfg_lifter;
+mod cirx_rtl;
 mod cockpit_server;
 mod crypto_scan;
 mod deobfuscate;
 mod disasm;
 mod entropy;
 mod freezer;
+mod frida_dbi;
 mod hw_mapper;
+mod kaitai_imhex;
+mod mcp_server;
 mod npu_bridge;
+mod npu_cv;
 mod pattern;
 mod pointers;
+mod providers;
 mod rea_assistant;
 mod rom_locator;
 mod seere_v11;
 mod shm;
 mod snapshot;
+mod tile_vram;
 mod unifier;
 
 use std::env;
@@ -22,21 +30,30 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 
 fn print_usage() {
-    eprintln!("MegaDaemon Native Rust Core v12.0 Omega (ARMv8.2-A + Exynos 2100 NPU + REA Assistant)");
+    eprintln!("MegaDaemon Native Rust Core v13.0 Zenith (Pure Rust ARM64 + Exynos 2100 NPU + LTO-Decomp v3.4 CIRX)");
     eprintln!("Usage: megadaemon-core <command> [args...]");
     eprintln!("Commands:");
-    eprintln!("  cockpit [port]                              Launch Native Multi-Threaded Rust Cockpit HTTP Server (default: 3000)");
+    eprintln!("  cockpit [port]                              Launch 100% Pure-Rust Multi-Threaded Cockpit HTTP Server (default: 3000)");
+    eprintln!("  mcp-server                                  Run Antigravity JSON-RPC 2.0 MCP Server over stdio (MiniMax + RE Tools)");
+    eprintln!("  chat <model_id> <prompt>                    Query MiniMax M2.7/M2.5, GitHub Models, Free Swarm, or Local SEERE");
+    eprintln!("  die-binwalk <file>                          Detect It Easy + Binwalk + Scalpel + Bulk Extractor + Comtype Scanner");
+    eprintln!("  cirx-ssa [mas]                              LTO-Decomp v3.4 CIRX Micro-RTL SSA, Risk Score S/R & SMT-LIB2 Export");
+    eprintln!("  mba <expr>                                  D810/Goomba Mixed Boolean-Arithmetic (MBA) Algebraic Simplifier");
+    eprintln!("  kaitai <file> [template] [offset]           ImHex/Kaitai Struct Declarative Binary Parser");
+    eprintln!("  rizin <file> [mode] [arch]                  Native ARM64 Rizin 0.9.1 Multi-OS Inspector");
+    eprintln!("  frida <mode> <module> <sym_or_off> [proc]   Frida DBI Script Generator (attach|stalker|native_call|android_jni|tenet_mem)");
+    eprintln!("  npu-cv                                      Exynos 2100 NPU + Mali-G78 + VLA Computer Vision ROI Telemetry");
     eprintln!("  unifier                                     Scan & Unify All 9 Projects Across the Device Ecosystem");
-    eprintln!("  rea <plat> [query] [max]                    REA Ghidra 2.7MB C Corpus Indexer, Semantic Classifier & ScummVM C++ Transpiler");
-    eprintln!("  cfg <plat> [offset] [count]                 Native Control Flow Graph (CFG) Lifter, McCabe Complexity & Mermaid Generator");
-    eprintln!("  bindiff <plat>                              Multi-ISA Cross-Platform Function Matcher (Diaphora in Rust)");
+    eprintln!("  rea <plat> [query] [max]                    REA Ghidra 2.7MB C Corpus Indexer & ScummVM C++ Transpiler");
+    eprintln!("  cfg <plat> [offset] [count]                 Native Control Flow Graph (CFG) Lifter & Mermaid Generator");
+    eprintln!("  bindiff <plat>                              Multi-ISA Cross-Platform Function Matcher");
     eprintln!("  hw-mmio <plat>                              Hardware MMIO Register Annotator & Auto-Struct Reconstructor");
-    eprintln!("  crypto-scan <plat>                          Shift-JIS Japanese String Decoder & Konami LZSS/RLE Compression Scanner");
-    eprintln!("  seere <query>                               Execute SEERE v12 GBNF KV-Pinned Harness (with D, F, X RE Opcodes)");
+    eprintln!("  crypto-scan <plat>                          Shift-JIS String Decoder & Konami LZSS/RLE Scanner");
+    eprintln!("  seere <query>                               Execute SEERE v12 GBNF KV-Pinned Local Harness");
     eprintln!("  seere-selftest                              Run SEERE v12 Assertion Suites & Export Shared GBNF/Prompts");
-    eprintln!("  npu-probe                                   Probe Exynos 2100 NPU (/dev/vertex10, EDEN, NNAPI, KleidiAI) & Pin Cores 4-7");
+    eprintln!("  npu-probe                                   Probe Exynos 2100 NPU (/dev/vertex10, EDEN, KleidiAI) & Pin Cores 4-7");
     eprintln!("  locate-roms [refresh]                       Native Multi-Platform ROM & Binary Auto-Discovery");
-    eprintln!("  disasm <plat> <file> [offset] [count]       Native Multi-Arch Disassembler (MIPS, M68K, SH-2, Z80, HuC6280)");
+    eprintln!("  disasm <plat> <file> [offset] [count]       Native Multi-Arch Disassembler");
     eprintln!("  hex <file> [offset] [length]                Native Hex & ASCII Inspector");
     eprintln!("  deobfuscate <plat> <file>                   Native Konami XOR Script Deobfuscator");
     eprintln!("  dumper <plat> <file>                        Native Asset Signature Extractor");
@@ -62,6 +79,67 @@ fn main() {
                 eprintln!("Cockpit server error: {}", e);
                 std::process::exit(1);
             }
+        }
+
+        "mcp-server" => {
+            mcp_server::run_stdio_mcp_server();
+        }
+
+        "chat" => {
+            let model = args.get(2).map(|s| s.as_str());
+            let prompt = if args.len() > 3 { args[3..].join(" ") } else { "Hello".into() };
+            let res = providers::execute_chat(&prompt, model, None, None, 1024);
+            println!("{}", serde_json::to_string_pretty(&res).unwrap());
+        }
+
+        "die-binwalk" => {
+            let fp = args.get(2).map(|s| s.as_str()).unwrap_or("");
+            let rep = binwalk_die::analyze_binary_full(fp);
+            println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+        }
+
+        "cirx-ssa" => {
+            let mas = args.get(2).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.75);
+            let rep = cirx_rtl::run_reference_pipeline(mas, 10, 0.05, 3, 1, 0);
+            println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+        }
+
+        "mba" => {
+            let expr = if args.len() > 2 { args[2..].join(" ") } else { "(x ^ y) + 2*(x & y)".into() };
+            let rep = kaitai_imhex::simplify_mba_expression(&expr);
+            println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+        }
+
+        "kaitai" => {
+            let fp = args.get(2).map(|s| s.as_str()).unwrap_or("");
+            let tmpl = args.get(3).map(|s| s.as_str()).unwrap_or("sega_m68k_vectors");
+            let off = args.get(4).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+            match kaitai_imhex::parse_struct_at_offset(fp, tmpl, off, None) {
+                Ok(rep) => println!("{}", serde_json::to_string_pretty(&rep).unwrap()),
+                Err(e) => { eprintln!("{}", e); std::process::exit(1); }
+            }
+        }
+
+        "rizin" => {
+            let fp = args.get(2).map(|s| s.as_str()).unwrap_or("");
+            let mode = args.get(3).map(|s| s.as_str()).unwrap_or("info");
+            let arch = args.get(4).map(|s| s.as_str());
+            let rep = frida_dbi::run_rizin_analysis(fp, mode, arch);
+            println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+        }
+
+        "frida" => {
+            let mode = args.get(2).map(|s| s.as_str()).unwrap_or("attach");
+            let module = args.get(3).map(|s| s.as_str()).unwrap_or("libtarget.so");
+            let sym = args.get(4).map(|s| s.as_str()).unwrap_or("0x1000");
+            let proc_n = args.get(5).map(|s| s.as_str()).unwrap_or("com.example.target");
+            let rep = frida_dbi::generate_frida_script(mode, module, sym, proc_n);
+            println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+        }
+
+        "npu-cv" => {
+            let rep = npu_cv::analyze_vla_frame_and_accel();
+            println!("{}", serde_json::to_string_pretty(&rep).unwrap());
         }
 
         "unifier" => {

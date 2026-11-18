@@ -1,9 +1,9 @@
 [package]
 name = "megadaemon-core"
-version = "11.0.0"
+version = "13.0.0"
 edition = "2021"
 authors = ["MegaDaemon Engineering Team <megadaemon@agy.internal>"]
-description = "Native ARM64 High-Performance Reverse Engineering, SEERE v11 GBNF Harness, Exynos 2100 NPU FFI Bridge, and Multi-Threaded Cockpit Server"
+description = "MegaDaemon v13.0 Zenith — Pure Rust Multi-OS RE Workbench (DiE, Binwalk, Tile Molester, ImHex/Kaitai, CIRX v3.4 SSA, MBA, Rizin/Frida, Exynos NPU/CV, Parasitic LLM Swarm & Antigravity MCP Server)"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

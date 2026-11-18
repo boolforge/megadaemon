@@ -19,6 +19,7 @@ pub struct OpSpec {
     pub tok: &'static str,
     pub name: &'static str,
     pub help: &'static str,
+    #[allow(dead_code)]
     pub untrusted_ok: bool,
 }
 
@@ -1080,6 +1081,23 @@ impl Arsenal {
     }
 
     pub fn delegate_llm(&self, task: &str) -> String {
+        // First try live Pure-Rust Parasitic Swarm delegation (MiniMax M2.7 / GitHub Models / Free Swarm)
+        let res = crate::providers::execute_chat(
+            task,
+            Some("minimax-m2.7-fast"),
+            None,
+            Some("Responde de forma concisa y técnica para el agente local SEERE v12."),
+            512,
+        );
+        if res.model_id != "local-seere" && !res.reply.trim().is_empty() {
+            return format!(
+                "EXT_LLM[{}]: {}",
+                res.model_id,
+                res.reply.chars().take(1200).collect::<String>()
+            );
+        }
+
+        // Offline fallback: queue ticket in delegated_tasks.json
         let del_file = format!("{}/delegated_tasks.json", STATE_DIR);
         let mut tasks: Vec<Value> = fs::read_to_string(&del_file)
             .ok()
@@ -1094,14 +1112,11 @@ impl Arsenal {
             "id": task_id,
             "prompt": task,
             "timestamp": ts,
-            "status": "QUEUED_FOR_SUPERIOR_AGENT",
-            "origin": "SEERE_V11_RUST_HARNESS"
+            "status": "QUEUED_OFFLINE",
+            "origin": "SEERE_V12_RUST_HARNESS"
         }));
         let _ = fs::write(&del_file, serde_json::to_string_pretty(&tasks).unwrap_or_default());
-        let _ = Command::new("agy-notify")
-            .args(["post", "-t", "SEERE v11 Rust: Tarea Delegada", "-m", &task.chars().take(100).collect::<String>()])
-            .output();
-        format!("EXT_OK:registered {} -> {}", task_id, del_file)
+        format!("EXT_QUEUED:{} -> {}", task_id, del_file)
     }
 
     pub fn note_add(&self, text: &str) -> String {

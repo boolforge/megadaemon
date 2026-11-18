@@ -1,0 +1,79 @@
+{
+  "version": "3.4",
+  "absolute_set": ["formal_control_flow"],
+  "obligations": [
+    {
+      "id": "O-1",
+      "title": "CIRX Stage-1 lifter for AArch64 on formal semantics",
+      "priority": "P0",
+      "acceptance": [
+        "I1-I4 satisfied for base AArch64 ISA",
+        "semantic_loss only for documented gaps",
+        "0 mismatches on >=10000 instruction differential corpus",
+        "deterministic content-addressed binary"
+      ],
+      "evidence": "public repository + corpus hash + differential log",
+      "blocks_claims": ["any absolute data-flow or full CIRX provenance"]
+    },
+    {
+      "id": "O-2",
+      "title": "Architecture-parametric CIRX for x86-64, RV64, AArch32",
+      "priority": "P0",
+      "acceptance": ["same as O-1 per ISA", "ArchProfile completeness checklist passes C-PA"],
+      "evidence": "profile PR + linter output"
+    },
+    {
+      "id": "O-3",
+      "title": "Absolute Layer-2 data-flow checker over CIRX",
+      "priority": "P0",
+      "acceptance": [
+        "sound under CIRX memory model §3.3",
+        "emits formal_data_flow_absolute only after absolute-set membership test",
+        "0 false proofs on >=100 seeded inequivalent mutants"
+      ],
+      "evidence": "checker binary + mutation report",
+      "blocks_claims": ["formal_data_flow_absolute"]
+    },
+    {
+      "id": "O-4",
+      "title": "Layer-5 relational harness (step 3 of §6.6)",
+      "priority": "P1",
+      "acceptance": [
+        "bounded relational VC generation",
+        "discharges under QF_AUFBV",
+        "0 false proofs on >=50 relational mutants inside envelope"
+      ],
+      "evidence": "Boogie/SMT scripts + solver logs",
+      "blocks_claims": ["formal_trace_equivalence"]
+    },
+    {
+      "id": "O-5",
+      "title": "Track-B trace store + emulator adapters",
+      "priority": "P1",
+      "acceptance": ["hash-stable partial-execution traces under sandbox safety contract"],
+      "evidence": "trace corpus + SPRT log"
+    },
+    {
+      "id": "O-6",
+      "title": "Full conformal + VIF-SPRT calibration pipeline",
+      "priority": "P1",
+      "acceptance": ["empirical coverage within 0.03 of 1-alpha on held-out strata"],
+      "evidence": "calibration report"
+    },
+    {
+      "id": "O-7",
+      "title": "Multi-container ingest with LLVM-validated relocations",
+      "priority": "P1",
+      "acceptance": ["zero discrepancies on relocation constant suite"],
+      "evidence": "reloc checker log + CFG dump"
+    },
+    {
+      "id": "O-8",
+      "title": "Cross-architecture extension protocol automation",
+      "priority": "P2",
+      "acceptance": ["new ISA profile fills ArchProfile checklist; C-PA passes"],
+      "evidence": "profile PR + linter output"
+    }
+  ],
+  "discharge_rule": "acceptance criteria + content-addressed evidence + ledger row + zero-issue linter"
+}

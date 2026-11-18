@@ -1,39 +1,37 @@
-# MegaDaemon v12.0 Omega — The Mega-Unifier, Native Rust REA (Reverse Engineering Assistant), SEERE v12 GBNF & Exynos 2100 NPU Bridge
+# MegaDaemon v13.0 Zenith — 100% Pure-Rust Multi-OS Reverse Engineering Workbench, LTO-Decomp v3.4 CIRX, Parasitic Multi-LLM Swarm & Exynos 2100 NPU/CV Engine
 
-**MegaDaemon v12.0 Omega** unifies the entire **9-project Snatcher & Retro Reverse Engineering Ecosystem** on Android ARMv8.2-A (`aarch64-linux-android`, Samsung Exynos 2100) into a single **18-module Native Rust Engine (`megadaemon-core`)**.
-
----
-
-## 1. Unified 9-Project Ecosystem (`src/unifier.rs`)
-
-MegaDaemon v12.0 Omega directly bridges, indexes, and orchestrates:
-1. **`megadaemon/`**: Core v12.0 Omega Rust Server (`:3000`), SEERE v12 GBNF KV-Pinned Harness, and Exynos 2100 NPU FFI Bridge.
-2. **`re-research/`**: 7 clean extracted CPU executables (`ps1_slps.bin`, `saturn_main.bin`, `scd_subcode.bin`, `pce_overlay.bin`, `pce_boot.bin`, `msx2_com.bin`, `pc88_boot.bin`) and **2.71 MB of Ghidra Decompiled C & ASM Corpus** (`ps1.c` 935 KB, `scd_subcode.c` 44 KB, `msx2_com.c` 59 KB).
-3. **`dumper-web/`**: Universal media & container extractor (`dumper-companion.py` 152 KB for HFS+, ISO9660, CUE/BIN, ECM, Shift-JIS) and multi-platform converter.
-4. **`snatcher-tools/`**: Multi-platform script, font, and sector patching suite for PC Engine, PlayStation 1, and Sega Saturn.
-5. **`Sega-CD-Snatcher-Language-Patcher/` & `Sega-Mega-CD-Spatcher/`**: M68K Sub-CPU and ISO language patchers.
-6. **`scummvm/`**: Target `ScummVM::SnatcherEngine` C++ implementation and 16-phase verification pipeline.
-7. **`libchdr/`**: Native C/C++ MAME Compressed Hunks of Data (`.chd`) optical disc decompressor.
-8. **`client-seere`, `client-malphas`, `client-ukobach`**: Triad of native 60 FPS Rust TUI/CLI demon clients.
-9. **`seere-android`, `seere-gpui-apk`, `gpui-mobile`**: Native Android & GPUI mobile client suites.
+**MegaDaemon v13.0 Zenith** unifies the entire **9-project Reverse Engineering Ecosystem** plus **LTO-Decomp v3.4 (`CIRX Micro-RTL/SSA`)** on Android ARM64 (`aarch64-linux-android`, Samsung Exynos 2100) into a single **26-module Native Rust Engine (`megadaemon-core`)** with **zero Python runtime shell-outs** on the Cockpit or Chat hot paths.
 
 ---
 
-## 2. The 18 Native Rust Modules (`rust-core/src/`)
+## 1. Key Capabilities (v13.0 Zenith)
+
+- **100% Pure-Rust Web Cockpit (`127.0.0.1:3000`) & Mobile-First `ui-ux-pro` UI:** Obsidian Phoenix palette, zero structural emojis, WCAG AAA contrast, fixed bottom 4-tab thumb navigation (`SWARM`, `INSPECT`, `VRAM`, `SYSTEM`), and **unrestricted file uploads up to 100 MB** (`.7z`, `.exe`, `.dll`, `.apk`, `.dex`, `.elf`, `.so`, `.macho`, `.com`, `.md`, `.py`, `.rs`, `.bin`, `.iso`).
+- **Parasitic Multi-LLM Swarm (`src/providers.rs`):** Native Rust router supporting **MiniMax M2.7 / M2.7-highspeed / M2.5 / M2.5-highspeed**, **GitHub Models (Free via `gh` CLI)**, **Pollinations (Zero-Key)**, **OpenRouter `:free`**, **Groq Free**, **Cerebras Free**, **Google AI Studio Free**, **Mistral Free**, **Hybrid (Rust RE Tools + Cloud)**, and **Local SEERE v12 (Offline GBNF)**. API keys live strictly in gitignored `state/providers.json`.
+- **Native Antigravity MCP Server (`src/mcp_server.rs`):** JSON-RPC 2.0 stdio server (`megadaemon-core mcp-server`) exposing `minimax_chat`, `swarm_chat`, `megadaemon_die_binwalk`, `megadaemon_rizin`, `megadaemon_cirx_analyze`, `megadaemon_mba_simplify`, and `megadaemon_npu_cv` directly to Antigravity.
+- **LTO-Decomp v3.4 CIRX Engine (`src/cirx_rtl.rs` + `lto-decomp/`):** Integrates `cirx_micro_rtl_v2.rs` (concrete Micro-RTL interpreter, multi-block SSA via Cooper-Harvey-Kennedy dominators & Cytron dominance frontiers, SMT-LIB 2 `QF_BV` overlap emitter) with normative Risk Score ($S = 8M + 1000P + 20A + 50L + 200I$, $R = \min(100, \lfloor S/50 \rfloor)$), MAS Track Routing, Absolute Set Closure Lemma ($A = \{\text{formal\_control\_flow}\}$), Conformal Quantile, Flag Polarity verification, and Obligations `O-1..O-8`.
+- **Elite Multi-OS Reverse Engineering Engines:**
+  - **Detect It Easy (DiE) + Binwalk + Unblob (`7zz`) + Scalpel + Bulk Extractor + Comtype Scanner (`src/binwalk_die.rs`)** via zero-copy `memmap2` covering Windows PE/PE32+, Linux/Android ELF/DEX/APK, macOS Mach-O/Fat, DOS MZ/COM, archives, and retro ROMs.
+  - **Tile Molester / YY-CHR / CrystalTile2 Native VRAM Engine (`src/tile_vram.rs`)** rendering `1bpp`, `2bpp_planar`, `4bpp_linear`, `4bpp_planar`, `8bpp_linear`, and `15bpp_rgb555` with CRAM/CLUT palettes synced to Hex Inspector.
+  - **ImHex / Kaitai Struct Parser + D810/Goomba MBA Deobfuscator (`src/kaitai_imhex.rs`)**.
+  - **Rizin 0.9.1 Zero-JVM Multi-OS Bridge + Frida DBI Generator + Root Process/Maps Inspector (`src/frida_dbi.rs`)**.
+  - **Exynos 2100 NPU + Mali-G78 + Native Rust VLA Computer Vision (`src/npu_cv.rs`, `src/npu_bridge.rs`)**.
+
+---
+
+## 2. The 26 Native Rust Modules (`rust-core/src/`)
 
 | Module | Engineering Role |
 | :--- | :--- |
-| **`cockpit_server.rs`** | Multi-threaded Native Rust HTTP Server (`127.0.0.1:3000`) serving `web/cockpit_template.html` and 45+ `/api/*` endpoints. |
-| **`seere_v11.rs` (v12)** | SEERE v12 Deterministic Harness with `OP_SPEC` Single Source of Truth, 15 typed GBNF opcodes (including RE opcodes **`D` `DISASM_CFG`**, **`F` `GHIDRA_FUNC`**, **`X` `XPLAT_BINDIFF`**), 100% static KV-pinned prompts, bounded AST math, and raw TCP OAI client. |
-| **`rea_assistant.rs`** | **REA (Reverse Engineering Assistant)**: Indexes the 2.71 MB Ghidra `.c` corpus, classifies function semantics, annotates MMIO registers, suggests symbol names, and transpiles to `ScummVM::SnatcherEngine` C++. |
-| **`cfg_lifter.rs`** | **Control Flow Graph (CFG) Lifter**: Recovers Basic Blocks, branch/fallthrough/call edges, McCabe Cyclomatic Complexity $M = E - N + 2$, Mermaid flowcharts, and C++ state machines from raw binaries. |
-| **`bindiff.rs`** | **Diaphora-Style Multi-ISA BinDiff**: Matches equivalent game engine functions across MIPS R3000A (PS1), M68K (Sega CD), SH-2 (Saturn), HuC6280 (PCE), and Z80 (MSX2/PC-88) using ISA-invariant topological vectors. |
-| **`hw_mapper.rs`** | **Hardware MMIO & Auto-Struct Mapper**: Annotates physical hardware registers (PS1 GPU/SPU/CDROM/MDEC, Sega CD Gate Array/Word RAM/PCM RF5C164, Saturn VDP1/VDP2/SCU/SCSP, PCE HuC6270/VCE, MSX2 V9938/OPNA) and reconstructs C `struct` layouts. |
-| **`crypto_scan.rs`** | **Shift-JIS & Konami LZSS/RLE Scanner**: Decodes Japanese Shift-JIS strings (Hiragana, Katakana, Kanji) to UTF-8 in pure Rust and detects compressed Konami LZSS/RLE data streams. |
-| **`unifier.rs`** | **Universal Ecosystem Unifier**: Audits and bridges all 9 projects across the device filesystem. |
-| **`npu_bridge.rs`** | **Exynos 2100 NPU FFI Bridge**: Dynamic `dlopen`/`dlsym` to `/vendor/lib64/libeden_wrapper.so`, `/vendor/lib64/libeden_ud_npu.so`, `/system/lib64/libneuralnetworks.so`, `/dev/vertex10` (VS4L 26-TOPS NPU), and `libggml-cpu.so` (Arm KleidiAI SDOT), pinning inference threads to Cores 4–7. |
-| **`disasm.rs`** | Multi-architecture disassembler & hex inspector for MIPS R3000A, Motorola 68000, Hitachi SH-2, Zilog Z80, and Hudson HuC6280. |
-| **`rom_locator.rs`** | Thread-safe ROM & pure binary locator linking each platform to its `re-research/bin/` executable and `re-research/out/` Ghidra corpus. |
-| **`deobfuscate.rs`** | Konami XOR script deobfuscator and asset signature scanner. |
-| **`freezer.rs`** | Native 60 Hz (`16.6 ms`) background memory lock manager. |
-| **`entropy.rs` \| `pattern.rs` \| `pointers.rs` \| `snapshot.rs` \| `shm.rs`** | Shannon entropy classifier, wildcard AOB pattern scanner, 32-bit pointer miner, memory snapshot differential engine, and 1 MB zero-copy VLA SHM bus. |
+| `cockpit_server.rs` | 100% pure-Rust multi-threaded HTTP server (`:3000`, 50+ `/api/*` endpoints, 100 MB unrestricted uploads). |
+| `providers.rs` | Parasitic Multi-LLM Swarm router, gitignored API vault, `<think>` parser, automatic failover cascade. |
+| `mcp_server.rs` | JSON-RPC 2.0 stdio MCP server for Antigravity MiniMax & RE tool integration. |
+| `binwalk_die.rs` | Multi-OS DiE + Binwalk + Scalpel + Bulk Extractor + Comtype + `7zz` extraction (`memmap2`). |
+| `tile_vram.rs` | Tile Molester / YY-CHR / CrystalTile2 multi-bpp & hardware palette BMP renderer. |
+| `kaitai_imhex.rs` | Declarative ImHex/Kaitai binary struct parser & D810/Goomba MBA algebraic simplifier. |
+| `cirx_rtl.rs` | LTO-Decomp v3.4 CIRX Micro-RTL, formal SSA builder/checker, Risk Score, MAS Track, SMT-LIB 2. |
+| `frida_dbi.rs` | Rizin 0.9.1 native bridge, Frida DBI script generator (`Interceptor`/`Stalker`/`NativeFunction`/`JNI`/`Tenet`), root procfs maps. |
+| `npu_cv.rs` / `npu_bridge.rs` | Exynos 2100 NPU (`/dev/vertex10`, EDEN `dlopen`), KleidiAI SDOT, Cores 4–7 pinning, VLA CV delta/Sobel/ROIs. |
+| `seere_v11.rs` | SEERE v12 GBNF KV-pinned local harness with live Swarm `@` delegation & RE opcodes (`D`, `F`, `X`). |
+| `rea_assistant.rs` / `cfg_lifter.rs` / `bindiff.rs` / `hw_mapper.rs` / `crypto_scan.rs` | Ghidra 2.71 MB corpus indexer, CFG lifter, Multi-ISA BinDiff, Hardware MMIO annotator, Shift-JIS/LZSS scanner. |
+| `unifier.rs` / `rom_locator.rs` / `disasm.rs` / `deobfuscate.rs` / `freezer.rs` / `entropy.rs` / `pattern.rs` / `pointers.rs` / `snapshot.rs` / `shm.rs` | 9-project ecosystem unifier, multi-arch disassembler, 60 Hz memory freezer, AOB/entropy/pointer/diff engines, and zero-copy SHM bus. |

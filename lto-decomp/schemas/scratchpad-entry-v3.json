@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/cirx/scratchpad-entry-v3.json",
+  "type": "object",
+  "required": ["function", "arch", "address", "cirx_sha256", "contract", "status", "guarantee_class", "unsupported_relocations"],
+  "additionalProperties": false,
+  "properties": {
+    "function": { "type": "string" },
+    "arch": { "enum": ["aarch64", "aarch32", "x86_64", "x86_32", "x86_16", "riscv32", "riscv64", "mips32", "mips64", "ppc32", "ppc64", "wasm32", "wasm64", "other"] },
+    "address": { "type": "string", "pattern": "^0x[0-9a-f]{1,16}$" },
+    "cirx_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "contract": {
+      "type": "object",
+      "required": ["abi", "pre", "post", "side_effects", "variadic"],
+      "additionalProperties": false,
+      "properties": {
+        "abi": { "enum": ["aapcs64", "aapcs64_apple", "aapcs64_windows", "aapcs32", "aapcs32_vfp", "sysv_amd64", "win64", "i386_cdecl", "i386_stdcall", "i386_fastcall", "i386_thiscall_msvc", "dos_near", "dos_far", "riscv_ilp32", "riscv_ilp32d", "riscv_lp64", "riscv_lp64d", "mips_o32", "mips_n32", "mips_n64", "ppc32_sysv", "ppc64_elfv1", "ppc64_elfv2", "wasm_basic_c_abi", "internal_lto", "unknown"] },
+        "pre": { "type": "array", "items": { "type": "string" } },
+        "post": { "type": "array", "items": { "type": "string" } },
+        "side_effects": { "type": "array", "items": { "type": "string" } },
+        "variadic": { "type": "boolean" }
+      }
+    },
+    "status": { "enum": ["verified", "partial", "hypothesis", "abandoned"] },
+    "guarantee_class": {
+      "enum": ["formal_control_flow", "formal_data_flow_relative", "formal_trace_equivalence",
+               "execution_empirical", "byte_exact", "rehabilitated_partial", "structural_hypothesis", "none"]
+    },
+    "unsupported_relocations": { "type": "array", "items": { "type": "string" } }
+  }
+}

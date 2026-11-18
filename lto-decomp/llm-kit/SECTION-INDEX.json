@@ -1,0 +1,23 @@
+{
+  "version": "3.4",
+  "sections": [
+    {"id": "1", "title": "Introduction", "key_concepts": ["Rice", "LTO distortion operator", "three-tier mandate"]},
+    {"id": "2", "title": "Platform Landscape", "key_concepts": ["ELF", "PE/COFF", "NSO/NRO", "AAPCS64"]},
+    {"id": "3", "title": "CIRX", "key_concepts": ["Micro-RTL", "SSA", "memory model", "SMT theories", "provenance"]},
+    {"id": "4", "title": "Metadata Availability Score", "key_concepts": ["MAS indicators", "routing"]},
+    {"id": "5", "title": "Track A′ Rehabilitation", "key_concepts": ["partial metadata"]},
+    {"id": "6", "title": "Track A Formal Cascade", "key_concepts": ["Layers 1-5", "risk score", "walls"]},
+    {"id": "7", "title": "Track B Triage", "key_concepts": ["conformal", "SPRT", "VIF", "sandbox"]},
+    {"id": "8", "title": "Container & Relocation Handling", "key_concepts": ["ELF/PE/Mach-O/NSO"]},
+    {"id": "9", "title": "LLM Orchestration & Scratchpad", "key_concepts": ["contract-driven", "JSON schema"]},
+    {"id": "10", "title": "Provenance Badge Grammar", "key_concepts": ["absolute set", "verdict-with-source"]},
+    {"id": "15", "title": "Implementation Obligations", "key_concepts": ["O-1..O-8", "Absolute Set Closure Lemma", "discharge rule", "agent contract"]},
+    {"id": "16", "title": "Pre-Registered Hypotheses", "key_concepts": ["H-A′1", "H-B1..H-B3", "H-C1", "H-RS1"]},
+    {"id": "20", "title": "Architecture-Parametric Core", "key_concepts": ["ArchProfile", "completeness checklist", "RegId", "FlagSet"]},
+    {"id": "28", "title": "Extension Protocol", "key_concepts": ["new ISA admission"]},
+    {"id": "30", "title": "Cross-Architecture Matrices", "key_concepts": ["layer availability", "soundness restated"]},
+    {"id": "Appendix D", "title": "CIRX Reference Implementation", "key_concepts": ["Rust Micro-RTL", "SSA", "tests"]},
+    {"id": "Appendix E", "title": "Verification Ledger", "key_concepts": ["carried-forward rows", "re-execution"]},
+    {"id": "Appendix G", "title": "Open Research Items", "key_concepts": ["verification debt", "implementation debt"]}
+  ]
+}

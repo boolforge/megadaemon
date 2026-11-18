@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/cirx/verification-record-v3.json",
+  "type": "object",
+  "required": ["track", "arch", "layer", "function", "verdict", "guarantee_class", "smt_logics", "assumptions", "resource_used", "cirx_sha256"],
+  "additionalProperties": false,
+  "properties": {
+    "track": { "enum": ["A", "A_prime", "B"] },
+    "arch": { "enum": ["aarch64", "aarch32", "x86_64", "x86_32", "x86_16", "riscv32", "riscv64", "mips32", "mips64", "ppc32", "ppc64", "wasm32", "wasm64", "other"] },
+    "layer": { "enum": ["cf-gkat", "faultless", "pcode-trans", "chisel", "echo", "basil", "decir", "cluster"] },
+    "function": { "type": "string", "minLength": 1 },
+    "verdict": { "enum": ["proved", "disproved", "unknown", "out_of_envelope", "hypothesis"] },
+    "guarantee_class": {
+      "enum": ["formal_control_flow", "formal_data_flow_relative", "formal_trace_equivalence",
+               "execution_empirical", "byte_exact", "rehabilitated_partial", "structural_hypothesis", "none"]
+    },
+    "smt_logics": {
+      "type": "array", "uniqueItems": true,
+      "items": { "enum": ["QF_ABV", "QF_ABVFP", "QF_AUFBV", "QF_AUFBVFP", "algebraic", "none"] }
+    },
+    "solver": {
+      "type": ["object", "null"],
+      "properties": { "name": { "type": "string" }, "version": { "type": "string" } },
+      "required": ["name", "version"], "additionalProperties": false
+    },
+    "assumptions": { "type": "array", "items": { "type": "string" } },
+    "abandonment_reason": { "enum": ["none", "timeout", "memory", "conflicts", "unknown_result", "instruction_wall", "microop_wall", "loop_wall", "block_wall", "unsupported_instruction", "unsupported_relocation", "unsupported_architecture", "no_semantics_backend", "config_budget"] },
+    "resource_used": {
+      "type": "object",
+      "required": ["time_ms", "memory_mb", "solver_queries"],
+      "properties": {
+        "time_ms": { "type": "integer", "minimum": 0 },
+        "memory_mb": { "type": "integer", "minimum": 0 },
+        "solver_queries": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "counterexample": { "type": ["object", "null"] },
+    "cirx_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

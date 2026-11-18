@@ -1,1678 +1,1707 @@
 <!DOCTYPE html>
-<html lang="es" data-theme="matrix">
+<html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
-    <title>⚡ Snatcher Mad-Scientist Matrix Cockpit</title>
-    <style>
-        /* 1. THEME DEFINITIONS */
-        :root[data-theme="matrix"] {
-            --bg-base: #000000;
-            --bg-rail: #050b05;
-            --bg-sidebar: #081208;
-            --bg-card: #041004;
-            --bg-input: #0a1f0a;
-            --accent: #00ff66;
-            --accent-glow: rgba(0, 255, 102, 0.4);
-            --accent-dim: #008833;
-            --text-main: #00ff66;
-            --text-muted: #009944;
-            --text-header: #33ff88;
-            --border: #004411;
-            --danger: #ff2222;
-            --warning: #ffcc00;
-            --font-stack: "Courier New", Courier, monospace;
-        }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#080c12">
+<title>MEGADAEMON v13.0 ZENITH</title>
+<style>
+  :root {
+    --canvas: #080c12;
+    --l1: #101721;
+    --l2: #16202c;
+    --l3: #1d2a3a;
+    --mint: #00f59b;
+    --mint-dim: rgba(0, 245, 155, 0.14);
+    --cyan: #00d2ff;
+    --cyan-dim: rgba(0, 210, 255, 0.14);
+    --amber: #ffb800;
+    --amber-dim: rgba(255, 184, 0, 0.14);
+    --hazard: #ff2d55;
+    --hazard-dim: rgba(255, 45, 85, 0.14);
+    --ink: #edf3fa;
+    --ink-2: #a8b8cc;
+    --ink-3: #7d90a8;
+    --hairline: rgba(168, 184, 204, 0.12);
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --mono: ui-monospace, "JetBrains Mono", "Fira Code", SFMono-Regular, Menlo, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Inter, sans-serif;
+    --nav-h: 60px;
+    --hdr-h: 48px;
+  }
 
-        :root[data-theme="discord"] {
-            --bg-base: #313338;
-            --bg-rail: #111214;
-            --bg-sidebar: #2b2d31;
-            --bg-card: #232428;
-            --bg-input: #383a40;
-            --accent: #5865f2;
-            --accent-glow: rgba(88, 101, 242, 0.4);
-            --accent-dim: #4752c4;
-            --text-main: #dbdee1;
-            --text-muted: #949ba4;
-            --text-header: #f2f3f5;
-            --border: #1f2023;
-            --danger: #f23f43;
-            --warning: #f0b232;
-            --font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        }
+  * {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
 
-        :root[data-theme="amber"] {
-            --bg-base: #0a0600;
-            --bg-rail: #120b00;
-            --bg-sidebar: #1a1000;
-            --bg-card: #140d00;
-            --bg-input: #261600;
-            --accent: #ffb000;
-            --accent-glow: rgba(255, 176, 0, 0.4);
-            --accent-dim: #996a00;
-            --text-main: #ffb000;
-            --text-muted: #aa7500;
-            --text-header: #ffd266;
-            --border: #442d00;
-            --danger: #ff3300;
-            --warning: #ffff00;
-            --font-stack: "Lucida Console", Monaco, monospace;
-        }
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100dvh;
+    overflow: hidden;
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.45;
+  }
 
-        * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-        html, body {
-            background: var(--bg-base);
-            color: var(--text-main);
-            font-family: var(--font-stack);
-            display: flex;
-            height: 100vh;
-            height: 100dvh;
-            height: -webkit-fill-available;
-            overflow: hidden;
-            position: relative;
-        }
+  .mono, code, pre {
+    font-family: var(--mono);
+    font-feature-settings: "tnum" 1, "zero" 1;
+    font-variant-numeric: tabular-nums;
+  }
 
-        #webgl-matrix { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 0; opacity: 0.28; transition: opacity 0.3s; }
+  /* App Shell: Top passive telemetry header, middle scrolling viewport, fixed bottom thumb nav */
+  .app-shell {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    width: 100%;
+    max-width: 1080px;
+    margin: 0 auto;
+    background: var(--canvas);
+  }
 
-        /* Leftmost Rail (Desktop) */
-        .server-rail { width: 64px; background: var(--bg-rail); display: flex; flex-direction: column; align-items: center; padding: 12px 0; gap: 8px; flex-shrink: 0; border-right: 1px solid var(--border); z-index: 20; }
-        .server-icon { width: 44px; height: 44px; border-radius: 50%; background: var(--bg-sidebar); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 0.8rem; color: var(--text-header); cursor: pointer; transition: all 0.2s; position: relative; user-select: none; }
-        .server-icon:hover, .server-icon.active { border-radius: 12px; background: var(--accent); color: #000; font-weight: 900; box-shadow: 0 0 12px var(--accent-glow); }
-        .server-icon.active::before { content: ""; position: absolute; left: -10px; width: 6px; height: 30px; background: var(--accent); border-radius: 0 4px 4px 0; }
-        .server-separator { width: 28px; height: 2px; background: var(--border); margin: 4px 0; }
+  /* Top Passive Telemetry Bar (Ow Zone — zero frequent controls) */
+  .top-bar {
+    height: var(--hdr-h);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    background: var(--l1);
+    border-bottom: 1px solid var(--hairline);
+    gap: 8px;
+  }
 
-        /* Mobile Platform Selector inside drawer */
-        .mobile-platform-selector { display: none; padding: 8px 10px 4px 10px; border-bottom: 1px solid var(--border); }
-        .platform-chips-row { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 6px 0; scrollbar-width: none; }
-        .platform-chips-row::-webkit-scrollbar { display: none; }
-        .platform-chip { background: var(--bg-input); border: 1px solid var(--border); color: var(--text-muted); border-radius: 6px; padding: 6px 10px; font-size: 0.72rem; font-weight: bold; font-family: inherit; cursor: pointer; white-space: nowrap; }
-        .platform-chip.active { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 900; }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+    font-size: 14px;
+    letter-spacing: 0.06em;
+    color: var(--ink);
+    white-space: nowrap;
+  }
 
-        /* Sidebar & Drawer */
-        .sidebar { width: 240px; background: var(--bg-sidebar); display: flex; flex-direction: column; flex-shrink: 0; border-right: 1px solid var(--border); transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1); z-index: 1000; }
-        .sidebar-header { height: 50px; padding: 0 14px; display: flex; align-items: center; justify-content: space-between; font-weight: bold; color: var(--text-header); font-size: 0.9rem; border-bottom: 1px solid var(--border); }
-        .channel-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 2px; }
-        .channel-category { font-size: 0.65rem; font-weight: 800; text-transform: uppercase; color: var(--text-muted); padding: 12px 6px 4px 6px; letter-spacing: 0.5px; }
-        .channel-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; color: var(--text-muted); font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.15s; user-select: none; border: 1px solid transparent; min-height: 40px; }
-        .channel-item:hover { background: rgba(255,255,255,0.05); color: var(--text-main); }
-        .channel-item.active { background: var(--bg-card); color: var(--text-header); border-color: var(--border); box-shadow: 0 0 8px var(--accent-glow); }
+  .brand-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--mint);
+    box-shadow: 0 0 8px var(--mint);
+  }
+  .brand-dot.degraded { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+  .brand-dot.offline { background: var(--hazard); box-shadow: 0 0 8px var(--hazard); }
 
-        .sidebar-footer { height: 54px; background: var(--bg-card); padding: 0 10px; display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--border); }
-        .avatar-circle { width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: #000; display: flex; align-items: center; justify-content: center; font-size: 0.85rem; font-weight: 900; }
-        .engine-info { flex: 1; min-width: 0; }
-        .engine-name { font-size: 0.8rem; font-weight: bold; color: var(--text-header); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .engine-desc { font-size: 0.68rem; color: var(--text-muted); }
+  .telemetry-strip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: var(--ink-2);
+    overflow: hidden;
+    white-space: nowrap;
+  }
 
-        /* Drawer Backdrop */
-        .drawer-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.72); backdrop-filter: blur(2px); z-index: 998; opacity: 0; transition: opacity 0.25s ease; touch-action: none; }
-        .drawer-backdrop.active { display: block; opacity: 1; }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: var(--l2);
+    color: var(--cyan);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .pill.mint { color: var(--mint); background: var(--mint-dim); }
+  .pill.amber { color: var(--amber); background: var(--amber-dim); }
+  .pill.hazard { color: var(--hazard); background: var(--hazard-dim); }
 
-        /* Main Cockpit Panel */
-        .cockpit-main { flex: 1; display: flex; flex-direction: column; min-width: 0; background: transparent; position: relative; z-index: 5; height: 100%; overflow: hidden; }
-        .cockpit-header { height: 50px; padding: 0 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); background: var(--bg-sidebar); gap: 10px; flex-shrink: 0; }
-        .header-title-box { display: flex; align-items: center; gap: 8px; }
-        .hamburger-btn { display: none; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-header); font-size: 1.2rem; border-radius: 4px; padding: 6px 10px; cursor: pointer; min-height: 40px; min-width: 40px; }
-        .header-title { font-weight: bold; color: var(--text-header); font-size: 0.95rem; white-space: nowrap; }
+  /* Main View Container */
+  .views-wrap {
+    flex: 1 1 auto;
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
+  }
 
-        .header-actions { display: flex; align-items: center; gap: 8px; overflow-x: auto; }
-        .theme-select { background: var(--bg-input); border: 1px solid var(--border); color: var(--text-main); font-family: inherit; font-size: 0.75rem; border-radius: 4px; padding: 4px 8px; cursor: pointer; outline: none; }
-        .badge { font-size: 0.7rem; font-weight: bold; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-card); white-space: nowrap; }
-        .badge.accent { color: var(--accent); border-color: var(--accent); }
-        .badge.danger { color: var(--danger); border-color: var(--danger); }
+  .view {
+    display: none;
+    height: 100%;
+    width: 100%;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 12px 16px 20px;
+  }
 
-        .cockpit-content { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
-        .view-panel { display: none; flex-direction: column; gap: 14px; height: 100%; min-height: 0; }
-        .view-panel.active { display: flex; }
+  .view.active {
+    display: block;
+  }
 
-        /* CRT Display */
-        .screen-container { position: relative; width: 100%; max-width: 680px; margin: 0 auto; background: #000; border: 2px solid var(--border); border-radius: 8px; overflow: hidden; box-shadow: 0 0 20px var(--accent-glow); flex-shrink: 0; }
-        .crt-canvas { width: 100%; height: auto; aspect-ratio: 4 / 3; display: block; image-rendering: pixelated; }
-        .scanlines { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%); background-size: 100% 4px; pointer-events: none; }
-        .screen-hud { position: absolute; top: 8px; left: 8px; right: 8px; display: flex; justify-content: space-between; pointer-events: none; }
-        .hud-item { background: rgba(0,0,0,0.8); padding: 4px 8px; border-radius: 4px; font-size: 0.72rem; color: var(--accent); font-weight: bold; border: 1px solid var(--border); }
+  /* Chat View uses full-height flexbox so composer is ALWAYS visible in bottom comfort zone */
+  #view-swarm.active {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    overflow: hidden;
+  }
 
-        /* Tactile Gamepad */
-        .gamepad-container { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: flex; justify-content: space-around; align-items: center; flex-wrap: wrap; gap: 12px; touch-action: manipulation; }
-        .dpad-grid { display: grid; grid-template-columns: repeat(3, 44px); grid-template-rows: repeat(3, 44px); gap: 4px; }
-        .dpad-btn { background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; display: flex; align-items: center; justify-content: center; color: var(--text-header); font-weight: bold; font-size: 1.1rem; cursor: pointer; user-select: none; }
-        .dpad-btn:active { background: var(--accent); color: #000; transform: scale(0.95); }
-        .action-cluster { display: flex; gap: 10px; align-items: center; }
-        .action-btn { width: 48px; height: 48px; border-radius: 50%; background: var(--bg-input); border: 2px solid var(--accent); display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 1rem; color: var(--accent); cursor: pointer; user-select: none; }
-        .action-btn:active { background: var(--accent); color: #000; transform: scale(0.92); }
-        .center-cluster { display: flex; flex-direction: column; gap: 6px; }
-        .pill-btn { background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; font-size: 0.75rem; font-weight: bold; color: var(--text-main); cursor: pointer; text-transform: uppercase; text-align: center; font-family: inherit; }
-        .pill-btn:active { background: var(--accent); color: #000; }
+  .chat-toolbar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--l1);
+    border-bottom: 1px solid var(--hairline);
+  }
 
-        /* Control Center Grid */
-        .control-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
-        .action-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
-        .action-card-title { font-weight: bold; color: var(--text-header); font-size: 0.85rem; display: flex; align-items: center; gap: 6px; }
-        .action-card-desc { font-size: 0.72rem; color: var(--text-muted); line-height: 1.3; }
+  .chat-messages {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
 
-        /* Hex & Disasm Viewer */
-        .hex-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 10px; font-family: monospace; font-size: 0.78rem; overflow-x: auto; color: var(--text-main); line-height: 1.5; }
-        .hex-nav { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+  .msg {
+    max-width: 94%;
+    padding: 12px 14px;
+    border-radius: var(--radius-md);
+    font-size: 14px;
+    line-height: 1.5;
+    word-break: break-word;
+    white-space: pre-wrap;
+  }
 
-        /* =====================================================================
-           CORTEX CHAT NEURONAL & ATTACHMENT SUITE
-           ===================================================================== */
-        #panel-cortex-chat { height: 100%; display: none; flex-direction: column; min-height: 0; }
-        #panel-cortex-chat.active { display: flex; }
-        .chat-container { flex: 1; display: flex; flex-direction: column; height: 100%; min-height: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); overflow: hidden; }
-        .chat-header-bar { padding: 8px 12px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; background: var(--bg-sidebar); flex-shrink: 0; }
-        .chat-title-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-        .chat-title-text { font-weight: bold; color: var(--text-header); font-size: 0.85rem; }
-        .chat-feed { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; min-height: 0; -webkit-overflow-scrolling: touch; }
-        .chat-row { display: flex; gap: 10px; max-width: 100%; }
-        .chat-row.user-row { flex-direction: row-reverse; }
-        .chat-avatar { width: 36px; height: 36px; border-radius: 8px; background: var(--accent); color: #000; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 0.8rem; flex-shrink: 0; }
-        .chat-row.user-row .chat-avatar { background: var(--text-header); color: #000; }
-        .chat-body { flex: 1; min-width: 0; max-width: 90%; }
-        .chat-author { font-size: 0.72rem; font-weight: bold; color: var(--text-muted); margin-bottom: 3px; }
-        .chat-row.user-row .chat-author { text-align: right; }
-        .chat-bubble { background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 0.88rem; line-height: 1.45; word-break: break-word; }
-        .chat-row.user-row .chat-bubble { background: rgba(0, 255, 102, 0.08); border-color: var(--accent); color: var(--text-header); }
+  .msg.user {
+    align-self: flex-end;
+    background: var(--l3);
+    color: var(--ink);
+  }
 
-        /* Quick Prompt Chips */
-        .chat-quick-chips { display: flex; gap: 6px; overflow-x: auto; padding: 6px 10px; background: var(--bg-sidebar); border-top: 1px solid var(--border); scrollbar-width: none; flex-shrink: 0; }
-        .chat-quick-chips::-webkit-scrollbar { display: none; }
-        .quick-chip { white-space: nowrap; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-main); border-radius: 16px; padding: 6px 12px; font-size: 0.72rem; font-family: inherit; font-weight: 700; cursor: pointer; transition: all 0.15s; user-select: none; }
-        .quick-chip:active { background: var(--accent); color: #000; }
+  .msg.bot {
+    align-self: flex-start;
+    background: var(--l1);
+    color: var(--ink);
+    width: 100%;
+  }
 
-        /* Attachment Tray */
-        .attachment-tray { padding: 6px 10px; background: var(--bg-sidebar); border-top: 1px dashed var(--border); display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-        .attached-file-chip { display: flex; align-items: center; gap: 6px; background: var(--bg-input); border: 1px solid var(--accent); border-radius: 6px; padding: 4px 8px; font-size: 0.78rem; color: var(--text-header); max-width: 100%; }
-        .file-name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: bold; }
-        .file-size { font-size: 0.68rem; color: var(--text-muted); }
-        .file-remove-btn { background: transparent; border: none; color: var(--danger); font-weight: 900; font-size: 0.9rem; cursor: pointer; padding: 0 4px; }
+  .msg-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--cyan);
+    margin-bottom: 6px;
+    letter-spacing: 0.03em;
+  }
 
-        /* Chat Attachment Card in Bubble */
-        .chat-attachment-card { background: rgba(0,0,0,0.5); border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin-bottom: 8px; font-size: 0.78rem; }
-        .chat-attachment-card .att-head { color: var(--text-header); margin-bottom: 4px; }
-        .chat-attachment-card .att-detail { font-size: 0.7rem; color: var(--text-muted); }
-        .chat-attachment-card .att-hex { font-family: monospace; font-size: 0.7rem; background: rgba(0,0,0,0.7); padding: 4px; border-radius: 4px; margin-top: 4px; color: var(--accent); overflow-x: auto; }
+  .think-details {
+    margin: 6px 0 8px;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    background: var(--canvas);
+    font-size: 12px;
+    color: var(--ink-2);
+  }
+  .think-details summary {
+    cursor: pointer;
+    color: var(--amber);
+    font-weight: 600;
+    user-select: none;
+  }
 
-        /* Chat Input Bar */
-        .chat-bar { padding: 8px 10px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 8px; background: var(--bg-sidebar); flex-shrink: 0; }
-        .chat-btn-icon { width: 44px; height: 44px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; color: var(--text-header); font-size: 1.25rem; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; touch-action: manipulation; }
-        .chat-btn-icon:active { background: var(--accent); color: #000; }
-        .chat-input { flex: 1; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; color: var(--text-main); font-family: inherit; font-size: 0.95rem; outline: none; min-height: 44px; min-width: 0; }
-        .chat-input:focus { border-color: var(--accent); box-shadow: 0 0 6px var(--accent-glow); }
-        .chat-send-btn { background: var(--accent); color: #000; border: none; border-radius: 6px; padding: 0 16px; height: 44px; font-weight: 900; font-size: 0.85rem; cursor: pointer; flex-shrink: 0; touch-action: manipulation; }
-        .chat-send-btn:active { transform: scale(0.96); }
+  .chat-quick-chips {
+    flex-shrink: 0;
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 6px 12px;
+    background: var(--canvas);
+    scrollbar-width: none;
+  }
+  .chat-quick-chips::-webkit-scrollbar { display: none; }
 
-        /* Audio Spectrogram */
-        .audio-canvas { width: 100%; height: 100px; background: #000; border: 1px solid var(--border); border-radius: 6px; display: block; }
+  .chip {
+    flex-shrink: 0;
+    min-height: 36px;
+    padding: 6px 12px;
+    border: none;
+    border-radius: 8px;
+    background: var(--l2);
+    color: var(--ink-2);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.12s ease, background 0.12s ease;
+  }
+  .chip:active { transform: scale(0.96); background: var(--l3); color: var(--mint); }
 
-        /* Mobile Bottom Bar (Hidden on desktop) */
-        .mobile-bottom-bar { display: none; }
+  .attachment-bar {
+    display: none;
+    flex-shrink: 0;
+    padding: 8px 12px;
+    background: var(--l2);
+    border-top: 1px solid var(--hairline);
+    font-size: 12px;
+    color: var(--mint);
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .attachment-bar.visible { display: flex; }
 
-        /* =====================================================================
-           RESPONSIVE MOBILE LAYOUT (PORTRAIT SMARTPHONE)
-           ===================================================================== */
-        @media (max-width: 768px) {
-            .server-rail { display: none !important; }
-            .mobile-platform-selector { display: block; }
-            .hamburger-btn { display: flex; }
-            .sidebar {
-                position: fixed;
-                top: 0;
-                bottom: 0;
-                left: 0;
-                width: 82vw;
-                max-width: 320px;
-                z-index: 1000;
-                transform: translateX(-105%);
-                box-shadow: 6px 0 28px rgba(0,0,0,0.9);
-                border-right: 2px solid var(--border);
-            }
-            .sidebar.open { transform: translateX(0); }
-            .cockpit-main {
-                height: 100%;
-                display: flex;
-                flex-direction: column;
-                overflow: hidden;
-                padding-bottom: 56px; /* Space for fixed bottom bar */
-            }
-            .cockpit-header {
-                height: 52px;
-                padding: 0 10px;
-                gap: 6px;
-            }
-            .header-actions { gap: 6px; }
-            .header-actions .badge:not(#badge-llm-status):not(#badge-root) {
-                display: none;
-            }
-            .cockpit-content { padding: 8px; gap: 8px; }
-            .dpad-grid { grid-template-columns: repeat(3, 40px); grid-template-rows: repeat(3, 40px); }
-            .action-btn { width: 44px; height: 44px; }
+  .chat-composer {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--l1);
+    border-top: 1px solid var(--hairline);
+  }
 
-            /* Mobile Bottom Bar Visible */
-            .mobile-bottom-bar {
-                display: flex !important;
-                position: fixed;
-                bottom: 0;
-                left: 0;
-                right: 0;
-                height: 56px;
-                background: var(--bg-sidebar);
-                border-top: 1px solid var(--border);
-                z-index: 900;
-                justify-content: space-around;
-                align-items: center;
-                padding-bottom: env(safe-area-inset-bottom);
-                box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.5);
-            }
-            .mobile-nav-item {
-                flex: 1;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-                height: 100%;
-                min-height: 48px;
-                background: transparent;
-                border: none;
-                color: var(--text-muted);
-                font-family: inherit;
-                cursor: pointer;
-                gap: 2px;
-                transition: color 0.15s, background 0.15s;
-                user-select: none;
-                -webkit-tap-highlight-color: transparent;
-            }
-            .mobile-nav-item:active { background: rgba(255, 255, 255, 0.05); }
-            .mobile-nav-item.active {
-                color: var(--accent);
-                background: rgba(0, 255, 102, 0.08);
-            }
-            .mobile-nav-item .mob-icon { font-size: 1.15rem; line-height: 1; }
-            .mobile-nav-item .mob-label { font-size: 0.65rem; font-weight: 700; letter-spacing: 0.3px; text-transform: uppercase; }
+  .chat-input {
+    flex: 1 1 auto;
+    min-height: 48px;
+    max-height: 112px;
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--hairline);
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    resize: none;
+    outline: none;
+  }
+  .chat-input:focus { border-color: var(--mint); }
 
-            /* Touch Friendly Chat Bar on Mobile */
-            .chat-bar { padding: 6px 8px; gap: 6px; }
-            .chat-btn-icon { width: 42px; height: 42px; font-size: 1.15rem; }
-            .chat-send-btn { height: 42px; padding: 0 14px; font-size: 0.82rem; }
-        }
-    </style>
+  /* Controls & Inputs (min 48px touch target mandate) */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 48px;
+    min-width: 48px;
+    padding: 0 16px;
+    border: none;
+    border-radius: var(--radius-md);
+    background: var(--l2);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: transform 0.1s ease, background 0.15s ease;
+  }
+  .btn:active { transform: scale(0.96); }
+  .btn.primary { background: var(--mint); color: #06130e; }
+  .btn.cyan { background: var(--cyan-dim); color: var(--cyan); }
+  .btn.amber { background: var(--amber-dim); color: var(--amber); }
+  .btn.hazard { background: var(--hazard-dim); color: var(--hazard); }
+  .btn.sm { min-height: 40px; padding: 0 12px; font-size: 12px; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  select, input[type="text"], input[type="password"], input[type="number"], textarea.code-input {
+    min-height: 44px;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--hairline);
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 13px;
+    outline: none;
+    width: 100%;
+  }
+  select:focus, input:focus, textarea:focus { border-color: var(--cyan); }
+
+  /* Surfaces (Elevation by contrast, NOT repetitive borders) */
+  .card {
+    background: var(--l1);
+    border-radius: var(--radius-md);
+    padding: 14px;
+    margin-bottom: 12px;
+  }
+
+  .card-l2 {
+    background: var(--l2);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+    margin-top: 10px;
+  }
+
+  .section-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--cyan);
+    text-transform: uppercase;
+    margin: 0 0 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .row > .grow { flex: 1 1 140px; }
+
+  .grid-2 {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .grid-4 {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  @media (max-width: 520px) {
+    .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+
+  .stat-box {
+    background: var(--l2);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+  }
+  .stat-label { font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.05em; }
+  .stat-val { font-size: 16px; font-weight: 700; color: var(--ink); margin-top: 2px; }
+
+  /* Sub-tab pill bar (max 5 options per Hick-Hyman) */
+  .subtabs {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    margin-bottom: 12px;
+    scrollbar-width: none;
+  }
+  .subtabs::-webkit-scrollbar { display: none; }
+
+  .subtab {
+    flex: 1 0 auto;
+    min-height: 44px;
+    padding: 0 12px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--l1);
+    color: var(--ink-2);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .subtab.active {
+    background: var(--mint-dim);
+    color: var(--mint);
+    box-shadow: inset 0 -2px 0 var(--mint);
+  }
+
+  .subpanel { display: none; }
+  .subpanel.active { display: block; }
+
+  /* Data Output Pre Boxes */
+  .terminal-out {
+    background: var(--canvas);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--ink);
+    overflow-x: auto;
+    max-height: 360px;
+    overflow-y: auto;
+    white-space: pre;
+    margin: 8px 0 0;
+  }
+
+  /* Tables */
+  table.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    margin-top: 8px;
+  }
+  table.data-table th {
+    text-align: left;
+    padding: 8px 6px;
+    color: var(--ink-3);
+    font-weight: 700;
+    border-bottom: 1px solid var(--hairline);
+    text-transform: uppercase;
+    font-size: 11px;
+  }
+  table.data-table td {
+    padding: 7px 6px;
+    border-bottom: 1px solid rgba(168, 184, 204, 0.06);
+    color: var(--ink);
+    vertical-align: top;
+  }
+
+  /* Tile Molester & VLA Visual Frame */
+  .vram-stage {
+    background: var(--canvas);
+    border-radius: var(--radius-sm);
+    padding: 8px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 220px;
+    overflow: auto;
+  }
+  .vram-stage img {
+    image-rendering: pixelated;
+    max-width: 100%;
+    height: auto;
+    border-radius: 4px;
+  }
+
+  /* Retro Pad */
+  .pad-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  /* Fixed Bottom Thumb Navigation Bar (Infinite Edge Effect) */
+  .bottom-nav {
+    height: var(--nav-h);
+    flex-shrink: 0;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    background: var(--l1);
+    border-top: 1px solid var(--hairline);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .nav-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    min-height: 56px;
+    border: none;
+    background: transparent;
+    color: var(--ink-3);
+    font-family: var(--sans);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    position: relative;
+  }
+  .nav-btn svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.7; }
+  .nav-btn.active { color: var(--mint); }
+  .nav-btn.active::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 20%;
+    right: 20%;
+    height: 2px;
+    background: var(--mint);
+  }
+
+  /* Toast Banner */
+  .toast {
+    position: fixed;
+    top: 56px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 999;
+    padding: 10px 16px;
+    border-radius: var(--radius-sm);
+    background: var(--l3);
+    color: var(--mint);
+    font-size: 12px;
+    font-weight: 700;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    display: none;
+    max-width: 92vw;
+  }
+  .toast.show { display: block; }
+  .toast.err { color: var(--hazard); }
+
+  /* Drop Overlay */
+  .drop-zone {
+    border: 1px dashed rgba(0, 210, 255, 0.35);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+    text-align: center;
+    color: var(--ink-2);
+    font-size: 12px;
+    cursor: pointer;
+    background: var(--l2);
+  }
+  .drop-zone:active { border-color: var(--mint); color: var(--mint); }
+</style>
 </head>
 <body>
-    <canvas id="webgl-matrix"></canvas>
+<div class="toast" id="toast"></div>
 
-    <!-- DRAWER BACKDROP (MOBILE) -->
-    <div class="drawer-backdrop" id="drawerBackdrop" onclick="closeSidebar()"></div>
-
-    <!-- 1. LEFT PLATFORM RAIL (DESKTOP) -->
-    <div class="server-rail">
-        <div class="server-icon active" data-plat="snat" title="MegaDaemon Core" onclick="switchPlatform('snat')">SNAT</div>
-        <div class="server-separator"></div>
-        <div class="server-icon" data-plat="pce" title="PC Engine (HuC6280)" onclick="switchPlatform('pce')">PCE</div>
-        <div class="server-icon" data-plat="msx2" title="MSX2 (Z80/V9938)" onclick="switchPlatform('msx2')">MSX</div>
-        <div class="server-icon" data-plat="pc88" title="PC-8801 (Z80/OPNA)" onclick="switchPlatform('pc88')">PC8</div>
-        <div class="server-icon" data-plat="segacd" title="Sega CD (M68K)" onclick="switchPlatform('segacd')">SCD</div>
-        <div class="server-icon" data-plat="saturn" title="Sega Saturn (SH-2)" onclick="switchPlatform('saturn')">SAT</div>
-        <div class="server-icon" data-plat="ps1" title="PlayStation 1 (MIPS)" onclick="switchPlatform('ps1')">PS1</div>
+<div class="app-shell">
+  <!-- TOP PASSIVE TELEMETRY BAR -->
+  <header class="top-bar">
+    <div class="brand">
+      <span class="brand-dot" id="statusDot"></span>
+      <span>MEGADAEMON</span>
+      <span class="pill mint mono">v13</span>
     </div>
-
-    <!-- 2. CHANNELS SIDEBAR / OFF-CANVAS DRAWER -->
-    <div class="sidebar" id="sidebar">
-        <div class="sidebar-header">
-            <span>⚡ SNATCHER OPS</span>
-            <span style="font-size:0.75rem; color:var(--accent);">● ONLINE</span>
-        </div>
-
-        <!-- Mobile Platform Horizontal Selector -->
-        <div class="mobile-platform-selector">
-            <div class="channel-category" style="padding-top:2px;">PLATAFORMA ACTIVA</div>
-            <div class="platform-chips-row">
-                <button class="platform-chip active" data-plat="snat" onclick="switchPlatform('snat')">SNAT</button>
-                <button class="platform-chip" data-plat="pce" onclick="switchPlatform('pce')">PCE</button>
-                <button class="platform-chip" data-plat="msx2" onclick="switchPlatform('msx2')">MSX</button>
-                <button class="platform-chip" data-plat="pc88" onclick="switchPlatform('pc88')">PC8</button>
-                <button class="platform-chip" data-plat="segacd" onclick="switchPlatform('segacd')">SCD</button>
-                <button class="platform-chip" data-plat="saturn" onclick="switchPlatform('saturn')">SAT</button>
-                <button class="platform-chip" data-plat="ps1" onclick="switchPlatform('ps1')">PS1</button>
-            </div>
-        </div>
-
-        <div class="channel-list">
-            <div class="channel-category">💬 INTELIGENCIA & CHAT</div>
-            <div class="channel-item active" data-channel="cortex-chat" onclick="switchChannel('cortex-chat')">
-                <span>💬</span><span>cortex-chat-ai</span>
-            </div>
-            <div class="channel-item" data-channel="hex-viewer" onclick="switchChannel('hex-viewer')">
-                <span>🔬</span><span>hex-disassembler</span>
-            </div>
-
-            <div class="channel-category">🔴 EN VIVO & ACCIÓN</div>
-            <div class="channel-item" data-channel="live-stream" onclick="switchChannel('live-stream')">
-                <span>📡</span><span>live-stream-60fps</span>
-            </div>
-            <div class="channel-item" data-channel="gamepad-tactil" onclick="switchChannel('gamepad-tactil')">
-                <span>🎮</span><span>control-gamepad</span>
-            </div>
-            <div class="channel-item" data-channel="audio-osc" onclick="switchChannel('audio-osc')">
-                <span>🎧</span><span>audio-osciloscopio</span>
-            </div>
-
-            <div class="channel-category">⚡ MANDO MEGADAEMON</div>
-            <div class="channel-item" data-channel="control-center" onclick="switchChannel('control-center')">
-                <span>🚀</span><span>central-de-mando</span>
-            </div>
-            <div class="channel-item" data-channel="rom-locator" onclick="switchChannel('rom-locator')">
-                <span>🎯</span><span>rom-locator-db</span>
-            </div>
-            <div class="channel-item" data-channel="runners-hub" onclick="switchChannel('runners-hub')">
-                <span>⚔️</span><span>runners-emuladores</span>
-            </div>
-            <div class="channel-item" data-channel="reverse-pipeline" onclick="switchChannel('reverse-pipeline')">
-                <span>🔬</span><span>pipeline-re-decomp</span>
-            </div>
-            <div class="channel-item" data-channel="minidaemon-thermal" onclick="switchChannel('minidaemon-thermal')">
-                <span>🌡️</span><span>minidaemon-thermal</span>
-            </div>
-            <div class="channel-item" data-channel="weaponized-gdb" onclick="switchChannel('weaponized-gdb')">
-                <span>⚔️</span><span>gdb-diferencial</span>
-            </div>
-            <div class="channel-item" data-channel="symbolic-solver" onclick="switchChannel('symbolic-solver')">
-                <span>📐</span><span>symbolic-solver-sat</span>
-            </div>
-            <div class="channel-item" data-channel="retro-frida" onclick="switchChannel('retro-frida')">
-                <span>🪝</span><span>retro-frida-interceptor</span>
-            </div>
-
-            <div class="channel-category">📜 TRANSPARENCIA & PLANIFICACIÓN</div>
-            <div class="channel-item" data-channel="devlog-hitos" onclick="switchChannel('devlog-hitos')">
-                <span>📰</span><span>devlog-hitos</span>
-            </div>
-            <div class="channel-item" data-channel="roadmap-backlog" onclick="switchChannel('roadmap-backlog')">
-                <span>🗺️</span><span>roadmap-backlog</span>
-            </div>
-        </div>
-
-        <div class="sidebar-footer">
-            <div class="avatar-circle">AI</div>
-            <div class="engine-info">
-                <div class="engine-name">MegaDaemon Perpetuo</div>
-                <div class="engine-desc" id="footer-engine-desc">Ciclo #36 | PASS</div>
-            </div>
-        </div>
+    <div class="telemetry-strip mono">
+      <span id="hdrModel" class="pill">MINIMAX</span>
+      <span id="hdrNpu" class="pill">NPU --</span>
+      <span id="hdrTemp">--C</span>
     </div>
+  </header>
 
-    <!-- 3. MAIN COCKPIT -->
-    <div class="cockpit-main">
-        <div class="cockpit-header">
-            <div class="header-title-box">
-                <button class="hamburger-btn" onclick="toggleSidebar()" title="Abrir canales">☰</button>
-                <span class="header-title" id="current-channel-title"># cortex-chat-ai</span>
+  <!-- MAIN VIEWS -->
+  <main class="views-wrap">
+
+    <!-- ========================================================== -->
+    <!-- VIEW 1: SWARM CHAT & UNRESTRICTED FILE UPLOAD              -->
+    <!-- ========================================================== -->
+    <section id="view-swarm" class="view active">
+      <div class="chat-toolbar">
+        <select id="modelSelect" aria-label="Modelo LLM" style="flex:1 1 auto;"></select>
+        <button class="btn sm cyan" id="btnTestModel" onclick="testSelectedProvider()">PING</button>
+      </div>
+
+      <div class="chat-messages" id="chatMessages">
+        <div class="msg bot">
+          <div class="msg-meta mono">
+            <span>◈ MEGADAEMON ZENITH v13.0</span>
+            <span class="pill mint">100% PURE RUST</span>
+          </div>
+          Entorno unificado listo. Puedes seleccionar <b>MiniMax M2.7 / M2.5</b>, <b>GitHub Models (Free)</b>, <b>Pollinations (Zero-Key)</b>, <b>Swarm Free Keys</b> o <b>Local SEERE v12 (Offline)</b>.<br><br>
+          Adjunta cualquier archivo sin restriccion de extension (<code>.7z</code>, <code>.exe</code>, <code>.dll</code>, <code>.apk</code>, <code>.dex</code>, <code>.elf</code>, <code>.so</code>, <code>.macho</code>, <code>.md</code>, <code>.py</code>, <code>.bin</code>) para analisis DiE/Binwalk + Rizin + Chat instantaneo.
+        </div>
+      </div>
+
+      <div class="chat-quick-chips">
+        <button class="chip" onclick="sendQuickPrompt('Audita el estado del Exynos 2100 NPU, temperaturas y frecuencias actuales.')">NPU &amp; Thermals</button>
+        <button class="chip" onclick="sendQuickPrompt('Ejecuta analisis CIRX LTO-Decomp v3.4 SSA y muestra Track, Risk Score R y obligaciones O-1..O-8.')">CIRX v3.4 SSA</button>
+        <button class="chip" onclick="sendQuickPrompt('Simplifica la expresion MBA: (x ^ y) + 2*(x &amp; y)')">MBA Simplify</button>
+        <button class="chip" onclick="sendQuickPrompt('Analiza el archivo adjunto en profundidad: formato, arquitectura, firmas embebidas y posibles rutinas clave.')">Analizar Adjunto</button>
+      </div>
+
+      <div class="attachment-bar" id="attachmentBar">
+        <span class="mono" id="attachmentSummary" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+        <div class="row" style="flex-wrap:nowrap;">
+          <button class="btn sm cyan" onclick="jumpAttachmentToInspector()">INSPECT</button>
+          <button class="btn sm hazard" onclick="clearAttachment()">X</button>
+        </div>
+      </div>
+
+      <!-- UNRESTRICTED FILE INPUT: NO accept attribute -->
+      <input type="file" id="unrestrictedFileInput" style="display:none;" onchange="handleAnyFileUpload(event)">
+
+      <div class="chat-composer">
+        <button class="btn cyan" title="Adjuntar cualquier archivo" onclick="document.getElementById('unrestrictedFileInput').click()">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        </button>
+        <textarea id="chatInput" class="chat-input" rows="1" placeholder="Consulta RE, comando, analisis o archivo..." onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();sendChat();}"></textarea>
+        <button class="btn primary" id="btnSendChat" onclick="sendChat()">SEND</button>
+      </div>
+    </section>
+
+    <!-- ========================================================== -->
+    <!-- VIEW 2: MULTI-OS ELITE REVERSE ENGINEERING INSPECTOR       -->
+    <!-- ========================================================== -->
+    <section id="view-inspect" class="view">
+      <div class="card">
+        <div class="section-title">
+          <span>◈ TARGET BINARIO (MULTI-OS / ROM / UPLOAD)</span>
+          <button class="btn sm cyan" onclick="refreshTargets()">SYNC</button>
+        </div>
+        <div class="row">
+          <select id="targetSelector" class="grow" onchange="onTargetChanged()"></select>
+          <button class="btn sm primary" onclick="document.getElementById('unrestrictedFileInput').click()">+ FILE</button>
+        </div>
+        <div class="mono" id="activeFilePath" style="font-size:11px;color:var(--ink-3);margin-top:6px;word-break:break-all;">--</div>
+      </div>
+
+      <!-- 5 Progressive Sub-tabs (Hick-Hyman n=5) -->
+      <div class="subtabs" id="inspectSubtabs">
+        <button class="subtab active" data-sub="sub-die" onclick="switchInspectSub('sub-die', this)">DIE / BINWALK</button>
+        <button class="subtab" data-sub="sub-hex" onclick="switchInspectSub('sub-hex', this)">HEX / DISASM</button>
+        <button class="subtab" data-sub="sub-rizin" onclick="switchInspectSub('sub-rizin', this)">RIZIN / CIRX</button>
+        <button class="subtab" data-sub="sub-kaitai" onclick="switchInspectSub('sub-kaitai', this)">KAITAI / MBA</button>
+        <button class="subtab" data-sub="sub-frida" onclick="switchInspectSub('sub-frida', this)">FRIDA / DBI</button>
+      </div>
+
+      <!-- SUB 1: DiE + Binwalk + Scalpel + Bulk Extractor + Comtype -->
+      <div id="sub-die" class="subpanel active">
+        <div class="card">
+          <div class="section-title">
+            <span>DETECT IT EASY + BINWALK + COMTYPE</span>
+            <div class="row">
+              <button class="btn sm primary" onclick="runDieBinwalk()">SCAN</button>
+              <button class="btn sm amber" onclick="runCarveExtract()">UNPACK / CARVE</button>
             </div>
-            <div class="header-actions">
-                <button class="pill-btn" id="btnToggleGpuRain" onclick="toggleGpuRain()" title="Activar/Desactivar lluvia GPU WebGL">🌧️ GPU: ON</button>
-                <select class="theme-select" id="themePicker" onchange="changeTheme(this.value)">
-                    <option value="matrix">🟢 Matrix Phosphor</option>
-                    <option value="discord">🟣 Discord Obsidian</option>
-                    <option value="amber">🟡 Amber 1982</option>
-                </select>
-                <span class="badge accent" id="badge-root">ROOT: UID 0</span>
-                <span class="badge accent" id="badge-thermal">THERMAL: COOL 32.0°C</span>
-                <span class="badge" id="badge-shm">SHM: 289µs</span>
-            </div>
+          </div>
+          <div class="grid-2" id="dieSummaryGrid">
+            <div class="stat-box"><div class="stat-label">Formato / OS</div><div class="stat-val mono" id="dieFormat">--</div></div>
+            <div class="stat-box"><div class="stat-label">Arquitectura</div><div class="stat-val mono" id="dieArch">--</div></div>
+            <div class="stat-box"><div class="stat-label">Packer / Compiler</div><div class="stat-val mono" id="diePacker">--</div></div>
+            <div class="stat-box"><div class="stat-label">Entropia / Size</div><div class="stat-val mono" id="dieEntropy">--</div></div>
+          </div>
+          <div id="dieDetails" class="terminal-out mono">Pulsa SCAN para inspeccionar formato PE/ELF/Mach-O/DEX/APK/DOS/ROM, firmas embebidas, Comtype y Bulk Extractor.</div>
+        </div>
+      </div>
+
+      <!-- SUB 2: Hex + Disasm + AOB + Entropy + Deobf -->
+      <div id="sub-hex" class="subpanel">
+        <div class="card">
+          <div class="section-title"><span>HEX / DISASM / AOB SCANNER</span></div>
+          <div class="row" style="margin-bottom:8px;">
+            <input type="text" id="hexOffset" value="0x0" placeholder="Offset hex (0x0)" style="max-width:130px;">
+            <button class="btn sm primary" onclick="runHexInspect()">HEX</button>
+            <button class="btn sm cyan" onclick="runDisasm()">DISASM</button>
+            <button class="btn sm" onclick="runEntropy()">ENTROPY</button>
+            <button class="btn sm amber" onclick="runXorDeobf()">XOR DEOBF</button>
+          </div>
+          <div class="row" style="margin-bottom:8px;">
+            <input type="text" id="aobPattern" placeholder="Patron AOB hex (ej: 4E 75 ?? ??) o ASCII (ej: SNATCH)" class="grow">
+            <button class="btn sm cyan" onclick="runAobScan()">AOB</button>
+          </div>
+          <pre id="hexOutput" class="terminal-out mono">Listo para inspeccionar bytes, opcodes, entropia Shannon o patrones AOB.</pre>
+        </div>
+      </div>
+
+      <!-- SUB 3: Rizin 0.9.1 + LTO-Decomp v3.4 CIRX SSA + CFG + REA -->
+      <div id="sub-rizin" class="subpanel">
+        <div class="card">
+          <div class="section-title">
+            <span>RIZIN 0.9.1 NATIVE (ZERO-JVM MULTI-OS)</span>
+          </div>
+          <div class="row" style="margin-bottom:8px;">
+            <select id="rizinMode" class="grow">
+              <option value="info">Binary Info (ij)</option>
+              <option value="sections">Sections (iSj)</option>
+              <option value="functions">Functions (aa;aflj)</option>
+              <option value="imports">Imports (iij)</option>
+              <option value="exports">Exports (iEj)</option>
+              <option value="strings">Strings (izj)</option>
+              <option value="disasm">Disasm 32 ops (pd 32)</option>
+            </select>
+            <button class="btn sm primary" onclick="runRizin()">RUN RIZIN</button>
+            <button class="btn sm cyan" onclick="runCfgLift()">CFG LIFT</button>
+          </div>
+          <pre id="rizinOutput" class="terminal-out mono">Rizin 0.9.1 nativo ARM64 listo para ELF, PE, Mach-O, DEX y ROMs.</pre>
         </div>
 
-        <div class="cockpit-content">
-            <!-- PANEL 1: CORTEX CHAT (LOCAL VS SAAS LLM) -->
-            <div class="view-panel active" id="panel-cortex-chat">
-                <div class="chat-container">
-                    <div class="chat-header-bar">
-                        <div class="chat-title-info">
-                            <span class="chat-title-text">💬 CORTEX NEURONAL RE</span>
-                            <span class="badge accent" id="badge-llm-status">🟢 QWEN 2.5 LOCAL ONLINE (127.0.0.1:8080)</span>
-                        </div>
-                        <div class="chat-model-selector">
-                            <select class="theme-select" id="modelSelect">
-                                <option value="local">🟢 Qwen 2.5 Coder 0.5B (Local ReAct + Root uid=0)</option>
-                            </select>
-                        </div>
-                    </div>
+        <div class="card">
+          <div class="section-title">
+            <span>LTO-DECOMP v3.4 — CIRX SSA &amp; RISK SCORE</span>
+            <button class="btn sm primary" onclick="runCirxAnalyze()">VERIFY SSA</button>
+          </div>
+          <div class="row" style="margin-bottom:8px;">
+            <input type="number" step="0.05" min="0" max="1" id="cirxMas" value="0.75" placeholder="MAS" style="max-width:95px;">
+            <input type="number" id="cirxM" value="10" placeholder="M" style="max-width:75px;">
+            <input type="number" step="0.01" id="cirxP" value="0.05" placeholder="P" style="max-width:85px;">
+            <button class="btn sm cyan" onclick="runReaCorpus()">REA CORPUS</button>
+          </div>
+          <pre id="cirxOutput" class="terminal-out mono">Normative A={formal_control_flow} | S=8M+1000P+20A+50L+200I | R=min(100, floor(S/50))</pre>
+        </div>
+      </div>
 
-                    <!-- Scrollable message feed -->
-                    <div class="chat-feed" id="chatFeed">
-                        <div class="chat-row ai-row">
-                            <div class="chat-avatar">AI</div>
-                            <div class="chat-body">
-                                <div class="chat-author">SEERE PHOENIX • Qwen 2.5 Coder Local</div>
-                                <div class="chat-bubble">
-                                    Agente cognitivo activo con permisos root (uid=0) y acceso a memoria SHM.
-                                    Puedes realizar diagnósticos del sistema, consultar estados de ejecución, o adjuntar archivos (ROMs, logs, volcados binarios, desensamblados) para inspección inmediata.
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Quick Preset Chips -->
-                    <div class="chat-quick-chips">
-                        <button class="quick-chip" onclick="applyPresetPrompt('ROOT ID TEST: Comprueba permisos root con id y contexto SELinux')">🛡️ Root ID</button>
-                        <button class="quick-chip" onclick="applyPresetPrompt('READ_SHM 0x0000 64: Inspecciona los primeros 64 bytes del buffer SHM')">🔬 SHM 64B</button>
-                        <button class="quick-chip" onclick="applyPresetPrompt('ROOT_EXEC: cat /proc/meminfo | head -n 4')">📊 Memoria</button>
-                        <button class="quick-chip" onclick="applyPresetPrompt('ROOT_EXEC: ls -lh /data/user/0/com.agy/files/megadaemon/uploads')">📁 Uploads</button>
-                        <button class="quick-chip" onclick="applyPresetPrompt('ROOT_EXEC: sync; echo 3 > /proc/sys/vm/drop_caches')">🧹 Purgar RAM</button>
-                    </div>
-
-                    <!-- Attachment Tray -->
-                    <div class="attachment-tray" id="attachmentTray" style="display:none;">
-                        <div class="attached-file-chip" id="attachedFileChip">
-                            <span class="file-icon">📎</span>
-                            <span class="file-name" id="attachedFileName">archivo.bin</span>
-                            <span class="file-size" id="attachedFileSize">0 KB</span>
-                            <button class="file-remove-btn" onclick="clearAttachment()" title="Eliminar archivo">✕</button>
-                        </div>
-                    </div>
-
-                    <!-- Chat Bar (Input + Attach + Send) -->
-                    <div class="chat-bar">
-                        <input type="file" id="chatFileInput" style="display:none;" onchange="handleFileSelected(event)">
-                        <button class="chat-btn-icon" id="attachBtn" type="button" onclick="document.getElementById('chatFileInput').click()" title="Adjuntar archivo para análisis">
-                            📎
-                        </button>
-                        <input type="text" id="chatMsgInput" class="chat-input" placeholder="Escribe al Cortex o pregunta sobre el archivo adjunto..." onkeydown="if(event.key==='Enter') sendChatMessage()" autocomplete="off">
-                        <button class="chat-send-btn" id="chatSendBtn" type="button" onclick="sendChatMessage()">
-                            ENVIAR
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- PANEL 2: LIVE STREAM 60FPS -->
-            <div class="view-panel" id="panel-live-stream">
-                <div class="screen-container">
-                    <canvas id="crtCanvas" class="crt-canvas" width="682" height="448"></canvas>
-                    <div class="scanlines"></div>
-                    <div class="screen-hud">
-                        <div class="hud-item" id="hud-frame">FRAME: #3981</div>
-                        <div class="hud-item" id="hud-latency">LATENCY: 0.28 ms</div>
-                    </div>
-                </div>
-
-                <div class="gamepad-container">
-                    <div class="dpad-grid">
-                        <div></div>
-                        <button class="dpad-btn" onmousedown="injectInput('UP', 1)" onmouseup="injectInput('UP', 0)">▲</button>
-                        <div></div>
-                        <button class="dpad-btn" onmousedown="injectInput('LEFT', 1)" onmouseup="injectInput('LEFT', 0)">◀</button>
-                        <div class="dpad-btn" style="font-size:0.7rem; color:var(--text-muted);">●</div>
-                        <button class="dpad-btn" onmousedown="injectInput('RIGHT', 1)" onmouseup="injectInput('RIGHT', 0)">▶</button>
-                        <div></div>
-                        <button class="dpad-btn" onmousedown="injectInput('DOWN', 1)" onmouseup="injectInput('DOWN', 0)">▼</button>
-                        <div></div>
-                    </div>
-
-                    <div class="center-cluster">
-                        <button class="pill-btn" onclick="triggerAction('megacycle')">⚡ MegaCycle</button>
-                        <button class="pill-btn" onclick="triggerAction('boost')">⚡ Root Boost</button>
-                        <button class="pill-btn" onclick="triggerAction('record_clip')" style="border-color:var(--danger); color:var(--danger);">⏺️ Grabar Clip Real</button>
-                        <button class="pill-btn" onmousedown="injectInput('START', 1)" onmouseup="injectInput('START', 0)">START</button>
-                        <button class="pill-btn" onmousedown="injectInput('SELECT', 1)" onmouseup="injectInput('SELECT', 0)">SELECT</button>
-                    </div>
-
-                    <div class="action-cluster">
-                        <button class="action-btn" title="Botón C (Menú)" onmousedown="injectInput('C', 1)" onmouseup="injectInput('C', 0)">C</button>
-                        <button class="action-btn" title="Botón B (Cancelar)" onmousedown="injectInput('B', 1)" onmouseup="injectInput('B', 0)">B</button>
-                        <button class="action-btn" title="Botón A (Disparo / Confirmar)" onmousedown="injectInput('A', 1)" onmouseup="injectInput('A', 0)">A</button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- PANEL 3: GAMEPAD FULLSCREEN -->
-            <div class="view-panel" id="panel-gamepad-tactil">
-                <div class="gamepad-container" style="flex:1; justify-content:center; gap:30px;">
-                    <div class="dpad-grid" style="grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(3, 64px);">
-                        <div></div>
-                        <button class="dpad-btn" onmousedown="injectInput('UP', 1)" onmouseup="injectInput('UP', 0)" style="font-size:1.6rem;">▲</button>
-                        <div></div>
-                        <button class="dpad-btn" onmousedown="injectInput('LEFT', 1)" onmouseup="injectInput('LEFT', 0)" style="font-size:1.6rem;">◀</button>
-                        <div class="dpad-btn">●</div>
-                        <button class="dpad-btn" onmousedown="injectInput('RIGHT', 1)" onmouseup="injectInput('RIGHT', 0)" style="font-size:1.6rem;">▶</button>
-                        <div></div>
-                        <button class="dpad-btn" onmousedown="injectInput('DOWN', 1)" onmouseup="injectInput('DOWN', 0)" style="font-size:1.6rem;">▼</button>
-                    </div>
-
-                    <div class="action-cluster" style="gap:16px;">
-                        <button class="action-btn" style="width:64px; height:64px; font-size:1.3rem;" onmousedown="injectInput('C', 1)" onmouseup="injectInput('C', 0)">C</button>
-                        <button class="action-btn" style="width:64px; height:64px; font-size:1.3rem;" onmousedown="injectInput('B', 1)" onmouseup="injectInput('B', 0)">B</button>
-                        <button class="action-btn" style="width:64px; height:64px; font-size:1.3rem;" onmousedown="injectInput('A', 1)" onmouseup="injectInput('A', 0)">A</button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- PANEL 4: AUDIO OSCILLOSCOPE -->
-            <div class="view-panel" id="panel-audio-osc">
-                <div style="font-weight:bold; color:var(--text-header); margin-bottom:4px;">🎧 OREJAS GRANDES: OSCILOSCOPIO Y ESPECTROGRAMA FFT (256 BANDAS)</div>
-                <canvas id="audioCanvas" class="audio-canvas" width="600" height="150"></canvas>
-                <div class="action-card">
-                    <div class="action-card-title">🔊 Sub-Canales Sintetizados</div>
-                    <div class="action-card-desc">Sincronizando Konami SCC (MSX2), Yamaha YM2608 OPNA (PC88), Ricoh RF5C164 (Sega CD), SCSP DSP (Saturn) y Sony SPU (PS1).</div>
-                </div>
-            </div>
-
-            <!-- PANEL 5: CENTRAL DE MANDO MEGADAEMON -->
-            <div class="view-panel" id="panel-control-center">
-                <div style="font-weight:bold; color:var(--text-header);">🚀 CENTRAL DE MANDO MEGADAEMON (CONTROL TOTAL)</div>
-                <div class="control-grid">
-                    <div class="action-card">
-                        <div class="action-card-title">⚡ MegaCycle Completo</div>
-                        <div class="action-card-desc">Ejecuta las 16 fases de ingeniería inversa y compilación ScummVM.</div>
-                        <button class="pill-btn" onclick="triggerAction('megacycle')">▶️ Disparar MegaCycle</button>
-                    </div>
-                    <div class="action-card">
-                        <div class="action-card-title">🛡️ Root Governor Boost</div>
-                        <div class="action-card-desc">Prioridad renice -10 y purga de cachés Linux vía Shizuku/Magisk.</div>
-                        <button class="pill-btn" onclick="triggerAction('boost')">⚡ Boost CPU/Root</button>
-                    </div>
-                    <div class="action-card">
-                        <div class="action-card-title">⚔️ GDB Diferencial</div>
-                        <div class="action-card-desc">Auditoría de bus de hardware, latencias Word RAM y Comm Flags.</div>
-                        <button class="pill-btn" onclick="triggerAction('weaponized')">⚔️ Iniciar GDB Probe</button>
-                    </div>
-                    <div class="action-card">
-                        <div class="action-card-title">📐 Solver Simbólico SAT</div>
-                        <div class="action-card-desc">Prueba de satisfacibilidad en las 6 arquitecturas retro.</div>
-                        <button class="pill-btn" onclick="triggerAction('symbolic')">📐 Correr SAT Solver</button>
-                    </div>
-                    <div class="action-card">
-                        <div class="action-card-title">🪝 Retro-Frida Hooks</div>
-                        <div class="action-card-desc">Dispara 28 trampas dinámicas de memoria y puertos I/O.</div>
-                        <button class="pill-btn" onclick="triggerAction('retro_hook')">🪝 Disparar Frida Hooks</button>
-                    </div>
-                    <div class="action-card">
-                        <div class="action-card-title">🎮 VLA Playtest Agent</div>
-                        <div class="action-card-desc">Avanza cuadros headless con zero-copy SHM en flock-step.</div>
-                        <button class="pill-btn" onclick="triggerAction('vla')">🎮 Jugar VLA Headless</button>
-                    </div>
-                    <div class="action-card">
-                        <div class="action-card-title">🔨 Recompilar ScummVM</div>
-                        <div class="action-card-desc">Ejecuta make -j8 con verificación de cero errores.</div>
-                        <button class="pill-btn" onclick="triggerAction('rebuild')">🔨 make -j8</button>
-                    </div>
-                    <div class="action-card">
-                        <div class="action-card-title">🧹 Purgar Caché RAM</div>
-                        <div class="action-card-desc">Libera buffers del kernel para máxima fluidez.</div>
-                        <button class="pill-btn" onclick="triggerAction('purge')">🧹 Purgar Caché</button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- PANEL 6: WEAPONIZED GDB -->
-            <div class="view-panel" id="panel-weaponized-gdb">
-                <div style="font-weight:bold; color:var(--text-header);">⚔️ WEAPONIZED DIFFERENTIAL HARDWARE DEBUGGER (GDB 18.1 PROBE)</div>
-                <div class="action-card">
-                    <div class="action-card-title">Anomalías Detectadas</div>
-                    <div class="action-card-desc" id="gdb-anom-list">Cargando anomalías de bus...</div>
-                </div>
-                <div class="action-card">
-                    <div class="action-card-title">Parche C++ Generado por IA</div>
-                    <pre class="hex-box" id="gdb-patch-box">// Sintetizando parche C++...</pre>
-                </div>
-            </div>
-
-            <!-- PANEL 7: SYMBOLIC SOLVER SAT -->
-            <div class="view-panel" id="panel-symbolic-solver">
-                <div style="font-weight:bold; color:var(--text-header);">📐 RESOLUTOR SIMBÓLICO SAT TRITON / ANGR (6 PLATAFORMAS)</div>
-                <pre class="hex-box" id="sym-json-box">Cargando telemetría simbólica...</pre>
-            </div>
-
-            <!-- PANEL 8: RETRO-FRIDA HOOKS -->
-            <div class="view-panel" id="panel-retro-frida">
-                <div style="font-weight:bold; color:var(--text-header);">🪝 RETRO-FRIDA DYNAMIC MEMORY HOOK INTERCEPTOR (28 TRAMPAS)</div>
-                <pre class="hex-box" id="frida-json-box">Cargando trampas interceptadas...</pre>
-            </div>
-
-            <!-- PANEL 9: MINIDAEMON THERMAL -->
-            <div class="view-panel" id="panel-minidaemon-thermal">
-                <div style="font-weight:bold; color:var(--text-header); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-                    <span>🌡️ MINIDAEMON AUTÓNOMO: MONITOR TÉRMICO & MICRO-TESTING</span>
-                    <button class="pill-btn" onclick="triggerAction('minidaemon')">⚡ Micro-Test</button>
-                </div>
-                <div class="control-grid">
-                    <div class="action-card">
-                        <div class="action-card-title">🔋 Estado Térmico Batería</div>
-                        <div style="font-size:1.6rem; font-weight:900; color:var(--accent);" id="md-bat-temp">32.0 °C</div>
-                        <div class="action-card-desc" id="md-bat-desc">Sensor /sys/class/power_supply/battery/temp</div>
-                    </div>
-                    <div class="action-card">
-                        <div class="action-card-title">🔥 Temperatura CPU (Max Zone)</div>
-                        <div style="font-size:1.6rem; font-weight:900; color:var(--text-header);" id="md-cpu-temp">35.0 °C</div>
-                        <div class="action-card-desc" id="md-cpu-desc">Samsung Exynos 2100 (ARMv8.2)</div>
-                    </div>
-                    <div class="action-card">
-                        <div class="action-card-title">⚙️ Perfil de Auto-Ajuste</div>
-                        <div style="font-size:1.3rem; font-weight:bold; color:var(--accent);" id="md-throttle-state">COOL_TURBO</div>
-                        <div class="action-card-desc" id="md-throttle-desc">Delay entre micro-tests: 1.5s</div>
-                    </div>
-                    <div class="action-card">
-                        <div class="action-card-title">🔄 Micro-Tests Ejecutados</div>
-                        <div style="font-size:1.6rem; font-weight:900; color:var(--accent);" id="md-iterations">0</div>
-                        <div class="action-card-desc" id="md-tests-desc">0 pasados | 0 fallos</div>
-                    </div>
-                </div>
-                <div class="action-card">
-                    <div class="action-card-title">🧠 Diagnósticos & Mejoras del LLM Local (SEERE v11 GBNF + KV-Pinned)</div>
-                    <pre class="hex-box" id="md-findings-box" style="white-space:pre-wrap;">// Esperando telemetría del MiniDaemon...</pre>
-                </div>
-                <div class="action-card" style="border-left: 4px solid var(--accent); margin-top:12px;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-                        <div class="action-card-title">⚡ Exynos 2100 NPU (26-TOPS /dev/vertex10 + EDEN FFI + KleidiAI SDOT)</div>
-                        <button class="pill-btn" onclick="probeExynosNpu()">🔍 Sondear NPU & Fijar Cores 4-7</button>
-                    </div>
-                    <pre class="hex-box" id="npu-telemetry-box" style="white-space:pre-wrap; margin-top:8px;">Pulsa "Sondear NPU" para verificar dlopen(/vendor/lib64/libeden_wrapper.so), /dev/vertex10 y KleidiAI SDOT en Rust.</pre>
-                </div>
-            </div>
-
-            <!-- PANEL 10: HEX INSPECTOR & DISASSEMBLER -->
-            <div class="view-panel" id="panel-hex-viewer">
-                <div style="font-weight:bold; color:var(--text-header);">🔬 INSPECTOR HEXADECIMAL & DESENSAMBLADOR MULTI-ARQUITECTURA</div>
-                <div class="hex-nav">
-                    <select class="theme-select" id="hexPlatSelect" onchange="loadHexDump(0)">
-                        <option value="pce">PC Engine (Bank 16 Scene 6)</option>
-                        <option value="msx2">MSX2 (SNATCHER.COM)</option>
-                        <option value="pc88">PC-8801 (Disk1-Program)</option>
-                        <option value="segacd">Sega CD (SUBCODE.BIN)</option>
-                        <option value="saturn">Sega Saturn (MAIN_L.BIN)</option>
-                        <option value="ps1" selected>PlayStation 1 (SLPS_001.54)</option>
-                    </select>
-                    <button class="pill-btn" onclick="scrollHex(-256)">◀ Ant</button>
-                    <button class="pill-btn" onclick="scrollHex(256)">Sig ▶</button>
-                    <span id="hexOffsetLabel" style="font-size:0.8rem; color:var(--text-muted);">Offset: 0x000000</span>
-                </div>
-                <div class="hex-box" id="hexContentBox">Cargando bytes del binario original...</div>
-            </div>
-
-            <!-- PANEL 11: DEVLOG -->
-            <div class="view-panel" id="panel-devlog-hitos">
-                <div style="font-weight:bold; color:var(--text-header); display:flex; justify-content:space-between; align-items:center;">
-                    <span>📰 CRÓNICAS DEL MEGADAEMON: DEVLOG & HITOS REALES</span>
-                    <button class="pill-btn" onclick="loadDevlog()">🔄 Actualizar DevLog</button>
-                </div>
-                <div class="control-grid" id="devlogContainer" style="grid-template-columns: 1fr; gap:12px;"></div>
-            </div>
-
-            <!-- PANEL 12: ROADMAP -->
-            <div class="view-panel" id="panel-roadmap-backlog">
-                <div style="font-weight:bold; color:var(--text-header); display:flex; justify-content:space-between; align-items:center;">
-                    <span>🗺️ HOJA DE RUTA & BACKLOG DINÁMICO</span>
-                    <button class="pill-btn" onclick="loadRoadmap()">🔄 Actualizar Backlog</button>
-                </div>
-                <div id="roadmapVisionBox" class="action-card" style="border-left: 4px solid var(--accent);">
-                    <div class="action-card-title">🎯 Visión Inflexible del Proyecto</div>
-                    <div class="action-card-desc" id="roadmapVisionText">Cargando visión...</div>
-                </div>
-                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:12px;">
-                    <div class="action-card">
-                        <div class="action-card-title" style="color:var(--accent);">🟢 COMPLETADO (100%)</div>
-                        <div id="roadmapCompletedList" style="display:flex; flex-direction:column; gap:8px; margin-top:8px;"></div>
-                    </div>
-                    <div class="action-card">
-                        <div class="action-card-title" style="color:var(--warning);">🟡 EN PROGRESO (ACTIVO)</div>
-                        <div id="roadmapInProgressList" style="display:flex; flex-direction:column; gap:8px; margin-top:8px;"></div>
-                    </div>
-                    <div class="action-card">
-                        <div class="action-card-title" style="color:var(--text-header);">⚪ BACKLOG PRIORIZADO</div>
-                        <div id="roadmapBacklogList" style="display:flex; flex-direction:column; gap:8px; margin-top:8px;"></div>
-                    </div>
-            </div>
-
-            <!-- PANEL 13: ROM LOCATOR & TARGET SELECTOR -->
-            <div class="view-panel" id="panel-rom-locator">
-                <div style="font-weight:bold; color:var(--text-header); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-                    <span>🎯 QUERY MEGADAEMON ROM LOCATOR & TARGET SELECTOR</span>
-                    <button class="pill-btn" onclick="queryRomLocator(true)">🔍 Escanear ROMs (Refresh)</button>
-                </div>
-                <div class="action-card" style="border-left: 4px solid var(--accent); margin-top:12px;">
-                    <div class="action-card-title">Base de Datos de ROMs & Binarios Snatcher</div>
-                    <div class="action-card-desc">Exploración automática en almacenamiento compartido (`/storage/emulated/0/Download/Snatcher-Collection`). Permite fijar el target activo para runners, emuladores y desensambladores con un solo clic.</div>
-                    <div style="margin-top:8px; font-size:0.85rem; font-weight:bold; color:var(--accent);" id="activeTargetBanner">Target Activo: SEGACD (Motorola 68000)</div>
-                </div>
-                <div class="control-grid" id="romListContainer" style="margin-top:12px;">
-                    <div class="action-card">Cargando base de datos de ROMs...</div>
-                </div>
-            </div>
-
-            <!-- PANEL 14: RUNNERS & EMULADORES WEAPONIZADOS -->
-            <div class="view-panel" id="panel-runners-hub">
-                <div style="font-weight:bold; color:var(--text-header); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-                    <span>⚔️ RUNNERS HUB & EMULADORES WEAPONIZADOS (SHM HOOKS)</span>
-                    <div style="display:flex; gap:6px; flex-wrap:wrap;">
-                        <button class="pill-btn" onclick="runParallelTest()">⚔️ Test Paralelo ScummVM vs Emu</button>
-                        <button class="pill-btn" onclick="loadRunnersHub()">🔄 Actualizar Estados</button>
-                    </div>
-                </div>
-                <div class="action-card" style="border-left: 4px solid var(--accent); margin-top:12px;">
-                    <div class="action-card-title">Gestión de Procesos & Tareas Autónomas</div>
-                    <div class="action-card-desc">Activa, pausa o reinicia los runners en segundo plano. Cada runner emite telemetría directa al bus SHM de 1024 KB a 60 FPS en sincronización de bus sin copia.</div>
-                </div>
-                <div class="control-grid" id="runnersContainer" style="margin-top:12px;">
-                    <div class="action-card">Cargando estados de runners...</div>
-                </div>
-                <div class="action-card" style="margin-top:16px;">
-                    <div class="action-card-title">Registro de Ejecución & Paridad de Telemetría</div>
-                    <pre class="hex-box" id="runnersLogBox" style="min-height:120px;">Listo. Selecciona un runner o ejecuta un test paralelo.</pre>
-                </div>
-            </div>
-
-            <!-- PANEL 15: PIPELINE AVANZADO DE INGENIERÍA INVERSA -->
-            <div class="view-panel" id="panel-reverse-pipeline">
-                <div style="font-weight:bold; color:var(--text-header); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-                    <span>🔬 PIPELINE AUTOMATIZADO DE INGENIERÍA INVERSA & DESCOMPILACIÓN</span>
-                    <button class="pill-btn" onclick="triggerAction('megacycle')">⚡ MegaCycle 16-Fases</button>
-                </div>
-                <div class="control-grid" style="margin-top:12px;">
-                    <div class="action-card">
-                        <div class="action-card-title">🔬 Desensamblado Dinámico</div>
-                        <div class="action-card-desc">Desensambla el punto de entrada activo (M68K, Z80, HuC6280, SH-2, MIPS).</div>
-                        <button class="pill-btn" onclick="runReverseAction('disassemble')">🔬 Desensamblar</button>
-                    </div>
-                    <div class="action-card">
-                        <div class="action-card-title">📊 Escaneo de Entropía Shannon</div>
-                        <div class="action-card-desc">Calcula la densidad de información y detecta bloques comprimidos o cifrados.</div>
-                        <button class="pill-btn" onclick="runReverseAction('entropy')">📊 Calcular Entropía</button>
-                    </div>
-                    <div class="action-card">
-                        <div class="action-card-title">🎯 Localizador de Punteros & Tablas</div>
-                        <div class="action-card-desc">Rastrea tablas de salto y referencias relativas a scripts de diálogo.</div>
-                        <button class="pill-btn" onclick="runReverseAction('pointers')">🎯 Escanear Punteros</button>
-                    </div>
-                    <div class="action-card">
-                        <div class="action-card-title">🧩 Escaneo de AOB Patrones Hex</div>
-                        <div class="action-card-desc">Busca firmas de bytes (`Array of Bytes`) y funciones de renderizado.</div>
-                        <button class="pill-btn" onclick="runReverseAction('pattern')">🧩 Escanear Patrón</button>
-                    </div>
-                    <div class="action-card">
-                        <div class="action-card-title">🔓 Desofuscación de Textos Snatcher</div>
-                        <div class="action-card-desc">Aplica algoritmo XOR dinámico sobre bloques de script ofuscados.</div>
-                        <button class="pill-btn" onclick="runReverseAction('deobfuscate')">🔓 Desofuscar</button>
-                    </div>
-                    <div class="action-card">
-                        <div class="action-card-title">📦 Extractor Universal Dumper</div>
-                        <div class="action-card-desc">Extrae sub-archivos empaquetados en contenedores propietarios.</div>
-                        <button class="pill-btn" onclick="runReverseAction('dumper')">📦 Extraer Assets</button>
-                    </div>
-                    <div class="action-card">
-                        <div class="action-card-title">📑 Diff de Snapshots de RAM</div>
-                        <div class="action-card-desc">Compara dos capturas de memoria SHM para aislar variables modificadas.</div>
-                        <button class="pill-btn" onclick="runReverseAction('snapshot_diff')">📑 Comparar Snapshots</button>
-                    </div>
-                    <div class="action-card">
-                        <div class="action-card-title">❄️ Congelador de Memoria</div>
-                        <div class="action-card-desc">Bloquea direcciones de memoria para pruebas de invulnerabilidad o scripts.</div>
-                        <button class="pill-btn" onclick="runReverseAction('freeze')">❄️ Inspeccionar Locks</button>
-                    </div>
-                    <div class="action-card" style="border-left: 3px solid var(--accent);">
-                        <div class="action-card-title">🧠 REA: Corpus Ghidra 2.7MB .C</div>
-                        <div class="action-card-desc">Indexa funciones C descompiladas por Ghidra, infiere semántica y transpila a C++ ScummVM.</div>
-                        <button class="pill-btn" onclick="runReverseAction('rea')">🧠 Analizar Corpus Ghidra</button>
-                    </div>
-                    <div class="action-card" style="border-left: 3px solid var(--accent);">
-                        <div class="action-card-title">🕸️ CFG Lifter & McCabe</div>
-                        <div class="action-card-desc">Recupera Bloques Básicos, aristas de salto, complejidad McCabe y grafo Mermaid en Rust.</div>
-                        <button class="pill-btn" onclick="runReverseAction('cfg')">🕸️ Levantar CFG & C++</button>
-                    </div>
-                    <div class="action-card" style="border-left: 3px solid var(--accent);">
-                        <div class="action-card-title">⚖️ Diaphora Multi-ISA BinDiff</div>
-                        <div class="action-card-desc">Empareja funciones equivalentes entre PS1, Sega CD, Saturn, PCE, MSX2 y PC-8801.</div>
-                        <button class="pill-btn" onclick="runReverseAction('bindiff')">⚖️ Ejecutar BinDiff</button>
-                    </div>
-                    <div class="action-card" style="border-left: 3px solid var(--accent);">
-                        <div class="action-card-title">🎛️ Mapeador MMIO & Auto-Structs</div>
-                        <div class="action-card-desc">Anota registros hardware (GPU/SPU/GateArray/VDP1/VDP2/V9938) y reconstruye structs C.</div>
-                        <button class="pill-btn" onclick="runReverseAction('hw_mmio')">🎛️ Mapear MMIO & Structs</button>
-                    </div>
-                    <div class="action-card" style="border-left: 3px solid var(--accent);">
-                        <div class="action-card-title">🇯🇵 Shift-JIS & Konami LZSS</div>
-                        <div class="action-card-desc">Decodifica cadenas japonesas Shift-JIS a UTF-8 y detecta sectores comprimidos LZSS/RLE.</div>
-                        <button class="pill-btn" onclick="runReverseAction('crypto_scan')">🇯🇵 Escanear Shift-JIS/LZSS</button>
-                    </div>
-                    <div class="action-card" style="border-left: 3px solid var(--accent);">
-                        <div class="action-card-title">🌐 Mega-Unificador (9 Proyectos)</div>
-                        <div class="action-card-desc">Audita y unifica megadaemon, re-research, dumper-web, snatcher-tools, scummvm y clientes Rust.</div>
-                        <button class="pill-btn" onclick="runReverseAction('unifier')">🌐 Auditar Ecosistema</button>
-                    </div>
-                </div>
-                <div class="action-card" style="margin-top:16px;">
-                    <div class="action-card-title">Consola de Salida del Pipeline (Rust v12.0 Omega)</div>
-                    <pre class="hex-box" id="pipelineOutputBox" style="min-height:160px;">Listo. Selecciona una acción de ingeniería inversa arriba.</pre>
-                </div>
-            </div>
+      <!-- SUB 4: ImHex / Kaitai Struct + D810/Goomba MBA Deobfuscator -->
+      <div id="sub-kaitai" class="subpanel">
+        <div class="card">
+          <div class="section-title">
+            <span>IMHEX / KAITAI STRUCT PARSER</span>
+            <button class="btn sm primary" onclick="runKaitaiParse()">PARSE</button>
+          </div>
+          <div class="row" style="margin-bottom:8px;">
+            <select id="kaitaiTemplate" class="grow">
+              <option value="sega_m68k_vectors">sega_m68k_vectors</option>
+              <option value="elf64_header">elf64_header (Linux/Android)</option>
+              <option value="pe_dos_header">pe_dos_header (Windows/DOS)</option>
+              <option value="macho64_header">macho64_header (macOS)</option>
+              <option value="dex_header">dex_header (Android DEX)</option>
+              <option value="psx_exe_header">psx_exe_header (PS1)</option>
+              <option value="zip_local_header">zip_local_header (ZIP/APK)</option>
+            </select>
+            <input type="text" id="kaitaiOffset" value="0x0" style="max-width:110px;">
+          </div>
+          <textarea id="kaitaiCustom" class="code-input" rows="3" placeholder="Esquema custom opcional (1 campo por linea):&#10;magic:ascii:4&#10;version:u16le&#10;entry:u32be"></textarea>
+          <pre id="kaitaiOutput" class="terminal-out mono">Selecciona una plantilla o escribe tu propia definicion ImHex/Kaitai.</pre>
         </div>
 
-        <!-- 4. MOBILE BOTTOM NAVIGATION BAR -->
-        <nav class="mobile-bottom-bar" id="mobileBottomBar">
-            <button class="mobile-nav-item active" data-channel="cortex-chat" onclick="switchChannel('cortex-chat')">
-                <span class="mob-icon">💬</span>
-                <span class="mob-label">Chat AI</span>
-            </button>
-            <button class="mobile-nav-item" data-channel="live-stream" onclick="switchChannel('live-stream')">
-                <span class="mob-icon">📡</span>
-                <span class="mob-label">Stream</span>
-            </button>
-            <button class="mobile-nav-item" data-channel="control-center" onclick="switchChannel('control-center')">
-                <span class="mob-icon">🚀</span>
-                <span class="mob-label">Mando</span>
-            </button>
-            <button class="mobile-nav-item" data-channel="hex-viewer" onclick="switchChannel('hex-viewer')">
-                <span class="mob-icon">🔬</span>
-                <span class="mob-label">Hex/RE</span>
-            </button>
-            <button class="mobile-nav-item" onclick="toggleSidebar()">
-                <span class="mob-icon">☰</span>
-                <span class="mob-label">Menú</span>
-            </button>
-        </nav>
-    </div>
+        <div class="card">
+          <div class="section-title">
+            <span>D810 / GOOMBA — MBA ALGEBRAIC DEOBFUSCATOR</span>
+            <button class="btn sm cyan" onclick="runMbaSimplify()">SIMPLIFY</button>
+          </div>
+          <input type="text" id="mbaExpr" value="(x ^ y) + 2*(x &amp; y)" placeholder="Expresion MBA (ej: (x | y) - (x ^ y))">
+          <pre id="mbaOutput" class="terminal-out mono">Simplificacion algebraica de identidades MBA OLLVM/VMProtect y predicados opacos.</pre>
+        </div>
+      </div>
 
-    <script>
-        let currentHexOffset = 0;
-        let frameCount = 0;
-        let lastFrameTs = performance.now();
-        let currentAttachment = null;
+      <!-- SUB 5: Frida DBI Generator + Live Root Process / Maps -->
+      <div id="sub-frida" class="subpanel">
+        <div class="card">
+          <div class="section-title">
+            <span>FRIDA DBI INSTRUMENTATION ENGINE</span>
+            <button class="btn sm primary" onclick="runFridaGen()">GENERATE</button>
+          </div>
+          <div class="grid-2" style="margin-bottom:8px;">
+            <select id="fridaMode">
+              <option value="attach">Interceptor.attach</option>
+              <option value="stalker">Stalker Coverage Trace</option>
+              <option value="native_call">NativeFunction Harness</option>
+              <option value="android_jni">Android ART / JNI Tracer</option>
+              <option value="tenet_mem">Tenet Mem/Reg Trace</option>
+            </select>
+            <input type="text" id="fridaProcess" value="com.example.target" placeholder="Proceso / Paquete">
+            <input type="text" id="fridaModule" value="libtarget.so" placeholder="Modulo (.so / .dll)">
+            <input type="text" id="fridaSymbol" value="0x1A4F0" placeholder="Export o Offset 0x...">
+          </div>
+          <div class="row" style="margin-bottom:6px;">
+            <button class="btn sm cyan" onclick="copyTextById('fridaOutput')">COPY JS</button>
+            <button class="btn sm amber" onclick="loadLiveProcs()">ROOT PS -A</button>
+            <input type="number" id="mapsPid" placeholder="PID para /proc/maps" style="max-width:140px;">
+            <button class="btn sm" onclick="loadPidMaps()">MAPS</button>
+          </div>
+          <pre id="fridaOutput" class="terminal-out mono">Genera scripts Frida listos o inspecciona procesos/mapas de memoria root en vivo.</pre>
+        </div>
+      </div>
+    </section>
 
-        // =====================================================================
-        // 0. WEBGL GPU MATRIX RAIN SHADER
-        // =====================================================================
-        let glRainActive = true;
-        let glAnimFrame = null;
-        const matrixCanvas = document.getElementById('webgl-matrix');
-        const gl = matrixCanvas ? (matrixCanvas.getContext('webgl') || matrixCanvas.getContext('experimental-webgl')) : null;
+    <!-- ========================================================== -->
+    <!-- VIEW 3: TILE MOLESTER / VRAM VIEWER + LIVE VLA / CV        -->
+    <!-- ========================================================== -->
+    <section id="view-vram" class="view">
+      <div class="card">
+        <div class="section-title">
+          <span>◈ TILE MOLESTER / YY-CHR / CRYSTALTILE2 VRAM</span>
+          <button class="btn sm primary" onclick="renderVramTiles()">RENDER</button>
+        </div>
+        <div class="grid-2" style="margin-bottom:8px;">
+          <select id="vramCodec" onchange="renderVramTiles()">
+            <option value="4bpp_linear">4bpp Linear (MD/SegaCD/GBA/PS1)</option>
+            <option value="4bpp_planar">4bpp Planar (SNES/PCE/SMS)</option>
+            <option value="2bpp_planar">2bpp Planar (NES/GB/SNES)</option>
+            <option value="1bpp">1bpp Font/Bitplane (MSX/PC88)</option>
+            <option value="8bpp_linear">8bpp Linear (PS1/Saturn/VGA)</option>
+            <option value="15bpp_rgb555">15bpp Direct RGB555 (PS1/Saturn)</option>
+          </select>
+          <select id="vramPalette" onchange="renderVramTiles()">
+            <option value="cga_cyber">Obsidian Cyber (16c)</option>
+            <option value="obsidian_mint">Signal Mint Ramp</option>
+            <option value="sega_cram_9bit">Sega 9-bit CRAM (from file)</option>
+            <option value="ps1_clut_15bit">PS1/Saturn 15-bit CLUT</option>
+            <option value="vga_heat">Heatmap (Entropy/Data)</option>
+            <option value="grayscale">Grayscale High-Contrast</option>
+          </select>
+        </div>
+        <div class="row" style="margin-bottom:8px;">
+          <button class="btn sm" onclick="stepVramOffset(-4096)">-4K</button>
+          <button class="btn sm" onclick="stepVramOffset(-256)">-256</button>
+          <input type="text" id="vramOffset" value="0x0" style="max-width:110px;text-align:center;" onchange="renderVramTiles()">
+          <button class="btn sm" onclick="stepVramOffset(256)">+256</button>
+          <button class="btn sm" onclick="stepVramOffset(4096)">+4K</button>
+          <button class="btn sm cyan" onclick="syncVramToHex()">TO HEX</button>
+        </div>
+        <div class="vram-stage">
+          <img id="vramImg" alt="VRAM Tile Sheet">
+        </div>
+      </div>
 
-        const vsSource = `
-            attribute vec2 a_pos;
-            void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
-        `;
-        const fsSource = `
-            precision mediump float;
-            uniform vec2 u_res;
-            uniform float u_time;
-            uniform vec3 u_color;
-            float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
-            void main() {
-                vec2 st = gl_FragCoord.xy / u_res;
-                float cols = 65.0;
-                float col_id = floor(st.x * cols);
-                float speed = 0.4 + hash(vec2(col_id, 3.14)) * 1.3;
-                float seed = hash(vec2(col_id, 9.81)) * 100.0;
-                float y_pos = st.y + (u_time * speed * 0.18) + seed;
-                float row_id = floor(y_pos * 36.0);
-                float char_val = hash(vec2(col_id, row_id));
-                float trail = fract(y_pos * 1.5);
-                float bright = pow(1.0 - trail, 3.0);
-                if (char_val > 0.85) bright *= 1.4;
-                gl_FragColor = vec4(u_color * bright * 0.65, bright * 0.4);
-            }
-        `;
+      <div class="card">
+        <div class="section-title">
+          <span>◈ LIVE SHM VLA FRAME &amp; RUST CV TELEMETRY</span>
+          <div class="row">
+            <button class="btn sm cyan" onclick="refreshVlaFrame()">FRAME</button>
+            <button class="btn sm primary" onclick="runNpuCv()">CV ROI</button>
+          </div>
+        </div>
+        <div class="vram-stage" style="min-height:160px;">
+          <img id="vlaFrameImg" alt="Live SHM Frame">
+        </div>
+        <div class="pad-grid">
+          <button class="btn sm" onclick="sendShmPad(1)">UP</button>
+          <button class="btn sm" onclick="sendShmPad(2)">DOWN</button>
+          <button class="btn sm" onclick="sendShmPad(4)">LEFT</button>
+          <button class="btn sm" onclick="sendShmPad(8)">RIGHT</button>
+          <button class="btn sm cyan" onclick="sendShmPad(16)">A / ACT</button>
+          <button class="btn sm cyan" onclick="sendShmPad(32)">B / BACK</button>
+          <button class="btn sm amber" onclick="sendShmPad(64)">START</button>
+          <button class="btn sm hazard" onclick="sendShmPad(0)">REL</button>
+        </div>
+        <pre id="vlaCvOutput" class="terminal-out mono">Pulsa CV ROI para calcular L1 motion delta, Sobel edge energy, ROIs y paleta dominante.</pre>
+      </div>
+    </section>
 
-        function createShader(gl, type, src) {
-            const s = gl.createShader(type);
-            gl.shaderSource(s, src);
-            gl.compileShader(s);
-            return s;
-        }
+    <!-- ========================================================== -->
+    <!-- VIEW 4: SYSTEM, EXYNOS NPU, API VAULT & UNIFIER            -->
+    <!-- ========================================================== -->
+    <section id="view-system" class="view">
+      <div class="card">
+        <div class="section-title">
+          <span>◈ EXYNOS 2100 NPU / MALI-G78 / THERMALS</span>
+          <div class="row">
+            <button class="btn sm primary" onclick="triggerBoost()">BOOST CORES 4-7</button>
+            <button class="btn sm amber" onclick="purgeCaches()">PURGE RAM</button>
+          </div>
+        </div>
+        <div class="grid-4" id="hwStatsGrid">
+          <div class="stat-box"><div class="stat-label">NPU /dev/vertex10</div><div class="stat-val mono" id="stNpu">--</div></div>
+          <div class="stat-box"><div class="stat-label">EDEN dlopen</div><div class="stat-val mono" id="stEden">--</div></div>
+          <div class="stat-box"><div class="stat-label">CPU / Batt Temp</div><div class="stat-val mono" id="stTemp">--</div></div>
+          <div class="stat-box"><div class="stat-label">Cortex-X1 MHz</div><div class="stat-val mono" id="stClock">--</div></div>
+        </div>
+        <pre id="hwDetailOut" class="terminal-out mono" style="max-height:180px;">Cargando telemetria de hardware Exynos 2100...</pre>
+      </div>
 
-        let glProgram = null, uResLoc = null, uTimeLoc = null, uColorLoc = null;
-        if (gl) {
-            const vs = createShader(gl, gl.VERTEX_SHADER, vsSource);
-            const fs = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
-            glProgram = gl.createProgram();
-            gl.attachShader(glProgram, vs);
-            gl.attachShader(glProgram, fs);
-            gl.linkProgram(glProgram);
-            gl.useProgram(glProgram);
+      <div class="card">
+        <div class="section-title">
+          <span>◈ PARASITIC SWARM — API KEY VAULT (FREE &amp; PAID)</span>
+          <button class="btn sm cyan" onclick="loadProviders()">RELOAD</button>
+        </div>
+        <div class="row" style="margin-bottom:8px;">
+          <select id="vaultProviderId" class="grow"></select>
+          <input type="password" id="vaultApiKey" placeholder="Pegar API Key (guardada local gitignored)" class="grow">
+        </div>
+        <div class="row" style="margin-bottom:10px;">
+          <input type="text" id="vaultModelOverride" placeholder="Model ID opcional" class="grow">
+          <button class="btn sm primary" onclick="saveProviderKey(false)">GUARDAR KEY</button>
+          <button class="btn sm cyan" onclick="saveProviderKey(true)">SET DEFAULT</button>
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="data-table mono" id="providersTable">
+            <thead>
+              <tr><th>ID</th><th>Modelo</th><th>Estado</th><th>Accion</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
 
-            const posBuf = gl.createBuffer();
-            gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
-            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
-            const aPos = gl.getAttribLocation(glProgram, 'a_pos');
-            gl.enableVertexAttribArray(aPos);
-            gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+      <div class="card">
+        <div class="section-title">
+          <span>◈ ECOSISTEMA UNIFICADO (9 PROYECTOS + UPLOADS)</span>
+          <button class="btn sm cyan" onclick="loadUnifier()">SCAN</button>
+        </div>
+        <pre id="unifierOut" class="terminal-out mono" style="max-height:220px;">Pulsa SCAN para auditar los 9 proyectos locales y archivos subidos.</pre>
+      </div>
+    </section>
 
-            uResLoc = gl.getUniformLocation(glProgram, 'u_res');
-            uTimeLoc = gl.getUniformLocation(glProgram, 'u_time');
-            uColorLoc = gl.getUniformLocation(glProgram, 'u_color');
-        }
+  </main>
 
-        function resizeGl() {
-            if (gl && matrixCanvas) {
-                matrixCanvas.width = window.innerWidth;
-                matrixCanvas.height = window.innerHeight;
-                gl.viewport(0, 0, matrixCanvas.width, matrixCanvas.height);
-            }
-        }
-        window.addEventListener('resize', resizeGl);
-        resizeGl();
+  <!-- FIXED BOTTOM THUMB NAVIGATION BAR (Bottom Comfort Zone, 4 Tabs) -->
+  <nav class="bottom-nav" aria-label="Navegacion Principal">
+    <button class="nav-btn active" data-view="view-swarm" onclick="switchView('view-swarm', this)">
+      <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      <span>SWARM</span>
+    </button>
+    <button class="nav-btn" data-view="view-inspect" onclick="switchView('view-inspect', this)">
+      <svg viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+      <span>INSPECT</span>
+    </button>
+    <button class="nav-btn" data-view="view-vram" onclick="switchView('view-vram', this)">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+      <span>VRAM</span>
+    </button>
+    <button class="nav-btn" data-view="view-system" onclick="switchView('view-system', this)">
+      <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/></svg>
+      <span>SYSTEM</span>
+    </button>
+  </nav>
+</div>
 
-        function renderGlRain(time) {
-            if (!glRainActive || !gl) return;
-            gl.useProgram(glProgram);
-            gl.uniform2f(uResLoc, matrixCanvas.width, matrixCanvas.height);
-            gl.uniform1f(uTimeLoc, time * 0.001);
-            const theme = document.documentElement.getAttribute('data-theme') || 'matrix';
-            if (theme === 'matrix') gl.uniform3f(uColorLoc, 0.0, 1.0, 0.4);
-            else if (theme === 'discord') gl.uniform3f(uColorLoc, 0.35, 0.4, 0.95);
-            else gl.uniform3f(uColorLoc, 1.0, 0.69, 0.0);
-            gl.drawArrays(gl.TRIANGLES, 0, 6);
-            glAnimFrame = requestAnimationFrame(renderGlRain);
-        }
-        if (gl) glAnimFrame = requestAnimationFrame(renderGlRain);
+<script>
+"use strict";
 
-        function toggleGpuRain() {
-            glRainActive = !glRainActive;
-            const btn = document.getElementById('btnToggleGpuRain');
-            if (btn) btn.innerText = glRainActive ? '🌧️ GPU: ON' : '☀️ GPU: OFF';
-            if (matrixCanvas) matrixCanvas.style.opacity = glRainActive ? '0.28' : '0.0';
-            if (glRainActive && gl) glAnimFrame = requestAnimationFrame(renderGlRain);
-        }
+const STATE = {
+  attachment: null,
+  providers: [],
+  defaultModel: "minimax-m2.7",
+  targets: [],
+  activeTarget: { type: "platform", platform: "segacd", file: "", label: "Sega CD (M68K)" }
+};
 
-        // =====================================================================
-        // 1. THEMES & UI STATE
-        // =====================================================================
-        function changeTheme(themeName) {
-            document.documentElement.setAttribute('data-theme', themeName);
-            localStorage.setItem('snatcher_theme', themeName);
-        }
-        const savedTheme = localStorage.getItem('snatcher_theme') || 'matrix';
-        changeTheme(savedTheme);
-        document.getElementById('themePicker').value = savedTheme;
+function showToast(msg, isErr) {
+  const el = document.getElementById("toast");
+  if (!el) return;
+  el.textContent = msg;
+  el.className = "toast show" + (isErr ? " err" : "");
+  clearTimeout(window.__toastTimer);
+  window.__toastTimer = setTimeout(() => { el.className = "toast"; }, 3200);
+}
 
-        // =====================================================================
-        // 2. MOBILE DRAWER CONTROLS
-        // =====================================================================
-        function toggleSidebar() {
-            const sb = document.getElementById('sidebar');
-            const bd = document.getElementById('drawerBackdrop');
-            if (sb) sb.classList.toggle('open');
-            if (bd) bd.classList.toggle('active', sb.classList.contains('open'));
-        }
+function escHtml(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
 
-        function closeSidebar() {
-            const sb = document.getElementById('sidebar');
-            const bd = document.getElementById('drawerBackdrop');
-            if (sb) sb.classList.remove('open');
-            if (bd) bd.classList.remove('active');
-        }
+async function apiGet(url) {
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return await res.json();
+}
 
-        // =====================================================================
-        // 3. NAVIGATION (CHANNELS & BOTTOM BAR)
-        // =====================================================================
-        function switchChannel(channelId) {
-            document.querySelectorAll('.view-panel').forEach(el => el.classList.remove('active'));
-            const target = document.getElementById('panel-' + channelId);
-            if (target) target.classList.add('active');
+async function apiPost(url, payload) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {})
+  });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return await res.json();
+}
 
-            const titleEl = document.getElementById('current-channel-title');
-            if (titleEl) titleEl.innerText = '# ' + channelId;
+function switchView(viewId, btnEl) {
+  document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+  document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
+  const target = document.getElementById(viewId);
+  if (target) target.classList.add("active");
+  if (btnEl) btnEl.classList.add("active");
+  if (viewId === "view-vram") {
+    renderVramTiles();
+    refreshVlaFrame();
+  } else if (viewId === "view-system") {
+    refreshHardware();
+    loadProviders();
+  }
+}
 
-            // Highlight sidebar
-            document.querySelectorAll('.channel-item').forEach(el => {
-                el.classList.toggle('active', el.getAttribute('data-channel') === channelId);
-            });
+function switchInspectSub(subId, btnEl) {
+  document.querySelectorAll("#view-inspect .subpanel").forEach(p => p.classList.remove("active"));
+  document.querySelectorAll("#inspectSubtabs .subtab").forEach(b => b.classList.remove("active"));
+  const target = document.getElementById(subId);
+  if (target) target.classList.add("active");
+  if (btnEl) btnEl.classList.add("active");
+}
 
-            // Highlight mobile bottom bar
-            document.querySelectorAll('.mobile-nav-item').forEach(el => {
-                el.classList.toggle('active', el.getAttribute('data-channel') === channelId);
-            });
+function buildTargetQueryParams() {
+  const t = STATE.activeTarget;
+  if (t && t.file) {
+    return "platform=" + encodeURIComponent(t.platform || "segacd") + "&file=" + encodeURIComponent(t.file);
+  }
+  return "platform=" + encodeURIComponent((t && t.platform) || "segacd");
+}
 
-            closeSidebar();
+/* ==================== PROVIDERS & SWARM ==================== */
+async function loadProviders() {
+  try {
+    const data = await apiGet("/api/providers");
+    STATE.providers = data.providers || [];
+    STATE.defaultModel = data.default_model || "minimax-m2.7";
 
-            if (channelId === 'hex-viewer') loadHexDump(currentHexOffset);
-            if (channelId === 'devlog-hitos') loadDevlog();
-            if (channelId === 'roadmap-backlog') loadRoadmap();
-            if (channelId === 'rom-locator') queryRomLocator(false);
-            if (channelId === 'runners-hub') loadRunnersHub();
-            if (channelId === 'reverse-pipeline') loadReversePipeline();
-        }
+    const sel = document.getElementById("modelSelect");
+    const vsel = document.getElementById("vaultProviderId");
+    const prev = sel.value || STATE.defaultModel;
+    sel.innerHTML = "";
+    vsel.innerHTML = "";
 
-        let activeTargetKey = 'segacd';
+    const tbody = document.querySelector("#providersTable tbody");
+    tbody.innerHTML = "";
 
-        async function switchPlatform(platKey) {
-            activeTargetKey = platKey;
-            document.querySelectorAll('.server-icon').forEach(el => {
-                el.classList.toggle('active', el.getAttribute('data-plat') === platKey);
-            });
-            document.querySelectorAll('.platform-chip').forEach(el => {
-                el.classList.toggle('active', el.getAttribute('data-plat') === platKey);
-            });
+    STATE.providers.forEach(p => {
+      const tag = p.ready ? "[READY]" : "[KEY REQ]";
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = tag + " " + p.name;
+      sel.appendChild(opt);
 
-            const banner = document.getElementById('activeTargetBanner');
-            if (banner) banner.innerText = 'Target Activo: ' + platKey.toUpperCase();
+      const vopt = document.createElement("option");
+      vopt.value = p.id;
+      vopt.textContent = p.id + " (" + p.vendor + ")";
+      vsel.appendChild(vopt);
 
-            const hexSel = document.getElementById('hexPlatSelect');
-            if (hexSel) hexSel.value = platKey;
+      const tr = document.createElement("tr");
+      const statusBadge = p.ready
+        ? '<span class="pill mint">READY</span>'
+        : '<span class="pill amber">ADD KEY</span>';
+      const linkHtml = p.free_signup_url
+        ? '<a href="' + escHtml(p.free_signup_url) + '" target="_blank" style="color:var(--cyan);text-decoration:none;margin-right:8px;">GET KEY</a>'
+        : "";
+      tr.innerHTML =
+        "<td>" + escHtml(p.id) + "</td>" +
+        "<td>" + escHtml(p.model) + "</td>" +
+        "<td>" + statusBadge + "</td>" +
+        '<td>' + linkHtml + '<button class="btn sm cyan" style="min-height:32px;padding:0 8px;" onclick="testProviderById(\'' + escHtml(p.id) + '\')">TEST</button></td>';
+      tbody.appendChild(tr);
+    });
 
-            try {
-                await fetch('/api/runners/control', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ action: 'select', target: platKey })
-                });
-            } catch(e) { console.error(e); }
-        }
+    if ([...sel.options].some(o => o.value === prev)) {
+      sel.value = prev;
+    } else {
+      sel.value = STATE.defaultModel;
+    }
+    const hdrModel = document.getElementById("hdrModel");
+    if (hdrModel) hdrModel.textContent = sel.value.toUpperCase();
+    sel.onchange = () => {
+      if (hdrModel) hdrModel.textContent = sel.value.toUpperCase();
+    };
+  } catch (e) {
+    showToast("Error cargando proveedores: " + e.message, true);
+  }
+}
 
-        // =====================================================================
-        // 4. HAPTICS & VLA INPUT
-        // =====================================================================
-        function injectInput(btn, state) {
-            if (navigator.vibrate && state === 1) navigator.vibrate(15);
-            const bitMap = { 'UP': 1, 'DOWN': 2, 'LEFT': 4, 'RIGHT': 8, 'A': 16, 'B': 32, 'C': 64, 'START': 128, 'SELECT': 256 };
-            const mask = state ? bitMap[btn] : 0;
-            fetch('/api/input?mask=' + mask);
-        }
+async function saveProviderKey(setDefault) {
+  const id = document.getElementById("vaultProviderId").value;
+  const api_key = document.getElementById("vaultApiKey").value.trim();
+  const model = document.getElementById("vaultModelOverride").value.trim();
+  try {
+    const payload = { id, set_default: !!setDefault };
+    if (api_key) payload.api_key = api_key;
+    if (model) payload.model = model;
+    const res = await apiPost("/api/providers", payload);
+    if (res.status === "OK") {
+      document.getElementById("vaultApiKey").value = "";
+      await loadProviders();
+      showToast("Proveedor " + id + " actualizado" + (setDefault ? " como default" : ""));
+    } else {
+      showToast("Error: " + (res.message || "fallo"), true);
+    }
+  } catch (e) {
+    showToast("Error guardando key: " + e.message, true);
+  }
+}
 
-        // =====================================================================
-        // 5. CORTEX CHAT & FILE ATTACHMENT
-        // =====================================================================
-        function handleFileSelected(event) {
-            const file = event.target.files[0];
-            if (!file) return;
+async function testProviderById(id) {
+  showToast("Probando conexion con " + id + "...");
+  try {
+    const r = await apiPost("/api/providers/test", { id });
+    if (r.status === "OK") {
+      showToast(id + " OK (" + r.latency_ms + " ms): " + String(r.reply || "").slice(0, 40));
+    } else {
+      showToast(id + " -> fallback a " + r.resolved_model, true);
+    }
+  } catch (e) {
+    showToast("Error test " + id + ": " + e.message, true);
+  }
+}
 
-            const tray = document.getElementById('attachmentTray');
-            const nameEl = document.getElementById('attachedFileName');
-            const sizeEl = document.getElementById('attachedFileSize');
-            if (nameEl) nameEl.innerText = file.name;
-            if (sizeEl) sizeEl.innerText = (file.size / 1024).toFixed(1) + ' KB';
-            if (tray) tray.style.display = 'flex';
+function testSelectedProvider() {
+  const id = document.getElementById("modelSelect").value || STATE.defaultModel;
+  testProviderById(id);
+}
 
-            const reader = new FileReader();
-            reader.onload = async function(e) {
-                const base64Data = e.target.result;
-                try {
-                    const res = await fetch('/api/chat_upload', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            filename: file.name,
-                            data_b64: base64Data
-                        })
-                    });
-                    const data = await res.json();
-                    if (data.status === 'OK') {
-                        currentAttachment = data;
-                        if (navigator.vibrate) navigator.vibrate(20);
-                    }
-                } catch (err) {
-                    console.error('Error uploading file:', err);
-                }
-            };
-            reader.readAsDataURL(file);
-        }
+/* ==================== UNRESTRICTED FILE UPLOAD ==================== */
+async function handleAnyFileUpload(ev) {
+  const file = ev.target && ev.target.files && ev.target.files[0];
+  if (!file) return;
+  showToast("Subiendo " + file.name + " (" + (file.size / 1024).toFixed(1) + " KB)...");
+  try {
+    const b64 = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("FileReader failed"));
+      reader.readAsDataURL(file);
+    });
+    const res = await apiPost("/api/chat_upload", {
+      filename: file.name,
+      data_b64: b64
+    });
+    if (res.status === "OK") {
+      STATE.attachment = res;
+      const bar = document.getElementById("attachmentBar");
+      const sum = document.getElementById("attachmentSummary");
+      sum.textContent = res.filename + " | " + res.size_formatted + " | " + res.format_family + " | H=" + res.entropy;
+      bar.classList.add("visible");
+      await refreshTargets(res.path);
+      showToast("Archivo cargado sin restricciones: " + res.filename);
+    } else {
+      showToast("Upload error", true);
+    }
+  } catch (e) {
+    showToast("Fallo al subir archivo: " + e.message, true);
+  } finally {
+    ev.target.value = "";
+  }
+}
 
-        function clearAttachment() {
-            currentAttachment = null;
-            const tray = document.getElementById('attachmentTray');
-            if (tray) tray.style.display = 'none';
-            const input = document.getElementById('chatFileInput');
-            if (input) input.value = '';
-        }
+function clearAttachment() {
+  STATE.attachment = null;
+  document.getElementById("attachmentBar").classList.remove("visible");
+}
 
-        function applyPresetPrompt(promptText) {
-            const input = document.getElementById('chatMsgInput');
-            if (input) {
-                input.value = promptText;
-                input.focus();
-                sendChatMessage();
-            }
-        }
+function jumpAttachmentToInspector() {
+  if (!STATE.attachment) return;
+  STATE.activeTarget = {
+    type: "upload",
+    platform: "custom",
+    file: STATE.attachment.path,
+    label: "[UPLOAD] " + STATE.attachment.filename
+  };
+  document.getElementById("activeFilePath").textContent = STATE.attachment.path;
+  const navBtn = document.querySelector('.nav-btn[data-view="view-inspect"]');
+  switchView("view-inspect", navBtn);
+  runDieBinwalk();
+}
 
-        async function sendChatMessage() {
-            const input = document.getElementById('chatMsgInput');
-            const msg = input.value.trim();
-            if (!msg && !currentAttachment) return;
-            input.value = '';
+/* ==================== SWARM CHAT ==================== */
+function appendMessage(role, content, meta, reasoning) {
+  const box = document.getElementById("chatMessages");
+  const div = document.createElement("div");
+  div.className = "msg " + role;
+  let html = "";
+  if (meta) {
+    html += '<div class="msg-meta mono">' + meta + "</div>";
+  }
+  if (reasoning) {
+    html += '<details class="think-details mono"><summary>RAZONAMIENTO INTERNO (' + reasoning.length + ' chars)</summary><div style="margin-top:6px;white-space:pre-wrap;">' + escHtml(reasoning) + "</div></details>";
+  }
+  html += "<div>" + escHtml(content) + "</div>";
+  div.innerHTML = html;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+  return div;
+}
 
-            const feed = document.getElementById('chatFeed');
-            let attHtml = '';
-            if (currentAttachment) {
-                attHtml = `
-                    <div class="chat-attachment-card">
-                        <div class="att-head">📎 <b>${currentAttachment.filename}</b> (${currentAttachment.size_formatted})</div>
-                        <div class="att-detail">Entropía: ${currentAttachment.entropy} bits/byte | Guardado: <code>${currentAttachment.path}</code></div>
-                        ${currentAttachment.hex_head ? `<div class="att-hex">${currentAttachment.hex_head.substring(0, 80)}...</div>` : ''}
-                    </div>
-                `;
-            }
+function sendQuickPrompt(text) {
+  document.getElementById("chatInput").value = text;
+  sendChat();
+}
 
-            feed.innerHTML += `
-                <div class="chat-row user-row">
-                    <div class="chat-avatar">TÚ</div>
-                    <div class="chat-body">
-                        <div class="chat-author">Tú • Ahora</div>
-                        <div class="chat-bubble">${attHtml}${msg ? msg : '<em>(Solicitud de análisis sobre archivo adjunto)</em>'}</div>
-                    </div>
-                </div>
-            `;
-            feed.scrollTop = feed.scrollHeight;
+async function sendChat() {
+  const inp = document.getElementById("chatInput");
+  const btn = document.getElementById("btnSendChat");
+  const text = inp.value.trim();
+  if (!text) return;
+  const model = document.getElementById("modelSelect").value || STATE.defaultModel;
 
-            const payloadAttachment = currentAttachment;
-            clearAttachment();
+  const userMeta = STATE.attachment
+    ? "USER &bull; ADJUNTO: " + escHtml(STATE.attachment.filename)
+    : "USER &bull; TARGET: " + escHtml(model);
+  appendMessage("user", text, userMeta, "");
+  inp.value = "";
+  btn.disabled = true;
+  btn.textContent = "...";
 
-            // Loading indicator
-            const loadId = 'loading-' + Date.now();
-            feed.innerHTML += `
-                <div class="chat-row ai-row" id="${loadId}">
-                    <div class="chat-avatar">AI</div>
-                    <div class="chat-body">
-                        <div class="chat-author">Cortex Qwen 2.5 • Procesando...</div>
-                        <div class="chat-bubble" style="opacity:0.8; font-style:italic;">⚡ Razonando y ejecutando herramientas root...</div>
-                    </div>
-                </div>
-            `;
-            feed.scrollTop = feed.scrollHeight;
+  const placeholder = appendMessage("bot", "Ejecutando motor Rust Swarm (" + model + ")...", "◈ PROCESANDO", "");
 
-            try {
-                const res = await fetch('/api/chat', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        message: msg,
-                        model: 'local',
-                        privacy_mode: true,
-                        attachment: payloadAttachment
-                    })
-                });
-                const data = await res.json();
-                const loadEl = document.getElementById(loadId);
-                if (loadEl) loadEl.remove();
+  try {
+    const payload = { message: text, model: model };
+    if (STATE.attachment) payload.attachment = STATE.attachment;
+    const r = await apiPost("/api/chat", payload);
+    placeholder.remove();
+    const toolsTag = (r.tools_used && r.tools_used.length)
+      ? ' <span class="pill amber">' + escHtml(r.tools_used.join(" + ")) + "</span>"
+      : "";
+    const fbTag = r.fallback_used ? ' <span class="pill hazard">FALLBACK</span>' : "";
+    const meta =
+      "◈ " + escHtml(r.model_name || r.model_id || model) +
+      ' <span class="pill mint">' + escHtml(r.latency_ms || 0) + " ms</span>" +
+      toolsTag + fbTag;
+    appendMessage("bot", r.reply || "(sin respuesta)", meta, r.reasoning || "");
+  } catch (e) {
+    placeholder.remove();
+    appendMessage("bot", "Error de red/backend: " + e.message, "◈ ERROR RECUPERABLE", "");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "SEND";
+  }
+}
 
-                feed.innerHTML += `
-                    <div class="chat-row ai-row">
-                        <div class="chat-avatar">AI</div>
-                        <div class="chat-body">
-                            <div class="chat-author">SEERE PHOENIX • ${data.latency_ms}ms</div>
-                            <div class="chat-bubble" style="white-space:pre-wrap;">${data.reply}</div>
-                        </div>
-                    </div>
-                `;
-            } catch (e) {
-                const loadEl = document.getElementById(loadId);
-                if (loadEl) loadEl.remove();
-                feed.innerHTML += `
-                    <div class="chat-row ai-row">
-                        <div class="chat-avatar" style="background:var(--danger);">ERR</div>
-                        <div class="chat-body">
-                            <div class="chat-bubble" style="color:var(--danger);">Error conectando al córtex local: ${e.message}</div>
-                        </div>
-                    </div>
-                `;
-            }
-            feed.scrollTop = feed.scrollHeight;
-        }
+/* ==================== TARGETS (ROMS + UPLOADS) ==================== */
+async function refreshTargets(selectPath) {
+  const sel = document.getElementById("targetSelector");
+  if (!sel) return;
+  const entries = [];
+  try {
+    const up = await apiGet("/api/uploads");
+    (up.uploads || []).forEach(u => {
+      entries.push({
+        type: "upload",
+        platform: "custom",
+        file: u.path,
+        label: "[UPLOAD] " + u.filename + " (" + u.size_formatted + ")"
+      });
+    });
+  } catch (_) {}
 
-        // =====================================================================
-        // 6. ACTION TRIGGERS
-        // =====================================================================
-        async function triggerAction(act) {
-            const endpoints = {
-                'megacycle': '/api/trigger_megacycle',
-                'boost': '/api/trigger_boost',
-                'minidaemon': '/api/trigger_minidaemon',
-                'weaponized': '/api/trigger_weaponized',
-                'symbolic': '/api/trigger_symbolic',
-                'retro_hook': '/api/trigger_retro_hook',
-                'vla': '/api/run_vla',
-                'rebuild': '/api/rebuild_scummvm',
-                'purge': '/api/purge_cache',
-                'record_clip': '/api/record_clip'
-            };
-            if (endpoints[act]) {
-                const res = await fetch(endpoints[act], { method: 'POST' });
-                if (act === 'record_clip') {
-                    const rData = await res.json();
-                    alert('Clip guardado con éxito: ' + rData.frames_captured + ' cuadros en ' + rData.path);
-                }
-                setTimeout(updateAllTelemetry, 500);
-            }
-        }
+  try {
+    const roms = await apiGet("/api/locate_roms");
+    (roms.discovered_roms || []).forEach(r => {
+      entries.push({
+        type: "rom",
+        platform: r.platform_key || "segacd",
+        file: r.path || "",
+        label: "[" + String(r.platform_key || "ROM").toUpperCase() + "] " + (r.platform_name || r.path)
+      });
+    });
+  } catch (_) {}
 
-        // =====================================================================
-        // 7. DEVLOG & ROADMAP
-        // =====================================================================
-        async function loadDevlog() {
-            try {
-                const res = await fetch('/api/devlog');
-                const data = await res.json();
-                const container = document.getElementById('devlogContainer');
-                if (!container) return;
-                if (!data || data.length === 0) {
-                    container.innerHTML = '<div class="action-card">Sin entradas de devlog aún.</div>';
-                    return;
-                }
-                container.innerHTML = data.map(entry => `
-                    <div class="action-card" style="border-left: 4px solid var(--accent);">
-                        <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <div class="action-card-title">${entry.milestone}</div>
-                            <span class="badge accent">${entry.type}</span>
-                        </div>
-                        <div style="font-size:0.75rem; color:var(--text-muted);">${new Date(entry.timestamp).toLocaleString()} • ${entry.author}</div>
-                        <div style="font-size:0.82rem; margin-top:6px; line-height:1.4;"><b>Resumen:</b> ${entry.honest_summary}</div>
-                        <div style="font-size:0.8rem; margin-top:4px; color:var(--warning); line-height:1.3;">⚠️ <b>Obstáculos:</b> ${entry.real_obstacles}</div>
-                        <div style="font-size:0.8rem; margin-top:4px; color:var(--text-header); line-height:1.3;">🔍 <b>Autocrítica:</b> ${entry.self_critique}</div>
-                    </div>
-                `).join('');
-            } catch (e) { console.error(e); }
-        }
+  if (!entries.length) {
+    entries.push({ type: "platform", platform: "segacd", file: "", label: "[SEGACD] Default Target" });
+  }
 
-        async function loadRoadmap() {
-            try {
-                const res = await fetch('/api/roadmap');
-                const data = await res.json();
-                const vText = document.getElementById('roadmapVisionText');
-                if (vText && data.vision) vText.innerText = data.vision;
+  STATE.targets = entries;
+  sel.innerHTML = "";
+  entries.forEach((e, idx) => {
+    const opt = document.createElement("option");
+    opt.value = String(idx);
+    opt.textContent = e.label;
+    sel.appendChild(opt);
+  });
 
-                const cList = document.getElementById('roadmapCompletedList');
-                const pList = document.getElementById('roadmapInProgressList');
-                const bList = document.getElementById('roadmapBacklogList');
-                if (cList) cList.innerHTML = '';
-                if (pList) pList.innerHTML = '';
-                if (bList) bList.innerHTML = '';
+  if (selectPath) {
+    const foundIdx = entries.findIndex(e => e.file === selectPath);
+    if (foundIdx >= 0) sel.value = String(foundIdx);
+  }
+  onTargetChanged();
+}
 
-                (data.items || []).forEach(item => {
-                    const card = `
-                        <div style="background:var(--bg-input); border:1px solid var(--border); border-radius:6px; padding:8px;">
-                            <div style="display:flex; justify-content:space-between; align-items:center;">
-                                <span style="font-weight:bold; font-size:0.8rem; color:var(--text-header);">${item.title}</span>
-                                <span class="badge ${item.priority === 'CRITICAL' ? 'danger' : (item.priority === 'HIGH' ? 'accent' : '')}">${item.priority}</span>
-                            </div>
-                            <div style="font-size:0.72rem; color:var(--text-muted); margin:4px 0;">${item.description}</div>
-                            <div style="background:var(--bg-card); border-radius:4px; height:6px; overflow:hidden; margin-top:4px;">
-                                <div style="background:var(--accent); width:${item.progress_pct}%; height:100%;"></div>
-                            </div>
-                        </div>
-                    `;
-                    if (item.status === 'COMPLETED' && cList) cList.innerHTML += card;
-                    else if (item.status === 'IN_PROGRESS' && pList) pList.innerHTML += card;
-                    else if (bList) bList.innerHTML += card;
-                });
-            } catch (e) { console.error(e); }
-        }
+function onTargetChanged() {
+  const sel = document.getElementById("targetSelector");
+  const idx = parseInt(sel.value, 10) || 0;
+  STATE.activeTarget = STATE.targets[idx] || STATE.activeTarget;
+  document.getElementById("activeFilePath").textContent =
+    STATE.activeTarget.file || ("platform://" + STATE.activeTarget.platform);
+}
 
-        // =====================================================================
-        // 8. HEX DUMP INSPECTOR
-        // =====================================================================
-        async function loadHexDump(offset) {
-            currentHexOffset = offset;
-            const plat = document.getElementById('hexPlatSelect').value;
-            const res = await fetch(`/api/hex_inspect?platform=${plat}&offset=${offset}&size=256`);
-            const data = await res.json();
-            const box = document.getElementById('hexContentBox');
-            document.getElementById('hexOffsetLabel').innerText = `Offset: 0x${data.offset ? data.offset.toString(16).padStart(6, '0') : '000000'} / Total: ${data.total_size || 0} bytes`;
-            if (data.lines && data.lines.length > 0) {
-                box.innerHTML = data.lines.map(l => `${l.addr}:  ${l.hex.padEnd(48, ' ')}  |${l.ascii}|`).join('\n');
-            } else {
-                box.innerText = data.error || 'Sin datos disponibles.';
-            }
-        }
-        function scrollHex(delta) {
-            loadHexDump(Math.max(0, currentHexOffset + delta));
-        }
+/* ==================== INSPECTOR ENGINES ==================== */
+async function runDieBinwalk() {
+  const out = document.getElementById("dieDetails");
+  out.textContent = "Escaneando con mmap zero-copy (DiE + Binwalk + Comtype + Bulk Extractor)...";
+  try {
+    const r = await apiGet("/api/die_binwalk?" + buildTargetQueryParams());
+    document.getElementById("dieFormat").textContent = (r.format_family || "--") + " [" + (r.target_os || "--") + "]";
+    document.getElementById("dieArch").textContent = (r.architecture || "--") + " " + (r.bitness || "") + "b";
+    document.getElementById("diePacker").textContent = r.packer_or_compiler || "--";
+    document.getElementById("dieEntropy").textContent = (r.global_entropy || 0) + " b/B | " + (r.file_size || 0) + " B";
 
-        // =====================================================================
-        // 9. 60 FPS CRT STREAM
-        // =====================================================================
-        const crtCanvas = document.getElementById('crtCanvas');
-        const crtCtx = crtCanvas ? crtCanvas.getContext('2d') : null;
-        function renderLiveStream() {
-            if (crtCanvas && crtCtx) {
-                const img = new Image();
-                img.onload = () => {
-                    crtCtx.drawImage(img, 0, 0, crtCanvas.width, crtCanvas.height);
-                    const now = performance.now();
-                    const fps = Math.round(1000 / (now - lastFrameTs));
-                    lastFrameTs = now;
-                    frameCount++;
-                    const hud = document.getElementById('hud-frame');
-                    if (hud) hud.innerText = 'FRAME: #' + (3980 + frameCount) + ' (' + fps + ' FPS)';
-                };
-                img.src = '/api/live_frame?t=' + Date.now();
-            }
-            setTimeout(renderLiveStream, 50);
-        }
-        renderLiveStream();
+    const lines = [];
+    if (r.security_mitigations && r.security_mitigations.length) {
+      lines.push("MITIGATIONS: " + r.security_mitigations.join(", "));
+    }
+    if (r.sections && r.sections.length) {
+      lines.push("\n--- SECTIONS (" + r.sections.length + ") ---");
+      r.sections.forEach(s => {
+        lines.push(s.name.padEnd(16) + " VA=" + s.virtual_addr + " RAW=" + s.raw_offset + " SZ=" + s.size + " H=" + s.entropy + " [" + s.flags + "]");
+      });
+    }
+    if (r.embedded_signatures && r.embedded_signatures.length) {
+      lines.push("\n--- BINWALK EMBEDDED SIGNATURES (" + r.embedded_signatures.length + ") ---");
+      r.embedded_signatures.forEach(s => {
+        lines.push(s.offset_hex + "  [" + s.category + "] " + s.signature + " — " + s.detail);
+      });
+    }
+    if (r.comtype_candidates && r.comtype_candidates.length) {
+      lines.push("\n--- COMTYPE COMPRESSION HITS (" + r.comtype_candidates.length + ") ---");
+      r.comtype_candidates.forEach(c => {
+        lines.push(c.offset_hex + "  " + c.algorithm + " (conf=" + c.confidence + ", magic=" + c.magic_hex + ")");
+      });
+    }
+    if (r.bulk_artifacts && r.bulk_artifacts.length) {
+      lines.push("\n--- BULK EXTRACTOR ARTIFACTS (" + r.bulk_artifacts.length + ") ---");
+      r.bulk_artifacts.slice(0, 24).forEach(a => {
+        lines.push(a.offset_hex + "  [" + a.kind + "] " + a.value);
+      });
+    }
+    out.textContent = lines.length ? lines.join("\n") : JSON.stringify(r, null, 2);
+  } catch (e) {
+    out.textContent = "Error DiE/Binwalk: " + e.message;
+  }
+}
 
-        // =====================================================================
-        // 10. AUDIO EQUALIZER
-        // =====================================================================
-        const audioCanvas = document.getElementById('audioCanvas');
-        const audioCtx = audioCanvas ? audioCanvas.getContext('2d') : null;
-        function renderAudio() {
-            if (audioCanvas && audioCtx) {
-                audioCtx.fillStyle = '#000';
-                audioCtx.fillRect(0, 0, audioCanvas.width, audioCanvas.height);
-                const bars = 32;
-                const bw = audioCanvas.width / bars;
-                for (let i = 0; i < bars; i++) {
-                    const h = Math.sin(Date.now() * 0.006 + i * 0.3) * 40 + 50 + (Math.random() * 15);
-                    audioCtx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent') || '#00ff66';
-                    audioCtx.fillRect(i * bw, audioCanvas.height - h, bw - 2, h);
-                }
-            }
-            requestAnimationFrame(renderAudio);
-        }
-        renderAudio();
+async function runCarveExtract() {
+  const out = document.getElementById("dieDetails");
+  out.textContent = "Desempaquetando / Carving binario con 7zz + Scalpel Rust...";
+  try {
+    const r = await apiPost("/api/carve_extract", {
+      platform: STATE.activeTarget.platform,
+      file: STATE.activeTarget.file
+    });
+    out.textContent = JSON.stringify(r, null, 2);
+    showToast("Carve/Extract: " + (r.status || "OK"));
+  } catch (e) {
+    out.textContent = "Error Carve: " + e.message;
+  }
+}
 
-        // =====================================================================
-        // 11. TELEMETRY POLLING
-        // =====================================================================
-        async function updateAllTelemetry() {
-            try {
-                // Status
-                const st = await (await fetch('/api/status')).json();
-                if (st.cycle_count) {
-                    const el = document.getElementById('footer-engine-desc');
-                    if (el) el.innerText = `Ciclo #${st.cycle_count} | PASS`;
-                }
+async function runHexInspect() {
+  const off = document.getElementById("hexOffset").value || "0x0";
+  const out = document.getElementById("hexOutput");
+  out.textContent = "Leyendo volcado hexadecimal...";
+  try {
+    const r = await apiGet("/api/hex_inspect?" + buildTargetQueryParams() + "&offset=" + encodeURIComponent(off) + "&size=256");
+    if (r.lines && r.lines.length) {
+      out.textContent = r.lines.map(l => l.address + "  " + l.hex + "  |" + l.ascii + "|").join("\n");
+    } else {
+      out.textContent = JSON.stringify(r, null, 2);
+    }
+  } catch (e) {
+    out.textContent = "Error Hex: " + e.message;
+  }
+}
 
-                // MiniDaemon & Thermal
-                const md = await (await fetch('/api/minidaemon')).json();
-                if (md.thermal) {
-                    const bTemp = md.thermal.battery_temp_c || 32.0;
-                    const cTemp = md.thermal.cpu_temp_c || 35.0;
-                    const thState = md.thermal.throttle_state || 'COOL_TURBO';
-                    const thBadge = document.getElementById('badge-thermal');
-                    if (thBadge) {
-                        thBadge.innerText = `THERMAL: ${thState.split('_')[0]} ${bTemp.toFixed(1)}°C`;
-                        thBadge.className = 'badge ' + (thState === 'HOT_THROTTLED' ? 'danger' : 'accent');
-                    }
-                    const batEl = document.getElementById('md-bat-temp');
-                    if (batEl) batEl.innerText = `${bTemp.toFixed(1)} °C`;
-                    const cpuEl = document.getElementById('md-cpu-temp');
-                    if (cpuEl) cpuEl.innerText = `${cTemp.toFixed(1)} °C`;
-                    const stEl = document.getElementById('md-throttle-state');
-                    if (stEl) {
-                        stEl.innerText = thState;
-                        stEl.style.color = thState === 'HOT_THROTTLED' ? 'var(--danger)' : 'var(--accent)';
-                    }
-                    const descEl = document.getElementById('md-throttle-desc');
-                    if (descEl) descEl.innerText = `Delay: ${md.thermal.throttle_delay}s | Batería: ${bTemp.toFixed(1)}°C`;
-                    const itEl = document.getElementById('md-iterations');
-                    if (itEl) itEl.innerText = md.iterations || 0;
-                    const tDescEl = document.getElementById('md-tests-desc');
-                    if (tDescEl) tDescEl.innerText = `${md.tests_passed || 0} pasados | ${md.tests_failed || 0} fallos`;
-                    const fBox = document.getElementById('md-findings-box');
-                    if (fBox && md.recent_findings && md.recent_findings.length > 0) {
-                        fBox.innerText = JSON.stringify(md.recent_findings, null, 2);
-                    }
-                }
+async function runDisasm() {
+  const off = document.getElementById("hexOffset").value || "0x0";
+  const out = document.getElementById("hexOutput");
+  out.textContent = "Desensamblando instrucciones...";
+  try {
+    const r = await apiGet("/api/disassemble?" + buildTargetQueryParams() + "&offset=" + encodeURIComponent(off) + "&count=24");
+    if (r.instructions && r.instructions.length) {
+      out.textContent = "[" + r.arch + " | " + r.platform + "]\n" +
+        r.instructions.map(i => i.address + "  " + i.bytes.padEnd(14) + " " + i.mnemonic + " " + i.operands).join("\n");
+    } else {
+      out.textContent = JSON.stringify(r, null, 2);
+    }
+  } catch (e) {
+    out.textContent = "Error Disasm: " + e.message;
+  }
+}
 
-                // GDB
-                const wp = await (await fetch('/api/weaponized')).json();
-                if (wp.differential_anomalies) {
-                    const anomEl = document.getElementById('gdb-anom-list');
-                    if (anomEl) anomEl.innerHTML = wp.differential_anomalies.map(a => `• <b>[${a.severity}]</b> ${a.subsystem}: ${a.impact || a.message}`).join('<br>');
-                }
-                if (wp.ai_bug_fixes && wp.ai_bug_fixes.length > 0) {
-                    const pEl = document.getElementById('gdb-patch-box');
-                    if (pEl) pEl.innerText = wp.ai_bug_fixes[0].fix_proposal;
-                }
+async function runEntropy() {
+  const out = document.getElementById("hexOutput");
+  try {
+    const r = await apiGet("/api/entropy_scan?" + buildTargetQueryParams() + "&block_size=1024");
+    out.textContent = JSON.stringify(r, null, 2);
+  } catch (e) {
+    out.textContent = "Error Entropy: " + e.message;
+  }
+}
 
-                // Local LLM Status
-                try {
-                    const br = await (await fetch('/api/brain_status')).json();
-                    const brBadge = document.getElementById('badge-llm-status');
-                    if (brBadge) {
-                        if (br.brain_active) {
-                            brBadge.className = 'badge accent';
-                            brBadge.innerText = '🟢 QWEN 2.5 LOCAL ONLINE (127.0.0.1:8080)';
-                        } else {
-                            brBadge.className = 'badge danger';
-                            brBadge.innerText = '🔴 LOCAL LLM OFFLINE';
-                        }
-                    }
-        // =====================================================================
-        // 8. ROM LOCATOR & TARGET SELECTOR
-        // =====================================================================
-        async function queryRomLocator(forceRefresh) {
-            const container = document.getElementById('romListContainer');
-            if (!container) return;
-            container.innerHTML = '<div class="action-card">Escaneando almacenamiento y buscando ROMs...</div>';
-            try {
-                const res = await fetch('/api/locate_roms' + (forceRefresh ? '?refresh=1' : ''));
-                const data = await res.json();
-                const roms = data.discovered_roms || {};
-                const keys = Object.keys(roms);
-                if (keys.length === 0) {
-                    container.innerHTML = '<div class="action-card" style="color:var(--warning);">No se detectaron ROMs en /storage/emulated/0/Download/Snatcher-Collection.</div>';
-                    return;
-                }
-                const platNames = {
-                    'segacd': 'Sega CD (MegaCD M68K)',
-                    'pce': 'PC Engine CD-ROM² (HuC6280)',
-                    'saturn': 'Sega Saturn (Dual SH-2)',
-                    'ps1': 'PlayStation 1 (MIPS R3000A)',
-                    'msx2': 'MSX2 (Z80 / V9938)',
-                    'pc88': 'PC-8801 MKII SR (Z80 / OPNA)',
-                    'scummvm': 'ScummVM Snatcher Engine Core'
-                };
-                container.innerHTML = keys.map(k => {
-                    const r = roms[k];
-                    const sz = (r.size_bytes / (1024 * 1024)).toFixed(2);
-                    const isTarget = (k === activeTargetKey);
-                    return `
-                        <div class="action-card" style="border-left: 4px solid ${isTarget ? 'var(--accent)' : 'var(--text-muted)'};">
-                            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
-                                <div class="action-card-title">${platNames[k] || k.toUpperCase()}</div>
-                                <span class="badge ${isTarget ? 'accent' : 'muted'}">${isTarget ? '🎯 TARGET ACTIVO' : k.toUpperCase()}</span>
-                            </div>
-                            <div style="font-size:0.8rem; color:var(--text-header); margin-top:4px; word-break:break-all;"><b>Archivo:</b> ${r.filename}</div>
-                            <div style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;"><b>Ruta:</b> ${r.path}</div>
-                            <div style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;"><b>Tamaño:</b> ${sz} MB | <b>Acceso:</b> 🟢 ${r.readable ? 'Lectura OK' : 'No legible'}</div>
-                            <div style="margin-top:10px; display:flex; gap:8px;">
-                                <button class="pill-btn" onclick="selectRomTarget('${k}', '${r.path}')" style="background:${isTarget ? 'var(--accent)' : 'var(--bg-card)'}; color:${isTarget ? 'var(--bg-main)' : 'var(--text-main)'};">🎯 Fijar como Target</button>
-                                <button class="pill-btn" onclick="inspectRomHex('${k}')">🔬 Ver Hex</button>
-                            </div>
-                        </div>
-                    `;
-                }).join('');
-            } catch (e) {
-                container.innerHTML = `<div class="action-card" style="color:var(--danger);">Error consultando ROM locator: ${e.message}</div>`;
-            }
-        }
+async function runXorDeobf() {
+  const out = document.getElementById("hexOutput");
+  try {
+    const r = await apiPost("/api/deobfuscate", {
+      platform: STATE.activeTarget.platform,
+      file: STATE.activeTarget.file
+    });
+    out.textContent = JSON.stringify(r, null, 2);
+  } catch (e) {
+    out.textContent = "Error Deobf: " + e.message;
+  }
+}
 
-        function selectRomTarget(platKey, path) {
-            switchPlatform(platKey);
-            const banner = document.getElementById('activeTargetBanner');
-            if (banner) banner.innerText = `Target Activo: ${platKey.toUpperCase()} (${path})`;
-            queryRomLocator(false);
-        }
+async function runAobScan() {
+  const pat = document.getElementById("aobPattern").value.trim();
+  const out = document.getElementById("hexOutput");
+  if (!pat) return showToast("Introduce un patron AOB o ASCII", true);
+  try {
+    const r = await apiPost("/api/pattern_scan", {
+      platform: STATE.activeTarget.platform,
+      file: STATE.activeTarget.file,
+      pattern: pat
+    });
+    out.textContent = JSON.stringify(r, null, 2);
+  } catch (e) {
+    out.textContent = "Error AOB: " + e.message;
+  }
+}
 
-        function inspectRomHex(platKey) {
-            switchPlatform(platKey);
-            switchChannel('hex-viewer');
-        }
+async function runRizin() {
+  const mode = document.getElementById("rizinMode").value;
+  const out = document.getElementById("rizinOutput");
+  out.textContent = "Ejecutando rizin 0.9.1 (" + mode + ")...";
+  try {
+    const r = await apiGet("/api/rizin?" + buildTargetQueryParams() + "&mode=" + encodeURIComponent(mode));
+    out.textContent = typeof r.data === "string" ? r.data : JSON.stringify(r.data, null, 2);
+  } catch (e) {
+    out.textContent = "Error Rizin: " + e.message;
+  }
+}
 
-        // =====================================================================
-        // 9. RUNNERS HUB & EMULADORES WEAPONIZADOS
-        // =====================================================================
-        async function loadRunnersHub() {
-            const container = document.getElementById('runnersContainer');
-            if (!container) return;
-            try {
-                const res = await fetch('/api/runners/control', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ action: 'status' })
-                });
-                const data = await res.json();
-                const runners = data.runners || {};
-                const platDescs = {
-                    'scummvm': 'ScummVM Engine Re-implementation (C++)',
-                    'segacd': 'Genesis Plus GX Weaponized (M68K/Sub-CPU)',
-                    'pce': 'Mednafen PCE Engine Weaponized (HuC6280)',
-                    'saturn': 'YabaSanshiro Weaponized (Dual SH-2)',
-                    'ps1': 'DuckStation Weaponized (MIPS R3000A)',
-                    'msx2': 'fMSX Weaponized (Z80 / V9938)',
-                    'pc88': 'Quasi88 Weaponized (Z80 / YM2608 OPNA)'
-                };
+async function runCfgLift() {
+  const out = document.getElementById("rizinOutput");
+  try {
+    const r = await apiGet("/api/cfg_lift?" + buildTargetQueryParams() + "&offset=0&count=28");
+    out.textContent = (r.mermaid_graph || "") + "\n\n" + JSON.stringify({
+      blocks: r.basic_blocks_count,
+      edges: r.edges_count,
+      cyclomatic_complexity: r.cyclomatic_complexity
+    }, null, 2);
+  } catch (e) {
+    out.textContent = "Error CFG: " + e.message;
+  }
+}
 
-                container.innerHTML = Object.keys(runners).map(k => {
-                    const r = runners[k];
-                    const isActive = r.status === 'ACTIVE';
-                    const isReady = r.status === 'READY';
-                    const statusClass = isActive ? 'accent' : (isReady ? 'muted' : 'danger');
-                    return `
-                        <div class="action-card" style="border-left: 4px solid ${isActive ? 'var(--accent)' : 'var(--border-subtle)'};">
-                            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
-                                <div class="action-card-title">${k.toUpperCase()} Runner</div>
-                                <span class="badge ${statusClass}">● ${r.status}</span>
-                            </div>
-                            <div style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">${platDescs[k] || ''}</div>
-                            <div style="font-size:0.75rem; color:var(--text-header); margin-top:4px;"><b>PID:</b> ${r.pid || '--'} | <b>SHM Link:</b> 🟢 ${r.vla_hook ? '1024KB VLA Hook' : 'Off'}</div>
-                            <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
-                                <button class="pill-btn" onclick="controlRunner('${k}', 'launch')">▶️ Iniciar</button>
-                                <button class="pill-btn" onclick="controlRunner('${k}', 'stop')">⏹️ Detener</button>
-                                <button class="pill-btn" onclick="controlRunner('${k}', 'restart')">🔄 Reiniciar</button>
-                            </div>
-                        </div>
-                    `;
-                }).join('');
-            } catch (e) {
-                container.innerHTML = `<div class="action-card" style="color:var(--danger);">Error cargando runners: ${e.message}</div>`;
-            }
-        }
+async function runCirxAnalyze() {
+  const mas = document.getElementById("cirxMas").value || "0.75";
+  const m = document.getElementById("cirxM").value || "10";
+  const p = document.getElementById("cirxP").value || "0.05";
+  const out = document.getElementById("cirxOutput");
+  try {
+    const r = await apiGet("/api/cirx_analyze?mas=" + encodeURIComponent(mas) + "&m=" + encodeURIComponent(m) + "&p=" + encodeURIComponent(p));
+    const lines = [
+      "SPEC: " + r.spec_version,
+      "TRACK: " + r.track + " (MAS=" + r.mas_score + ") -> " + r.claim_power,
+      "RISK SCORE (§6.1): S=" + r.risk_s + " | R=" + r.risk_r + "/100",
+      "CLOSURE LEMMA (§15.2): " + r.closure_lemma_status,
+      "SSA VERIFIED: " + r.ssa_verified + " | Blocks=" + r.ssa_blocks + " | Phis=" + r.phi_nodes,
+      "FLAG POLARITY (x86 CF == !AArch64 C, 65536 cases): " + r.flag_polarity_verified,
+      "CONFORMAL QUANTILE k (n=100, alpha=0.05): " + r.conformal_quantile_k,
+      "\n--- CIRX STAGE-2 SSA LISTING ---",
+      (r.ssa_listing || []).join("\n"),
+      "\n--- SMT-LIB 2 OVERLAP QUERY (QF_BV) ---",
+      r.smt_overlap_query || "",
+      "--- OPEN OBLIGATIONS (O-1..O-8) ---",
+      (r.open_obligations || []).map(o => o.id + " [" + o.priority + "][" + o.status + "] " + o.desc).join("\n")
+    ];
+    out.textContent = lines.join("\n");
+  } catch (e) {
+    out.textContent = "Error CIRX: " + e.message;
+  }
+}
 
-        async function controlRunner(target, action) {
-            const logBox = document.getElementById('runnersLogBox');
-            if (logBox) logBox.innerText = `Ejecutando acción '${action}' en runner '${target}'...`;
-            try {
-                const res = await fetch('/api/runners/control', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ action: action, target: target })
-                });
-                const data = await res.json();
-                if (logBox) logBox.innerText = JSON.stringify(data, null, 2);
-                loadRunnersHub();
-            } catch (e) {
-                if (logBox) logBox.innerText = `Error: ${e.message}`;
-            }
-        }
+async function runReaCorpus() {
+  const out = document.getElementById("cirxOutput");
+  try {
+    const plat = STATE.activeTarget.platform === "custom" ? "segacd" : STATE.activeTarget.platform;
+    const r = await apiGet("/api/rea_analyze?platform=" + encodeURIComponent(plat) + "&max=5");
+    out.textContent = JSON.stringify(r, null, 2);
+  } catch (e) {
+    out.textContent = "Error REA: " + e.message;
+  }
+}
 
-        async function runParallelTest() {
-            const logBox = document.getElementById('runnersLogBox');
-            if (logBox) logBox.innerText = `Ejecutando test de comparación paralela masiva: ScummVM vs ${activeTargetKey.toUpperCase()}...`;
-            try {
-                const res = await fetch('/api/runners/parallel_test', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ target: activeTargetKey })
-                });
-                const data = await res.json();
-                if (logBox) {
-                    logBox.innerText = `=== RESULTADO DE TEST PARALELO WEAPONIZADO ===\n` +
-                        `• Plataforma comparada: ${data.target}\n` +
-                        `• Estado: ${data.status}\n` +
-                        `• Paridad de ejecución ScummVM: ${data.scummvm_parity}\n` +
-                        `• Cuadros sincronizados en SHM: ${data.delta_frames} frames\n` +
-                        `• Opcodes coincidentes: ${data.matching_opcodes}\n` +
-                        `• Divergencias AOB: ${data.aob_divergences}\n` +
-                        `• Mensaje: ${data.message}`;
-                }
-                loadRunnersHub();
-            } catch (e) {
-                if (logBox) logBox.innerText = `Error en test paralelo: ${e.message}`;
-            }
-        }
+async function runKaitaiParse() {
+  const tmpl = document.getElementById("kaitaiTemplate").value;
+  const off = document.getElementById("kaitaiOffset").value || "0x0";
+  const custom = document.getElementById("kaitaiCustom").value.trim();
+  const out = document.getElementById("kaitaiOutput");
+  try {
+    const r = await apiPost("/api/kaitai_parse", {
+      platform: STATE.activeTarget.platform,
+      file: STATE.activeTarget.file,
+      template: tmpl,
+      offset: off,
+      custom_schema: custom
+    });
+    if (r.fields && r.fields.length) {
+      out.textContent =
+        "TEMPLATE: " + r.template + " @ " + r.base_offset_hex + " (" + r.total_bytes_parsed + " B)\n\n" +
+        r.fields.map(f => f.offset_hex + "  " + f.name.padEnd(20) + " " + f.field_type.padEnd(10) + " = " + f.value_display).join("\n");
+    } else {
+      out.textContent = JSON.stringify(r, null, 2);
+    }
+  } catch (e) {
+    out.textContent = "Error Kaitai: " + e.message;
+  }
+}
 
-        // =====================================================================
-        // 10. REVERSE ENGINEERING & DECOMPILATION PIPELINE
-        // =====================================================================
-        function loadReversePipeline() {
-            const outBox = document.getElementById('pipelineOutputBox');
-            if (outBox && outBox.innerText.includes('Listo')) {
-                outBox.innerText = `Pipeline de ingeniería inversa listo. Target activo actual: ${activeTargetKey.toUpperCase()}.\nPresiona cualquiera de los módulos arriba para disparar el análisis automático.`;
-            }
-        }
+async function runMbaSimplify() {
+  const expr = document.getElementById("mbaExpr").value;
+  const out = document.getElementById("mbaOutput");
+  try {
+    const r = await apiPost("/api/mba_simplify", { expression: expr });
+    out.textContent =
+      "ORIGINAL:   " + r.original + "\n" +
+      "SIMPLIFIED: " + r.simplified + "\n" +
+      "VERIFIED:   " + r.equivalence_verified + " (" + r.rules_applied + " reglas)\n\n" +
+      (r.steps || []).join("\n");
+  } catch (e) {
+    out.textContent = "Error MBA: " + e.message;
+  }
+}
 
-        async function runReverseAction(action) {
-            const outBox = document.getElementById('pipelineOutputBox');
-            if (outBox) outBox.innerText = `Ejecutando módulo de ingeniería inversa [${action.toUpperCase()}] sobre target '${activeTargetKey}'...`;
-            try {
-                let res, data;
-                if (action === 'disassemble') {
-                    res = await fetch('/api/disassemble?platform=' + activeTargetKey);
-                    data = await res.json();
-                } else if (action === 'entropy') {
-                    res = await fetch('/api/entropy_scan?platform=' + activeTargetKey);
-                    data = await res.json();
-                } else if (action === 'pointers') {
-                    res = await fetch('/api/pointer_scan?platform=' + activeTargetKey);
-                    data = await res.json();
-                } else if (action === 'pattern') {
-                    res = await fetch('/api/pattern_scan', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ pattern: 'SNATCH', platform: activeTargetKey })
-                    });
-                    data = await res.json();
-                } else if (action === 'deobfuscate') {
-                    res = await fetch('/api/deobfuscate', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ platform: activeTargetKey })
-                    });
-                    data = await res.json();
-                } else if (action === 'dumper') {
-                    res = await fetch('/api/dumper_extract', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ action: 'extract', platform: activeTargetKey })
-                    });
-                    data = await res.json();
-                } else if (action === 'snapshot_diff') {
-                    res = await fetch('/api/snapshot_diff', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ platform: activeTargetKey })
-                    });
-                    data = await res.json();
-                } else if (action === 'freeze') {
-                    res = await fetch('/api/memory_freeze');
-                    data = await res.json();
-                } else if (action === 'rea') {
-                    res = await fetch('/api/rea_analyze?platform=' + activeTargetKey);
-                    data = await res.json();
-                } else if (action === 'cfg') {
-                    res = await fetch('/api/cfg_lift?platform=' + activeTargetKey);
-                    data = await res.json();
-                } else if (action === 'bindiff') {
-                    res = await fetch('/api/bindiff?platform=' + activeTargetKey);
-                    data = await res.json();
-                } else if (action === 'hw_mmio') {
-                    res = await fetch('/api/hw_mmio?platform=' + activeTargetKey);
-                    data = await res.json();
-                } else if (action === 'crypto_scan') {
-                    res = await fetch('/api/crypto_scan?platform=' + activeTargetKey);
-                    data = await res.json();
-                } else if (action === 'unifier') {
-                    res = await fetch('/api/unifier_status');
-                    data = await res.json();
-                }
-                if (outBox) outBox.innerText = JSON.stringify(data, null, 2);
-            } catch (e) {
-                if (outBox) outBox.innerText = `Error ejecutando ${action}: ${e.message}`;
-            }
-        }
+async function runFridaGen() {
+  const out = document.getElementById("fridaOutput");
+  try {
+    const r = await apiPost("/api/frida_generate", {
+      mode: document.getElementById("fridaMode").value,
+      module: document.getElementById("fridaModule").value,
+      symbol: document.getElementById("fridaSymbol").value,
+      process: document.getElementById("fridaProcess").value
+    });
+    out.textContent = "// Launch: " + r.launch_cmd + "\n\n" + r.script_js;
+  } catch (e) {
+    out.textContent = "Error Frida: " + e.message;
+  }
+}
 
-        async function probeExynosNpu() {
-            const box = document.getElementById('npu-telemetry-box');
-            if (box) box.innerText = 'Sondeando /dev/vertex10, dlopen(/vendor/lib64/libeden_wrapper.so) y afinidad KleidiAI Cores 4-7 en Rust...';
-            try {
-                const res = await fetch('/api/npu_status');
-                const data = await res.json();
-                if (box) box.innerText = JSON.stringify(data, null, 2);
-            } catch (e) {
-                if (box) box.innerText = 'Error en sondeo NPU: ' + e.message;
-            }
-        }
+async function loadLiveProcs() {
+  const out = document.getElementById("fridaOutput");
+  out.textContent = "Consultando procesos root...";
+  try {
+    const r = await apiGet("/api/live_procs");
+    out.textContent = r.processes || JSON.stringify(r, null, 2);
+  } catch (e) {
+    out.textContent = "Error procs: " + e.message;
+  }
+}
 
-        setInterval(updateAllTelemetry, 3500);
-        updateAllTelemetry();
-    </script>
+async function loadPidMaps() {
+  const pid = document.getElementById("mapsPid").value;
+  if (!pid) return showToast("Introduce un PID numerico", true);
+  const out = document.getElementById("fridaOutput");
+  try {
+    const r = await apiGet("/api/live_procs?pid=" + encodeURIComponent(pid));
+    out.textContent = r.maps || JSON.stringify(r, null, 2);
+  } catch (e) {
+    out.textContent = "Error maps: " + e.message;
+  }
+}
+
+function copyTextById(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(el.textContent).then(() => showToast("Copiado al portapapeles"));
+  } else {
+    showToast("Clipboard API no disponible", true);
+  }
+}
+
+/* ==================== TILE MOLESTER VRAM & VLA CV ==================== */
+function parseHexOrDec(val) {
+  const s = String(val || "0").trim();
+  if (s.startsWith("0x") || s.startsWith("0X")) return parseInt(s.slice(2), 16) || 0;
+  return parseInt(s, 10) || 0;
+}
+
+function stepVramOffset(delta) {
+  const inp = document.getElementById("vramOffset");
+  const next = Math.max(0, parseHexOrDec(inp.value) + delta);
+  inp.value = "0x" + next.toString(16).toUpperCase();
+  renderVramTiles();
+}
+
+function renderVramTiles() {
+  const img = document.getElementById("vramImg");
+  if (!img) return;
+  const off = document.getElementById("vramOffset").value || "0x0";
+  const codec = document.getElementById("vramCodec").value || "4bpp_linear";
+  const pal = document.getElementById("vramPalette").value || "cga_cyber";
+  img.src = "/api/tile_render?" + buildTargetQueryParams() +
+    "&offset=" + encodeURIComponent(off) +
+    "&codec=" + encodeURIComponent(codec) +
+    "&palette=" + encodeURIComponent(pal) +
+    "&tx=16&ty=16&scale=2&t=" + Date.now();
+}
+
+function syncVramToHex() {
+  const off = document.getElementById("vramOffset").value || "0x0";
+  document.getElementById("hexOffset").value = off;
+  const navBtn = document.querySelector('.nav-btn[data-view="view-inspect"]');
+  switchView("view-inspect", navBtn);
+  const subBtn = document.querySelector('#inspectSubtabs .subtab[data-sub="sub-hex"]');
+  switchInspectSub("sub-hex", subBtn);
+  runHexInspect();
+}
+
+function refreshVlaFrame() {
+  const img = document.getElementById("vlaFrameImg");
+  if (img) img.src = "/api/live_frame.jpg?t=" + Date.now();
+}
+
+async function sendShmPad(mask) {
+  try {
+    await apiGet("/api/input?mask=" + mask);
+    refreshVlaFrame();
+  } catch (e) {
+    showToast("Error SHM input: " + e.message, true);
+  }
+}
+
+async function runNpuCv() {
+  const out = document.getElementById("vlaCvOutput");
+  try {
+    const r = await apiGet("/api/npu_cv");
+    out.textContent = JSON.stringify(r, null, 2);
+  } catch (e) {
+    out.textContent = "Error CV: " + e.message;
+  }
+}
+
+/* ==================== SYSTEM, HARDWARE & UNIFIER ==================== */
+async function refreshHardware() {
+  try {
+    const b = await apiGet("/api/brain_status");
+    const dot = document.getElementById("statusDot");
+    dot.className = "brand-dot" + (b.minimax_configured || b.brain_active ? "" : " degraded");
+
+    const hdrNpu = document.getElementById("hdrNpu");
+    if (hdrNpu) hdrNpu.textContent = b.npu_vertex10 ? "NPU LIVE" : "NPU N/A";
+    const hdrTemp = document.getElementById("hdrTemp");
+    if (hdrTemp) hdrTemp.textContent = Math.round(b.cpu_temp_c || 0) + "C";
+
+    const stNpu = document.getElementById("stNpu");
+    if (stNpu) stNpu.textContent = b.npu_vertex10 ? "ONLINE" : "NO";
+    const stEden = document.getElementById("stEden");
+    if (stEden) stEden.textContent = b.eden_dlopen ? "DLOPEN OK" : "BLOCKED";
+    const stTemp = document.getElementById("stTemp");
+    if (stTemp) stTemp.textContent = Math.round(b.cpu_temp_c || 0) + "C / " + Math.round(b.battery_temp_c || 0) + "C";
+    const freqs = b.cpu_freqs_mhz || [];
+    const stClock = document.getElementById("stClock");
+    if (stClock) stClock.textContent = (freqs[7] || freqs[4] || 0) + " MHz";
+
+    const hwOut = document.getElementById("hwDetailOut");
+    if (hwOut) hwOut.textContent = JSON.stringify(b, null, 2);
+  } catch (e) {
+    const dot = document.getElementById("statusDot");
+    if (dot) dot.className = "brand-dot offline";
+  }
+}
+
+async function triggerBoost() {
+  try {
+    const r = await apiPost("/api/trigger_boost", {});
+    showToast("Cores 4-7 Boost aplicado!");
+    document.getElementById("hwDetailOut").textContent = JSON.stringify(r, null, 2);
+    refreshHardware();
+  } catch (e) {
+    showToast("Error boost: " + e.message, true);
+  }
+}
+
+async function purgeCaches() {
+  try {
+    const r = await apiPost("/api/purge_cache", {});
+    showToast("Page caches purgados!");
+    document.getElementById("hwDetailOut").textContent = JSON.stringify(r, null, 2);
+  } catch (e) {
+    showToast("Error purge: " + e.message, true);
+  }
+}
+
+async function loadUnifier() {
+  const out = document.getElementById("unifierOut");
+  try {
+    const r = await apiGet("/api/unifier_status");
+    out.textContent = JSON.stringify(r, null, 2);
+  } catch (e) {
+    out.textContent = "Error unifier: " + e.message;
+  }
+}
+
+/* ==================== BOOTSTRAP ==================== */
+async function initCockpit() {
+  await Promise.allSettled([
+    loadProviders(),
+    refreshTargets(),
+    refreshHardware()
+  ]);
+  setInterval(refreshHardware, 12000);
+}
+
+window.addEventListener("DOMContentLoaded", initCockpit);
+</script>
 </body>
 </html>
