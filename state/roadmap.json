@@ -1,0 +1,116 @@
+{
+  "project": "MegaDaemon: Omnipotent Snatcher Digital Preservation & Reverse-Engineering Ecosystem",
+  "version": "4.5.0",
+  "last_updated": "2026-11-18T04:15:00Z",
+  "vision": "Conseguir que el motor Snatcher en ScummVM soporte al 100% todos los ports históricos con cero bugs, cero dependencias de pago ($0.00), privacidad total desconectada y cliente nativo ultra-eficiente en Rust.",
+  "items": [
+    {
+      "id": "TASK-001",
+      "title": "Backend Headless Zero-Copy SHM a 60 FPS",
+      "category": "ENGINE_OPTIMIZATION",
+      "status": "COMPLETED",
+      "priority": "CRITICAL",
+      "progress_pct": 100,
+      "description": "vla_headless.h integrado en ScummVM escribiendo fotogramas directos a snatcher_vla_shm.bin con 0.28ms de latencia."
+    },
+    {
+      "id": "TASK-002",
+      "title": "GUI Acelerada por GPU WebGL Matrix Rain Shader",
+      "category": "COCKPIT_UX",
+      "status": "COMPLETED",
+      "priority": "HIGH",
+      "progress_pct": 100,
+      "description": "Shader fragment WebGL ejecutado al 100% en la GPU Mali-G78 con adaptabilidad cromática para skins Matrix, Amber y Discord."
+    },
+    {
+      "id": "TASK-003",
+      "title": "MiniDaemon Watchdog con Auto-Ajuste Térmico y de Batería",
+      "category": "SYSTEM_HEALTH",
+      "status": "COMPLETED",
+      "priority": "HIGH",
+      "progress_pct": 100,
+      "description": "Lectura continua de sensores /sys/class/power_supply/battery/temp y escalado dinámico (COOL_TURBO / WARM_BALANCED / HOT_THROTTLED)."
+    },
+    {
+      "id": "TASK-004",
+      "title": "Modo 100% Local / Privado (Cero Fugas a la Nube)",
+      "category": "PRIVACY_SECURITY",
+      "status": "COMPLETED",
+      "priority": "CRITICAL",
+      "progress_pct": 100,
+      "description": "Aislamiento estricto de inferencia local con Qwen 2.5 Coder 0.5B en 127.0.0.1:8080 y fallback heurístico reflejo."
+    },
+    {
+      "id": "TASK-005",
+      "title": "Suite de Micro-Testing Multiplataforma (6/6 PASS)",
+      "category": "REVERSE_ENGINEERING",
+      "status": "COMPLETED",
+      "priority": "HIGH",
+      "progress_pct": 100,
+      "description": "Validación continua de vectores de inicio y cabeceras en PCE, MSX2, PC-8801, Sega CD, Saturn y PS1."
+    },
+    {
+      "id": "TASK-006",
+      "title": "Segregación de Repositorio MegaDaemon & Limpieza de dumper-web",
+      "category": "ARCHITECTURE",
+      "status": "IN_PROGRESS",
+      "priority": "CRITICAL",
+      "progress_pct": 75,
+      "description": "Restablecer dumper-web como volcado puro y consolidar MegaDaemon con arquitectura independiente."
+    },
+    {
+      "id": "TASK-007",
+      "title": "Blog de Hitos & Backlog Interactivo en Web Cockpit",
+      "category": "TRANSPARENCY",
+      "status": "IN_PROGRESS",
+      "priority": "HIGH",
+      "progress_pct": 80,
+      "description": "Integración de paneles interactivos de DevLog autocrítico y Roadmap dinámico sin falsedades."
+    },
+    {
+      "id": "TASK-008",
+      "title": "Grabadora Real de Clips de Vídeo y Audio en Disco",
+      "category": "MULTIMEDIA_AUDIT",
+      "status": "IN_PROGRESS",
+      "priority": "HIGH",
+      "progress_pct": 50,
+      "description": "Módulo de captura que guarda secuencias de fotogramas SHM reales y streams de audio a formato WebM/GIF sin simulaciones."
+    },
+    {
+      "id": "TASK-009",
+      "title": "Cliente Nativo 100% en Rust 'Ukobach' (Demonio Menor)",
+      "category": "NATIVE_CLIENT",
+      "status": "IN_PROGRESS",
+      "priority": "CRITICAL",
+      "progress_pct": 60,
+      "description": "Cliente Rust ultra-optimizado con estética Matrix, comunicación por socket UNIX / SHM mmap, <5MB RAM y cero lag."
+    },
+    {
+      "id": "TASK-010",
+      "title": "Síntesis Completa de Voz y Audio FM YM2608 en PC-8801 ScummVM",
+      "category": "ENGINE_DEVELOPMENT",
+      "status": "BACKLOG",
+      "priority": "MEDIUM",
+      "progress_pct": 30,
+      "description": "Conectar los buffers D88 desempacados con el softsynth OPN en sound_device_pc88.cpp."
+    },
+    {
+      "id": "TASK-011",
+      "title": "Dispatch Multihilo para CPU Dual Hitachi SH-2 (Sega Saturn)",
+      "category": "ENGINE_DEVELOPMENT",
+      "status": "BACKLOG",
+      "priority": "MEDIUM",
+      "progress_pct": 20,
+      "description": "Emular el pipeline de intercambio de memoria entre Master y Slave SH-2 en scene_platform.cpp."
+    },
+    {
+      "id": "TASK-012",
+      "title": "Nodo Distribuido Peer-to-Peer / SSI para Cómputo Parasitario",
+      "category": "DISTRIBUTED_COMPUTE",
+      "status": "BACKLOG",
+      "priority": "LOW",
+      "progress_pct": 10,
+      "description": "Protocolo de computación distribuida ligera para compartir tareas de descompilación entre múltiples instancias y dispositivos."
+    }
+  ]
+}

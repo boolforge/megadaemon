@@ -1,0 +1,8 @@
+[package]
+name = "ukobach"
+version = "1.0.0"
+edition = "2021"
+authors = ["MegaDaemon Core <megadaemon@agy.internal>"]
+description = "Ultra-fast, ergonomic native Matrix terminal cockpit for MegaDaemon Snatcher Ecosystem"
+
+[dependencies]

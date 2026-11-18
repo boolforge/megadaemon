@@ -1,0 +1,214 @@
+{
+  "cycle_count": 25,
+  "start_timestamp": 1794961419.673968,
+  "last_cycle_timestamp": 1794974655.6737597,
+  "total_functions_recovered": 14494,
+  "total_decompiled_functions": 915,
+  "total_hardware_traps": 25,
+  "scummvm_build_passes": 24,
+  "scummvm_build_failures": 1,
+  "platforms": {
+    "ps1": {
+      "functions": 14494,
+      "verified": false
+    },
+    "saturn": {
+      "functions": 0,
+      "verified": false
+    },
+    "pce": {
+      "scenes": 0,
+      "verified": false
+    },
+    "msx2": {
+      "palettes": 256,
+      "font_glyphs": 596,
+      "verified": false
+    },
+    "pc88": {
+      "ports": 7,
+      "verified": false
+    },
+    "segacd": {
+      "subcode_size": 53110,
+      "verified": false
+    }
+  },
+  "history": [
+    {
+      "cycle": 1,
+      "timestamp": 1794961668.0216858,
+      "duration": 248.35,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 2,
+      "timestamp": 1794961997.1998763,
+      "duration": 247.43,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 3,
+      "timestamp": 1794962385.2369628,
+      "duration": 335.96,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 4,
+      "timestamp": 1794962866.876895,
+      "duration": 216.15,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 5,
+      "timestamp": 1794963286.1133254,
+      "duration": 335.15,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 6,
+      "timestamp": 1794963929.6024077,
+      "duration": 378.32,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 7,
+      "timestamp": 1794964519.717188,
+      "duration": 368.18,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 8,
+      "timestamp": 1794965092.9886434,
+      "duration": 340.98,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 9,
+      "timestamp": 1794965797.5718946,
+      "duration": 444.92,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 10,
+      "timestamp": 1794966413.3133738,
+      "duration": 460.15,
+      "build_ok": false,
+      "functions": 14494
+    },
+    {
+      "cycle": 11,
+      "timestamp": 1794966948.0013404,
+      "duration": 395.42,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 12,
+      "timestamp": 1794967546.4338634,
+      "duration": 393.78,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 13,
+      "timestamp": 1794968018.0196383,
+      "duration": 265.64,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 14,
+      "timestamp": 1794968430.4924004,
+      "duration": 377.61,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 15,
+      "timestamp": 1794969103.0071824,
+      "duration": 449.75,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 16,
+      "timestamp": 1794969620.5275893,
+      "duration": 367.25,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 17,
+      "timestamp": 1794970360.619098,
+      "duration": 503.62,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 18,
+      "timestamp": 1794970817.3545268,
+      "duration": 363.36,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 19,
+      "timestamp": 1794971475.9047232,
+      "duration": 420.81,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 20,
+      "timestamp": 1794972125.8633564,
+      "duration": 471.03,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 21,
+      "timestamp": 1794972595.568315,
+      "duration": 341.31,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 22,
+      "timestamp": 1794973131.1648464,
+      "duration": 276.78,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 23,
+      "timestamp": 1794973483.9820776,
+      "duration": 328.86,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 24,
+      "timestamp": 1794974057.139725,
+      "duration": 302.06,
+      "build_ok": true,
+      "functions": 14494
+    },
+    {
+      "cycle": 25,
+      "timestamp": 1794974655.6737635,
+      "duration": 300.13,
+      "build_ok": true,
+      "functions": 14494
+    }
+  ]
+}
