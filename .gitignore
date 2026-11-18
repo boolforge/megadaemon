@@ -1,4 +1,6 @@
 __pycache__/
 *.pyc
 client-ukobach/target/
+client-seere/target/
+extracted/
 *.tmp

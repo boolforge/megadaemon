@@ -51,6 +51,20 @@ MEDIA_DIR = os.path.join(MEGADAEMON_DIR, "media")
 MINIDAEMON_STATE = os.path.join(TOOLS_DIR, "minidaemon_state.json")
 SHM_FILE = "/data/user/0/com.agy/files/snatcher_vla_shm.bin"
 
+sys.path.insert(0, os.path.join(MEGADAEMON_DIR, "core"))
+try:
+    from brain import MegaBrain
+    global_brain = MegaBrain()
+except Exception:
+    global_brain = None
+
+try:
+    from dumper import UniversalDumper
+    global_dumper = UniversalDumper()
+except Exception:
+    global_dumper = None
+
+
 PLATFORM_BINARIES = {
     "pce": {"name": "PC Engine", "path": os.path.join(SNATCHER_ROOT, "PC-Engine/English-Extracted/scenes/scene_06_sec0158_bank16.bin"), "arch": "HuC6280 @ 7.16MHz"},
     "msx2": {"name": "MSX2", "path": os.path.join(SNATCHER_ROOT, "MSX2/Extracted-Files/Disk0/SNATCHER.COM"), "arch": "Zilog Z80 @ 3.58MHz"},
@@ -1382,6 +1396,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(get_roadmap()).encode("utf-8"))
 
+        elif path == "/api/brain_status":
+            alive = global_brain.is_alive() if global_brain else False
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"brain_active": alive, "host": "127.0.0.1:8080", "model": "Qwen2.5-Coder-0.5B-Q4_K_M"}).encode("utf-8"))
+
+        elif path == "/api/dumper_status":
+            extracted_dir = "/data/user/0/com.agy/files/megadaemon/extracted"
+            entries = os.listdir(extracted_dir) if os.path.exists(extracted_dir) else []
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"extracted_platforms": entries, "count": len(entries)}).encode("utf-8"))
+
         elif path == "/api/hex_inspect":
             qs = parse_qs(parsed.query)
             plat = qs.get("platform", ["ps1"])[0]
@@ -1460,6 +1489,49 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(b'{"status":"launched"}')
+
+        elif path == "/api/brain_query":
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                body = json.loads(post_data.decode('utf-8'))
+                prompt = body.get("prompt", "")
+                system_prompt = body.get("system_prompt", None)
+                max_tokens = int(body.get("max_tokens", 256))
+                res = global_brain.query(prompt, system_prompt=system_prompt, max_tokens=max_tokens) if global_brain else {"error": "MegaBrain unavailable"}
+            except Exception as e:
+                res = {"error": str(e)}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(res).encode("utf-8"))
+
+        elif path == "/api/dumper_extract":
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                body = json.loads(post_data.decode('utf-8'))
+                plat = body.get("platform", "pce")
+                if global_dumper:
+                    if plat == "pce":
+                        pce_path = "/storage/emulated/0/Download/Snatcher-Collection/PC-Engine/English-Translated/Snatcher (English)/Snatcher (English) (Track 02).bin"
+                        res = global_dumper.dump_pce_cd(pce_path)
+                    elif plat == "pc88":
+                        pc88_path = "/storage/emulated/0/Download/Snatcher-Collection/PC88/Disks/Snatcher (1988)(Konami)(Disk 1 of 5)(Program Disk).d88"
+                        res = global_dumper.dump_pc88(pc88_path)
+                    elif plat == "msx2":
+                        msx2_path = "/storage/emulated/0/Download/Snatcher-Collection/MSX2/Disks/Snatcher (1988)(Konami)(Disk 1 of 3).dsk"
+                        res = global_dumper.dump_msx2(msx2_path)
+                    else:
+                        res = {"error": f"Platform {plat} extract requested"}
+                else:
+                    res = {"error": "UniversalDumper unavailable"}
+            except Exception as e:
+                res = {"error": str(e)}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(res).encode("utf-8"))
 
         elif path == "/api/trigger_boost":
             res = execute_root_boost()
