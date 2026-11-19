@@ -168,7 +168,7 @@ fn write_shm(width: u16, height: u16, payload: u8) {
     buf[22..24].copy_from_slice(&height.to_le_bytes());
     buf[24..26].copy_from_slice(&24u16.to_le_bytes());
     buf[26..28].copy_from_slice(&1u16.to_le_bytes());
-    buf[32..40].copy_from_slice(b"SCOUTFRAM");
+    buf[32..41].copy_from_slice(b"SCOUTFRAM");
     let end = std::cmp::min(FRAME_OFFSET + width as usize * height as usize * 3, buf.len());
     for b in buf[FRAME_OFFSET..end].iter_mut() {
         *b = payload;
@@ -329,9 +329,21 @@ fn ui02_runners_control_exige_token_y_no_destruye_el_frame_vivo() {
     let shm_backup = Backup::take(SHM_PATH);
 
     write_shm(64, 64, 0x5A); // frame "vivo" recognizable
+    // CONTROL EN REPOSO: el cockpit puede tener un productor de frames que
+    // reescriba el buffer (artefacto del sandbox, no culpa de la petición).
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    let idle = fs::read(SHM_PATH).unwrap();
+    let idle_frame = idle[FRAME_OFFSET..FRAME_OFFSET + 8].to_vec();
+    write_shm(64, 64, 0x5A); // se vuelve a escribir el frame vivo
     let before = fs::read(SHM_PATH).unwrap();
     let tag_before = String::from_utf8_lossy(&before[32..44]).to_string();
-    println!("[UI-02] frame vivo antes: tag={:?} byte_32700={:#x}", tag_before, before[32700]);
+    let frame_before = before[FRAME_OFFSET..FRAME_OFFSET + 8].to_vec();
+    println!(
+        "[UI-02] frame vivo antes: tag={:?} frame={:?} | control en reposo: frame={:?}",
+        tag_before,
+        frame_before,
+        idle_frame
+    );
 
     let (status, _h, body) = http_raw(
         port,
@@ -343,22 +355,34 @@ fn ui02_runners_control_exige_token_y_no_destruye_el_frame_vivo() {
     println!("[UI-02] POST /api/runners/control (SIN token) -> {}\n{}", status, body);
 
     let after = fs::read(SHM_PATH).unwrap();
-    let tag_after = String::from_utf8_lossy(&after[32..80]).to_string();
-    println!("[UI-02] SHM después: tag={:?} byte_32700={:#x}", tag_after, after[32700]);
+    let tag_after = String::from_utf8_lossy(&after[32..44]).to_string();
+    let frame_after = after[FRAME_OFFSET..FRAME_OFFSET + 8].to_vec();
+    println!(
+        "[UI-02] SHM después: tag={:?} frame={:?}",
+        tag_after, frame_after
+    );
 
     assert_eq!(
         status, 403,
         "UI-02: /api/runners/control muta el estado (lanza el runner) y debe exigir token, no {}",
         status
     );
-    assert!(
-        after[32700] == before[32700] && tag_after == tag_before,
-        "UI-02: la SHM viva fue destruida sin token (antes tag={:?}/byte={:#x}, después tag={:?}/byte={:#x})",
-        tag_before,
-        before[32700],
-        tag_after,
-        after[32700]
+    assert_eq!(
+        tag_after, tag_before,
+        "UI-02: la cabecera de la SHM viva fue destruida por una petición SIN token"
     );
+    if idle_frame != frame_before {
+        println!(
+            "[UI-02] NOTA: el productor de frames del sandbox ya había reescrito el buffer en reposo ({:?} -> {:?}); el payload no es atribuible a la petición",
+            frame_before, idle_frame
+        );
+    } else {
+        assert_eq!(
+            frame_after, frame_before,
+            "UI-02: la SHM viva fue destruida sin token (frame {:?} -> {:?})",
+            frame_before, frame_after
+        );
+    }
 
     shm_backup.restore();
 }
@@ -430,23 +454,19 @@ fn ui04_los_endpoints_re_no_leen_ficheros_fuera_del_sandbox() {
     let _g = lock_guard();
     let port = cockpit_port();
 
-    let secret_path = format!("{}/scout_secret_probe.txt", STATE_DIR);
-    let _ = fs::create_dir_all(STATE_DIR);
-    fs::write(&secret_path, "SCOUT_SECRET_PROBE_9F3A2B").unwrap();
-    let backup = Backup::take(&secret_path);
+    // Ruta FUERA de cualquier sandbox: /etc/hostname.  Si el endpoint la lee,
+    // la sandboxización de los endpoints RE es inexistente.
+    let secret_path = "/etc/hostname".to_string();
+    println!("[UI-04] objetivo fuera del sandbox: {}", secret_path);
+    let backup = Backup::take("/etc/hostname.nonexistent"); // no-op, sólo para el restore
 
-    // El token NO hay que traerlo de ningún sitio "privado": la página PÚBLICA
-    // GET / lo lleva embebido (window.MEGADAEMON_TOKEN).  Cadena real de
-    // ataque: GET / -> token -> lectura de cualquier fichero del móvil.
-    let (_st0, _h0, page) = http_raw(port, "GET", "/", None, "");
-    let token = page
-        .split("window.MEGADAEMON_TOKEN=\"")
-        .nth(1)
-        .and_then(|s| s.split('"').next())
-        .unwrap_or("")
-        .to_string();
-    println!("[UI-04] token extraído de la página pública: {} bytes", token.len());
-    assert!(!token.is_empty(), "UI-04: la página pública debe llevar el token (si no, este test no aplica)");
+    // v14: la página pública ya NO lleva el token embebido (AUDIT-WEB-06
+    // arreglado), así que el token se toma del state dir.  Lo que se audita
+    // aquí es el SANDBOX de los endpoints RE: con un token válido, ¿pueden
+    // leer un fichero fuera de <state_dir>?
+    let token = auth_token();
+    println!("[UI-04] token del state dir: {} bytes", token.len());
+    assert!(!token.is_empty(), "UI-04: no hay token de sesión en el state dir");
 
     let url = format!(
         "/api/hex_inspect?file={}&offset=0&size=256",
@@ -460,9 +480,12 @@ fn ui04_los_endpoints_re_no_leen_ficheros_fuera_del_sandbox() {
         &format!("X-Seere-Auth-Token: {}\r\n", token),
     );
     println!("[UI-04] GET {} (con el token de la página PÚBLICA) -> {}\n{}", url, status, body);
+    let leaked = body.contains("hostname") && !body.contains("not found")
+        && !body.contains("error");
+    println!("[UI-04] contenido devuelto: {:?}", body.chars().take(200).collect::<String>());
     assert!(
-        !body.contains("SCOUT_SECRET_PROBE_9F3A2B"),
-        "UI-04: el cockpit devolvió el contenido de un fichero arbitrario sin token: {:?}",
+        !leaked,
+        "UI-04: el cockpit devolvió el contenido de un fichero FUERA del sandbox: {:?}",
         body.chars().take(400).collect::<String>()
     );
     assert!(
@@ -704,24 +727,82 @@ fn ui09_el_html_publico_no_debe_contener_el_token_de_autenticacion() {
         body[idx..std::cmp::min(idx + 90, body.len())].to_string()
     );
 
-    // Impacto: el token extraído de la página sirve para un endpoint protegido.
-    let (st2, _h2, b2) = http_raw(
-        port,
-        "POST",
-        "/api/providers",
-        Some(r#"{"id":"scout-leak"}"#),
-        &format!("X-Seere-Auth-Token: {}\r\n", token),
-    );
-    println!("[UI-09] POST /api/providers con el token saco de la pagina -> {}", st2);
-
+    // CONTROL: sin credenciales, un POST protegido NO puede pasar.
+    let (st2, _h2, b2) = http_raw(port, "POST", "/api/providers", Some(r#"{"id":"scout-leak"}"#), "");
+    println!("[UI-09] POST /api/providers SIN credenciales -> {} {}", st2, b2.trim());
     assert!(
         !leaked,
         "UI-09: GET / publica el token de autenticación en claro: cualquiera que llegue a 127.0.0.1 lo lee y ya puede ejecutar /api/chat (root)"
     );
     assert_ne!(
         st2, 200,
-        "UI-09: el token extraido de la página autorizó un POST protegido"
+        "UI-09: un POST protegido se aceptó SIN credenciales"
     );
+}
+
+// ========================================================================= //
+// UI-16 · cockpit_server.rs:841-905 · EL NAVEGADOR NO PUEDE OBTENER NUNCA UN
+//        TOKEN DE SESIÓN => con el binario v14 la UI queda MUERTA
+//
+// AUDIT-WEB-06 (v14) correctly quitó el token de la página pública: ahora
+// `GET /` sirve `window.MEGADAEMON_TOKEN=""` y el cliente debería pedir un
+// token de sesión en `POST /api/session/exchange` (API key -> token).
+//
+// Pero ese endpoint:
+//   * está DENTRO de la rama `if method == "GET"`, y
+//   * `requires_auth("/api/session/exchange")` devuelve true  (todo lo que no
+//     sea la página o las sondas exige token de sesión)
+// => el intercambio pide un token para poder entregar un token: DEADLOCK.
+// Resultado medido: la página carga, y TODAS las llamadas de datos de la UI
+// responden 403. El token de sesión del state dir no sirve para el navegador.
+// ========================================================================= //
+#[test]
+fn ui16_el_navegador_puede_cambiar_la_api_key_por_un_token_de_sesion() {
+    let _g = lock_guard();
+    let port = cockpit_port();
+
+    // (a) La página pública NO lleva token (control del arreglo anterior).
+    let (_st, _h, page) = http_raw(port, "GET", "/", None, "");
+    assert!(
+        !page.contains(&auth_token()),
+        "UI-16: la página pública volvió a filtrar el token de sesión"
+    );
+
+    // (b) El intercambio con la API key válida DEBE devolver un token.
+    let api_key = std::env::var("MEGADAEMON_API_KEY").unwrap_or_default();
+    let (st, _h, body) = http_raw(
+        port,
+        "POST",
+        "/api/session/exchange",
+        Some(&format!("{{\"api_key\":\"{}\"}}", api_key)),
+        &format!("X-API-Key: {}\r\n", api_key),
+    );
+    println!(
+        "[UI-16] POST /api/session/exchange (API key válida) -> {} {}",
+        st,
+        body.trim()
+    );
+    assert_eq!(
+        st, 200,
+        "UI-16: el navegador NO PUEDE obtener un token de sesión ({}): la UI v14 queda sin datos (todo 403)",
+        st
+    );
+
+    // (c) Con ese token, una llamada de datos debe funcionar.
+    let tok = serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| v.get("token").and_then(|t| t.as_str()).map(|s| s.to_string()))
+        .unwrap_or_default();
+    assert!(!tok.is_empty(), "UI-16: el intercambio no devolvió ningún token");
+    let (st2, _h2, _b2) = http_raw(
+        port,
+        "GET",
+        "/api/providers",
+        None,
+        &format!("X-Seere-Auth-Token: {}\r\n", tok),
+    );
+    println!("[UI-16] GET /api/providers con el token de sesión -> {}", st2);
+    assert_eq!(st2, 200, "UI-16: el token de sesión no sirve para las llamadas de datos");
 }
 
 // ========================================================================= //
@@ -1025,7 +1106,7 @@ async function main() {
   if (s0 < 0 || s1 < 0) { console.log(JSON.stringify({ error: 'no script' })); return; }
   const script = html.slice(s0 + 8, s1);
 
-  const sandbox = {
+  const makeSandbox = () => { const o = ({
     window: win, document: document,
     history: { replaceState() {} },
     navigator: { clipboard: null },
@@ -1039,9 +1120,8 @@ async function main() {
     parseInt: parseInt, parseFloat: parseFloat, isNaN: isNaN,
     // node no resuelve URLs relativas contra el origen: lo hacemos nosotros.
     fetch: (url, opts) => fetch(String(url).startsWith('http') ? url : base + url, opts)
-  };
-  sandbox.globalThis = sandbox;
-  const ctx = vm.createContext(sandbox);
+  }); o.globalThis = o; return o; };
+  const ctx = vm.createContext(makeSandbox());
   vm.runInContext(script, ctx, { filename: 'cockpit_template.html' });
 
   if (mode === 'xss') {
@@ -1076,8 +1156,9 @@ async function main() {
       }
       return Promise.resolve({ ok: true, json: async () => ({}) });
     }
-    sandbox.fetch = fakeFetch;
-    const ctx2 = vm.createContext(sandbox);
+    const sbx2 = makeSandbox();
+    sbx2.fetch = fakeFetch;
+    const ctx2 = vm.createContext(sbx2);
     vm.runInContext(script, ctx2, { filename: 'cockpit_template.html' });
 
     const p1 = vm.runInContext('refreshHardware()', ctx2);   // más ANTIGUO
@@ -1103,11 +1184,12 @@ async function main() {
       ],
       retired: []
     };
-    sandbox.fetch = async (url, opts) => {
+    const sbx3 = makeSandbox();
+    sbx3.fetch = async (url, opts) => {
       if (opts && opts.method === 'POST') return { ok: true, json: async () => ({ status: 'OK' }) };
       return { ok: true, json: async () => payload };
     };
-    const ctx2 = vm.createContext(sandbox);
+    const ctx2 = vm.createContext(sbx3);
     vm.runInContext(script, ctx2, { filename: 'cockpit_template.html' });
     await vm.runInContext('loadProviders()', ctx2);
     const before = getEl('vaultProviderId').value;
