@@ -334,11 +334,18 @@ pub const PRICING_TABLE: &[(&str, f64, f64, &str)] = &[
     ("gpt-4o-mini", 0.15, 0.60, "openai"),
     ("codex-mini-latest", 1.50, 6.00, "openai"),
     // ---- Google Gemini (ai.google.dev) — tier de pago; el free es 0 ----
-    ("gemini-3-pro", 1.50, 9.00, "google"),
-    ("gemini-3-flash", 0.30, 2.50, "google"),
-    ("gemini-3-flash-lite", 0.10, 0.40, "google"),
-    ("gemini-flash", 0.30, 2.50, "google"),
-    ("gemini-flash-lite", 0.10, 0.40, "google"),
+    // Re-verificado el 2026-11-19 contra la página oficial de precios: los
+    // valores anteriores (1.50/9.00, 0.30/2.50, 0.10/0.40) estaban
+    // desfasados.  Ahora: 3.1 Pro = $2/$12 (≤200k) y $4/$18 (>200k),
+    // 3 Flash = $0.50/$3, 3.1 Flash-Lite = $0.25/$1.50, 3.8 Flash =
+    // $0.75/$3.75 hasta 2026-12-31 (luego $1.50/$7.50).
+    ("gemini-3-pro", 2.00, 12.00, "google"),
+    ("gemini-3-flash", 0.50, 3.00, "google"),
+    ("gemini-3-flash-lite", 0.25, 1.50, "google"),
+    ("gemini-3.1-pro-preview", 2.00, 12.00, "google"),
+    ("gemini-3.8-flash", 0.75, 3.75, "google"),
+    ("gemini-flash", 0.50, 3.00, "google"),
+    ("gemini-flash-lite", 0.25, 1.50, "google"),
     // ---- Moonshot Kimi (platform.kimi.ai) ----
     ("kimi-k3.1-pro", 2.00, 10.00, "moonshot"),
     ("kimi-k3", 3.00, 15.00, "moonshot"),
@@ -371,12 +378,17 @@ pub const PRICING_TABLE: &[(&str, f64, f64, &str)] = &[
 pub const PRICING_VERIFIED_ON: &str = "2026-11-19";
 
 /// Fuente oficial por proveedor: `(proveedor, url, verificado_el)`.
+///
+/// Las seis fuentes se re-verificaron el **2026-11-19** contra las páginas
+/// oficiales de cada proveedor.  Los precios de MiniMax, DeepSeek y Kimi son
+/// **tarifa directa del proveedor**: OpenRouter (y otros revendedores) cobran
+/// otra cosa, así que comparar contra un agregador da falsos positivos.
 pub const PRICING_SOURCES: &[(&str, &str, &str)] = &[
-    ("anthropic", "https://docs.anthropic.com/en/docs/about-claude/pricing", "2026-10-22"),
-    ("openai", "https://platform.openai.com/docs/pricing", "2026-11-19"),
+    ("anthropic", "https://platform.claude.com/docs/en/about-claude/pricing", "2026-11-19"),
+    ("openai", "https://developers.openai.com/api/docs/pricing", "2026-11-19"),
     ("google", "https://ai.google.dev/gemini-api/docs/pricing", "2026-11-19"),
     ("moonshot", "https://platform.kimi.ai/docs/pricing", "2026-11-19"),
-    ("minimax", "https://platform.minimax.io/docs/pricing", "2026-11-19"),
+    ("minimax", "https://platform.minimax.io/docs/pricing/overview", "2026-11-19"),
     ("deepseek", "https://api-docs.deepseek.com/quick_start/pricing", "2026-11-19"),
 ];
 
@@ -387,19 +399,31 @@ pub const PRICING_SOURCES: &[(&str, &str, &str)] = &[
 pub const PRICING_OVERRIDES: &[(&str, &str, &str, &str)] = &[
     (
         "gpt-5.6-sol",
-        "https://platform.openai.com/docs/pricing",
+        "https://developers.openai.com/api/docs/pricing",
         "2026-11-19",
-        "precio promocional: sube a 10/30 USD tras 2026-11-30",
+        "precio promocional hasta 2026-11-30 (otra fuente dice 2026-11-21); luego 8/40",
+    ),
+    (
+        "gemini-3-pro",
+        "https://ai.google.dev/gemini-api/docs/pricing",
+        "2026-11-19",
+        "equivale a gemini-3.1-pro-preview: $2/$12 hasta 200k de entrada, $4/$18 por encima",
+    ),
+    (
+        "gemini-3.8-flash",
+        "https://ai.google.dev/gemini-api/docs/pricing",
+        "2026-11-19",
+        "precio promo hasta 2026-12-31 ($0.75/$3.75); desde 2027-01-01 sube a $1.50/$7.50",
     ),
     (
         "minimax-m3",
-        "https://platform.minimax.io/docs/pricing",
+        "https://platform.minimax.io/docs/pricing/overview",
         "2026-11-19",
-        "tarifa corta (contexto <=512k); por encima cuesta el doble",
+        "tarifa corta (contexto <=512k) con 50% de descuento permanente; por encima cuesta el doble",
     ),
     (
         "minimax-m3.1-flash",
-        "https://platform.minimax.io/docs/pricing",
+        "https://platform.minimax.io/docs/pricing/overview",
         "2026-11-19",
         "tarifa corta (contexto <=512k); por encima cuesta el doble",
     ),
@@ -407,7 +431,19 @@ pub const PRICING_OVERRIDES: &[(&str, &str, &str, &str)] = &[
         "deepseek-v4-pro",
         "https://api-docs.deepseek.com/quick_start/pricing",
         "2026-11-19",
-        "tarifa de pico: conservadora a propósito",
+        "tarifa de pico (conservadora a propósito); en valle es la mitad",
+    ),
+    (
+        "deepseek-flash",
+        "https://api-docs.deepseek.com/quick_start/pricing",
+        "2026-11-19",
+        "tarifa de pico (conservadora a propósito); en valle es la mitad",
+    ),
+    (
+        "kimi-k3.1-pro",
+        "https://platform.kimi.ai/docs/pricing",
+        "2026-11-19",
+        "tarifa directa de Moonshot; OpenRouter lista otra (0.24/8.40 al 2026-11-16) por ser otra ruta",
     ),
 ];
 
