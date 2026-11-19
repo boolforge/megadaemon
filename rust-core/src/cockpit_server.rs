@@ -18,6 +18,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
+use std::sync::atomic::Ordering;
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -622,6 +623,12 @@ fn system_load() -> Value {
     }
     out
 }
+
+/// Techo de clientes concurrentes del cockpit (protege la RAM del móvil).
+const MAX_CLIENT_THREADS: usize = 64;
+/// Clientes concurrentes en curso.
+static ACTIVE_CLIENTS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 fn handle_client(mut stream: TcpStream) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
@@ -1317,6 +1324,23 @@ fn handle_client(mut stream: TcpStream) {
             let r = sync::run_sync(services, cookies);
             send_json(&mut stream, &r);
         }
+        // v13.4 — Vault de firma electronica: material criptografico con zona
+        // publica (replicable) y zona privada (nunca sale del dispositivo).
+        // Cae dentro del gate de autenticacion: todo lo que no sea `GET /`
+        // exige API key + token de sesion.
+        "/api/signing_vault" => {
+            let action = body_json
+                .get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or("list")
+                .to_string();
+            let r = crate::signing_vault::handle_action(
+                &action,
+                &body_json,
+                std::path::Path::new(&state_dir()),
+            );
+            send_json(&mut stream, &r);
+        }
         // v13.4 — genérico: cualquier herramienta del catálogo extendido
         // accesible como POST /api/tool/<nombre> con el cuerpo como args.
         _ if path.starts_with("/api/tool/") => {
@@ -1903,8 +1927,25 @@ pub fn run_server(port: u16) -> Result<(), String> {
     for (_, listener) in listeners {
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
+                // Techo de clientes concurrentes: el móvil va JUSTO de RAM
+                // (10,2/10,5 GB) y un hilo por conexión puede multiplicarse
+                // (cada hilo reserva pila virtual).  Por encima del techo se
+                // responde 503 en vez de crear otro hilo.  No se pierde
+                // ninguna capacidad: por debajo del techo el comportamiento
+                // es idéntico.
+                let prev = ACTIVE_CLIENTS.fetch_add(1, Ordering::Relaxed);
+                if prev >= MAX_CLIENT_THREADS {
+                    ACTIVE_CLIENTS.fetch_sub(1, Ordering::Relaxed);
+                    let mut s = stream;
+                    let _ = s.set_write_timeout(Some(Duration::from_secs(2)));
+                    let _ = s.write_all(
+                        b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    continue;
+                }
                 thread::spawn(move || {
                     handle_client(stream);
+                    ACTIVE_CLIENTS.fetch_sub(1, Ordering::Relaxed);
                 });
             }
         });

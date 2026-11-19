@@ -121,6 +121,26 @@ fn tool_definitions_core() -> Value {
             "name": "megadaemon_npu_cv",
             "description": "Probe Exynos 2100 NPU (/dev/vertex10, EDEN), Mali-G78 GPU, KleidiAI CPU thermals, and VLA Computer Vision telemetry.",
             "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "signing_vault",
+            "description": "Vault de firma electronica de MegaDaemon (Rust puro, sin JVM): almacena y replica material criptografico (certificados X.509, CMS/CAdES SignedData, PDF PAdES-B-B) con dos zonas. Zona PUBLIC = replicable a todas las instancias; zona PRIVATE = material personal que NO sale del dispositivo. Manifiesto NDJSON indexado con SHA-256 verificado en destino (fail-closed por entrada), nombres validados sin path traversal, put idempotente y get que re-verifica el hash.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "put", "get", "verify", "export_public", "import_public"],
+                        "default": "list"
+                    },
+                    "name": { "type": "string", "description": "Nombre del artefacto dentro del vault (sin rutas ni '..')." },
+                    "zone": { "type": "string", "enum": ["public", "private"], "description": "public = replicable a todas las instancias; private = local, nunca sale del dispositivo." },
+                    "content_b64": { "type": "string", "description": "Contenido del artefacto en base64 (para put)." },
+                    "mime": { "type": "string", "description": "Tipo MIME del artefacto (opcional)." },
+                    "origin": { "type": "string", "description": "Origen del artefacto (opcional)." },
+                    "bundle_b64": { "type": "string", "description": "Paquete de replicacion en base64 (para import_public)." }
+                }
+            }
         }
     ])
 }
@@ -154,6 +174,20 @@ pub fn dispatch_tool(name: &str, args: &Value) -> Value {
     if name == "adb" {
         let r = crate::adb_tool::dispatch(name, args)
             .unwrap_or(json!({ "ok": false, "error": "sin resultado" }));
+        let text = serde_json::to_string_pretty(&r).unwrap_or_default();
+        return json!({
+            "content": [{ "type": "text", "text": text }],
+            "structuredContent": r,
+            "isError": r.get("ok").and_then(|v| v.as_bool()) == Some(false),
+        });
+    }
+    if name == "signing_vault" {
+        let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("list");
+        let r = crate::signing_vault::handle_action(
+            action,
+            args,
+            std::path::Path::new(&crate::cockpit_server::state_dir()),
+        );
         let text = serde_json::to_string_pretty(&r).unwrap_or_default();
         return json!({
             "content": [{ "type": "text", "text": text }],
