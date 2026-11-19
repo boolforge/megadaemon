@@ -43,13 +43,13 @@ write_state() {
 # OJO (P0, 2026-11-19): el puerto 9090 esta protegido por el gate de API key
 # y el NAVEGADOR NO PUEDE mandar la cabecera X-API-Key -> en Chrome / sale un
 # 401 con un JSON de error, no la interfaz.  Las URLs que de verdad funcionan
-# en el navegador son las de alias (3000/3030/8090/8080): las sirve el puente
-# web con binarios antiguos y el propio daemon con el binario nuevo.
+# en el navegador son las de alias (80/3000/3030/8090/8080): las sirve el
+# puente web con binarios antiguos y el propio daemon con el binario nuevo.
 write_url() {
     {
         echo "# MegaDaemon - cockpit (generado por 99-megadaemon.sh)"
-        echo "# ABRE EN EL MOVIL (Chrome) - cualquiera de estos 4 funciona:"
-        for p in 3000 3030 8090 8080; do
+        echo "# ABRE EN EL MOVIL (Chrome) - cualquiera de estos 5 funciona:"
+        for p in 80 3000 3030 8090 8080; do
             echo "UI=http://localhost:$p/"
         done
         echo "HEALTH=http://localhost:3000/health"
@@ -113,9 +113,9 @@ ensure_web_template() {
 # web sobra y arrancarlo seria pelear por el bind (EADDRINUSE), lo que puede
 # tumbar al daemon nuevo al arrancar.  Se lee /proc/net/tcp{,6}: sin forks y
 # sin procesos extra (el movil va justo de RAM).
-#   3000=0BB8  3030=0BC6  8080=1F90  8090=1F9A   (hex)
+#   80=0050  3000=0BB8  3030=0BC6  8080=1F90  8090=1F9A   (hex)
 alias_ports_listening() {
-    for hp in 0BB8 0BC6 1F90 1F9A; do
+    for hp in 0050 0BB8 0BC6 1F90 1F9A; do
         # <local>:<puerto> <remoto> 0A   (0A = estado LISTEN)
         if grep -qiE ":$hp [0-9a-f]{8}:[0-9a-f]{4} 0A" /proc/net/tcp /proc/net/tcp6 2>/dev/null; then
             return 0
@@ -137,7 +137,8 @@ ensure_web_bridge() {
     if pgrep -f "web_bridge.py" > /dev/null 2>&1; then
         return 0
     fi
-    # El daemon ya sirve los alias (binario nuevo): el puente sobra.
+    # El daemon ya sirve los alias (binario nuevo): el puente sobra y solo
+    # provocaria un EADDRINUSE que tumba al daemon.
     if alias_ports_listening; then
         log "el daemon ya escucha los puertos alias: no hace falta puente web"
         return 0
@@ -152,8 +153,11 @@ ensure_web_bridge() {
         log "AVISO: sin python3 no se puede arrancar el puente web ($BRIDGE)"
         return 1
     fi
-    setsid nohup "$py" "$BRIDGE" >> "$PREFIX/bridge.log" 2>&1 < /dev/null &
-    log "puente web arrancado: 3000/3030/8090/8080 -> 127.0.0.1:$PORT (python3: $py)"
+    # Keeper: si el puente muere (lo mata una shell de agente, un OOM o un
+    # reinicio), vuelve a levantarse en 5 s.  Antes tardaba hasta 60 s y el
+    # usuario veia ERR_CONNECTION_REFUSED en el navegador.
+    setsid nohup sh -c "while true; do '$py' '$BRIDGE' >>'$PREFIX/bridge.log' 2>&1; sleep 5; done" >/dev/null 2>&1 </dev/null &
+    log "puente web arrancado (con keeper): 3000/3030/8090/8080/80 -> 127.0.0.1:$PORT (python3: $py)"
     return 0
 }
 
@@ -259,14 +263,17 @@ while true; do
         i=0
         ensure_web_bridge
         try_update
-        # Si el puerto que usa el navegador no está escuchando, se reintenta
-        # pronto (10 s): durante ese hueco el usuario ve ERR_CONNECTION_REFUSED.
-        # En el caso normal la cadencia sigue siendo de 60 s -> no se añaden
-        # procesos ni polling agresivo (el móvil va justo de RAM).
-        if alias_ports_listening; then
-            sleep 60
-        else
-            sleep 10
-        fi
+        # Vigilancia cada 5 s en vez de cada 60 s: si el daemon o el puente
+        # mueren, se relanzan casi al instante (antes el usuario podia verse
+        # ERR_CONNECTION_REFUSED durante un minuto entero).
+        k=0
+        while [ $k -lt 12 ]; do
+            sleep 5
+            k=$((k + 1))
+            ensure_web_bridge
+            if ! pgrep -f "megadaemon-core cockpit" > /dev/null 2>&1; then
+                break
+            fi
+        done
     fi
 done
