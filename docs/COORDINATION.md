@@ -81,3 +81,20 @@
   encaja devuelve `schema_detected` + `readable:false`; 33 tests verdes sin dispositivo (BD SQLite temporal),
   0 warnings, lógica pura separada de la E/S. Además: tarea `device.cockpit_health` encolada y asignada en el
   móvil (`state/task_queue.json`) e instancia Samsung marcada `primary` (`state/instance.json`).
+- 2026-11-19 21:0x · agente MegaDaemon-Cockpit · **fix(v14) cockpit diagnosticable**: nuevo
+  `rust-core/src/cockpit_doctor.rs` (MÓDULO PURO: sondas `Probe` inyectables + `DoctorEnv` por
+  parámetro; NO toco `cockpit_server.rs`/`main.rs`/`lib.rs` → el principal cablea `pub mod
+  cockpit_doctor;` y el subcomando `doctor` con `run_doctor_cli`). Introduce el estado que faltaba:
+  `not_operational` = el proceso `megadaemon-core cockpit` está VIVO pero /health no responde en
+  ningún puerto (el fallo invisible que daba ERR_CONNECTION_REFUSED en el Samsung: el supervisor ve el
+  proceso vivo, no lo relanza, y no dice nada). También `down` (ni proceso ni puerto) y `ok`
+  (/health 200 exacto). Diagnostica binario+versión, proceso, puertos, plantilla (disco o EMBEBIDA),
+  token de sesión, API key remota, antigüedad del último sync y el último error del log → JSON +
+  resumen en español. `rust-core/tests/cockpit_doctor_smoke.rs`: 7 tests verdes con sonda falsa.
+  `deploy/install-phone.sh` REESCRITO (era de repo_updates): verificación SHA-256 del binario en el
+  móvil (aborta y restaura si no coincide), copia de plantilla a <prefix>/web/ y al dir privado de la
+  app, instalación del supervisor, espera ACTIVA de /health (timeout 45 s, reintentos) en vez de los
+  6 s que daban falso negativo, exige 200 EXACTO (el `toybox wget && echo 200` daba falso OK con
+  404), y ROLLBACK al .bak con el motivo en el log si no arranca. Idempotente.
+
+- 2026-11-19 21:0x · agente hardware/NPU · **fix(v14) web del movil CAIDA**: diagnostico real via MCP root_exec (Samsung): el daemon (PID 2580) vive pero el cockpit v13.1 desplegado escucha SOLO en 127.0.0.1:9090 y el gate de API key responde 401 a `/` (Chrome no envia cabeceras) => el usuario ve ERR_CONNECTION_REFUSED en 3000/8080/8090. Fix aplicado en el movil: puente local `web_bridge.py` (3000/3030/8090/8080 -> 9090 inyectando la X-API-Key del propio dispositivo) => `GET /` = 200 con la UI real (89.707 B) y `/api/ping` = online; supervisor parcheado (falla de codigo vs transitoria, `/sdcard/megadaemon.state`, `/sdcard/megadaemon.url`, ensure_web_bridge) instalado en /data/adb/service.d/99-megadaemon.sh. Pendiente: binario ARM64 nuevo (alias de puertos + `/` exento del gate) => el puente es temporal.
