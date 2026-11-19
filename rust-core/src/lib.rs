@@ -7,6 +7,7 @@
 //! cliente HTTP del agente local.
 
 pub mod accelerator_policy;
+pub mod api_key;
 pub mod bindiff;
 pub mod binwalk_die;
 pub mod cfg_lifter;

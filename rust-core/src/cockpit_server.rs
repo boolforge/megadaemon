@@ -5,6 +5,7 @@
 //! Rizin 0.9.1, Frida DBI, Exynos 2100 NPU/CV, Memory Freezer, and 9-Project Unifier.
 
 use crate::{
+    api_key,
     bindiff, binwalk_die, cfg_lifter, cirx_rtl, crypto_scan, deobfuscate, disasm, entropy,
     freezer, frida_dbi, hw_mapper, kaitai_imhex, npu_bridge, npu_cv, pattern, pointers, providers,
     rea_assistant, rom_locator, seere_v11, shm, snapshot, tile_vram, unifier, power_policy,
@@ -465,6 +466,70 @@ fn list_uploaded_files() -> Value {
     json!({ "uploads": items, "count": items.len(), "dir": UPLOADS_DIR })
 }
 
+/// Contadores del cockpit (Fase 4: /metrics).
+static REQ_TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static REQ_REJECTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static REQ_RATE_LIMITED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SERVER_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Rate limit global por IP (Fase 4).
+static RATE_LIMITER: std::sync::LazyLock<api_key::RateLimiter> =
+    std::sync::LazyLock::new(api_key::RateLimiter::new);
+
+fn uptime_secs() -> u64 {
+    SERVER_START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs()
+}
+
+/// Lee la carga del sistema desde /proc (Android/Linux) o devuelve null.
+fn system_load() -> Value {
+    let mut out = json!({});
+    // CPU: /proc/stat -> total e idle (muestra de 100 ms).
+    if let Ok(stat) = fs::read_to_string("/proc/stat") {
+        if let Some(line) = stat.lines().next() {
+            let nums: Vec<u64> = line
+                .split_whitespace()
+                .skip(1)
+                .filter_map(|x| x.parse::<u64>().ok())
+                .collect();
+            if nums.len() >= 5 {
+                let total: u64 = nums.iter().sum();
+                let idle = nums[3] + nums[4];
+                out["cpu_total_ticks"] = json!(total);
+                out["cpu_idle_ticks"] = json!(idle);
+            }
+        }
+    }
+    // RAM: /proc/meminfo
+    if let Ok(mi) = fs::read_to_string("/proc/meminfo") {
+        let mut total = None;
+        let mut avail = None;
+        for l in mi.lines() {
+            if l.starts_with("MemTotal:") {
+                total = l.split_whitespace().nth(1).and_then(|v| v.parse::<u64>().ok());
+            } else if l.starts_with("MemAvailable:") {
+                avail = l.split_whitespace().nth(1).and_then(|v| v.parse::<u64>().ok());
+            }
+        }
+        if let (Some(t), Some(a)) = (total, avail) {
+            out["mem_total_kb"] = json!(t);
+            out["mem_available_kb"] = json!(a);
+            out["mem_used_pct"] = json!(if t > 0 {
+                ((t - a) as f64 * 100.0 / t as f64 * 10.0).round() / 10.0
+            } else {
+                0.0
+            });
+        }
+    }
+    // Carga media (Android la expone en /proc/loadavg).
+    if let Ok(la) = fs::read_to_string("/proc/loadavg") {
+        out["loadavg"] = json!(la.split_whitespace().next().unwrap_or(""));
+    }
+    out
+}
+
 fn handle_client(mut stream: TcpStream) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(60)));
@@ -564,6 +629,87 @@ fn handle_client(mut stream: TcpStream) {
     };
     let qs = parse_query_params(query);
 
+    // ------------------------------------------------------------------
+    // v13.2.5 (Fase 4): API key para acceso remoto.  Se evalúa ANTES que
+    // el token local, porque es la primera barrera cuando el cockpit está
+    // expuesto (túnel Cloudflare, reverse proxy, LAN).
+    //   * loopback exento (UI y proxy en la misma máquina);
+    //   * sin key -> 401; key incorrecta -> 403 + auditoría; exceso de
+    //     ritmo -> 429.
+    // ------------------------------------------------------------------
+    REQ_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let peer_ip = stream
+        .peer_addr()
+        .map(|a| a.ip())
+        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+    let cfg = api_key::ApiKeyConfig::load(&state_dir());
+    match api_key::decide(
+        &cfg,
+        &RATE_LIMITER,
+        &peer_ip,
+        &header_str,
+        std::time::Instant::now(),
+    ) {
+        api_key::Decision::Allow => {}
+        api_key::Decision::Unauthorized => {
+            REQ_REJECTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            println!(
+                "{}",
+                api_key::audit_line(
+                    &peer_ip,
+                    path,
+                    &api_key::user_agent(&header_str),
+                    "missing_api_key"
+                )
+            );
+            send_http_response(
+                &mut stream,
+                401,
+                "application/json",
+                b"{\"error\":\"unauthorized\",\"hint\":\"falta X-API-Key o Authorization: Bearer\"}",
+            );
+            return;
+        }
+        api_key::Decision::Forbidden => {
+            REQ_REJECTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            println!(
+                "{}",
+                api_key::audit_line(
+                    &peer_ip,
+                    path,
+                    &api_key::user_agent(&header_str),
+                    "invalid_api_key"
+                )
+            );
+            send_http_response(
+                &mut stream,
+                403,
+                "application/json",
+                b"{\"error\":\"forbidden\",\"hint\":\"API key invalida\"}",
+            );
+            return;
+        }
+        api_key::Decision::RateLimited => {
+            REQ_RATE_LIMITED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            println!(
+                "{}",
+                api_key::audit_line(
+                    &peer_ip,
+                    path,
+                    &api_key::user_agent(&header_str),
+                    "rate_limited"
+                )
+            );
+            send_http_response(
+                &mut stream,
+                429,
+                "application/json",
+                b"{\"error\":\"rate_limited\",\"hint\":\"maximo 60 req/min por IP\"}",
+            );
+            return;
+        }
+    }
+
     // v13.2 (S08): los endpoints que ejecutan o modifican estado exigen el
     // token.  Sin esto, cualquiera (página web con CORS abierto, o alguien en
     // la LAN) podía hacer POST /api/chat con "$ comando" y obtener RCE root.
@@ -603,6 +749,30 @@ fn handle_client(mut stream: TcpStream) {
                     "text/html; charset=utf-8",
                     html.as_bytes(),
                 );
+            }
+            "/health" | "/api/health" => {
+                // Fase 3: endpoint de salud del demonio (monitorizable por
+                // Termux, Uptime Kuma, etc.).
+                send_json(
+                    &mut stream,
+                    &json!({
+                        "status": "ok",
+                        "uptime": uptime_secs(),
+                        "version": env!("CARGO_PKG_VERSION"),
+                        "requests": REQ_TOTAL.load(std::sync::atomic::Ordering::Relaxed),
+                    }),
+                );
+            }
+            "/metrics" | "/api/metrics" => {
+                // Fase 3: CPU, RAM, uptime y contadores de peticiones.
+                let mut m = system_load();
+                m["uptime_sec"] = json!(uptime_secs());
+                m["requests_total"] = json!(REQ_TOTAL.load(std::sync::atomic::Ordering::Relaxed));
+                m["requests_rejected"] = json!(REQ_REJECTED.load(std::sync::atomic::Ordering::Relaxed));
+                m["requests_rate_limited"] = json!(REQ_RATE_LIMITED.load(std::sync::atomic::Ordering::Relaxed));
+                m["api_key_active"] = json!(cfg.enabled);
+                m["version"] = json!(env!("CARGO_PKG_VERSION"));
+                send_json(&mut stream, &m);
             }
             "/api/ping" => {
                 send_json(

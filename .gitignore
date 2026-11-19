@@ -18,4 +18,16 @@ state/*.key
 re_pipeline/llm_config.json
 .env
 *.secret
-
+# --- v13.2.5: nada de secretos ni artefactos del dispositivo ------------
+*.env
+!deploy/megadaemon.env.example
+*.key
+*.pem
+*.log
+logs/
+_IA_Cuarentena/
+*.pte
+*.gguf
+*.img
+*.bin
+!.gitignore
