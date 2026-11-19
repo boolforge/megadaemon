@@ -924,7 +924,6 @@ struct ApkAnalysis {
     abis: Vec<String>,
     assets: Vec<String>,
     has_resources_arsc: bool,
-    entry_count: usize,
     manifest: Value,
     fingerprint: String,
 }
@@ -965,7 +964,6 @@ fn analyze_apk_internal(path: &str) -> Option<ApkAnalysis> {
     };
     let fingerprint = manifest_fingerprint(&manifest);
     // `entries` se mueve en el literal; el tamaño se calcula antes del movimiento.
-    let entry_count = entries.len();
     Some(ApkAnalysis {
         entries,
         dex_files,
@@ -973,7 +971,6 @@ fn analyze_apk_internal(path: &str) -> Option<ApkAnalysis> {
         abis,
         assets,
         has_resources_arsc,
-        entry_count,
         manifest,
         fingerprint,
     })
