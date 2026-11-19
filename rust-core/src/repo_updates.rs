@@ -1629,6 +1629,302 @@ pub fn watch_once() -> Value {
     })
 }
 
+// ── Despliegue del daemon en el dispositivo (sin adb) ──────────────────────
+
+/// Ruta habitual del binario del daemon en Android.
+pub const DEFAULT_BIN_PATH: &str = "/data/local/tmp/megadaemon/megadaemon-core";
+/// Ruta habitual del supervisor Magisk.
+pub const DEFAULT_SERVICE_PATH: &str = "/data/adb/service.d/99-megadaemon.sh";
+/// Puerto del cockpit en el móvil.
+pub const COCKPIT_PORT: u16 = 9090;
+/// Puerto de ADB sobre TCP.
+pub const ADB_TCP_PORT: u16 = 5555;
+
+/// Comprobación de salud del cockpit: devuelve si responde y el código HTTP.
+///
+/// El sondeo se hace DENTRO del dispositivo (una sola llamada a root) para
+/// no gastar 45 viajes de red: espera hasta 90 s a que el daemon levante.
+fn health_probe_cmd(port: u16) -> String {
+    format!(
+        "i=0; code=000; while [ $i -lt 45 ]; do \
+           if command -v curl >/dev/null 2>&1; then \
+             code=$(curl -s -m 2 -o /dev/null -w '%{{http_code}}' http://127.0.0.1:{port}/health 2>/dev/null); \
+           else \
+             code=$(toybox wget -q -O /dev/null http://127.0.0.1:{port}/health 2>/dev/null && echo 200 || echo 000); \
+           fi; \
+           [ \"$code\" = 200 ] && break; i=$((i+1)); sleep 2; done; echo HEALTH:$code",
+        port = port
+    )
+}
+
+/// Interpreta la salida del sondeo de salud.
+///
+/// Función pura (para testearla sin dispositivo): "HEALTH:200" → sana.
+fn parse_health_output(out: &str) -> (bool, String) {
+    for line in out.lines() {
+        let l = line.trim();
+        if let Some(rest) = l.strip_prefix("HEALTH:") {
+            let code = rest.trim().to_string();
+            let ok = code == "200";
+            return (ok, code);
+        }
+    }
+    (false, "000".to_string())
+}
+
+/// Estado de salud del cockpit en el dispositivo.
+pub fn health(port: u16) -> Value {
+    let res = crate::android::root_exec(&health_probe_cmd(port), 120_000, 4096);
+    let (ok, code) = parse_health_output(&res.combined());
+    let alive = process_alive("megadaemon-core");
+    json!({
+        "ok": ok,
+        "port": port,
+        "http_code": code,
+        "process_alive": alive,
+        "error": if ok { Value::Null } else { json!("el cockpit no responde en el puerto indicado") },
+    })
+}
+
+/// ¿Vive el proceso? (por nombre, sin depender de `pidof`).
+fn process_alive(name: &str) -> bool {
+    let cmd = format!("pgrep -f {} >/dev/null 2>&1 && echo YES || echo NO", name);
+    let res = crate::android::root_exec(&cmd, 15_000, 1024);
+    res.stdout.contains("YES")
+}
+
+/// Reinicia el daemon: mata el proceso y se asegura de que el supervisor
+/// Magisk está vivo (si ya lo está, él solo lo relanza).
+fn restart_daemon() -> String {
+    let cmd = format!(
+        "killall megadaemon-core 2>/dev/null; sleep 1; \
+         pgrep -f 99-megadaemon >/dev/null 2>&1 || \
+         setsid nohup sh {} >/dev/null 2>&1 & sleep 1; echo RESTARTED",
+        crate::android::sh_quote(DEFAULT_SERVICE_PATH)
+    );
+    let res = crate::android::root_exec(&cmd, 30_000, 4096);
+    res.combined()
+}
+
+/// Despliega un binario nuevo del daemon en el dispositivo.
+///
+/// Camino completo, **sin adb**: el fichero ya descargado y verificado
+/// (`download()`) se copia sobre el binario en uso (guardando el anterior),
+/// se reinicia el daemon y se comprueba `/health`.  Si el daemon no levanta,
+/// se **revierte** al binario anterior y se informa del rollback.
+///
+/// `confirm == true` es obligatorio: esto sustituye el daemon en marcha.
+pub fn deploy_binary(package: &str, src_path: &str, target_path: &str, confirm: bool) -> Value {
+    if !confirm {
+        return json!({
+            "ok": false,
+            "package": package,
+            "installed": false,
+            "error": "confirm debe ser true: no se sustituye el daemon sin confirmación explícita",
+            "hint": "repite la llamada con confirm=true",
+        });
+    }
+    let src = Path::new(src_path.trim());
+    if !src.exists() {
+        return json!({
+            "ok": false,
+            "package": package,
+            "installed": false,
+            "error": format!("no existe el fichero a desplegar: {}", src_path),
+        });
+    }
+    let target = if target_path.trim().is_empty() {
+        DEFAULT_BIN_PATH.to_string()
+    } else {
+        target_path.trim().to_string()
+    };
+
+    let (digest, size) = match sha256_file(src) {
+        Ok(v) => v,
+        Err(e) => {
+            return json!({
+                "ok": false,
+                "package": package,
+                "installed": false,
+                "error": format!("no se pudo calcular el SHA-256: {}", e),
+            })
+        }
+    };
+
+    // 1) Copia del binario actual (para poder revertir).
+    let backup = format!("{}.bak", target);
+    let _ = crate::android::root_exec(
+        &format!(
+            "cp -f {} {} 2>/dev/null",
+            crate::android::sh_quote(&target),
+            crate::android::sh_quote(&backup)
+        ),
+        30_000,
+        4096,
+    );
+
+    // 2) Instalación del binario nuevo.
+    let install = crate::android::root_exec(
+        &format!(
+            "cp -f {} {} && chmod 755 {}",
+            crate::android::sh_quote(&src.to_string_lossy()),
+            crate::android::sh_quote(&target),
+            crate::android::sh_quote(&target)
+        ),
+        60_000,
+        4096,
+    );
+    if install.code != Some(0) {
+        return json!({
+            "ok": false,
+            "package": package,
+            "installed": false,
+            "error": "no se pudo copiar el binario al dispositivo",
+            "output": install.combined(),
+        });
+    }
+
+    // 3) Reinicio + salud.
+    let restart = restart_daemon();
+    let probe = health(COCKPIT_PORT);
+
+    if probe.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return json!({
+            "ok": true,
+            "package": package,
+            "installed": true,
+            "path": target,
+            "size": size,
+            "sha256": digest,
+            "health": probe,
+            "restart": restart,
+            "error": Value::Null,
+        });
+    }
+
+    // 4) Rollback: el binario nuevo no levantaba el daemon.
+    let _ = crate::android::root_exec(
+        &format!(
+            "cp -f {} {} && chmod 755 {}",
+            crate::android::sh_quote(&backup),
+            crate::android::sh_quote(&target),
+            crate::android::sh_quote(&target)
+        ),
+        60_000,
+        4096,
+    );
+    let _ = restart_daemon();
+    json!({
+        "ok": false,
+        "package": package,
+        "installed": false,
+        "rolled_back": true,
+        "path": target,
+        "size": size,
+        "sha256": digest,
+        "health": probe,
+        "error": "el binario nuevo no arrancó el cockpit: se ha revertido al anterior",
+    })
+}
+
+// ── ADB remoto (TCP) para todos los conectados ──────────────────────────────
+
+/// Estado de ADB sobre TCP en el dispositivo.
+pub fn adb_status() -> Value {
+    let cmd = "port=$(getprop service.adb.tcp.port 2>/dev/null); \
+               adbd=$(pgrep -f adbd >/dev/null 2>&1 && echo yes || echo no); \
+               ips=$(ip -4 -o addr show 2>/dev/null | awk '{print $2}' | cut -d/ -f1 | tr '\\n' ',' ); \
+               echo PORT:$port; echo ADBD:$adbd; echo IPS:$ips";
+    let res = crate::android::root_exec(cmd, 20_000, 4096);
+    let text = res.combined();
+    let port = text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("PORT:").map(|v| v.trim().to_string()))
+        .unwrap_or_default();
+    let adbd = text.contains("ADBD:yes");
+    let ips: Vec<String> = text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("IPS:").map(|v| v.to_string()))
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let enabled = port.parse::<i64>().map(|p| p > 0).unwrap_or(false);
+    json!({
+        "ok": true,
+        "adb_tcp_port": port,
+        "enabled": enabled,
+        "adbd_running": adbd,
+        "ips": ips,
+        "hint": if enabled {
+            "desde un PC: adb connect <ip>:<puerto> (varios equipos a la vez)"
+        } else {
+            "ADB por TCP desactivado: actívalo con remote_adb(true, confirm=true)"
+        },
+    })
+}
+
+/// Activa o desactiva **ADB sobre TCP** para que varios equipos a la vez
+/// (PC, otro móvil, la red de casa) puedan conectar con `adb connect`.
+///
+/// AVISO DE SEGURIDAD: `adbd` por TCP da control del dispositivo a quien se
+/// conecte (y con `su`, control root).  Por eso:
+///   * exige `confirm == true`;
+///   * se puede limitar a una IP de origen con `allow_from` (regla de
+///     iptables en el puerto 5555);
+///   * se puede desactivar en cualquier momento con `enable=false`.
+pub fn remote_adb(enable: bool, confirm: bool, allow_from: &str) -> Value {
+    if enable && !confirm {
+        return json!({
+            "ok": false,
+            "enabled": false,
+            "error": "confirm debe ser true: abrir ADB por TCP da control remoto del dispositivo",
+            "hint": "repite la llamada con confirm=true (y usa allow_from para limitar a una IP)",
+        });
+    }
+
+    let allow = allow_from.trim();
+    let cmd = if enable {
+        // 1) Regla de firewall (si se pidió una IP de origen).
+        let fw = if allow.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "iptables -I INPUT -p tcp --dport {p} -s {ip} -j ACCEPT 2>/dev/null; \
+                 iptables -I INPUT -p tcp --dport {p} ! -s {ip} -j DROP 2>/dev/null;",
+                p = ADB_TCP_PORT,
+                ip = allow
+            )
+        };
+        format!(
+            "{fw} setprop service.adb.tcp.port {p}; stop adbd; start adbd; \
+             echo ENABLED:$(getprop service.adb.tcp.port)",
+            fw = fw,
+            p = ADB_TCP_PORT
+        )
+    } else {
+        format!(
+            "iptables -D INPUT -p tcp --dport {p} 2>/dev/null; \
+             setprop service.adb.tcp.port -1; stop adbd; start adbd; \
+             echo DISABLED:$(getprop service.adb.tcp.port)",
+            p = ADB_TCP_PORT
+        )
+    };
+
+    let res = crate::android::root_exec(&cmd, 45_000, 4096);
+    let out = res.combined();
+    let ok = res.code == Some(0)
+        && (out.contains("ENABLED:") || out.contains("DISABLED:"));
+    let mut status = adb_status();
+    if let Some(obj) = status.as_object_mut() {
+        obj.insert("ok".into(), json!(ok));
+        obj.insert("allow_from".into(), json!(allow));
+        obj.insert("output".into(), json!(out.trim()));
+    }
+    status
+}
+
 // ── Tests (SIN RED) ─────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1996,5 +2292,45 @@ mod tests {
         assert_eq!(epoch_ms_to_date(0), "1970-01-01 00:00:00Z");
         assert_eq!(epoch_ms_to_date(1_714_644_000_000), "2024-05-02 10:00:00Z");
         assert!(epoch_to_iso(1_714_644_000).starts_with("2024-05-02T10:00:00"));
+    }
+
+    // ── Despliegue y ADB remoto ───────────────────────────────────────
+    #[test]
+    fn el_sondeo_de_salud_se_interpreta_bien() {
+        let (ok, code) = parse_health_output("ruido\nHEALTH:200\nmas ruido");
+        assert!(ok);
+        assert_eq!(code, "200");
+
+        let (ok, code) = parse_health_output("HEALTH:000");
+        assert!(!ok);
+        assert_eq!(code, "000");
+
+        // Si el sondeo no llegó a Prints (p.ej. sin root), es "no responde".
+        let (ok, code) = parse_health_output("sin salida de salud");
+        assert!(!ok);
+        assert_eq!(code, "000");
+    }
+
+    #[test]
+    fn desplegar_sin_confirmacion_no_toca_nada() {
+        let r = deploy_binary("megadaemon-core", "/no/existe", "", false);
+        assert_eq!(r["ok"], false);
+        assert_eq!(r["installed"], false);
+        assert!(r["error"].as_str().unwrap().contains("confirm"));
+    }
+
+    #[test]
+    fn desplegar_un_fichero_inexistente_falla() {
+        let r = deploy_binary("megadaemon-core", "/no/existe/megadaemon-core", "", true);
+        assert_eq!(r["ok"], false);
+        assert!(r["error"].as_str().unwrap().contains("no existe"));
+    }
+
+    #[test]
+    fn adb_remoto_exige_confirmacion() {
+        let r = remote_adb(true, false, "");
+        assert_eq!(r["ok"], false);
+        assert_eq!(r["enabled"], false);
+        assert!(r["error"].as_str().unwrap().contains("confirm"));
     }
 }
