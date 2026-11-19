@@ -70,10 +70,24 @@ pub fn read_shm_status() -> Result<ShmHeader, String> {
 }
 
 /// Generates a valid 24-bit uncompressed Windows BMP file header + pixel data
+///
+/// v14 (UI-03 · CRÍTICA): con `width=65535, height=65535` el cálculo
+/// `row_size * height` desborda u32 y, en release (`panic = "abort"`), el
+/// panic **mataba el proceso entero del cockpit** ⇒ ERR_CONNECTION_REFUSED
+/// para el usuario.  Un header SHM hostil no puede tumbar el daemon, así que
+/// aquí se satura y se acota la imagen en lugar de desbordar.
 pub fn encode_bmp_24(width: u32, height: u32, rgb_data: &[u8]) -> Vec<u8> {
-    let row_size = ((width * 3 + 3) / 4) * 4; // 4-byte aligned rows
-    let pixel_array_size = row_size * height;
-    let file_size = 54 + pixel_array_size;
+    // Acota las dimensiones para que ningún producto intermedio desborde.
+    const MAX_DIM: u32 = 16_384;
+    let w = width.clamp(1, MAX_DIM);
+    let h = height.clamp(1, MAX_DIM);
+    let row_size = ((w as u64 * 3 + 3) / 4) * 4; // filas alineadas a 4 bytes
+    let pixel_array_size = row_size.saturating_mul(h as u64);
+    // Tope duro del BMP: 64 MiB.  Por encima, la cabecera se recorta.
+    let pixel_array_size = pixel_array_size.min(64 * 1024 * 1024) as u32;
+    let file_size = 54u32.saturating_add(pixel_array_size);
+    let width = w;
+    let height = h;
 
     let mut bmp = Vec::with_capacity(file_size as usize);
 
@@ -97,9 +111,16 @@ pub fn encode_bmp_24(width: u32, height: u32, rgb_data: &[u8]) -> Vec<u8> {
     bmp.extend_from_slice(&0u32.to_le_bytes());
 
     // Pixel data (BGR bottom-up)
-    let padding = (row_size - width * 3) as usize;
+    let padding = (row_size - (width as u64 * 3)) as usize;
+    // Tope de píxeles realmente escritos: una imagen hostil no puede hacer
+    // que el daemon reserve/rellene gigabytes.
+    const MAX_PIXELS: u64 = 4_194_304; // 4 Mpx (~12 MiB de píxeles)
+    let max_rows = (MAX_PIXELS / (width as u64).max(1)).max(1).min(height as u64);
     for y in (0..height).rev() {
-        let row_start = (y * width * 3) as usize;
+        if (height as u64 - y as u64) > max_rows {
+            break;
+        }
+        let row_start = (y as u64 * width as u64 * 3) as usize;
         for x in 0..width as usize {
             let px_idx = row_start + x * 3;
             if px_idx + 2 < rgb_data.len() {

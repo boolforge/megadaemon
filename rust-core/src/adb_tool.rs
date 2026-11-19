@@ -197,6 +197,7 @@ fn pull(host: &str, port: u16, timeout: Duration, args: &Value, max_bytes: usize
         Ok(json!({ "ok": true, "src": src, "dst": dst, "bytes": data.len() }))
     } else {
         // Sin destino: se devuelve el contenido en base64 (coteado).
+        use base64ct::Encoding;
         let b64 = base64ct::Base64::encode_string(&data);
         Ok(json!({ "ok": true, "src": src, "bytes": data.len(), "base64": b64 }))
     }
