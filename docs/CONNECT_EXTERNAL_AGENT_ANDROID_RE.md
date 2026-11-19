@@ -105,12 +105,12 @@ RUTAS ALTERNATIVAS si el túnel no te responde:
     flota).
 
 ═══════════════════════════════════════════════════════════════════
-3. CATÁLOGO REAL DE TOOLS (26, verificado) — empieza por tools/list
+3. CATÁLOGO REAL DE TOOLS (27, verificado) — empieza por tools/list
 ═══════════════════════════════════════════════════════════════════
 Sistema y dispositivo:
   system_overview, props_and_settings, root_exec, fs_read, fs_write,
   find_duplicates, kernel_and_blocks, screen_and_ui, selinux_control,
-  magisk_module, app_control
+  magisk_module, app_control, adb
 
 Apps / binarios (motor RE):
   megadaemon_die_binwalk   (DiE + Binwalk + Scalpel + Bulk Extractor, nativo)
@@ -127,11 +127,44 @@ Conversaciones / datos:
 LLM:
   minimax_chat, swarm_chat
 
-IMPORTANTE: este listado es el del binario DESPLEGADO (v13.3.0). El código del
-repo tiene módulos más nuevos (inventario de APKs, decompilador DEX, tablero de
-coordinación, vault de firma) que AÚN NO están desplegados. **No los busques en
-tools/list**: si no están, no los uses. Lo que no exista, lo haces con
-`root_exec` + tu propia herramienta local, y reportas el hueco.
+IMPORTANTE: este listado es el del binario DESPLEGADO (v13.4.0). El código del
+repo tiene módulos más nuevos (tablón, bus de malla, vault de firma) que AÚN
+NO están expuestos como tool MCP. **No los busques en tools/list**: si no
+están, no los uses. Lo que no exista, lo haces con `root_exec` + tu propia
+herramienta local, y reportas el hueco.
+
+═══════════════════════════════════════════════════════════════════
+3b. SEGUNDO CANAL: EL CATÁLOGO EXTENDIDO POR HTTP (¡y funciona!)
+═══════════════════════════════════════════════════════════════════
+Hay más motores que NO salen en `tools/list` porque son extendidos. Se llaman
+por HTTP POST, con las mismas dos cabeceras:
+
+    POST <BASE>/api/tool/<nombre>
+    X-API-Key: <KEY>
+    X-Seere-Auth-Token: <TOKEN>
+    Content-Type: application/json
+    {"action":"...","path":"...","limit":50}
+
+Verificados EN VIVO contra la instancia:
+  · apk_inventory   {"action":"list"}  → inventario real de las apps instaladas:
+      package, apk_path, dex_count, fingerprint, native_libs, permisos,
+      activities, receivers, services, providers. (action "list" = el
+      default; también "analyze" {path}, "dump" {dest_dir}, "drift".)
+  · dex_decompile   {"action":"decompile"|"strings"|"obfuscation", "path":<ABS>}
+      "path" = ruta ABSOLUTA de un .dex suelto o de un APK (extrae los
+      classes*.dex). "strings" = las cadenas del pool; "obfuscation" = el
+      mapa de desofuscación; "decompile" = clases, métodos, strings, pool.
+      ► ESTA ES LA HERRAMIENTA QUE HACE EL TRABAJO PESADO POR TI: apúntale
+        cualquier APK de `incoming/<TU_ID>/` y te extrae el pool de
+        constantes. No implementes tú el detector de strings.
+  · capabilities    {"action":"verify"|"manifest"|"summary"} → qué funciona de verdad en el móvil
+  · task_queue      {"action":"submit"|"run"|"stats"|"cancel"|"retry"|"export"|"journal"}
+  · alerts          {"action":"check"|"status"|"ack"|"prune"}
+  · agent           {"action":"plan"|"run"}
+  (No existen: `mesh` ni `signing_vault` en este binario.)
+
+⇒ USA LOS DOS CANALES: MCP para lo tipado del dispositivo y el catálogo
+  extendido por HTTP para el motor de APKs/DEX.
 
 ═══════════════════════════════════════════════════════════════════
 4. REGLAS DE OPERACIÓN (obligatorias)
@@ -276,20 +309,25 @@ fichero y te devuelve formato, packer y entropía de salida:
 6. QUÉ HACER, EN ORDEN
 ═══════════════════════════════════════════════════════════════════
 FASE 1 — INVENTARIO Y VOLCADO (prioritario, no lo saltes)
-  1) `tools/list` → confirma el catálogo real.
+  1) `tools/list` → confirma el catálogo real (27).
   2) `system_overview` → estado del móvil (RAM, apps, Android, SELinux).
-  3) `app_control {action:"list"}` → todos los paquetes instalados.
-  4) Inventario de APKs: para cada app de terceros que te interese, extrae
-     ruta de la APK (`pm path <pkg>`), sha256, versión, y vuelca el artefacto
-     a tu directorio de entrada.
+  3) `POST /api/tool/apk_inventory` con {"action":"list"} → INVENTARIO REAL de
+     las apps instaladas: package, apk_path, dex_count, native_libs, permisos,
+     activities, receivers, providers. Es mejor que `app_control {action:list}`
+     + `pm path`: te da la ruta de cada APK ya resuelta.
+  4) Para las apps con IA (Claude, ChatGPT, Gemini, DeepSeek, Kimi, MiniMax)
+     y las que te interesen: vuelca el APK CRUDO a tu directorio de entrada
+     (`fs_write` en base64 por trozos o `POST /api/chat_upload`) y pon su
+     ruta absoluta + sha256 en el MANIFEST.
   5) Metadata: permisos, activities, receivers, providers, libs nativas.
   6) Lo que tu reversing ya tenga y NO esté en el móvil: súbelo igual
      (es tu aporte diferencial). Índice todo en el MANIFEST.
 
   ► LO MÁS VALIOSO QUE PUEDES APORTAR: EL APK/DEX CRUDO, no sólo el digest.
-    MegaDaemon ya tiene su propio módulo de decompilación DEX (`dex_decompile`:
-    clases, métodos, strings, pool de constantes, código) y extrae del APK lo
-    que a ti te costaría. Si le mandas el APK entero, tú no tienes que
+    El motor de decompilación DEX de MegaDaemon (`POST /api/tool/dex_decompile`
+    con {"action":"strings"|"obfuscation","path":<ruta absoluta>}) extrae del
+    APK lo que a ti te costaría — clases, métodos, pool de constantes y el
+    mapa de desofuscación. Si le mandas el APK entero, tú no tienes que
     implementar ni el detector de strings ni el de ofuscación: él lo hace.
     Prioridad de apps: las de IA del usuario — Claude, ChatGPT, Gemini,
     DeepSeek, Kimi, MiniMax — y cualquier otra con integraciones de IA.
