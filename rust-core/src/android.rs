@@ -22,7 +22,7 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Tope por defecto de salida de una命令.
+/// Tope por defecto de salida de una orden.
 pub const DEFAULT_MAX_CHARS: usize = 64 * 1024;
 /// Tope absoluto.
 pub const MAX_CHARS_CEILING: usize = 512 * 1024;
