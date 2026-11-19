@@ -266,10 +266,25 @@ pub fn dispatch_tool(name: &str, args: &Value) -> Value {
             let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
             json!({ "content": [{ "type": "text", "text": txt }] })
         }
-        _ => json!({
-            "isError": true,
-            "content": [{ "type": "text", "text": format!("Unknown tool: {}", name) }]
-        }),
+        _ => {
+            // v14: las tools de los módulos nuevos (apk_inventory, dex_decompile,
+            // app_intel, root_hide) SÍ aparecen en tools/list (se merges con
+            // `mcp_ext::tool_definitions()`), pero no tenían ruta de
+            // invocación aquí => el MCP respondía "Unknown tool" a tools que
+            // él mismo acababa de anunciar.  Ahora se enrutan.
+            if let Some(r) = crate::mcp_ext::dispatch(name, args) {
+                let text = serde_json::to_string_pretty(&r).unwrap_or_default();
+                return json!({
+                    "content": [{ "type": "text", "text": text }],
+                    "structuredContent": r,
+                    "isError": r.get("ok").and_then(|v| v.as_bool()) == Some(false),
+                });
+            }
+            json!({
+                "isError": true,
+                "content": [{ "type": "text", "text": format!("Unknown tool: {}", name) }]
+            })
+        }
     }
 }
 
