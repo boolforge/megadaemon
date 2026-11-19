@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Tablón de coordinación — MegaDaemon v14
 
 > **Este fichero es el ÚNICO punto de verdad compartido entre sesiones y agentes.**
