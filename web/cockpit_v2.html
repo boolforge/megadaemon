@@ -29,6 +29,7 @@
       </select>
       <span class="chip chip--ghost" id="chip-bus" title="Estado del bus de coordinación">bus: —</span>
       <span class="chip chip--ghost" id="chip-master" title="Rol de esta instancia">rol: —</span>
+      <span class="chip chip--ghost" id="chip-auth" title="Estado de la autenticación">sesión: —</span>
     </div>
 
     <div class="appbar__spacer"></div>
@@ -399,7 +400,67 @@
       </div>
     </section>
 
-    <!-- ─────────── 9. SISTEMA ─────────── -->
+    <!-- ─────────── 9. REPARTO DE TRABAJO ─────────── -->
+    <section class="view" id="view-reparto" role="tabpanel" aria-labelledby="tab-reparto" tabindex="-1">
+      <div class="view__head">
+        <h1 class="view__title">Reparto</h1>
+        <span class="view__subtitle" id="reparto-sub">mercado de capacidades entre nodos</span>
+      </div>
+
+      <div id="reparto-alert"></div>
+
+      <div class="grid grid--stats" id="reparto-stats"></div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Oferta de cada nodo</h2>
+          <button class="btn btn--sm btn--ghost" id="btn-market-refresh">Recargar</button>
+        </div>
+        <div class="table-wrap" id="reparto-oferta"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Demanda y plan de reparto</h2></div>
+        <div class="table-wrap" id="reparto-plan"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Contribución de cada nodo</h2></div>
+        <div class="table-wrap" id="reparto-contribucion"></div>
+        <div id="reparto-deben"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Mis reglas locales de compartición</h2></div>
+        <div class="field">
+          <label class="field__label" for="rules-node">Nodo</label>
+          <input class="input mono" id="rules-node" placeholder="id del nodo">
+        </div>
+        <div class="row">
+          <label class="switch small"><input type="checkbox" id="rule-dedicated"> instancia dedicada (no comparte)</label>
+          <label class="switch small"><input type="checkbox" id="rule-charging"> sólo con cargador</label>
+          <label class="switch small"><input type="checkbox" id="rule-inference"> compartir inferencia (LLM local)</label>
+        </div>
+        <div class="grid grid--stats mt-3">
+          <div class="field"><label class="field__label" for="rule-battery">Batería mín. (%)</label><input class="input" id="rule-battery" type="number" min="0" max="100" value="30"></div>
+          <div class="field"><label class="field__label" for="rule-temp">Temp. máx. (°C)</label><input class="input" id="rule-temp" type="number" min="15" max="95" value="45"></div>
+          <div class="field"><label class="field__label" for="rule-concurrent">Concurrencia</label><input class="input" id="rule-concurrent" type="number" min="0" max="64" value="2"></div>
+          <div class="field"><label class="field__label" for="rule-reserved">Reservado local (0-0.95)</label><input class="input" id="rule-reserved" type="number" min="0" max="0.95" step="0.05" value="0.5"></div>
+          <div class="field"><label class="field__label" for="rule-bias">Sesgo de prioridad (-100..100)</label><input class="input" id="rule-bias" type="number" min="-100" max="100" value="0"></div>
+        </div>
+        <div class="field mt-3">
+          <span class="field__label">Tipos de trabajo que ofrezco</span>
+          <div class="row" id="rule-kinds"></div>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn--primary" id="btn-save-rules">Guardar reglas</button>
+          <button class="btn btn--ghost" id="btn-load-rules">Cargar las de este nodo</button>
+        </div>
+        <div class="mt-3" id="reparto-device"></div>
+      </div>
+    </section>
+
+    <!-- ─────────── 10. SISTEMA ─────────── -->
     <section class="view" id="view-sistema" role="tabpanel" aria-labelledby="tab-sistema" tabindex="-1">
       <div class="view__head">
         <h1 class="view__title">Sistema</h1>
@@ -463,6 +524,9 @@
     </button>
     <button class="tabbar__btn" role="tab" id="tab-archivos" data-view="archivos" aria-selected="false" aria-controls="view-archivos">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>Archivos</span>
+    </button>
+    <button class="tabbar__btn" role="tab" id="tab-reparto" data-view="reparto" aria-selected="false" aria-controls="view-reparto">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="12" r="2.5"/><circle cx="9" cy="18" r="2.5"/><path d="M8.5 6h4a3 3 0 0 1 3 3v1M8 17.5h6.5"/></svg><span>Reparto</span>
     </button>
     <button class="tabbar__btn" role="tab" id="tab-sistema" data-view="sistema" aria-selected="false" aria-controls="view-sistema">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></svg><span>Sistema</span>
@@ -553,7 +617,9 @@ const state = {
   data: {},
   lastSync: null,
   timer: null,
-  busy: false
+  busy: false,
+  authMode: "desconocido",
+  authDetail: ""
 };
 
 const VIEW_LOADERS = {
@@ -565,6 +631,7 @@ const VIEW_LOADERS = {
   alertas: loadAlertas,
   re: loadRe,
   archivos: loadArchivos,
+  reparto: loadReparto,
   sistema: loadSistema
 };
 
@@ -594,6 +661,7 @@ function askApiKey() {
       if (v) {
         state.apiKey = v;
         localStorage.setItem("md_api_key", v);
+        diagnoseAuth();
         resolve(v);
       } else {
         resolve("");
@@ -605,7 +673,13 @@ function askApiKey() {
   });
 }
 
-/** Intercambia la API key por un token de sesión. */
+/** Intercambia la API key por un token de sesión.
+ *
+ *  EXIGE un token real: el dispatcher genérico (`/api/tool/*`) responde 200
+ *  con `{"status":"executed"}` a cualquier ruta desconocida, así que un 200
+ *  sin `token` NO es un canje válido (fallo UI-16).  Si no hay token, la
+ * exchange se considera fallida y se avisa.
+ */
 async function exchangeToken(apiKey) {
   try {
     const res = await fetch("/api/session/exchange", {
@@ -614,13 +688,78 @@ async function exchangeToken(apiKey) {
       body: JSON.stringify({ api_key: apiKey })
     });
     const data = await res.json();
-    if (data && data.ok && data.token) {
+    if (data && data.ok === true && typeof data.token === "string" && data.token.length >= 16) {
       state.token = data.token;
       sessionStorage.setItem("md_token", data.token);
       return true;
     }
-  } catch (e) { /* el daemon puede no tener exchange: se sigue con la API key */ }
-  return false;
+    state.authDetail = data && (data.hint || data.error)
+      ? ("el canje devolvió: " + (data.hint || data.error))
+      : "el canje no devolvió un token real (respuesta 200 sin campo «token»)";
+    return false;
+  } catch (e) {
+    state.authDetail = String(e && e.message || e);
+    return false;
+  }
+}
+
+/** Sonda de lectura: ¿el daemon sirve datos con las credenciales actuales?
+ *
+ *  Se usa `/api/status` (endpoint de datos ligero, exige el gate de auth);
+ *  `/api/providers` sirve igual como sonda.
+ */
+async function probeRead() {
+  try {
+    const res = await fetch("/api/status", { cache: "no-store", headers: authHeaders() });
+    if (res.ok) return { ok: true, endpoint: "/api/status" };
+    return { ok: false, endpoint: "/api/status", status: res.status };
+  } catch (e) {
+    return { ok: false, endpoint: "/api/status", error: String(e && e.message || e) };
+  }
+}
+
+/** Diagnostica el modo de autenticación y lo pinta en la cabecera.
+ *
+ *  Tres estados (medidos contra v13.4.0 y v14):
+ *   1. `sesion`       → el canje devuelve token real: todo funciona.
+ *   2. `lectura`      → el canje falla pero la lectura va: escrituras
+ *                       bloqueadas (UI-16 abierto).
+ *   3. `incompatible` → ni canje ni lectura: el daemon exige token de
+ *                       sesión y esta UI no puede obtenerlo.
+ */
+async function diagnoseAuth() {
+  const chip = $("#chip-auth");
+  let exchanged = false;
+  if (state.apiKey) exchanged = await exchangeToken(state.apiKey);
+  else if (state.token) exchanged = true;
+
+  const probe = await probeRead();
+  let mode, text, cls, title;
+  if (exchanged && probe.ok) {
+    mode = "sesion"; text = "sesión: ok"; cls = "chip--accent";
+    title = "Canje de API key por token de sesión correcto.";
+  } else if (probe.ok) {
+    mode = "lectura"; text = "sólo lectura"; cls = "chip--warn";
+    title = "El canje de token falló (" + (state.authDetail || "sin detalle") +
+      "). Las lecturas funcionan, las escrituras fallarán. Ver docs/AUDIT_V14_UI_HTTP.md (UI-16).";
+  } else {
+    mode = "incompatible"; text = "sin sesión"; cls = "chip--danger";
+    title = "Ni el canje ni la lectura funcionan: " + probe.endpoint + " devolvió " +
+      (probe.status || probe.error || "error") + ". El daemon exige token de sesión (UI-16 abierto).";
+  }
+  state.authMode = mode;
+  if (chip) {
+    chip.className = "chip " + cls;
+    chip.textContent = text;
+    chip.title = title;
+  }
+  const box = $("#resumen-alert");
+  if (box && mode !== "sesion") {
+    box.innerHTML = '<div class="notice notice--danger"><div><div class="notice__title">Autenticación: ' +
+      (mode === "lectura" ? "modo lectura" : "modo incompatible") + "</div><div>" + esc(title) +
+      "</div></div></div>";
+  }
+  return mode;
 }
 
 /** Garantiza que hay credenciales; devuelve true si se pudo. */
@@ -1283,7 +1422,187 @@ async function loadArchivos() {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   VISTA 9 · SISTEMA
+   VISTA 9 · REPARTO DE TRABAJO (mercado de capacidades)
+   ═══════════════════════════════════════════════════════════════════════════ */
+async function loadReparto() {
+  const m = await apiCall(() => fetch("/api/v2/market", { cache: "no-store", headers: authHeaders() }));
+  state.data.market = m;
+
+  if (!$("#rules-node").value.trim()) $("#rules-node").value = state.node || "";
+
+  const dev = m.device || {};
+  const supply = m.supply || [];
+  const demand = m.demand || [];
+  const plan = m.plan || [];
+  const contrib = m.contribution || [];
+
+  $('#reparto-sub').textContent = supply.length + " nodo(s) · " + demand.length + " demanda(s) pendiente(s)";
+
+  $('#reparto-alert').innerHTML = supply.length
+    ? ""
+    : '<div class="notice notice--warn"><div><div class="notice__title">Sin nodos en el mercado</div><div>' +
+      esc("No hay instancias conectadas al bus, así que no hay a quién repartir trabajo. Las reglas locales siguen configurables.") +
+      "</div></div></div>";
+
+  const sharing = supply.filter(function (n) { return n.offer && n.offer.available; }).length;
+  $('#reparto-stats').innerHTML = [
+    { l: "Nodos", v: supply.length },
+    { l: "Comparten", v: sharing, cls: sharing ? "stat--accent" : "stat--warn" },
+    { l: "Demanda", v: demand.length },
+    { l: "Sin asignar", v: plan.filter(function (p) { return !p.assignment.assigned; }).length, cls: "stat--warn" },
+    { l: "Batería", v: dev.capacity_pct === null || dev.capacity_pct === undefined ? "—" : dev.capacity_pct + " %" },
+    { l: "Carga", v: dev.load === undefined ? "—" : Number(dev.load).toFixed(2) }
+  ].map(function (s) {
+    return '<div class="stat ' + (s.cls || "") + '"><div class="stat__label">' + esc(s.l) + '</div><div class="stat__value stat__value--sm">' + esc(s.v) + "</div></div>";
+  }).join("");
+
+  // Oferta
+  $('#reparto-oferta').innerHTML = supply.length
+    ? '<table class="table"><thead><tr><th>Nodo</th><th>Ofrece</th><th>Capacidad</th><th>Reglas</th><th>Estado</th></tr></thead><tbody>' +
+      supply.map(function (n) {
+        const o = n.offer || {};
+        const r = n.rules || {};
+        const kinds = (o.offers || []).join(", ");
+        return "<tr><td class='mono small'>" + esc(n.id) + "<div class='muted'>" + esc(n.role || "") + " · carga " + Number(n.load || 0).toFixed(2) + "</div></td>" +
+          "<td class='small'>" + esc(kinds || "—") + "</td>" +
+          "<td class='table__num'>" + Math.round(Number(o.capacity || 0) * 100) + " %</td>" +
+          "<td class='small muted'>" +
+          (r.dedicated ? "<span class='badge badge--warn'>dedicada</span> " : "") +
+          (r.only_when_charging ? "<span class='badge'>sólo cargador</span> " : "") +
+          "batt≥" + esc(r.min_battery_pct) + "% · temp≤" + esc(r.max_cpu_temp_c) + "°C · conc=" + esc(r.max_concurrent) +
+          " · reservado " + Math.round(Number(r.reserved_ratio || 0) * 100) + "%" +
+          "</td>" +
+          "<td>" + (o.available
+            ? "<span class='chip chip--accent'>comparte</span><div class='small muted'>" + esc(o.reason || "") + "</div>"
+            : "<span class='chip chip--warn'>no comparte</span><div class='small muted'>" + esc(o.reason || "") + "</div>") +
+          "</td></tr>";
+      }).join("") + "</tbody></table>"
+    : '<div class="empty"><div class="empty__title">Sin oferta</div><div class="empty__reason">No hay instancias en el bus. Arranca otra instancia con el mismo MEGADAEMON_STATE_DIR (o comparte el tablón) para repartir trabajo.</div></div>';
+
+  // Plan
+  $('#reparto-plan').innerHTML = plan.length
+    ? '<table class="table"><thead><tr><th>Tarea</th><th>Tipo</th><th>Prior.</th><th>Nodo</th><th>Por qué</th><th></th></tr></thead><tbody>' +
+      plan.map(function (p) {
+        const d = p.demand || {};
+        const a = p.assignment || {};
+        return "<tr><td class='mono small'>" + esc(d.id) + "</td>" +
+          "<td class='small'>" + esc(d.kind) + "<div class='muted'>" + esc(d.work_kind) + "</div></td>" +
+          "<td class='table__num'>" + esc(d.priority) + "</td>" +
+          "<td class='small'>" + (a.node ? esc(a.node) : "<span class='muted'>—</span>") + "</td>" +
+          "<td class='small muted'>" + esc(a.reason || "") + "</td>" +
+          "<td><button class='btn btn--sm btn--ghost' data-route='" + esc(d.id) + "'>Repartir</button></td></tr>";
+      }).join("") + "</tbody></table>"
+    : '<div class="empty"><div class="empty__title">Sin demanda</div><div class="empty__reason">No hay tareas pendientes que repartir. Encola algo en la vista Tareas.</div></div>';
+
+  // Contribución
+  $('#reparto-contribucion').innerHTML = contrib.length
+    ? '<table class="table"><thead><tr><th>Nodo</th><th>Tareas</th><th>OK</th><th>Fallos</th><th>% del total</th><th>Veredicto</th></tr></thead><tbody>' +
+      contrib.map(function (c) {
+        const bad = c.verdict === "falla_mas_de_lo_que_hace";
+        return "<tr><td class='mono small'>" + esc(c.node) + "</td>" +
+          "<td class='table__num'>" + esc(c.tasks) + "</td>" +
+          "<td class='table__num'>" + esc(c.ok) + "</td>" +
+          "<td class='table__num'>" + esc(c.failed) + "</td>" +
+          "<td class='table__num'>" + esc(c.share_pct) + " %</td>" +
+          "<td>" + (bad ? "<span class='chip chip--danger'>falla más de lo que hace</span>"
+            : c.verdict === "sin_trabajo" ? "<span class='chip chip--warn'>sin trabajo</span>"
+              : "<span class='chip chip--accent'>ok</span>") + "</td></tr>";
+      }).join("") + "</tbody></table>"
+    : '<div class="empty"><div class="empty__title">Sin ledger</div><div class="empty__reason">Todavía no hay actividad registrada en el bus ni en el tablero.</div></div>';
+
+  const must = m.must_contribute || [];
+  $('#reparto-deben').innerHTML = must.length
+    ? '<div class="notice notice--warn"><div><div class="notice__title">Nodos que deben contribuir</div><div>' +
+      must.map(function (x) { return esc(x.node) + " — " + esc(x.reason); }).join("<br>") +
+      "</div></div></div>"
+    : '<div class="notice notice--accent"><div><div class="notice__title">Todos los nodos han contribuido</div><div>Ningún nodo con capacidad libre está sin trabajo.</div></div></div>';
+
+  $('#reparto-device').innerHTML =
+    '<dl class="kv">' +
+    "<dt>Batería</dt><dd>" + (dev.capacity_pct === null || dev.capacity_pct === undefined ? "—" : dev.capacity_pct + " %") + (dev.charging ? " (cargando)" : "") + "</dd>" +
+    "<dt>Temperatura CPU</dt><dd>" + (dev.cpu_temp_c === null || dev.cpu_temp_c === undefined ? "—" : dev.cpu_temp_c + " °C") + (dev.thermal_hot ? " · térmico" : "") + "</dd>" +
+    "<dt>Política</dt><dd>" + esc(dev.policy || "—") + "</dd>" +
+    "<dt>Dispositivo</dt><dd>" + (dev.is_mobile ? "móvil (reglas conservadoras por defecto)" : "PC") + "</dd>" +
+    "<dt>Fichero de reglas</dt><dd class='mono small'>" + esc(m.rules_source || "") + "</dd>" +
+    "</dl>";
+
+  // Checkboxes de tipos de trabajo.
+  const kinds = m.kinds || ["inference", "build", "compute", "network", "storage"];
+  const current = state.data.rules && state.data.rules.node === ($("#rules-node").value || state.node)
+    ? (state.data.rules.rules || {}) : {};
+  const offered = current.offers || [];
+  $('#rule-kinds').innerHTML = kinds.map(function (k) {
+    const on = offered.indexOf(k) >= 0 || (!current.offers && k !== "inference");
+    return '<label class="switch small"><input type="checkbox" data-rule-kind="' + esc(k) + '"' + (on ? " checked" : "") + "> " + esc(k) + "</label>";
+  }).join("");
+}
+
+async function loadRules(node) {
+  const n = node || $("#rules-node").value.trim() || state.node;
+  if (!n) { toast("warn", "Indica el nodo", ""); return; }
+  const data = await apiCall(() => fetch("/api/v2/market/rules?node=" + encodeURIComponent(n), { cache: "no-store", headers: authHeaders() }));
+  state.data.rules = data;
+  $("#rules-node").value = n;
+  const r = (data.rules) || {};
+  $("#rule-dedicated").checked = !!r.dedicated;
+  $("#rule-charging").checked = !!r.only_when_charging;
+  $("#rule-inference").checked = !!r.share_inference;
+  $("#rule-battery").value = r.min_battery_pct === undefined ? 30 : r.min_battery_pct;
+  $("#rule-temp").value = r.max_cpu_temp_c === undefined ? 45 : r.max_cpu_temp_c;
+  $("#rule-concurrent").value = r.max_concurrent === undefined ? 2 : r.max_concurrent;
+  $("#rule-reserved").value = r.reserved_ratio === undefined ? 0.5 : r.reserved_ratio;
+  $("#rule-bias").value = r.priority_bias === undefined ? 0 : r.priority_bias;
+  const kinds = data.policy && data.policy.offers ? data.policy.offers : [];
+  $$("[data-rule-kind]").forEach(function (cb) {
+    cb.checked = kinds.indexOf(cb.getAttribute("data-rule-kind")) >= 0;
+  });
+  toast("ok", "Reglas cargadas", n + (data.explicit ? "" : " (valores por defecto)"));
+}
+
+async function saveRules() {
+  const node = $("#rules-node").value.trim() || state.node;
+  if (!node) { toast("warn", "Indica el nodo", ""); return; }
+  const offers = $$("[data-rule-kind]").filter(function (cb) { return cb.checked; })
+    .map(function (cb) { return cb.getAttribute("data-rule-kind"); });
+  const payload = {
+    node: node,
+    rules: {
+      dedicated: $("#rule-dedicated").checked,
+      only_when_charging: $("#rule-charging").checked,
+      share_inference: $("#rule-inference").checked,
+      min_battery_pct: Number($("#rule-battery").value),
+      max_cpu_temp_c: Number($("#rule-temp").value),
+      max_concurrent: Number($("#rule-concurrent").value),
+      reserved_ratio: Number($("#rule-reserved").value),
+      priority_bias: Number($("#rule-bias").value),
+      offers: offers
+    }
+  };
+  const data = await apiCall(() => fetch("/api/v2/market/rules", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload)
+  }));
+  if (data.ok) { toast("ok", "Reglas guardadas", node); loadReparto(); }
+  else toast("error", "Reglas rechazadas", data.detail || data.error || "");
+}
+
+async function routeDemand(demandId) {
+  const data = await apiCall(() => fetch("/api/v2/market/route", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ demand_id: demandId })
+  }));
+  if (!data.ok) { toast("warn", "Sin candidato", data.hint || data.reason || ""); return; }
+  const a = data.assignment || {};
+  toast(a.assigned ? "ok" : "warn",
+    a.assigned ? ("Asignado a " + a.node) : "Nadie puede cogerlo",
+    a.reason || "");
+  loadReparto();
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   VISTA 10 · SISTEMA
    ═══════════════════════════════════════════════════════════════════════════ */
 async function loadSistema() {
   const [loop, routes] = await Promise.all([
@@ -1600,6 +1919,7 @@ const PALETTE_ACTIONS = [
   { group: "Ir a", label: "Alertas", hint: "reglas y acuse", run: function () { go("alertas"); } },
   { group: "Ir a", label: "RE / Apps", hint: "inventario y firma", run: function () { go("re"); } },
   { group: "Ir a", label: "Archivos compartidos", hint: "vault + manifest", run: function () { go("archivos"); } },
+  { group: "Ir a", label: "Reparto de trabajo", hint: "mercado de capacidades", run: function () { go("reparto"); } },
   { group: "Ir a", label: "Sistema", hint: "bucle agéntico y API", run: function () { go("sistema"); } },
   { group: "Acciones", label: "Refrescar la vista", hint: "Ctrl+R", run: function () { refresh(true); } },
   { group: "Acciones", label: "Evaluar reglas de alerta", hint: "alerts.check", run: function () { alertAction("check"); } },
@@ -1698,6 +2018,8 @@ function bindEvents() {
     if (ping) { pingProvider(ping.getAttribute("data-ping")); return; }
     const dl = e.target.closest("[data-share-get]");
     if (dl) { downloadShare(dl.getAttribute("data-share-get")); return; }
+    const route = e.target.closest("[data-route]");
+    if (route) { routeDemand(route.getAttribute("data-route")); return; }
   });
 
   // Sub-tabs del bus
@@ -1762,6 +2084,9 @@ function bindEvents() {
     $("#re-out").innerHTML = "<pre>" + esc(JSON.stringify(data, null, 2).slice(0, 4000)) + "</pre>";
   });
   $("#btn-share-refresh").addEventListener("click", loadArchivos);
+  $("#btn-market-refresh").addEventListener("click", loadReparto);
+  $("#btn-save-rules").addEventListener("click", saveRules);
+  $("#btn-load-rules").addEventListener("click", function () { loadRules(); });
   $("#btn-share-upload").addEventListener("click", function () { uploadShare(true); });
   $("#btn-share-upload-one").addEventListener("click", function () { uploadShare(false); });
   $("#btn-routes-refresh").addEventListener("click", loadSistema);
@@ -1771,6 +2096,7 @@ function bindEvents() {
     state.node = e.target.value;
     $("#assign-node").value = state.node;
     $("#msg-node").value = state.node;
+    $("#rules-node").value = state.node;
   });
 
   // Palette
@@ -1833,8 +2159,8 @@ function boot() {
   const hash = (location.hash || "").replace("#", "");
   go(VIEW_LOADERS[hash] ? hash : "resumen");
 
-  // Si ya hay API key, se pide el token de sesión por adelantado.
-  if (state.apiKey) exchangeToken(state.apiKey);
+  // Diagnóstico de autenticación: sólo lectura, incompatible o sesión OK.
+  diagnoseAuth().catch(function () { /* el diagnóstico es best-effort */ });
 }
 
 if (document.readyState === "loading") {

@@ -49,6 +49,7 @@
 //! SIN DEPENDENCIAS NUEVAS: sólo `serde_json`, `sha2`, `libc` y `std`, que ya
 //! estaban en `Cargo.toml`.
 
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -87,6 +88,10 @@ pub fn api_v2_routes() -> Vec<(&'static str, &'static str)> {
         ("POST", "/api/v2/share/put"),
         ("POST", "/api/v2/share/chunk"),
         ("POST", "/api/v2/share/commit"),
+        ("GET", "/api/v2/market"),
+        ("GET", "/api/v2/market/rules"),
+        ("POST", "/api/v2/market/rules"),
+        ("POST", "/api/v2/market/route"),
         ("GET", "/api/v2/routes"),
     ]
 }
@@ -113,6 +118,10 @@ fn route_descriptions() -> Vec<(&'static str, &'static str, &'static str)> {
         ("POST", "/api/v2/share/put", "Sube un fichero compartido completo; verifica el sha256 declarado antes de escribir."),
         ("POST", "/api/v2/share/chunk", "Sube un trozo (chunk) de un fichero compartido; el hash es el del trozo."),
         ("POST", "/api/v2/share/commit", "Ensambla los trozos subidos, verifica el sha256 del fichero completo y lo publica en el manifiesto."),
+        ("GET", "/api/v2/market", "Mercado de capacidades: oferta de cada nodo (con sus reglas locales), demanda pendiente, plan de reparto y ledger de contribución."),
+        ("GET", "/api/v2/market/rules", "Reglas locales de compartición de un nodo (batería mínima, temperatura, dedicated, capacidades ofrecidas)."),
+        ("POST", "/api/v2/market/rules", "Guarda las reglas locales de compartición de un nodo (validadas)."),
+        ("POST", "/api/v2/market/route", "Elige el nodo que debe tomar una demanda según las reglas locales y (opcionalmente) la publica en el bus."),
         ("GET", "/api/v2/routes", "Tabla de rutas v2 autogenerada + política de auth (la UI se valida contra esto)."),
     ]
 }
@@ -1881,6 +1890,925 @@ fn share_get_range(rel_path: &str, offset: usize, len: usize) -> Value {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 10) Mercado de capacidades: reparto de trabajo entre nodos
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Tipos de trabajo que el mercado sabe repartir entre instancias.
+///
+/// `inference` = LLM/embeddings · `build` = compilación/RE/firma ·
+/// `compute` = CPU genérica · `network` = scrape/sync · `storage` = vault.
+pub const WORK_KINDS: &[&str] = &["inference", "build", "compute", "network", "storage"];
+
+/// Reglas locales de compartición de un nodo.
+///
+/// Son las reglas que el usuario ajusta por instancia y que el motor respeta
+/// **antes** de repartir nada: si el móvil está al 12 % de batería no se
+/// ofrece CPU aunque haya cola, y una instancia "dedicada" no comparte nada.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ShareRules {
+    /// Nodo al que pertenecen estas reglas.
+    pub node: String,
+    /// Instancia dedicada: no comparte nada (sólo trabajo local).
+    #[serde(default)]
+    pub dedicated: bool,
+    /// Compartir sólo mientras hay cargador.
+    #[serde(default)]
+    pub only_when_charging: bool,
+    /// Batería mínima (%) para compartir.
+    #[serde(default = "default_min_battery")]
+    pub min_battery_pct: u8,
+    /// Temperatura máxima de CPU (°C) para compartir trabajo pesado.
+    #[serde(default = "default_max_temp")]
+    pub max_cpu_temp_c: f32,
+    /// Concurrencia máxima de tareas compartidas admitidas.
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent: usize,
+    /// Fracción de la capacidad que se reserva para uso local (0.0 – 0.95).
+    #[serde(default = "default_reserved")]
+    pub reserved_ratio: f32,
+    /// Tipos de trabajo que la instancia ofrece.
+    #[serde(default)]
+    pub offers: Vec<String>,
+    /// Tipos de trabajo que la instancia nunca ofrece.
+    #[serde(default)]
+    pub denies: Vec<String>,
+    /// Desempate: >0 prefiere esta instancia, <0 la relega.
+    #[serde(default)]
+    pub priority_bias: i32,
+    /// ¿Comparte el LLM local (inferencia)?
+    #[serde(default = "default_true_flag")]
+    pub share_inference: bool,
+    /// Última actualización (ISO-8601 UTC).
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+fn default_min_battery() -> u8 {
+    30
+}
+fn default_max_temp() -> f32 {
+    45.0
+}
+fn default_max_concurrent() -> usize {
+    2
+}
+fn default_reserved() -> f32 {
+    0.5
+}
+fn default_true_flag() -> bool {
+    true
+}
+
+impl Default for ShareRules {
+    fn default() -> Self {
+        ShareRules {
+            node: String::new(),
+            dedicated: false,
+            only_when_charging: false,
+            min_battery_pct: default_min_battery(),
+            max_cpu_temp_c: default_max_temp(),
+            max_concurrent: default_max_concurrent(),
+            reserved_ratio: default_reserved(),
+            offers: vec!["compute".into(), "network".into(), "storage".into()],
+            denies: vec![],
+            priority_bias: 0,
+            share_inference: true,
+            updated_at: String::new(),
+        }
+    }
+}
+
+/// Reglas por defecto de un nodo, derivadas del estado real del dispositivo.
+///
+/// Un móvil (Android) es conservador: guarda el 70 % de su CPU para sí y no
+/// comparte sin cargador por debajo del 30 % de batería.  Un PC es más
+/// generoso.
+pub fn default_rules(node: &str) -> ShareRules {
+    let mut r = ShareRules {
+        node: node.to_string(),
+        ..Default::default()
+    };
+    let mobile = crate::mesh::platform_is_android();
+    if mobile {
+        r.reserved_ratio = 0.7;
+        r.min_battery_pct = 30;
+        r.max_concurrent = 1;
+        r.only_when_charging = false;
+    }
+    // La inferencia local sólo se ofrece si hay un LLM listo.
+    let prov = crate::providers::list_providers_redacted();
+    let has_llm = prov["providers"]
+        .as_array()
+        .map(|a| {
+            a.iter().any(|p| {
+                p["ready"] == json!(true)
+                    && (p["auth_type"] == json!("local") || p["tier"] == json!("offline"))
+            })
+        })
+        .unwrap_or(false);
+    if has_llm && r.share_inference {
+        r.offers.push("inference".into());
+    }
+    r
+}
+
+/// Ruta del fichero de reglas de compartición.
+fn rules_path() -> PathBuf {
+    if let Ok(d) = std::env::var("MEGADAEMON_SHARE_RULES") {
+        let d = d.trim();
+        if !d.is_empty() {
+            return PathBuf::from(d);
+        }
+    }
+    Path::new(&cockpit_state_dir()).join("mesh_rules.json")
+}
+
+/// Lee el fichero de reglas (`{"version":1,"nodes":{"<id>":{...}}}`).
+fn load_rules_file() -> Value {
+    fs::read_to_string(rules_path())
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .unwrap_or_else(|| json!({ "version": 1, "nodes": {} }))
+}
+
+/// Reglas de un nodo: las suyas si existen; si no, la política común (`"*"`);
+/// si no, las derivadas del dispositivo.
+pub fn rules_for(node: &str) -> ShareRules {
+    let file = load_rules_file();
+    let nodes = file.get("nodes").cloned().unwrap_or(json!({}));
+    if let Some(r) = nodes.get(node).and_then(|v| serde_json::from_value::<ShareRules>(v.clone()).ok()) {
+        return r;
+    }
+    if let Some(r) = nodes.get("*").and_then(|v| serde_json::from_value::<ShareRules>(v.clone()).ok()) {
+        let mut r = r;
+        r.node = node.to_string();
+        return r;
+    }
+    default_rules(node)
+}
+
+/// Reglas de un nodo (JSON para la UI).
+pub fn work_rules(node: &str) -> Value {
+    let rules = rules_for(node);
+    let explicit = load_rules_file()
+        .get("nodes")
+        .and_then(|n| n.get(node))
+        .is_some();
+    json!({
+        "ok": true,
+        "node": node,
+        "rules": rules,
+        "explicit": explicit,
+        "source": rules_path().to_string_lossy(),
+        "policy": {
+            "only_when_charging": rules.only_when_charging,
+            "min_battery_pct": rules.min_battery_pct,
+            "max_cpu_temp_c": rules.max_cpu_temp_c,
+            "max_concurrent": rules.max_concurrent,
+            "reserved_ratio": rules.reserved_ratio,
+            "priority_bias": rules.priority_bias,
+            "dedicated": rules.dedicated,
+            "share_inference": rules.share_inference,
+            "offers": rules.offers,
+            "denies": rules.denies,
+        },
+        "device": device_state(),
+        "note": "las reglas se aplican ANTES de repartir: sin batería, con calor o en modo dedicado la instancia no ofrece nada",
+    })
+}
+
+/// Guarda (o actualiza) las reglas de un nodo tras validarlas.
+pub fn work_rules_set(node: &str, payload: &Value) -> Value {
+    let node = node.trim();
+    if node.is_empty() {
+        return json!({ "ok": false, "error": "missing_node" });
+    }
+    let mut file = load_rules_file();
+    let mut rules = rules_for(node);
+    rules.node = node.to_string();
+
+    let set_bool = |rules: &mut ShareRules, key: &str, v: bool| {
+        match key {
+            "dedicated" => rules.dedicated = v,
+            "only_when_charging" => rules.only_when_charging = v,
+            "share_inference" => rules.share_inference = v,
+            _ => {}
+        }
+    };
+    let p = payload.get("rules").unwrap_or(payload);
+    if let Some(obj) = p.as_object() {
+        for (k, v) in obj {
+            match k.as_str() {
+                "dedicated" | "only_when_charging" | "share_inference" => {
+                    if let Some(b) = v.as_bool() {
+                        set_bool(&mut rules, k, b);
+                    }
+                }
+                "min_battery_pct" => {
+                    if let Some(n) = v.as_u64() {
+                        if n > 100 {
+                            return json!({ "ok": false, "error": "bad_value", "detail": "min_battery_pct debe estar entre 0 y 100" });
+                        }
+                        rules.min_battery_pct = n as u8;
+                    }
+                }
+                "max_cpu_temp_c" => {
+                    if let Some(n) = v.as_f64() {
+                        if !(15.0..=95.0).contains(&n) {
+                            return json!({ "ok": false, "error": "bad_value", "detail": "max_cpu_temp_c debe estar entre 15 y 95" });
+                        }
+                        rules.max_cpu_temp_c = n as f32;
+                    }
+                }
+                "max_concurrent" => {
+                    if let Some(n) = v.as_u64() {
+                        if n > 64 {
+                            return json!({ "ok": false, "error": "bad_value", "detail": "max_concurrent debe estar entre 0 y 64" });
+                        }
+                        rules.max_concurrent = n as usize;
+                    }
+                }
+                "reserved_ratio" => {
+                    if let Some(n) = v.as_f64() {
+                        if !(0.0..=0.95).contains(&n) {
+                            return json!({ "ok": false, "error": "bad_value", "detail": "reserved_ratio debe estar entre 0.0 y 0.95" });
+                        }
+                        rules.reserved_ratio = n as f32;
+                    }
+                }
+                "priority_bias" => {
+                    if let Some(n) = v.as_i64() {
+                        if !(-100..=100).contains(&n) {
+                            return json!({ "ok": false, "error": "bad_value", "detail": "priority_bias debe estar entre -100 y 100" });
+                        }
+                        rules.priority_bias = n as i32;
+                    }
+                }
+                "offers" => {
+                    if let Some(a) = v.as_array() {
+                        let mut out = vec![];
+                        for x in a {
+                            let Some(s) = x.as_str() else { continue };
+                            if !WORK_KINDS.contains(&s) {
+                                return json!({ "ok": false, "error": "bad_kind", "detail": format!("tipo de trabajo desconocido: {}", s),
+                                               "valid": WORK_KINDS });
+                            }
+                            out.push(s.to_string());
+                        }
+                        rules.offers = out;
+                    }
+                }
+                "denies" => {
+                    if let Some(a) = v.as_array() {
+                        let mut out = vec![];
+                        for x in a {
+                            let Some(s) = x.as_str() else { continue };
+                            if !WORK_KINDS.contains(&s) {
+                                return json!({ "ok": false, "error": "bad_kind", "detail": format!("tipo de trabajo desconocido: {}", s),
+                                               "valid": WORK_KINDS });
+                            }
+                            out.push(s.to_string());
+                        }
+                        rules.denies = out;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    rules.updated_at = now_iso();
+    let mut nodes = file.get("nodes").cloned().unwrap_or(json!({}));
+    if !nodes.is_object() {
+        nodes = json!({});
+    }
+    if let Some(obj) = nodes.as_object_mut() {
+        obj.insert(node.to_string(), serde_json::to_value(&rules).unwrap_or(json!({})));
+    }
+    file["version"] = json!(1);
+    file["nodes"] = nodes;
+    file["updated_at"] = json!(now_iso());
+    if let Err(e) = write_atomic(&rules_path(), serde_json::to_string_pretty(&file).unwrap_or_default().as_bytes()) {
+        return json!({ "ok": false, "error": "persist_failed", "detail": e });
+    }
+    json!({
+        "ok": true,
+        "node": node,
+        "rules": rules,
+        "source": rules_path().to_string_lossy(),
+        "note": "reglas guardadas: el reparto las respeta en la siguiente petición",
+    })
+}
+
+/// Estado real del dispositivo (base de las reglas locales).
+fn device_state() -> Value {
+    let (pstate, pol) = crate::power_policy::current_policy();
+    json!({
+        "capacity_pct": pstate.capacity_pct,
+        "charging": pstate.charging,
+        "usb_plugged": pstate.usb_plugged,
+        "battery_temp_c": pstate.battery_temp_c,
+        "cpu_temp_c": pstate.cpu_temp_c,
+        "thermal_hot": pstate.thermal_hot,
+        "governor": pstate.governor,
+        "load": crate::mesh::current_load(),
+        "policy": pol.name,
+        "is_mobile": crate::mesh::platform_is_android(),
+    })
+}
+
+/// Tipo de trabajo al que pertenece un `kind` de tarea.
+pub fn work_kind_for(kind: &str) -> &'static str {
+    let k = kind.to_ascii_lowercase();
+    if k.starts_with("sync.web")
+        || k.starts_with("web.")
+        || k.starts_with("messaging.ingest")
+        || k.starts_with("repo_updates")
+        || k.starts_with("updates.")
+        || k.contains("scrape")
+        || k.contains("download")
+    {
+        "network"
+    } else if k.starts_with("apk.analyze")
+        || k.starts_with("dex")
+        || k.starts_with("sign")
+        || k.starts_with("build")
+        || k.contains("rizin")
+        || k.contains("cirx")
+        || k.contains("kaitai")
+        || k.contains("decompile")
+    {
+        "build"
+    } else if k.starts_with("agent")
+        || k.starts_with("llm")
+        || k.starts_with("chat")
+        || k.starts_with("delegat")
+        || k.contains("seere")
+        || k.contains("infer")
+    {
+        "inference"
+    } else if k.starts_with("share")
+        || k.starts_with("vault")
+        || k.starts_with("backup")
+        || k.contains("upload")
+    {
+        "storage"
+    } else {
+        "compute"
+    }
+}
+
+/// Tipos de trabajo que ofrece un nodo según sus capacidades declaradas.
+fn kinds_from_capabilities(caps: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    let mut push = |k: &str, out: &mut Vec<String>| {
+        if !out.iter().any(|x| x == k) {
+            out.push(k.to_string());
+        }
+    };
+    for c in caps {
+        let l = c.to_ascii_lowercase();
+        if l.contains("llm") || l.contains("seere") || l.contains("inference") || l.contains("model") {
+            push("inference", &mut out);
+        }
+        if l.contains("reverse") || l.contains("dex") || l.contains("sign") || l.contains("firma")
+            || l.contains("build") || l.contains("apk") || l.contains("re")
+        {
+            push("build", &mut out);
+        }
+        if l.contains("compute") || l.contains("cpu") || l.contains("core") {
+            push("compute", &mut out);
+        }
+        if l.contains("net") || l.contains("web") || l.contains("proxy") || l.contains("sync") {
+            push("network", &mut out);
+        }
+        if l.contains("storage") || l.contains("vault") || l.contains("backup") || l.contains("disk") {
+            push("storage", &mut out);
+        }
+    }
+    out
+}
+
+/// Oferta efectiva de un nodo: ¿comparte? ¿cuánto? ¿por qué no?
+fn effective_offer(rules: &ShareRules, node: &Value, device: &Value) -> Value {
+    let mut blocked: Vec<String> = vec![];
+    let load = node.get("load").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let battery = device.get("capacity_pct").and_then(|v| v.as_u64());
+    let charging = device.get("charging").and_then(|v| v.as_bool()).unwrap_or(false);
+    let cpu_temp = device.get("cpu_temp_c").and_then(|v| v.as_f64());
+    let thermal = device.get("thermal_hot").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    if rules.dedicated {
+        blocked.push("instancia dedicada: no comparte nada".to_string());
+    }
+    if rules.only_when_charging && !charging {
+        blocked.push("sin cargador y la regla exige cargador".to_string());
+    }
+    if let Some(b) = battery {
+        if (b as u8) < rules.min_battery_pct {
+            blocked.push(format!(
+                "batería {} % por debajo del mínimo {} %",
+                b, rules.min_battery_pct
+            ));
+        }
+    }
+    if thermal {
+        blocked.push("tensión térmica activa".to_string());
+    }
+    if let Some(t) = cpu_temp {
+        if t > rules.max_cpu_temp_c as f64 {
+            blocked.push(format!(
+                "CPU a {:.0} °C por encima del máximo {:.0} °C",
+                t, rules.max_cpu_temp_c
+            ));
+        }
+    }
+
+    // Capacidad libre = lo que no se reserva para uso local, menos la carga.
+    // `rules.reserved_ratio` es f32 y `load` es f64: se Homogeneiza a f64
+    // (E0277/E0308 rompia el build entero del crate).
+    let mut capacity = (1.0f64 - rules.reserved_ratio as f64).max(0.0) * (1.0 - load.clamp(0.0, 1.0));
+    if let Some(b) = battery {
+        if b < 40 {
+            capacity *= 0.5; // por debajo del 40 % se ofrece la mitad
+        }
+    }
+    if rules.max_concurrent == 0 {
+        blocked.push("concurrencia máxima 0".to_string());
+        capacity = 0.0;
+    }
+
+    let caps: Vec<String> = node
+        .get("capabilities")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut offers = rules.offers.clone();
+    for k in kinds_from_capabilities(&caps) {
+        if !offers.contains(&k) {
+            offers.push(k);
+        }
+    }
+    if !rules.share_inference {
+        offers.retain(|k| k != "inference");
+    }
+    offers.retain(|k| !rules.denies.contains(k));
+    if capacity < 0.05 {
+        blocked.push(format!("capacidad libre {:.0} %", capacity * 100.0));
+    }
+    let available = blocked.is_empty() && capacity >= 0.05;
+
+    json!({
+        "available": available,
+        "capacity": (capacity * 1000.0).round() / 1000.0,
+        "offers": offers,
+        "blocked_by": blocked,
+        "reason": if available {
+            format!(
+                "ofrece {} con {:.0} % de capacidad libre",
+                offers.join("/"),
+                capacity * 100.0
+            )
+        } else {
+            blocked.join(" · ")
+        },
+    })
+}
+
+/// Instancias conocidas por el mercado (bus + tablero SQLite).
+fn market_nodes() -> Vec<Value> {
+    let mut out: Vec<Value> = vec![];
+    if let Some(board) = mesh_snapshot() {
+        if let Some(me) = board.get("me") {
+            let mut n = me.clone();
+            if let Some(o) = n.as_object_mut() {
+                o.insert("kind".to_string(), json!("local"));
+            }
+            out.push(n);
+        }
+        if let Some(peers) = board.get("peers").and_then(|v| v.as_array()) {
+            for p in peers {
+                let mut n = p.clone();
+                if let Some(o) = n.as_object_mut() {
+                    o.insert("kind".to_string(), json!("peer"));
+                }
+                out.push(n);
+            }
+        }
+    }
+    if let Some(coord) = coordination_snapshot() {
+        if let Some(instances) = coord.get("instances").and_then(|v| v.as_array()) {
+            for i in instances {
+                let id = i.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                if id.is_empty() || out.iter().any(|n| n.get("id").and_then(|v| v.as_str()) == Some(id)) {
+                    continue;
+                }
+                let caps: Vec<String> = i
+                    .get("capabilities")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                out.push(json!({
+                    "id": id,
+                    "role": i.get("role").cloned().unwrap_or(json!("worker")),
+                    "hostname": i.get("device").cloned().unwrap_or(json!("")),
+                    "platform": i.get("platform").cloned().unwrap_or(json!("")),
+                    "version": i.get("version").cloned().unwrap_or(json!("")),
+                    "capabilities": caps,
+                    "load": 0.0,
+                    "last_seen": i.get("last_seen").cloned().unwrap_or(json!(0)),
+                    "kind": "board",
+                }));
+            }
+        }
+    }
+    out
+}
+
+/// Ledger de contribución: cuánto ha hecho cada nodo.
+///
+/// "Todos los nodos deben contribuir": un nodo vivo con capacidad libre y
+/// cero contribución aparece marcado como `debe_contribuir`.
+fn contribution_ledger(nodes: &[Value]) -> Vec<Value> {
+    let mut ledger: std::collections::BTreeMap<String, (u64, u64, u64)> = std::collections::BTreeMap::new();
+
+    // Agentes registrados en el bus.
+    if let Some(board) = mesh_snapshot() {
+        if let Some(agents) = board.get("agents").and_then(|v| v.as_array()) {
+            for a in agents {
+                let who = a.get("agent").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                if who.is_empty() {
+                    continue;
+                }
+                let e = ledger.entry(who).or_insert((0, 0, 0));
+                e.0 += 1;
+                match a.get("status").and_then(|v| v.as_str()) {
+                    Some("done") => e.1 += 1,
+                    Some("failed") => e.2 += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+    // Tareas del tablero con propietario.
+    if let Some(coord) = coordination_snapshot() {
+        if let Some(tasks) = coord.get("tasks").and_then(|v| v.as_array()) {
+            for t in tasks {
+                let Some(owner) = t.get("owner").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                if owner.is_empty() {
+                    continue;
+                }
+                let e = ledger.entry(owner.to_string()).or_insert((0, 0, 0));
+                e.0 += 1;
+                match t.get("status").and_then(|v| v.as_str()) {
+                    Some("done") => e.1 += 1,
+                    Some("failed") => e.2 += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+    // Journal local: el trabajo ejecutado en esta instancia cuenta como
+    // contribución de esta instancia.
+    let local_id = crate::mesh::instance_id();
+    let journal = crate::task_scheduler::journal_json(200);
+    let mut local = (0u64, 0u64, 0u64);
+    if let Some(entries) = journal.get("entries").and_then(|v| v.as_array()) {
+        for e in entries {
+            local.0 += 1;
+            if e.get("ok") == Some(&json!(true)) {
+                local.1 += 1;
+            } else if e.get("ok") == Some(&json!(false)) {
+                local.2 += 1;
+            }
+        }
+    }
+    ledger.insert(local_id.clone(), local);
+
+    let total: u64 = ledger.values().map(|v| v.0).sum();
+    let mut out: Vec<Value> = vec![];
+    for n in nodes {
+        let id = n.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if id.is_empty() {
+            continue;
+        }
+        let (tasks, ok, failed) = ledger.get(&id).copied().unwrap_or((0, 0, 0));
+        let share = if total > 0 {
+            (tasks as f64 * 100.0 / total as f64 * 10.0).round() / 10.0
+        } else {
+            0.0
+        };
+        let ok_rate = if tasks > 0 {
+            (ok as f64 * 100.0 / tasks as f64 * 10.0).round() / 10.0
+        } else {
+            0.0
+        };
+        out.push(json!({
+            "node": id,
+            "tasks": tasks,
+            "ok": ok,
+            "failed": failed,
+            "ok_rate": ok_rate,
+            "share_pct": share,
+            "verdict": if tasks == 0 {
+                "sin_trabajo"
+            } else if failed > ok {
+                "falla_mas_de_lo_que_hace"
+            } else {
+                "ok"
+            },
+        }));
+    }
+    out
+}
+
+/// Demanda pendiente: tareas de la cola que se pueden repartir.
+fn market_demands() -> Vec<Value> {
+    let mut out: Vec<Value> = vec![];
+    let queue = crate::task_scheduler::list_json();
+    if let Some(tasks) = queue.get("tasks").and_then(|v| v.as_array()) {
+        for t in tasks {
+            let state = t.get("state").and_then(|v| v.as_str()).unwrap_or("");
+            if state != "pending" && state != "queued" {
+                continue;
+            }
+            let kind = t.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+            out.push(json!({
+                "id": t.get("id").cloned().unwrap_or(json!("")),
+                "kind": kind,
+                "work_kind": work_kind_for(kind),
+                "priority": t.get("priority").cloned().unwrap_or(json!(5)),
+                "state": state,
+                "source": "cola local",
+            }));
+        }
+    }
+    out
+}
+
+/// Puntúa un nodo para una demanda concreta.
+///
+/// Devuelve `None` si el nodo no puede cogerla (reglas, capacidad o tipo de
+/// trabajo no admitido).
+fn score_node(
+    node: &Value,
+    offer: &Value,
+    rules: &ShareRules,
+    work_kind: &str,
+    contribution: &Value,
+) -> Option<(f64, String)> {
+    if offer.get("available").and_then(|v| v.as_bool()) != Some(true) {
+        return None;
+    }
+    let offers: Vec<String> = offer
+        .get("offers")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !offers.iter().any(|k| k == work_kind) {
+        return None;
+    }
+    let capacity = offer.get("capacity").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let bias = 1.0 + (rules.priority_bias as f64 / 100.0);
+    // Equidad: quien menos ha contributed recibe un empujón (todos deben
+    // aportar).  El nodo con 0 % recibe ×1.5, el que ya hizo el 100 % ×1.0.
+    let share = contribution
+        .get("share_pct")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let fairness = 1.0 + ((100.0 - share) / 100.0) * 0.5;
+    let score = capacity * bias * fairness;
+    let id = node.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    let reason = format!(
+        "{} ofrece {} · capacidad {:.0} % · prioridad {:+} · contribución {:.1} % (equidad ×{:.2})",
+        id,
+        work_kind,
+        capacity * 100.0,
+        rules.priority_bias,
+        share,
+        fairness
+    );
+    Some((score, reason))
+}
+
+/// Mercado de capacidades: oferta, demanda, plan y contribución.
+pub fn work_market() -> Value {
+    let device = device_state();
+    let nodes = market_nodes();
+    let contribution = contribution_ledger(&nodes);
+    let contribution_of = |id: &str| -> Value {
+        contribution
+            .iter()
+            .find(|c| c.get("node").and_then(|v| v.as_str()) == Some(id))
+            .cloned()
+            .unwrap_or(json!({ "node": id, "tasks": 0, "share_pct": 0.0, "verdict": "sin_trabajo" }))
+    };
+
+    // Oferta por nodo (con sus reglas locales).
+    let mut supply: Vec<Value> = vec![];
+    for n in &nodes {
+        let id = n.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        if id.is_empty() {
+            continue;
+        }
+        let rules = rules_for(id);
+        let offer = effective_offer(&rules, n, &device);
+        let mut entry = n.clone();
+        if let Some(o) = entry.as_object_mut() {
+            o.insert("rules".to_string(), serde_json::to_value(&rules).unwrap_or(json!({})));
+            o.insert("offer".to_string(), offer.clone());
+            o.insert("contribution".to_string(), contribution_of(id));
+        }
+        supply.push(entry);
+    }
+
+    // Demanda y plan de reparto.
+    let demand = market_demands();
+    let mut plan: Vec<Value> = vec![];
+    for d in &demand {
+        let work_kind = d.get("work_kind").and_then(|v| v.as_str()).unwrap_or("compute");
+        let mut best: Option<(f64, String, Value)> = None;
+        let mut considered: Vec<Value> = vec![];
+        for n in &supply {
+            let id = n.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let rules = rules_for(id);
+            let offer = n.get("offer").cloned().unwrap_or(json!({}));
+            let contrib = contribution_of(id);
+            match score_node(n, &offer, &rules, work_kind, &contrib) {
+                Some((score, reason)) => {
+                    considered.push(json!({ "node": id, "score": (score * 1000.0).round() / 1000.0, "reason": reason }));
+                    let better = match &best {
+                        Some((s, _, _)) => score > *s,
+                        None => true,
+                    };
+                    if better {
+                        best = Some((score, reason, n.clone()));
+                    }
+                }
+                None => {
+                    considered.push(json!({
+                        "node": id,
+                        "score": 0.0,
+                        "reason": offer
+                            .get("reason")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("no disponible")
+                            .to_string(),
+                    }));
+                }
+            }
+        }
+        let entry = match &best {
+            Some((score, reason, node)) => json!({
+                "demand_id": d.get("id").cloned().unwrap_or(json!("")),
+                "kind": d.get("kind").cloned().unwrap_or(json!("")),
+                "work_kind": work_kind,
+                "priority": d.get("priority").cloned().unwrap_or(json!(5)),
+                "node": node.get("id").cloned().unwrap_or(json!("")),
+                "score": (score * 1000.0).round() / 1000.0,
+                "reason": reason,
+                "assigned": true,
+            }),
+            None => json!({
+                "demand_id": d.get("id").cloned().unwrap_or(json!("")),
+                "kind": d.get("kind").cloned().unwrap_or(json!("")),
+                "work_kind": work_kind,
+                "priority": d.get("priority").cloned().unwrap_or(json!(5)),
+                "node": Value::Null,
+                "score": 0.0,
+                "reason": "ningún nodo ofrece este tipo de trabajo con sus reglas actuales",
+                "assigned": false,
+            }),
+        };
+        plan.push(json!({
+            "demand": d,
+            "assignment": entry,
+            "candidates": considered,
+        }));
+    }
+
+    // Nodos que deben contribuir (vivos, con capacidad y sin trabajo).
+    let idle: Vec<Value> = supply
+        .iter()
+        .filter(|n| {
+            let id = n.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let contrib = contribution_of(id);
+            contrib.get("tasks").and_then(|v| v.as_u64()).unwrap_or(0) == 0
+                && n.get("offer").and_then(|o| o.get("available")).and_then(|v| v.as_bool()) == Some(true)
+        })
+        .map(|n| {
+            json!({
+                "node": n.get("id").cloned().unwrap_or(json!("")),
+                "reason": "tiene capacidad libre y reglas compatibles pero no ha tomado ninguna tarea",
+            })
+        })
+        .collect();
+
+    json!({
+        "ok": true,
+        "generated_at": now_iso(),
+        "device": device,
+        "kinds": WORK_KINDS,
+        "supply": supply,
+        "demand": demand,
+        "plan": plan,
+        "contribution": contribution,
+        "must_contribute": idle,
+        "rules_source": rules_path().to_string_lossy(),
+        "notes": [
+            "las reglas locales mandan: sin batería, con calor, sin cargador o en modo «dedicada» la instancia no ofrece nada",
+            "el reparto penaliza a quien ya ha hecho mucho trabajo: quien menos ha contribuido recibe un empujón (todos deben aportar)",
+            "la capacidad ofrecida es la que queda tras reservar una fracción para el uso local de la propia instancia",
+        ],
+    })
+}
+
+/// Elige el nodo que debe tomar una demanda y (opcionalmente) la publica.
+pub fn work_route(demand: &Value) -> Value {
+    let market = work_market();
+    let kind = demand
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let work_kind = demand
+        .get("work_kind")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| work_kind_for(&kind).to_string());
+    let demand_id = demand
+        .get("demand_id")
+        .or_else(|| demand.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let chosen = market["plan"]
+        .as_array()
+        .and_then(|plans| {
+            plans.iter().find(|p| {
+                let d = p.get("demand");
+                let matches = d
+                    .and_then(|d| d.get("id"))
+                    .and_then(|v| v.as_str())
+                    .map(|id| id == demand_id)
+                    .unwrap_or(false);
+                let kind_matches = d
+                    .and_then(|d| d.get("kind"))
+                    .and_then(|v| v.as_str())
+                    .map(|k| k == kind)
+                    .unwrap_or(false);
+                matches || (demand_id.is_empty() && kind_matches)
+            })
+        })
+        .map(|p| p.get("assignment").cloned().unwrap_or(json!({})));
+
+    let Some(assignment) = chosen else {
+        return json!({
+            "ok": false,
+            "error": "no_demand",
+            "hint": "indica demand_id o kind de una tarea pendiente",
+            "market_demands": market["demand"].clone(),
+        });
+    };
+
+    let node = assignment.get("node").and_then(|v| v.as_str()).unwrap_or("");
+    let mut published = Value::Null;
+    if demand.get("publish").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if node.is_empty() {
+            return json!({
+                "ok": false,
+                "error": "no_candidate",
+                "reason": assignment.get("reason").cloned().unwrap_or(json!("")),
+            });
+        }
+        let payload = demand.get("payload").cloned().unwrap_or(json!({}));
+        published = node_assign(node, &kind, &payload, &work_kind);
+    }
+
+    json!({
+        "ok": true,
+        "assignment": assignment,
+        "published": published,
+        "note": "el plan es una recomendación de las reglas locales; publicarla en el bus es opcional",
+    })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Router
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1912,6 +2840,11 @@ pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
         ("GET", "/api/v2/agentic") => agentic_loop_status(),
         ("GET", "/api/v2/share") => shared_files(),
         ("GET", "/api/v2/routes") => routes_doc(),
+        ("GET", "/api/v2/market") => work_market(),
+        ("GET", "/api/v2/market/rules") => {
+            let node = query_get(query, "node").unwrap_or_default();
+            work_rules(&node)
+        }
         ("GET", "/api/v2/share/get") => {
             let path_q = query_get(query, "path").unwrap_or_default();
             let offset = query_get(query, "offset")
@@ -1943,6 +2876,11 @@ pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
             share_put_chunk(&s("path"), n("index") as usize, &s("data_b64"), &s("sha256"))
         }
         ("POST", "/api/v2/share/commit") => share_commit(&s("path"), &s("sha256")),
+        ("POST", "/api/v2/market/rules") => {
+            let node = s("node");
+            work_rules_set(&node, &b)
+        }
+        ("POST", "/api/v2/market/route") => work_route(&b),
         _ => {
             return Some(json!({
                 "ok": false,
@@ -2357,5 +3295,125 @@ mod tests {
         if a["channel"]["configured"] == json!(true) {
             assert!(a["channel"].get("host").is_some());
         }
+    }
+
+    // ── Mercado de capacidades ──────────────────────────────────────────────
+
+    #[test]
+    fn cada_tipo_de_tarea_cae_en_un_tipo_de_trabajo_conocido() {
+        assert_eq!(work_kind_for("sync.web"), "network");
+        assert_eq!(work_kind_for("apk.analyze"), "build");
+        assert_eq!(work_kind_for("agent.plan"), "inference");
+        assert_eq!(work_kind_for("share.put"), "storage");
+        assert_eq!(work_kind_for("loquesea"), "compute");
+        for k in WORK_KINDS {
+            assert!(!k.is_empty());
+        }
+    }
+
+    #[test]
+    fn las_reglas_locales_deciden_si_la_instancia_comparte() {
+        let node = json!({ "id": "n1", "capabilities": ["llm", "reverse"], "load": 0.1 });
+        let device = json!({
+            "capacity_pct": 90, "charging": true, "cpu_temp_c": 35.0, "thermal_hot": false, "load": 0.1
+        });
+        let mut rules = default_rules("n1");
+        rules.offers = vec!["compute".into(), "inference".into()];
+        rules.dedicated = false;
+        rules.only_when_charging = false;
+        rules.min_battery_pct = 30;
+        rules.max_cpu_temp_c = 45.0;
+        rules.reserved_ratio = 0.5;
+
+        let offer = effective_offer(&rules, &node, &device);
+        assert_eq!(offer["available"], json!(true), "con batería y frío debe compartir: {}", offer);
+
+        // Batería baja: deja de compartir y lo explica.
+        let low = json!({
+            "capacity_pct": 10, "charging": false, "cpu_temp_c": 35.0, "thermal_hot": false, "load": 0.1
+        });
+        let offer = effective_offer(&rules, &node, &low);
+        assert_eq!(offer["available"], json!(false));
+        let reason = offer["reason"].as_str().unwrap_or("");
+        assert!(reason.contains("batería"), "debe explicar el bloqueo: {}", reason);
+
+        // Modo dedicado: no comparte nada, aunque la batería sea perfecta.
+        let mut dedicated = rules.clone();
+        dedicated.dedicated = true;
+        let offer = effective_offer(&dedicated, &node, &device);
+        assert_eq!(offer["available"], json!(false));
+        assert!(offer["reason"].as_str().unwrap_or("").contains("dedicada"));
+    }
+
+    #[test]
+    fn las_reglas_se_validan_antes_de_guardarse() {
+        let dir = std::env::temp_dir().join(format!("md-webui-rules-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        // Se validan los valores (aunque el fichero no se pueda escribir en
+        // el sandbox, la validación ocurre antes).
+        let bad_kind = json!({ "rules": { "offers": ["teletransporte"] } });
+        assert_eq!(
+            work_rules_set("", &bad_kind)["error"],
+            json!("missing_node"),
+            "sin nodo no se guarda"
+        );
+        assert_eq!(
+            work_rules_set("n1", &json!({ "rules": { "min_battery_pct": 900 } }))["error"],
+            json!("bad_value"),
+            "una batería de 900 % es imposible"
+        );
+        assert_eq!(
+            work_rules_set("n1", &json!({ "rules": { "reserved_ratio": 2.0 } }))["error"],
+            json!("bad_value"),
+            "no se puede reservar el 200 % de la capacidad"
+        );
+        assert_eq!(
+            work_rules_set("n1", &json!({ "rules": { "offers": ["teletransporte"] } }))["error"],
+            json!("bad_kind"),
+            "tipo de trabajo desconocido"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn el_mercado_expone_oferta_demanda_y_contribucion() {
+        let m = work_market();
+        assert_eq!(m["ok"], json!(true));
+        assert!(m["supply"].is_array());
+        assert!(m["demand"].is_array());
+        assert!(m["plan"].is_array());
+        assert!(m["contribution"].is_array());
+        assert!(m["kinds"].is_array());
+        // El dispositivo se informa con datos reales (aunque pueden ser null).
+        assert!(m["device"].get("capacity_pct").is_some());
+        assert!(m["device"].get("charging").is_some());
+        // Sin bus desplegado no puede haber oferta de peers inventada.
+        let supply = m["supply"].as_array().cloned().unwrap_or_default();
+        for s in &supply {
+            assert!(s.get("offer").is_some());
+            assert!(s.get("rules").is_some());
+        }
+    }
+
+    #[test]
+    fn el_reparto_ignora_los_nodos_que_no_cumplen_las_reglas() {
+        let node = json!({ "id": "n1", "capabilities": [], "load": 0.0 });
+        let device = json!({
+            "capacity_pct": 90, "charging": true, "cpu_temp_c": 30.0, "thermal_hot": false, "load": 0.0
+        });
+        let mut rules = default_rules("n1");
+        rules.offers = vec!["compute".into()];
+        rules.reserved_ratio = 0.0;
+        rules.min_battery_pct = 10;
+        let offer = effective_offer(&rules, &node, &device);
+        let contrib = json!({ "share_pct": 0.0 });
+
+        // Ofrece compute: puntúa.
+        assert!(score_node(&node, &offer, &rules, "compute", &contrib).is_some());
+        // No ofrece inference: descartado.
+        assert!(score_node(&node, &offer, &rules, "inference", &contrib).is_none());
+        // Nodo bloqueado: descartado aunque encaje el tipo.
+        let blocked = json!({ "available": false, "capacity": 0.0, "offers": ["compute"], "reason": "x" });
+        assert!(score_node(&node, &blocked, &rules, "compute", &contrib).is_none());
     }
 }
