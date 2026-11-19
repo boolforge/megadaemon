@@ -783,8 +783,17 @@ function escHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
+// v13.2 (S08): el cockpit exige `X-Seere-Auth-Token` en los endpoints que
+// ejecutan o modifican estado.  El token lo inyecta el servidor en la propia
+// página (legible sólo same-origin: el CORS ya no es `*`).
+function authHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  if (window.MEGADAEMON_TOKEN) h["X-Seere-Auth-Token"] = window.MEGADAEMON_TOKEN;
+  return h;
+}
+
 async function apiGet(url) {
-  const res = await fetch(url, { cache: "no-store" });
+  const res = await fetch(url, { cache: "no-store", headers: authHeaders() });
   if (!res.ok) throw new Error("HTTP " + res.status);
   return await res.json();
 }
@@ -792,7 +801,7 @@ async function apiGet(url) {
 async function apiPost(url, payload) {
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload || {})
   });
   if (!res.ok) throw new Error("HTTP " + res.status);

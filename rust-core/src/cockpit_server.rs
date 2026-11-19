@@ -29,6 +29,99 @@ const UPLOADS_DIR: &str = "/data/user/0/com.agy/files/megadaemon/uploads";
 const EXTRACTED_DIR: &str = "/data/user/0/com.agy/files/megadaemon/extracted";
 const TEMPLATE_PATH: &str = "/data/user/0/com.agy/files/megadaemon/web/cockpit_template.html";
 
+/// ── Autenticación del cockpit (v13.2 · S08) ────────────────────────────────
+/// El cockpit EJECUTA órdenes (root) a través del agente SEERE.  Con
+/// `Access-Control-Allow-Origin: *` y sin autenticación, cualquier página
+/// web que visitara el móvil (o cualquiera en la LAN) podía hacer POST
+/// /api/chat con `$ ...` y obtener ejecución de comandos como root.
+///
+/// Ahora:
+///   * el token se genera en el arranque (o viene en SEERE_AUTH_TOKEN) y se
+///     guarda en `<STATE_DIR>/cockpit_token` con permisos 0600;
+///   * los endpoints que ejecutan o modifican estado exigen la cabecera
+///     `X-Seere-Auth-Token`;
+///   * el CORS deja de ser `*`: sólo se refleja el Origin si coincide con el
+///     Host de la petición o está en MEGADAEMON_ALLOWED_ORIGINS;
+///   * la UI recibe el token embebido (sólo legible same-origin).
+static AUTH_TOKEN: OnceLock<String> = OnceLock::new();
+
+fn random_hex(nbytes: usize) -> String {
+    let mut buf = vec![0u8; nbytes];
+    if let Ok(mut f) = File::open("/dev/urandom") {
+        use std::io::Read;
+        let _ = f.read_exact(&mut buf);
+    } else {
+        // Fallback: reloj + pid (no criptográfico, pero el fichero es local).
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        buf[..8].copy_from_slice(&t.to_le_bytes()[..8]);
+    }
+    buf.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Token de autenticación del cockpit (estable entre arranques).
+pub fn auth_token() -> &'static str {
+    AUTH_TOKEN.get_or_init(|| {
+        if let Ok(t) = std::env::var("SEERE_AUTH_TOKEN") {
+            let t = t.trim().to_string();
+            if !t.is_empty() {
+                return t;
+            }
+        }
+        let path = format!("{}/cockpit_token", STATE_DIR);
+        if let Ok(existing) = fs::read_to_string(&path) {
+            let t = existing.trim().to_string();
+            if t.len() >= 16 {
+                return t;
+            }
+        }
+        let t = random_hex(32);
+        let _ = fs::create_dir_all(STATE_DIR);
+        let _ = fs::write(&path, &t);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        }
+        t
+    })
+}
+
+/// ¿La petición lleva el token correcto?
+fn auth_ok(headers: &str) -> bool {
+    let mut supplied = String::new();
+    for line in headers.lines() {
+        let low = line.to_lowercase();
+        if low.starts_with("x-seere-auth-token:") {
+            supplied = line[low.find(':').unwrap() + 1..].trim().to_string();
+        }
+    }
+    !supplied.is_empty() && supplied == auth_token()
+}
+
+/// ¿Este endpoint exige autenticación?
+fn requires_auth(path: &str, method: &str) -> bool {
+    if method == "GET" {
+        return false;
+    }
+    matches!(
+        path,
+        "/api/chat"
+            | "/api/llm_agent"
+            | "/api/brain_query"
+            | "/api/run_vla"
+            | "/api/memory_freeze"
+            | "/api/trigger_boost"
+            | "/api/purge_cache"
+            | "/api/providers"
+            | "/api/vision_start"
+            | "/api/vision_stop"
+            | "/api/chat_upload"
+    )
+}
+
 /// Resuelve el HTML del cockpit.
 ///
 /// BUG v13.0: la ruta estaba HARDCODEADA al path de Android, así que fuera
@@ -104,7 +197,13 @@ fn read_json_file_fallback(filename: &str, default_val: Value) -> Value {
     for p in &[p1, p2, p3] {
         if let Ok(s) = fs::read_to_string(p) {
             if let Ok(v) = serde_json::from_str::<Value>(&s) {
-                return v;
+                // v13.2 (HW-01): si el fichero contiene un ARRAY (estado a
+                // medias), indexarlo con una clave entraba en panic de
+                // serde_json y, en release (panic=abort), mataba el cockpit
+                // COMPLETO.  Sólo se aceptan objetos.
+                if v.is_object() {
+                    return v;
+                }
             }
         }
     }
@@ -243,21 +342,53 @@ fn check_llama_online() -> bool {
     }
 }
 
+thread_local! {
+    /// Origen permitido para ESTA conexión (vacío = sin CORS).
+    static CORS_ORIGIN: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+/// ¿Se permite este Origin?  (v13.2 · S08: `*` era un agujero)
+fn cors_allowed(origin: &str, host: &str) -> bool {
+    if origin.is_empty() {
+        return false;
+    }
+    // 1) Lista explícita por variable de entorno.
+    if let Ok(list) = std::env::var("MEGADAEMON_ALLOWED_ORIGINS") {
+        if list.split(',').any(|o| o.trim() == origin) {
+            return true;
+        }
+    }
+    // 2) Same-origin: el Origin debe apuntar al mismo Host que la petición.
+    let o = origin.trim();
+    for scheme in ["http://", "https://"] {
+        if let Some(rest) = o.strip_prefix(scheme) {
+            let hostport = rest.split('/').next().unwrap_or("");
+            if !hostport.is_empty() && hostport.eq_ignore_ascii_case(host.trim()) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn send_http_response(stream: &mut TcpStream, status: u16, content_type: &str, body: &[u8]) {
     let status_text = match status {
         200 => "OK",
         400 => "Bad Request",
         404 => "Not Found",
         413 => "Payload Too Large",
+        403 => "Forbidden",
         _ => "Internal Server Error",
     };
+    let cors = CORS_ORIGIN.with(|c| c.borrow().clone());
     let header = format!(
         "HTTP/1.1 {} {}\r\n\
          Content-Type: {}\r\n\
          Content-Length: {}\r\n\
-         Access-Control-Allow-Origin: *\r\n\
+         Access-Control-Allow-Origin: {cors}\r\n\
          Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
          Access-Control-Allow-Headers: Content-Type, X-Seere-Auth-Token\r\n\
+         Vary: Origin\r\n\
          Cache-Control: no-cache, no-store, must-revalidate\r\n\
          Connection: close\r\n\r\n",
         status,
@@ -354,15 +485,29 @@ fn handle_client(mut stream: TcpStream) {
     }
 
     let mut content_length = 0usize;
+    let mut origin = String::new();
+    let mut host = String::new();
     for line in lines {
         let low = line.to_lowercase();
         if low.starts_with("content-length:") {
             content_length = low["content-length:".len()..].trim().parse().unwrap_or(0);
+        } else if low.starts_with("origin:") {
+            origin = line[low.find(':').unwrap() + 1..].trim().to_string();
+        } else if low.starts_with("host:") {
+            host = line[low.find(':').unwrap() + 1..].trim().to_string();
         }
     }
+    // CORS: sólo se refleja el Origin si está permitido (nunca `*`).
+    let cors_ok = cors_allowed(&origin, &host);
+    CORS_ORIGIN.with(|c| {
+        *c.borrow_mut() = if cors_ok { origin.clone() } else { String::new() };
+    });
 
     // Cap single HTTP body at 100 MB (allows large .7z, .exe, .apk, .iso uploads cleanly)
-    if content_length > 100 * 1024 * 1024 {
+    // v13.2 (HW-05): 100 MB por conexión y un hilo por conexión = DoS local
+    // trivial (basta con mandar un Content-Length enorme).
+    const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
+    if content_length > MAX_BODY_BYTES {
         send_http_response(
             &mut stream,
             413,
@@ -398,6 +543,19 @@ fn handle_client(mut stream: TcpStream) {
     };
     let qs = parse_query_params(query);
 
+    // v13.2 (S08): los endpoints que ejecutan o modifican estado exigen el
+    // token.  Sin esto, cualquiera (página web con CORS abierto, o alguien en
+    // la LAN) podía hacer POST /api/chat con "$ comando" y obtener RCE root.
+    if requires_auth(path, method) && !auth_ok(&header_str) {
+        send_http_response(
+            &mut stream,
+            403,
+            "application/json",
+            b"{\"error\":\"unauthorized\",\"hint\":\"falta la cabecera X-Seere-Auth-Token\"}",
+        );
+        return;
+    }
+
     if method == "GET" {
         match path {
             "/" | "/index.html" => {
@@ -407,7 +565,23 @@ fn handle_client(mut stream: TcpStream) {
                         b"<!doctype html><meta charset=utf-8><h1>MegaDaemon v13.1 Zenith Rust Cockpit</h1>                          <p>cockpit_template.html no encontrado. Rutas probadas: $MEGADAEMON_WEB_TEMPLATE,                           &lt;bin&gt;/../../web/, ./web/. Copia el fichero o exporta MEGADAEMON_WEB_TEMPLATE.</p>"
                             .to_vec()
                     });
-                send_http_response(&mut stream, 200, "text/html; charset=utf-8", &html);
+                // El token se inyecta en la página (legible sólo same-origin,
+                // porque el CORS ya no es `*`).
+                let html = String::from_utf8_lossy(&html).into_owned();
+                let inject = format!(
+                    "<script>window.MEGADAEMON_TOKEN=\"{}\";</script>",
+                    auth_token()
+                );
+                let html = match html.find("<script>") {
+                    Some(i) => format!("{}{}{}", &html[..i], inject, &html[i..]),
+                    None => format!("{}{}", inject, html),
+                };
+                send_http_response(
+                    &mut stream,
+                    200,
+                    "text/html; charset=utf-8",
+                    html.as_bytes(),
+                );
             }
             "/api/ping" => {
                 send_json(
@@ -473,7 +647,7 @@ fn handle_client(mut stream: TcpStream) {
             "/api/brain_status" => {
                 let active = check_llama_online();
                 let vault = providers::load_vault();
-                let npu = npu_bridge::probe_exynos_npu();
+                let npu = npu_bridge::probe_exynos_npu_cached();
                 send_json(
                     &mut stream,
                     &json!({
@@ -497,7 +671,7 @@ fn handle_client(mut stream: TcpStream) {
                 );
             }
             "/api/npu_status" | "/api/hardware_telemetry" => {
-                let npu_info = npu_bridge::probe_exynos_npu();
+                let npu_info = npu_bridge::probe_exynos_npu_cached();
                 send_json(&mut stream, &serde_json::to_value(npu_info).unwrap_or_else(|_| json!({})));
             }
             "/api/vision_status" => {
@@ -703,7 +877,7 @@ fn handle_client(mut stream: TcpStream) {
                 let plat = qs.get("platform").map(|s| s.as_str()).unwrap_or("segacd");
                 let (_, _, _, c_path, _) = rom_locator::platform_metadata(&plat.to_lowercase());
                 let sample = fs::read_to_string(c_path)
-                    .map(|s| s[..s.len().min(65536)].to_string())
+                    .map(|s| crate::util_text::truncate_chars(&s, 65536))
                     .unwrap_or_default();
                 let rep = hw_mapper::analyze_text_for_mmio_and_structs(plat, &sample);
                 send_json(&mut stream, &serde_json::to_value(rep).unwrap());
@@ -812,7 +986,9 @@ fn handle_client(mut stream: TcpStream) {
         }
         "/api/llm_agent" | "/api/brain_query" => {
             let prompt = body_json["prompt"].as_str().unwrap_or("");
-            let res = seere_v11::run_seere_v11(prompt, 4, true, false, false, true, true);
+            // v13.2 (S09): la politica de energia se aplica AL AGENTE.
+            let (_, pol) = power_policy::current_policy();
+            let res = seere_v11::run_seere_v11(prompt, pol.max_turns.max(1), true, false, false, true, true);
             send_json(&mut stream, &res);
         }
         "/api/chat_upload" => {

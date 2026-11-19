@@ -4,6 +4,7 @@ use std::ffi::{CStr, CString};
 use std::fs;
 use std::os::raw::c_int;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 use std::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,10 +81,13 @@ fn probe_elf_symbols(lib_path: &str, symbols: &[&str]) -> EdenLibraryProbe {
                     }
                     libc::dlclose(handle);
                 } else {
-                    // On Android Bionic linker namespace isolation, /vendor/lib64 may require root/ELF check if dlopen from app domain is restricted
-                    for &sym in symbols {
-                        resolved.push(format!("{} (ELF-verified)", sym));
-                    }
+                    // v13.2 (HW-10): antes se listaban los símbolos como
+                    // "resueltos (ELF-verified)" aunque la librería NO se
+                    // pudo cargar.  Ahora se declara el hecho sin fingir.
+                    resolved.push(format!(
+                        "dlopen fallo: {} simbolos presentes en el ELF pero NO cargados",
+                        symbols.len()
+                    ));
                 }
             }
         }
@@ -103,35 +107,37 @@ fn check_kleidiai_dotprod() -> (bool, Vec<String>) {
     let mut dotprod = false;
     let base_dir = "/data/user/0/com.agy/files/usr/lib";
 
+    //
+    // v13.2 (HW-10): antes se anunciaba el backend si el FICHERO existía y
+    // se declaraba dotprod=true aunque el dlopen fallara o el símbolo no
+    // estuviera.  Ahora un backend sólo se anuncia si la librería se ha
+    // CARGADO de verdad, y dotprod sólo se declara si el símbolo lo confirma.
     for (file, label) in &[
         ("libggml-cpu.so", "ggml-cpu (ARMv8.2 KleidiAI SDOT + FP16)"),
         ("libggml-vulkan.so", "ggml-vulkan (Mali-G78 MP14 Vulkan Compute)"),
         ("libggml-opencl.so", "ggml-opencl (Mali-G78 MP14 OpenCL 3.0)"),
     ] {
         let full = format!("{}/{}", base_dir, file);
-        if Path::new(&full).exists() {
-            backends.push(label.to_string());
-            if *file == "libggml-cpu.so" {
-                if let Ok(c_path) = CString::new(full) {
-                    unsafe {
-                        let h = libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
-                        if !h.is_null() {
-                            let sym = libc::dlsym(
-                                h,
-                                CStr::from_bytes_with_nul_unchecked(b"ggml_cpu_has_dotprod\0").as_ptr(),
-                            );
-                            if !sym.is_null() {
-                                type HasDotprodFn = unsafe extern "C" fn() -> c_int;
-                                let f: HasDotprodFn = std::mem::transmute(sym);
-                                dotprod = f() != 0;
-                            } else {
-                                dotprod = true;
-                            }
-                            libc::dlclose(h);
-                        } else {
-                            dotprod = true;
+        if !Path::new(&full).exists() {
+            continue;
+        }
+        if let Ok(c_path) = CString::new(full.clone()) {
+            unsafe {
+                let h = libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+                if !h.is_null() {
+                    backends.push(label.to_string());
+                    if *file == "libggml-cpu.so" {
+                        let sym = libc::dlsym(
+                            h,
+                            CStr::from_bytes_with_nul_unchecked(b"ggml_cpu_has_dotprod\0").as_ptr(),
+                        );
+                        if !sym.is_null() {
+                            type HasDotprodFn = unsafe extern "C" fn() -> c_int;
+                            let f: HasDotprodFn = std::mem::transmute(sym);
+                            dotprod = f() != 0;
                         }
                     }
+                    libc::dlclose(h);
                 }
             }
         }
@@ -173,7 +179,10 @@ pub fn read_cpu_and_thermal() -> (Vec<u32>, f32, f32, String, f32) {
         freqs.push(mhz);
     }
 
-    let mut bat_temp_c: f32 = 32.0;
+    // v13.2 (HW-16): sin sensor NO se inventa una temperatura.  NaN se
+    // serializa como `null` en JSON y las comparaciones con NaN dan false
+    // (la politica termica no se dispara por un valor inventado).
+    let mut bat_temp_c: f32 = f32::NAN;
     for bp in &[
         "/sys/class/power_supply/battery/temp",
         "/sys/class/power_supply/battery/batt_temp",
@@ -190,7 +199,7 @@ pub fn read_cpu_and_thermal() -> (Vec<u32>, f32, f32, String, f32) {
     // su tipo: en Android eso incluye el sensor de piel, el cargador o el
     // modem, y un "max" así puede declarar THROTTLE por el móvil que está en
     // la mesa.  Ahora se priorizan las zonas de SoC/GPU/CPU.
-    let mut cpu_temp_c: f32 = 35.0;
+    let mut cpu_temp_c: f32 = f32::NAN;
     let mut best_is_soc = false;
     let zones = fs::read_dir("/sys/class/thermal").map(|it| it.flatten().count()).unwrap_or(16);
     for tz in 0..zones {
@@ -212,7 +221,10 @@ pub fn read_cpu_and_thermal() -> (Vec<u32>, f32, f32, String, f32) {
                 if c <= 20.0 || c >= 115.0 {
                     continue;
                 }
-                if (is_soc && !best_is_soc) || (is_soc == best_is_soc && c > cpu_temp_c) {
+                if cpu_temp_c.is_nan() {
+                    cpu_temp_c = c;
+                    best_is_soc = is_soc;
+                } else if (is_soc && !best_is_soc) || (is_soc == best_is_soc && c > cpu_temp_c) {
                     cpu_temp_c = c;
                     best_is_soc = is_soc;
                 }
@@ -265,23 +277,33 @@ pub fn pin_performance_cluster() -> bool {
     pinned
 }
 
-pub fn probe_exynos_npu() -> ExynosNpuTelemetry {
-    if unsafe { libc::getuid() } != 0 && std::env::var("MEGADAEMON_NPU_RAW").is_err() {
-        if let Ok(exe) = std::env::current_exe() {
-            let cmd = format!(
-                "MEGADAEMON_NPU_RAW=1 LD_LIBRARY_PATH=/vendor/lib64:/system/lib64 '{}' npu-probe",
-                exe.display()
-            );
-            if let Ok(out) = Command::new("su").args(["-c", &cmd]).output() {
-                if out.status.success() {
-                    if let Ok(rep) = serde_json::from_slice::<ExynosNpuTelemetry>(&out.stdout) {
-                        return rep;
-                    }
-                }
-            }
-        }
-    }
+static PROBE_CACHE: OnceLock<Mutex<(std::time::Instant, ExynosNpuTelemetry)>> = OnceLock::new();
 
+/// TTL del sondeo cacheado: la UI pregunta cada 20 s, pero varios endpoints
+/// hitcan la misma telemetría; sin cache, cada petición releía /sys entero.
+const PROBE_TTL_SECS: u64 = 5;
+
+/// Sondeo de hardware con cache corto.
+pub fn probe_exynos_npu_cached() -> ExynosNpuTelemetry {
+    let cache = PROBE_CACHE.get_or_init(|| Mutex::new((std::time::Instant::now() - std::time::Duration::from_secs(PROBE_TTL_SECS), probe_exynos_npu())));
+    let mut guard = cache.lock().unwrap();
+    if guard.0.elapsed().as_secs() < PROBE_TTL_SECS {
+        return guard.1.clone();
+    }
+    let fresh = probe_exynos_npu();
+    *guard = (std::time::Instant::now(), fresh.clone());
+    fresh
+}
+
+pub fn probe_exynos_npu() -> ExynosNpuTelemetry {
+    // v13.2: la v13.0/1 hacía esto:
+    //     su -c "MEGADAEMON_NPU_RAW=1 <exe> npu-probe"
+    // es decir, CONVOCABA OTRO PROCESO (con `su`, que puede pedir contrasena y
+    // COLGARSE sin limite) en CADA sondeo, y la UI sondea cada 20 s.  Un
+    // `su` interactivo sin timeout puede tumbar el cockpit entero.
+    //
+    // Ahora: sondeo directo (sin root) + cacheo corto.  Lo que necesite root
+    // se declara como no disponible en vez de colgarse.
     let vs4l_node = "/dev/vertex10";
     let vs4l_present = Path::new(vs4l_node).exists();
     let (kleidiai_dotprod_active, ggml_backends) = check_kleidiai_dotprod();

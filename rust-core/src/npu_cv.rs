@@ -45,6 +45,11 @@ pub struct NpuCvReport {
     /// `true` si el frame cambió mientras se leía (análisis potencialmente
     /// inconsistente; se declara en vez de esconderlo).
     pub frame_torn: bool,
+    /// Contador de frame del producer (para saber si la imagen es nueva).
+    pub frame_counter: u32,
+    /// `true` si este es el primer análisis (no hay frame previo con el que
+    /// comparar, así que el delta es 0 por definición, no medido).
+    pub first_frame: bool,
     /// Mapa de bordes reducido (máx. 64 columnas) para dibujar el mapa de
     /// calor en la UI.  Valores 0..127 por celda (energía por canal sumada).
     pub edge_map: Vec<u8>,
@@ -81,6 +86,7 @@ pub fn analyze_vla_frame_and_accel() -> NpuCvReport {
     // escribir" (el productor escribe mientras leemos).
     let snap = shm::read_frame_snapshot().ok();
     let torn = snap.as_ref().map(|s| s.torn).unwrap_or(false);
+    let frame_counter = snap.as_ref().map(|s| s.header.frame_counter).unwrap_or(0);
     let (w, h, rgb) = match snap {
         Some(s) if s.header.width > 0 && s.header.height > 0 => (
             s.header.width as usize,
@@ -108,19 +114,25 @@ pub fn analyze_vla_frame_and_accel() -> NpuCvReport {
 
     // Frame-to-frame L1 delta (motion gating for VLM call savings)
     let prev_lock = PREV_LUMA.get_or_init(|| Mutex::new(Vec::new()));
+    // `first_frame_seen` se inicializa dentro del bloque (siempre se asigna).
+    let first_frame_seen;
     let delta_l1 = {
         let mut prev = prev_lock.lock().unwrap();
-        let d = if prev.len() == luma.len() && !luma.is_empty() {
+        // v13.2 (HW-11): sin frame previo NO hay delta que medir.  Antes se
+        // fabricaba 12,5 y `scene_changed: true`, es decir, se inventaba
+        // movimiento en el primer análisis (y se disparaba el VLM de verdad).
+        let (d, first_frame) = if prev.len() == luma.len() && !luma.is_empty() {
             let sum: u64 = luma
                 .iter()
                 .zip(prev.iter())
                 .map(|(&a, &b)| (a as i32 - b as i32).unsigned_abs() as u64)
                 .sum();
-            sum as f64 / luma.len() as f64
+            (sum as f64 / luma.len() as f64, false)
         } else {
-            12.5
+            (0.0, true)
         };
         *prev = luma.clone();
+        first_frame_seen = first_frame;
         (d * 100.0).round() / 100.0
     };
 
@@ -215,6 +227,8 @@ pub fn analyze_vla_frame_and_accel() -> NpuCvReport {
         nnapi_device_count: edge_exec.nnapi_device_count,
         nnapi_devices: edge_exec.nnapi_devices.clone(),
         frame_torn: torn,
+        frame_counter,
+        first_frame: first_frame_seen,
         edge_map: downsample_edge_map(&edge, 64),
         edge_map_w: downsample_edge_map_w(&edge, 64),
         edge_map_h: downsample_edge_map_h(&edge, 64),
@@ -339,7 +353,7 @@ fn vision_loop() {
         if rep.frame_torn {
             st.torn_frames += 1;
         }
-        st.last_frame_counter = rep.frame_width * 0 + st.last_frame_counter;
+        st.last_frame_counter = rep.frame_counter;
         st.last_backend = rep.vision_backend.clone();
         st.last_latency_ms = rep.cv_latency_ms;
         if rep.vision_fallback_reason.len() > 0 && st.last_error.is_empty() {

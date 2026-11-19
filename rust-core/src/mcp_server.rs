@@ -25,8 +25,8 @@ fn tool_definitions() -> Value {
                     "prompt": { "type": "string", "description": "User prompt or reverse-engineering task." },
                     "model": {
                         "type": "string",
-                        "description": "Provider ID: minimax-m2.7 (default), minimax-m2.7-fast, minimax-m2.5, minimax-m2.5-fast",
-                        "default": "minimax-m2.7"
+                        "description": "Provider ID: local-seere (default, offline), minimax-m3.1-flash, pollinations-free, ovhcloud-free, groq-free, google-ai-studio (modelos retirados como M2.5/M2.7 y GitHub Models NO se ofrecen)",
+                        "default": "local-seere"
                     },
                     "system": { "type": "string", "description": "Optional system instruction." },
                     "attachment_path": { "type": "string", "description": "Optional path to ANY file (.7z, .exe, .elf, .md, .py, .bin) for grounded Rust DiE/Binwalk pre-analysis." },
@@ -42,7 +42,7 @@ fn tool_definitions() -> Value {
                 "type": "object",
                 "properties": {
                     "prompt": { "type": "string" },
-                    "provider_id": { "type": "string", "default": "minimax-m2.7-fast" },
+                    "provider_id": { "type": "string", "default": "local-seere" },
                     "attachment_path": { "type": "string" }
                 },
                 "required": ["prompt"]

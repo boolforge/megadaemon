@@ -6,6 +6,13 @@ pub const SHM_PATH: &str = "/data/user/0/com.agy/files/snatcher_vla_shm.bin";
 pub const SHM_SIZE: usize = 1048576; // 1 MB
 /// Offset del payload del frame dentro del fichero SHM (cabecera + metadatos).
 pub const FRAME_OFFSET: usize = 32824;
+/// Límite de dimensiones del frame.  La cabecera la escribe la app Android y
+/// es un dato NO CONFIABLE: sin este tope, 65535x65535 pedía 12,9 GB de RAM
+/// y mataba el proceso (DoS trivial con 28 bytes).
+pub const MAX_FRAME_DIM: u32 = 4096;
+/// Límite de megapíxeles (8 MP) y de bytes de payload.
+pub const MAX_FRAME_PIXELS: u64 = 8 * 1024 * 1024;
+pub const MAX_FRAME_BYTES: u64 = 32 * 1024 * 1024;
 /// Longitud de la cabecera (magic..format).
 pub const HEADER_SIZE: usize = 28;
 
@@ -202,7 +209,32 @@ pub fn read_frame_snapshot() -> Result<FrameSnapshot, String> {
     if width == 0 || height == 0 {
         return Err("SHM header reports an empty frame".to_string());
     }
-    let frame_len = width * height * 3;
+    // La cabecera no es de fiar: validar ANTES de reservar memoria.
+    if width as u32 > MAX_FRAME_DIM || height as u32 > MAX_FRAME_DIM {
+        return Err(format!(
+            "dimensiones del frame fuera de rango: {}x{} (max {}x{})",
+            width, height, MAX_FRAME_DIM, MAX_FRAME_DIM
+        ));
+    }
+    let pixels = (width as u64) * (height as u64);
+    if pixels > MAX_FRAME_PIXELS {
+        return Err(format!(
+            "frame con {} pixeles (max {})",
+            pixels, MAX_FRAME_PIXELS
+        ));
+    }
+    let frame_len = (pixels * 3) as usize;
+    if frame_len as u64 > MAX_FRAME_BYTES {
+        return Err(format!("frame de {} bytes (max {})", frame_len, MAX_FRAME_BYTES));
+    }
+    // Y no puede exceder lo que realmente hay en el fichero.
+    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if (FRAME_OFFSET as u64) + frame_len as u64 > file_len {
+        return Err(format!(
+            "el frame declarado ({} bytes) no cabe en el fichero ({} bytes)",
+            frame_len, file_len
+        ));
+    }
 
     // 2) Payload (una sola copia).
     let mut rgb = vec![0u8; frame_len];

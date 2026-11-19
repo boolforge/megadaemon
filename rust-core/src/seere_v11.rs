@@ -12,7 +12,10 @@ pub const VERSION: &str = "v11.0-rust-apex";
 pub const STATE_DIR: &str = "/data/user/0/com.agy/files/megadaemon/state";
 pub const SHM_PATH: &str = "/data/user/0/com.agy/files/snatcher_vla_shm.bin";
 pub const ACTION_MAX_TOK: u32 = 256;
-pub const FINAL_MAX_TOK: u32 = 448;
+/// v13.2 (S09): el presupuesto por turno NO puede superar el de la política
+/// más restrictiva (crítica = 256); si no, el agente podría gastar más de lo
+/// que la política de energía permite en el peor caso.
+pub const FINAL_MAX_TOK: u32 = 256;
 
 #[derive(Debug, Clone)]
 pub struct OpSpec {
@@ -523,9 +526,14 @@ pub fn normalize_action(raw: &str) -> (String, String) {
     let mut arg = parts.next().unwrap_or("").trim().to_string();
     let tool = map_opcode(raw_tool);
 
+    // v13.2 (S01): `arg[prefix.len()..]` hacía panic si el prefijo caía en
+    // medio de un carácter multibyte (p. ej. "ISS Iſſ:"), y en release
+    // (panic=abort) mataba el daemon entero.  Ahora se busca el ':' real.
     let prefix = format!("{}:", tool);
     if arg.to_uppercase().starts_with(&prefix) {
-        arg = arg[prefix.len()..].trim().to_string();
+        if let Some(pos) = arg.find(':') {
+            arg = arg[pos + 1..].trim().to_string();
+        }
     }
 
     if tool == "SHM_OP" {
@@ -552,6 +560,28 @@ pub fn normalize_action(raw: &str) -> (String, String) {
     }
 
     (tool.clone(), normalize_pipe_opcode(&tool, &arg))
+}
+
+/// v13.2 (S11): ¿la pareja (opcode, arg) respeta la gramática GBNF?
+///
+/// La gramática exige argumento en todos los opcodes ("NONE " reason,
+/// "$ " shell, ...).  La única excepción son SHM_OP y MEM_OP, cuyo
+/// sub-operador ("i", "l", ...) es parte de la regla `shm`/`mem` y puede
+/// omitirse (valor por defecto).  Sin esta comprobación el parser aceptaba
+/// y DESPACHABA formas que la gramática prohíbe ("A: NONE", "A: $").
+pub fn opcode_arg_valid(tool: &str, raw_arg: &str) -> bool {
+    if !raw_arg.trim().is_empty() {
+        return true;
+    }
+    // `split_multi` normaliza antes de devolver, así que aquí ya pueden
+    // aparecer los nombres finales (SHM_INFO/MEM_LIST) o los intermedios
+    // (SHM_OP/MEM_OP).  Todos ellos admiten argumento vacío.
+    matches!(tool, "SHM_OP" | "MEM_OP" | "SHM_INFO" | "MEM_LIST")
+}
+
+/// v13.2 (S11): tools finales que legítimamente no llevan argumento.
+pub fn final_tool_accepts_empty(tool: &str) -> bool {
+    matches!(tool, "SHM_INFO" | "MEM_LIST")
 }
 
 /// Pistas de ayuda de la línea OPS (derivadas de OP_SPEC: fuente única).
@@ -754,7 +784,13 @@ pub fn parse_model_output(raw: &str) -> ParsedOutput {
                     if t == "RESPONSE" {
                         response = Some(a);
                     } else {
-                        actions.push((t, a));
+                        // v13.2 (S11): la gramática exige argumento en
+                        // TODOS los opcodes ("NONE reason", "$ shell"...).
+                        // Una acción sin argumento ("A: NONE", "A: $") es
+                        // inválida y no debe llegar al dispatcher.
+                        if !a.trim().is_empty() {
+                            actions.push((t, a));
+                        }
                     }
                 }
             } else if iu.starts_with("R:") {
@@ -775,7 +811,13 @@ pub fn parse_model_output(raw: &str) -> ParsedOutput {
                     if t == "RESPONSE" {
                         response = Some(a);
                     } else {
-                        actions.push((t, a));
+                        // v13.2 (S11): la gramática exige argumento en
+                        // TODOS los opcodes ("NONE reason", "$ shell"...).
+                        // Una acción sin argumento ("A: NONE", "A: $") es
+                        // inválida y no debe llegar al dispatcher.
+                        if !a.trim().is_empty() {
+                            actions.push((t, a));
+                        }
                     }
                 }
             } else {
@@ -787,7 +829,10 @@ pub fn parse_model_output(raw: &str) -> ParsedOutput {
             for (t, a) in split_multi(line[2..].trim()) {
                 if t == "RESPONSE" {
                     response = Some(a);
-                } else {
+                } else if opcode_arg_valid(&t, &a) {
+                    // v13.2 (S11): la gramática exige argumento en todos los
+                    // opcodes salvo SHM_OP/MEM_OP (que llevan sub-op);
+                    // "A: NONE" y "A: $" (sin shell) son inválidos.
                     actions.push((t, a));
                 }
             }
@@ -796,10 +841,20 @@ pub fn parse_model_output(raw: &str) -> ParsedOutput {
 
         // Línea suelta sin prefijo: si el modelo olvidó "A:", se reintenta como
         // acción sólo si empieza por un opcode conocido.
+        // v13.2 (S04b): si ya hubo una RESPUESTA ("R: ..."), una línea suelta
+        // ya no es una orden: es ruido (o una vía de inyección).  Antes una
+        // respuesta "R: ...\nC: /fichero" ejecutaba la lectura y devolvía el
+        // contenido del fichero.
+        if response.is_some() {
+            continue;
+        }
         let first_tok = line.split_whitespace().next().unwrap_or("");
         let mapped = map_opcode(first_tok);
         if OP_SPEC.iter().any(|sp| sp.name == mapped) && first_tok != "A" && first_tok != "N" {
-            actions.push(normalize_action(line));
+            let (t, a) = normalize_action(line);
+            if final_tool_accepts_empty(&t) || !a.trim().is_empty() {
+                actions.push((t, a));
+            }
         }
     }
 
@@ -902,7 +957,9 @@ pub fn verify_grounding(
         }
         if token.starts_with("0x") && token.len() > 2 && token[2..].chars().all(|c| c.is_ascii_hexdigit()) {
             literals.insert(token.to_string());
-        } else if token.len() >= 2 && token.chars().all(|c| c.is_ascii_digit()) {
+        } else if !token.is_empty() && token.chars().all(|c| c.is_ascii_digit()) {
+            // v13.2 (S05): antes exigía 2+ dígitos, así que "5 nucleos"
+            // (inventado) pasaba el verificador sin comprobar nada.
             literals.insert(token.to_string());
         } else if token.starts_with('/') && token.len() > 3 && token.chars().skip(1).any(|c| c.is_ascii_alphanumeric()) {
             literals.insert(token.to_string());
@@ -1033,9 +1090,11 @@ fn extract_unit_numbers(text: &str) -> Vec<String> {
                 i += 1;
             }
             let num: String = chars[start..i].iter().collect();
-            if !num.contains('.') {
+            if num.is_empty() {
                 continue;
             }
+            // v13.2 (S05): los enteros con unidad ("4 GB") también son dato.
+            // Antes sólo se aceptaban los decimales ("4.5 GB").
             let mut j = i;
             while j < chars.len() && chars[j] == ' ' {
                 j += 1;
@@ -1061,6 +1120,11 @@ pub struct Arsenal {
     pub dry: bool,
     pub allow_exec: bool,
     pub allow_external: bool,
+    /// Permitir ROOT_EXEC / DELEGATE_LLM cuando el contexto está manchado
+    /// por contenido no fiable (web, fichero).  Por defecto FALSE: el taint
+    /// tiene que bloquear de verdad (S02).  Escape hatch explícito para el
+    /// operador que sepa lo que hace (SEERE_ALLOW_TAINTED=1).
+    pub allow_tainted: bool,
 }
 
 impl Arsenal {
@@ -1070,7 +1134,15 @@ impl Arsenal {
             dry,
             allow_exec,
             allow_external,
+            allow_tainted: false,
         }
+    }
+
+    /// Escape hatch del guardián de taint (S02).  Por defecto el contexto
+    /// manchado bloquea la ejecución y la delegación.
+    pub fn allow_tainted(mut self, v: bool) -> Self {
+        self.allow_tainted = v;
+        self
     }
 
     pub fn dispatch(&self, raw_tool: &str, raw_arg: &str, tainted: bool) -> String {
@@ -1090,8 +1162,18 @@ impl Arsenal {
         if tool == "DELEGATE_LLM" && !self.allow_external {
             return "ERR_POLICY:DELEGATE_LLM disabled (set SEERE_ALLOW_EXTERNAL=1)".into();
         }
-        if tainted && (tool == "ROOT_EXEC" || tool == "DELEGATE_LLM") && !self.allow_exec {
-            return "ERR_POLICY:tainted_context".into();
+        // v13.2 (S02): la condición tenía `&& !self.allow_exec`, así que el
+        // gate sólo podía activarse cuando exec ya estaba prohibido (o sea:
+        // NUNCA hacía nada).  Con exec abierto —la configuración real del CLI
+        // y del cockpit— el contexto manchado (contenido externo o de
+        // fichero) podía ejecutar root.  La referencia Python v11 lo bloquea
+        // siempre; aquí también, salvo que el operador abra el escape hatch
+        // (allow_tainted) de forma explícita.
+        if tainted
+            && (tool == "ROOT_EXEC" || tool == "DELEGATE_LLM")
+            && !self.allow_tainted
+        {
+            return "ERR_POLICY:tainted_context (tool follows untrusted content)".into();
         }
 
         match tool.as_str() {
@@ -1214,34 +1296,68 @@ impl Arsenal {
             return format!("DRY:{}", c);
         }
         // Priority: Magisk `su -c` (verified uid=0 on device), then `rish -c`, then `sh -c`
+        //
+        // v13.2 (S06): si el runner EXISTE pero no puede arrancar (Magisk
+        // denegando `su`, `rish` sin servidor), antes se devolvía el error y
+        // el agente se quedaba sin shell.
+        //
+        // v13.2 (S06-bis): la heurística por texto de stderr ("permission
+        // denied", "not found", ...) NO distingue "el runner no arrancó" de
+        // "el comando falló": un comando que falla con "denied" se ejecutaba
+        // hasta 3 veces (su -> rish -> sh) duplicando efectos laterales.  Se
+        // comprueba el runner con una SONDA SIN EFECTOS (`exit 0`) antes de
+        // lanzar el comando real: si la sonda falla, el runner no sirve y se
+        // pasa al siguiente; si la sonda pasa, el comando se ejecuta UNA vez
+        // y su fallo se devuelve tal cual.
+        let mut last_fail: Option<String> = None;
         for (prog, flag) in &[("su", "-c"), ("rish", "-c"), ("sh", "-c")] {
-            if let Ok(out) = Command::new(prog).arg(flag).arg(c).output() {
-                let stdout = String::from_utf8_lossy(&out.stdout)
+            // Sonda: ¿arranca el runner? (no tiene efectos secundarios)
+            let probe = match Command::new(prog).arg(flag).arg("exit 0").output() {
+                Ok(o) => o,
+                Err(_) => continue, // el binario no existe: siguiente runner
+            };
+            if !probe.status.success() {
+                let p_err = String::from_utf8_lossy(&probe.stderr)
                     .replace("Entering shell...", "")
                     .trim()
                     .to_string();
-                let stderr = String::from_utf8_lossy(&out.stderr)
-                    .replace("Entering shell...", "")
-                    .trim()
-                    .to_string();
-                if *prog == "rish" && (stdout.contains("Server is not running") || stderr.contains("Server is not running")) {
+                last_fail = Some(format!("ERR_RUNNER_UNAVAILABLE:{}:{}", prog, p_err));
+                continue; // el runner no arranca (su denegado, rish caído)
+            }
+            let out = match Command::new(prog).arg(flag).arg(c).output() {
+                Ok(o) => o,
+                Err(e) => {
+                    last_fail = Some(format!("ERR:{}", e));
                     continue;
                 }
-                let combined = if stderr.is_empty() {
-                    stdout
-                } else if stdout.is_empty() {
-                    stderr
-                } else {
-                    format!("{}\n[ERR]:{}", stdout, stderr)
-                };
-                if out.status.success() {
-                    return compact(if combined.is_empty() { "EXIT_0" } else { &combined }, 480);
-                } else {
-                    return format!("ERR_RC{}:{}", out.status.code().unwrap_or(1), compact(&combined, 300));
-                }
+            };
+            let stdout = String::from_utf8_lossy(&out.stdout)
+                .replace("Entering shell...", "")
+                .trim()
+                .to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr)
+                .replace("Entering shell...", "")
+                .trim()
+                .to_string();
+            if *prog == "rish" && (stdout.contains("Server is not running") || stderr.contains("Server is not running")) {
+                last_fail = Some("ERR_RUNNER_UNAVAILABLE:rish:Server is not running".into());
+                continue;
             }
+            let combined = if stderr.is_empty() {
+                stdout
+            } else if stdout.is_empty() {
+                stderr
+            } else {
+                format!("{}\n[ERR]:{}", stdout, stderr)
+            };
+            if out.status.success() {
+                return compact(if combined.is_empty() { "EXIT_0" } else { &combined }, 480);
+            }
+            // El COMANDO falló (no el runner): no se reintenta con otro runner
+            // (evita efectos laterales duplicados).
+            return format!("ERR_RC{}:{}", out.status.code().unwrap_or(1), compact(&combined, 300));
         }
-        "ERR_NO_SHELL".into()
+        last_fail.unwrap_or_else(|| "ERR_NO_SHELL".into())
     }
 
     pub fn chunk_read(&self, arg: &str) -> String {
@@ -1483,12 +1599,19 @@ impl Arsenal {
         // First try live Pure-Rust Parasitic Swarm delegation (MiniMax M2.7 / GitHub Models / Free Swarm)
         let res = crate::providers::execute_chat(
             task,
-            Some("minimax-m2.7-fast"),
+            Some("minimax-m3.1-flash"),
             None,
             Some("Responde de forma concisa y técnica para el agente local SEERE v12."),
             512,
         );
-        if res.model_id != "local-seere" && !res.reply.trim().is_empty() {
+        // v13.2 (S14): el aviso "MODELO RETIRADO" NO es una respuesta del
+        // modelo: si llega, se ignora y se pasa al ticket offline.
+        let reply_is_retired_notice = res.reply.to_uppercase().contains("RETIRAD")
+            || res.reply.to_uppercase().contains("RETIRADO");
+        if res.model_id != "local-seere"
+            && !reply_is_retired_notice
+            && !res.reply.trim().is_empty()
+        {
             return format!(
                 "EXT_LLM[{}]: {}",
                 res.model_id,
@@ -1798,6 +1921,10 @@ pub struct SeereConfig {
     /// defecto NO se manda: la huella se queda en el harness (fundamento +
     /// ruta de 0 tokens).  El modelo pregunta al shell, no adivina.
     pub env_in_prompt: bool,
+    /// Permitir ROOT_EXEC / DELEGATE_LLM cuando el contexto está manchado
+    /// por contenido no fiable (web, fichero).  Por defecto FALSE (S02):
+    /// el taint bloquea de verdad salvo que el operador lo abra.
+    pub allow_tainted: bool,
 }
 
 impl Default for SeereConfig {
@@ -1811,6 +1938,7 @@ impl Default for SeereConfig {
             allow_external: false,
             env_in_prompt: false,
             re_opcodes: false,
+            allow_tainted: false,
         }
     }
 }
@@ -1836,6 +1964,7 @@ pub fn run_seere_v11(
             allow_external,
             env_in_prompt: false,
             re_opcodes: false,
+            allow_tainted: false,
         },
     )
 }
@@ -1864,13 +1993,17 @@ pub fn seere_messages(prompt: &str, cfg: &SeereConfig, lang: &str) -> Vec<Value>
 pub fn run_seere(prompt: &str, cfg: &SeereConfig) -> Value {
     let t0 = Instant::now();
     let _ = export_shared_ssot_files();
-    let arsenal = Arsenal::new(false, cfg.allow_exec, cfg.allow_external);
+    let arsenal = Arsenal::new(false, cfg.allow_exec, cfg.allow_external)
+        .allow_tainted(cfg.allow_tainted);
     let max_turns = cfg.max_turns.max(1);
 
     // 1. 0-Token Deterministic Short-Circuit: Math & Direct Shell
     let trimmed = prompt.trim();
     if !cfg.bin_mode {
-        if trimmed.starts_with("$ ") && cfg.allow_tools {
+        // v13.2 (S03): el atajo de 0 tokens ejecutaba root aunque la
+        // política estuviera CERRADA (allow_exec=false).  Ahora respeta la
+        // política: con exec prohibido, el atajo no se dispara.
+        if trimmed.starts_with("$ ") && cfg.allow_tools && cfg.allow_exec {
             let out = arsenal.exec_root(&trimmed[2..]);
             return json!({
                 "version": VERSION,
@@ -2026,8 +2159,30 @@ pub fn run_seere(prompt: &str, cfg: &SeereConfig) -> Value {
                 // "R: $ free -m" -> el modelo no respondió: pidió una orden.
                 // Se le concede UNA acción de última hora.
                 let mut effective = cand.clone();
+                // v13.2 (S04): el hueco de S04 NO era esta acción, sino que el
+                // PARSER laxo convertía una línea suelta ("C: /fichero") en
+                // acción durante la fase final.  Eso ya está cerrado en
+                // parse_model_output (una respuesta "R:" ya impide que una
+                // línea suelta se convierta en orden).  La acción de última
+                // hora se mantiene en todas las fases (F06: "R: $ free -m" es
+                // una orden, no una respuesta).
+                // v13.2 (S07): la acción de última hora pasa también por el
+                // guardián anti-eco (si el argumento es la pista del opcode,
+                // es un eco del prompt, no una intención).
                 if cfg.allow_tools {
                     if let Some((tool, arg)) = lead_opcode(&cand) {
+                        if is_echo_arg(&tool, &arg) {
+                            effective = "ERR_ECHO:argumento = pista del opcode".to_string();
+                            let o = effective.clone();
+                            audit.push(json!({
+                                "turn": turn, "tool": tool,
+                                "arg": arg.chars().take(80).collect::<String>(),
+                                "ok": false, "tainted": tainted,
+                                "note": "descartado por el guardián anti-eco"
+                            }));
+                            obs.push(o.clone());
+                            obs_ids.push(turn.to_string());
+                        } else {
                         let sig = format!("{}:{}", tool, arg);
                         let o = if seen.contains(&sig) {
                             "ERR_LOOP:repeated action".to_string()
@@ -2044,6 +2199,7 @@ pub fn run_seere(prompt: &str, cfg: &SeereConfig) -> Value {
                         obs.push(o.clone());
                         obs_ids.push(turn.to_string());
                         effective = o;
+                        }
                     }
                 }
                 // Si el modelo devuelve el TEXTO de la reparación, no es una
@@ -2083,11 +2239,16 @@ pub fn run_seere(prompt: &str, cfg: &SeereConfig) -> Value {
     // Si no hubo respuesta, NO se devuelve una observación cruda como si fuera
     // la respuesta: se marca explícitamente como no fundamentada.
     let mut answer_is_observation = false;
+    let mut last_observation = String::new();
     let answer = match final_ans {
         Some(a) => a,
         None => {
+            // v13.2 (S12): la observación cruda ya no se entrega en "answer"
+            // (que es lo que consume la UI): va en su propio campo.  El
+            // "answer" dice explícitamente que no hay respuesta verificada.
             answer_is_observation = true;
-            obs.last().cloned().unwrap_or_else(|| "NO_VERIFIED_DATA".to_string())
+            last_observation = obs.last().cloned().unwrap_or_default();
+            "NO_VERIFIED_DATA: el agente no produjo una respuesta fundamentada".to_string()
         }
     };
     let (g_ok, _) = verify_grounding(&answer, &obs, &fp_str, prompt, Some(&obs_ids));
@@ -2099,6 +2260,7 @@ pub fn run_seere(prompt: &str, cfg: &SeereConfig) -> Value {
         "mode": "REACT",
         "grounded": grounded,
         "answer_is_observation": answer_is_observation,
+        "last_observation": last_observation,
         "tools": audit,
         "tokens": total_tok,
         "ms": t0.elapsed().as_millis() as u64,

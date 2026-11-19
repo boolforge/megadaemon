@@ -37,6 +37,14 @@ fn global_lock() -> &'static Mutex<()> {
     L.get_or_init(|| Mutex::new(()))
 }
 
+/// Adquiere el cerrojo global ignorando el envenenamiento (un test que falla
+/// no debe impedir que corran los demás).
+fn lock_guard() -> std::sync::MutexGuard<'static, ()> {
+    global_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Utilidades
 // ─────────────────────────────────────────────────────────────────────────────
@@ -52,13 +60,17 @@ fn write_shm(width: u16, height: u16, frame_byte: u8) {
     buf[22..24].copy_from_slice(&height.to_le_bytes());
     buf[24..26].copy_from_slice(&24u16.to_le_bytes());
     buf[26..28].copy_from_slice(&1u16.to_le_bytes());
-    buf[32..36].copy_from_slice(b"SCOUT");
-    if (width as usize) * (height as usize) * 3 + FRAME_OFFSET <= buf.len() {
-        let start = FRAME_OFFSET;
-        let end = start + width as usize * height as usize * 3;
-        for b in buf[start..end].iter_mut() {
-            *b = frame_byte;
-        }
+    buf[32..37].copy_from_slice(b"SCOUT");
+    // El frame se rellena hasta donde quepa; si no cabe entero, al menos se
+    // marca un byte no nulo (si no, `is_active` sería false y el daemon ni
+    // miraría la cabecera).
+    let start = FRAME_OFFSET;
+    let end = std::cmp::min(
+        start + width as usize * height as usize * 3,
+        buf.len(),
+    );
+    for b in buf[start..end].iter_mut() {
+        *b = frame_byte;
     }
     std::fs::write(SHM_PATH, &buf).expect("no se pudo escribir el SHM de prueba");
 }
@@ -278,7 +290,7 @@ fn run_child(test_name: &str, extra_env: &[(&str, &str)], limit: Duration) -> Op
 
 #[test]
 fn hw01_status_handler_no_debe_panicar_con_estado_corrupto() {
-    let _g = global_lock().lock().unwrap();
+    let _g = lock_guard();
     let state_file = format!("{}/megadaemon_state.json", STATE_DIR);
     std::fs::create_dir_all(STATE_DIR).unwrap();
     let backup = Backup::take(&state_file);
@@ -305,7 +317,7 @@ fn hw01_status_handler_no_debe_panicar_con_estado_corrupto() {
 
 #[test]
 fn hw02_memory_freeze_no_escribe_fuera_del_sandbox() {
-    let _g = global_lock().lock().unwrap();
+    let _g = lock_guard();
     let victim = std::env::temp_dir().join("scout_victim_hw02.bin");
     let victim_s = victim.to_string_lossy().to_string();
     std::fs::write(&victim, b"ORIGINAL").unwrap();
@@ -343,7 +355,7 @@ fn hw02_memory_freeze_no_escribe_fuera_del_sandbox() {
 
 #[test]
 fn hw03_endpoint_de_proveedor_no_puede_redirigir_la_key() {
-    let _g = global_lock().lock().unwrap();
+    let _g = lock_guard();
     let fake = start_fake_provider();
     let backup = write_vault(
         &format!("http://127.0.0.1:{}/original", fake.port),
@@ -384,7 +396,7 @@ fn hw03_endpoint_de_proveedor_no_puede_redirigir_la_key() {
 
 #[test]
 fn hw04_adjunto_no_filtra_contenido_de_ficheros_locales() {
-    let _g = global_lock().lock().unwrap();
+    let _g = lock_guard();
     let fake = start_fake_provider();
     let backup = write_vault(
         &format!("http://127.0.0.1:{}/original", fake.port),
@@ -423,7 +435,7 @@ fn hw04_adjunto_no_filtra_contenido_de_ficheros_locales() {
 
 #[test]
 fn hw05_content_length_no_reserva_100mb_por_conexion() {
-    let _g = global_lock().lock().unwrap();
+    let _g = lock_guard();
     let port = 39413u16;
     start_cockpit(port);
 
@@ -459,7 +471,7 @@ fn hw05_content_length_no_reserva_100mb_por_conexion() {
 
 #[test]
 fn hw06_su_sin_timeout_no_cuelga_la_sonda() {
-    let _g = global_lock().lock().unwrap();
+    let _g = lock_guard();
 
     if std::env::var("SCOUT_CHILD").is_ok() {
         // Hijo: corre como nobody y con un `su` falso que no devuelve nunca
@@ -541,7 +553,7 @@ fn hw06_su_sin_timeout_no_cuelga_la_sonda() {
 
 #[test]
 fn hw07_cabecera_shm_no_puede_forzar_12gb() {
-    let _g = global_lock().lock().unwrap();
+    let _g = lock_guard();
 
     if std::env::var("SCOUT_CHILD").is_ok() {
         // Hijo: analiza el frame con una cabecera hostil (65535x65535).
@@ -589,7 +601,7 @@ fn hw07_cabecera_shm_no_puede_forzar_12gb() {
 
 #[test]
 fn hw08_shm_frame_bmp_no_panea() {
-    let _g = global_lock().lock().unwrap();
+    let _g = lock_guard();
     let backup = Backup::take(SHM_PATH);
     // 1000x1000x3 = 3 MB de frame en un fichero de 1 MB.
     write_shm(1000, 1000, 0xAB);
@@ -619,7 +631,7 @@ fn hw08_shm_frame_bmp_no_panea() {
 
 #[test]
 fn hw09_max_turns_no_altera_la_consulta() {
-    let _g = global_lock().lock().unwrap();
+    let _g = lock_guard();
     let a = Command::new(env!("CARGO_BIN_EXE_megadaemon-core"))
         .args(["seere", "$ echo SCOUT_PROOF_HW09"])
         .output()
@@ -628,8 +640,20 @@ fn hw09_max_turns_no_altera_la_consulta() {
         .args(["seere", "--max-turns", "8", "$ echo SCOUT_PROOF_HW09"])
         .output()
         .unwrap();
-    let sa = String::from_utf8_lossy(&a.stdout).to_string();
-    let sb = String::from_utf8_lossy(&b.stdout).to_string();
+    // Se compara el CONTENIDO (respuesta + modo), no el JSON entero: el campo
+    // "ms" cambia entre ejecuciones y no es lo que se quiere comparar.
+    let key = |out: &[u8]| -> String {
+        let v: serde_json::Value =
+            serde_json::from_slice(String::from_utf8_lossy(out).trim().as_bytes())
+                .unwrap_or(serde_json::Value::Null);
+        format!(
+            "mode={} answer={:?}",
+            v.get("mode").and_then(|x| x.as_str()).unwrap_or("?"),
+            v.get("answer").and_then(|x| x.as_str()).unwrap_or("?")
+        )
+    };
+    let sa = key(&a.stdout);
+    let sb = key(&b.stdout);
     println!("[HW-09] sin flag : {}", sa);
     println!("[HW-09] con flag : {}", sb);
 
@@ -646,7 +670,7 @@ fn hw09_max_turns_no_altera_la_consulta() {
 
 #[test]
 fn hw10_telemetria_no_declara_kleidiai_sin_cargar_la_lib() {
-    let _g = global_lock().lock().unwrap();
+    let _g = lock_guard();
     std::fs::create_dir_all(APP_USR_LIB).unwrap();
     let fake_so = format!("{}/libggml-cpu.so", APP_USR_LIB);
     let backup = Backup::take(&fake_so);
@@ -681,7 +705,7 @@ fn hw10_telemetria_no_declara_kleidiai_sin_cargar_la_lib() {
 
 #[test]
 fn hw11_primer_frame_no_inventa_movimiento() {
-    let _g = global_lock().lock().unwrap();
+    let _g = lock_guard();
 
     if std::env::var("SCOUT_CHILD").is_ok() {
         // Hijo: estado limpio (PREV_LUMA vacío).
@@ -737,7 +761,7 @@ fn hw11_primer_frame_no_inventa_movimiento() {
 
 #[test]
 fn hw12_mascara_de_key_no_filtra_casi_toda_la_key() {
-    let _g = global_lock().lock().unwrap();
+    let _g = lock_guard();
     let key = "ABCDEFGHIJK"; // 11 caracteres
     let backup = write_vault("https://example.invalid/x", key);
     let red = megadaemon_core::providers::list_providers_redacted();
@@ -767,7 +791,7 @@ fn hw12_mascara_de_key_no_filtra_casi_toda_la_key() {
 
 #[test]
 fn hw13_modelo_retirado_no_se_sustituye_en_silencio() {
-    let _g = global_lock().lock().unwrap();
+    let _g = lock_guard();
     let fake = start_fake_provider();
     let backup = write_vault(
         &format!("http://127.0.0.1:{}/x", fake.port),

@@ -124,18 +124,33 @@ pub fn read_power_state() -> PowerState {
         st.system_power_save = true;
     }
     // --- governor de la CPU ---
-    for pol in ["policy0", "policy4", "policy6", "policy7"] {
+    //
+    // v13.2 (HW-15): antes se miraba `policy0` (el cluster PEQUEÑO, que en
+    // Android SIEMPRE va en "powersave") con un `break`, de modo que
+    // `system_power_save` era `true` en cualquier móvil -> la política era
+    // casi siempre "saver" -> `allow_heavy=false` -> **la visión/NPU no se
+    // ejecutaba nunca**.  Ahora sólo cuenta el cluster GRANDE (policy4/6/7)
+    // o la señal explícita `cpufreq/power_save`.
+    let mut big_ps = false;
+    let mut big_gov: Option<String> = None;
+    for pol in ["policy6", "policy7", "policy4"] {
         if let Some(g) = read_trim(&format!(
             "/sys/devices/system/cpu/cpufreq/{}/scaling_governor",
             pol
         )) {
-            let is_ps = g == "powersave";
-            st.governor = Some(g);
-            if is_ps {
-                st.system_power_save = true;
+            if big_gov.is_none() {
+                big_gov = Some(g.clone());
             }
-            break;
+            if g == "powersave" {
+                big_ps = true;
+            }
         }
+    }
+    if let Some(g) = big_gov {
+        st.governor = Some(g);
+    }
+    if big_ps {
+        st.system_power_save = true;
     }
 
     st
@@ -162,7 +177,25 @@ pub fn policy_for(st: &PowerState) -> Policy {
         };
     }
 
-    // 2) AHORRO: sin cargador por debajo del 35 %, o modo ahorro del sistema.
+    // 2) TÉRMICO: el móvil se recalienta aunque esté cargando.  Va ANTES del
+    //    modo ahorro porque el "ahorro" por governor (policy powersave en el
+    //    cluster grande) es un estado normal de Android y no puede tapar una
+    //    temperatura dangerousa (HW-15).
+    if st.thermal_hot || cpu_t >= 62.0 {
+        return Policy {
+            name: "thermal",
+            max_turns: 2,
+            prefer_local: false,
+            allow_heavy: false,
+            max_tokens: 384,
+            reason: format!(
+                "cpu {:.1}C (thermal_hot={}) -> limitacion termica: sin trabajos pesados",
+                cpu_t, st.thermal_hot
+            ),
+        };
+    }
+
+    // 3) AHORRO: sin cargador por debajo del 35 %, o modo ahorro del sistema.
     if (!st.charging && cap <= 35) || st.system_power_save {
         return Policy {
             name: "saver",
@@ -174,18 +207,6 @@ pub fn policy_for(st: &PowerState) -> Policy {
                 "bateria {}% cargando={} powersave={} -> modo ahorro: local primero, sin CV/NPU pesado",
                 cap, st.charging, st.system_power_save
             ),
-        };
-    }
-
-    // 3) TÉRMICO: el móvil se recalienta aunque esté cargando.
-    if st.thermal_hot || cpu_t >= 62.0 {
-        return Policy {
-            name: "thermal",
-            max_turns: 2,
-            prefer_local: false,
-            allow_heavy: false,
-            max_tokens: 384,
-            reason: format!("cpu {:.1}C -> limitacion termica, sin trabajos pesados", cpu_t),
         };
     }
 
