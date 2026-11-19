@@ -7,6 +7,7 @@
 //! cliente HTTP del agente local.
 
 pub mod accelerator_policy;
+pub mod coordination;
 pub mod android;
 pub mod sync;
 pub mod sync_web;
