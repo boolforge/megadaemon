@@ -1337,7 +1337,7 @@ pub fn check_migration(me: &mut Mesh, remote: &ReleaseInfo) -> Result<MigrationP
 
     Ok(MigrationPlan {
         from: local.version,
-        to: remote.version,
+        to: remote.version.clone(),
         steps,
         compatible,
     })
