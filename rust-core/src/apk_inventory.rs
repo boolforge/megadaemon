@@ -1371,7 +1371,12 @@ mod tests {
 
     /// Construye el chunk del string pool en UTF-16.
     fn build_string_pool(strings: &[String]) -> Vec<u8> {
-        let header_size = 28 + strings.len() * 4;
+        // Cabecera real del chunk "string pool": 28 bytes (tipo, headerSize,
+        // size, stringCount, styleCount, flags, stringsStart, stylesStart).
+        // El array de offsets va justo detrás (28..28+4n) y los datos de las
+        // cadenas en `stringsStart`. Es el formato que emite aapt.
+        let header_size = 28usize;
+        let strings_start = header_size + strings.len() * 4;
         let mut body = Vec::new();
         let mut offsets = Vec::new();
         for s in strings {
@@ -1386,11 +1391,11 @@ mod tests {
         let mut out = Vec::new();
         out.extend_from_slice(&1u16.to_le_bytes()); // tipo: string pool
         out.extend_from_slice(&(header_size as u16).to_le_bytes());
-        out.extend_from_slice(&((header_size + body.len()) as u32).to_le_bytes());
+        out.extend_from_slice(&((strings_start + body.len()) as u32).to_le_bytes());
         out.extend_from_slice(&(strings.len() as u32).to_le_bytes());
         out.extend_from_slice(&0u32.to_le_bytes()); // style count
         out.extend_from_slice(&0u32.to_le_bytes()); // flags (UTF-16)
-        out.extend_from_slice(&(header_size as u32).to_le_bytes()); // strings start
+        out.extend_from_slice(&(strings_start as u32).to_le_bytes()); // strings start
         out.extend_from_slice(&0u32.to_le_bytes()); // styles start
         for o in offsets {
             out.extend_from_slice(&o.to_le_bytes());
@@ -1443,6 +1448,11 @@ mod tests {
     }
 
     /// Construye un AXML completo con los elementos indicados.
+    ///
+    /// La lista es plana, pero el AXML resultante sale **bien anidado** como el
+    /// que emite aapt: `<application>` contiene a los componentes, cada
+    /// componente contiene a sus `<intent-filter>` y cada filtro a sus
+    /// `<action>`/`<category>`.
     fn build_axml(elements: &[(&str, &[(&str, TestVal)])]) -> Vec<u8> {
         let mut pool: Vec<String> = Vec::new();
         let ns_idx = intern(&mut pool, ANDROID_NS);
@@ -1471,13 +1481,45 @@ mod tests {
             prepared.push((name_idx, list));
         }
 
+        /// ¿Puede `padre` contener a `hijo` en el esquema de AndroidManifest?
+        fn puede_contener(padre: &str, hijo: &str) -> bool {
+            let es_componente = |n: &str| {
+                matches!(
+                    n,
+                    "activity" | "activity-alias" | "service" | "receiver" | "provider"
+                )
+            };
+            match hijo {
+                "intent-filter" => es_componente(padre),
+                "action" | "category" => padre == "intent-filter",
+                "activity" | "activity-alias" | "service" | "receiver" | "provider" => {
+                    padre == "application" || es_componente(padre)
+                }
+                _ => padre == "manifest",
+            }
+        }
+
         let mut out = Vec::new();
         out.extend_from_slice(&AXML_MAGIC.to_le_bytes());
         out.extend_from_slice(&0u32.to_le_bytes()); // tamaño (se parchea al final)
         out.extend_from_slice(&build_string_pool(&pool));
+        let mut abiertos: Vec<u32> = Vec::new();
         for (name_idx, attrs) in prepared {
+            let name = pool[name_idx as usize].clone();
+            // Cierra los elementos abiertos que ya no pueden contener a este.
+            while let Some(&top) = abiertos.last() {
+                let top_name = pool[top as usize].clone();
+                if puede_contener(&top_name, &name) {
+                    break;
+                }
+                let ni = abiertos.pop().unwrap();
+                out.extend_from_slice(&build_end_element(ns_idx, ni));
+            }
             out.extend_from_slice(&build_start_element(ns_idx, name_idx, &attrs));
-            out.extend_from_slice(&build_end_element(ns_idx, name_idx));
+            abiertos.push(name_idx);
+        }
+        while let Some(ni) = abiertos.pop() {
+            out.extend_from_slice(&build_end_element(ns_idx, ni));
         }
         let total = out.len() as u32;
         out[4..8].copy_from_slice(&total.to_le_bytes());
@@ -1583,7 +1625,6 @@ mod tests {
                 "category",
                 &[("name", TestVal::S("android.intent.category.LAUNCHER"))],
             ),
-            ("intent-filter", &[]),
             (
                 "service",
                 &[
@@ -1591,6 +1632,9 @@ mod tests {
                     ("exported", TestVal::B(false)),
                 ],
             ),
+            // El filtro del service va DESPUÉS del service: el constructor
+            // anida cada intent-filter dentro del componente que le precede.
+            ("intent-filter", &[]),
             ("receiver", &[("name", TestVal::S("com.example.app.Rcv"))]),
         ]);
         let m = manifest_axml(&buf);
