@@ -5,85 +5,97 @@
 # Ejecutar como root en el móvil:
 #     su -mm -c 'sh /data/local/tmp/megadaemon/recover_channels.sh'
 #
-# Qué hace, en orden:
-#   1. relanza el supervisor (/data/adb/service.d/99-megadaemon.sh) — el que
-#      debe sobrevivir al OOM y resucitar daemon + túnel;
-#   2. espera a que el daemon abra 9090;
-#   3. si no hay túnel (porque el supervisor también murió), arranca cloudflared
-#      a mano contra 9090 y contra el MCP legacy 8765;
-#   4. captura la URL pública NUEVA en /data/local/tmp/megadaemon/tunnel.url
-#      y la imprime (es EFÍMERA: cambia en cada relanzamiento);
-#   5. imprime el estado (RAM, procesos, puertos) para que quien lo ejecute
-#      pueda reportar.
+# REGLAS (pedidas por el bus de coordinación, para no pisar a otro agente):
+#   * NO reinicia el daemon si /health ya responde 200 → en ese caso sólo
+#     relanza cloudflared. Si el daemon está muerto, THEN sí relanza el
+#     supervisor completo.
+#   * NO toca ni borra board.sqlite (5 tasks + 1 instancia + 7 eventos).
+#   * La URL del túnel se EXTRAE DE tunnel.log (cloudflared la imprime ahí),
+#     nunca se inventa ni se reescribe a mano: se escribe en bucle cada 15 s
+#     hasta que aparece, y tunnel.url se vacía al principio para que nadie
+#     use una URL muerta.
 #
-# No compila nada, no reinicia Chrome y no toca el repo: sólo levantar canales.
+# Qué hace:
+#   1. ¿daemon vivo? (9090 escuchando) → decide si relanzar supervisor o no;
+#   2. relanza cloudflared (9090) y el legacy (8765) si faltan;
+#   3. escribe tunnel.url / tunnel8765.url desde los logs, en bucle;
+#   4. imprime estado (RAM, procesos, puertos) y la URL nueva.
 # ---------------------------------------------------------------------------
 LOG=/data/local/tmp/megadaemon
 CF=/data/data/com.termux/files/usr/bin/cloudflared
 SUP=/data/adb/service.d/99-megadaemon.sh
+URL_RE='https://[a-z0-9-]*\.trycloudflare\.com'
 
 mkdir -p "$LOG" 2>/dev/null
 
-echo "== 1) supervisor =="
-if [ -f "$SUP" ]; then
+listening() {
+  # 9090 = 0x2382 ; 8765 = 0x2235  (lee /proc, sin forks)
+  grep -q ':2382 ' /proc/net/tcp 2>/dev/null || grep -q ':2382 ' /proc/net/tcp6 2>/dev/null
+}
+
+# --- 1) ¿daemon vivo? -------------------------------------------------------
+echo "== 1) daemon =="
+if listening; then
+  DAEMON_UP=1
+  echo "   9090 escuchando → NO se toca el daemon (otro agente podría estar desplegando)"
+else
+  DAEMON_UP=0
+  echo "   9090 mudo → hay que relanzar el supervisor"
+fi
+
+# --- 2) supervisor -----------------------------------------------------------
+if [ "$DAEMON_UP" = "0" ] && [ -f "$SUP" ]; then
+  echo "== 2) supervisor =="
   setsid sh "$SUP" >/dev/null 2>&1 &
   echo "   lanzado: $SUP"
-else
-  echo "   NO EXISTE $SUP  -> se arranca cloudflared a mano en el paso 3"
-fi
-
-# 2) esperar al daemon en 9090 (9090 decimal = 0x2382)
-echo "== 2) daemon en 9090 =="
-i=0
-while [ $i -lt 20 ]; do
-  if grep -q ':2382 ' /proc/net/tcp 2>/dev/null || grep -q ':2382 ' /proc/net/tcp6 2>/dev/null; then
-    echo "   daemon escuchando en 9090 ✓"
-    break
-  fi
-  sleep 1
-  i=$((i + 1))
-done
-
-# 3) túnel: primero el del supervisor, y si no hay URL, a mano
-echo "== 3) túnel =="
-U=""
-if [ -f "$LOG/tunnel.log" ]; then
-  U=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' "$LOG/tunnel.log" 2>/dev/null | head -1)
-fi
-if [ -z "$U" ] && [ -x "$CF" ]; then
-  echo "   el supervisor no levantó túnel (o murió): arrancando cloudflared a mano"
-  setsid "$CF" tunnel --no-autoupdate --url http://127.0.0.1:9090 >"$LOG/tunnel.log" 2>&1 &
   i=0
-  while [ $i -lt 40 ]; do
-    U=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' "$LOG/tunnel.log" 2>/dev/null | head -1)
-    [ -n "$U" ] && break
+  while [ $i -lt 30 ]; do
+    listening && { echo "   daemon en 9090 ✓"; break; }
     sleep 1
     i=$((i + 1))
   done
 fi
-if [ -n "$U" ]; then
-  echo "$U" >"$LOG/tunnel.url"
-  echo "   TUNEL NUEVO = $U"
-  echo "   (EFÍMERA: mándala a la flota; los que la tienen hardcodeada caerán a 530)"
-else
-  echo "   SIN URL: revisa $LOG/tunnel.log"
+
+# --- 3) túneles -------------------------------------------------------------
+echo "== 3) túneles =="
+U=$(grep -o "$URL_RE" "$LOG/tunnel.log" 2>/dev/null | head -1)
+if [ -z "$U" ] && [ -x "$CF" ]; then
+  echo "   sin URL en tunnel.log → arrancando cloudflared (9090)"
+  : > "$LOG/tunnel.url"
+  setsid "$CF" tunnel --no-autoupdate --url http://127.0.0.1:9090 >"$LOG/tunnel.log" 2>&1 &
+fi
+if ! pgrep -f "cloudflared.*8765" >/dev/null 2>&1 && [ -x "$CF" ]; then
+  echo "   MCP legacy 8765 caído → relanzando (es OTRO cloudflared)"
+  : > "$LOG/tunnel8765.url"
+  setsid "$CF" tunnel --no-autoupdate --url http://127.0.0.1:8765 >"$LOG/tunnel8765.log" 2>&1 &
 fi
 
-# 3b) MCP legacy 8765 (es OTRO cloudflared, aparte)
-if [ -x "$CF" ]; then
-  if ! pgrep -f "cloudflared.*8765" >/dev/null 2>&1; then
-    setsid "$CF" tunnel --no-autoupdate --url http://127.0.0.1:8765 >"$LOG/tunnel8765.log" 2>&1 &
-    sleep 6
-    U2=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' "$LOG/tunnel8765.log" 2>/dev/null | head -1)
-    [ -n "$U2" ] && echo "$U2" >"$LOG/tunnel8765.url" && echo "   TUNEL LEGACY 8765 = $U2"
+# --- 4) tunnel.url desde el log, en bucle cada 15 s -------------------------
+echo "== 4) tunnel.url =="
+i=0
+while [ $i -lt 8 ]; do
+  U=$(grep -o "$URL_RE" "$LOG/tunnel.log" 2>/dev/null | head -1)
+  if [ -n "$U" ]; then
+    printf '%s\n' "$U" > "$LOG/tunnel.url"
+    echo "   tunnel.url = $U"
+    break
   fi
+  sleep 15
+  i=$((i + 1))
+done
+[ -n "$U" ] || echo "   aún sin URL: revisa $LOG/tunnel.log"
+
+U2=$(grep -o "$URL_RE" "$LOG/tunnel8765.log" 2>/dev/null | head -1)
+if [ -n "$U2" ]; then
+  printf '%s\n' "$U2" > "$LOG/tunnel8765.url"
+  echo "   tunnel8765.url = $U2"
 fi
 
-# 4) estado
-echo "== 4) estado =="
+# --- 5) estado ---------------------------------------------------------------
+echo "== 5) estado =="
 free -m 2>/dev/null | head -3
-echo "-- procesos megadaemon/cloudflared --"
-ps -A -o PID,ARGS 2>/dev/null | grep -E 'megadaemon|cloudflared|99-megadaemon' | grep -v grep | head -8
+echo "-- procesos --"
+ps -A -o PID,ARGS 2>/dev/null | grep -E 'megadaemon|cloudflared' | grep -v grep | head -8
 echo "-- puertos --"
 ss -ltn 2>/dev/null | grep -E ':(80|3000|3030|8080|8090|8765|9090)' | head -12
 echo "== FIN =="
