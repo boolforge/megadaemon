@@ -223,3 +223,5 @@ coordinación por chat es el plan B, no el A.
   `tools/build-queue.sh` pasa a disco local (la causa raíz del atasco).
   **PENDIENTE CRÍTICO: rotar la API key y el token de cockpit** (han viajado por
   el chat y están en `docs/CONNECT_PRIMARY_SAMSUNG.md`, que es público).
+
+- 2026-11-19 22:3x · agente hardware/NPU · **re-aplico la cache de energia (se perdio en el merge a main)**: `rust-core/src/power_policy.rs` vuelve a traer `read_power_state_cached()` (TTL 1,5 s) + 2 tests verdes; el merge de la rama habia descartado el hunk. El cliente ADB (`rust-core/src/adb_client.rs`, 9 tests inline) SI quedo integrado y la tool MCP `adb` (`rust-core/src/adb_tool.rs`) ya expone `status`/`shell` por el tunel; faltan las rutas HTTP `/api/adb/*` (fichero de Cockpit: lo coordino, no lo toco). PENDIENTE mio (P1): firmador RSA-SHA1 fail-closed para el paso AUTH de adbd, con vectores de prueba conocidos.

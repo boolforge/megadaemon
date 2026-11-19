@@ -18,6 +18,8 @@
 
 use std::fs;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Default)]
 pub struct PowerState {
@@ -224,9 +226,39 @@ pub fn policy_for(st: &PowerState) -> Policy {
     }
 }
 
+/// Frescura de la cache de energia: bateria y temperaturas cambian muy
+/// despacio, pero la UI hace polling frecuente de /api/power y cada lectura
+/// cruda abre ~15 ficheros de sysfs y recorre /sys/class/thermal (con sus
+/// `format!` y asignaciones).  Con 1,5 s de ventana el coste por consulta
+/// cae a cero sin perder resolucion de datos: el estado se refresca solo.
+const POWER_CACHE_TTL: Duration = Duration::from_millis(1500);
+
+static POWER_CACHE: OnceLock<Mutex<Option<(Instant, PowerState)>>> = OnceLock::new();
+
+/// Estado de energia con cache de corta ventana.
+///
+/// `read_power_state()` sigue siendo la lectura cruda (tests y sondeos
+/// puntuales); esta es la que deben usar los caminos calientes (cockpit,
+/// bucle de inferencia, resumen de politica).
+pub fn read_power_state_cached() -> PowerState {
+    let cell = POWER_CACHE.get_or_init(|| Mutex::new(None));
+    let mut guard = match cell.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some((ts, st)) = guard.as_ref() {
+        if ts.elapsed() < POWER_CACHE_TTL {
+            return st.clone();
+        }
+    }
+    let st = read_power_state();
+    *guard = Some((Instant::now(), st.clone()));
+    st
+}
+
 /// Estado + política en una llamada.
 pub fn current_policy() -> (PowerState, Policy) {
-    let st = read_power_state();
+    let st = read_power_state_cached();
     let pol = policy_for(&st);
     (st, pol)
 }
@@ -247,4 +279,37 @@ pub fn policy_summary() -> String {
         st.governor,
         pol.reason
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    /// La cache debe ser mucho mas rapida que la lectura cruda (que abre
+    /// ~15 ficheros de sysfs y lista un directorio en cada llamada).
+    #[test]
+    fn cache_energia_es_mas_rapida_que_lectura_cruda() {
+        let _ = read_power_state_cached();
+        let t0 = Instant::now();
+        for _ in 0..200 {
+            let _ = read_power_state_cached();
+        }
+        let cached = t0.elapsed();
+        let t1 = Instant::now();
+        for _ in 0..200 {
+            let _ = read_power_state();
+        }
+        let raw = t1.elapsed();
+        assert!(cached <= raw, "cache={:?} raw={:?}", cached, raw);
+        if raw > std::time::Duration::from_millis(1) {
+            assert!(cached * 10 < raw, "esperado >=10x: cache={:?} raw={:?}", cached, raw);
+        }
+    }
+
+    #[test]
+    fn cache_tiene_ttl_acotado() {
+        assert!(POWER_CACHE_TTL <= Duration::from_secs(5));
+        assert!(POWER_CACHE_TTL >= Duration::from_millis(100));
+    }
 }
