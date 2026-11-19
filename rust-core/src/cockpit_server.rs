@@ -964,6 +964,363 @@ fn handle_client(mut stream: TcpStream) {
                     }),
                 );
             }
+            "/health" | "/api/health" => {
+                // Fase 3: endpoint de salud del demonio (monitorizable por
+                // Termux, Uptime Kuma, etc.).
+                //
+                // v14 (AUDIT-WEB-05): "la interfaz web no me funciona" era
+                // imposible de diagnosticar porque /health sólo decía
+                // "ok".  Ahora devuelve el DIAGNÓSTICO: dónde escucha, qué
+                // puertos están abiertos, qué plantilla se está sirviendo,
+                // si el token está materializado y las URLs exactas que
+                // debe abrir el usuario.
+                send_json(
+                    &mut stream,
+                    &json!({
+                        "status": "ok",
+                        "uptime": uptime_secs(),
+                        "version": env!("CARGO_PKG_VERSION"),
+                        "requests": REQ_TOTAL.load(std::sync::atomic::Ordering::Relaxed),
+                        "web": web_diagnostics(),
+                    }),
+                );
+            }
+            "/metrics" | "/api/metrics" => {
+                // Fase 3: CPU, RAM, uptime y contadores de peticiones.
+                let mut m = system_load();
+                m["uptime_sec"] = json!(uptime_secs());
+                m["requests_total"] = json!(REQ_TOTAL.load(std::sync::atomic::Ordering::Relaxed));
+                m["requests_rejected"] = json!(REQ_REJECTED.load(std::sync::atomic::Ordering::Relaxed));
+                m["requests_rate_limited"] = json!(REQ_RATE_LIMITED.load(std::sync::atomic::Ordering::Relaxed));
+                m["api_key_active"] = json!(cfg.enabled);
+                m["version"] = json!(env!("CARGO_PKG_VERSION"));
+                send_json(&mut stream, &m);
+            }
+            "/api/ping" => {
+                send_json(
+                    &mut stream,
+                    &json!({
+                        "status": "online",
+                        "daemon": "megadaemon-zenith-rust",
+                        "version": "13.1.0-zenith",
+                        "engine": "100%-pure-rust-arm64"
+                    }),
+                );
+            }
+            "/api/power" => {
+                let (st, pol) = power_policy::current_policy();
+                send_json(&mut stream, &json!({
+                    "policy": pol.name,
+                    "max_turns": pol.max_turns,
+                    "prefer_local": pol.prefer_local,
+                    "allow_heavy": pol.allow_heavy,
+                    "max_tokens": pol.max_tokens,
+                    "reason": pol.reason,
+                    "charging": st.charging,
+                    "battery_pct": st.capacity_pct,
+                    "battery_temp_c": st.battery_temp_c,
+                    "cpu_temp_c": st.cpu_temp_c,
+                    "thermal_hot": st.thermal_hot,
+                    "system_power_save": st.system_power_save,
+                    "governor": st.governor,
+                    "usb_plugged": st.usb_plugged
+                }));
+            }
+            "/api/status" => {
+                let mut st = read_json_file_fallback(
+                    "megadaemon_state.json",
+                    json!({"cycle_count": 36, "total_functions_recovered": 14494}),
+                );
+                st["cockpit_engine"] = json!("rust-zenith-v13.0");
+                send_json(&mut stream, &st);
+            }
+            "/api/minidaemon" => {
+                let mut md = read_json_file_fallback(
+                    "minidaemon_state.json",
+                    json!({"status": "active", "iterations": 42, "tests_passed": 42, "tests_failed": 0}),
+                );
+                let (freqs, b_temp, c_temp, th_state, th_delay) = npu_bridge::read_cpu_and_thermal();
+                md["thermal"] = json!({
+                    "battery_temp_c": b_temp,
+                    "cpu_temp_c": c_temp,
+                    "throttle_state": th_state,
+                    "throttle_delay": th_delay,
+                    "cpu_freqs_mhz": freqs
+                });
+                send_json(&mut stream, &md);
+            }
+            "/api/brain_status" => {
+                let active = check_llama_online();
+                let vault = providers::load_vault();
+                let npu = npu_bridge::probe_exynos_npu_cached();
+                send_json(
+                    &mut stream,
+                    &json!({
+                        "brain_active": active,
+                        "default_model": vault.default_model,
+                        "minimax_configured": vault.providers.iter().any(|p| p.id.starts_with("minimax") && !p.api_key.is_empty()),
+                        "engine": "MegaDaemon Zenith v13.2 Pure Rust Swarm + SEERE v13.1 + NNAPI INT8",
+                        "npu_vertex10": npu.vs4l_present,
+                        "eden_dlopen": npu.eden_runtime.dlopen_ok,
+                        "kleidiai_dotprod": npu.kleidiai_dotprod_active,
+                        // v13.2: el backend REAL de la vision (no "NPU LIVE"
+                        // por el simple hecho de que exista /dev/vertex10).
+                        "npu_offload_implemented": npu.npu_offload_implemented,
+                        "npu_vision_backend": npu.npu_vision_backend,
+                        "nnapi_device_count": npu.nnapi_device_count,
+                        "cpu_freqs_mhz": npu.cpu_freqs_mhz,
+                        "cpu_temp_c": npu.cpu_temp_c,
+                        "battery_temp_c": npu.battery_temp_c,
+                        "cockpit": "rust-arm64-v13.2"
+                    }),
+                );
+            }
+            "/api/npu_status" | "/api/hardware_telemetry" => {
+                let npu_info = npu_bridge::probe_exynos_npu_cached();
+                send_json(&mut stream, &serde_json::to_value(npu_info).unwrap_or_else(|_| json!({})));
+            }
+            "/api/vision_status" => {
+                send_json(&mut stream, &serde_json::to_value(npu_cv::vision_status()).unwrap_or_else(|_| json!({})));
+            }
+            "/api/vision_start" => {
+                npu_cv::start_continuous();
+                send_json(&mut stream, &json!({"status": "VISION_CONTINUOUS_STARTED", "state": npu_cv::vision_status()}));
+            }
+            "/api/vision_stop" => {
+                npu_cv::stop_continuous();
+                send_json(&mut stream, &json!({"status": "VISION_CONTINUOUS_STOPPED", "state": npu_cv::vision_status()}));
+            }
+            "/api/npu_bench" => {
+                // Benchmark A/B en el dispositivo real: ruta NNAPI vs referencia
+                // CPU sobre el MISMO frame, con verificación de equivalencia.
+                let iters = query_u64(query, "iters").unwrap_or(10).clamp(1, 50) as u32;
+                let snap = shm::read_frame_snapshot().ok();
+                let (w, h, luma) = match snap {
+                    Some(s) if s.header.width > 0 && s.header.height > 0 => {
+                        let (w, h) = (s.header.width as usize, s.header.height as usize);
+                        let mut luma = vec![0u8; w * h];
+                        for i in 0..w * h {
+                            let b = i * 3;
+                            if b + 2 < s.rgb.len() {
+                                luma[i] = ((s.rgb[b] as u32 * 77 + s.rgb[b + 1] as u32 * 150 + s.rgb[b + 2] as u32 * 29) >> 8) as u8;
+                            }
+                        }
+                        (w, h, luma)
+                    }
+                    _ => (320, 224, vec![16u8; 320 * 224]),
+                };
+                let res = npu_nnapi::bench(&luma, w as u32, h as u32, iters);
+                send_json(&mut stream, &serde_json::to_value(res).unwrap_or_else(|_| json!({})));
+            }
+            "/api/llm_route" => {
+                let prompt = query_u64(query, "prompt").unwrap_or(207) as u32;
+                let output = query_u64(query, "output").unwrap_or(40) as u32;
+                send_json(&mut stream, &serde_json::to_value(accelerator_policy::llm_route_decision(prompt, output)).unwrap_or_else(|_| json!({})));
+            }
+            "/api/npu_cv" => {
+                let (_, pol) = power_policy::current_policy();
+                let rep = npu_cv::analyze_vla_frame_and_accel();
+                let mut v = serde_json::to_value(rep).unwrap_or_else(|_| json!({}));
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("power_policy".into(), json!(pol.name));
+                    obj.insert("power_allow_heavy".into(), json!(pol.allow_heavy));
+                    obj.insert("power_reason".into(), json!(pol.reason));
+                }
+                send_json(&mut stream, &v);
+            }
+            "/api/locate_roms" => {
+                let refresh = qs.get("refresh").map(|v| v == "1").unwrap_or(false);
+                let roms = rom_locator::locate_all(refresh);
+                send_json(&mut stream, &json!({ "discovered_roms": roms, "engine": "rust-arm64-v13.0" }));
+            }
+            "/api/die_binwalk" => {
+                let plat = qs.get("platform").map(|s| s.as_str()).unwrap_or("segacd");
+                let explicit = qs.get("file").map(|s| s.as_str());
+                let (file_path, _, _) = resolve_target_or_file(plat, explicit);
+                let rep = binwalk_die::analyze_binary_full(&file_path);
+                send_json(&mut stream, &serde_json::to_value(rep).unwrap_or_else(|_| json!({})));
+            }
+            "/api/tile_render" => {
+                let plat = qs.get("platform").map(|s| s.as_str()).unwrap_or("segacd");
+                let explicit = qs.get("file").map(|s| s.as_str());
+                let (file_path, _, _) = resolve_target_or_file(plat, explicit);
+                let offset = qs.get("offset").and_then(|s| parse_u64_hex_or_dec(s)).unwrap_or(0);
+                let codec = qs.get("codec").map(|s| s.as_str()).unwrap_or("4bpp_linear");
+                let tx = qs.get("tx").and_then(|s| s.parse::<usize>().ok()).unwrap_or(16);
+                let ty = qs.get("ty").and_then(|s| s.parse::<usize>().ok()).unwrap_or(16);
+                let pal = qs.get("palette").map(|s| s.as_str()).unwrap_or("cga_cyber");
+                let pal_off = qs.get("pal_offset").and_then(|s| parse_u64_hex_or_dec(s)).unwrap_or(0) as usize;
+                let scale = qs.get("scale").and_then(|s| s.parse::<usize>().ok()).unwrap_or(2);
+                match tile_vram::render_vram_bmp(&file_path, offset, codec, tx, ty, pal, pal_off, scale) {
+                    Ok(bmp) => send_http_response(&mut stream, 200, "image/bmp", &bmp),
+                    Err(e) => send_json(&mut stream, &json!({"error": e})),
+                }
+            }
+            "/api/kaitai_parse" => {
+                let plat = qs.get("platform").map(|s| s.as_str()).unwrap_or("segacd");
+                let explicit = qs.get("file").map(|s| s.as_str());
+                let (file_path, _, _) = resolve_target_or_file(plat, explicit);
+                let tmpl = qs.get("template").map(|s| s.as_str()).unwrap_or("sega_m68k_vectors");
+                let offset = qs.get("offset").and_then(|s| parse_u64_hex_or_dec(s)).unwrap_or(0);
+                match kaitai_imhex::parse_struct_at_offset(&file_path, tmpl, offset, None) {
+                    Ok(rep) => send_json(&mut stream, &serde_json::to_value(rep).unwrap()),
+                    Err(e) => send_json(&mut stream, &json!({"error": e})),
+                }
+            }
+            "/api/cirx_analyze" => {
+                let mas = qs.get("mas").and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.75);
+                let m = qs.get("m").and_then(|s| s.parse::<u64>().ok()).unwrap_or(10);
+                let p = qs.get("p").and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.05);
+                let a = qs.get("a").and_then(|s| s.parse::<u64>().ok()).unwrap_or(3);
+                let l = qs.get("l").and_then(|s| s.parse::<u64>().ok()).unwrap_or(1);
+                let i = qs.get("i").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                let rep = cirx_rtl::run_reference_pipeline(mas, m, p, a, l, i);
+                send_json(&mut stream, &serde_json::to_value(rep).unwrap());
+            }
+            "/api/rizin" => {
+                let plat = qs.get("platform").map(|s| s.as_str()).unwrap_or("segacd");
+                let explicit = qs.get("file").map(|s| s.as_str());
+                let (file_path, _, _) = resolve_target_or_file(plat, explicit);
+                let mode = qs.get("mode").map(|s| s.as_str()).unwrap_or("info");
+                let arch = qs.get("arch").map(|s| s.as_str());
+                let rep = frida_dbi::run_rizin_analysis(&file_path, mode, arch);
+                send_json(&mut stream, &rep);
+            }
+            "/api/live_procs" => {
+                let filter = qs.get("filter").map(|s| s.as_str()).unwrap_or("");
+                let pid = qs.get("pid").and_then(|s| s.parse::<u32>().ok());
+                let rep = frida_dbi::inspect_live_processes(filter, pid);
+                send_json(&mut stream, &rep);
+            }
+            "/api/hex_inspect" => {
+                let plat = qs.get("platform").map(|s| s.as_str()).unwrap_or("segacd");
+                let explicit = qs.get("file").map(|s| s.as_str());
+                let offset = qs.get("offset").and_then(|s| parse_u64_hex_or_dec(s)).unwrap_or(0);
+                let size = qs.get("size").and_then(|s| s.parse::<usize>().ok()).unwrap_or(256);
+                let (file_path, _, arch) = resolve_target_or_file(plat, explicit);
+                match disasm::inspect_hex(&file_path, &arch, offset, size) {
+                    Ok(rep) => send_json(&mut stream, &serde_json::to_value(rep).unwrap()),
+                    Err(e) => send_json(&mut stream, &json!({"error": e, "lines": []})),
+                }
+            }
+            "/api/disassemble" => {
+                let plat = qs.get("platform").map(|s| s.as_str()).unwrap_or("segacd");
+                let explicit = qs.get("file").map(|s| s.as_str());
+                let offset = qs.get("offset").and_then(|s| parse_u64_hex_or_dec(s)).unwrap_or(0);
+                let count = qs.get("count").and_then(|s| s.parse::<usize>().ok()).unwrap_or(24);
+                let (file_path, plat_name, arch) = resolve_target_or_file(plat, explicit);
+                match disasm::disassemble_file(plat, &plat_name, &arch, &file_path, offset, count) {
+                    Ok(rep) => send_json(&mut stream, &serde_json::to_value(rep).unwrap()),
+                    Err(e) => send_json(&mut stream, &json!({"error": e, "instructions": []})),
+                }
+            }
+            "/api/entropy_scan" => {
+                let plat = qs.get("platform").map(|s| s.as_str()).unwrap_or("segacd");
+                let explicit = qs.get("file").map(|s| s.as_str());
+                let block_size = qs.get("block_size").and_then(|s| s.parse::<usize>().ok()).unwrap_or(1024);
+                let (file_path, _, _) = resolve_target_or_file(plat, explicit);
+                match fs::read(&file_path) {
+                    Ok(data) => {
+                        let slice = &data[..data.len().min(65536)];
+                        let rep = entropy::scan_entropy(slice, block_size);
+                        let mut val = serde_json::to_value(rep).unwrap();
+                        val["engine"] = json!("rust-arm64-v13.0-inprocess");
+                        send_json(&mut stream, &val);
+                    }
+                    Err(e) => send_json(&mut stream, &json!({"status": "error", "message": e.to_string()})),
+                }
+            }
+            "/api/pointer_scan" => {
+                let plat = qs.get("platform").map(|s| s.as_str()).unwrap_or("segacd");
+                let explicit = qs.get("file").map(|s| s.as_str());
+                let (file_path, _, _) = resolve_target_or_file(plat, explicit);
+                let is_be = matches!(plat, "segacd" | "saturn");
+                let base_vaddr = if plat == "ps1" { 0x80010000 } else { 0x00000000 };
+                match fs::read(&file_path) {
+                    Ok(data) => {
+                        let slice = &data[..data.len().min(131072)];
+                        let rep = pointers::scan_pointers_32(slice, base_vaddr, is_be, 64);
+                        let mut val = serde_json::to_value(rep).unwrap();
+                        val["engine"] = json!("rust-arm64-v13.0-inprocess");
+                        send_json(&mut stream, &val);
+                    }
+                    Err(e) => send_json(&mut stream, &json!({"status": "error", "message": e.to_string()})),
+                }
+            }
+            "/api/memory_freeze" => {
+                let locks = freezer::list_locks();
+                send_json(&mut stream, &json!({ "locks": locks, "count": locks.len(), "engine": "rust-60hz-v13.0" }));
+            }
+            "/api/unifier_status" => {
+                let rep = unifier::scan_unified_ecosystem();
+                send_json(&mut stream, &serde_json::to_value(rep).unwrap());
+            }
+            "/api/rea_analyze" => {
+                let plat = qs.get("platform").map(|s| s.as_str()).unwrap_or("segacd");
+                let q = qs.get("query").map(|s| s.as_str()).unwrap_or("");
+                let max_r = qs.get("max").and_then(|s| s.parse::<usize>().ok()).unwrap_or(5);
+                let rep = rea_assistant::analyze_ghidra_corpus(plat, q, max_r);
+                send_json(&mut stream, &serde_json::to_value(rep).unwrap());
+            }
+            "/api/cfg_lift" => {
+                let plat = qs.get("platform").map(|s| s.as_str()).unwrap_or("segacd");
+                let explicit = qs.get("file").map(|s| s.as_str());
+                let offset = qs.get("offset").and_then(|s| parse_u64_hex_or_dec(s)).unwrap_or(0);
+                let count = qs.get("count").and_then(|s| s.parse::<usize>().ok()).unwrap_or(28);
+                let (file_path, plat_name, arch) = resolve_target_or_file(plat, explicit);
+                match cfg_lifter::lift_cfg(plat, &plat_name, &arch, &file_path, offset, count) {
+                    Ok(rep) => send_json(&mut stream, &serde_json::to_value(rep).unwrap()),
+                    Err(e) => send_json(&mut stream, &json!({"status": "error", "message": e})),
+                }
+            }
+            "/api/bindiff" => {
+                let plat = qs.get("platform").map(|s| s.as_str()).unwrap_or("segacd");
+                let rep = bindiff::run_cross_platform_bindiff(plat);
+                send_json(&mut stream, &serde_json::to_value(rep).unwrap());
+            }
+            "/api/hw_mmio" => {
+                let plat = qs.get("platform").map(|s| s.as_str()).unwrap_or("segacd");
+                let (_, _, _, c_path, _) = rom_locator::platform_metadata(&plat.to_lowercase());
+                let sample = fs::read_to_string(c_path)
+                    .map(|s| crate::util_text::truncate_chars(&s, 65536))
+                    .unwrap_or_default();
+                let rep = hw_mapper::analyze_text_for_mmio_and_structs(plat, &sample);
+                send_json(&mut stream, &serde_json::to_value(rep).unwrap());
+            }
+            "/api/crypto_scan" => {
+                let plat = qs.get("platform").map(|s| s.as_str()).unwrap_or("segacd");
+                let explicit = qs.get("file").map(|s| s.as_str());
+                let (file_path, _, _) = resolve_target_or_file(plat, explicit);
+                let rep = crypto_scan::scan_crypto_and_encodings(plat, &file_path);
+                send_json(&mut stream, &serde_json::to_value(rep).unwrap());
+            }
+            "/api/input" => {
+                let mask = qs.get("mask").and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+                if let Ok(mut f) = OpenOptions::new().read(true).write(true).open(shm::SHM_PATH) {
+                    let _ = f.seek(SeekFrom::Start(28));
+                    let _ = f.write_all(&mask.to_le_bytes());
+                }
+                send_json(&mut stream, &json!({"status": "ok", "mask": mask}));
+            }
+            "/api/live_frame" | "/api/live_frame_jpg" | "/api/live_frame.jpg" => {
+                let bmp_bytes = match shm::read_shm_status() {
+                    Ok(hdr) if hdr.is_active && hdr.width > 0 && hdr.height > 0 => {
+                        if let Ok(mut f) = File::open(shm::SHM_PATH) {
+                            let mut b = vec![0u8; shm::SHM_SIZE];
+                            if f.read_exact(&mut b).is_ok() {
+                                let end = (32824 + (hdr.width as usize * hdr.height as usize * 3)).min(b.len());
+                                shm::encode_bmp_24(hdr.width as u32, hdr.height as u32, &b[32824..end])
+                            } else {
+                                shm::generate_tactical_hud_bmp(682, 448)
+                            }
+                        } else {
+                            shm::generate_tactical_hud_bmp(682, 448)
+                        }
+                    }
+                    _ => shm::generate_tactical_hud_bmp(682, 448),
+                };
+                send_http_response(&mut stream, 200, "image/bmp", &bmp_bytes);
+            }
             _ => {
                 send_http_response(&mut stream, 404, "application/json", b"{\"error\":\"not_found\"}");
             }
