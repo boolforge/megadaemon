@@ -2177,9 +2177,9 @@ mod tests {
                 m.claim("t-11", "x").is_ok()
             }));
         }
-        let winners = handles.into_iter().filter(|h| h.join().unwrap()).count();
+        let winners = handles.into_iter().map(|h| h.join().unwrap()).filter(|ok| *ok).count();
         assert_eq!(winners, 1, "sólo una instancia puede ganar el claim");
-        let data = read_board(Path::new(&board)).unwrap();
+        let data = read_board(Path::new(board.as_str())).unwrap();
         assert_eq!(data.claims.len(), 1);
     }
 
@@ -2215,7 +2215,7 @@ mod tests {
             schema: 1,
             migrated_at: now_iso(),
         };
-        let plan = a.check_migration(&viejo).unwrap();
+        let plan = check_migration(&mut a, &viejo).unwrap();
         assert!(plan.compatible);
         assert!(!plan.steps.is_empty());
         assert!(plan.steps.iter().any(|s| s.contains("migrar")));
@@ -2226,7 +2226,7 @@ mod tests {
             schema: 99,
             migrated_at: now_iso(),
         };
-        let plan2 = a.check_migration(&nuevo).unwrap();
+        let plan2 = check_migration(&mut a, &nuevo).unwrap();
         assert!(!plan2.compatible, "un esquema más nuevo no es compatible");
         assert_ne!(plan2.from, plan2.to);
     }
@@ -2288,7 +2288,7 @@ mod tests {
         let mut a = Mesh::attach(&board, inst("inst-a", true, 100, &["x"])).unwrap();
         a.me.last_seen = "2000-01-01T00:00:00Z".into();
         a.heartbeat().unwrap();
-        assert!(a.me.last_seen > "2020-01-01T00:00:00Z");
+        assert!(a.me.last_seen.as_str() > "2020-01-01T00:00:00Z");
         assert!(a.me.master, "la maestra sigue siendo maestra tras el latido");
     }
 }

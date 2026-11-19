@@ -1986,7 +1986,10 @@ mod tests {
     fn ui_fetch_paths(html: &str) -> Vec<String> {
         let mut out = vec![];
         let bytes = html.as_bytes();
-        let needle = b"fetch(";
+        // El needle va como `&str`: ni `&[u8; 6]` ni `&[u8]` implementan
+        // `Pattern` para `str::find` en este toolchain (E0277). Con `&str` la
+        // semántica es idéntica (mismo texto, misma longitud) y `.len()` = 6.
+        let needle = "fetch(";
         let mut i = 0;
         while let Some(pos) = html[i..].find(needle) {
             let start = i + pos + needle.len();

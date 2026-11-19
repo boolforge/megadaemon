@@ -514,7 +514,7 @@ mod tests {
     #[test]
     fn las_dependencias_bloquean_hasta_que_se_resuelven() {
         let a = submit("test.dep_a", json!({}), 5, vec![], Resources::default());
-        let b = submit("test.dep_b", json!({}), 5, vec![vec![a.clone()]], Resources::default());
+        let b = submit("test.dep_b", json!({}), 5, vec![a.clone()], Resources::default());
         // "b" depende de "a": no es elegible hasta que "a" esté hecha.
         let q = list();
         let tb = q.iter().find(|t| t.id == b).unwrap();
