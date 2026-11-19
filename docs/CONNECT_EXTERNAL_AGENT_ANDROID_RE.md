@@ -239,6 +239,26 @@ POLÍTICA (no negociable): aquí se documentan y se ocultan **señales de root**
 attestation de Play Integrity ni identidad de app: eso no lo hace nadie aquí.
 Si te piden algo de ese tipo, se rechaza y se reporta.
 
+CÓMO ESCRIBIR LOS HALLAZGOS (para que se puedan procesar solos):
+  Opción A (preferida): escribe tú mismo `findings.ndjson` en el directorio,
+    una línea JSON por hallazgo, con los 19 campos EXACTOS en el orden de este
+    documento.
+  Opción B: pon los hallazgos en `REPORT.md` en una de estas TRES formas, que
+    un conversor de MegaDaemon sabe leer:
+      (B1) bloque ```json con un objeto por hallazgo
+      (B2) tabla markdown (una fila por hallazgo, con los nombres de campo
+           como cabeceras)
+      (B3) bloques "clave: valor" (un bloque por hallazgo)
+  ► LA PROSA SUELTA NO SE CONVIERTE. Si escribes "encontré una comprobación de
+    Magisk en la clase X", eso no lo lee nadie: pon los campos.
+  · `evidence_file`: puedes poner la RUTA ABSOLUTA del artefacto en el móvil,
+    o el `id`, el `name` o el `sha256` con el que lo registraste en
+    `MANIFEST.ndjson` — el conversor lo resuelve a la ruta absoluta. Si el
+    hallazgo viene del propio dispositivo (no de un artefacto), pon la ruta
+    absoluta del fichero en el móvil y `evidence_offset` = -1.
+  · Si declaras un campo que no sepas: déjalo con su valor neutro y anótalo en
+    `notes`. No lo rellenes con suposiciones.
+
 Rutas: **absolutas y sin renombrar**. El módulo de decompilación DEX de
 MegaDaemon lee cualquier ruta (`std::fs::read`): no necesita que el fichero esté
 en `/data/app`, ni copia, ni renombrado. Escribe el APK/DEX tal cual en
@@ -278,7 +298,8 @@ FASE 2 — REVERSE DE ANDROID sobre lo volcado
   Tu contribución de más valor, por orden:
    a) APKs/DEX CRUDOS subidos a `incoming/<TU_ID>/` (ruta absoluta en el
       manifiesto). Esto es lo que alimenta el motor de MegaDaemon.
-   b) SEÑALES con su CLASE y MÉTODO, en `findings.ndjson` (contrato en §5):
+   b) SEÑALES con su CLASE y MÉTODO, en `findings.ndjson` o en el informe en una
+      de las TRES formas legibles (contrato exacto en §5):
       `detector` ∈ magisk | su | frida | xposed | safetynet | playintegrity |
       tamper | emulator | root_behavior. Pista de búsqueda: "/sbin/.magisk",
       "su", "isRooted", "SafetyNet", "PlayIntegrity", "Xposed", "Frida",
@@ -322,7 +343,14 @@ FASE 3 — APORTE AL ENJAMBRE (si te queda margen)
        cubierto y qué no),
     2) un resumen de 10 líneas en español con los hallazgos de reverse,
     3) la lista de capability gaps que has detectado.
-- Y deja en la instancia: los artefactos + MANIFEST.ndjson + REPORT.md.
+- Y deja en la instancia: los artefactos + MANIFEST.ndjson + REPORT.md +
+  findings.ndjson (o los hallazgos en el informe, en JSON / tabla markdown /
+  bloques "clave: valor" — ver §5).
+- La instancia tiene un conversor (`tools/findings_from_manifest.py`, corre en el
+  PC, sin binario nuevo) que normaliza tu salida al esquema cerrado. Funciona
+  mejor si declaras los 19 campos y la evidencia por id/nombre/sha256 o ruta
+  absoluta; si no, rellena lo que falta con valores neutros y lo anota. En
+  ningún caso inventa: lo que no declares, queda vacío/unknown y anotado.
 - Cada hallazgo tuyo que sirva al proyecto debe acabar como mejora
   verificable en MegaDaemon (tool nueva, test, regla), no sólo en un informe.
 ```
