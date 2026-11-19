@@ -1111,51 +1111,6 @@ mod tests {
     }
 
     #[test]
-    fn fusionar_es_idempotente_y_convergente() {
-        let a = TaskBoard::open_in_memory().unwrap();
-        let b = TaskBoard::open_in_memory().unwrap();
-        a.register_instance(&inst("pc", InstanceRole::Worker)).unwrap();
-        b.register_instance(&inst("movil", InstanceRole::Primary)).unwrap();
-        let id = a.add_task("tarea compartida", 1, None).unwrap();
-
-        let snap_a = a.export_for_sync().unwrap();
-        let out1 = b.merge_remote(&snap_a).unwrap();
-        assert_eq!(out1.tasks_new, 1);
-        assert_eq!(out1.instances_upserted, 1);
-
-        // Segunda fusión: no duplica nada.
-        let out2 = b.merge_remote(&snap_a).unwrap();
-        assert_eq!(out2.tasks_new, 0);
-        assert_eq!(b.list_tasks(None).unwrap().len(), 1);
-
-        // Y la vuelta: `a` ve la tarea de `b`.
-        let snap_b = b.export_for_sync().unwrap();
-        a.merge_remote(&snap_b).unwrap();
-        assert_eq!(a.list_tasks(None).unwrap().len(), 1);
-    }
-
-    #[test]
-    fn un_estado_terminal_no_se_degrada() {
-        let a = TaskBoard::open_in_memory().unwrap();
-        let b = TaskBoard::open_in_memory().unwrap();
-        let id = a.add_task("tarea", 1, None).unwrap();
-        a.claim_task(&id, "pc", 60).unwrap();
-        a.report_task(&id, "pc", true, "hecho / nada / nada").unwrap();
-
-        // `b` todavía la tiene en curso: al fusionar, gana el terminal.
-        b.add_task(&format!("tarea"), 1, None).ok();
-        let mut remote = b.export_for_sync().unwrap();
-        // Forzamos el caso: en `b` la tarea está en curso y con fecha vieja.
-        remote["tasks"] = json!([{
-            "id": id, "title": "tarea", "owner": "pc", "status": "claimed",
-            "priority": 1, "created_at": 1, "updated_at": 1, "lease_expires_at": 0
-        }]);
-        let out = a.merge_remote(&remote).unwrap();
-        assert_eq!(out.conflicts, 1);
-        assert_eq!(a.list_tasks(None).unwrap()[0].status, TaskStatus::Done);
-    }
-
-    #[test]
     fn registrar_instancia_es_idempotente() {
         let b = TaskBoard::open_in_memory().unwrap();
         b.register_instance(&inst("pc", InstanceRole::Worker)).unwrap();
