@@ -42,7 +42,8 @@ TEMPLATE="$WEB_DIR/cockpit_template.html"
 SERVICE="/data/adb/service.d/99-megadaemon.sh"
 LOG=/sdcard/megadaemon.log
 # El cockpit escucha en el puerto pedido + alias (AUDIT-WEB-04).
-PORTS="9090 3000 3030 8090"
+PORTS="9090 3000 3030 8090 8080"
+HEALTH_TIMEOUT=45   # segundos que se espera a /health
 HERE=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 REPO_ROOT=$(cd "$HERE/.." 2>/dev/null && pwd)
 PUSH_ONLY=0
@@ -98,13 +99,32 @@ find_binary() {
     return 1
 }
 
+# ── 2b. SHA-256 ──────────────────────────────────────────────────────────────
+sha256_of() {
+    if have sha256sum; then sha256sum "$1" | awk '{print $1}'
+    elif have shasum; then shasum -a 256 "$1" | awk '{print $1}'
+    else echo "sin-sha256"
+    fi
+}
+
+# SHA-256 de un fichero YA DENTRO del móvil.
+remote_sha256() {
+    as_root "sha256sum '$1' 2>/dev/null | awk '{print \$1}' || shasum -a 256 '$1' 2>/dev/null | awk '{print \$1}'" 2>/dev/null | tr -d '\r\n'
+}
+
 # ── 3. Despliegue ────────────────────────────────────────────────────────────
 deploy_files() {
     SRC_BIN=$(find_binary) || die "no encuentro el binario ARM64; compílalo con:
   cd rust-core && CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=\$NDK/bin/aarch64-linux-android21-clang \\
     CC_aarch64_linux_android=\$NDK/bin/aarch64-linux-android21-clang cargo build --release --target aarch64-linux-android"
 
+    SRC_SHA=$(sha256_of "$SRC_BIN")
     say "binario origen: $SRC_BIN"
+    say "sha-256 origen: $SRC_SHA"
+    if [ "$SRC_SHA" = "sin-sha256" ]; then
+        fail "no hay sha256sum ni shasum: no puedo verificar la copia (aborto)"
+        return 1
+    fi
     if [ "$ON_PHONE" = "1" ]; then
         mkdir -p "$PREFIX" "$WEB_DIR" 2>/dev/null
         [ -f "$BIN" ] && cp -f "$BIN" "$BIN.bak" 2>/dev/null
@@ -157,18 +177,32 @@ health_on_port() {
 }
 
 verify() {
-    say "verificando /health"
-    ok_port=""
+    say "esperando /health (max ${HEALTH_TIMEOUT}s) en: $PORTS"
+    ok_port=$(wait_healthy "$HEALTH_TIMEOUT")
     for p in $PORTS; do
         code=$(health_on_port "$p")
         printf '   puerto %-5s -> HTTP %s\n' "$p" "${code:-000}"
-        [ "${code:-000}" = "200" ] && [ -z "$ok_port" ] && ok_port=$p
     done
     if [ -n "$ok_port" ]; then
         say "COCKPIT OK -> abre http://localhost:$ok_port (o http://127.0.0.1:$ok_port)"
         return 0
     fi
     say "el cockpit SIGUE sin responder; log:"
+    as_root "tail -n 25 $LOG 2>/dev/null" 2>/dev/null
+    return 1
+}
+
+# ── 6. Rollback ──────────────────────────────────────────────────────────────
+rollback() {
+    say "el cockpit no arranco: ROLLBACK al binario anterior"
+    as_root 'killall megadaemon-core 2>/dev/null; sleep 1' >/dev/null 2>&1
+    if as_root "[ -f $BIN.bak ]"; then
+        as_root "cp -f $BIN.bak $BIN && chmod 755 $BIN" 2>/dev/null
+        say "binario anterior restaurado ($BIN.bak)"
+    else
+        say "no habia binario anterior: nada que restaurar"
+    fi
+    as_root "echo '[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: install-phone.sh fallo el arranque de /health; rollback aplicado' >> $LOG" 2>/dev/null
     as_root "tail -n 25 $LOG 2>/dev/null" 2>/dev/null
     return 1
 }
