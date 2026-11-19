@@ -1,0 +1,240 @@
+[
+  {
+    "id": "F01",
+    "desc": "sanitize() ya no destruye las etiquetas A:/R:/P: de las OBS",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F02",
+    "desc": "el system prompt es estático (huella fuera del prompt)",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F03",
+    "desc": "verify() sin falsos positivos y sigue detectando lo no soportado",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F04",
+    "desc": "las rutas ya no dependen de una lista Android (y no casan con URLs)",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F05",
+    "desc": "los números dentro de identificadores no se exigen como dato",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F06",
+    "desc": "chunk() ya no confunde el índice con el nombre del fichero",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F07",
+    "desc": "root() ejecuta el comando UNA sola vez",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F08",
+    "desc": "un opcode desconocido es un error, no una llamada externa",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F09",
+    "desc": "los hilos perdedores del swarm ya no bloquean el exit",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F10",
+    "desc": "la caché corrupta ya no lanza KeyError",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F11",
+    "desc": "el máximo legal de la gramática cabe en el presupuesto de tokens",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F13",
+    "desc": "los prompts largos ya no se envían al swarm externo",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F14",
+    "desc": "ya no se pre-leen ficheros arbitrarios citados en el prompt",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F15",
+    "desc": "las lecciones autoescritas ya no se reinyectan como órdenes",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F16",
+    "desc": "se envía id_slot (el nombre que lee llama.cpp actual)",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F17",
+    "desc": "el deadline global se propaga a las herramientas",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F18",
+    "desc": "la selección de líneas 'prioritarias' discrimina de verdad",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F19",
+    "desc": "safe_math acota el exponente",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F20",
+    "desc": "el prompt BIN no arrastra la huella del host",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F21",
+    "desc": "el contenido externo se marca, no se borra",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F22",
+    "desc": "notify() escapa también el título",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F23",
+    "desc": "el selftest prueba caminos alcanzables bajo la gramática",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F24",
+    "desc": "relevant_notes() hace matching por palabra completa",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "F25",
+    "desc": "el atajo de prompt largo está desactivado por defecto",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "N01",
+    "desc": "política: ROOT_EXEC cerrado por defecto",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "N02",
+    "desc": "política: DELEGATE_LLM cerrado por defecto",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "N03",
+    "desc": "taint tracking: actuar tras leer contenido externo se bloquea",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "N04",
+    "desc": "el system prompt v11 es más corto que el v10",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "N05",
+    "desc": "la gramática v11 es válida y conforms con el contrato",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "N06",
+    "desc": "el guardián anti-eco descarta la lista de herramientas copiada",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "N07",
+    "desc": "el guardián anti-eco no toca las acciones legítimas",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "N08",
+    "desc": "el guardián anti-eco respeta el argumento vacío de SHM_INFO",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "N09",
+    "desc": "una cita [SRC:n] sin observación que la respalde no pasa",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  },
+  {
+    "id": "N10",
+    "desc": "sin observaciones, un número en la respuesta se marca como inventado",
+    "v10_defect": true,
+    "v11_fixed": true,
+    "ok": true
+  }
+]

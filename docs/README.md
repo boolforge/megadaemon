@@ -8,6 +8,14 @@
 | [`LLM_SWITCH_PLAN.md`](LLM_SWITCH_PLAN.md) | Plan de cambio de LLM con datos: 4 modelos medidos, jerarquía de palancas, 5 fases, umbrales, riesgos y rollback. |
 | [`SEERE_V11.md`](SEERE_V11.md) | Harness SEERE: los 24 defectos de la v10, el diseño de la v11 (gramáticas tipadas, anti-eco, huella fuera del prompt) y los benchmarks E2E con modelos reales. |
 
+## Código de referencia y evidencia
+
+| Ruta | Qué es |
+|---|---|
+| [`reference/python/`](../reference/python/README.md) | El **oráculo Python** del harness SEERE v11: `seere_v11.py`, el v10 original auditado, 34 tests de regresión y el verificador GBNF↔parser (33/33). El port Rust de producción se validó contra él. |
+| [`tools/`](../tools/README.md) | El banco que produce las cifras del repo: `audit_v10.py` (24 defectos confirmados), `bench_fidelity.py`, `bench_models.py`, `token_budget.py`, `bench_e2e.py`. |
+| `rust-core/tests/` | Las suites de auditoría en Rust: 93 tests (`audit_v13`, `audit_scout_hw`, `audit_scout_seere`, `audit_scout_auth`, `npu_nnapi`). |
+
 ## Cómo se verifica el repo
 
 ```bash
