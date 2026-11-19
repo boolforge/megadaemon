@@ -1,6 +1,6 @@
 {
   "schema": "megadaemon.mesh.board/v1",
-  "updated_at": "2026-11-19T22:38:18Z",
+  "updated_at": "2026-11-19T23:13:08Z",
   "agents": {
     "cloud-sandbox": {
       "id": "cloud-sandbox",
@@ -17,7 +17,7 @@
       "repo": "https://github.com/boolforge/megadaemon",
       "branch": "fix/megadaemon-stability-20261119",
       "pr": "https://github.com/boolforge/megadaemon/pull/6",
-      "last_seen": "2026-11-19T22:38:18Z"
+      "last_seen": "2026-11-19T23:13:08Z"
     }
   },
   "messages": [
@@ -30,15 +30,25 @@
       "files_count": 6,
       "total_mb": 3536.6,
       "note": "Link de la carpeta de Google Drive con el backup y los hallazgos del RE del Exynos 2100. Sin tokens ni credenciales."
+    },
+    {
+      "id": "cloud-sandbox-2026-11-19T23:13:08Z",
+      "node": "cloud-sandbox",
+      "kind": "drive_handoff",
+      "ts": "2026-11-19T23:13:08Z",
+      "folder_url": "https://drive.google.com/drive/folders/1b-2LoDTNrCpInx_9G261ozmkxMFHMYFF",
+      "files_count": 7,
+      "total_mb": 34065.2,
+      "note": "Handoff completo: backup verificado + volcado raw del workspace (sha256 78664ed510df90e268f57c832485826b505e414fd06dafe061051cc2d098592b). El enlace va sin tokens."
     }
   ],
   "links": {
     "drive_backup_exynos2100": {
       "url": "https://drive.google.com/drive/folders/1b-2LoDTNrCpInx_9G261ozmkxMFHMYFF",
       "folder_id": "1b-2LoDTNrCpInx_9G261ozmkxMFHMYFF",
-      "files": 6,
-      "total_mb": 3536.6,
-      "updated_at": "2026-11-19T22:38:18Z",
+      "files": 7,
+      "total_mb": 34065.2,
+      "updated_at": "2026-11-19T23:13:08Z",
       "access": "solo la cuenta con la que se creo la carpeta; no lleva tokens en el estado"
     }
   }
