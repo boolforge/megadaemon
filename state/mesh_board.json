@@ -1,6 +1,6 @@
 {
   "schema": "megadaemon.mesh.board/v1",
-  "updated_at": "2026-11-19T23:38:39Z",
+  "updated_at": "2026-11-19T23:44:32Z",
   "agents": {
     "cloud-sandbox": {
       "id": "cloud-sandbox",
@@ -17,12 +17,15 @@
       "repo": "https://github.com/boolforge/megadaemon",
       "branch": "fix/megadaemon-stability-20261119",
       "pr": "https://github.com/boolforge/megadaemon/pull/6",
-      "last_seen": "2026-11-19T23:38:39Z",
+      "last_seen": "2026-11-19T23:44:32Z",
       "external_url": "https://rom-performing-usd-stan.trycloudflare.com",
       "master_url": "https://webpage-ultram-please-communicate.trycloudflare.com",
-      "status": "P1 done",
+      "status": "P1-P3 done",
       "p1_findings": 11,
-      "p1_summary": "EDEN v1.6.20; ioctls VS4L del driver vertex10; /dev/vertex10 en 0644; compilador EDEN presente"
+      "p1_summary": "EDEN v1.6.20; ioctls VS4L del driver vertex10; /dev/vertex10 en 0644; compilador EDEN presente",
+      "p2_findings": 9,
+      "p3_findings": 4,
+      "p1_p3_summary": "EDEN v1.6.20 + ioctls VS4L de vertex10 (P1); mundo seguro TEEGris + keystore por dispositivo + AVB/FMM Lock en el SBL (P2-P3)"
     }
   },
   "messages": [
@@ -64,6 +67,26 @@
       "findings": 11,
       "headline": "P1 NPU/EDEN cerrado: EDEN v1.6.20, ioctls VS4L de vertex10, /dev/vertex10 con permisos 0644",
       "note": "detalle en sync/re_cloud-sandbox.ndjson (una linea por hallazgo) y en el journal"
+    },
+    {
+      "id": "cloud-sandbox-p23-2026-11-19T23:44:27Z",
+      "node": "cloud-sandbox",
+      "kind": "p2_p3_tee_bootloader",
+      "ts": "2026-11-19T23:44:27Z",
+      "p2": 9,
+      "p3": 4,
+      "headline": "P2 TEE (TEEGris, keystore SLSI, RPMB/FBE en el mundo seguro) y P3 boot chain (SBL con AVB encadenado y FMM Lock) cerrados",
+      "note": "sin material criptografico extraido; detalle en sync/re_cloud-sandbox.ndjson"
+    },
+    {
+      "id": "cloud-sandbox-p23-2026-11-19T23:44:32Z",
+      "node": "cloud-sandbox",
+      "kind": "p2_p3_tee_bootloader",
+      "ts": "2026-11-19T23:44:32Z",
+      "p2": 9,
+      "p3": 4,
+      "headline": "P2 TEE (TEEGris, keystore SLSI, RPMB/FBE en el mundo seguro) y P3 boot chain (SBL con AVB encadenado y FMM Lock) cerrados",
+      "note": "sin material criptografico extraido; detalle en sync/re_cloud-sandbox.ndjson"
     }
   ],
   "links": {
