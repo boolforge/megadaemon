@@ -44,7 +44,7 @@ fn vault_path() -> std::path::PathBuf {
     sync_dir().join("sessions.json")
 }
 
-/// WebView de cada app: las cookies de sesión，往往 están en claro.
+/// WebView de cada app: las cookies de sesión suelen estar en claro.
 const COOKIE_SOURCES: &[(&str, &str)] = &[
     ("chatgpt", "/data/data/com.openai.chatgpt/app_webview/Default/Cookies"),
     ("claude", "/data/data/com.anthropic.claude/app_webview/Default/Cookies"),

@@ -22,7 +22,7 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Tope por defecto de salida de una命令.
+/// Tope por defecto de salida de una orden.
 pub const DEFAULT_MAX_CHARS: usize = 64 * 1024;
 /// Tope absoluto.
 pub const MAX_CHARS_CEILING: usize = 512 * 1024;
@@ -702,6 +702,19 @@ pub fn screen_and_ui(action: &str, x: i32, y: i32, x1: i32, y1: i32, x2: i32, y2
 
 // ========================================================================= //
 // fs_read / fs_write
+
+/// ¿Esta ruta cae en una zona del sistema cuya escritura exige confirmación
+/// explícita (`confirm_destructive=true`)?
+///
+/// Cubre `/dev/block` (particiones), `/system` y `/system/...`.  La barra
+/// final se comprueba aparte porque `starts_with("/system/")` no casa con
+/// `/system` exactamente (H-03).
+fn write_requires_confirm(path: &str) -> bool {
+    path == "/dev/block"
+        || path.starts_with("/dev/block/")
+        || path == "/system"
+        || path.starts_with("/system/")
+}
 // ========================================================================= //
 pub fn fs_read(path: &str, base64: bool, max_bytes: usize) -> Value {
     if path.is_empty() || !path.starts_with('/') {
@@ -721,7 +734,7 @@ pub fn fs_read(path: &str, base64: bool, max_bytes: usize) -> Value {
             "content": r.stdout, "stderr": r.stderr })
 }
 
-pub fn fs_write(path: &str, content: &str, base64: bool, chmod: &str) -> Value {
+pub fn fs_write(path: &str, content: &str, base64: bool, chmod: &str, confirm: bool) -> Value {
     if path.is_empty() || !path.starts_with('/') {
         return err("bad_path", "path debe ser absoluta");
     }
@@ -729,7 +742,15 @@ pub fn fs_write(path: &str, content: &str, base64: bool, chmod: &str) -> Value {
         return err("bad_path", "path no puede contener '..'");
     }
     // Escritura en /dev/block o en el sistema: exigir confirmación.
-    if path.starts_with("/dev/block") || path.starts_with("/system/") && chmod.is_empty() {
+    //
+    // BUG v13.4 (H-01/H-02): la condición era
+    //     path.starts_with("/dev/block") || path.starts_with("/system/") && chmod.is_empty()
+    // y en Rust `&&` liga más fuerte que `||`, o sea que se leía como
+    // `A || (B && C)`: escribir en `/system/...` CON `chmod` saltaba la
+    // confirmación.  Además el error pedía un `confirm_destructive` que la
+    // función no tenía ni el esquema declaraba (contrato muerto).
+    if write_requires_confirm(path) && !confirm {
+        audit("fs_write.blocked", &json!({"path": path}));
         return err(
             "needs_confirm",
             "escribir en /dev/block o /system exige confirm_destructive=true",
@@ -852,14 +873,15 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "fs_write",
-            "description": "Escribe un fichero en el dispositivo (texto o base64), con chmod opcional.",
+            "description": "Escribe un fichero en el dispositivo (texto o base64), con chmod opcional. Escribir en /dev/block o /system exige confirm_destructive=true.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "path": { "type": "string" },
                     "content": { "type": "string" },
                     "base64": { "type": "boolean", "default": false },
-                    "chmod": { "type": "string", "description": "p.ej. 600, 755" }
+                    "chmod": { "type": "string", "description": "p.ej. 600, 755" },
+                    "confirm_destructive": { "type": "boolean", "default": false, "description": "Obligatorio para escribir en /dev/block o /system." }
                 },
                 "required": ["path", "content"]
             }
@@ -986,7 +1008,7 @@ pub fn dispatch(name: &str, args: &Value) -> Value {
             b("confirm_destructive"),
         ),
         "fs_read" => fs_read(&s("path"), b("base64"), u("max_bytes") as usize),
-        "fs_write" => fs_write(&s("path"), &s("content"), b("base64"), &s("chmod")),
+        "fs_write" => fs_write(&s("path"), &s("content"), b("base64"), &s("chmod"), b("confirm_destructive")),
         "find_duplicates" => find_duplicates(&s("path"), u("min_size_kb")),
         "props_and_settings" => props_and_settings(
             &s("action"),
@@ -1105,5 +1127,24 @@ mod tests {
         let r = root_exec_tool("rm -rf /", 1000, 1024, false);
         assert_eq!(r["ok"], json!(false));
         assert_eq!(r["error"], json!("needs_confirm"));
+    }
+
+    #[test]
+    fn escribir_en_el_sistema_exige_confirmacion() {
+        // La política pura: qué rutas la activan y cuáles no.
+        assert!(write_requires_confirm("/system"));
+        assert!(write_requires_confirm("/system/app/x.apk"));
+        assert!(write_requires_confirm("/dev/block"));
+        assert!(write_requires_confirm("/dev/block/sda"));
+        assert!(!write_requires_confirm("/data/local/tmp/x"));
+        assert!(!write_requires_confirm("/tmp/x"));
+        // El contrato completo: sin confirmar, la escritura se rechaza
+        // ANTES de tocar el sistema (con `chmod` y sin él).
+        for p in ["/system/app/x.apk", "/system", "/dev/block/sda"] {
+            let r = fs_write(p, "x", false, "644", false);
+            assert_eq!(r["error"], json!("needs_confirm"), "{}: {}", p, r);
+            let r2 = fs_write(p, "x", false, "", false);
+            assert_eq!(r2["error"], json!("needs_confirm"), "{}: {}", p, r2);
+        }
     }
 }
