@@ -120,7 +120,67 @@ fn auth_ok(headers: &str) -> bool {
 }
 
 /// ¿Este endpoint exige autenticación?
-fn requires_auth(path: &str, _method: &str) -> bool {
+/// ¿El `Host` de la petición es loopback (localhost, 127.0.0.1, [::1])?
+///
+/// La exención del navegador local NO puede decidirse por la IP de peer: el
+/// túnel (cloudflared entra por 127.0.0.1) sería indistinguible del Chrome
+/// del propio móvil.  Se decide por el Host, con un veto adicional de
+/// cabeceras de proxy para que el túnel no pueda falsearlo.
+fn host_is_loopback(headers: &str) -> bool {
+    for line in headers.lines() {
+        let low = line.to_ascii_lowercase();
+        let Some(rest) = low.strip_prefix("host:") else { continue };
+        let mut h = rest.trim();
+        if let Some(inner) = h.strip_prefix('[') {
+            h = inner.split(']').next().unwrap_or("").trim();
+        } else {
+            h = h.split(':').next().unwrap_or("").trim();
+        }
+        if h.eq_ignore_ascii_case("localhost") || h == "::1" {
+            return true;
+        }
+        if let Ok(ip) = h.parse::<std::net::IpAddr>() {
+            if api_key::is_loopback(&ip) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// ¿La petición trae cabeceras de proxy (túnel, reverse proxy)?
+///
+/// cloudflared añade `CF-Connecting-IP`; los proxies normales añaden
+/// `X-Forwarded-For`/`X-Real-IP`/`Forwarded`.  Su presencia demuestra que la
+/// petición NO viene del navegador local del dispositivo.
+fn has_proxy_headers(headers: &str) -> bool {
+    let low = headers.to_ascii_lowercase();
+    [
+        "cf-connecting-ip:",
+        "x-forwarded-for:",
+        "x-real-ip:",
+        "forwarded:",
+        "x-forwarded-host:",
+    ]
+    .iter()
+    .any(|h| low.contains(h))
+}
+
+/// ¿La petición viene del navegador LOCAL del propio dispositivo?
+///
+/// Se admite sin API key sólo si TODO se cumple:
+///   1. peer loopback (el Chrome del propio móvil),
+///   2. Host loopback (`localhost`, `127.0.0.1`, `[::1]`),
+///   3. SIN cabeceras de proxy (o sea: no entra por el túnel).
+///
+/// El túnel público sigue exigiendo API key: su Host es un dominio y sus
+/// peticiones llevan cabeceras de proxy.  Un cliente que falsifique
+/// `Host: localhost` no puede quitar esas cabeceras ⇒ no cuela.
+fn local_browser_request(peer: &std::net::IpAddr, headers: &str) -> bool {
+    api_key::is_loopback(peer) && host_is_loopback(headers) && !has_proxy_headers(headers)
+}
+
+fn requires_auth(path: &str, method: &str, local_browser: bool) -> bool {
     // v13.2.3 (AUTH-01…AUTH-06): FAIL-CLOSED.
     //
     // Antes sólo se protegían los POST, y en la rama GET quedaban endpoints
@@ -137,14 +197,31 @@ fn requires_auth(path: &str, _method: &str) -> bool {
     // la página HTML exige token, con independencia del método.
     //
     // La única superficie pública es `GET /` (y `/index.html`): es la propia
-    // página, que lleva el token embebido en `window.MEGADAEMON_TOKEN`.  Sin
-    // CORS abierto, un origen externo no puede leerla.
+    // página.  OJO: desde v13.4 (AUDIT-WEB-06) la página PÚBLICA NO lleva el
+    // token: sólo el navegador LOCAL del dispositivo lo recibe incrustado
+    // (Host loopback + sin cabeceras de proxy).  Sin CORS abierto, un origen
+    // externo no puede leer la respuesta de la página.
     if path == "/" || path == "/index.html" {
         return false;
     }
     // Los endpoints de monitorización son de SÓLO LECTURA: no exigen el
     // token de sesión local (el control de acceso remoto es la API key).
     if matches!(path, "/health" | "/api/health" | "/metrics" | "/api/metrics") {
+        return false;
+    }
+    // v14 (UI-16 · CRÍTICA): el intercambio API key → token de sesión NO puede
+    // exigir el token de sesión: sería un deadlock (pide un token para poder
+    // entregar un token) y la UI quedaría muerta con 403 en todas las
+    // llamadas de datos.  La credencial que lo protege es la API key, que el
+    // gate de API key ya validó antes de llegar aquí.
+    if path == "/api/session/exchange" {
+        return false;
+    }
+    // v14: el navegador LOCAL (ver `local_browser_request`) lee sin token de
+    // sesión: el token se lo inyectamos en la página.  Las ESCRITURAS
+    // (POST/PUT/DELETE) siguen exigiendo token ⇒ una web maliciosa que
+    //借 el puerto del móvil sigue sin poder ejecutar comandos.
+    if local_browser && method == "GET" {
         return false;
     }
     true
@@ -763,6 +840,10 @@ fn handle_client(mut stream: TcpStream) {
         path,
         "/health" | "/api/health" | "/metrics" | "/api/metrics" | "/api/ping"
     );
+    // v14: el navegador local del dispositivo se exime de la API key
+    // (decisión por Host + veto de cabeceras de proxy; ver el comentario de
+    // `local_browser_request`).  El túnel público NO se exime.
+    let local_browser = local_browser_request(&peer_ip, &header_str);
     match api_key::decide(
         &cfg,
         &RATE_LIMITER,
@@ -771,7 +852,7 @@ fn handle_client(mut stream: TcpStream) {
         std::time::Instant::now(),
     ) {
         api_key::Decision::Allow => {}
-        api_key::Decision::Unauthorized if is_public_page || is_public_probe => {
+        api_key::Decision::Unauthorized if is_public_page || is_public_probe || local_browser => {
             // Se permite la página/sonda; el resto de endpoints siguen protegidos.
             REQ_REJECTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
@@ -837,7 +918,7 @@ fn handle_client(mut stream: TcpStream) {
     // v13.2 (S08): los endpoints que ejecutan o modifican estado exigen el
     // token.  Sin esto, cualquiera (página web con CORS abierto, o alguien en
     // la LAN) podía hacer POST /api/chat con "$ comando" y obtener RCE root.
-    if requires_auth(path, method) && !auth_ok(&header_str) {
+    if requires_auth(path, method, local_browser) && !auth_ok(&header_str) {
         send_http_response(
             &mut stream,
             403,
@@ -869,7 +950,20 @@ fn handle_client(mut stream: TcpStream) {
                 //   * `GET /api/*`          → exige API key (o loopback).
                 //   * `POST /api/*`         → exige API key + token de sesión.
                 let html = String::from_utf8_lossy(&html).into_owned();
-                let inject = "<script>window.MEGADAEMON_TOKEN=\"\";window.MEGADAEMON_TOKEN_ISSUED=false;</script>";
+                //
+                // v14: al navegador LOCAL del dispositivo sí se le incrusta el
+                // token de sesión (su JS lo adjunta a cada llamada → lecturas
+                // Y escrituras funcionan en :3000 sin puente y sin pedir nada
+                // al usuario).  La página PÚBLICA (túnel, LAN) sigue SIN
+                // token: ahí el cliente pide la API key y la canjea.
+                let inject = if local_browser {
+                    format!(
+                        "<script>window.MEGADAEMON_TOKEN=\"{}\";window.MEGADAEMON_TOKEN_ISSUED=true;</script>",
+                        auth_token()
+                    )
+                } else {
+                    "<script>window.MEGADAEMON_TOKEN=\"\";window.MEGADAEMON_TOKEN_ISSUED=false;</script>".to_string()
+                };
                 let html = match html.find("<script>") {
                     Some(i) => format!("{}{}{}", &html[..i], inject, &html[i..]),
                     None => format!("{}{}", inject, html),
@@ -880,44 +974,6 @@ fn handle_client(mut stream: TcpStream) {
                     "text/html; charset=utf-8",
                     html.as_bytes(),
                 );
-            }
-            // Intercambio: API key válida → token de sesión para el navegador.
-            //
-            // POST /api/session/exchange   body: {"api_key": "..."}
-            // → 200 {"ok":true,"token":"..."}  (el token va al navegador, no al
-            //   HTML público).  Con la API key incorrecta → 403.
-            "/api/session/exchange" => {
-                let body: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);
-                let provided = body
-                    .get("api_key")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-                let ok = !provided.is_empty()
-                    && cfg.enabled
-                    && provided == cfg.key
-                    && !cfg.key.is_empty();
-                if ok {
-                    send_json(
-                        &mut stream,
-                        &json!({
-                            "ok": true,
-                            "token": auth_token(),
-                            "expires_hint": "el token es de la instancia; rotarlo reinicia la sesión",
-                        }),
-                    );
-                } else {
-                    REQ_REJECTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    send_json(
-                        &mut stream,
-                        &json!({
-                            "ok": false,
-                            "error": "invalid_api_key",
-                            "hint": "la API key no coincide con la configurada en la instancia",
-                        }),
-                    );
-                }
             }
             "/health" | "/api/health" => {
                 // Fase 3: endpoint de salud del demonio (monitorizable por
@@ -1308,6 +1364,50 @@ fn handle_client(mut stream: TcpStream) {
 
     let qp = parse_query_params(query);
     match path {
+        // ------------------------------------------------------------------
+        // v14 (UI-16 · CRÍTICA) — Intercambio: API key → token de sesión.
+        //
+        // La página pública `GET /` NO lleva el token incrustado (si lo
+        // llevara, cualquiera que alcanzase el puerto obtendría el control
+        // del daemon).  El navegador pide la API key al usuario y la canjea
+        // aquí por un token de sesión.
+        //
+        // El endpoint NO puede exigir el token de sesión (sería un deadlock:
+        // pedir un token para poder entregar un token) → `requires_auth()`
+        // lo exime.  La credencial que lo protege es la API key, ya validada
+        // por el gate de API key.
+        // ------------------------------------------------------------------
+        "/api/session/exchange" => {
+            let provided = body_json
+                .get("api_key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            // El navegador local del dispositivo canjea sin API key: ya está
+            // autenticado por ser local (Host loopback, sin cabeceras de
+            // proxy).  El túnel público sigue necesitando la key.
+            let ok = (local_browser && !provided.is_empty())
+                || (!provided.is_empty() && cfg.enabled && !cfg.key.is_empty() && provided == cfg.key);
+            if ok {
+                send_json(
+                    &mut stream,
+                    &json!({
+                        "ok": true,
+                        "token": auth_token(),
+                        "expires_hint": "el token pertenece a la instancia; rotarlo reinicia la sesion",
+                    }),
+                );
+            } else {
+                REQ_REJECTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                send_http_response(
+                    &mut stream,
+                    403,
+                    "application/json",
+                    b"{\"ok\":false,\"error\":\"invalid_api_key\",\"hint\":\"la API key no coincide con la configurada en la instancia\"}",
+                );
+            }
+        }
         // ------------------------------------------------------------------
         // v13.3 — API del motor de sincronización de conversaciones.
         // ------------------------------------------------------------------

@@ -32,10 +32,10 @@ const RATE_MAX_REQUESTS: u32 = 60;
 
 /// Límite de peticiones por IP y ventana, configurable por entorno.
 ///
-/// v14 (AUDIT-OPS-01): el límite fijo de 60/min hacía que TODOS los agentes
-/// que entran por el túnel Cloudflare compartieran el mismo cubo (el peer
-/// Seen es 127.0.0.1) ⇒ 429 en cascada ⇒ los agentes leían "la instancia
-/// está caída" y se rendían.  Con esto el operador puede subirlo, y el
+/// v14 (AUDIT-OPS-01): el límite fijo de 60/min hace que TODOS los agentes
+/// que entran por el túnel Cloudflare compartan el mismo cubo (el peer
+///Seen es 127.0.0.1) ⇒ 429 en cascada ⇒ los agentes leen "la instancia
+/// está caída" y se rinden.  Con esto el operador puede subirlo, y el
 /// loopback (UI local y proxy) queda exento por defecto.
 pub fn rate_max_requests() -> u32 {
     std::env::var("MEGADAEMON_RATE_MAX")
@@ -78,6 +78,12 @@ pub enum Decision {
 pub struct ApiKeyConfig {
     /// Key activa (vacía = middleware inactivo).
     pub key: String,
+    /// Claves adicionales por agente (una por línea en `megadaemon_api.keys`).
+    ///
+    /// Antes sólo existía una clave: acuñar otra invalidaba a toda la flota.
+    /// Con este registro cada agente (o un agente externo) tiene la suya y
+    /// puede revocarse sin tocar a los demás.
+    pub extra_keys: Vec<String>,
     /// Si está activa, se exige fuera de loopback.
     pub enabled: bool,
     /// Fuerza la key incluso para loopback.
@@ -97,20 +103,21 @@ impl ApiKeyConfig {
             std::env::var("MEGADAEMON_REQUIRE_API_KEY").unwrap_or_default().trim(),
             "1" | "true" | "yes" | "on"
         );
+        let extra_keys = load_extra_keys(state_dir);
         if let Ok(k) = std::env::var("MEGADAEMON_API_KEY") {
             let k = k.trim().to_string();
             if !k.is_empty() {
-                return Self { key: k, enabled: true, forced };
+                return Self { key: k, extra_keys, enabled: true, forced };
             }
         }
         let path = format!("{}/megadaemon_api.key", state_dir);
         if let Ok(existing) = fs::read_to_string(&path) {
             let k = existing.trim().to_string();
             if k.len() >= 16 {
-                return Self { key: k, enabled: true, forced };
+                return Self { key: k, extra_keys, enabled: true, forced };
             }
         }
-        Self { key: String::new(), enabled: false, forced }
+        Self { key: String::new(), extra_keys, enabled: false, forced }
     }
 
     /// Crea una key nueva con el prefijo de la casa y la deja en el disco
@@ -123,6 +130,58 @@ impl ApiKeyConfig {
         set_mode_600(&path);
         Ok(key)
     }
+
+    /// ¿Esta clave concreta está autorizada (principal o de un agente)?
+    pub fn accepts(&self, k: &str) -> bool {
+        if constant_time_eq(k, &self.key) {
+            return true;
+        }
+        self.extra_keys.iter().any(|e| constant_time_eq(k, e))
+    }
+}
+
+/// Ruta del registro de claves adicionales.
+pub fn extra_keys_path(state_dir: &str) -> String {
+    format!("{}/megadaemon_api.keys", state_dir)
+}
+
+/// Carga las claves adicionales (una por línea; se ignoran vacíos y `#`).
+fn load_extra_keys(state_dir: &str) -> Vec<String> {
+    let path = extra_keys_path(state_dir);
+    let Ok(txt) = fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    txt.lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| l.to_string())
+        .collect()
+}
+
+/// Acuña una clave **nueva** para un agente y la añade al registro de claves
+/// adicionales, sin tocar la clave principal: los demás agentes siguen
+/// funcionando y esta se revoca quitando su línea.
+pub fn generate_extra_key(state_dir: &str, label: &str) -> Result<String, String> {
+    let key = format!("mdaemon_sk_live_{}", random_hex(32));
+    let path = extra_keys_path(state_dir);
+    fs::create_dir_all(state_dir).map_err(|e| format!("mkdir {}: {}", state_dir, e))?;
+    let mut existing = fs::read_to_string(&path).unwrap_or_default();
+    if !existing.is_empty() && !existing.ends_with('\n') {
+        existing.push('\n');
+    }
+    let comment = if label.is_empty() {
+        String::new()
+    } else {
+        format!("# {}\n", label.replace(['\n', '\r'], " "))
+    };
+    let mut out = String::new();
+    out.push_str(&existing);
+    out.push_str(&comment);
+    out.push_str(&key);
+    out.push('\n');
+    fs::write(&path, out).map_err(|e| format!("write {}: {}", path, e))?;
+    set_mode_600(&path);
+    Ok(key)
 }
 
 /// Octetos aleatorios de /dev/urandom (fallback: reloj + pid).
@@ -268,7 +327,7 @@ pub fn decide(
             if !limiter.allow(peer, now) {
                 return Decision::RateLimited;
             }
-            if constant_time_eq(&k, &cfg.key) {
+            if cfg.accepts(&k) {
                 Decision::Allow
             } else {
                 Decision::Forbidden
@@ -317,7 +376,7 @@ mod tests {
 
     #[test]
     fn loopback_exento() {
-        let cfg = ApiKeyConfig { key: "k".into(), enabled: true, forced: false };
+        let cfg = ApiKeyConfig { key: "k".into(), extra_keys: Vec::new(), enabled: true, forced: false };
         let lim = RateLimiter::new();
         assert_eq!(decide(&cfg, &lim, &ip4(127, 0, 0, 1), "", Instant::now()), Decision::Allow);
         assert_eq!(
@@ -328,7 +387,7 @@ mod tests {
 
     #[test]
     fn sin_key_401_invalida_403() {
-        let cfg = ApiKeyConfig { key: "secreta".into(), enabled: true, forced: false };
+        let cfg = ApiKeyConfig { key: "secreta".into(), extra_keys: Vec::new(), enabled: true, forced: false };
         let lim = RateLimiter::new();
         let ext = ip4(203, 0, 113, 9);
         assert_eq!(decide(&cfg, &lim, &ext, "", Instant::now()), Decision::Unauthorized);
@@ -344,7 +403,7 @@ mod tests {
 
     #[test]
     fn bearer_tambien_sirve() {
-        let cfg = ApiKeyConfig { key: "secreta".into(), enabled: true, forced: false };
+        let cfg = ApiKeyConfig { key: "secreta".into(), extra_keys: Vec::new(), enabled: true, forced: false };
         let lim = RateLimiter::new();
         let ext = ip4(198, 51, 100, 7);
         assert_eq!(
@@ -355,7 +414,7 @@ mod tests {
 
     #[test]
     fn rate_limit_60_por_minuto() {
-        let cfg = ApiKeyConfig { key: "secreta".into(), enabled: true, forced: false };
+        let cfg = ApiKeyConfig { key: "secreta".into(), extra_keys: Vec::new(), enabled: true, forced: false };
         let lim = RateLimiter::new();
         let ext = ip4(192, 0, 2, 55);
         let now = Instant::now();
@@ -383,7 +442,7 @@ mod tests {
     fn forced_exige_key_aunque_venga_de_loopback() {
         // Caso del túnel: el proxy conecta desde 127.0.0.1, pero el servicio
         // está expuesto -> la key es obligatoria.
-        let cfg = ApiKeyConfig { key: "secreta".into(), enabled: true, forced: true };
+        let cfg = ApiKeyConfig { key: "secreta".into(), extra_keys: Vec::new(), enabled: true, forced: true };
         let lim = RateLimiter::new();
         assert_eq!(
             decide(&cfg, &lim, &ip4(127, 0, 0, 1), "", Instant::now()),
