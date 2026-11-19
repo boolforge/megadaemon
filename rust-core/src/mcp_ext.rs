@@ -82,6 +82,41 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "dex_decompile",
+            "description": "Decompilador DEX en Rust puro (sin Java, dex2jar ni Ghidra): pseudo-Java por clase, desensamblado Dalvik, mapa de desofuscación (nombres ofuscados, strings cifrados, flujo de control) y strings del DEX. Acepta un .dex suelto o un APK (extrae classes*.dex).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["decompile", "strings", "obfuscation"], "default": "decompile" },
+                    "path": { "type": "string", "description": "ruta ABSOLUTA de un .dex o de un APK" }
+                },
+                "required": ["path"]
+            }
+        },
+        {
+            "name": "app_intel",
+            "description": "Inteligencia de apps de IA (Claude, ChatGPT/Codex, Gemini, DeepSeek, Kimi, MiniMax, Grok, Manus, Cursor, Windsurf, Antigravity): rutas de datos locales, formatos de sesión, endpoints, plan de exportación/importación idempotente y notas de interoperabilidad sin API key. Los secretos se redactan siempre.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["profiles", "profile", "scan", "exchange", "notes"], "default": "profiles" },
+                    "id": { "type": "string" },
+                    "root": { "type": "string", "description": "directorio raíz de datos de la app" }
+                }
+            }
+        },
+        {
+            "name": "root_hide",
+            "description": "Auditoría de ocultación de root: matriz de señales de fuga por app (su, Magisk, Zygisk, Xposed, props, Play Integrity), plan de remediación con acciones reversibles y layout del módulo Magisk propio.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["audit", "plan", "magisk_layout"], "default": "audit" },
+                    "packages": { "type": "array", "items": { "type": "string" } }
+                }
+            }
+        },
+        {
             "name": "repo_updates",
             "description": "Actualización automática de apps desde repositorios (F-Droid, Obtainium). Calcula el plan de actualización comparando versiones; descargar e instalar exige confirmación explícita.",
             "inputSchema": {
@@ -281,6 +316,116 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             "dump" => crate::apk_inventory::dump_all(&s("dest_dir")),
             "drift" => crate::apk_inventory::drift(args.get("known").unwrap_or(&Value::Null)),
             _ => crate::apk_inventory::inventory(if n("limit") == 0 { 50 } else { n("limit") as usize }),
+        },
+        // v14: decompilador DEX.  El agente externo de Android lo usa para
+        // analizar APKs crudas sin invertir en Ghidra-DEX ni en smali.
+        "dex_decompile" => match s("action").as_str() {
+            "strings" => {
+                let dex = match crate::dex_decompile::load_dex(&s("path")) {
+                    Ok(d) => d,
+                    Err(e) => return Some(json!({ "ok": false, "error": e })),
+                };
+                let v = crate::dex_decompile::dex_strings(&dex);
+                json!({
+                    "ok": true,
+                    "count": v.len(),
+                    "strings": v,
+                })
+            }
+            "obfuscation" => {
+                let dex = match crate::dex_decompile::load_dex(&s("path")) {
+                    Ok(d) => d,
+                    Err(e) => return Some(json!({ "ok": false, "error": e })),
+                };
+                serde_json::to_value(crate::dex_decompile::analyze_obfuscation(&dex))
+                    .unwrap_or_else(|e| json!({ "ok": false, "error": e.to_string() }))
+            }
+            "decompile" => {
+                let dex = match crate::dex_decompile::load_dex(&s("path")) {
+                    Ok(d) => d,
+                    Err(e) => return Some(json!({ "ok": false, "error": e })),
+                };
+                let java = crate::dex_decompile::decompile_all(&dex);
+                json!({
+                    "ok": true,
+                    "chars": java.len(),
+                    "java": java,
+                })
+            }
+            _ => json!({
+                "ok": false,
+                "error": "unknown_action",
+                "hint": "acciones: decompile | strings | obfuscation",
+                "path": "ruta ABSOLUTA de un .dex o de un APK (se extrae classes*.dex)",
+            }),
+        },
+        // v14: intel de apps (rutas de datos, endpoints, plan de export/import)
+        // y auditoría de ocultación de root.
+        "app_intel" => match s("action").as_str() {
+            "profiles" => json!({
+                "ok": true,
+                "profiles": crate::app_intel::known_profiles(),
+            }),
+            "profile" => match crate::app_intel::profile_by_id(&s("id")) {
+                Some(p) => json!({ "ok": true, "profile": p }),
+                None => json!({ "ok": false, "error": "unknown_profile", "id": s("id") }),
+            },
+            "scan" => {
+                let scan = crate::app_intel::scan_local_storage(&s("root"));
+                json!({
+                    "ok": true,
+                    "files": scan.files,
+                    "summary": scan.summary,
+                })
+            }
+            "exchange" => {
+                let Some(p) = crate::app_intel::profile_by_id(&s("id")) else {
+                    return Some(json!({ "ok": false, "error": "unknown_profile", "id": s("id") }));
+                };
+                let plan = crate::app_intel::data_exchange_plan(&p, &s("root"));
+                json!({
+                    "ok": true,
+                    "items": plan.items,
+                    "total_bytes": plan.total_bytes,
+                    "warnings": plan.warnings,
+                })
+            }
+            "notes" => json!({
+                "ok": true,
+                "notes": crate::app_intel::interop_notes(&s("id")),
+            }),
+            _ => json!({
+                "ok": false,
+                "error": "unknown_action",
+                "hint": "acciones: profiles | profile | scan | exchange | notes",
+            }),
+        },
+        "root_hide" => match s("action").as_str() {
+            "audit" => {
+                let pkgs = sa("packages");
+                let env = crate::root_hide::DeviceEnv::clean();
+                let audits = crate::root_hide::audit_all(&pkgs, &env);
+                json!({ "ok": true, "audits": audits, "env": "clean (simulado)" })
+            }
+            "plan" => {
+                let pkgs = sa("packages");
+                let env = crate::root_hide::DeviceEnv::clean();
+                let audits = crate::root_hide::audit_all(&pkgs, &env);
+                let remeds: Vec<crate::root_hide::Remediation> = audits
+                    .iter()
+                    .flat_map(|a| crate::root_hide::plan_remediation(a))
+                    .collect();
+                json!({ "ok": true, "remediations": remeds })
+            }
+            "magisk_layout" => json!({
+                "ok": true,
+                "files": crate::root_hide::magisk_module_layout(),
+            }),
+            _ => json!({
+                "ok": false,
+                "error": "unknown_action",
+                "hint": "acciones: audit | plan | magisk_layout",
+            }),
         },
         "repo_updates" => match s("action").as_str() {
             "repos" => crate::repo_updates::repos(),

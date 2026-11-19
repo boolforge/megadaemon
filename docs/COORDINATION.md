@@ -184,3 +184,42 @@ Detalle y reproducción en `docs/AUDIT_HARNESS_V13_4.md`.
 Para el que lo construya: NDK r26c **no trae** `aarch64-linux-android-ar` → usar `AR_aarch64_linux_android=$NDK/bin/llvm-ar` y `RANLIB_aarch64_linux_android=$NDK/bin/llvm-ranlib`, y `CARGO_TARGET_DIR` en disco local (el NAS se corrompe con builds concurrentes).
 
 - 2026-11-19 22:2x · agente General (coordinación) · **el árbol compartido COMPILA (verificado con `tools/build-queue.sh check`)**: el bloqueo era `rust-core/src/adb_tool.rs` ausente (`lib.rs:14` lo declara, `mcp_server.rs:29/155` lo usan) ⇒ restaurado desde la copia suelta `/workspace/md-adb-build/rust-core/src/adb_tool.rs` (8.744 B) y commiteado en `ae039e7` (2 rutas exactas). Con la actualización del `adb_client.rs` que hizo el owner de ADB (ahora idéntico byte a byte a md-adb-build: `HostKey::sign_token`, `TokenHash`, `base64ct` vía el trait `Encoding`), la **lib `megadaemon-core` compila** ✓. Quedaba **un** error, en el binario nuevo `src/bin/megadaemon-adb.rs:264`: el `Vec` local `devices` **sombreaba** a la fn `devices()` ⇒ E0618; corregido en una línea (`devices = crate::devices(&adb_path);`), sin renombrar nada de su código. **Los `pub mod` de `lib.rs` están todos con fichero** (comprobado uno a uno) y `adb_client.rs`/`coordination.rs` son idénticos a las copias rescatadas de md-wt-push ⇒ el reset de las 20:36 ya no deja nada roto. **OJO con `Cargo.toml`**: `rsa = "0.9"` + `sha1 = { features = ["oid"] }` + `base64ct = "1"` es lo correcto (ya está así) ⇒ **no subáis rsa a 0.10**: el código está escrito para la API 0.9 (`Pkcs1v15Sign`, `Encoding::encode_string`) y con 0.10 no compila. El móvil sigue con el binario **v13.3.0** ⇒ `MEGADAEMON_RATE_MAX`/`MEGADAEMON_RATE_LOOPBACK` aún no están vivos; lo que sostiene la UI es el puente con **IP de origen 127.0.0.2** + **keeper** + supervisor cada 5 s (verificado: dual-stack 80/3000/3030/8080/8090 → 200, cero 429, túnel → 200). **No he reiniciado nada del móvil** desde la regla de avisar por `communicate`.
+
+## v14-bis · LA REGLA DEL NFS (medida, no opinión) — aplica a TODOS
+
+**`/workspace` está montado por NFS (nolock, hard, TCP).** Medido por el bus de coordinación:
+
+| Build | Ubicación de `CARGO_HOME`/`CARGO_TARGET_DIR` | Tiempo |
+|---|---|---|
+| A | dentro de `/workspace` (NFS) | **8+ minutos** o fallos falsos |
+| B | disco local (`/run/agent-runtime/…`) | **33 segundos** |
+
+Los errores `failed to open object file ...rcgu.o`, `failed to build archive`,
+`database is locked` y `rust-lld: cannot open` **NO son bugs de código**: son
+síntoma de E/S bloqueada contra el NAS. Nadie "arregla" código por eso.
+
+**Reglas:**
+1. NINGÚN build con `CARGO_HOME` ni `CARGO_TARGET_DIR` dentro de `/workspace`.
+   Usa `/run/agent-runtime/<tu-agente>/target` y `/run/agent-runtime/md/cargo`.
+2. `tools/build-queue.sh` ya usa disco local por defecto (`MD_BUILD_TARGET`).
+3. Builds serializados con `flock` (`tools/build-queue.sh`), `-j 2` en esta caja
+   de 2 CPUs, `CARGO_INCREMENTAL=0`.
+4. El móvil va JUSTO de RAM (10,2/10,5 GB): nada de polling agresivo, nada de
+   procesos extra, nada de builds en el móvil.
+
+**Tablero:** el rendez-vous real es `<state_dir>/board.sqlite` en el primary
+(Samsung). Se crea con `md-coord register --primary`. Hasta que exista, la
+coordinación por chat es el plan B, no el A.
+
+---
+
+- 2026-11-19 22:2x · agente principal · **PUSH A `main` HECHO** (remoto `7a51bd2`).
+  Merge de `origin/main` resuelto (adb_client con el firmador RSA, lib.rs con 62
+  módulos, Cargo.toml con la feature `ssh` restaurada). Añadidas las tools MCP
+  `dex_decompile`, `app_intel` y `root_hide` (para que el agente externo de Android
+  consulte el motor, no sólo ficheros). Rate-limit configurable por IP
+  (`MEGADAEMON_RATE_MAX`, loopback exento). Plantilla web embebida, `/` exento
+  del gate de API key, bind 0.0.0.0 + alias 3000/3030/8080/8090/9090 + IPv6.
+  `tools/build-queue.sh` pasa a disco local (la causa raíz del atasco).
+  **PENDIENTE CRÍTICO: rotar la API key y el token de cockpit** (han viajado por
+  el chat y están en `docs/CONNECT_PRIMARY_SAMSUNG.md`, que es público).

@@ -37,7 +37,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::{Cursor, Read};
 
@@ -2556,7 +2556,7 @@ pub fn disassemble_method(dex: &DexFile, class_idx: u32, method_idx: u32) -> Vec
         None => return Vec::new(),
     };
 
-    let mut methods: Vec<&DexEncodedMethod> = class_def
+    let methods: Vec<&DexEncodedMethod> = class_def
         .direct_methods
         .iter()
         .chain(class_def.virtual_methods.iter())
@@ -2606,6 +2606,10 @@ pub struct EncryptedString {
     pub class_name: String,
     /// Método donde se encontró la referencia.
     pub method_name: String,
+    /// Texto LITERAL tal cual aparece en el pool de constantes (la evidencia
+    /// original). Antes el mapa perdía este dato: `evidence` es una
+    /// descripción, no el string.
+    pub original: String,
     /// Tipo de cifrado sospechado (`base64`, `xor`, `byte-array`…).
     pub kind: String,
     /// Evidencia textual (patrón detectado, clave, volcado hex…).
@@ -2798,41 +2802,7 @@ fn find_encrypted_strings(dex: &DexFile) -> Vec<EncryptedString> {
     let mut out: Vec<EncryptedString> = Vec::new();
 
     // Referencia de cada string desde el código (para atribuirlo a un método).
-    let mut origin: HashMap<u32, (String, String)> = HashMap::new();
-    for class_def in &dex.classes {
-        for method in class_def
-            .direct_methods
-            .iter()
-            .chain(class_def.virtual_methods.iter())
-        {
-            let code = match &method.code {
-                Some(c) => c,
-                None => continue,
-            };
-            let method_name = dex
-                .methods
-                .get(method.method_idx as usize)
-                .map(|m| m.name.clone())
-                .unwrap_or_default();
-            let mut offset = 0usize;
-            while offset < code.insns.len() {
-                let opcode = (code.insns[offset] & 0xff) as u8;
-                let width = instruction_width(opcode).max(1);
-                if opcode == 0x1a && offset + 1 < code.insns.len() {
-                    origin.entry(code.insns[offset + 1] as u32).or_insert_with(|| {
-                        (class_def.class_name.clone(), method_name.clone())
-                    });
-                } else if opcode == 0x1b && offset + 2 < code.insns.len() {
-                    let index = ((code.insns[offset + 2] as u32) << 16)
-                        | code.insns[offset + 1] as u32;
-                    origin.entry(index).or_insert_with(|| {
-                        (class_def.class_name.clone(), method_name.clone())
-                    });
-                }
-                offset += width;
-            }
-        }
-    }
+    let origin = string_origins(dex);
 
     for (index, text) in dex.strings.iter().enumerate() {
         // Los descriptores de tipo no son strings Interesting.
@@ -2858,6 +2828,7 @@ fn find_encrypted_strings(dex: &DexFile) -> Vec<EncryptedString> {
                 if decoded.len() >= 3 && printable_ratio(&decoded) >= 0.9 {
                     let plain = String::from_utf8_lossy(&decoded).to_string();
                     out.push(EncryptedString {
+                        original: text.clone(),
                         class_name: class_name.clone(),
                         method_name: method_name.clone(),
                         kind: "base64".to_string(),
@@ -2906,6 +2877,7 @@ fn find_encrypted_strings(dex: &DexFile) -> Vec<EncryptedString> {
             }
             if best_score - original_score > 0.25 && !best_text.is_empty() {
                 out.push(EncryptedString {
+                    original: text.clone(),
                     class_name: class_name.clone(),
                     method_name: method_name.clone(),
                     kind: "xor".to_string(),
@@ -2928,6 +2900,7 @@ fn find_encrypted_strings(dex: &DexFile) -> Vec<EncryptedString> {
         let ratio = printable_ratio(bytes);
         if ratio < 0.75 {
             out.push(EncryptedString {
+                original: text.clone(),
                 class_name,
                 method_name,
                 kind: "binary-blob".to_string(),
@@ -2989,6 +2962,7 @@ fn find_encrypted_strings(dex: &DexFile) -> Vec<EncryptedString> {
                             }
                             if raw.iter().any(|&b| b > 0x7f || (b < 0x20 && b != 0)) {
                                 out.push(EncryptedString {
+                                    original: String::new(),
                                     class_name: class_def.class_name.clone(),
                                     method_name: method_name.clone(),
                                     kind: "byte-array".to_string(),
@@ -3382,6 +3356,47 @@ fn inflate_raw(chunk: &[u8]) -> Vec<u8> {
     }
 }
 
+/// Carga un DEX para analizarlo.
+///
+/// Acepta dos formas:
+///   * un fichero `.dex` suelto → se lee tal cual;
+///   * un APK → se extrae el primer `classes*.dex` (si hay varios, se
+///     devuelve el de mayor tamaño, que es el principal en la práctica).
+///
+/// Es la entrada que usa la tool MCP `dex_decompile`.
+pub fn load_dex(path: &str) -> Result<DexFile, String> {
+    let p = std::path::Path::new(path);
+    if !p.exists() {
+        return Err(format!("no existe: {}", path));
+    }
+    let is_apk = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.to_ascii_lowercase().ends_with(".apk"))
+        .unwrap_or(false);
+    if is_apk {
+        let entries = apk_dex_entries(path)?;
+        // El DEX principal es el mayor (los multidex reparten por peso).
+        let mut best: Option<(String, Vec<u8>)> = None;
+        for (name, bytes) in entries {
+            let better = match &best {
+                None => true,
+                Some((_, b)) => bytes.len() > b.len(),
+            };
+            if better {
+                best = Some((name, bytes));
+            }
+        }
+        let (name, bytes) = best.ok_or_else(|| {
+            format!("el APK {} no contiene classes*.dex", path)
+        })?;
+        return DexFile::parse(&bytes)
+            .map_err(|e| format!("no se pudo parsear {} de {}: {}", name, path, e));
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("no se pudo leer {}: {}", path, e))?;
+    DexFile::parse(&bytes).map_err(|e| format!("no se pudo parsear {}: {}", path, e))
+}
+
 /// Decompila un APK completo: extrae sus DEX y devuelve el pseudo-Java.
 ///
 /// Devuelve el pseudo-Java de todas las clases de todos los `classes*.dex`
@@ -3440,6 +3455,617 @@ pub fn decompile_dex_bytes(bytes: &[u8]) -> Result<String, String> {
 /// Parsea un DEX suelto (alias funcional de [`DexFile::parse`]).
 pub fn parse_dex(bytes: &[u8]) -> Result<DexFile, String> {
     DexFile::parse(bytes)
+}
+
+// ========================================================================= //
+// Findings NDJSON — contrato común del enjambre (esquema v1.2)
+// ========================================================================= //
+//
+// Un "hallazgo" es una línea de `findings.ndjson`. El esquema lo fijó el bus
+// de coordinación (v1.2, 19 campos) para que TODOS los agentes hablen el
+// mismo idioma:
+//
+//   ts, package, version, detector, class, method, signal, java_class,
+//   java_method, original, decoded, kind, severity, confidence, bypassable,
+//   offset, evidence_file, evidence_offset, notes
+//
+// OJO con dos nombres que colisionan conceptualmente:
+//   * `class`  = TIPO de evidencia (fs_path|property|process|maps|ptrace|
+//                keystore|signature|network|behavior|pool_string)
+//   * `method` = cómo se obtuvo (stat|readlink|grep_props|proc_read|
+//                package_manager|signature_check|runtime_probe|dex_pool_scan|
+//                manifest_parse|static_scan)
+// La clase y el método JAVA del hallazgo viajan en `java_class`/`java_method`.
+// ========================================================================= //
+
+/// Un hallazgo del formato común `findings.ndjson` (esquema v1.2).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Finding {
+    /// Timestamp Unix del análisis.
+    #[serde(default)]
+    pub ts: i64,
+    /// Paquete Android (vacío si el DEX va suelto).
+    #[serde(default)]
+    pub package: String,
+    /// Versión de la app (vacía si no se sabe).
+    #[serde(default)]
+    pub version: String,
+    /// Clase de detección: `magisk|su|frida|xposed|safetynet|playintegrity|
+    /// tamper|emulator|root_behavior|obf_string|crypto_api|net_endpoint`.
+    #[serde(default)]
+    pub detector: String,
+    /// Tipo de evidencia (`pool_string`, `network`, `behavior`…).
+    #[serde(rename = "class", default)]
+    pub evidence_class: String,
+    /// Cómo se obtuvo el hallazgo.
+    #[serde(default)]
+    pub method: String,
+    /// Valor crudo observado.
+    #[serde(default)]
+    pub signal: String,
+    /// Clase Java donde aparece el hallazgo.
+    #[serde(default)]
+    pub java_class: String,
+    /// Método Java donde aparece el hallazgo.
+    #[serde(default)]
+    pub java_method: String,
+    /// Texto literal tal cual aparece (enmascarado si es una credencial).
+    #[serde(default)]
+    pub original: String,
+    /// Candidata descifrada (o vacía).
+    #[serde(default)]
+    pub decoded: String,
+    /// Subtipo libre.
+    #[serde(default)]
+    pub kind: String,
+    /// `info|low|medium|high`.
+    #[serde(default)]
+    pub severity: String,
+    /// Confianza 0-100.
+    #[serde(default)]
+    pub confidence: u8,
+    /// Si la detección es evadible.
+    #[serde(default)]
+    pub bypassable: bool,
+    /// Índice en el pool de constantes del DEX (-1 si no aplica).
+    #[serde(default)]
+    pub offset: i64,
+    /// Ruta absoluta del fichero que evidencia el hallazgo.
+    #[serde(default)]
+    pub evidence_file: String,
+    /// Offset en bytes dentro del fichero (-1 si no aplica).
+    #[serde(default)]
+    pub evidence_offset: i64,
+    /// Notas libres.
+    #[serde(default)]
+    pub notes: String,
+}
+
+impl Finding {
+    /// Serializa el hallazgo a una línea NDJSON (sin salto de línea).
+    pub fn to_ndjson(&self) -> String {
+        serde_json::to_string(self).unwrap_or_else(|_| String::from("{}"))
+    }
+}
+
+/// Timestamp actual en segundos Unix.
+fn now_ts() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Hosts de proveedores de IA con su nombre legible.
+const AI_ENDPOINT_HOSTS: &[(&str, &str)] = &[
+    ("api.anthropic.com", "Claude"),
+    ("api.openai.com", "ChatGPT"),
+    ("generativelanguage.googleapis.com", "Gemini"),
+    ("aiplatform.googleapis.com", "Gemini"),
+    ("api.deepseek.com", "DeepSeek"),
+    ("api.moonshot.cn", "Kimi"),
+    ("api.moonshot.ai", "Kimi"),
+    ("api.minimax.chat", "MiniMax"),
+    ("api.minimaxi.com", "MiniMax"),
+    ("api.minimax.io", "MiniMax"),
+    ("api.groq.com", "Groq"),
+    ("api.together.xyz", "Together"),
+    ("api.fireworks.ai", "Fireworks"),
+    ("api.x.ai", "xAI"),
+    ("api.perplexity.ai", "Perplexity"),
+    ("openrouter.ai", "OpenRouter"),
+];
+
+/// Cabeceras y variables de entorno que delatan integración con IA:
+/// (marcador exacto, subtipo, proveedor).
+const AI_AUTH_MARKERS: &[(&str, &str, &str)] = &[
+    ("x-api-key", "header_name", "Anthropic"),
+    ("anthropic-version", "header_name", "Anthropic"),
+    ("Authorization", "header_name", "Bearer"),
+    ("ANTHROPIC_API_KEY", "env_var", "Anthropic"),
+    ("OPENAI_API_KEY", "env_var", "ChatGPT"),
+    ("GEMINI_API_KEY", "env_var", "Gemini"),
+    ("GOOGLE_API_KEY", "env_var", "Gemini"),
+    ("DEEPSEEK_API_KEY", "env_var", "DeepSeek"),
+    ("MOONSHOT_API_KEY", "env_var", "Kimi"),
+    ("KIMI_API_KEY", "env_var", "Kimi"),
+    ("MINIMAX_API_KEY", "env_var", "MiniMax"),
+    ("MINIMAX_GROUP_ID", "env_var", "MiniMax"),
+    ("GROQ_API_KEY", "env_var", "Groq"),
+    ("XAI_API_KEY", "env_var", "xAI"),
+    ("PERPLEXITY_API_KEY", "env_var", "Perplexity"),
+];
+
+/// Formas de clave API: (prefijo, tipo, longitud mínima, confianza).
+const API_KEY_SHAPES: &[(&str, &str, usize, u8)] = &[
+    ("sk-ant-", "anthropic_key", 24, 95),
+    ("sk-proj-", "openai_project_key", 24, 90),
+    ("sk-", "openai_like_key", 24, 85),
+    ("gsk_", "groq_key", 24, 90),
+    ("xai-", "xai_key", 24, 85),
+    ("ghp_", "github_token", 20, 90),
+    ("gho_", "github_token", 20, 90),
+    ("ghs_", "github_token", 20, 90),
+    ("github_pat_", "github_pat", 24, 95),
+    ("AIza", "google_api_key", 30, 90),
+];
+
+/// Señales anti-root / anti-debug / anti-tamper:
+/// (detector, aguja, severidad, evadible).
+const ANTI_ROOT_SIGNALS: &[(&str, &str, &str, bool)] = &[
+    ("magisk", "/sbin/.magisk", "high", true),
+    ("magisk", "magisk", "low", true),
+    ("magisk", "Magisk", "low", true),
+    ("su", "/system/xbin/su", "high", true),
+    ("su", "/system/bin/su", "high", true),
+    ("su", "/sbin/su", "high", true),
+    ("su", "isRooted", "medium", true),
+    ("su", "RootBeer", "medium", true),
+    ("su", "test-keys", "medium", true),
+    ("xposed", "de.robv.android.xposed", "high", false),
+    ("xposed", "XposedBridge", "high", false),
+    ("frida", "frida-agent", "high", true),
+    ("frida", "frida-gadget", "high", true),
+    ("frida", "frida-server", "high", true),
+    ("safetynet", "SafetyNet", "medium", false),
+    ("safetynet", "safetynet", "medium", false),
+    ("playintegrity", "PlayIntegrity", "medium", false),
+    ("playintegrity", "playintegrity", "medium", false),
+    ("tamper", "/proc/self/maps", "medium", true),
+    ("tamper", "TracerPid", "medium", true),
+    ("tamper", "ptrace", "medium", true),
+    ("emulator", "goldfish", "medium", true),
+    ("emulator", "generic_x86", "medium", true),
+    ("emulator", "sdk_gphone", "medium", true),
+    ("root_behavior", "ro.debuggable", "medium", true),
+    ("root_behavior", "ro.build.tags", "medium", true),
+];
+
+/// Mapa de strings del DEX: índice del pool → (clase Java, método Java).
+///
+/// Se calcula UNA vez y se reutiliza para todos los detectores: es el hot
+/// path (APKs de 50-100 MB con 5 `classes*.dex`) y recomputarlo por detector
+/// multiplicaba el trabajo.
+fn string_origins(dex: &DexFile) -> HashMap<u32, (String, String)> {
+    let mut origin: HashMap<u32, (String, String)> = HashMap::new();
+    for class_def in &dex.classes {
+        for method in class_def
+            .direct_methods
+            .iter()
+            .chain(class_def.virtual_methods.iter())
+        {
+            let code = match &method.code {
+                Some(c) => c,
+                None => continue,
+            };
+            let method_name = dex
+                .methods
+                .get(method.method_idx as usize)
+                .map(|m| m.name.clone())
+                .unwrap_or_default();
+            let mut offset = 0usize;
+            while offset < code.insns.len() {
+                let opcode = (code.insns[offset] & 0xff) as u8;
+                let width = instruction_width(opcode).max(1);
+                if opcode == 0x1a && offset + 1 < code.insns.len() {
+                    origin
+                        .entry(code.insns[offset + 1] as u32)
+                        .or_insert_with(|| {
+                            (class_def.class_name.clone(), method_name.clone())
+                        });
+                } else if opcode == 0x1b && offset + 2 < code.insns.len() {
+                    let index = ((code.insns[offset + 2] as u32) << 16)
+                        | code.insns[offset + 1] as u32;
+                    origin.entry(index).or_insert_with(|| {
+                        (class_def.class_name.clone(), method_name.clone())
+                    });
+                }
+                offset += width;
+            }
+        }
+    }
+    origin
+}
+
+/// ¿El texto tiene forma de clave API? → (tipo, confianza).
+fn api_key_shape(text: &str) -> Option<(&'static str, u8)> {
+    if text.len() < 16 || text.chars().any(|c| c.is_whitespace()) {
+        return None;
+    }
+    for (prefix, kind, min_len, conf) in API_KEY_SHAPES {
+        if text.starts_with(prefix) && text.len() >= *min_len {
+            let rest = &text[prefix.len()..];
+            if rest
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+            {
+                return Some((kind, *conf));
+            }
+        }
+    }
+    if text.starts_with("eyJ") && text.matches('.').count() == 2 {
+        return Some(("jwt", 80));
+    }
+    None
+}
+
+/// Enmascara un secreto dejando 4 caracteres al principio y 4 al final.
+///
+/// Las credenciales NO se escriben en claro en `findings.ndjson`: el
+/// `offset` apunta al string literal del pool, así que el dato sigue
+/// siendo recuperable por quien tenga el DEX, pero un informe que se
+/// comparte por chat o se sube a un almacén no filtra la clave.
+pub fn mask_secret(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= 12 {
+        return "*".repeat(chars.len());
+    }
+    let head: String = chars[..4].iter().collect();
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("{}{}{}", head, "*".repeat(chars.len() - 8), tail)
+}
+
+/// Hallazgos de endpoints de IA y credenciales embebidas en el DEX.
+///
+/// Variante segura: las credenciales salen ENMASCARADAS.
+pub fn ai_credential_findings(dex: &DexFile) -> Vec<Finding> {
+    ai_credential_findings_inner(dex, false)
+}
+
+/// Hallazgos de endpoints de IA y credenciales embebidas en el DEX.
+///
+/// Variante que revela el literal de la credencial (sólo para consumo local).
+pub fn ai_credential_findings_raw(dex: &DexFile) -> Vec<Finding> {
+    ai_credential_findings_inner(dex, true)
+}
+
+fn ai_credential_findings_inner(dex: &DexFile, reveal: bool) -> Vec<Finding> {
+    let origins = string_origins(dex);
+    let ts = now_ts();
+    let mut out: Vec<Finding> = Vec::new();
+
+    for (index, text) in dex.strings.iter().enumerate() {
+        if text.len() < 8 || text.len() > 2048 {
+            continue;
+        }
+        let (java_class, java_method) = origins
+            .get(&(index as u32))
+            .cloned()
+            .unwrap_or_else(|| (String::from("<string-pool>"), String::new()));
+
+        // (1) Endpoint de proveedor de IA.
+        for (host, provider) in AI_ENDPOINT_HOSTS {
+            if text.contains(host) {
+                out.push(Finding {
+                    ts,
+                    detector: String::from("net_endpoint"),
+                    evidence_class: String::from("network"),
+                    method: String::from("dex_pool_scan"),
+                    signal: text.clone(),
+                    java_class: java_class.clone(),
+                    java_method: java_method.clone(),
+                    original: text.clone(),
+                    kind: format!("ai_endpoint:{}", provider),
+                    severity: String::from("medium"),
+                    confidence: 90,
+                    bypassable: false,
+                    offset: index as i64,
+                    evidence_offset: -1,
+                    notes: format!("endpoint de {}", provider),
+                    ..Default::default()
+                });
+                break;
+            }
+        }
+
+        // (2) Cabecera o variable de entorno de autenticación (match exacto).
+        for (marker, kind, provider) in AI_AUTH_MARKERS {
+            if text == *marker {
+                out.push(Finding {
+                    ts,
+                    detector: String::from("crypto_api"),
+                    evidence_class: String::from("pool_string"),
+                    method: String::from("dex_pool_scan"),
+                    signal: text.clone(),
+                    java_class: java_class.clone(),
+                    java_method: java_method.clone(),
+                    original: text.clone(),
+                    kind: format!("{}:{}", kind, provider),
+                    severity: String::from("medium"),
+                    confidence: 70,
+                    bypassable: false,
+                    offset: index as i64,
+                    evidence_offset: -1,
+                    notes: format!("{} de {}", kind, provider),
+                    ..Default::default()
+                });
+                break;
+            }
+        }
+
+        // (3) Forma de clave API.
+        if let Some((kind, conf)) = api_key_shape(text) {
+            let shown = if reveal {
+                text.clone()
+            } else {
+                mask_secret(text)
+            };
+            out.push(Finding {
+                ts,
+                detector: String::from("crypto_api"),
+                evidence_class: String::from("pool_string"),
+                method: String::from("dex_pool_scan"),
+                signal: text.clone(),
+                java_class: java_class.clone(),
+                java_method: java_method.clone(),
+                original: shown,
+                kind: format!("api_key:{}", kind),
+                severity: String::from("high"),
+                confidence: conf,
+                bypassable: false,
+                offset: index as i64,
+                evidence_offset: -1,
+                notes: if reveal {
+                    String::from("credencial en claro")
+                } else {
+                    String::from("credencial enmascarada; literal en el pool, offset del DEX")
+                },
+                ..Default::default()
+            });
+        }
+    }
+
+    out
+}
+
+/// Hallazgos de señales anti-root / anti-debug / anti-tamper.
+pub fn anti_root_findings(dex: &DexFile) -> Vec<Finding> {
+    let origins = string_origins(dex);
+    let ts = now_ts();
+    let mut out: Vec<Finding> = Vec::new();
+    // Tope por señal: evita inundar el informe con 200 coincidencias de
+    // "magisk" y mantiene el valor real de cada hallazgo.
+    let mut per_signal: HashMap<(&str, &str), usize> = HashMap::new();
+
+    for (index, text) in dex.strings.iter().enumerate() {
+        if text.len() < 4 || text.len() > 512 {
+            continue;
+        }
+        for (detector, needle, severity, bypassable) in ANTI_ROOT_SIGNALS {
+            if !text.contains(needle) {
+                continue;
+            }
+            let counter = per_signal.entry((*detector, *needle)).or_insert(0);
+            if *counter >= 3 {
+                continue;
+            }
+            *counter += 1;
+            let (java_class, java_method) = origins
+                .get(&(index as u32))
+                .cloned()
+                .unwrap_or_else(|| (String::from("<string-pool>"), String::new()));
+            out.push(Finding {
+                ts,
+                detector: (*detector).to_string(),
+                evidence_class: String::from("pool_string"),
+                method: String::from("dex_pool_scan"),
+                signal: text.clone(),
+                java_class,
+                java_method,
+                original: text.clone(),
+                kind: String::from("anti_check"),
+                severity: (*severity).to_string(),
+                confidence: 75,
+                bypassable: *bypassable,
+                offset: index as i64,
+                evidence_offset: -1,
+                notes: format!("señal de detección {}", detector),
+                ..Default::default()
+            });
+        }
+    }
+
+    out
+}
+
+/// Hallazgos de ofuscación (renombrados + strings cifrados) en el formato
+/// común v1.2.
+pub fn obfuscation_findings(dex: &DexFile) -> Vec<Finding> {
+    let ts = now_ts();
+    let report = analyze_obfuscation(dex);
+    let mut out: Vec<Finding> = Vec::new();
+
+    for class_name in &report.renamed_types {
+        out.push(Finding {
+            ts,
+            detector: String::from("obf_string"),
+            evidence_class: String::from("behavior"),
+            method: String::from("static_scan"),
+            signal: class_name.clone(),
+            java_class: class_name.clone(),
+            kind: String::from("renamed_class"),
+            severity: String::from("low"),
+            confidence: 70,
+            bypassable: true,
+            offset: -1,
+            evidence_offset: -1,
+            notes: String::from("nombre de clase de 1-2 caracteres: renombrado de ofuscador"),
+            ..Default::default()
+        });
+    }
+
+    for method in &report.renamed_methods {
+        let (class_name, method_name) = match method.split_once('.') {
+            Some((c, m)) => (c.to_string(), m.trim_end_matches("()").to_string()),
+            None => (String::new(), method.clone()),
+        };
+        out.push(Finding {
+            ts,
+            detector: String::from("obf_string"),
+            evidence_class: String::from("behavior"),
+            method: String::from("static_scan"),
+            signal: method.clone(),
+            java_class: class_name.clone(),
+            java_method: method_name.clone(),
+            kind: String::from("renamed_method"),
+            severity: String::from("low"),
+            confidence: 70,
+            bypassable: true,
+            offset: -1,
+            evidence_offset: -1,
+            notes: String::from("nombre de método de 1-2 caracteres: renombrado de ofuscador"),
+            ..Default::default()
+        });
+    }
+
+    for enc in &report.encrypted_strings {
+        let severity = if enc.confidence >= 85 {
+            "high"
+        } else if enc.confidence >= 65 {
+            "medium"
+        } else {
+            "low"
+        };
+        out.push(Finding {
+            ts,
+            detector: String::from("obf_string"),
+            evidence_class: String::from("pool_string"),
+            method: String::from("dex_pool_scan"),
+            signal: enc.original.clone(),
+            java_class: enc.class_name.clone(),
+            java_method: enc.method_name.clone(),
+            original: enc.original.clone(),
+            decoded: enc.candidate_plaintext.clone(),
+            kind: enc.kind.clone(),
+            severity: severity.to_string(),
+            confidence: enc.confidence,
+            bypassable: true,
+            offset: enc.offset as i64,
+            evidence_offset: -1,
+            notes: enc.evidence.clone(),
+            ..Default::default()
+        });
+    }
+
+    out
+}
+
+/// Informe completo en NDJSON (esquema v1.2): ofuscación + credenciales +
+/// señales anti-root, una línea por hallazgo.
+pub fn findings_ndjson(dex: &DexFile, evidence_file: &str) -> String {
+    let mut findings = obfuscation_findings(dex);
+    findings.extend(ai_credential_findings(dex));
+    findings.extend(anti_root_findings(dex));
+    let mut out = String::new();
+    for f in &findings {
+        let mut f = f.clone();
+        if f.evidence_file.is_empty() {
+            f.evidence_file = evidence_file.to_string();
+        }
+        out.push_str(&f.to_ndjson());
+        out.push('\n');
+    }
+    out
+}
+
+/// Mapa de desofuscación en NDJSON (mismo contenido que [`findings_ndjson`]
+/// pero sólo la parte de ofuscación).
+pub fn obfuscation_map_ndjson(dex: &DexFile, evidence_file: &str) -> String {
+    let mut out = String::new();
+    for f in obfuscation_findings(dex) {
+        let mut f = f;
+        if f.evidence_file.is_empty() {
+            f.evidence_file = evidence_file.to_string();
+        }
+        out.push_str(&f.to_ndjson());
+        out.push('\n');
+    }
+    out
+}
+
+/// Lee `findings.ndjson` (texto) y devuelve los hallazgos.
+///
+/// Tolerante a propósito: líneas vacías, líneas que no son JSON o JSON
+/// inválido se saltan en vez de tumbar el análisis completo.
+pub fn parse_findings_ndjson(text: &str) -> Vec<Finding> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || !line.starts_with('{') {
+            continue;
+        }
+        if let Ok(f) = serde_json::from_str::<Finding>(line) {
+            out.push(f);
+        }
+    }
+    out
+}
+
+/// Lee `findings.ndjson` del disco.
+pub fn load_findings_ndjson(path: &str) -> Result<Vec<Finding>, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("no se pudo leer {}: {}", path, e))?;
+    Ok(parse_findings_ndjson(&text))
+}
+
+/// Fusiona hallazgos propios con los del agente externo, sin duplicar.
+///
+/// La clave de deduplicación es (detector, java_class, java_method, original,
+/// signal): el mismo hallazgo visto por dos agentes se reporta una vez.
+pub fn merge_findings(local: Vec<Finding>, external: Vec<Finding>) -> Vec<Finding> {
+    let mut out: Vec<Finding> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for f in local.into_iter().chain(external.into_iter()) {
+        let key = format!(
+            "{}|{}|{}|{}|{}",
+            f.detector, f.java_class, f.java_method, f.original, f.signal
+        );
+        if seen.insert(key) {
+            out.push(f);
+        }
+    }
+    out
+}
+
+/// Analiza un APK o DEX en disco y devuelve sus hallazgos en NDJSON.
+///
+/// `evidence_file` es la ruta que se graba en cada hallazgo.
+pub fn findings_ndjson_file(path: &str) -> Result<String, String> {
+    if path.ends_with(".apk") {
+        let entries = apk_dex_entries(path)?;
+        let mut out = String::new();
+        for (name, bytes) in entries {
+            if let Ok(dex) = DexFile::parse(&bytes) {
+                out.push_str(&findings_ndjson(&dex, path));
+            }
+            let _ = name;
+        }
+        Ok(out)
+    } else {
+        let bytes = std::fs::read(path).map_err(|e| format!("no se pudo leer {}: {}", path, e))?;
+        let dex = DexFile::parse(&bytes)?;
+        Ok(findings_ndjson(&dex, path))
+    }
 }
 
 // ========================================================================= //
@@ -4142,5 +4768,134 @@ mod tests {
         assert_eq!(descriptor_to_java("Z"), "boolean");
         assert_eq!(class_simple_name("Lcom/x/Foo$Bar;"), "Bar");
         assert_eq!(java_class_name("Lcom/x/Foo;"), "com.x.Foo");
+    }
+
+    #[test]
+    fn test_api_key_shape_detects_common_providers() {
+        assert!(api_key_shape("sk-ant-api03-AAAABBBBCCCCDDDDEEEE").is_some());
+        assert!(api_key_shape("sk-proj-AAAABBBBCCCCDDDDEEEEFFFF").is_some());
+        assert!(api_key_shape("ghp_AAAABBBBCCCCDDDDEEEEFFFF").is_some());
+        assert!(api_key_shape("AIzaSyAAAABBBBCCCCDDDDEEEEFFFFGGGG").is_some());
+        // Demasiado corto o con espacios => no es una clave.
+        assert!(api_key_shape("sk-corto").is_none());
+        assert!(api_key_shape("Bearer sk-ant-AAAABBBBCCCCDDDDEEEE").is_none());
+        assert!(api_key_shape("hola mundo").is_none());
+    }
+
+    #[test]
+    fn test_mask_secret_never_leaks_the_middle() {
+        let m = mask_secret("sk-ant-api03-SECRETSECRETSECRET");
+        assert!(!m.contains("SECRETSECRET"));
+        assert!(m.starts_with("sk-a"));
+        assert!(m.ends_with("CRET"));
+        assert_eq!(mask_secret("corto"), "*****");
+    }
+
+    #[test]
+    fn test_findings_ndjson_uses_the_common_schema() {
+        let dex = DexFile::parse(&fixture_dex()).unwrap();
+        let ndjson = findings_ndjson(&dex, "/data/app/com.example/base.apk");
+        assert!(!ndjson.is_empty());
+        let mut count = 0usize;
+        for line in ndjson.lines() {
+            let v: Value = serde_json::from_str(line).expect("cada línea debe ser JSON");
+            // Los 19 campos del esquema v1.2 deben existir.
+            for campo in [
+                "ts", "package", "version", "detector", "class", "method", "signal",
+                "java_class", "java_method", "original", "decoded", "kind", "severity",
+                "confidence", "bypassable", "offset", "evidence_file", "evidence_offset",
+                "notes",
+            ] {
+                assert!(v.get(campo).is_some(), "falta el campo {}", campo);
+            }
+            assert_eq!(v["evidence_file"].as_str().unwrap(), "/data/app/com.example/base.apk");
+            count += 1;
+        }
+        assert!(count > 0);
+    }
+
+    #[test]
+    fn test_parse_findings_ndjson_is_tolerant() {
+        let texto = concat!(
+            "{\"detector\":\"magisk\",\"signal\":\"/sbin/.magisk\"}\n",
+            "\n",
+            "esto no es json\n",
+            "{\"detector\":\"crypto_api\",\"java_class\":\"com.x.A\",\"confidence\":80,\"offset\":7}\n"
+        );
+        let v = parse_findings_ndjson(texto);
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].detector, "magisk");
+        assert_eq!(v[1].java_class, "com.x.A");
+        assert_eq!(v[1].confidence, 80);
+        assert_eq!(v[1].offset, 7);
+        // Campos ausentes => defaults, sin pánico.
+        assert!(v[0].java_class.is_empty());
+        assert!(v[0].severity.is_empty());
+    }
+
+    #[test]
+    fn test_merge_findings_deduplicates() {
+        let a = Finding {
+            detector: "magisk".into(),
+            java_class: "com.x.A".into(),
+            original: "/sbin/.magisk".into(),
+            ..Default::default()
+        };
+        let b = a.clone();
+        let c = Finding {
+            detector: "su".into(),
+            ..Default::default()
+        };
+        let merged = merge_findings(vec![a, b], vec![c]);
+        assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn test_ai_findings_mask_credentials_by_default() {
+        let mut b = TestDexBuilder::new();
+        let s_url = b.string("https://api.anthropic.com/v1/messages");
+        let s_key = b.string("sk-ant-api03-AAAABBBBCCCCDDDDEEEE");
+        let s_env = b.string("ANTHROPIC_API_KEY");
+        let t = b.add_type_str(s_url);
+        let p = b.add_proto(s_url, t, &[]);
+        let m = b.add_method(t, p, s_env);
+        let s_field = b.string("k");
+        let f = b.add_field(t, t, s_field);
+        b.add_class(TestClass {
+            class_idx: t as u32,
+            superclass_idx: t as u32,
+            access_flags: 0x0001,
+            source_file_idx: s_url,
+            direct_methods: vec![TestMethod {
+                method_idx: m as u32,
+                access_flags: 0x10001,
+                registers: 1,
+                ins: 1,
+                outs: 0,
+                insns: vec![0x001a, 0x0001, 0x000e],
+            }],
+            virtual_methods: vec![],
+        });
+        let bytes = b.build();
+        let dex = DexFile::parse(&bytes).unwrap();
+
+        let findings = ai_credential_findings(&dex);
+        assert!(findings
+            .iter()
+            .any(|f| f.detector == "net_endpoint" && f.kind.contains("Claude")));
+        assert!(findings.iter().any(|f| f.kind.contains("api_key")));
+        assert!(findings.iter().any(|f| f.kind.contains("env_var")));
+        // La clave NO sale en claro.
+        let joined = findings
+            .iter()
+            .map(|f| f.original.clone())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(!joined.contains("AAAABBBBCCCCDDDDEEEE"));
+        // ...pero sí si se pide explícitamente.
+        let raw = ai_credential_findings_raw(&dex);
+        assert!(raw
+            .iter()
+            .any(|f| f.original == "sk-ant-api03-AAAABBBBCCCCDDDDEEEE"));
     }
 }

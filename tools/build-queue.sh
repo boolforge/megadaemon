@@ -31,8 +31,13 @@
 set -uo pipefail
 
 SLOTS="${MD_BUILD_SLOTS:-2}"
-SHARED_TARGET="${MD_BUILD_TARGET:-/workspace/md-build}"
-LOCKDIR="${MD_BUILD_LOCKDIR:-/workspace/md-build-slots}"
+# v14-bis (AUDIT-OPS-02): /workspace está montado por NFS (nolock, hard, TCP).
+# Medido: un build con CARGO_HOME/CARGO_TARGET_DIR en el NFS tarda 8+ MINUTOS
+# (o falla con "failed to open object file ...rcgu.o" y "database is locked",
+# que NO son bugs de código); el MISMO build con las rutas en disco local tarda
+# 33 SEGUNDOS.  Por defecto la cola usa disco LOCAL.
+SHARED_TARGET="${MD_BUILD_TARGET:-/run/agent-runtime/md/build}"
+LOCKDIR="${MD_BUILD_LOCKDIR:-/run/agent-runtime/md/slots}"
 PER_AGENT="${CARGO_TARGET_DIR_PER_AGENT:-0}"
 AGENT="${MD_AGENT_NAME:-$(basename "${PWD}")}"
 
@@ -92,6 +97,10 @@ done
 cd "$CRATE_DIR" || exit 1
 
 export CARGO_TARGET_DIR="$TARGET_DIR"
+# v14-bis: el índice de crates de cargo también es un SQLite: en NFS da
+# "database is locked".  Se mueve a disco local por defecto.
+export CARGO_HOME="${MD_BUILD_CARGO_HOME:-/run/agent-runtime/md/cargo}"
+mkdir -p "$CARGO_HOME" 2>/dev/null || true
 export CARGO_INCREMENTAL=0
 export CARGO_TERM_COLOR=never
 
