@@ -227,3 +227,52 @@ fn el_informe_de_vision_expone_el_backend_real() {
         .iter()
         .any(|w| w.contains("NNAPI")));
 }
+
+#[test]
+fn la_politica_de_energia_prohibe_el_trabajo_pesado_cuando_toca() {
+    use megadaemon_core::power_policy::{policy_for, PowerState};
+
+    // Batería al 10 % sin cargador → crítico: nada de trabajo pesado.
+    let critico = policy_for(&PowerState {
+        charging: false,
+        capacity_pct: Some(10),
+        battery_temp_c: Some(30.0),
+        cpu_temp_c: Some(40.0),
+        ..Default::default()
+    });
+    assert_eq!(critico.name, "critical");
+    assert!(!critico.allow_heavy, "el trabajo pesado debe quedar prohibido");
+
+    // Batería al 25 % sin cargador → ahorro: tampoco trabajo pesado.
+    let ahorro = policy_for(&PowerState {
+        charging: false,
+        capacity_pct: Some(25),
+        battery_temp_c: Some(30.0),
+        cpu_temp_c: Some(40.0),
+        ..Default::default()
+    });
+    assert_eq!(ahorro.name, "saver");
+    assert!(!ahorro.allow_heavy);
+
+    // Calor → térmico: tampoco.
+    let termico = policy_for(&PowerState {
+        charging: true,
+        capacity_pct: Some(90),
+        battery_temp_c: Some(30.0),
+        cpu_temp_c: Some(70.0),
+        ..Default::default()
+    });
+    assert_eq!(termico.name, "thermal");
+    assert!(!termico.allow_heavy);
+
+    // Con cargador y batería alta → operación completa.
+    let completa = policy_for(&PowerState {
+        charging: true,
+        capacity_pct: Some(88),
+        battery_temp_c: Some(30.0),
+        cpu_temp_c: Some(40.0),
+        ..Default::default()
+    });
+    assert_eq!(completa.name, "performance");
+    assert!(completa.allow_heavy);
+}

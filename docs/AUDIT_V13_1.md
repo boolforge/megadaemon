@@ -302,3 +302,4 @@ Detalles, evidencia y bibliografía: **`docs/NPU_REAL.md`**.
 | F-35 | `dimensions` del `OperandType` era un puntero a un `Vec` temporal ya liberado (formas basura en el driver) | Alta | **Corregido** + test |
 | F-36 | La librería NNAPI se duplicaba entre `npu_bridge.rs` y `npu_nnapi.rs` (dos fuentes de verdad) | Media | **Corregido**: una sola implementación |
 | F-37 | La UI anunciaba «NPU LIVE» en función de `/dev/vertex10`, que no prueba ninguna ejecución | Media | **Corregido**: refleja el backend real |
+| F-38 | `allow_heavy` (política de energía) era un flag decorativo: la VLA/CV se ejecutaba igual con la batería al 10 % | Media | **Corregido**: `/api/run_vla` devuelve `VLA_CV_THROTTLED` con el motivo, y `/api/npu_cv` publica la política vigente |

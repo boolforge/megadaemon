@@ -494,8 +494,15 @@ fn handle_client(mut stream: TcpStream) {
                 send_json(&mut stream, &serde_json::to_value(npu_info).unwrap_or_else(|_| json!({})));
             }
             "/api/npu_cv" => {
+                let (_, pol) = power_policy::current_policy();
                 let rep = npu_cv::analyze_vla_frame_and_accel();
-                send_json(&mut stream, &serde_json::to_value(rep).unwrap_or_else(|_| json!({})));
+                let mut v = serde_json::to_value(rep).unwrap_or_else(|_| json!({}));
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("power_policy".into(), json!(pol.name));
+                    obj.insert("power_allow_heavy".into(), json!(pol.allow_heavy));
+                    obj.insert("power_reason".into(), json!(pol.reason));
+                }
+                send_json(&mut stream, &v);
             }
             "/api/locate_roms" => {
                 let refresh = qs.get("refresh").map(|v| v == "1").unwrap_or(false);
@@ -1044,8 +1051,33 @@ fn handle_client(mut stream: TcpStream) {
             send_json(&mut stream, &json!({"status": "purged", "details": out, "engine": "rust-arm64-v13.0"}));
         }
         "/api/run_vla" => {
+            // v13.2: `allow_heavy` deja de ser decorativo.  Sin cargador y con
+            // la batería baja (política saver/critical) o con calor (thermal),
+            // el trabajo pesado de CV/NPU NO se ejecuta: se responde con el
+            // motivo y la política vigente, sin gastar batería a lo tonto.
+            let (pstate, pol) = power_policy::current_policy();
+            if !pol.allow_heavy {
+                send_json(
+                    &mut stream,
+                    &json!({
+                        "status": "VLA_CV_THROTTLED",
+                        "power_policy": pol.name,
+                        "power_reason": pol.reason,
+                        "battery_pct": pstate.capacity_pct,
+                        "charging": pstate.charging,
+                        "cpu_temp_c": pstate.cpu_temp_c,
+                        "executed": false,
+                    }),
+                );
+                return;
+            }
             let rep = npu_cv::analyze_vla_frame_and_accel();
-            send_json(&mut stream, &json!({"status": "VLA_CV_EXECUTED", "report": rep}));
+            send_json(&mut stream, &json!({
+                "status": "VLA_CV_EXECUTED",
+                "executed": true,
+                "power_policy": pol.name,
+                "report": rep
+            }));
         }
         _ => {
             send_json(
