@@ -977,6 +977,49 @@ fn handle_client(mut stream: TcpStream) {
     let qp = parse_query_params(query);
     match path {
         // ------------------------------------------------------------------
+        // v14 (UI-16 · CRÍTICA) — Intercambio: API key → token de sesión.
+        //
+        // La página pública `GET /` NO lleva el token incrustado (si lo
+        // llevara, cualquiera que alcanzase el puerto obtendría el control
+        // del daemon).  El navegador pide la API key al usuario y la canjea
+        // aquí por un token de sesión.
+        //
+        // El endpoint NO puede exigir el token de sesión (sería un deadlock:
+        // pedir un token para poder entregar un token) → `requires_auth()`
+        // lo exime.  La credencial que lo protege es la API key, que el gate
+        // de API key ya validó antes de llegar aquí.
+        // ------------------------------------------------------------------
+        "/api/session/exchange" => {
+            let provided = body_json
+                .get("api_key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let ok = !provided.is_empty()
+                && cfg.enabled
+                && !cfg.key.is_empty()
+                && provided == cfg.key;
+            if ok {
+                send_json(
+                    &mut stream,
+                    &json!({
+                        "ok": true,
+                        "token": auth_token(),
+                        "expires_hint": "el token pertenece a la instancia; rotarlo reinicia la sesion",
+                    }),
+                );
+            } else {
+                REQ_REJECTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                send_http_response(
+                    &mut stream,
+                    403,
+                    "application/json",
+                    b"{\"ok\":false,\"error\":\"invalid_api_key\",\"hint\":\"la API key no coincide con la configurada en la instancia\"}",
+                );
+            }
+        }
+        // ------------------------------------------------------------------
         // v13.3 — API del motor de sincronización de conversaciones.
         // ------------------------------------------------------------------
         "/api/sync/run" => {
