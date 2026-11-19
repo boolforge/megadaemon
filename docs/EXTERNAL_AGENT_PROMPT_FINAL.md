@@ -255,8 +255,9 @@ Lo que NO se te da, y por qué:
 | `tools/call root_exec` → mkdir + fichero en `incoming/<id>/` | ✅ |
 | `/health` por el túnel | 200 `{"status":"ok",...}` |
 | Web en el móvil | `http://localhost/` (puerto 80) · `:3000` `:3030` `:8080` `:8090` — IPv4 **e** IPv6, 200 con la UI de 89.707 B |
-| Puertos del daemon | `megadaemon-core` en `127.0.0.1:9090` (bind local); los alias los sirve el puente |
-| RAM del móvil | 10,2 GB usados de 10,5 GB → el móvil NO es una máquina de análisis |
+| Puertos del daemon | `megadaemon-core` (v13.4.0) sirve **3000, 3030, 8090 y 9090** en IPv4 (`0.0.0.0`) **e** IPv6 (`[::1]`); el puente local cubre sólo **80 y 8080** |
+| Túnel (público) | `/` → 200 con la UI **sin credenciales**; `/health` → 200; `/api/status` → **401** sin API key (fail-closed) |
+| RAM del móvil | 2,9 GB disponibles (era 0,4 GB al empezar) → el móvil NO es una máquina de análisis |
 
 ## 3. Por qué este prompt y no otro
 
