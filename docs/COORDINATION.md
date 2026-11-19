@@ -11,7 +11,7 @@
 
 | Sesión | Ámbito | Fichero(s) propio(s) | Estado | Commit en `main` | Nota |
 |---|---|---|---|---|---|
-| `458507570102555` (esta) | Capa harness/MCP/sincronización (v13.3+) | `rust-core/src/android.rs`, `rust-core/src/mcp_server.rs`, `rust-core/src/sync.rs`, `rust-core/src/sync_web.rs`, `rust-core/src/cockpit_server.rs`, `rust-core/tests/harness_policy.rs` | ✅ **HECHO** — política de escritura: H-01, H-02 y H-03 corregidos con suite rojo→verde | `ab535d6` | Informe: `docs/AUDIT_HARNESS_V13_4.md`. Suite 118 → **129 tests**, 0 fallos. No toco `lib.rs`, `main.rs` ni `Cargo.toml`. |
+| `458507570102555` (esta) | Capa harness/MCP/sincronización (v13.3+) | `rust-core/src/android.rs`, `rust-core/src/mcp_server.rs`, `rust-core/src/sync.rs`, `rust-core/src/sync_web.rs`, `rust-core/src/cockpit_server.rs`, `rust-core/tests/harness_policy.rs` | ✅ **HECHO** — política de escritura: H-01, H-02 y H-03 corregidos con suite rojo→verde. Además, 2 ideogramas CJK inyectados reparados en mi capa. | `ab535d6` · `72bca7c` · `7e38bdb` | Informe: `docs/AUDIT_HARNESS_V13_4.md`. Suite 118 → **129 tests**, 0 fallos. No toco `lib.rs`, `main.rs` ni `Cargo.toml`. |
 
 ## Bloqueos y choseas abiertas
 
@@ -21,6 +21,8 @@
 | B-2 | `rust-core/src/repo_updates.rs` (2.000 líneas, commit `1db663d`) **no está declarado en `lib.rs`**: nunca se ha compilado, y no puede compilarse porque llama a `crate::apk_inventory::inventory(...)` y **`apk_inventory.rs` no existe en el repositorio**. | Cablear `repo_updates` sin `apk_inventory` rompe el build. La secuencia segura es: primero `apk_inventory.rs` + su `mod` en `lib.rs`, después `repo_updates.rs`. | dueño de `repo_updates` / agente principal |
 | B-3 | Esta sesión no puede cerrar B-2: `lib.rs` y `Cargo.toml` están fuera de su ámbito por instrucción expresa, y `repo_updates.rs` / `apk_inventory.rs` son de otro módulo. | El landmine sigue abierto. | agente principal |
 | B-4 | `apk_inventory.rs` no está en el repo pese a que el agente principal lo cita como fichero ya reescrito por otra sesión. ¿Está en un árbol local sin pushear, o se perdió? | Sin el fichero no se puede cablear `repo_updates`. | agente principal |
+
+| B-5 | **Ideogramas CJK/Cirílico inyectados dentro de frases en español.** Hay 61 caracteres afectados en 9 ficheros de `main`. En mi capa he reparado `rust-core/src/android.rs` ("de una命令" → "de una orden") y `rust-core/src/sync_web.rs` ("sesión，往往" → "sesión suelen"). Quedan fuera de mi ámbito: `docs/AUDIT_V13_1.md`, `docs/LLM_SWITCH_PLAN.md`, `docs/NPU_REAL.md`, `docs/SEERE_V11.md`, `docs/npu-research.md`, `reference/python/gbnf_check.py`, `reference/python/seere_v11.py`, `rust-core/src/providers.rs`. | Texto corrupto en la documentación y en el código de otras sesiones. **Ojo: `rust-core/src/crypto_scan.rs` usa ideogramas a propósito** (decodifica un juego de caracteres CJK): no hay que tocarlo. | dueño de cada fichero |
 
 ## Hallazgos abiertos (documentados, sin tocar)
 
@@ -35,3 +37,4 @@ Detalle y reproducción en `docs/AUDIT_HARNESS_V13_4.md`.
 ## Cremallero
 
 - `458507570102555` — Política del harness: `fs_write` saltaba la confirmación en `/system` con `chmod` (precedencia `||`/`&&`) y su error `needs_confirm` era un contrato muerto; corregido en `ab535d6` con suite rojo→verde en `rust-core/tests/harness_policy.rs` (118 → 129 tests).
+- `458507570102555` — Barrido de ideogramas inyectados: reparados `android.rs` y `sync_web.rs` (`7e38bdb`); los de otras sesiones quedan en B-5.
