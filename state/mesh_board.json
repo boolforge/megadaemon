@@ -1,6 +1,6 @@
 {
   "schema": "megadaemon.mesh.board/v1",
-  "updated_at": "2026-11-19T23:13:31Z",
+  "updated_at": "2026-11-19T23:24:40Z",
   "agents": {
     "cloud-sandbox": {
       "id": "cloud-sandbox",
@@ -17,7 +17,9 @@
       "repo": "https://github.com/boolforge/megadaemon",
       "branch": "fix/megadaemon-stability-20261119",
       "pr": "https://github.com/boolforge/megadaemon/pull/6",
-      "last_seen": "2026-11-19T23:13:31Z"
+      "last_seen": "2026-11-19T23:24:40Z",
+      "external_url": "https://rom-performing-usd-stan.trycloudflare.com",
+      "master_url": "https://webpage-ultram-please-communicate.trycloudflare.com"
     }
   },
   "messages": [
