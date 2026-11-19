@@ -176,6 +176,36 @@ health_on_port() {
     fi
 }
 
+# Sonda de UI (UI-16): el deploy NO se da por bueno si la UI no puede
+# autenticarse.  Con la v14 el servidor ya no incrusta el token en la pagina y
+# POST /api/session/exchange exige un token de sesion que el navegador todavia
+# no tiene => la pagina carga y TODAS las llamadas de datos devuelven 403.
+# Si la pagina trae token vacio Y el exchange no devuelve un token real, el
+# despliegue es un "cockpit vivo pero UI muerta": se hace rollback.
+ui_probe() {
+    p=$1
+    page=$(as_root "toybox wget -q -O - http://127.0.0.1:$p/ 2>/dev/null" 2>/dev/null | tr -d '\r\n')
+    case "$page" in
+        *'MEGADAEMON_TOKEN=""'*)
+            say "la pagina se sirve SIN token (UI-16 abierto)"
+            ;;
+        *'MEGADAEMON_TOKEN='*)
+            say "la pagina trae token de sesion embebido: la UI puede autenticarse"
+            return 0
+            ;;
+        *)
+            say "la pagina no inyecta token: se comprueba el canje API key -> token"
+            ;;
+    esac
+    # El canje solo vale si devuelve un token REAL (no un 200 generico).
+    body=$(as_root "toybox wget -q -O - --post-data='{}' http://127.0.0.1:$p/api/session/exchange 2>/dev/null" 2>/dev/null | tr -d '\r\n')
+    case "$body" in
+        *'"token"'*) say "el canje API key -> token funciona"; return 0 ;;
+        *) say "el canje API key -> token NO devuelve token" ;;
+    esac
+    return 1
+}
+
 verify() {
     say "esperando /health (max ${HEALTH_TIMEOUT}s) en: $PORTS"
     ok_port=$(wait_healthy "$HEALTH_TIMEOUT")
@@ -213,7 +243,17 @@ if [ "$PUSH_ONLY" = "1" ]; then
     say "--no-push: sólo diagnóstico, no se toca nada"
     exit 0
 fi
-deploy_files
+deploy_files || exit 1
 restart
-verify || true
-say "si sigue sin responder, abre el log del móvil: tail -f $LOG"
+if verify; then
+    if ui_probe "$ok_port"; then
+        say "DESPLIEGUE OK (cockpit vivo y UI autenticable)"
+        exit 0
+    fi
+    say "la UI NO puede autenticarse (token vacio y canje roto) => rollback"
+    rollback
+    exit 3
+fi
+rollback
+say "abre el log del móvil: tail -f $LOG"
+exit 2
