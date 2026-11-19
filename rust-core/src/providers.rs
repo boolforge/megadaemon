@@ -7,9 +7,8 @@ use crate::{binwalk_die, cirx_rtl, kaitai_imhex, npu_bridge, provider_catalog, s
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
-use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::Instant;
 
 pub const PROVIDERS_PATH: &str = "/data/user/0/com.agy/files/megadaemon/state/providers.json";
