@@ -575,7 +575,8 @@
       <span class="pill mint mono">v13</span>
     </div>
     <div class="telemetry-strip mono">
-      <span id="hdrModel" class="pill">MINIMAX</span>
+      <span id="hdrModel" class="pill">LOCAL</span>
+      <span id="hdrPower" class="pill" title="Estado de energia / politica activa">BAT --</span>
       <span id="hdrNpu" class="pill">NPU --</span>
       <span id="hdrTemp">--C</span>
     </div>
@@ -896,6 +897,8 @@
           <button class="btn sm cyan" onclick="saveProviderKey(true)">SET DEFAULT</button>
         </div>
         <div style="overflow-x:auto;">
+          <div id="retiredModelsWarn" style="display:none;flex-wrap:wrap;gap:6px;margin-bottom:10px;"></div>
+          <div id="powerStateBox" class="mono" style="font-size:11px;opacity:.8;margin-bottom:10px;"></div>
           <table class="data-table mono" id="providersTable">
             <thead>
               <tr><th>ID</th><th>Modelo</th><th>Estado</th><th>Accion</th></tr>
@@ -1017,7 +1020,7 @@ async function loadProviders() {
   try {
     const data = await apiGet("/api/providers");
     STATE.providers = data.providers || [];
-    STATE.defaultModel = data.default_model || "minimax-m2.7";
+    STATE.defaultModel = data.default_model || "local-seere";
 
     const sel = document.getElementById("modelSelect");
     const vsel = document.getElementById("vaultProviderId");
@@ -1059,6 +1062,18 @@ async function loadProviders() {
       sel.value = prev;
     } else {
       sel.value = STATE.defaultModel;
+    }
+    // Modelos RETIRADOS: se avisa en la UI en vez de fallar en silencio
+    // (MiniMax M2.5/M2.7 se retiraron el 2026-11-18; GitHub Models el
+    //  2026-07-30).
+    if (data.retired && data.retired.length) {
+      const warn = document.getElementById("retiredModelsWarn");
+      if (warn) {
+        warn.innerHTML = data.retired.map(r =>
+          '<div class="pill amber" title="' + escHtml(r.note) + '">' +
+          escHtml(r.model) + " — RETIRADO</div>").join(" ");
+        warn.style.display = "flex";
+      }
     }
     const hdrModel = document.getElementById("hdrModel");
     if (hdrModel) hdrModel.textContent = sel.value.toUpperCase();
@@ -1638,7 +1653,17 @@ async function refreshHardware() {
     dot.className = "brand-dot" + (b.minimax_configured || b.brain_active ? "" : " degraded");
 
     const hdrNpu = document.getElementById("hdrNpu");
-    if (hdrNpu) hdrNpu.textContent = b.npu_vertex10 ? "NPU LIVE" : "NPU N/A";
+    // v13.2: no se anuncia "NPU LIVE" por que exista /dev/vertex10: se
+    // anuncia el backend que REALMENTE ejecutó el análisis de visión.
+    if (hdrNpu) {
+      const vb = b.npu_vision_backend || "";
+      if (vb.indexOf("accelerator") >= 0) hdrNpu.textContent = "NPU ACCEL";
+      else if (vb.indexOf("gpu") >= 0) hdrNpu.textContent = "GPU NNAPI";
+      else if (vb.indexOf("cpu") >= 0) hdrNpu.textContent = "CPU FALLBACK";
+      else hdrNpu.textContent = "NPU N/A";
+      hdrNpu.title = "Backend real de visión: " + (vb || "desconocido") +
+                     " | offload NPU implementado: " + (b.npu_offload_implemented ? "si" : "no");
+    }
     const hdrTemp = document.getElementById("hdrTemp");
     if (hdrTemp) hdrTemp.textContent = Math.round(b.cpu_temp_c || 0) + "C";
 
@@ -1699,6 +1724,34 @@ async function initCockpit() {
     refreshHardware()
   ]);
   setInterval(refreshHardware, 12000);
+
+  /* ==================== ENERGIA / POLITICA ==================== */
+  async function refreshPower() {
+    try {
+      const p = await apiGet("/api/power");
+      const box = document.getElementById("powerStateBox");
+      if (box) {
+        box.textContent =
+          "POLITICA " + p.policy + " | turnos " + p.max_turns +
+          " | local " + (p.prefer_local ? "SI" : "no") +
+          " | pesado " + (p.allow_heavy ? "SI" : "no") +
+          " | bat " + (p.battery_pct == null ? "--" : p.battery_pct + "%") +
+          " | " + (p.charging ? "CONECTANDO" : "en bateria") +
+          " | cpu " + (p.cpu_temp_c == null ? "--" : p.cpu_temp_c.toFixed(1) + "C") +
+          " | " + (p.governor || "--") +
+          (p.thermal_hot ? " | TERMICO" : "") + " | " + p.reason;
+      }
+      const hp = document.getElementById("hdrPower");
+      if (hp) {
+        const pct = p.battery_pct == null ? "--" : p.battery_pct + "%";
+        hp.textContent = "BAT " + pct + (p.charging ? " CHG" : "");
+        hp.className = "pill " + (p.charging ? "mint" : (p.battery_pct != null && p.battery_pct < 20 ? "amber" : ""));
+        hp.title = p.reason;
+      }
+    } catch (_) {}
+  }
+  refreshPower();
+  setInterval(refreshPower, 20000);
 }
 
 window.addEventListener("DOMContentLoaded", initCockpit);

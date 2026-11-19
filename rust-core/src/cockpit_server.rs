@@ -7,7 +7,7 @@
 use crate::{
     bindiff, binwalk_die, cfg_lifter, cirx_rtl, crypto_scan, deobfuscate, disasm, entropy,
     freezer, frida_dbi, hw_mapper, kaitai_imhex, npu_bridge, npu_cv, pattern, pointers, providers,
-    rea_assistant, rom_locator, seere_v11, shm, snapshot, tile_vram, unifier,
+    rea_assistant, rom_locator, seere_v11, shm, snapshot, tile_vram, unifier, power_policy,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -27,6 +27,40 @@ const STATE_DIR: &str = "/data/user/0/com.agy/files/megadaemon/state";
 const UPLOADS_DIR: &str = "/data/user/0/com.agy/files/megadaemon/uploads";
 const EXTRACTED_DIR: &str = "/data/user/0/com.agy/files/megadaemon/extracted";
 const TEMPLATE_PATH: &str = "/data/user/0/com.agy/files/megadaemon/web/cockpit_template.html";
+
+/// Resuelve el HTML del cockpit.
+///
+/// BUG v13.0: la ruta estaba HARDCODEADA al path de Android, así que fuera
+/// del móvil (o en un checkout del repo) el cockpit servía un
+/// `<h1>...</h1>` de 45 bytes: la UI "no funcionaba" y no había ni un error
+/// visible.  Ahora se prueban, por orden:
+///   1. $MEGADAEMON_WEB_TEMPLATE
+///   2. <dir del binario>/../../web/cockpit_template.html
+///   3. <dir del binario>/web/cockpit_template.html
+///   4. ./web/cockpit_template.html
+///   5. el path de Android de siempre
+pub fn resolve_template() -> Option<String> {
+    let mut cands: Vec<String> = Vec::new();
+    if let Ok(p) = std::env::var("MEGADAEMON_WEB_TEMPLATE") {
+        cands.push(p);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            cands.push(dir.join("../../web/cockpit_template.html").to_string_lossy().into());
+            cands.push(dir.join("../web/cockpit_template.html").to_string_lossy().into());
+            cands.push(dir.join("web/cockpit_template.html").to_string_lossy().into());
+        }
+    }
+    cands.push("web/cockpit_template.html".to_string());
+    cands.push("../web/cockpit_template.html".to_string());
+    cands.push(TEMPLATE_PATH.to_string());
+    for c in cands {
+        if Path::new(&c).exists() {
+            return Some(c);
+        }
+    }
+    None
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunnerState {
@@ -360,8 +394,12 @@ fn handle_client(mut stream: TcpStream) {
     if method == "GET" {
         match path {
             "/" | "/index.html" => {
-                let html = fs::read(TEMPLATE_PATH)
-                    .unwrap_or_else(|_| b"<h1>MegaDaemon v13.0 Zenith Rust Cockpit</h1>".to_vec());
+                let html = resolve_template()
+                    .and_then(|p| fs::read(&p).ok())
+                    .unwrap_or_else(|| {
+                        b"<!doctype html><meta charset=utf-8><h1>MegaDaemon v13.1 Zenith Rust Cockpit</h1>                          <p>cockpit_template.html no encontrado. Rutas probadas: $MEGADAEMON_WEB_TEMPLATE,                           &lt;bin&gt;/../../web/, ./web/. Copia el fichero o exporta MEGADAEMON_WEB_TEMPLATE.</p>"
+                            .to_vec()
+                    });
                 send_http_response(&mut stream, 200, "text/html; charset=utf-8", &html);
             }
             "/api/ping" => {
@@ -370,12 +408,31 @@ fn handle_client(mut stream: TcpStream) {
                     &json!({
                         "status": "online",
                         "daemon": "megadaemon-zenith-rust",
-                        "version": "13.0.0-zenith",
+                        "version": "13.1.0-zenith",
                         "engine": "100%-pure-rust-arm64"
                     }),
                 );
             }
             "/api/providers" => send_json(&mut stream, &providers::list_providers_redacted()),
+            "/api/power" => {
+                let (st, pol) = power_policy::current_policy();
+                send_json(&mut stream, &json!({
+                    "policy": pol.name,
+                    "max_turns": pol.max_turns,
+                    "prefer_local": pol.prefer_local,
+                    "allow_heavy": pol.allow_heavy,
+                    "max_tokens": pol.max_tokens,
+                    "reason": pol.reason,
+                    "charging": st.charging,
+                    "battery_pct": st.capacity_pct,
+                    "battery_temp_c": st.battery_temp_c,
+                    "cpu_temp_c": st.cpu_temp_c,
+                    "thermal_hot": st.thermal_hot,
+                    "system_power_save": st.system_power_save,
+                    "governor": st.governor,
+                    "usb_plugged": st.usb_plugged
+                }));
+            }
             "/api/uploads" => send_json(&mut stream, &list_uploaded_files()),
             "/api/status" => {
                 let mut st = read_json_file_fallback(
@@ -416,10 +473,15 @@ fn handle_client(mut stream: TcpStream) {
                         "brain_active": active,
                         "default_model": vault.default_model,
                         "minimax_configured": vault.providers.iter().any(|p| p.id.starts_with("minimax") && !p.api_key.is_empty()),
-                        "engine": "MegaDaemon Zenith v13.0 Pure Rust Swarm + SEERE v12",
+                        "engine": "MegaDaemon Zenith v13.2 Pure Rust Swarm + SEERE v13.1 + NNAPI INT8",
                         "npu_vertex10": npu.vs4l_present,
                         "eden_dlopen": npu.eden_runtime.dlopen_ok,
                         "kleidiai_dotprod": npu.kleidiai_dotprod_active,
+                        // v13.2: el backend REAL de la vision (no "NPU LIVE"
+                        // por el simple hecho de que exista /dev/vertex10).
+                        "npu_offload_implemented": npu.npu_offload_implemented,
+                        "npu_vision_backend": npu.npu_vision_backend,
+                        "nnapi_device_count": npu.nnapi_device_count,
                         "cpu_freqs_mhz": npu.cpu_freqs_mhz,
                         "cpu_temp_c": npu.cpu_temp_c,
                         "battery_temp_c": npu.battery_temp_c,
@@ -432,8 +494,15 @@ fn handle_client(mut stream: TcpStream) {
                 send_json(&mut stream, &serde_json::to_value(npu_info).unwrap_or_else(|_| json!({})));
             }
             "/api/npu_cv" => {
+                let (_, pol) = power_policy::current_policy();
                 let rep = npu_cv::analyze_vla_frame_and_accel();
-                send_json(&mut stream, &serde_json::to_value(rep).unwrap_or_else(|_| json!({})));
+                let mut v = serde_json::to_value(rep).unwrap_or_else(|_| json!({}));
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("power_policy".into(), json!(pol.name));
+                    obj.insert("power_allow_heavy".into(), json!(pol.allow_heavy));
+                    obj.insert("power_reason".into(), json!(pol.reason));
+                }
+                send_json(&mut stream, &v);
             }
             "/api/locate_roms" => {
                 let refresh = qs.get("refresh").map(|v| v == "1").unwrap_or(false);
@@ -660,8 +729,24 @@ fn handle_client(mut stream: TcpStream) {
                 .as_str()
                 .or_else(|| body_json["attachment_path"].as_str());
 
-            let res = providers::execute_chat(msg, model, att_path, system, max_tokens);
-            send_json(&mut stream, &serde_json::to_value(res).unwrap());
+            // Política de energía: el daemon se adapta al estado del móvil.
+            // Sin cargador y con la batería baja, el presupuesto de turnos y de
+            // tokens baja; con cargador, sube.
+            let (pstate, pol) = power_policy::current_policy();
+            let mut max_tokens = max_tokens.min(pol.max_tokens);
+            if !pol.allow_heavy {
+                // En modo ahorro/termico el techo de tokens se recorta.
+                max_tokens = max_tokens.min(384);
+            }
+            let mut res = providers::execute_chat(msg, model, att_path, system, max_tokens);
+            let mut v = serde_json::to_value(&mut res).unwrap();
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("power_policy".into(), json!(pol.name));
+                obj.insert("power_reason".into(), json!(pol.reason));
+                obj.insert("battery_pct".into(), json!(pstate.capacity_pct));
+                obj.insert("charging".into(), json!(pstate.charging));
+            }
+            send_json(&mut stream, &v);
         }
         "/api/providers" => {
             let id = body_json["id"].as_str().unwrap_or("");
@@ -676,7 +761,7 @@ fn handle_client(mut stream: TcpStream) {
             }
         }
         "/api/providers/test" => {
-            let id = body_json["id"].as_str().unwrap_or("minimax-m2.7");
+            let id = body_json["id"].as_str().unwrap_or("local-seere");
             let rep = providers::test_provider_connection(id);
             send_json(&mut stream, &rep);
         }
@@ -966,8 +1051,33 @@ fn handle_client(mut stream: TcpStream) {
             send_json(&mut stream, &json!({"status": "purged", "details": out, "engine": "rust-arm64-v13.0"}));
         }
         "/api/run_vla" => {
+            // v13.2: `allow_heavy` deja de ser decorativo.  Sin cargador y con
+            // la batería baja (política saver/critical) o con calor (thermal),
+            // el trabajo pesado de CV/NPU NO se ejecuta: se responde con el
+            // motivo y la política vigente, sin gastar batería a lo tonto.
+            let (pstate, pol) = power_policy::current_policy();
+            if !pol.allow_heavy {
+                send_json(
+                    &mut stream,
+                    &json!({
+                        "status": "VLA_CV_THROTTLED",
+                        "power_policy": pol.name,
+                        "power_reason": pol.reason,
+                        "battery_pct": pstate.capacity_pct,
+                        "charging": pstate.charging,
+                        "cpu_temp_c": pstate.cpu_temp_c,
+                        "executed": false,
+                    }),
+                );
+                return;
+            }
             let rep = npu_cv::analyze_vla_frame_and_accel();
-            send_json(&mut stream, &json!({"status": "VLA_CV_EXECUTED", "report": rep}));
+            send_json(&mut stream, &json!({
+                "status": "VLA_CV_EXECUTED",
+                "executed": true,
+                "power_policy": pol.name,
+                "report": rep
+            }));
         }
         _ => {
             send_json(
@@ -1008,7 +1118,7 @@ pub fn run_server(port: u16) -> Result<(), String> {
     println!("==================================================================");
     println!("MEGADAEMON v13.0 ZENITH — 100% PURE RUST COCKPIT SERVER ONLINE");
     println!("  Listen:    http://{}", addr);
-    println!("  Swarm:     MiniMax M2.7/M2.5 + GitHub Models + Free Swarm + SEERE v12");
+    println!("  Swarm:     18 proveedores (2 offline, 2 zero-key, 13 free con key, MiniMax M3.1-Flash/M3) + SEERE v13.1");
     println!("  RE Engine: DiE/Binwalk + Tile VRAM + Kaitai + MBA + CIRX v3.4 + Rizin + Frida");
     println!("  Hardware:  Exynos 2100 NPU (/dev/vertex10) + KleidiAI Cores 4-7");
     println!("==================================================================");

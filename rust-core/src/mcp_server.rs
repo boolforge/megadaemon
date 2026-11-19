@@ -37,7 +37,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "swarm_chat",
-            "description": "Route a prompt to any model in MegaDaemon's Parasitic Swarm (MiniMax, GitHub Models GPT-4.1-mini / DeepSeek-R1, Pollinations, OpenRouter :free, Groq, Cerebras, Gemini, Local SEERE v12).",
+            "description": "Route a prompt to any model in MegaDaemon's Parasitic Swarm (MiniMax M3.1-Flash/M3, Pollinations zero-key, OpenRouter :free, Groq gpt-oss, Google AI Studio Gemini, Cloudflare Workers AI, Z.ai GLM-Flash, local SEERE v13.1).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -110,7 +110,7 @@ fn dispatch_tool(name: &str, args: &Value) -> Value {
     match name {
         "minimax_chat" => {
             let prompt = args["prompt"].as_str().unwrap_or("");
-            let model = args["model"].as_str().unwrap_or("minimax-m2.7");
+            let model = args["model"].as_str().unwrap_or("local-seere");
             let sys = args["system"].as_str();
             let att = args["attachment_path"].as_str();
             let max_tok = args["max_tokens"].as_u64().unwrap_or(1024) as u32;
@@ -127,7 +127,7 @@ fn dispatch_tool(name: &str, args: &Value) -> Value {
         }
         "swarm_chat" => {
             let prompt = args["prompt"].as_str().unwrap_or("");
-            let pid = args["provider_id"].as_str().unwrap_or("minimax-m2.7-fast");
+            let pid = args["provider_id"].as_str().unwrap_or("local-seere");
             let att = args["attachment_path"].as_str();
             let res = providers::execute_chat(prompt, Some(pid), att, None, 1024);
             let txt = format!("[{} | {} ms]\n{}", res.model_name, res.latency_ms, res.reply);

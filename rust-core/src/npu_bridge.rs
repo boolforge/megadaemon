@@ -1,7 +1,8 @@
+use crate::accelerator_policy;
 use serde::{Deserialize, Serialize};
 use std::ffi::{CStr, CString};
 use std::fs;
-use std::os::raw::{c_char, c_int, c_uint, c_void};
+use std::os::raw::c_int;
 use std::path::Path;
 use std::process::Command;
 
@@ -41,6 +42,19 @@ pub struct ExynosNpuTelemetry {
     pub throttle_state: String,
     pub throttle_delay_sec: f32,
     pub hybrid_routing_policy: String,
+    /// ¿Hay un CAMINO REAL de offload al NPU?  (v13.1: honestidad)
+    /// En v13.0 la "hybrid routing policy" era un STRING que prometía
+    /// "Prefill -> Exynos NPU (EDEN/NNAPI)" pero NINGÚN módulo del repo
+    /// invocaba EDEN/VNNI/NNAPI: el NPU era sólo telemetría.  Este flag lo
+    /// dice explícitamente para que la UI no prometa lo que no hay.
+    pub npu_offload_implemented: bool,
+    pub npu_offload_note: String,
+    /// Backend real que ejecutó el análisis de visión (v13.2).
+    pub npu_vision_backend: String,
+    /// Política REAL de aceleradores (JSON embebido) — sustituye al string
+    /// de la "hybrid routing policy" de la v13.0, que no correspondía a ningún
+    /// código ejecutado.
+    pub accelerator_policy: accelerator_policy::AcceleratorPolicy,
 }
 
 fn probe_elf_symbols(lib_path: &str, symbols: &[&str]) -> EdenLibraryProbe {
@@ -82,105 +96,6 @@ fn probe_elf_symbols(lib_path: &str, symbols: &[&str]) -> EdenLibraryProbe {
         dlopen_ok,
         resolved_symbols: resolved,
     }
-}
-
-fn probe_nnapi_devices() -> (u32, Vec<NnapiDeviceInfo>) {
-    let mut devices = Vec::new();
-    let mut num_devices: c_uint = 0;
-
-    let c_lib = match CString::new("/system/lib64/libneuralnetworks.so") {
-        Ok(s) => s,
-        Err(_) => return (0, devices),
-    };
-
-    unsafe {
-        let handle = libc::dlopen(c_lib.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
-        if handle.is_null() {
-            return (0, devices);
-        }
-
-        type GetDeviceCountFn = unsafe extern "C" fn(*mut c_uint) -> c_int;
-        type GetDeviceFn = unsafe extern "C" fn(c_uint, *mut *mut c_void) -> c_int;
-        type GetNameFn = unsafe extern "C" fn(*mut c_void, *mut *const c_char) -> c_int;
-        type GetVersionFn = unsafe extern "C" fn(*mut c_void, *mut *const c_char) -> c_int;
-        type GetTypeFn = unsafe extern "C" fn(*mut c_void, *mut i32) -> c_int;
-
-        let fn_count = libc::dlsym(
-            handle,
-            CStr::from_bytes_with_nul_unchecked(b"ANeuralNetworks_getDeviceCount\0").as_ptr(),
-        );
-        let fn_dev = libc::dlsym(
-            handle,
-            CStr::from_bytes_with_nul_unchecked(b"ANeuralNetworks_getDevice\0").as_ptr(),
-        );
-        let fn_name = libc::dlsym(
-            handle,
-            CStr::from_bytes_with_nul_unchecked(b"ANeuralNetworksDevice_getName\0").as_ptr(),
-        );
-        let fn_ver = libc::dlsym(
-            handle,
-            CStr::from_bytes_with_nul_unchecked(b"ANeuralNetworksDevice_getVersion\0").as_ptr(),
-        );
-        let fn_type = libc::dlsym(
-            handle,
-            CStr::from_bytes_with_nul_unchecked(b"ANeuralNetworksDevice_getType\0").as_ptr(),
-        );
-
-        if !fn_count.is_null() && !fn_dev.is_null() && !fn_name.is_null() {
-            let get_count: GetDeviceCountFn = std::mem::transmute(fn_count);
-            let get_dev: GetDeviceFn = std::mem::transmute(fn_dev);
-            let get_name: GetNameFn = std::mem::transmute(fn_name);
-
-            if get_count(&mut num_devices) == 0 {
-                for idx in 0..num_devices {
-                    let mut dev_ptr: *mut c_void = std::ptr::null_mut();
-                    if get_dev(idx, &mut dev_ptr) == 0 && !dev_ptr.is_null() {
-                        let mut name_ptr: *const c_char = std::ptr::null();
-                        let name = if get_name(dev_ptr, &mut name_ptr) == 0 && !name_ptr.is_null() {
-                            CStr::from_ptr(name_ptr).to_string_lossy().into_owned()
-                        } else {
-                            format!("nnapi-dev-{}", idx)
-                        };
-
-                        let mut version = "1.3".to_string();
-                        if !fn_ver.is_null() {
-                            let get_ver: GetVersionFn = std::mem::transmute(fn_ver);
-                            let mut ver_ptr: *const c_char = std::ptr::null();
-                            if get_ver(dev_ptr, &mut ver_ptr) == 0 && !ver_ptr.is_null() {
-                                version = CStr::from_ptr(ver_ptr).to_string_lossy().into_owned();
-                            }
-                        }
-
-                        let mut dev_type: i32 = 0;
-                        if !fn_type.is_null() {
-                            let get_type: GetTypeFn = std::mem::transmute(fn_type);
-                            let _ = get_type(dev_ptr, &mut dev_type);
-                        }
-
-                        let type_label = match dev_type {
-                            1 => "OTHER".to_string(),
-                            2 => "CPU".to_string(),
-                            3 => "GPU (Mali-G78)".to_string(),
-                            4 => "ACCELERATOR (Exynos NPU / EDEN)".to_string(),
-                            _ => "UNKNOWN".to_string(),
-                        };
-
-                        devices.push(NnapiDeviceInfo {
-                            index: idx,
-                            name,
-                            version,
-                            device_type: dev_type,
-                            type_label,
-                        });
-                    }
-                }
-            }
-        }
-
-        libc::dlclose(handle);
-    }
-
-    (num_devices, devices)
 }
 
 fn check_kleidiai_dotprod() -> (bool, Vec<String>) {
@@ -234,14 +149,28 @@ fn check_kleidiai_dotprod() -> (bool, Vec<String>) {
 }
 
 pub fn read_cpu_and_thermal() -> (Vec<u32>, f32, f32, String, f32) {
-    let mut freqs = Vec::new();
-    for core in 0..8 {
-        let p = format!("/sys/devices/system/cpu/cpu{}/cpufreq/scaling_cur_freq", core);
-        if let Ok(s) = fs::read_to_string(&p) {
-            if let Ok(khz) = s.trim().parse::<u32>() {
-                freqs.push(khz / 1000);
+    // BUG v13.0: `freqs.push` sólo metía los núcleos que se podían leer, así
+    // que si el core0 estaba offline (o no tenía cpufreq) el vector se
+    // desplazaba y la UI atribtaba la frecuencia de un core a otro.  Ahora
+    // el índice ES el número de core (0 si no se pudo leer).
+    let ncpu = std::thread::available_parallelism()
+        .map(|n| n.get().min(16))
+        .unwrap_or(8);
+    let mut freqs: Vec<u32> = Vec::with_capacity(ncpu);
+    for core in 0..ncpu {
+        let mut mhz = 0u32;
+        for p in [
+            format!("/sys/devices/system/cpu/cpu{}/cpufreq/scaling_cur_freq", core),
+            format!("/sys/devices/system/cpu/cpu{}/cpufreq/cpuinfo_max_freq", core),
+        ] {
+            if let Ok(s) = fs::read_to_string(&p) {
+                if let Ok(khz) = s.trim().parse::<u32>() {
+                    mhz = khz / 1000;
+                    break;
+                }
             }
         }
+        freqs.push(mhz);
     }
 
     let mut bat_temp_c: f32 = 32.0;
@@ -257,14 +186,35 @@ pub fn read_cpu_and_thermal() -> (Vec<u32>, f32, f32, String, f32) {
         }
     }
 
+    // BUG v13.0: se tomaba el MAX de las 8 primeras zonas térmicas sin mirar
+    // su tipo: en Android eso incluye el sensor de piel, el cargador o el
+    // modem, y un "max" así puede declarar THROTTLE por el móvil que está en
+    // la mesa.  Ahora se priorizan las zonas de SoC/GPU/CPU.
     let mut cpu_temp_c: f32 = 35.0;
-    for tz in 0..8 {
-        let p = format!("/sys/class/thermal/thermal_zone{}/temp", tz);
+    let mut best_is_soc = false;
+    let zones = fs::read_dir("/sys/class/thermal").map(|it| it.flatten().count()).unwrap_or(16);
+    for tz in 0..zones {
+        let base = format!("/sys/class/thermal/thermal_zone{}", tz);
+        let p = format!("{}/temp", base);
+        let ztype = fs::read_to_string(format!("{}/type", base))
+            .unwrap_or_default()
+            .trim()
+            .to_lowercase();
+        let is_soc = ztype.contains("soc")
+            || ztype.contains("cpu")
+            || ztype.contains("gpu")
+            || ztype.contains("cluster")
+            || ztype.contains("big")
+            || ztype.contains("little");
         if let Ok(s) = fs::read_to_string(&p) {
             if let Ok(v) = s.trim().parse::<f32>() {
                 let c = if v > 1000.0 { v / 1000.0 } else { v };
-                if c > cpu_temp_c && c < 115.0 {
+                if c <= 20.0 || c >= 115.0 {
+                    continue;
+                }
+                if (is_soc && !best_is_soc) || (is_soc == best_is_soc && c > cpu_temp_c) {
                     cpu_temp_c = c;
+                    best_is_soc = is_soc;
                 }
             }
         }
@@ -335,7 +285,19 @@ pub fn probe_exynos_npu() -> ExynosNpuTelemetry {
     let vs4l_node = "/dev/vertex10";
     let vs4l_present = Path::new(vs4l_node).exists();
     let (kleidiai_dotprod_active, ggml_backends) = check_kleidiai_dotprod();
-    let (nnapi_device_count, nnapi_devices) = probe_nnapi_devices();
+    let nnapi_probe = crate::npu_nnapi::probe();
+    let nnapi_device_count = nnapi_probe.nnapi_device_count;
+    let nnapi_devices: Vec<NnapiDeviceInfo> = nnapi_probe
+        .nnapi_devices
+        .iter()
+        .map(|d| NnapiDeviceInfo {
+            index: d.index,
+            name: d.name.clone(),
+            version: d.version.clone(),
+            device_type: d.device_type,
+            type_label: d.type_label.clone(),
+        })
+        .collect();
 
     let eden_runtime = probe_elf_symbols(
         "/vendor/lib64/libeden_wrapper.so",
@@ -382,6 +344,10 @@ pub fn probe_exynos_npu() -> ExynosNpuTelemetry {
         cpu_temp_c,
         throttle_state,
         throttle_delay_sec,
-        hybrid_routing_policy: "Prefill Batch (N>=32): Exynos NPU (EDEN/NNAPI /dev/vertex10) + Mali-G78 Vulkan | Decode (N=1): KleidiAI SDOT Q4_0_8x8_Q8_0 on Cores 4-7".to_string(),
+        hybrid_routing_policy: "v13.2: la politica hibrida es REAL y esta en accelerator_policy::policy(). Resumen: vision (bordes INT8) -> NPU via NNAPI; LLM (decode+prefill) -> CPU con dotprod+i8mm+KleidiAI en cores 4-7; Vulkan/Mali NO para el LLM (medido 2x mas lento en decode en el Galaxy S21); el NPU NO puede ejecutar el LLM (NNAPI no tiene ops de atencion ni formas dinamicas; llama.cpp no tiene backend Exynos).".to_string(),
+        npu_offload_implemented: true,
+        npu_offload_note: "v13.2: S\u{FA} hay offload real. La tuberia de vision INT8 (conv3x3 Sobel + relu + maxpool2x2, forma fija) se compila y ejecuta via NNAPI (libneuralnetworks.so, ABI verificada contra AOSP) sobre el dispositivo ACCELERATOR (NPU del Exynos 2100) cuando esta disponible; si el driver rechaza el modelo se cae a la referencia CPU con la MISMA aritmetica entera y la telemetria lo dice (vision_backend / vision_fallback_reason). El LLM NO va al NPU: es fisicamente imposible con esta API.".to_string(),
+        npu_vision_backend: nnapi_probe.backend.clone(),
+        accelerator_policy: accelerator_policy::policy(),
     }
 }
