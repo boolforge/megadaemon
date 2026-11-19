@@ -28,6 +28,40 @@ const UPLOADS_DIR: &str = "/data/user/0/com.agy/files/megadaemon/uploads";
 const EXTRACTED_DIR: &str = "/data/user/0/com.agy/files/megadaemon/extracted";
 const TEMPLATE_PATH: &str = "/data/user/0/com.agy/files/megadaemon/web/cockpit_template.html";
 
+/// Resuelve el HTML del cockpit.
+///
+/// BUG v13.0: la ruta estaba HARDCODEADA al path de Android, así que fuera
+/// del móvil (o en un checkout del repo) el cockpit servía un
+/// `<h1>...</h1>` de 45 bytes: la UI "no funcionaba" y no había ni un error
+/// visible.  Ahora se prueban, por orden:
+///   1. $MEGADAEMON_WEB_TEMPLATE
+///   2. <dir del binario>/../../web/cockpit_template.html
+///   3. <dir del binario>/web/cockpit_template.html
+///   4. ./web/cockpit_template.html
+///   5. el path de Android de siempre
+pub fn resolve_template() -> Option<String> {
+    let mut cands: Vec<String> = Vec::new();
+    if let Ok(p) = std::env::var("MEGADAEMON_WEB_TEMPLATE") {
+        cands.push(p);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            cands.push(dir.join("../../web/cockpit_template.html").to_string_lossy().into());
+            cands.push(dir.join("../web/cockpit_template.html").to_string_lossy().into());
+            cands.push(dir.join("web/cockpit_template.html").to_string_lossy().into());
+        }
+    }
+    cands.push("web/cockpit_template.html".to_string());
+    cands.push("../web/cockpit_template.html".to_string());
+    cands.push(TEMPLATE_PATH.to_string());
+    for c in cands {
+        if Path::new(&c).exists() {
+            return Some(c);
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunnerState {
     pub status: String,
@@ -360,8 +394,12 @@ fn handle_client(mut stream: TcpStream) {
     if method == "GET" {
         match path {
             "/" | "/index.html" => {
-                let html = fs::read(TEMPLATE_PATH)
-                    .unwrap_or_else(|_| b"<h1>MegaDaemon v13.0 Zenith Rust Cockpit</h1>".to_vec());
+                let html = resolve_template()
+                    .and_then(|p| fs::read(&p).ok())
+                    .unwrap_or_else(|| {
+                        b"<!doctype html><meta charset=utf-8><h1>MegaDaemon v13.1 Zenith Rust Cockpit</h1>                          <p>cockpit_template.html no encontrado. Rutas probadas: $MEGADAEMON_WEB_TEMPLATE,                           &lt;bin&gt;/../../web/, ./web/. Copia el fichero o exporta MEGADAEMON_WEB_TEMPLATE.</p>"
+                            .to_vec()
+                    });
                 send_http_response(&mut stream, 200, "text/html; charset=utf-8", &html);
             }
             "/api/ping" => {
