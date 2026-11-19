@@ -24,12 +24,22 @@ Las tres sesiones de este workspace comparten sistema de ficheros, así que
 **cualquier agente de la flota las lee localmente**:
 
 ```sh
+# ÚNICO SITIO donde viven los valores reales (0600, dir 0700, FUERA del repo):
 cat /workspace/md-secrets/instance.env
-# MEGADAEMON_API_KEY=mdaemon_sk_live_...
-# MEGADAEMON_COCKPIT_TOKEN=...
-# MEGADAEMON_URL=https://webpage-ultram-please-communicate.trycloudflare.com
-# MEGADAEMON_MCP=https://webpage-ultram-please-communicate.trycloudflare.com/mcp
-```
+#   MEGADAEMON_API_KEY=...        (API key de la instancia)
+#   MEGADAEMON_COCKPIT_TOKEN=...   (token de escritura)
+#   MEGADAEMON_URL=...            (URL base)
+#   MEGADAEMON_MCP=...            (endpoint MCP, JSON-RPC 2.0)
+#
+# Este documento es PÚBLICO: aquí NO se escribe ningún valor, ni de ejemplo.
+# Si necesitas el valor de verdad, lelo del fichero de arriba. Si lo copias a
+# un chat, a un log o a un commit, queda filtrado: rotarlo es entonces
+# obligatorio (mismo criterio que el token de GitHub).
+#
+# Clave POR AGENTE (revocable, para agentes externos): la que se le da a un
+# agente que no es de esta flota es `/workspace/md-secrets/agent_external_api.key`
+# y su línea correspondiente en el registro `megadaemon_api.keys` del móvil.
+# Se revoca quitando su línea; la clave principal no se toca.
 
 Cabeceras obligatorias en **cada** llamada:
 
