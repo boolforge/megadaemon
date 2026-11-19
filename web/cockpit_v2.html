@@ -1,0 +1,1847 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a0e14">
+<meta name="color-scheme" content="dark light">
+<meta name="description" content="MegaDaemon v14 · cockpit: resumen, nodos, tareas, agente, delegación, alertas, RE y ficheros compartidos.">
+<title>MEGADAEMON v14 · Cockpit</title>
+<!-- Sin CDN: el móvil va justo de datos y puede estar sin red. -->
+<link rel="stylesheet" href="webui_v2.css">
+</head>
+<body>
+<a class="skip-link" href="#view-resumen">Saltar al contenido</a>
+
+<div class="app">
+
+  <!-- ══════════════════ CABECERA GLOBAL ══════════════════ -->
+  <header class="appbar" role="banner">
+    <div class="appbar__brand">
+      <span class="brand-dot" id="brand-dot" aria-hidden="true"></span>
+      <span>MEGADAEMON</span>
+    </div>
+
+    <div class="appbar__group">
+      <label class="sr-only" for="node-select">Nodo activo</label>
+      <select class="node-select" id="node-select" title="Nodo activo (destino de las acciones del bus)">
+        <option value="">esta instancia</option>
+      </select>
+      <span class="chip chip--ghost" id="chip-bus" title="Estado del bus de coordinación">bus: —</span>
+      <span class="chip chip--ghost" id="chip-master" title="Rol de esta instancia">rol: —</span>
+    </div>
+
+    <div class="appbar__spacer"></div>
+
+    <div class="appbar__group">
+      <span class="clock" id="clock" title="Última sincronización">—</span>
+      <button class="btn btn--icon btn--ghost" id="btn-theme" aria-label="Cambiar tema" title="Tema claro / oscuro">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>
+      <button class="btn btn--icon btn--ghost" id="btn-refresh" aria-label="Refrescar vista" title="Refrescar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
+      </button>
+      <button class="btn btn--icon btn--ghost" id="btn-palette" aria-label="Abrir command palette" title="Command palette (Ctrl+K)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ══════════════════ VISTAS ══════════════════ -->
+  <main class="views" id="views">
+
+    <!-- ─────────── 1. RESUMEN ─────────── -->
+    <section class="view" id="view-resumen" role="tabpanel" aria-labelledby="tab-resumen" tabindex="-1">
+      <div class="view__head">
+        <h1 class="view__title">Resumen</h1>
+        <span class="view__subtitle" id="resumen-sub">cargando estado real del daemon…</span>
+      </div>
+
+      <div id="resumen-alert"></div>
+
+      <div class="grid grid--stats" id="resumen-stats"></div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Estado del bus de coordinación</h2>
+          <span class="badge" id="resumen-bus-badge">—</span>
+        </div>
+        <div id="resumen-bus"></div>
+      </div>
+
+      <div class="grid grid--wide">
+        <div class="card">
+          <div class="card__head">
+            <h2 class="card__title">Alertas activas</h2>
+            <button class="btn btn--sm btn--ghost" data-goto="alertas">Ver todas</button>
+          </div>
+          <div id="resumen-alertas"></div>
+        </div>
+        <div class="card">
+          <div class="card__head">
+            <h2 class="card__title">Cola pendiente</h2>
+            <button class="btn btn--sm btn--ghost" data-goto="tablero">Ver tablero</button>
+          </div>
+          <div id="resumen-cola"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Dispositivo y energía</h2></div>
+        <dl class="kv" id="resumen-dispositivo"></dl>
+      </div>
+    </section>
+
+    <!-- ─────────── 2. NODOS ─────────── -->
+    <section class="view" id="view-nodos" role="tabpanel" aria-labelledby="tab-nodos" tabindex="-1">
+      <div class="view__head">
+        <h1 class="view__title">Nodos</h1>
+        <span class="view__subtitle" id="nodos-sub">instancias conectadas al bus</span>
+      </div>
+
+      <div id="nodos-bus"></div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Instancias</h2>
+          <button class="btn btn--sm" id="btn-nodes-refresh">Recargar</button>
+        </div>
+        <div id="nodos-lista"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Acciones sobre el bus</h2></div>
+
+        <div class="tabs" role="tablist" aria-label="Acción del bus">
+          <button class="tabs__btn" role="tab" aria-selected="true" data-bus-tab="assign">Asignar tarea</button>
+          <button class="tabs__btn" role="tab" aria-selected="false" data-bus-tab="message">Enviar mensaje</button>
+          <button class="tabs__btn" role="tab" aria-selected="false" data-bus-tab="migrate">Migración</button>
+        </div>
+
+        <div class="mt-3" data-bus-pane="assign">
+          <div class="field">
+            <label class="field__label" for="assign-node">Nodo destino</label>
+            <input class="input" id="assign-node" placeholder="id del nodo (o el del selector de arriba)">
+          </div>
+          <div class="field">
+            <label class="field__label" for="assign-kind">Tipo de tarea</label>
+            <input class="input" id="assign-kind" value="sync.local" list="known-kinds">
+            <datalist id="known-kinds"></datalist>
+          </div>
+          <div class="field">
+            <label class="field__label" for="assign-cap">Capacidad requerida (opcional)</label>
+            <input class="input" id="assign-cap" placeholder="reverse, firma, npu…">
+          </div>
+          <div class="field">
+            <label class="field__label" for="assign-payload">Carga útil (JSON)</label>
+            <textarea class="textarea mono" id="assign-payload">{}</textarea>
+          </div>
+          <button class="btn btn--primary" id="btn-assign">Asignar al nodo</button>
+        </div>
+
+        <div class="mt-3 hidden" data-bus-pane="message">
+          <div class="field">
+            <label class="field__label" for="msg-node">Nodo destino</label>
+            <input class="input" id="msg-node" placeholder="id del nodo">
+          </div>
+          <div class="field">
+            <label class="field__label" for="msg-text">Mensaje</label>
+            <textarea class="textarea" id="msg-text" placeholder="texto para el nodo"></textarea>
+          </div>
+          <div class="field">
+            <label class="field__label" for="msg-data">Datos adjuntos (base64, opcional)</label>
+            <textarea class="textarea mono" id="msg-data" placeholder="aGVsbG8="></textarea>
+          </div>
+          <button class="btn btn--primary" id="btn-message">Enviar mensaje</button>
+        </div>
+
+        <div class="mt-3 hidden" data-bus-pane="migrate">
+          <div class="field">
+            <label class="field__label" for="migrate-version">Versión objetivo</label>
+            <input class="input" id="migrate-version" placeholder="vacío = la versión de este binario">
+          </div>
+          <button class="btn btn--primary" id="btn-migrate">Pedir plan de migración</button>
+          <div class="mt-3" id="migrate-out"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Tareas publicadas y claims</h2></div>
+        <div id="nodos-tasks"></div>
+      </div>
+    </section>
+
+    <!-- ─────────── 3. TABLERO DE TAREAS ─────────── -->
+    <section class="view" id="view-tablero" role="tabpanel" aria-labelledby="tab-tablero" tabindex="-1">
+      <div class="view__head">
+        <h1 class="view__title">Tablero de tareas</h1>
+        <span class="view__subtitle" id="tablero-sub">cola local y cola del tablero</span>
+      </div>
+
+      <div class="grid grid--stats" id="tablero-stats"></div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Cola</h2>
+          <div class="btn-row">
+            <button class="btn btn--sm" id="btn-task-run">Ejecutar lote</button>
+            <button class="btn btn--sm" id="btn-task-export">Exportar</button>
+            <button class="btn btn--sm" id="btn-task-import">Importar</button>
+            <input type="file" id="task-import-file" accept="application/json,.json" class="hidden">
+          </div>
+        </div>
+        <div id="tablero-lista"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Encolar tarea</h2></div>
+        <div class="field">
+          <label class="field__label" for="task-kind">Tipo</label>
+          <input class="input" id="task-kind" list="known-kinds-2" placeholder="sync.local">
+          <datalist id="known-kinds-2"></datalist>
+        </div>
+        <div class="field">
+          <label class="field__label" for="task-priority">Prioridad (0-9)</label>
+          <input class="input" id="task-priority" type="number" min="0" max="9" value="5">
+        </div>
+        <div class="field">
+          <label class="field__label" for="task-payload">Carga útil (JSON)</label>
+          <textarea class="textarea mono" id="task-payload">{}</textarea>
+        </div>
+        <button class="btn btn--primary" id="btn-task-submit">Encolar</button>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Journal (auditoría)</h2></div>
+        <div id="tablero-journal"></div>
+      </div>
+    </section>
+
+    <!-- ─────────── 4. AGENTE ─────────── -->
+    <section class="view" id="view-agente" role="tabpanel" aria-labelledby="tab-agente" tabindex="-1">
+      <div class="view__head">
+        <h1 class="view__title">Agente</h1>
+        <span class="view__subtitle">objetivo → plan → ejecución</span>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Objetivo</h2>
+          <span class="chip" id="agente-source-chip">origen: —</span>
+        </div>
+        <div class="field">
+          <label class="field__label" for="agente-goal">¿Qué quieres que haga el daemon?</label>
+          <textarea class="textarea" id="agente-goal" placeholder="sincroniza mis conversaciones y busca las de ayer"></textarea>
+          <span class="field__hint">El planificador usa el LLM local si está disponible; si no, cae en la heurística determinista (0 tokens).</span>
+        </div>
+        <div class="row">
+          <label class="switch small"><input type="checkbox" id="agente-prefer-llm" checked> preferir LLM local</label>
+        </div>
+        <div class="btn-row mt-3">
+          <button class="btn btn--primary" id="btn-plan">Planificar</button>
+          <button class="btn" id="btn-run">Planificar y ejecutar</button>
+        </div>
+        <div class="mt-3" id="agente-plan"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Proveedores y modelos</h2>
+          <button class="btn btn--sm btn--ghost" id="btn-llm-refresh">Recargar</button>
+        </div>
+        <div id="agente-routing"></div>
+        <div class="table-wrap mt-3" id="agente-providers"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Consumo por proveedor</h2></div>
+        <div id="agente-consumo"></div>
+      </div>
+    </section>
+
+    <!-- ─────────── 5. DELEGACIÓN ─────────── -->
+    <section class="view" id="view-delegacion" role="tabpanel" aria-labelledby="tab-delegacion" tabindex="-1">
+      <div class="view__head">
+        <h1 class="view__title">Delegación</h1>
+        <span class="view__subtitle">cuentas gratuitas, cuota y reparto</span>
+      </div>
+
+      <div id="delegacion-alert"></div>
+      <div class="grid grid--stats" id="delegacion-stats"></div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Cuentas</h2>
+          <button class="btn btn--sm btn--ghost" id="btn-deleg-refresh">Recargar</button>
+        </div>
+        <div class="table-wrap" id="delegacion-cuentas"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Plan de reparto</h2></div>
+        <div class="table-wrap" id="delegacion-plan"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Ajustes propuestos por el motor</h2>
+          <button class="btn btn--sm btn--primary" id="btn-apply-adjustments">Aplicar todos</button>
+        </div>
+        <div id="delegacion-ajustes"></div>
+      </div>
+    </section>
+
+    <!-- ─────────── 6. ALERTAS ─────────── -->
+    <section class="view" id="view-alertas" role="tabpanel" aria-labelledby="tab-alertas" tabindex="-1">
+      <div class="view__head">
+        <h1 class="view__title">Alertas</h1>
+        <span class="view__subtitle" id="alertas-sub">reglas, dedup y acuse</span>
+      </div>
+
+      <div class="grid grid--stats" id="alertas-stats"></div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Canal de entrega</h2>
+          <button class="btn btn--sm" id="btn-alerts-check">Evaluar reglas</button>
+        </div>
+        <div id="alertas-canal"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Alertas activas</h2></div>
+        <div id="alertas-lista"></div>
+      </div>
+    </section>
+
+    <!-- ─────────── 7. RE / APPS ─────────── -->
+    <section class="view" id="view-re" role="tabpanel" aria-labelledby="tab-re" tabindex="-1">
+      <div class="view__head">
+        <h1 class="view__title">RE / Apps</h1>
+        <span class="view__subtitle">inventario, DEX, anti-root y firma</span>
+      </div>
+
+      <div class="grid grid--stats" id="re-stats"></div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">APKs instaladas</h2>
+          <button class="btn btn--sm btn--ghost" id="btn-re-refresh">Refrescar inventario</button>
+        </div>
+        <div id="re-apps"></div>
+      </div>
+
+      <div class="grid grid--wide">
+        <div class="card">
+          <div class="card__head"><h2 class="card__title">DEX y anti-root</h2></div>
+          <div id="re-dex"></div>
+          <div class="field mt-3">
+            <label class="field__label" for="re-apk-path">Ruta de una APK</label>
+            <input class="input mono" id="re-apk-path" placeholder="/data/app/.../base.apk">
+          </div>
+          <div class="btn-row">
+            <button class="btn btn--sm" id="btn-re-analyze">Analizar APK</button>
+            <button class="btn btn--sm" id="btn-re-rootstatus">Ver estado anti-root</button>
+          </div>
+          <div class="mt-3" id="re-out"></div>
+        </div>
+
+        <div class="card">
+          <div class="card__head"><h2 class="card__title">Vault de firma</h2></div>
+          <div id="re-vault"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Exportación / importación</h2></div>
+        <div id="re-export"></div>
+      </div>
+    </section>
+
+    <!-- ─────────── 8. ARCHIVOS COMPARTIDOS ─────────── -->
+    <section class="view" id="view-archivos" role="tabpanel" aria-labelledby="tab-archivos" tabindex="-1">
+      <div class="view__head">
+        <h1 class="view__title">Archivos compartidos</h1>
+        <span class="view__subtitle" id="archivos-sub">vault cifrado + MANIFEST.ndjson</span>
+      </div>
+
+      <div class="grid grid--stats" id="archivos-stats"></div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Inventario del vault</h2>
+          <button class="btn btn--sm btn--ghost" id="btn-share-refresh">Recargar</button>
+        </div>
+        <div class="table-wrap" id="archivos-lista"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Subir</h2></div>
+        <div class="field">
+          <label class="field__label" for="share-path">Ruta en el vault</label>
+          <input class="input mono" id="share-path" placeholder="informes/2026-11-19.txt">
+        </div>
+        <div class="field">
+          <label class="field__label" for="share-file">Fichero</label>
+          <input class="input" id="share-file" type="file">
+          <span class="field__hint" id="share-hint">Se sube por trozos de 64 KiB; cada trozo y el fichero completo se verifican con sha256.</span>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn--primary" id="btn-share-upload">Subir por trozos</button>
+          <button class="btn" id="btn-share-upload-one">Subir de una vez</button>
+        </div>
+        <div class="mt-3" id="share-progress"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">MANIFEST.ndjson</h2></div>
+        <pre id="share-manifest" aria-label="Manifiesto de ficheros compartidos">(sin manifiesto)</pre>
+      </div>
+    </section>
+
+    <!-- ─────────── 9. SISTEMA ─────────── -->
+    <section class="view" id="view-sistema" role="tabpanel" aria-labelledby="tab-sistema" tabindex="-1">
+      <div class="view__head">
+        <h1 class="view__title">Sistema</h1>
+        <span class="view__subtitle">bucle de auto-mejora, API v2 y auth</span>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Bucle agéntico local</h2></div>
+        <div id="sistema-ciclo"></div>
+      </div>
+
+      <div class="grid grid--wide">
+        <div class="card">
+          <div class="card__head"><h2 class="card__title">Notas de aprendizaje</h2></div>
+          <div id="sistema-notas"></div>
+        </div>
+        <div class="card">
+          <div class="card__head"><h2 class="card__title">Ajustes pendientes</h2></div>
+          <div id="sistema-ajustes"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">API v2</h2>
+          <button class="btn btn--sm btn--ghost" id="btn-routes-refresh">Recargar</button>
+        </div>
+        <div class="table-wrap" id="sistema-rutas"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Autenticación</h2></div>
+        <div id="sistema-auth"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ══════════════════ NAVEGACIÓN ══════════════════ -->
+  <nav class="tabbar" id="tabbar" role="tablist" aria-label="Vistas del cockpit">
+    <button class="tabbar__btn" role="tab" id="tab-resumen" data-view="resumen" aria-selected="true" aria-controls="view-resumen">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 13h8V3H3zM13 21h8v-8h-8zM13 3v6h8V3zM3 21h8v-6H3z"/></svg><span>Resumen</span>
+    </button>
+    <button class="tabbar__btn" role="tab" id="tab-nodos" data-view="nodos" aria-selected="false" aria-controls="view-nodos">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M12 7.5v5M12 12.5 6.5 17M12 12.5 17.5 17"/></svg><span>Nodos</span>
+    </button>
+    <button class="tabbar__btn" role="tab" id="tab-tablero" data-view="tablero" aria-selected="false" aria-controls="view-tablero">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Tareas</span>
+    </button>
+    <button class="tabbar__btn" role="tab" id="tab-agente" data-view="agente" aria-selected="false" aria-controls="view-agente">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M8.5 13h.01M15.5 13h.01M9.5 16h5"/></svg><span>Agente</span>
+    </button>
+    <button class="tabbar__btn" role="tab" id="tab-delegacion" data-view="delegacion" aria-selected="false" aria-controls="view-delegacion">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="7" cy="7" r="2.5"/><circle cx="17" cy="17" r="2.5"/><path d="M9.5 7H14a3 3 0 0 1 3 3v4.5"/></svg><span>Delegación</span>
+    </button>
+    <button class="tabbar__btn" role="tab" id="tab-alertas" data-view="alertas" aria-selected="false" aria-controls="view-alertas">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3a6 6 0 0 0-6 6c0 5-2 6-2 6h16s-2-1-2-6a6 6 0 0 0-6-6zM10.5 20a2 2 0 0 0 3 0"/></svg><span>Alertas</span>
+    </button>
+    <button class="tabbar__btn" role="tab" id="tab-re" data-view="re" aria-selected="false" aria-controls="view-re">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m14 3 7 7-9 9H5v-7z"/><path d="m12 5 7 7"/></svg><span>RE</span>
+    </button>
+    <button class="tabbar__btn" role="tab" id="tab-archivos" data-view="archivos" aria-selected="false" aria-controls="view-archivos">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>Archivos</span>
+    </button>
+    <button class="tabbar__btn" role="tab" id="tab-sistema" data-view="sistema" aria-selected="false" aria-controls="view-sistema">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></svg><span>Sistema</span>
+    </button>
+  </nav>
+</div>
+
+<!-- ══════════════════ TOASTS ══════════════════ -->
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<!-- ══════════════════ MODAL ══════════════════ -->
+<div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="modal__panel">
+    <h2 class="modal__title" id="modal-title">Confirmar</h2>
+    <div id="modal-body"></div>
+    <div class="modal__foot">
+      <button class="btn btn--ghost" id="modal-cancel">Cancelar</button>
+      <button class="btn btn--primary" id="modal-ok">Aceptar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════ COMMAND PALETTE ══════════════════ -->
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+  <div class="palette__panel">
+    <input class="palette__input" id="palette-input" type="text" placeholder="Buscar acción o vista…  (Ctrl+K)" autocomplete="off" aria-controls="palette-list" aria-expanded="true">
+    <ul class="palette__list" id="palette-list" role="listbox" aria-label="Acciones"></ul>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ===========================================================================
+   MEGADAEMON v14 · cockpit v2
+   ---------------------------------------------------------------------------
+   REGLAS DE ESTE FICHERO
+   1. Una vista = una llamada a la API v2 (agregadores).  Nada de 20 fetch.
+   2. Los endpoints se escriben LITERALES en cada `fetch("...")`: es lo que
+      permite validar la UI contra la tabla de rutas del daemon
+      (`webui::api_v2_routes`) con un test de Rust.
+   3. Nada de datos inventados: si el daemon no tiene el dato, se pinta el
+      estado real ("tablero no desplegado", "sin inventario", etc.).
+   4. Auth en dos pasos: API key (X-API-Key) + token de sesión
+      (X-Seere-Auth-Token) obtenido con POST /api/session/exchange.
+   =========================================================================== */
+
+/* ── Utilidades DOM ─────────────────────────────────────────────────────── */
+const $ = (sel, root) => (root || document).querySelector(sel);
+const $$ = (sel, root) => Array.prototype.slice.call((root || document).querySelectorAll(sel));
+
+function esc(v) {
+  if (v === null || v === undefined) return "";
+  return String(v)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function fmtBytes(n) {
+  if (n === null || n === undefined) return "—";
+  const u = ["B", "KiB", "MiB", "GiB"];
+  let i = 0, v = Number(n);
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return (i === 0 ? v : v.toFixed(1)) + " " + u[i];
+}
+function fmtAgo(epochSec) {
+  if (!epochSec) return "nunca";
+  const d = Math.floor(Date.now() / 1000) - Number(epochSec);
+  if (d < 0) return "ahora";
+  if (d < 60) return "hace " + d + " s";
+  if (d < 3600) return "hace " + Math.floor(d / 60) + " min";
+  if (d < 86400) return "hace " + Math.floor(d / 3600) + " h";
+  return "hace " + Math.floor(d / 86400) + " d";
+}
+function fmtWhen(iso) {
+  if (!iso) return "—";
+  const t = Date.parse(iso);
+  if (isNaN(t)) return String(iso);
+  return new Date(t).toLocaleString();
+}
+function pct(v) { return (v === null || v === undefined) ? "—" : Number(v).toFixed(1) + " %"; }
+
+/* ── Estado global ──────────────────────────────────────────────────────── */
+const state = {
+  apiKey: localStorage.getItem("md_api_key") || "",
+  token: sessionStorage.getItem("md_token") || (window.MEGADAEMON_TOKEN || ""),
+  theme: localStorage.getItem("md_theme") || "auto",
+  view: "resumen",
+  node: "",
+  data: {},
+  lastSync: null,
+  timer: null,
+  busy: false
+};
+
+const VIEW_LOADERS = {
+  resumen: loadResumen,
+  nodos: loadNodos,
+  tablero: loadTablero,
+  agente: loadAgente,
+  delegacion: loadDelegacion,
+  alertas: loadAlertas,
+  re: loadRe,
+  archivos: loadArchivos,
+  sistema: loadSistema
+};
+
+/* ── Autenticación ──────────────────────────────────────────────────────── */
+function authHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  if (state.apiKey) h["X-API-Key"] = state.apiKey;
+  if (state.token) h["X-Seere-Auth-Token"] = state.token;
+  return h;
+}
+
+/** Pide la API key al usuario (modal) y la guarda. */
+function askApiKey() {
+  return new Promise(function (resolve) {
+    const body = $('#modal-body');
+    body.innerHTML =
+      '<div class="notice notice--warn"><div><div class="notice__title">Falta la API key</div>' +
+      '<div>El daemon exige <code>X-API-Key</code> fuera de loopback. Pégala aquí; se guarda en este navegador (localStorage) y no se envía a ningún sitio más que al propio daemon.</div></div></div>' +
+      '<div class="field"><label class="field__label" for="api-key-input">API key</label>' +
+      '<input class="input mono" id="api-key-input" type="password" autocomplete="off" placeholder="clave configurada en el daemon"></div>';
+    $('#modal-title').textContent = "Autenticación requerida";
+    const ok = $('#modal-ok');
+    ok.textContent = "Guardar y continuar";
+    ok.onclick = function () {
+      const v = ($('#api-key-input') && $('#api-key-input').value || "").trim();
+      closeModal();
+      if (v) {
+        state.apiKey = v;
+        localStorage.setItem("md_api_key", v);
+        resolve(v);
+      } else {
+        resolve("");
+      }
+    };
+    $('#modal-cancel').onclick = function () { closeModal(); resolve(""); };
+    openModal();
+    setTimeout(function () { const i = $('#api-key-input'); if (i) i.focus(); }, 60);
+  });
+}
+
+/** Intercambia la API key por un token de sesión. */
+async function exchangeToken(apiKey) {
+  try {
+    const res = await fetch("/api/session/exchange", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+      body: JSON.stringify({ api_key: apiKey })
+    });
+    const data = await res.json();
+    if (data && data.ok && data.token) {
+      state.token = data.token;
+      sessionStorage.setItem("md_token", data.token);
+      return true;
+    }
+  } catch (e) { /* el daemon puede no tener exchange: se sigue con la API key */ }
+  return false;
+}
+
+/** Garantiza que hay credenciales; devuelve true si se pudo. */
+async function ensureSession() {
+  if (!state.apiKey) {
+    const key = await askApiKey();
+    if (!key) return false;
+  }
+  await exchangeToken(state.apiKey);
+  return true;
+}
+
+/**
+ * Ejecuta una llamada y reintenta una vez si el daemon pide autenticación.
+ * El `fetch` va LITERAL en el call-site: así la UI se puede validar contra
+ * la tabla de rutas del daemon.
+ */
+async function apiCall(fn) {
+  let res = await fn();
+  if (res.status === 401 || res.status === 403) {
+    const ok = await ensureSession();
+    if (!ok) throw new Error("Sin credenciales: el daemon devolvió " + res.status);
+    res = await fn();
+  }
+  let body = null;
+  try { body = await res.json(); } catch (e) { body = null; }
+  if (!res.ok) {
+    const hint = (body && (body.hint || body.detail || body.error)) || "";
+    throw new Error("HTTP " + res.status + (hint ? " · " + hint : ""));
+  }
+  return body;
+}
+
+/* ── Toasts ─────────────────────────────────────────────────────────────── */
+function toast(kind, title, detail) {
+  const box = $('#toasts');
+  const el = document.createElement("div");
+  el.className = "toast toast--" + (kind || "info");
+  el.innerHTML =
+    '<div class="toast__body"><div class="toast__title">' + esc(title) + '</div>' +
+    (detail ? '<div class="toast__detail">' + esc(detail) + '</div>' : "") + '</div>' +
+    '<button class="toast__close" aria-label="Cerrar">×</button>';
+  el.querySelector(".toast__close").onclick = function () { el.remove(); };
+  box.appendChild(el);
+  setTimeout(function () { if (el.parentNode) el.remove(); }, kind === "error" ? 9000 : 5000);
+}
+
+/* ── Modal genérico ─────────────────────────────────────────────────────── */
+let modalResolve = null;
+function openModal() {
+  $('#modal').classList.add("is-open");
+  $('#modal-ok').focus();
+}
+function closeModal() {
+  $('#modal').classList.remove("is-open");
+  modalResolve = null;
+}
+function confirmModal(title, bodyHtml, okLabel) {
+  return new Promise(function (resolve) {
+    $('#modal-title').textContent = title;
+    $('#modal-body').innerHTML = bodyHtml;
+    const ok = $('#modal-ok');
+    ok.textContent = okLabel || "Confirmar";
+    ok.onclick = function () { closeModal(); resolve(true); };
+    $('#modal-cancel').onclick = function () { closeModal(); resolve(false); };
+    openModal();
+  });
+}
+
+/* ── Navegación ─────────────────────────────────────────────────────────── */
+function go(view) {
+  if (!VIEW_LOADERS[view]) return;
+  state.view = view;
+  $$(".view").forEach(function (v) { v.classList.remove("is-active"); });
+  const el = document.getElementById("view-" + view);
+  if (el) el.classList.add("is-active");
+  $$(".tabbar__btn").forEach(function (b) {
+    b.setAttribute("aria-selected", b.getAttribute("data-view") === view ? "true" : "false");
+  });
+  try { history.replaceState(null, "", "#" + view); } catch (e) { /* noop */ }
+  const active = document.getElementById("view-" + view);
+  if (active) active.focus({ preventScroll: true });
+  refresh(true);
+}
+
+async function refresh(force) {
+  if (state.busy && !force) return;
+  state.busy = true;
+  const loader = VIEW_LOADERS[state.view];
+  if (loader) {
+    try {
+      await loader();
+      state.lastSync = Date.now();
+      updateClock();
+    } catch (e) {
+      toast("error", "No se pudo cargar la vista", String(e && e.message || e));
+    }
+  }
+  state.busy = false;
+}
+
+function updateClock() {
+  const el = $('#clock');
+  if (!el) return;
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, "0");
+  const mm = String(now.getMinutes()).padStart(2, "0");
+  const ss = String(now.getSeconds()).padStart(2, "0");
+  const sync = state.lastSync ? " · sync " + hh + ":" + mm + ":" + ss : "";
+  el.textContent = hh + ":" + mm + ":" + ss + sync;
+  el.title = state.lastSync ? "Última sincronización: " + new Date(state.lastSync).toLocaleString() : "Sin sincronizar";
+}
+
+/* ── Estado global en la cabecera ───────────────────────────────────────── */
+function paintHeader(data) {
+  const bus = (data && data.bus) || {};
+  const busChip = $('#chip-bus');
+  const masterChip = $('#chip-master');
+  const dot = $('#brand-dot');
+
+  if (busChip) {
+    if (bus.deployed) {
+      busChip.className = "chip chip--accent";
+      busChip.textContent = "bus: " + (bus.peers_alive || 0) + " vivo(s)";
+      busChip.title = bus.reason || "";
+    } else {
+      busChip.className = "chip chip--warn";
+      busChip.textContent = "bus: no desplegado";
+      busChip.title = bus.reason || "El bus de coordinación no está desplegado en esta instancia.";
+    }
+  }
+  if (masterChip) {
+    if (bus.master) {
+      masterChip.className = "chip chip--info";
+      masterChip.textContent = "maestra";
+    } else {
+      masterChip.className = "chip chip--ghost";
+      masterChip.textContent = "rol: " + (bus.master === false ? "worker" : "—");
+    }
+  }
+  if (dot) {
+    dot.className = "brand-dot " + (bus.deployed ? "is-ok" : "is-warn");
+  }
+
+  // Selector de nodo (destino de las acciones del bus).
+  const sel = $('#node-select');
+  if (sel && data && Array.isArray(data.nodes)) {
+    const current = sel.value;
+    sel.innerHTML = '<option value="">esta instancia</option>' +
+      data.nodes.map(function (n) {
+        const id = n.id || n.hostname || "instancia";
+        const role = n.role || "worker";
+        return '<option value="' + esc(id) + '">' + esc(id) + " · " + esc(role) + "</option>";
+      }).join("");
+    sel.value = current;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   VISTA 1 · RESUMEN
+   ═══════════════════════════════════════════════════════════════════════════ */
+async function loadResumen() {
+  const d = await apiCall(() => fetch("/api/v2/dashboard", { cache: "no-store", headers: authHeaders() }));
+  state.data.resumen = d;
+  paintHeader(d);
+
+  const sub = $('#resumen-sub');
+  if (sub) sub.textContent = "actualizado " + fmtWhen(d.generated_at) + " · " + (d.daemon.version || "");
+
+  const alertBox = $('#resumen-alert');
+  const bus = d.bus || {};
+  if (!bus.deployed) {
+    alertBox.innerHTML =
+      '<div class="notice notice--warn"><div><div class="notice__title">Bus de coordinación no desplegado</div>' +
+      '<div>' + esc(bus.reason || "") + '</div></div></div>';
+  } else {
+    alertBox.innerHTML = "";
+  }
+
+  const stats = [
+    { label: "Uptime", value: (d.daemon.uptime_human || "—"), meta: d.daemon.host + " · " + d.daemon.platform, cls: "" },
+    { label: "CPU", value: pct((d.system || {}).cpu_pct), meta: "muestra de 120 ms", cls: "stat--info" },
+    { label: "RAM usada", value: pct((((d.system || {}).mem) || {}).used_pct), meta: fmtBytes((((d.system || {}).mem) || {}).used_kb * 1024) + " / " + fmtBytes((((d.system || {}).mem) || {}).total_kb * 1024), cls: "" },
+    { label: "Batería", value: (d.power && d.power.capacity_pct !== null && d.power.capacity_pct !== undefined) ? d.power.capacity_pct + " %" : "—", meta: d.power && d.power.charging ? "cargando" : "sin cargador", cls: (d.power && d.power.capacity_pct < 20) ? "stat--warn" : "stat--accent" },
+    { label: "Temperatura", value: (d.power && d.power.battery_temp_c !== null && d.power.battery_temp_c !== undefined) ? d.power.battery_temp_c + " °C" : "—", meta: d.power && d.power.thermal_hot ? "térmico alta" : "CPU " + ((d.power && d.power.cpu_temp_c) || "—") + " °C", cls: (d.power && d.power.thermal_hot) ? "stat--danger" : "" },
+    { label: "NPU", value: (d.npu && d.npu.offload_implemented) ? "activa" : "sin offload", meta: (d.npu && d.npu.soc) || "—", cls: (d.npu && d.npu.offload_implemented) ? "stat--accent" : "" },
+    { label: "Alertas", value: (d.alerts && d.alerts.active) || 0, meta: ((d.alerts && d.alerts.crit) || 0) + " crit · " + ((d.alerts && d.alerts.warn) || 0) + " warn", cls: ((d.alerts && d.alerts.crit) || 0) > 0 ? "stat--danger" : "" },
+    { label: "Cola", value: (d.queue && d.queue.total) || 0, meta: Object.keys((d.queue && d.queue.by_state) || {}).map(function (k) { return k + ":" + d.queue.by_state[k]; }).join(" "), cls: "stat--info" },
+    { label: "Nodos", value: (bus.nodes) || 0, meta: bus.deployed ? ((bus.peers_alive || 0) + " con latido") : "sin bus", cls: bus.deployed ? "stat--accent" : "stat--warn" }
+  ];
+  $('#resumen-stats').innerHTML = stats.map(function (s) {
+    return '<div class="stat ' + (s.cls || "") + '"><div class="stat__label">' + esc(s.label) +
+      '</div><div class="stat__value stat__value--sm">' + esc(s.value) + '</div><div class="stat__meta">' + esc(s.meta) + '</div></div>';
+  }).join("");
+
+  $('#resumen-bus-badge').textContent = bus.deployed ? "desplegado" : "no desplegado";
+  $('#resumen-bus').innerHTML =
+    '<dl class="kv">' +
+    "<dt>Estado</dt><dd>" + (bus.deployed ? "operativo" : "no desplegado") + "</dd>" +
+    "<dt>Rol local</dt><dd>" + (bus.master ? "maestra (primary)" : "worker") + "</dd>" +
+    "<dt>Motivo</dt><dd>" + esc(bus.reason || "—") + "</dd>" +
+    "<dt>Nodos</dt><dd>" + (bus.nodes || 0) + " (" + (bus.peers_alive || 0) + " con latido)</dd>" +
+    "</dl>";
+
+  // Alertas (resumen)
+  const alerts = [];
+  const aStats = d.alerts || {};
+  if ((aStats.crit || 0) + (aStats.warn || 0) + (aStats.info || 0) > 0) {
+    alerts.push('<div class="small muted">El detalle está en la vista Alertas: ' + (aStats.crit || 0) + " crítica(s), " + (aStats.warn || 0) + " aviso(s), " + (aStats.info || 0) + " info.</div>");
+  } else {
+    alerts.push('<div class="empty"><div class="empty__title">Sin alertas activas</div><div class="empty__reason">El motor de reglas no ha emitido nada todavía.</div></div>');
+  }
+  $('#resumen-alertas').innerHTML = alerts.join("");
+
+  // Cola (resumen)
+  const byState = (d.queue && d.queue.by_state) || {};
+  const q = Object.keys(byState).map(function (k) { return k + ": " + byState[k]; }).join(" · ");
+  $('#resumen-cola').innerHTML = (d.queue && d.queue.total)
+    ? '<div class="small">Tareas en cola: <strong>' + d.queue.total + "</strong></div><div class='small muted mt-2'>" + esc(q) + "</div>"
+    : '<div class="empty"><div class="empty__title">Cola vacía</div><div class="empty__reason">No hay tareas pendientes ni registradas.</div></div>';
+
+  // Dispositivo
+  const pw = d.power || {};
+  $('#resumen-dispositivo').innerHTML =
+    "<dt>Versión</dt><dd>" + esc(d.daemon.version || "—") + "</dd>" +
+    "<dt>Instancia</dt><dd class='mono'>" + esc(d.daemon.instance_id || "—") + "</dd>" +
+    "<dt>Política de energía</dt><dd>" + esc((pw.policy || {}).name || "—") + " — " + esc((pw.policy || {}).reason || "") + "</dd>" +
+    "<dt>Governor</dt><dd>" + esc(pw.governor || "—") + "</dd>" +
+    "<dt>Almacenamiento</dt><dd>" + esc(d.daemon.state_dir || "—") + "</dd>" +
+    "<dt>Capacidades</dt><dd>" + ((d.capabilities || {}).healthy || 0) + " sanas de " + ((d.capabilities || {}).total || 0) + "</dd>" +
+    "<dt>LLM</dt><dd>" + esc((d.llm || {}).default_model || "—") + " · " + ((d.llm || {}).ready || 0) + "/" + ((d.llm || {}).providers || 0) + " listos</dd>" +
+    "<dt>Ficheros compartidos</dt><dd>" + ((d.share || {}).files || 0) + " · " + fmtBytes((d.share || {}).bytes || 0) + "</dd>";
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   VISTA 2 · NODOS
+   ═══════════════════════════════════════════════════════════════════════════ */
+async function loadNodos() {
+  const d = await apiCall(() => fetch("/api/v2/nodes", { cache: "no-store", headers: authHeaders() }));
+  state.data.nodos = d;
+  paintHeader({ bus: d.bus, nodes: d.nodes });
+
+  $('#nodos-sub').textContent = d.node_count + " instancia(s) · " + fmtWhen(d.generated_at);
+
+  const bus = d.bus || {};
+  $('#nodos-bus').innerHTML = bus.deployed
+    ? '<div class="notice notice--accent"><div><div class="notice__title">Bus desplegado</div><div>' + esc(bus.reason || "") + '</div></div></div>'
+    : '<div class="notice notice--warn"><div><div class="notice__title">Tablero no desplegado</div><div>' + esc(bus.reason || "") +
+      '</div><div class="small muted mt-2">tablón esperado en <code>' + esc(bus.board_path || "") + '</code></div></div></div>';
+
+  const nodes = d.nodes || [];
+  if (!nodes.length) {
+    $('#nodos-lista').innerHTML =
+      '<div class="empty"><div class="empty__title">Sin instancias conectadas</div>' +
+      '<div class="empty__reason">' + esc(bus.reason || "El bus de coordinación no está desplegado.") + '</div>' +
+      '<div class="empty__code">' + esc(bus.board_path || "") + "</div></div>";
+  } else {
+    $('#nodos-lista').innerHTML = nodes.map(function (n) {
+      const id = n.id || n.hostname || "instancia";
+      const role = n.role || "worker";
+      const kind = n.kind === "local" ? "esta instancia" : "peer";
+      const caps = Array.isArray(n.capabilities) ? n.capabilities : [];
+      return '<div class="card card--inset">' +
+        '<div class="row row--between">' +
+        "<div><div class='strong'>" + esc(id) + "</div>" +
+        '<div class="small muted">' + esc(n.device || "") + " · " + esc(n.platform || "") + " · v" + esc(n.version || "?") + "</div></div>" +
+        '<div class="row">' + '<span class="badge ' + (role === "primary" || role === "master" ? "badge--accent" : role === "observer" ? "badge--info" : "") + '">' + esc(role) + "</span>" +
+        '<span class="chip chip--ghost">' + esc(kind) + "</span></div></div>" +
+        '<div class="grid grid--stats mt-3">' +
+        '<div class="stat"><div class="stat__label">Carga</div><div class="stat__value stat__value--sm">' + (n.load !== undefined && n.load !== null ? Number(n.load).toFixed(2) : "—") + '</div><div class="stat__meta">0.00 – 1.00</div></div>' +
+        '<div class="stat"><div class="stat__label">Último latido</div><div class="stat__value stat__value--sm">' + esc(fmtWhen(n.last_seen)) + '</div><div class="stat__meta">' + esc(n.last_seen || "") + "</div></div>" +
+        '<div class="stat"><div class="stat__label">Capacidades</div><div class="stat__value stat__value--sm">' + caps.length + '</div><div class="stat__meta">' + esc(caps.join(", ") || "sin declarar") + "</div></div>" +
+        "</div>" +
+        '<div class="btn-row mt-3">' +
+        '<button class="btn btn--sm" data-node-assign="' + esc(id) + '">Asignar tarea</button>' +
+        '<button class="btn btn--sm" data-node-message="' + esc(id) + '">Enviar mensaje</button>' +
+        "</div></div>";
+    }).join("");
+  }
+
+  const tasks = d.tasks || [];
+  const claims = d.claims || [];
+  let html = "";
+  if (tasks.length) {
+    html += '<div class="table-wrap"><table class="table"><thead><tr><th>Tarea</th><th>Estado</th><th>Capacidad</th><th>Prioridad</th><th>Propietario</th></tr></thead><tbody>' +
+      tasks.map(function (t) {
+        const claim = claims.filter(function (c) { return c.task_id === t.task_id; })[0];
+        return "<tr><td class='mono'>" + esc(t.task_id || "") + "<div class='small muted'>" + esc(t.title || "") + "</div></td>" +
+          "<td><span class='chip'>" + esc(t.state || "—") + "</span></td>" +
+          "<td>" + esc(t.capability || "—") + "</td>" +
+          "<td class='table__num'>" + esc(t.priority) + "</td>" +
+          "<td>" + esc((claim && claim.owner) || t.owner || "—") + "</td></tr>";
+      }).join("") + "</tbody></table></div>";
+  }
+  if (!html) {
+    html = '<div class="empty"><div class="empty__title">Sin tareas en el tablón</div><div class="empty__reason">Nadie ha publicado trabajo en el bus todavía.</div></div>';
+  }
+  $('#nodos-tasks').innerHTML = html;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   VISTA 3 · TABLERO DE TAREAS
+   ═══════════════════════════════════════════════════════════════════════════ */
+async function loadTablero() {
+  const d = await apiCall(() => fetch("/api/v2/tasks", { cache: "no-store", headers: authHeaders() }));
+  state.data.tablero = d;
+
+  const st = d.stats || {};
+  const byState = st.by_state || {};
+  $('#tablero-stats').innerHTML = [
+    { l: "Tareas", v: st.tasks || 0 },
+    { l: "Pendientes", v: byState.pending || 0 },
+    { l: "En curso", v: byState.running || 0 },
+    { l: "Hechas", v: byState.done || 0 },
+    { l: "Fallidas", v: byState.failed || 0 },
+    { l: "Journal", v: st.journal_entries || 0 }
+  ].map(function (s) {
+    return '<div class="stat"><div class="stat__label">' + esc(s.l) + '</div><div class="stat__value stat__value--sm">' + esc(s.v) + "</div></div>";
+  }).join("");
+
+  const tasks = d.tasks || [];
+  if (!tasks.length) {
+    $('#tablero-lista').innerHTML = '<div class="empty"><div class="empty__title">Cola vacía</div><div class="empty__reason">No hay tareas en la cola local. Encola una abajo o pide al agente que planifique una.</div></div>';
+  } else {
+    $('#tablero-lista').innerHTML = '<div class="table-wrap"><table class="table"><thead><tr>' +
+      "<th>Id</th><th>Tipo</th><th>Prior.</th><th>Estado</th><th>Deps</th><th>Nodo</th><th>Intentos</th><th>Acciones</th>" +
+      "</tr></thead><tbody>" +
+      tasks.map(function (t) {
+        const deps = Array.isArray(t.deps) ? t.deps : [];
+        return "<tr><td class='mono small'>" + esc(t.id) + "</td>" +
+          "<td>" + esc(t.kind) + "</td>" +
+          "<td class='table__num'>" + esc(t.priority) + "</td>" +
+          "<td><span class='chip'>" + esc(t.state) + "</span></td>" +
+          "<td class='small'>" + (deps.length ? esc(deps.join(", ")) : "—") + "</td>" +
+          "<td class='small'>" + esc(t.node || "—") + "</td>" +
+          "<td class='table__num'>" + esc(t.attempts || 0) + "</td>" +
+          "<td><div class='table__actions'>" +
+          "<button class='btn btn--sm btn--ghost' data-task-cancel='" + esc(t.id) + "'>Cancelar</button>" +
+          "<button class='btn btn--sm btn--ghost' data-task-retry='" + esc(t.id) + "'>Reintentar</button>" +
+          "</div></td></tr>";
+      }).join("") + "</tbody></table></div>";
+  }
+
+  const kinds = d.known_kinds || [];
+  const opts = kinds.map(function (k) { return '<option value="' + esc(k) + '"></option>'; }).join("");
+  $("#known-kinds").innerHTML = opts;
+  $("#known-kinds-2").innerHTML = opts;
+
+  const journal = (d.journal && d.journal.entries) || [];
+  $('#tablero-journal').innerHTML = journal.length
+    ? '<div class="table-wrap"><table class="table"><thead><tr><th>Tipo</th><th>Estado</th><th>Resumen</th><th>Error</th></tr></thead><tbody>' +
+      journal.slice(-30).reverse().map(function (e) {
+        const r = e.result || e;
+        return "<tr><td class='small'>" + esc(e.kind || r.kind || "—") + "</td>" +
+          "<td><span class='chip'>" + (e.ok ? "ok" : "error") + "</span></td>" +
+          "<td class='small'>" + esc(r.summary || e.summary || "—") + "</td>" +
+          "<td class='small muted'>" + esc(e.error || r.error || "") + "</td></tr>";
+      }).join("") + "</tbody></table></div>"
+    : '<div class="empty"><div class="empty__title">Journal vacío</div><div class="empty__reason">Todavía no se ha ejecutado ninguna tarea en esta instancia.</div></div>';
+
+  $('#tablero-sub').textContent = (d.board && d.board.deployed)
+    ? "tablero SQLite desplegado · " + (d.board.instances || 0) + " instancia(s)"
+    : "tablero SQLite no desplegado (la cola local sigue viva)";
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   VISTA 4 · AGENTE
+   ═══════════════════════════════════════════════════════════════════════════ */
+async function loadAgente() {
+  const d = await apiCall(() => fetch("/api/v2/llm", { cache: "no-store", headers: authHeaders() }));
+  state.data.llm = d;
+
+  const routing = d.routing || {};
+  $('#agente-source-chip').textContent = "origen: " + (routing.primary || "—");
+  $('#agente-routing').innerHTML =
+    '<dl class="kv">' +
+    "<dt>Proveedor activo</dt><dd>" + esc(d.default_model || "—") + "</dd>" +
+    "<dt>Política de enrutado</dt><dd>" + esc(routing.policy || "—") + "</dd>" +
+    "<dt>Proveedores</dt><dd>" + (d.ready_count || 0) + " listos de " + (d.provider_count || 0) + " · " + (d.free_providers || 0) + " gratuitos</dd>" +
+    "<dt>Motor</dt><dd>" + esc(d.engine || "—") + "</dd>" +
+    "</dl>";
+
+  const provs = d.providers || [];
+  $('#agente-providers').innerHTML = provs.length
+    ? '<table class="table"><thead><tr><th>Id</th><th>Proveedor</th><th>Modelo</th><th>Nivel</th><th>Listo</th><th></th></tr></thead><tbody>' +
+      provs.map(function (p) {
+        return "<tr><td class='mono small'>" + esc(p.id) + "</td>" +
+          "<td>" + esc(p.name || p.vendor || "") + "</td>" +
+          "<td class='small'>" + esc(p.model || "") + "</td>" +
+          "<td><span class='chip'>" + esc(p.tier || "") + "</span></td>" +
+          "<td>" + (p.ready ? "<span class='chip chip--accent'>listo</span>" : "<span class='chip chip--warn'>sin key</span>") + "</td>" +
+          "<td><button class='btn btn--sm btn--ghost' data-ping='" + esc(p.id) + "'>Probar</button></td></tr>";
+      }).join("") + "</tbody></table>"
+    : '<div class="empty"><div class="empty__title">Sin proveedores en el vault</div><div class="empty__reason">El daemon no tiene proveedores configurados: el agente caerá en el planificador heurístico (0 tokens).</div></div>';
+
+  const cons = d.consumption || {};
+  if (cons.available) {
+    const byAcct = cons.by_account || {};
+    const keys = Object.keys(byAcct);
+    $('#agente-consumo').innerHTML = keys.length
+      ? '<div class="table-wrap"><table class="table"><thead><tr><th>Cuenta</th><th>Modelo</th><th>Tokens in</th><th>Tokens out</th><th>Coste</th><th>Éxito</th></tr></thead><tbody>' +
+        keys.map(function (k) {
+          const a = byAcct[k];
+          return "<tr><td>" + esc(k) + "</td><td class='small'>" + esc(a.model || "") + "</td>" +
+            "<td class='table__num'>" + (a.input_tokens || 0) + "</td>" +
+            "<td class='table__num'>" + (a.output_tokens || 0) + "</td>" +
+            "<td class='table__num'>$" + Number(a.cost_usd || 0).toFixed(4) + "</td>" +
+            "<td class='table__num'>" + Math.round(Number(a.success_rate || 0) * 100) + " %</td></tr>";
+        }).join("") + "</tbody></table></div>"
+      : '<div class="empty"><div class="empty__title">Sin consumo registrado</div><div class="empty__reason">Todavía no se ha usado ninguna cuenta delegada.</div></div>';
+  } else {
+    $('#agente-consumo').innerHTML = '<div class="empty"><div class="empty__title">Consumo no disponible</div><div class="empty__reason">El motor de delegación no tiene cuentas cargadas en esta instancia.</div></div>';
+  }
+}
+
+async function planGoal(execute) {
+  const goal = $("#agente-goal").value.trim();
+  if (!goal) { toast("warn", "Escribe un objetivo", "El planificador necesita saber qué hacer."); return; }
+  const prefer = $("#agente-prefer-llm").checked;
+  const body = { goal: goal, prefer_llm: prefer };
+  if (execute) body.action = "run"; else body.action = "plan";
+  const data = await apiCall(() => fetch("/api/tool/agent", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body)
+  }));
+  state.data.plan = data;
+
+  const source = data.source || data.plan_source || "—";
+  const notes = data.notes || "";
+  const tasks = data.tasks || [];
+  $('#agente-source-chip').textContent = "origen: " + source;
+  let html = '<div class="notice ' + (source.indexOf("heur") >= 0 ? "notice--warn" : "notice--accent") + '"><div>' +
+    '<div class="notice__title">Plan generado por: ' + esc(source) + "</div>" +
+    "<div>" + esc(notes || "Sin notas.") + "</div></div></div>";
+  if (tasks.length) {
+    html += '<div class="table-wrap"><table class="table"><thead><tr><th>#</th><th>Tipo</th><th>Prioridad</th><th>Carga útil</th></tr></thead><tbody>' +
+      tasks.map(function (t, i) {
+        const p = t.payload || {};
+        return "<tr><td class='table__num'>" + (i + 1) + "</td><td class='mono small'>" + esc(t.kind) + "</td>" +
+          "<td class='table__num'>" + esc(t.priority) + "</td>" +
+          "<td class='small muted'>" + esc(JSON.stringify(p).slice(0, 120)) + "</td></tr>";
+      }).join("") + "</tbody></table></div>";
+  } else {
+    html += '<div class="empty"><div class="empty__title">El plan está vacío</div><div class="empty__reason">El planificador no reconoció ninguna tarea aplicable a este objetivo.</div></div>';
+  }
+  if (execute) {
+    html += '<div class="notice mt-3"><div><div class="notice__title">Ejecución</div><div>' +
+      esc("Tareas ejecutadas: " + (data.executed || 0) + " · correctas: " + (data.succeeded || 0)) +
+      "</div></div></div>";
+  }
+  $("#agente-plan").innerHTML = html;
+  toast("ok", execute ? "Objetivo ejecutado" : "Plan listo", source);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   VISTA 5 · DELEGACIÓN
+   ═══════════════════════════════════════════════════════════════════════════ */
+async function loadDelegacion() {
+  const d = await apiCall(() => fetch("/api/v2/delegation", { cache: "no-store", headers: authHeaders() }));
+  state.data.delegacion = d;
+
+  const alertBox = $('#delegacion-alert');
+  if (!d.deployed) {
+    alertBox.innerHTML = '<div class="notice notice--warn"><div><div class="notice__title">Motor de delegación sin desplegar</div><div>' + esc(d.reason || "") + "</div></div></div>";
+  } else {
+    alertBox.innerHTML = "";
+  }
+
+  const st = d.stats || {};
+  const accounts = (st.accounts) || {};
+  const cons = d.consumption || {};
+  $('#delegacion-stats').innerHTML = [
+    { l: "Cuentas", v: (d.accounts || []).length },
+    { l: "Gratuitas", v: accounts.free || 0 },
+    { l: "De pago", v: accounts.paid || 0 },
+    { l: "Cola", v: st.queue_depth || 0 },
+    { l: "Tokens", v: (cons.tokens || {}).total || 0 },
+    { l: "Coste", v: "$" + Number(((cons.cost_usd || {}).estimated) || 0).toFixed(4) },
+    { l: "Éxito", v: Math.round(Number(((cons.success_rate || {}).overall) || 0) * 100) + " %" },
+    { l: "Ajustes", v: (d.adjustments || []).length }
+  ].map(function (s) {
+    return '<div class="stat"><div class="stat__label">' + esc(s.l) + '</div><div class="stat__value stat__value--sm">' + esc(s.v) + "</div></div>";
+  }).join("");
+
+  const accts = d.accounts || [];
+  $('#delegacion-cuentas').innerHTML = accts.length
+    ? '<table class="table"><thead><tr><th>Cuenta</th><th>Proveedor</th><th>Modelo</th><th>Nivel</th><th>Cuota</th><th>Presup.</th><th>Score</th><th>Activa</th></tr></thead><tbody>' +
+      accts.map(function (a) {
+        return "<tr><td class='mono small'>" + esc(a.id) + "</td>" +
+          "<td>" + esc(a.provider) + "</td>" +
+          "<td class='small'>" + esc(a.model) + "</td>" +
+          "<td><span class='chip'>" + esc(a.tier) + "</span></td>" +
+          "<td class='table__num'>" + (a.remaining_quota === null || a.remaining_quota === undefined ? "—" : esc(a.remaining_quota)) + "</td>" +
+          "<td class='table__num'>$" + Number(a.daily_budget_usd || 0).toFixed(2) + "</td>" +
+          "<td class='table__num'>" + Number(a.score || 0).toFixed(3) + "</td>" +
+          "<td>" + (a.enabled ? '<span class="chip chip--accent">sí</span>' : '<span class="chip chip--warn">no</span>') + "</td></tr>";
+      }).join("") + "</tbody></table>"
+    : '<div class="empty"><div class="empty__title">Sin cuentas</div><div class="empty__reason">No hay cuentas de proveedor cargadas en esta instancia.</div></div>';
+
+  const plan = d.plan || [];
+  $('#delegacion-plan').innerHTML = plan.length
+    ? '<table class="table"><thead><tr><th>#</th><th>Tarea</th><th>Cuenta</th><th>Modelo</th><th>Tokens est.</th><th>Coste est.</th><th>Por qué</th></tr></thead><tbody>' +
+      plan.map(function (p) {
+        return "<tr><td class='table__num'>" + esc(p.order) + "</td>" +
+          "<td class='small'>" + esc(p.task_id) + "<div class='muted'>" + esc(p.kind) + "</div></td>" +
+          "<td>" + esc(p.account || "—") + "</td>" +
+          "<td class='small'>" + esc(p.model || "") + "</td>" +
+          "<td class='table__num'>" + esc(p.estimated_input_tokens) + "+" + esc(p.estimated_output_tokens) + "</td>" +
+          "<td class='table__num'>$" + Number(p.estimated_cost_usd || 0).toFixed(4) + "</td>" +
+          "<td class='small muted'>" + esc(p.reason || "") + "</td></tr>";
+      }).join("") + "</tbody></table>"
+    : '<div class="empty"><div class="empty__title">Sin plan de reparto</div><div class="empty__reason">No hay tareas delegables pendientes.</div></div>';
+
+  const adj = d.adjustments || [];
+  $('#delegacion-ajustes').innerHTML = adj.length
+    ? adj.map(function (a) {
+      return '<div class="notice ' + (String(a.action).indexOf("disable") >= 0 ? "notice--danger" : "notice") + '"><div>' +
+        '<div class="notice__title">' + esc(a.account) + " → " + esc(typeof a.action === "string" ? a.action : JSON.stringify(a.action)) + "</div>" +
+        "<div>" + esc(a.reason || "") + "</div></div></div>";
+    }).join("")
+    : '<div class="empty"><div class="empty__title">Sin ajustes propuestos</div><div class="empty__reason">El motor no ha detectado cuentas quemadas, sin uso o con mal historial. Con historial aparecerá aquí.</div></div>';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   VISTA 6 · ALERTAS
+   ═══════════════════════════════════════════════════════════════════════════ */
+async function loadAlertas() {
+  const d = await apiCall(() => fetch("/api/v2/alerts", { cache: "no-store", headers: authHeaders() }));
+  state.data.alertas = d;
+
+  const st = d.status || {};
+  $('#alertas-stats').innerHTML = [
+    { l: "Activas", v: st.active || 0 },
+    { l: "Críticas", v: st.crit || 0, cls: "stat--danger" },
+    { l: "Avisos", v: st.warn || 0, cls: "stat--warn" },
+    { l: "Info", v: st.info || 0 },
+    { l: "Emitidas", v: st.total_emitted || 0 },
+    { l: "Dedup", v: (st.dedup_window_s || 0) + " s" }
+  ].map(function (s) {
+    return '<div class="stat ' + (s.cls || "") + '"><div class="stat__label">' + esc(s.l) + '</div><div class="stat__value stat__value--sm">' + esc(s.v) + "</div></div>";
+  }).join("");
+
+  const ch = d.channel || {};
+  $('#alertas-canal').innerHTML =
+    '<dl class="kv">' +
+    "<dt>Canal</dt><dd>" + esc(ch.kind || "—") + "</dd>" +
+    "<dt>Configurado</dt><dd>" + (ch.configured ? "sí" : "no") + "</dd>" +
+    (ch.host ? "<dt>Destino</dt><dd class='mono'>" + esc(ch.host) + "</dd>" : "") +
+    "<dt>Nota</dt><dd>" + esc(ch.note || "") + "</dd>" +
+    "</dl>";
+
+  const alerts = d.alerts || [];
+  $('#alertas-sub').textContent = (d.total || 0) + " alerta(s) · " + (d.returned || 0) + " mostradas";
+  $('#alertas-lista').innerHTML = alerts.length
+    ? alerts.map(function (a) {
+      const sev = a.severity || "info";
+      const cls = sev === "crit" ? "chip--danger" : sev === "warn" ? "chip--warn" : "chip--info";
+      return '<div class="card card--inset">' +
+        '<div class="row row--between"><div><span class="chip ' + cls + '">' + esc(sev) + "</span> " +
+        '<span class="chip chip--ghost">' + esc(a.rule || "") + "</span>" +
+        (a.count > 1 ? '<span class="badge badge--warn">×' + esc(a.count) + "</span>" : "") + "</div>" +
+        '<button class="btn btn--sm btn--ghost" data-alert-ack="' + esc(a.id) + '">Acusar</button></div>' +
+        '<div class="strong mt-2">' + esc(a.title || "") + "</div>" +
+        '<div class="small muted">' + esc(a.body || "") + "</div>" +
+        '<div class="small dim mt-2">creada ' + esc(fmtWhen(a.created_at)) + " · vista " + esc(fmtWhen(a.last_seen)) +
+        (a.acknowledged ? " · <strong>acusada</strong>" : "") + "</div></div>";
+    }).join("")
+    : '<div class="empty"><div class="empty__title">Sin alertas</div><div class="empty__reason">El motor de reglas no ha emitido nada. Puedes forzarlo con "Evaluar reglas".</div></div>';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   VISTA 7 · RE / APPS
+   ═══════════════════════════════════════════════════════════════════════════ */
+async function loadRe() {
+  const d = await apiCall(() => fetch("/api/v2/re", { cache: "no-store", headers: authHeaders() }));
+  state.data.re = d;
+
+  const apps = d.apps || {};
+  const vault = d.signature_vault || {};
+  $('#re-stats').innerHTML = [
+    { l: "APKs", v: apps.count || 0 },
+    { l: "Inventario", v: apps.available ? "ok" : "no", cls: apps.available ? "stat--accent" : "stat--warn" },
+    { l: "Ficheros de firma", v: vault.count || 0 }
+  ].map(function (s) {
+    return '<div class="stat ' + (s.cls || "") + '"><div class="stat__label">' + esc(s.l) + '</div><div class="stat__value stat__value--sm">' + esc(s.v) + "</div></div>";
+  }).join("");
+
+  $('#re-apps').innerHTML = apps.available
+    ? '<div class="table-wrap"><table class="table"><thead><tr><th>Paquete</th><th>Versión</th><th>Tamaño</th><th>SHA-256</th></tr></thead><tbody>' +
+      (apps.packages || []).map(function (p) {
+        return "<tr><td class='mono small'>" + esc(p.package || "") + "</td>" +
+          "<td class='small'>" + esc(p.version || "") + "</td>" +
+          "<td class='table__num'>" + fmtBytes(p.size || p.size_bytes || 0) + "</td>" +
+          "<td class='small mono muted'>" + esc((p.sha256 || "").slice(0, 16)) + "…</td></tr>";
+      }).join("") + "</tbody></table></div>"
+    : '<div class="empty"><div class="empty__title">Inventario no disponible</div><div class="empty__reason">' + esc(apps.reason || "El daemon no pudo leer el inventario de paquetes.") + "</div></div>";
+
+  const dex = d.dex || {};
+  $('#re-dex').innerHTML =
+    '<div class="small">' + esc(dex.note || "") + "</div>" +
+    '<dl class="kv mt-2"><dt>Entrada</dt><dd class="mono small">' + esc(dex.entry_point || "") + "</dd></dl>";
+
+  $('#re-vault').innerHTML = vault.empty
+    ? '<div class="empty"><div class="empty__title">Sin material de firma</div><div class="empty__reason">' + esc(vault.note || "") + "</div></div>"
+    : '<div class="table-wrap"><table class="table"><thead><tr><th>Nombre</th><th>Tamaño</th><th>SHA-256</th></tr></thead><tbody>' +
+      (vault.files || []).map(function (f) {
+        return "<tr><td class='mono small'>" + esc(f.name) + "</td><td class='table__num'>" + fmtBytes(f.size) + "</td>" +
+          "<td class='small mono muted'>" + esc((f.sha256 || "").slice(0, 16)) + "…</td></tr>";
+      }).join("") + "</tbody></table></div>";
+
+  const exp = d.export || {};
+  $('#re-export').innerHTML =
+    '<dl class="kv">' +
+    "<dt>Cola de tareas</dt><dd class='mono small'>" + esc(exp.task_export || "") + "</dd>" +
+    "<dt>Repos</dt><dd class='mono small'>" + esc(exp.repo_updates || "") + "</dd>" +
+    "<dt>Volcado de APKs</dt><dd class='mono small'>" + esc(exp.apk_dump || "") + "</dd>" +
+    "</dl>";
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   VISTA 8 · ARCHIVOS COMPARTIDOS
+   ═══════════════════════════════════════════════════════════════════════════ */
+async function loadArchivos() {
+  const d = await apiCall(() => fetch("/api/v2/share", { cache: "no-store", headers: authHeaders() }));
+  state.data.share = d;
+
+  $('#archivos-stats').innerHTML = [
+    { l: "Ficheros", v: d.total_files || 0 },
+    { l: "Bytes", v: fmtBytes(d.total_bytes || 0) },
+    { l: "Verificados", v: d.verified || 0, cls: "stat--accent" },
+    { l: "Corruptos", v: d.broken || 0, cls: (d.broken ? "stat--danger" : "") },
+    { l: "Ausentes", v: d.missing || 0, cls: (d.missing ? "stat--warn" : "") },
+    { l: "Subidas a medias", v: d.pending_parts || 0 }
+  ].map(function (s) {
+    return '<div class="stat ' + (s.cls || "") + '"><div class="stat__label">' + esc(s.l) + '</div><div class="stat__value stat__value--sm">' + esc(s.v) + "</div></div>";
+  }).join("");
+
+  const files = d.files || [];
+  $('#archivos-lista').innerHTML = files.length
+    ? '<table class="table"><thead><tr><th>Ruta</th><th>Tamaño</th><th>SHA-256</th><th>Estado</th><th></th></tr></thead><tbody>' +
+      files.map(function (f) {
+        const st = f.state === "ok" ? '<span class="chip chip--accent">verificado</span>'
+          : f.state === "corrupt" ? '<span class="chip chip--danger">corrupto</span>'
+            : '<span class="chip chip--warn">ausente</span>';
+        return "<tr><td class='mono small'>" + esc(f.path) + "<div class='muted'>" + esc(f.node || "") + " · " + esc(fmtWhen(f.updated_at)) + "</div></td>" +
+          "<td class='table__num'>" + fmtBytes(f.size) + "</td>" +
+          "<td class='small mono muted'>" + esc((f.sha256 || "").slice(0, 16)) + "…</td>" +
+          "<td>" + st + "</td>" +
+          "<td><button class='btn btn--sm btn--ghost' data-share-get='" + esc(f.path) + "'>Descargar</button></td></tr>";
+      }).join("") + "</tbody></table>"
+    : '<div class="empty"><div class="empty__title">Vault vacío</div><div class="empty__reason">No hay ficheros compartidos en esta instancia todavía. Sube uno: se guarda con su sha256 en el MANIFEST.ndjson.</div></div>';
+
+  const manifest = (d.files || []).map(function (f) {
+    return JSON.stringify({ path: f.path, size: f.size, sha256: f.sha256, updated_at: f.updated_at, node: f.node });
+  }).join("\n");
+  $("#share-manifest").textContent = manifest || "(sin entradas — MANIFEST.ndjson vacío)";
+
+  $('#archivos-sub').textContent = "vault: " + (d.root || "");
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   VISTA 9 · SISTEMA
+   ═══════════════════════════════════════════════════════════════════════════ */
+async function loadSistema() {
+  const [loop, routes] = await Promise.all([
+    apiCall(() => fetch("/api/v2/agentic", { cache: "no-store", headers: authHeaders() })),
+    apiCall(() => fetch("/api/v2/routes", { cache: "no-store", headers: authHeaders() }))
+  ]);
+  state.data.agentic = loop;
+  state.data.routes = routes;
+
+  const cycle = loop.cycle || [];
+  $('#sistema-ciclo').innerHTML =
+    '<div class="grid grid--stats">' + cycle.map(function (c) {
+      return '<div class="stat stat--accent"><div class="stat__label">' + esc(c.label || c.phase) + '</div>' +
+        '<div class="stat__value stat__value--sm">' + esc(c.phase) + "</div>" +
+        '<div class="stat__meta">' + esc(c.source || "") + "</div></div>";
+    }).join("") + "</div>" +
+    '<dl class="kv mt-3">' +
+    "<dt>En cola</dt><dd>" + esc((loop.observe || {}).queue || 0) + "</dd>" +
+    "<dt>Journal</dt><dd>" + esc((loop.execute || {}).journal_entries || 0) + " entradas · " + esc((loop.execute || {}).failed || 0) + " fallos</dd>" +
+    "<dt>Enrutado</dt><dd>" + esc((((loop.plan || {}).route) || {}).primary || "—") + "</dd>" +
+    "</dl>";
+
+  const notes = ((loop.measure || {}).notes) || [];
+  $('#sistema-notas').innerHTML = notes.length
+    ? notes.map(function (n) { return '<div class="notice"><div>' + esc(n) + "</div></div>"; }).join("")
+    : '<div class="empty"><div class="empty__title">Sin notas todavía</div><div class="empty__reason">El bucle escribe notas cuando hay fallos registrados en el bus.</div></div>';
+
+  const adj = ((loop.adjust || {}).proposed) || [];
+  $('#sistema-ajustes').innerHTML = adj.length
+    ? adj.map(function (a) {
+      return '<div class="notice"><div><div class="notice__title">' + esc(a.account) + "</div><div>" + esc(a.reason || "") + "</div></div></div>";
+    }).join("")
+    : '<div class="empty"><div class="empty__title">Nada que ajustar</div><div class="empty__reason">El motor de delegación no ha propuesto cambios.</div></div>';
+
+  const rt = routes.routes || [];
+  $('#sistema-rutas').innerHTML =
+    '<table class="table"><thead><tr><th>Método</th><th>Ruta</th><th>Qué hace</th></tr></thead><tbody>' +
+    rt.map(function (r) {
+      return "<tr><td><span class='badge'>" + esc(r.method) + "</span></td>" +
+        "<td class='mono small'>" + esc(r.path) + "</td>" +
+        "<td class='small muted'>" + esc(r.description) + "</td></tr>";
+    }).join("") + "</tbody></table>";
+
+  const auth = routes.auth || {};
+  $('#sistema-auth').innerHTML =
+    '<dl class="kv">' +
+    "<dt>Cabecera de API</dt><dd class='mono'>" + esc(auth.api_key_header || "") + "</dd>" +
+    "<dt>Token de sesión</dt><dd class='mono'>" + esc(auth.session_token_header || "") + "</dd>" +
+    "<dt>Política</dt><dd>" + esc(auth.policy || "") + "</dd>" +
+    "<dt>Intercambio</dt><dd class='mono small'>" + esc(auth.exchange || "") + "</dd>" +
+    "<dt>Compatibilidad</dt><dd>" + esc((routes.compatibility || {}).note || "") + "</dd>" +
+    "</dl>";
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ACCIONES (escritura)
+   ═══════════════════════════════════════════════════════════════════════════ */
+async function doAssign(node, kind, capability, payload) {
+  const data = await apiCall(() => fetch("/api/v2/nodes/assign", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ node: node, kind: kind, capability: capability, payload: payload })
+  }));
+  if (data.ok) toast("ok", "Tarea publicada", data.task_id + " → " + node);
+  else toast("error", "No se pudo asignar", data.reason || data.error || "");
+  loadNodos();
+}
+
+async function doMessage(node, message, dataB64) {
+  const data = await apiCall(() => fetch("/api/v2/nodes/message", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ node: node, message: message, data_b64: dataB64 })
+  }));
+  if (data.ok) toast("ok", "Mensaje entregado", data.task_id + " · " + data.bytes + " B");
+  else toast("error", "No se pudo enviar", data.reason || data.error || "");
+  loadNodos();
+}
+
+async function doMigrate(version) {
+  const data = await apiCall(() => fetch("/api/v2/nodes/migrate", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ target_version: version })
+  }));
+  $("#migrate-out").innerHTML = "<pre>" + esc(JSON.stringify(data, null, 2)) + "</pre>";
+  toast(data.ok ? "ok" : "warn", data.ok ? "Plan de migración calculado" : "Sin plan", data.reason || "");
+}
+
+async function taskAction(action, taskId, extra) {
+  const body = Object.assign({ action: action }, extra || {});
+  if (taskId) body.task_id = taskId;
+  const data = await apiCall(() => fetch("/api/tool/task_queue", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body)
+  }));
+  toast(data && data.ok !== false ? "ok" : "warn", "Tarea: " + action, data && data.ok === false ? (data.error || "rechazada") : "");
+  loadTablero();
+}
+
+async function alertAction(action, id) {
+  const body = { action: action };
+  if (id) body.id = id;
+  const data = await apiCall(() => fetch("/api/tool/alerts", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body)
+  }));
+  toast("ok", "Alertas: " + action, "");
+  loadAlertas();
+}
+
+async function pingProvider(id) {
+  toast("info", "Probando " + id, "petición en curso…");
+  const data = await apiCall(() => fetch("/api/providers/test", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ id: id })
+  }));
+  toast(data.status === "OK" ? "ok" : "warn", id + ": " + data.status,
+    (data.reply || "").slice(0, 120) + " · " + data.latency_ms + " ms" + (data.fallback_used ? " · con fallback" : ""));
+}
+
+async function applyAdjustments() {
+  const d = state.data.delegacion || {};
+  const adj = d.adjustments || [];
+  if (!adj.length) { toast("warn", "No hay ajustes que aplicar", ""); return; }
+  const ok = await confirmModal("Aplicar ajustes",
+    "<p>Se aplicarán " + adj.length + " ajuste(s) del motor de delegación. Es todo o nada: si uno falla no se aplica ninguno.</p>",
+    "Aplicar");
+  if (!ok) return;
+  const data = await apiCall(() => fetch("/api/v2/delegation/apply", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ adjustments: adj })
+  }));
+  if (data.ok) toast("ok", "Ajustes aplicados", data.applied + " ajuste(s)");
+  else toast("error", "No se pudieron aplicar", data.detail || data.error || "");
+  loadDelegacion();
+}
+
+async function exportTasks() {
+  const data = await apiCall(() => fetch("/api/v2/tasks/export", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ node: state.node || "" })
+  }));
+  const blob = new Blob([JSON.stringify(data.export || data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "megadaemon-tasks-" + Date.now() + ".json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+  toast("ok", "Cola exportada", "fichero descargado");
+}
+
+async function importTasks(file) {
+  let parsed;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch (e) {
+    toast("error", "El fichero no es JSON válido", String(e.message || e));
+    return;
+  }
+  const data = await apiCall(() => fetch("/api/v2/tasks/import", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(parsed)
+  }));
+  if (data.ok) toast("ok", "Cola importada", data.imported + " tarea(s)");
+  else toast("error", "Importación fallida", data.detail || data.error || "");
+  loadTablero();
+}
+
+async function downloadShare(path) {
+  const data = await apiCall(() => fetch("/api/v2/share/get?path=" + encodeURIComponent(path) + "&offset=0&len=0", { cache: "no-store", headers: authHeaders() }));
+  if (!data.ok) { toast("error", "No se pudo descargar", data.hint || data.error || ""); return; }
+  const bin = atob(data.data_b64 || "");
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const blob = new Blob([bytes], { type: "application/octet-stream" });
+  const url2 = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url2;
+  a.download = path.split("/").pop() || "fichero";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(function () { URL.revokeObjectURL(url2); }, 2000);
+  toast(data.verified ? "ok" : "warn", "Descarga completa",
+    "sha256 " + (data.sha256 || "").slice(0, 16) + "… · " + (data.verified ? "verificado" : "NO verificado"));
+}
+
+async function uploadShare(chunked) {
+  const input = $("#share-file");
+  const rel = $("#share-path").value.trim();
+  if (!input.files || !input.files.length) { toast("warn", "Elige un fichero", ""); return; }
+  if (!rel) { toast("warn", "Indica la ruta en el vault", "por ejemplo informes/informe.txt"); return; }
+  const file = input.files[0];
+  const buf = new Uint8Array(await file.arrayBuffer());
+  const hash = sha256Hex(buf);
+
+  if (!chunked) {
+    const data = await apiCall(() => fetch("/api/v2/share/put", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ path: rel, data_b64: b64encode(buf), sha256: hash })
+    }));
+    if (data.ok) toast("ok", "Fichero compartido", rel + " · " + data.sha256.slice(0, 16) + "…");
+    else toast("error", "Subida rechazada", data.detail || data.error || "");
+    loadArchivos();
+    return;
+  }
+
+  const CHUNK = 65536;
+  const total = Math.max(1, Math.ceil(buf.length / CHUNK));
+  $("#share-progress").innerHTML = "<div class='small'>Subiendo " + total + " trozo(s)…</div>";
+  for (let i = 0; i < total; i++) {
+    const slice = buf.subarray(i * CHUNK, Math.min(buf.length, (i + 1) * CHUNK));
+    const data = await apiCall(() => fetch("/api/v2/share/chunk", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ path: rel, index: i, data_b64: b64encode(slice), sha256: sha256Hex(slice) })
+    }));
+    if (!data.ok) {
+      toast("error", "Trozo " + (i + 1) + " rechazado", data.detail || data.error || "");
+      $("#share-progress").innerHTML = "";
+      return;
+    }
+    $("#share-progress").innerHTML = "<div class='small'>Trozo " + (i + 1) + " de " + total + " subido…</div>";
+  }
+  const commit = await apiCall(() => fetch("/api/v2/share/commit", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ path: rel, sha256: hash })
+  }));
+  if (commit.ok) {
+    toast("ok", "Fichero publicado", rel + " · " + commit.chunks + " trozo(s) · sha256 verificado");
+    $("#share-progress").innerHTML = "<div class='small'>Publicado en el MANIFEST.ndjson.</div>";
+  } else {
+    toast("error", "El ensamblado no cuadra", commit.detail || commit.error || "");
+    $("#share-progress").innerHTML = "";
+  }
+  loadArchivos();
+}
+
+/* ── SHA-256 en JS (sin dependencias; funciona sin crypto.subtle) ───────── */
+function sha256Hex(bytes) {
+  const K = [0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2];
+  const H = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+  const len = bytes.length;
+  const padded = len + 1 + ((56 - ((len + 1) % 64) + 64) % 64) + 8;
+  const msg = new Uint8Array(padded);
+  msg.set(bytes);
+  msg[len] = 0x80;
+  const dv = new DataView(msg.buffer);
+  dv.setUint32(padded - 8, Math.floor(len / 536870912));
+  dv.setUint32(padded - 4, (len << 3) >>> 0);
+  const w = new Uint32Array(64);
+  const rotr = function (x, n) { return ((x >>> n) | (x << (32 - n))) >>> 0; };
+  for (let off = 0; off < padded; off += 64) {
+    for (let t = 0; t < 16; t++) w[t] = dv.getUint32(off + t * 4);
+    for (let t = 16; t < 64; t++) {
+      const a = w[t - 15], b = w[t - 2];
+      const s0 = (rotr(a, 7) ^ rotr(a, 18) ^ (a >>> 3)) >>> 0;
+      const s1 = (rotr(b, 17) ^ rotr(b, 19) ^ (b >>> 10)) >>> 0;
+      w[t] = (w[t - 16] + s0 + w[t - 7] + s1) >>> 0;
+    }
+    let a = H[0], b = H[1], c = H[2], d = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+    for (let t = 0; t < 64; t++) {
+      const S1 = (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) >>> 0;
+      const ch = ((e & f) ^ (~e & g)) >>> 0;
+      const t1 = (h + S1 + ch + K[t] + w[t]) >>> 0;
+      const S0 = (rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) >>> 0;
+      const maj = ((a & b) ^ (a & c) ^ (b & c)) >>> 0;
+      const t2 = (S0 + maj) >>> 0;
+      h = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+    }
+    H[0] = (H[0] + a) >>> 0; H[1] = (H[1] + b) >>> 0; H[2] = (H[2] + c) >>> 0; H[3] = (H[3] + d) >>> 0;
+    H[4] = (H[4] + e) >>> 0; H[5] = (H[5] + f) >>> 0; H[6] = (H[6] + g) >>> 0; H[7] = (H[7] + h) >>> 0;
+  }
+  return H.map(function (x) { return x.toString(16).padStart(8, "0"); }).join("");
+}
+
+function b64encode(bytes) {
+  let bin = "";
+  const step = 0x8000;
+  for (let i = 0; i < bytes.length; i += step) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(bytes.length, i + step)));
+  }
+  return btoa(bin);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   COMMAND PALETTE
+   ═══════════════════════════════════════════════════════════════════════════ */
+const PALETTE_ACTIONS = [
+  { group: "Ir a", label: "Resumen", hint: "salud del daemon", run: function () { go("resumen"); } },
+  { group: "Ir a", label: "Nodos", hint: "bus de coordinación", run: function () { go("nodos"); } },
+  { group: "Ir a", label: "Tablero de tareas", hint: "cola", run: function () { go("tablero"); } },
+  { group: "Ir a", label: "Agente", hint: "objetivo → plan", run: function () { go("agente"); } },
+  { group: "Ir a", label: "Delegación", hint: "cuentas gratuitas", run: function () { go("delegacion"); } },
+  { group: "Ir a", label: "Alertas", hint: "reglas y acuse", run: function () { go("alertas"); } },
+  { group: "Ir a", label: "RE / Apps", hint: "inventario y firma", run: function () { go("re"); } },
+  { group: "Ir a", label: "Archivos compartidos", hint: "vault + manifest", run: function () { go("archivos"); } },
+  { group: "Ir a", label: "Sistema", hint: "bucle agéntico y API", run: function () { go("sistema"); } },
+  { group: "Acciones", label: "Refrescar la vista", hint: "Ctrl+R", run: function () { refresh(true); } },
+  { group: "Acciones", label: "Evaluar reglas de alerta", hint: "alerts.check", run: function () { alertAction("check"); } },
+  { group: "Acciones", label: "Ejecutar lote de tareas", hint: "task_queue.run", run: function () { taskAction("run", null, { max: 5 }); } },
+  { group: "Acciones", label: "Exportar la cola", hint: "JSON", run: function () { exportTasks(); } },
+  { group: "Acciones", label: "Cambiar tema", hint: "claro / oscuro", run: function () { toggleTheme(); } },
+  { group: "Acciones", label: "Cambiar API key", hint: "autenticación", run: function () { askApiKey(); } }
+];
+
+let paletteIndex = 0;
+function openPalette() {
+  $("#palette").classList.add("is-open");
+  $("#palette-input").value = "";
+  renderPalette("");
+  $("#palette-input").focus();
+}
+function closePalette() { $("#palette").classList.remove("is-open"); }
+function renderPalette(query) {
+  const q = (query || "").toLowerCase();
+  const matches = PALETTE_ACTIONS.filter(function (a) {
+    return !q || a.label.toLowerCase().indexOf(q) >= 0 || a.group.toLowerCase().indexOf(q) >= 0 || (a.hint || "").toLowerCase().indexOf(q) >= 0;
+  });
+  paletteIndex = 0;
+  const list = $("#palette-list");
+  if (!matches.length) {
+    list.innerHTML = '<li class="palette__item" aria-selected="false">Sin coincidencias</li>';
+    return;
+  }
+  let html = "";
+  let group = "";
+  matches.forEach(function (a, i) {
+    if (a.group !== group) { group = a.group; html += '<li class="palette__group" role="presentation">' + esc(group) + "</li>"; }
+    html += '<li class="palette__item" role="option" id="pal-' + i + '" aria-selected="' + (i === 0 ? "true" : "false") + '" data-pal="' + i + '">' +
+      esc(a.label) + "<small>" + esc(a.hint || "") + "</small></li>";
+  });
+  list.innerHTML = html;
+  list.querySelectorAll("[data-pal]").forEach(function (li) {
+    li.addEventListener("click", function () {
+      const a = matches[Number(li.getAttribute("data-pal"))];
+      closePalette();
+      if (a) a.run();
+    });
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TEMA
+   ═══════════════════════════════════════════════════════════════════════════ */
+function applyTheme() {
+  const html = document.documentElement;
+  if (state.theme === "auto") html.removeAttribute("data-theme");
+  else html.setAttribute("data-theme", state.theme);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", state.theme === "light" ? "#f2f5f9" : "#0a0e14");
+}
+function toggleTheme() {
+  state.theme = state.theme === "dark" ? "light" : "dark";
+  localStorage.setItem("md_theme", state.theme);
+  applyTheme();
+  toast("info", "Tema: " + state.theme, "");
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ARRANQUE
+   ═══════════════════════════════════════════════════════════════════════════ */
+function bindEvents() {
+  // Navegación
+  $$(".tabbar__btn").forEach(function (b) {
+    b.addEventListener("click", function () { go(b.getAttribute("data-view")); });
+  });
+  document.addEventListener("click", function (e) {
+    const goto = e.target.closest("[data-goto]");
+    if (goto) { go(goto.getAttribute("data-goto")); return; }
+
+    const assign = e.target.closest("[data-node-assign]");
+    if (assign) {
+      go("nodos");
+      $("#assign-node").value = assign.getAttribute("data-node-assign");
+      switchBusTab("assign");
+      return;
+    }
+    const msg = e.target.closest("[data-node-message]");
+    if (msg) {
+      go("nodos");
+      $("#msg-node").value = msg.getAttribute("data-node-message");
+      switchBusTab("message");
+      return;
+    }
+    const cancel = e.target.closest("[data-task-cancel]");
+    if (cancel) { taskAction("cancel", cancel.getAttribute("data-task-cancel")); return; }
+    const retry = e.target.closest("[data-task-retry]");
+    if (retry) { taskAction("retry", retry.getAttribute("data-task-retry")); return; }
+    const ack = e.target.closest("[data-alert-ack]");
+    if (ack) { alertAction("ack", ack.getAttribute("data-alert-ack")); return; }
+    const ping = e.target.closest("[data-ping]");
+    if (ping) { pingProvider(ping.getAttribute("data-ping")); return; }
+    const dl = e.target.closest("[data-share-get]");
+    if (dl) { downloadShare(dl.getAttribute("data-share-get")); return; }
+  });
+
+  // Sub-tabs del bus
+  $$("[data-bus-tab]").forEach(function (b) {
+    b.addEventListener("click", function () { switchBusTab(b.getAttribute("data-bus-tab")); });
+  });
+
+  // Botones
+  $("#btn-theme").addEventListener("click", toggleTheme);
+  $("#btn-refresh").addEventListener("click", function () { refresh(true); });
+  $("#btn-palette").addEventListener("click", openPalette);
+  $("#btn-nodes-refresh").addEventListener("click", loadNodos);
+  $("#btn-assign").addEventListener("click", function () {
+    const node = $("#assign-node").value.trim() || state.node;
+    let payload = {};
+    try { payload = JSON.parse($("#assign-payload").value || "{}"); }
+    catch (e) { toast("error", "Carga útil inválida", "el JSON no parsea"); return; }
+    doAssign(node, $("#assign-kind").value.trim(), $("#assign-cap").value.trim(), payload);
+  });
+  $("#btn-message").addEventListener("click", function () {
+    const node = $("#msg-node").value.trim() || state.node;
+    doMessage(node, $("#msg-text").value, $("#msg-data").value.trim());
+  });
+  $("#btn-migrate").addEventListener("click", function () { doMigrate($("#migrate-version").value.trim()); });
+  $("#btn-task-run").addEventListener("click", function () { taskAction("run", null, { max: 5 }); });
+  $("#btn-task-submit").addEventListener("click", function () {
+    let payload = {};
+    try { payload = JSON.parse($("#task-payload").value || "{}"); }
+    catch (e) { toast("error", "Carga útil inválida", "el JSON no parsea"); return; }
+    taskAction("submit", null, { kind: $("#task-kind").value.trim(), priority: Number($("#task-priority").value || 5), payload: payload });
+  });
+  $("#btn-task-export").addEventListener("click", exportTasks);
+  $("#btn-task-import").addEventListener("click", function () { $("#task-import-file").click(); });
+  $("#task-import-file").addEventListener("change", function (e) {
+    const f = e.target.files && e.target.files[0];
+    if (f) importTasks(f);
+    e.target.value = "";
+  });
+  $("#btn-plan").addEventListener("click", function () { planGoal(false); });
+  $("#btn-run").addEventListener("click", function () { planGoal(true); });
+  $("#btn-llm-refresh").addEventListener("click", loadAgente);
+  $("#btn-deleg-refresh").addEventListener("click", loadDelegacion);
+  $("#btn-apply-adjustments").addEventListener("click", applyAdjustments);
+  $("#btn-alerts-check").addEventListener("click", function () { alertAction("check"); });
+  $("#btn-re-refresh").addEventListener("click", loadRe);
+  $("#btn-re-analyze").addEventListener("click", async function () {
+    const path = $("#re-apk-path").value.trim();
+    if (!path) { toast("warn", "Indica la ruta de la APK", ""); return; }
+    const data = await apiCall(() => fetch("/api/tool/apk_inventory", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ action: "analyze", path: path })
+    }));
+    $("#re-out").innerHTML = "<pre>" + esc(JSON.stringify(data, null, 2).slice(0, 4000)) + "</pre>";
+  });
+  $("#btn-re-rootstatus").addEventListener("click", async function () {
+    const data = await apiCall(() => fetch("/api/tool/root_stealth", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ action: "status" })
+    }));
+    $("#re-out").innerHTML = "<pre>" + esc(JSON.stringify(data, null, 2).slice(0, 4000)) + "</pre>";
+  });
+  $("#btn-share-refresh").addEventListener("click", loadArchivos);
+  $("#btn-share-upload").addEventListener("click", function () { uploadShare(true); });
+  $("#btn-share-upload-one").addEventListener("click", function () { uploadShare(false); });
+  $("#btn-routes-refresh").addEventListener("click", loadSistema);
+
+  // Selector de nodo
+  $("#node-select").addEventListener("change", function (e) {
+    state.node = e.target.value;
+    $("#assign-node").value = state.node;
+    $("#msg-node").value = state.node;
+  });
+
+  // Palette
+  $("#palette-input").addEventListener("input", function (e) { renderPalette(e.target.value); });
+  $("#palette-input").addEventListener("keydown", function (e) {
+    const items = $$("#palette-list [data-pal]");
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!items.length) return;
+      paletteIndex = (paletteIndex + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length;
+      items.forEach(function (li, i) { li.setAttribute("aria-selected", i === paletteIndex ? "true" : "false"); });
+      items[paletteIndex].scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const li = items[paletteIndex];
+      if (li) li.click();
+    } else if (e.key === "Escape") {
+      closePalette();
+    }
+  });
+  $("#palette").addEventListener("click", function (e) { if (e.target === $("#palette")) closePalette(); });
+
+  // Atajos de teclado
+  document.addEventListener("keydown", function (e) {
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName || "").toUpperCase());
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      openPalette();
+      return;
+    }
+    if (e.key === "Escape") {
+      closePalette();
+      if ($("#modal").classList.contains("is-open")) closeModal();
+      return;
+    }
+    if (typing) return;
+    if (e.key === "r" || e.key === "R") { refresh(true); }
+  });
+}
+
+function switchBusTab(name) {
+  $$("[data-bus-tab]").forEach(function (b) {
+    b.setAttribute("aria-selected", b.getAttribute("data-bus-tab") === name ? "true" : "false");
+  });
+  $$("[data-bus-pane]").forEach(function (p) {
+    p.classList.toggle("hidden", p.getAttribute("data-bus-pane") !== name);
+  });
+}
+
+function boot() {
+  applyTheme();
+  bindEvents();
+  updateClock();
+  setInterval(updateClock, 1000);
+  // Auto-refresco de la vista activa.
+  state.timer = setInterval(function () {
+    if (document.visibilityState === "visible") refresh(false);
+  }, 30000);
+
+  const hash = (location.hash || "").replace("#", "");
+  go(VIEW_LOADERS[hash] ? hash : "resumen");
+
+  // Si ya hay API key, se pide el token de sesión por adelantado.
+  if (state.apiKey) exchangeToken(state.apiKey);
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", boot);
+} else {
+  boot();
+}
+</script>
+</body>
+</html>
