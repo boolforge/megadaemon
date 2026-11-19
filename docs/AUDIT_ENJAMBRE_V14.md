@@ -32,11 +32,32 @@
 | Tipo de `/workspace` | `nfs` (vers=3, `nolock`, `hard`, TCP) → NAS Alibaba |
 | Disco local del contenedor | overlay/ext4, 30 GB, **26 GB libres** |
 | `CARGO_HOME` | `/workspace/.home/.cargo` (**también en el NAS**) |
-| `.rlib`produced en todo el workspace | **0** (15 target dirs revisados) |
+| `.rlib` produced en todo el workspace | **0** (15 target dirs revisados) |
 | Procesos `cargo`/`rustc` simultáneos | 65 → 128 |
 | Load average (2 CPUs) | 28-39 |
 | `cp -a` del registro de crates (NAS → local) | **3,7 MB en 4 minutos** |
-| RAM | 3 GB totales, ~700 MB libres |
+| RAM | **3 GB totales** → el rustc del lib completo (55 módulos, ~33.000 líneas) muere por **SIGKILL (OOM)** con el perfil por defecto |
+| Build con recipe local (`CARGO_HOME` + target fuera del NAS) | crate + tests de cero a verde en **33 s** |
+
+### 1.1-bis El segundo límite: la RAM
+
+`cargo build --lib` (debug, `codegen-units=1`) sobre el lib completo muere con
+`signal: 9, SIGKILL: kill`: **3 GB de RAM no bastan** para el rustc de
+33.000 líneas con debuginfo. No es un bug del código: es el perfil de build.
+
+Receta que cabe en la caja:
+
+```bash
+export CARGO_HOME=/run/agent-runtime/md/cargo2            # registro local
+export CARGO_TARGET_DIR=/run/agent-runtime/md/target2    # artefactos locales
+export CARGO_PROFILE_DEV_DEBUG=0                         # sin debuginfo
+export CARGO_PROFILE_DEV_CODEGEN_UNITS=16                # en vez de 1
+cargo build --lib -j 1                                   # un solo rustc
+```
+
+Con `debug=2` (el default) el lib completo no entra. Para los arnés
+`#[path]` por módulo no hay problema: son crates pequeños.
+
 
 ### 1.2 Por qué esto rompe el enjambre
 
