@@ -35,7 +35,7 @@
 | 1 | El chat hacía de cola: sin *claims*, sin estados, sin auditoría, contexto quemado | Tablero SQLite por instancia (`src/coordination.rs`): `add → claim (lease) → report (3 líneas)`, con eventos auditados |
 | 2 | Nadie era dueño de nada | Mapa de propiedad en `docs/COORDINATION.md` + regla "un fichero = un agente"; tocar otro ⇒ acuerdo previo por `communicate` |
 | 3 | Dependencias reimplementadas (un ZIP propio) | Política **reutiliza o mufla**: `zip 2.2` + `flate2` (ZIP/DEFLATE), `sha2` (hash), `rusqlite` (estado), `ureq` (HTTP), `serde_json` (datos). Nada de crypto propio si el crate está en el árbol |
-| 4 | Cada agente con su `target/` ⇒ la misma dependencia compilada N veces (medido: 65→128 procesos `cargo`, load 39) | **Regla v14-bis**: un **único target compartido** (`/workspace/md-build`) + builds **serializados con `flock`** vía `tools/build-queue.sh` (2 slots, `CARGO_INCREMENTAL=0`, `-j 2`) + guardia de RAM (espera si `MemAvailable < 512 MB`). El target por agente multiplicaba el trabajo ×15; la corrupción venía del **acceso concurrente**, que es lo que el `flock` impide |
+| 4 | **`/workspace` está en NFS** (`nfs v3, nolock, hard`): el chorro de artefactos de build no aguanta ⇒ **cero `.rlib`** tras horas de build, `database is locked` del registro de crates (SQLite sobre NFS), `failed to copy bitcode` / `rust-lld: cannot open ...rcgu.o`, y load 28-39 que es **E/S bloqueada**, no CPU | **Regla v14-bis**: `CARGO_TARGET_DIR` en **disco LOCAL** (`/run/agent-runtime/md/target`, ext4, 26 GB) + builds **serializados con `flock`** (`tools/build-queue.sh`, 2 slots, `CARGO_INCREMENTAL=0`, `-j 2`) + guardia de RAM. El código fuente sigue en NFS (se lee una vez); los artefactos van a local |
 | 5 | Faltaba el criterio de "fin" | Definition of Done por tarea (§7) y por ola (§4) |
 
 ---
@@ -49,9 +49,11 @@
 3. **`git add <ruta exacta>`**, un commit por ámbito, nunca `-A`, nunca
    `--force`, nunca el token en el código.
 4. **Reutilizar, no reescribir.** Zip/flate2/sha2/rusqlite/ureq/serde_json.
-5. **Builds serializados**: `tools/build-queue.sh build --release` (target
-   compartido + `flock` + guardia de RAM). Nada de `cargo build` a pelo: el
-   enjambre compila por la cola o no compila.
+5. **Builds: target LOCAL + cola `flock`**. `/workspace` es NFS y el build
+   no puede vivir ahí (cero `.rlib`, `database is locked`, `.rcgu.o` que no
+   aparece). Regla: `CARGO_TARGET_DIR=/run/agent-runtime/md/target` (ext4
+   local) y builds serializados con `tools/build-queue.sh`. Nada de `cargo
+   build` a pelo con el target en el NFS.
 6. **Informe de 3 líneas**: qué hice / qué toca / qué bloquea. Nada de
    mensajes largos al principal (el usuario tiene una cola de 20).
 7. **Una línea de estado al final del tablón** al commitear; no se editan
