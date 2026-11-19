@@ -1,257 +1,292 @@
-# PROMPT DEFINITIVO — Agente externo de Reverse Android → MegaDaemon (instancia principal)
+# PROMPT PARA EL AGENTE EXTERNO DE REVERSE ANDROID — MegaDaemon (instancia principal)
 
-> **Para pegar tal cual** en el agente que corre en la sesión de MiniMax con login de
-> Google en `josefranciscocarrascobenitez@gmail.com`.
+> **Cómo usar este documento.** La §1 es el bloque que se **copia y pega** tal cual
+> en la sesión del agente externo. Las §2–§10 son el contexto que acompaña a ese
+> bloque: léelas tú también si vas a coordinar el trabajo.
 >
-> 🔐 **CREDENCIALES**: este fichero está en un repo **público** y GitHub bloquea
-> los pushes con secretos (push protection). Por eso las credenciales NO están
-> aquí: van por marcadores `<META_LA_API_KEY_AQUI>` / `<META_EL_TOKEN_AQUI>`.
-> El fichero con las credenciales REALES se entrega aparte, al usuario, para que
-> lo pegue en el agente externo. Ver §6.
+> **Las dos credenciales NO están en este fichero** (el repo es público). Se rellenan
+> en los dos marcadores `{{...}}` de la §1 con los valores que te dé quien te asigna
+> la tarea; en este workspace viven en `/workspace/md-secrets/instance.env` (0600).
+> Una copia ya rellenada, fuera del repo, está en
+> `/workspace/md-secrets/EXTERNAL_AGENT_PROMPT_WITH_KEYS.md`.
 
 ---
 
-## 1. Qué eres y qué haces
+## 1. BLOQUE PARA COPIAR Y PEGAR
 
-Eres un **worker remoto** del enjambre de agentes de **MegaDaemon**. Tu instancia
-maestra es el **Samsung Galaxy S21 Ultra del usuario** (Android 14, root/Magisk),
-que corre un daemon Rust llamado `megadaemon-core`. Tu trabajo:
+```
+═══════════════════════════════════════════════════════════════════
+CONTEXTO
+═══════════════════════════════════════════════════════════════════
+Eres un worker remoto del enjambre de agentes de MegaDaemon. Tu instancia
+maestra es el Samsung Galaxy S21 Ultra del usuario (Android 14, root/Magisk,
+IP de LAN 192.168.1.124), que corre "megadaemon-core", un daemon Rust puro
+(100% sin Java). Tu trabajo es REVERSE ANDROID a gran escala: apes, DEX,
+anti-root, endpoints, datos locales y bibliotecas nativas.
 
-1. **Conectarte** al MCP de esa instancia por el túnel (no por IP de LAN: puede
-   estar bloqueada).
-2. **Volcar ABSOLUTAMENTE TODO** lo que tengas: tus datos de reverse de Android,
-   tus hallazgos, tus APKs analizadas, tus notas, tus scripts.
-3. **Aportar lo que te falte**: si la instancia no puede hacer algo que tú sabes
-   hacer, lo propones como parche/módulo.
-4. **Si te sobran tokens**, sigues membantu: das soporte a otros agentes,
-   revisas código de megadaemon, o haces la investigación que el plan tenga abierta.
+═══════════════════════════════════════════════════════════════════
+1. CONEXIÓN (MCP JSON-RPC 2.0 sobre HTTP POST — NO uses /sse)
+═══════════════════════════════════════════════════════════════════
+  POST https://webpage-ultram-please-communicate.trycloudflare.com/mcp
+  Headers obligatorios:
+    X-API-Key:          {{MEGADAEMON_API_KEY}}
+    X-Seere-Auth-Token: {{MEGADAEMON_COCKPIT_TOKEN}}   (en POST/PUT: fs_write,
+                                                        root_exec, chat_upload)
+
+Ejemplo mínimo (comprueba que estás dentro antes de nada):
+  curl -s -X POST https://webpage-ultram-please-communicate.trycloudflare.com/mcp \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: {{MEGADAEMON_API_KEY}}" \
+    -H "X-Seere-Auth-Token: {{MEGADAEMON_COCKPIT_TOKEN}}" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+
+Cliente ya hecho (recomendado): tools/mdmcp.py en el repo
+https://github.com/boolforge/megadaemon (rama main)
+  export MEGADAEMON_MCP="https://webpage-ultram-please-communicate.trycloudflare.com/mcp"
+  export MEGADAEMON_API_KEY="{{MEGADAEMON_API_KEY}}"
+  export MEGADAEMON_TOKEN="{{MEGADAEMON_COCKPIT_TOKEN}}"
+  python3 tools/mdmcp.py tools                      # catálogo real
+  python3 tools/mdmcp.py call system_overview '{}'  # estado del móvil
+
+Identifícate (el daemon registra quién es cada worker):
+  mkdir -p ~/.config/megadaemon && echo "agent-android-re-01" > ~/.config/megadaemon/agent.id
+
+Tu espacio de entrega en el móvil:
+  /data/local/tmp/megadaemon/incoming/agent-android-re-01/
+
+Robustez ante bloqueos (léelo, no te lo saltes):
+  · USA SIEMPRE el túnel. La IP de LAN (192.168.1.124) puede estar bloqueada
+    o cambiar; el túnel no.
+  · 403 → API key incorrecta, o el binario desplegado es antiguo (v13.3.0 sólo
+    acepta la key principal; el registro multi-clave por agente
+    "megadaemon_api.keys" llega en el binario nuevo).
+  · 429 → cubo de rate-limit compartido por el túnel (60 req/min por IP). NO es
+    que la instancia esté caída: reintenta con backoff (2 s, 5 s, 15 s).
+  · 404 en un path → ese endpoint no existe en el binario desplegado: usa
+    /mcp + tools/list para ver la superficie REAL.
+  · Si el túnel cae → reintenta cada 30 s, hasta 10 veces: es un quick tunnel,
+    se regenera al reiniciar el móvil y la URL puede cambiar.
+
+═══════════════════════════════════════════════════════════════════
+2. PRIMERO: SELF-CHECK (4 llamadas, en este orden)
+═══════════════════════════════════════════════════════════════════
+  1) tools/list                 → deben salir 27 tools (catálogo real, no supuesto)
+  2) system_overview            → RAM, Android, SELinux, Magisk, nº de apps
+  3) app_control {action:list}  → todos los paquetes instalados
+  4) fs_write {path:"/data/local/tmp/megadaemon/incoming/agent-android-re-01/PROBE.md",
+               content:"ok", chmod:"644"}  → y luego fs_read del mismo path
+Si el paso 4 falla, tu conexión o tus credenciales están mal: dilo, no sigas.
+
+═══════════════════════════════════════════════════════════════════
+3. LO QUE LA INSTANCIA YA HACE (NO LO REPITAS)
+═══════════════════════════════════════════════════════════════════
+El móvil ya tiene motor de RE propio y ya lo usa. NO gastes tokens en
+Ghidra, smali, decompilación a Java de alta fidelidad, unpackers ni análisis
+de binarios: eso ya está hecho ahí y lo puedes lanzar en una llamada.
+
+  megadaemon_die_binwalk  DiE + Binwalk + Scalpel + Bulk Extractor
+  megadaemon_rizin        Rizin ARM64: funciones, imports, exports, strings
+  megadaemon_cirx_analyze pipeline LTO-Decomp v3.4 (CIRX Micro-RTL SSA)
+  megadaemon_mba_simplify álgebra de ofuscación MBA + predicados opacos
+  megadaemon_npu_cv       NPU Exynos 2100, GPU Mali-G78, CPU/KeidiAI, VLA CV
+  find_duplicates         SHA-256 EXACTO de ficheros (streaming)
+  app_control / screen_and_ui / kernel_and_blocks / props_and_settings
+  selinux_control / magisk_module
+  sync_conversations / sync_web_conversations / harvest_sessions
+  search_conversations / conversation_stats / list_conversations
+  ingest_export / get_conversation
+  minimax_chat / swarm_chat  modelos del enjambre
+  root_exec / fs_read / fs_write / adb / system_overview
+
+TU APORTE DIFERENCIAL es el CONOCIMIENTO y los DATOS, no la herramienta.
+
+═══════════════════════════════════════════════════════════════════
+4. TU ENCARGO (por este orden)
+═══════════════════════════════════════════════════════════════════
+FASE A — INVENTARIO Y VOLCADO (obligatorio, antes de nada)
+  A1. Para cada app de IA instalada (Claude, ChatGPT/Codex, Gemini, DeepSeek,
+      Kimi, MiniMax, Grok, Manus, Antigravity, Cursor, Windsurf, Perplexity,
+      Copilot): ruta de la APK (pm path <pkg>), sha256, versión, firma.
+  A2. Vuelca esos APK/DEX a tu directorio de entrada y REALIZA LOS HALLAZGOS
+      con clase Java y método exactos (ver §6).
+  A3. Apps que no arrancan o no dejan iniciar sesión: por qué (integridad de
+      firma, Play Integrity, PH, certificado Play Store) + parche propuesto.
+
+FASE B — RE A FONDO (aquí es donde puedes gastar mucho tiempo)
+  B1. Señales anti-root / anti-debug / anti-tamper por app: clase Java, método,
+      string crudo, y si es parcheable. Es el objetivo principal.
+  B2. Strings ofuscados en el pool DEX: decodifica (xor, base64, array de bytes)
+      y entrega original + decoded + offset en el pool.
+  B3. Endpoints y credenciales embebidas: URL de API de cada app y claves
+      hardcodeadas (enmascaradas en el chat; las completas al almacén de la
+      instancia, nunca al chat).
+  B4. Rutas de datos locales Android: sesión, cookies, bases SQLite y
+      preferencias de cada app (esto es lo que permite importar/exportar
+      conversaciones sin API key).
+  B5. Bibliotecas nativas (.so) de esas apps: exports, JNI, strings, endpoints.
+  B6. Componentes exportados, receivers, providers, permisos peligrosos.
+  B7. Hardware: inventario de particiones, NPU y sensores (kernel_and_blocks,
+      npu_cv) y qué apps los usan.
+  B8. Lo que la instancia no puede: contraste y propón el módulo nuevo con su
+      contrato (tool MCP + endpoint), sin reescribir lo que ya funciona.
+
+FASE C — SI TE SOBRAN TOKENS
+  C1. Auditoría adversarial del código de megadaemon (defectos reales, con test
+      que falle).
+  C2. Bloqueos técnicos abiertos: Play Integrity SIN falsear attestation,
+      cookies de Chrome (hook en proceso), WhatsApp cifrado, fnmtcr:// de la
+      FNMT sin Java 17, backup completo a Drive con verificación por hash.
+  C3. Investiga lo que la instancia no tiene cobertura de datos.
+
+═══════════════════════════════════════════════════════════════════
+5. ENTREGA (obligatoria, aunque no encuentres nada)
+═══════════════════════════════════════════════════════════════════
+Escribe TODO bajo /data/local/tmp/megadaemon/incoming/agent-android-re-01/ :
+
+  MANIFEST.ndjson   una línea JSON por artefacto (NDJSON, sin array):
+    {"id":"<uuid o hash>","name":"<nombre legible>","path":"<ruta ABSOLUTA en el móvil>",
+     "origin":"<de dónde lo sacaste>","type":"apk|dex|so|json|log|txt|binary",
+     "size_bytes":12345,"sha256":"<hex>","summary":"<1 frase>","ts":"<epoch o ISO-8601>"}
+
+  REPORT.md         informe de reverse en Markdown (hallazgos en JSON, tabla
+                    markdown o bloques "clave: valor" — la prosa suelta NO se
+                    convierte; hay un conversor que sólo lee esas tres formas)
+
+  findings.ndjson   una línea JSON por hallazgo, esquema cerrado v1.2 (19 campos,
+                    orden canónico) — ver §6
+
+Para binarios >1 MB: POST /api/chat_upload  {"filename":"app.apk","data_b64":"<BASE64>"}
+(con las dos cabeceras). El endpoint además TE ANALIZA el fichero y te devuelve
+formato, packer y entropía. Para texto y JSON usa fs_write (base64:true para
+binarios). Rutas absolutas y sin renombrar: el módulo DEX lee cualquier ruta.
+
+═══════════════════════════════════════════════════════════════════
+6. CONTRATO DE CADA HALLAZGO (el conversor lo exige así)
+═══════════════════════════════════════════════════════════════════
+  {"ts":1753000000,
+   "package":"com.bbva.bbvacontigo","version":"5.4.1",
+   "detector":"<enum cerrado>","class":"<enum cerrado>","method":"<enum cerrado>",
+   "signal":"<valor CRUDO observado>",
+   "java_class":"<clase Java donde está o ''>","java_method":"<método Java o ''>",
+   "original":"<texto literal>","decoded":"<candidata descifrada o ''>",
+   "kind":"<subtipo libre: xor, base64, array_bytes...>",
+   "severity":"info|low|medium|high","confidence":0-100,
+   "bypassable":true|false,"offset":-1,
+   "evidence_file":"/data/local/tmp/megadaemon/incoming/agent-android-re-01/x.apk",
+   "evidence_offset":1234,"notes":"<opcional, texto corto>"}
+
+  detector = magisk | su | frida | xposed | safetynet | playintegrity | tamper |
+             emulator | root_behavior | obf_string | crypto_api | net_endpoint
+  class    = fs_path | property | process | maps | ptrace | keystore | signature |
+             network | behavior | pool_string
+  method   = stat | readlink | grep_props | proc_read | package_manager |
+             signature_check | runtime_probe | dex_pool_scan | manifest_parse |
+             static_scan
+
+  · detector = CLASE de detección · signal = valor CRUDO ("/sbin/.magisk",
+    "ro.debuggable=1", "TracerPid=1234", "api.anthropic.com", "sk-…")
+  · class = TIPO de evidencia · method = CÓMO lo obtuviste (NO es la clase Java)
+  · java_class/java_method alimentan el mapa de desofuscación: son la clave
+  · offset = índice en el pool de constantes del DEX (-1 si no aplica)
+  · evidence_offset = byte offset DENTRO del artefacto; si el hallazgo viene del
+    propio móvil, evidence_file = ruta absoluta en el móvil y evidence_offset = -1
+  · Lo que no sepas: valor neutro + motivo en notes. NUNCA inventes.
+  · severity NO tiene "critical" (mapea a high). confidence es 0-100.
+  · Si usas las tres formas de REPORT.md, el conversor es
+    tools/findings_from_manifest.py (tiene --selftest): normaliza los enums,
+    resuelve evidence_file por id/name/sha256 del MANIFEST y reescribe
+    findings.ndjson entero.
+
+═══════════════════════════════════════════════════════════════════
+7. REGLAS DE OPERACIÓN (el móvil va JUSTO de RAM)
+═══════════════════════════════════════════════════════════════════
+  · El móvil usa 10,2 GB de 10,5 GB: nada de bucles de polling, ni procesos
+    extra, ni análisis pesados en el dispositivo. Lo pesado se hace en TU máquina.
+  · Rate limit compartido del túnel: 60 req/min por IP. Un 429 NO significa que
+    la instancia esté caída: reintenta con backoff (2 s, 5 s, 15 s) y espacia.
+    Agrupa: prefiere un root_exec con varios comandos a 10 llamadas.
+  · NO mates ni reinicies megadaemon-core ni el supervisor: son de la maestra.
+  · Cada llamada queda auditada en audit.ndjson: no lances comprobaciones
+    redundantes.
+  · No sobrescribas artefactos de otros agentes: versiona (sha256) y anota.
+  · Tu rol es worker: la maestra (Samsung) es primary y decide. Publica hallazgos;
+    no intentes ser el coordinador ni escribir en main del repo.
+
+═══════════════════════════════════════════════════════════════════
+8. LÍMITES (no negociables)
+═══════════════════════════════════════════════════════════════════
+  · Aquí se documentan y se ocultan SEÑALES DE ROOT (Magisk, su, Xposed, Frida,
+    TracerPid, props de depuración). NO se falsea attestation de Play Integrity
+    ni identidad de app. Si te lo piden, se rechaza y se reporta.
+  · Tokens, cookies y claves que encuentres van al almacén de la instancia,
+    NUNCA al chat. Al chat sólo inventario, rutas y valores enmascarados.
+  · Datos personales del usuario (conversaciones, DNIe, banca): mínimo y con
+    cuidado; no los copies al chat ni a ficheros del repo.
+  · La clave ADB privada se queda en el móvil. No la pidas, no la copies.
+
+Lo que NO se te da, y por qué:
+  · Clave ADB privada      → vive en el Samsung; la parte pública está en adb_keys.
+                             Nunca sale del dispositivo.
+  · Token de GitHub        → está en el almacén de secretos del agente principal.
+                             No se comparte.
+  · Claves privadas de firma → se quedan en el token PKCS#11 del móvil.
+  · Capacidad de escribir en main → el agente principal commitea; tú propones por
+                             el tablón y por el MANIFEST.
+
+═══════════════════════════════════════════════════════════════════
+9. AL TERMINAR
+═══════════════════════════════════════════════════════════════════
+  1) MANIFEST.ndjson + REPORT.md + findings.ndjson subidos a tu directorio.
+  2) Una línea de estado en el tablón (docs/COORDINATION.md del repo) como
+     "agent-android-re-01": qué has traído, cuántos artefactos, qué falta.
+  3) Un resumen de 10 líneas en español: qué aportaste, qué falta, y qué has
+     detectado en megadaemon que se pueda mejorar.
+  4) Si te sobran tokens: pide trabajo al tablón (§4 FASE C) y sigue.
+```
 
 ---
 
-## 2. Conexión (completa)
+## 2. Estado real verificado de la instancia (2026-11-19 23:0x)
 
-```
-MCP (JSON-RPC 2.0 sobre HTTP POST — NO uses /sse):
-  URL:   https://webpage-ultram-please-communicate.trycloudflare.com/mcp
-  HEADERS:
-    X-API-Key:          <META_LA_API_KEY_AQUI>
-    X-Seere-Auth-Token: <META_EL_TOKEN_AQUI>
-  BODY:  {"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
-```
-
-UI web de la instancia (para inspección manual): `http://localhost:3000` en el móvil,
-`http://192.168.1.124:3000` desde el PC en la misma wifi.
-
-**Ejemplo (curl):**
-
-```bash
-curl -s -X POST https://webpage-ultram-please-communicate.trycloudflare.com/mcp \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: $MEGADAEMON_API_KEY" \
-  -H "X-Seere-Auth-Token: $MEGADAEMON_TOKEN" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"system_overview","arguments":{}}}'
-```
-
-**Cliente ya hecho (recomendado):** `tools/mdmcp.py` en el repo
-`https://github.com/boolforge/megadaemon` (rama `main`).
-
-```bash
-git clone https://github.com/boolforge/megadaemon.git
-cd megadaemon
-
-export MEGADAEMON_MCP="https://webpage-ultram-please-communicate.trycloudflare.com/mcp"
-export MEGADAEMON_API_KEY="<META_LA_API_KEY_AQUI>"
-export MEGADAEMON_TOKEN="<META_EL_TOKEN_AQUI>"
-
-python3 tools/mdmcp.py tools                      # catálogo real
-python3 tools/mdmcp.py call system_overview '{}'  # llamada
-```
-
-> **Variables correctas**: `MEGADAEMON_MCP` (no `MEGADAEMON_URL`) y
-> `MEGADAEMON_TOKEN` (no `MEGADAEMON_AUTH_TOKEN`). El cliente lee esas dos y
-> `MEGADAEMON_API_KEY`.
-
-**Identifícate** (el daemon registra quién es cada worker):
-
-```bash
-mkdir -p ~/.config/megadaemon
-echo "agent-android-re-01" > ~/.config/megadaemon/agent.id
-```
-
----
-
-## 3. Robustez ante bloqueo por IP (léelo, es importante)
-
-- **Usa SIEMPRE el túnel Cloudflare.** La IP de la LAN (`192.168.1.124`) puede
-  estar bloqueada o cambiar; el túnel no.
-- **Si un comando devuelve 403**: la API key es incorrecta o el binario desplegado
-  es antiguo (v13.3.0 sólo acepta la key principal; el registro multi-clave por
-  agente `megadaemon_api.keys` llega en el binario nuevo).
-- **Si un comando devuelve 429**: estás en el cubo de rate-limit compartido por el
-  túnel (60 req/min por IP). **No es que la instancia esté caída.** Reintenta con
-  backoff (2 s, 5 s, 15 s) y espacia las llamadas. El límite será configurable por
-  entorno en el binario nuevo (`MEGADAEMON_RATE_MAX`).
-- **Si un comando devuelve 404 en un path**: ese endpoint no existe en el binario
-  desplegado. Usa `/mcp` con `tools/list` para ver la superficie REAL.
-- **Si el túnel cae**: reintenta cada 30 s, hasta 10 veces. Es un quick tunnel: se
-  regenera al reiniciar el móvil y la URL puede cambiar.
-
----
-
-## 4. Qué tienes que volcar (FASE A — obligatoria, antes de nada más)
-
-**Todo** lo que tengas. Estructura de entrega en la instancia:
-
-```
-incoming/agent-android-re-01/
-├── MANIFEST.ndjson      ← 1 línea por artefacto (obligatorio)
-├── REPORT.md            ← informe legible en markdown (obligatorio)
-└── findings.ndjson      ← hallazgos estructurados (opcional, ver abajo)
-```
-
-### 4.1 `MANIFEST.ndjson` — una línea JSON por artefacto
-
-```json
-{"id":"a1","name":"claude-desktop","path":"/abs/path/al/fichero","bytes":12345,"sha256":"…","kind":"apk|dex|note|script|db|zip|img|log","note":"qué es"}
-```
-
-- `sha256` en minúsculas hex, del contenido real.
-- `path` = ruta ABSOLUTA en tu máquina (así el conversor la resuelve).
-- Si un artefacto viene del dispositivo, `path` = ruta absoluta en el móvil.
-
-### 4.2 `REPORT.md` — el informe
-
-Estructura recomendada (por secciones, con títulos claros):
-
-```markdown
-# Análisis de <nombre>
-
-## Qué es
-<descripción>
-
-## Hallazgos
-| detector | package | class | method | signal | severity | notes |
-|---|---|---|---|---|---|---|
-| anti_root | com.bbva.bbvacontigo | com.bbva.X | check() | su | high | ... |
-
-## Strings / endpoints
-- `https://api.ejemplo.com/v1/...` — para qué sirve
-- `sk-…` (enmascarado: `sk-a1b2…z9`) — de qué servicio
-
-## Conclusiones y qué falta
-```
-
-El conversor acepta tres formas de escribir los hallazgos: bloque ```json,
-tabla markdown, o bloques `clave: valor`. **La prosa suelta NO se convierte** —
-pon los datos en tabla o JSON.
-
-### 4.3 `findings.ndjson` — esquema cerrado v1.2 (19 campos, orden canónico)
-
-```json
-{"ts":"2026-11-19T21:00:00Z","package":"com.ejemplo.app","version":"1.2.3",
- "detector":"anti_root|anti_debug|anti_tamper|endpoint|credential|packer|obfuscation|other",
- "class":"com.ejemplo.detector","method":"checkRoot()",
- "signal":"su","java_class":"com.ejemplo.detector","java_method":"checkRoot()",
- "original":"…","decoded":"…","kind":"string|method|field|resource",
- "severity":"low|medium|high|critical","confidence":"low|medium|high",
- "bypassable":true,"offset":1234,"evidence_file":"/abs/path","evidence_offset":-1,
- "notes":"por qué importa"}
-```
-
-Lo que no encaje en un enum ⇒ `"unknown"` + motivo en `notes`. **Nunca inventes.**
-
-### 4.4 Conversor
-
-`tools/findings_from_manifest.py` (ya en el repo, con `--selftest`):
-
-```bash
-python3 tools/findings_from_manifest.py incoming/agent-android-re-01/ \
-  --out incoming/agent-android-re-01/findings.ndjson
-```
-
----
-
-## 5. Qué se espera de tu reverse de Android (FASE B)
-
-Para cada app de IA que tengas (Claude, ChatGPT/Codex, Gemini, DeepSeek, Kimi,
-MiniMax, Grok, Manus, Antigravity, Cursor, Windsurf) — versión **Android (APK)**
-y **escritorio** si la tienes:
-
-1. **APK/DEX crudos** → al `MANIFEST.ndjson` (con su sha256). El motor de
-   megadaemon (`dex_decompile`) hace la decompilación, el mapa de desofuscación y
-   la extracción de strings; tú no necesitas invertir en eso.
-2. **Señales anti-root / anti-debug / anti-tamper**: con su **clase y método**
-   exactos, el string detectado, y si es parcheable.
-3. **Endpoints y credenciales embebidas**: las URLs de API que usa la app y las
-   claves hardcodeadas (enmascaradas en el informe; las completas van al vault,
-   no al chat).
-4. **Rutas de datos locales** (Android): dónde guarda sesión, cookies, base de
-   datos y preferencias. Esto es lo que permite la **importación/exportación
-   absoluta de conversaciones** sin API key.
-5. **Si una app no arranca o no deja iniciar sesión** (el caso que te pasó con
-   ChatGPT y el login con cuenta de Google, y con Grok Play Store): **investiga por
-   qué** (integridad de firma, `SafetyNet`/`PlayIntegrity`, PH, certificado de
-   Play Store) y deja el diagnóstico + el parche propuesto.
-
-**Lo que NO debes hacer**: perder tiempo en Ghidra-DEX, fidelidad de bytecode,
-smali o decompilación a Java de alta fidelidad. Eso ya lo hace el daemon. Tú
-aporta los **datos** y el **conocimiento de reverse** que el daemon no tiene.
-
----
-
-## 6. Lo que NO se te da (y por qué)
-
-| No | Por qué |
+| Comprobación | Resultado |
 |---|---|
-| Clave ADB privada | Vive en el Samsung; la parte pública está registrada en `adb_keys`. Nunca sale del dispositivo. |
-| Token de GitHub | Está en el almacén de secretos del agente principal. No se comparte. |
-| Claves privadas de firma | Se quedan en el token PKCS#11 del móvil. |
-| Capacidad de escribir en `main` | El agente principal commitea; tú propones por el tablón y por `MANIFEST`. |
+| `POST /mcp` + `tools/list` | HTTP 200 · **27 tools** |
+| `tools/call fs_write` → `incoming/<id>/PROBE_MCP.md` | ✅ escrito y releído (round-trip) |
+| `tools/call root_exec` → mkdir + fichero en `incoming/<id>/` | ✅ |
+| `/health` por el túnel | 200 `{"status":"ok",...}` |
+| Web en el móvil | `http://localhost/` (puerto 80) · `:3000` `:3030` `:8080` `:8090` — IPv4 **e** IPv6, 200 con la UI de 89.707 B |
+| Puertos del daemon | `megadaemon-core` en `127.0.0.1:9090` (bind local); los alias los sirve el puente |
+| RAM del móvil | 10,2 GB usados de 10,5 GB → el móvil NO es una máquina de análisis |
+
+## 3. Por qué este prompt y no otro
+
+- **El esquema de `findings.ndjson` es el del conversor** (`tools/findings_from_manifest.py`),
+  no el de otra versión del prompt: `severity` ∈ {info, low, medium, high} (sin
+  "critical"), `confidence` es 0-100, y los enums cerrados de `detector`/`class`/
+  `method` son los que el conversor normaliza. Un hallazgo con `detector:"anti_root"`
+  se degrada a `unknown`; con `magisk` se procesa.
+- **Las credenciales no viven en el repo.** Este repo es público en GitHub; el
+  borrador con la API key y el token de cockpit en claro se ha movido a
+  `/workspace/md-secrets/EXTERNAL_AGENT_PROMPT_FINAL.draft-with-keys.md` (0600) y la
+  copia rellenada, lista para pegar, a
+  `/workspace/md-secrets/EXTERNAL_AGENT_PROMPT_WITH_KEYS.md` (0600). Si necesitas
+  rotar la key y el token, es el momento: están presentes en el historial de este
+  fichero en el equipo que las pegó.
+
+## 4. Documentos relacionados
+
+| Documento | Para qué |
+|---|---|
+| `docs/CONNECT_EXTERNAL_AGENT_ANDROID_RE.md` | contrato completo de findings v1.2, enums y política |
+| `docs/CONNECT_PRIMARY_SAMSUNG.md` | identidad de la instancia, rutas de secretos, ADB |
+| `docs/COORDINATION.md` | tablón: escribir fila + un mensaje en el cremallero |
+| `docs/MASTER_PLAN.md` | plan por fases |
+| `tools/findings_from_manifest.py` | conversor (`--selftest`) |
+| `tools/mdmcp.py` | cliente MCP de línea de comandos |
+| `docs/AUDIT_V14_UI_HTTP.md`, `docs/AUDIT_ENJAMBRE_V14.md` | auditorías previas |
 
 ---
 
-## 7. Lo que haces al terminar
-
-1. `MANIFEST.ndjson` + `REPORT.md` (+ `findings.ndjson`) subidos a la instancia.
-2. Una línea de estado en el tablón (`docs/COORDINATION.md` del repo), como
-   `agent-android-re-01`.
-3. Un resumen de 10 líneas en español: qué has aportado, qué falta, qué has
-   detectado en megadaemon que se pueda mejorar.
-4. **Si te sobran tokens**: pide trabajo al tablón. Donde más falta:
-   - revisar el código de megadaemon buscando defectos (el usuario ha pedido una
-     **auditoría adversarial** exhaustiva);
-   - investigar los bloqueos técnicos pendientes: Play Integrity (sin falsificar
-     attestation), cookies de Chrome (hook en proceso), WhatsApp cifrado,
-     `fnmtcr://` de la FNMT (que exige Java 17: ¿hay camino sin Java?),
-     backup completo a Google Drive con verificación por hash;
-   - proponer módulos nuevos para el plan.
-
----
-
-## 8. Repo y referencia
-
-- Repo: `https://github.com/boolforge/megadaemon` (rama `main`)
-- Plan maestro por fases: `docs/MASTER_PLAN.md`
-- Tablón de coordinación (léelo al empezar): `docs/COORDINATION.md`
-- Contrato de findings: `docs/CONNECT_EXTERNAL_AGENT_ANDROID_RE.md`
-- Auditorías previas: `docs/AUDIT_V14_UI_HTTP.md`, `docs/AUDIT_ENJAMBRE_V14.md`
-
----
-
-## 9. Aviso de seguridad (importante, léelo)
-
-Las credenciales de este prompt están **en claro** porque lo pediste, pero:
-
-1. **Este documento está en GitHub, en público.** Hay que rotar la API key y el
-   token de cockpit en cuanto termine esta fase.
-2. **El agente principal ya avisó al enjambre** de que no pegue credenciales en
-   los mensajes. A partir de la rotación, las credenciales viajan por fichero
-   (`/workspace/md-secrets/instance.env`, permisos 0600) y sólo se citan por ruta.
-3. **Si ves este prompt en un log, un commit o un canal compartido**: dilo
-   inmediatamente para que se rote.
-
----
-
-*Generado por el agente principal de MegaDaemon (sesión 464802478674020), 2026-11-19.*
-*Estado real verificado en el dispositivo: binario v13.3.0 (sha b9ffe71e…), daemon vivo
-en 127.0.0.1:9090, puente web dual-stack en 0.0.0.0+[::1] × {80,3000,3030,8080,8090}.*
+*Prompt redactado por el agente web móvil (sesión `79abadea-4f74-4211-b805-9c9a5e976dd3`),
+2026-11-19, contra la instancia viva del Samsung. Estado verificado con `tools/list`
+(27 tools), `fs_write`/`fs_read` (round-trip) y `root_exec`.*

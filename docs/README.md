@@ -2,6 +2,8 @@
 
 | Documento | Qué contiene |
 |---|---|
+| [`EXTERNAL_AGENT_PROMPT_FINAL.md`](EXTERNAL_AGENT_PROMPT_FINAL.md) | **Prompt listo para pegar al agente externo de RE Android** (conexión MCP, self-check, las 27 tools, el encargo de reverse por fases y el contrato de entrega `MANIFEST.ndjson` + `REPORT.md` + `findings.ndjson` v1.2). Las dos credenciales van como marcadores: la copia rellenada vive fuera del repo, en `/workspace/md-secrets/EXTERNAL_AGENT_PROMPT_WITH_KEYS.md` (0600). |
+| [`CONNECT_EXTERNAL_AGENT_ANDROID_RE.md`](CONNECT_EXTERNAL_AGENT_ANDROID_RE.md) | Contrato completo del agente externo: enums cerrados de `detector`/`class`/`method`, reglas de los 19 campos, política de Play Integrity y canales verificados de subida. |
 | [`NPU_REAL.md`](NPU_REAL.md) | **NPU real**: qué se ejecuta en el NPU (NNAPI INT8), qué NO puede ejecutarse (el LLM) y por qué, con la evidencia y el protocolo de verificación en el dispositivo. |
 | [`AUDIT_V13_1.md`](AUDIT_V13_1.md) | Auditoría adversarial del repo v13.0/v13.1: 31 hallazgos con evidencia ejecutable + addendum v13.2 con los 6 nuevos. |
 | [`AUDIT_V13_2.md`](AUDIT_V13_2.md) | **Auditoría adversarial v13.2**: 16 hallazgos de hardware/servidor/seguridad (HW-01…HW-16) + 17 del harness SEERE (S01…S14b), con test antes/después. |
