@@ -1886,7 +1886,16 @@ mod tests {
         let board = board_path.to_string_lossy().to_string();
         let mut a = Mesh::attach(&board, inst("inst-a", false, 10, &["x"])).unwrap();
         let mut b = Mesh::attach(&board, inst("inst-b", false, 10, &["x"])).unwrap();
-        a.publish(&MeshTask::new("t-3", "tarea", "x")).unwrap();
+        // La tarea se envejece más allá del periodo de gracia
+        // (`DEFER_GRACE_SECS`): así el reparto por prioridad/load no
+        // interviene y el test mide SÓLO la semántica del lease.
+        // Antes, con la tarea recién publicada, el reparto comparaba la carga
+        // REAL de la máquina (`commit` refresca `me.load = current_load()`)
+        // contra la carga artificial del peer: el test PASABA en una caja
+        // ociosa y FALLABA en una saturada -> test dependiente del entorno.
+        let mut task = MeshTask::new("t-3", "tarea", "x");
+        task.created_at = "2000-01-01T00:00:00Z".into();
+        a.publish(&task).unwrap();
         a.claim("t-3", "x").expect("primer claim");
 
         // Con el lease vivo, B no puede.
@@ -2024,10 +2033,13 @@ mod tests {
         let board = dir.join(BOARD_FILE).to_string_lossy().to_string();
         let mut m = Mesh::attach(&board, inst("inst-a", false, 10, &["x"])).unwrap();
 
-        for _ in 0..3 {
+        // Tres EJECUCIONES DISTINTAS (task id distinto): `record_agent` guarda
+        // una fila por (agente, tarea, inicio), así que repetir la misma tarea
+        // colapsaba las tres y el contador salía 2 en vez de 4.
+        for i in 0..3 {
             m.record_agent(AgentTask {
                 agent: "agente-roto".into(),
-                task: "t-falla".into(),
+                task: format!("t-falla-{}", i),
                 kind: "firma".into(),
                 status: "failed".into(),
                 result_digest: None,
