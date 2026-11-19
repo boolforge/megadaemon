@@ -23,10 +23,15 @@ cd "$LOG" || exit 1
 
 sha() { sha256sum "$1" 2>/dev/null | cut -c1-16; }
 
+# El sha esperado llega en un fichero .sha256 junto al binario (lo escribe quien
+# lo sube). Si no existe, se usa el valor por defecto de la lista de abajo.
 install_one() {
   src="$1"; want="$2"; dest="$3"
   [ -f "$src" ] || { echo "   FALTA $src (no se instala $dest)"; return 1; }
   got=$(sha "$src")
+  if [ -f "$src.sha256" ]; then
+    want=$(cut -c1-16 "$src.sha256" 2>/dev/null)
+  fi
   if [ "$got" != "$want" ]; then
     echo "   SHA DISCREPANTE en $src: $got != $want -> no se instala"
     return 1
@@ -37,10 +42,10 @@ install_one() {
 }
 
 echo "== 1) md-coord (fix de WAL) =="
-install_one "$LOG/md-coord.0a7734e7" "0a7734e781140ab7d" "$LOG/md-coord"
+install_one "$LOG/md-coord" "0a7734e781140ab7d" "$LOG/md-coord"
 
 echo "== 2) megadaemon-core (canje remoto) =="
-install_one "$LOG/megadaemon-core.d93fa217" "d93fa2172a74ab17" "$LOG/megadaemon-core"
+install_one "$LOG/megadaemon-core" "d93fa2172a74ab17" "$LOG/megadaemon-core"
 
 echo "== 3) reinicio SÓLO del daemon =="
 pkill -x megadaemon-core 2>/dev/null

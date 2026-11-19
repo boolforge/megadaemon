@@ -231,7 +231,37 @@ SHA-256 del cliente está implementado en JS puro (≈60 líneas) para que
   vivo.
 * **Descarga**: `GET` con verificación; el toast dice si el hash cuadró.
 
-### 4.9 Sistema — `view-sistema`
+### 4.9 Reparto — `view-reparto`
+
+* **Endpoints**: `GET /api/v2/market`, `GET /api/v2/market/rules?node=…`,
+  `POST /api/v2/market/rules`, `POST /api/v2/market/route`.
+* **Qué resuelve**: el usuario pidió "una forma de distribuir trabajo entre
+  los nodos: inferencia, compilación, cómputo, red… cada nodo debe
+  contribuir, automatizado por reglas locales según lo que el dispositivo
+  pueda dar".  Esta vista es ese motor, hecho visible.
+* **Muestra**:
+  * **Oferta**: por nodo, los tipos de trabajo que ofrece (`inference`,
+    `build`, `compute`, `network`, `storage`), la **capacidad libre** que
+    ofrece y **por qué** comparte o no (batería, cargador, temperatura,
+    modo *dedicada*, concurrencia).
+  * **Demanda y plan**: cada tarea pendiente con su tipo de trabajo, el nodo
+    que debería cogerla, la puntuación y **la razón** del reparto; y los
+    candidatos descartados con su motivo.
+  * **Contribución**: tareas hechas/falladas por nodo, % del total y
+    veredicto; los nodos vivos con capacidad libre **sin trabajo** aparecen
+    como "deben contribuir".
+  * **Mis reglas locales**: editor de las reglas del nodo activo
+    (dedicada, sólo con cargador, compartir inferencia, batería mínima,
+    temperatura máxima, concurrencia, fracción reservada, sesgo de
+    prioridad y tipos ofrecidos).
+  * **Estado del dispositivo** que manda en las reglas (batería, carga,
+    temperatura, política de energía).
+* **Acciones**: guardar reglas (validadas por el daemon), cargar las reglas
+  de un nodo y "Repartir" una demanda concreta (el motor elige nodo y
+  explica por qué; con `publish` también se publica en el bus).
+* **Sin nodos**: la vista lo dice y no inventa oferta.
+
+### 4.10 Sistema — `view-sistema` `view-sistema`
 
 * **Endpoints**: `GET /api/v2/agentic` y `GET /api/v2/routes`.
 * **Muestra**: el **bucle agéntico local** en sus 5 fases (observar →
@@ -264,12 +294,27 @@ Filtra por texto, se navega con flechas y `Enter`, se cierra con `Esc`.
 ## 6. Autenticación en la UI
 
 1. `localStorage["md_api_key"]` → cabecera `X-API-Key`.
-2. `sessionStorage["md_token"]` (o `window.MEGADAEMON_TOKEN`) → cabecera
+2. `sessionStorage["md_token"]` (o `window.MEGADAEMON_TOKEN`, token embebido
+   por el servidor en los binarios que lo hacen) → cabecera
    `X-Seere-Auth-Token`.
-3. Un **401/403** en cualquier llamada dispara: pedir API key (modal) →
-   `POST /api/session/exchange` → reintentar la misma llamada.
-4. Si el usuario cancela, se avisa con un toast y la vista se queda como
-   estaba (no se borra lo ya pintado).
+3. Un **401** (sólo 401) dispara el prompt de API key → `POST
+   /api/session/exchange` → reintento de la misma llamada.
+   * El canje **exige un token real** (`ok === true` y `token` no vacío): un
+     `200 {"status":"executed"}` del dispatcher genérico **no** es una sesión.
+   * Si ya hay sesión, **no** se pregunta nada.
+   * Como mucho se pregunta **una vez**: si el canje falló, la UI no insiste.
+   * Un **403** (token que falta) o un **404** (endpoint inexistente) **no**
+     abren el prompt: son errores de otra naturaleza.
+4. **Diagnóstico adaptativo** al arrancar (chip en la cabecera + banner en
+   Resumen), con tres estados:
+   * `sesión: ok` — canje correcto y lecturas bien.
+   * `sólo lectura` — el canje falla pero la lectura va: las escrituras
+     fallarán (UI-16 abierto).
+   * `sin sesión` — ni canje ni lectura: el daemon exige token de sesión.
+     El mensaje **nombra el endpoint que falló** y su código.
+   La sonda de lectura es `GET /api/status` (ligero, pasa por el gate).
+5. Los errores de cualquier llamada se muestran con **endpoint + código**:
+   `"/api/v2/llm → HTTP 403 · falta la cabecera X-Seere-Auth-Token"`.
 
 La API key se guarda **sólo** en el navegador y sólo se envía al propio
 daemon.  La UI nunca la imprime en logs ni en la URL.

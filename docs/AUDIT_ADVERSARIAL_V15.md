@@ -34,15 +34,18 @@
 
 ### 0.1 Los tres hallazgos que cambian el plan
 
-1. **El "arreglo de seguridad" de v14 deja la web sin token.** La v14 dejó de
-   incrustar el token de sesión en el HTML público (bien pensado) y añadió un
-   intercambio `POST /api/session/exchange`… **pero el endpoint está
-   registrado en la rama `GET`**, además `requires_auth()` lo marca como
-   protegido ⇒ pedir el token exige tener el token, y la rama GET lee la API key
-   del cuerpo (que un GET no tiene). Con el binario v14 desplegado, **toda la
-   UI v1 devuelve 403 en cada `/api/*`** (T-A07, T-A08).
-   El móvil sigue con v13.3.0, así que hoy nadie lo ha notado: **el día que se
-   despliegue el ARM64 nuevo, la web muere**.
+1. **La web v14 se arregló a medias y el arreglo abre una puerta peor.**
+   Durante esta auditoría (21:xx) se detectó que el "arreglo de seguridad" de
+   v14 (quitar el token del HTML público) dejaba la web **entera en 403**:
+   el intercambio `POST /api/session/exchange` estaba registrado en la rama
+   **GET** y `requires_auth()` lo exigía (círculo vicioso). **El owner del
+   cockpit lo corrigió a las 22:48** (UI-16: la ruta está en POST, se exime
+   de `requires_auth` y se introduce `local_browser`). **Pero el arreglo
+   entrega el token root a cualquier petición que "parezca local"** — y
+   "parecer local" se decide con el `Host` y con la ausencia de cabeceras de
+   proxy, **que son falsificables**: el puente web (que escucha en
+   `0.0.0.0`) las reescribe ⇒ **RCE root desde la wifi del usuario**
+   (A-18, reproducido con test a las 22:59).
 2. **Hay dos RCE root nuevas y encadenadas** que no estaban en ninguna
    auditoría previa: el heredoc de `fs_write` (T-A01) y el `stat` que AWK
    construye con el nombre del fichero en `find_duplicates` (T-A02). Ambas se
@@ -111,14 +114,15 @@ detectado.
 | `adv_a04_require_api_key_se_ignora_sin_key_configurada` | A-04 | (T) |
 | `adv_a05_el_rate_limit_no_aplica_al_loopback` | A-05 | (T) |
 | `adv_a06_escribir_en_data_adb_no_pide_confirmacion` | A-06 | (T) |
-| `adv_a07_el_intercambio_de_token_de_sesion_es_inalcanzable` | A-07/A-08 | (T) |
+| `adv_a18_la_exencion_local_entrega_el_token_root` | **A-18** | (T) |
+| `adv_a19_el_tunel_no_recibe_el_token_root` | A-18 (control positivo) | (T) |
 | `adv_a08_post_a_ruta_inexistente_devuelve_200_ok` | A-08 | (T) |
 | `adv_a09_brain_status_true_por_cualquier_proceso_en_8080` | A-09 | (T) |
 | `adv_a10_8080_no_esta_en_los_puertos_alias` | A-10 | (T) |
 | `adv_c01_el_estimador_de_tokens_usa_chars_por_4` | C-01 | (T) |
 | `adv_c02_hw_mmio_convierte_un_error_de_lectura_en_vacio` | C-02 | (T) |
 | `adv_e01_la_config_de_api_key_se_relee_en_cada_request` | E-01 | (T) |
-| `adv_e02_el_techo_de_memoria_del_cockpit_supera_la_ram_libre` | E-03 | (T) |
+| `adv_e02_el_techo_de_memoria_del_cockpit_supera_la_ram_libre` | E-16/E-03 | (T) |
 | `adv_h01_el_conversor_duplica_el_valor_en_la_colision_signal_class` | H-01 | (T) |
 
 ---
@@ -133,7 +137,8 @@ detectado.
 | **A-04** | **P0** | `rust-core/src/api_key.rs:311-318` (`decide`) | `if !cfg.enabled { return Decision::Allow; }` está **antes** de mirar `cfg.forced`. `MEGADAEMON_REQUIRE_API_KEY=1` sólo obliga cuando *hay* key: si `<STATE_DIR>/megadaemon_api.key` falta o el env se borra, el middleware se desactiva entero y **el túnel público sirve el daemon sin credencial**. | **(T)** `adv_a04_…`: `forced=true, enabled=false` ⇒ `Allow` para una IP externa sin cabeceras. (C) `api_key.rs:311-318`. | Si se desinstala la app (se borra `/data/user/0/com.agy/…/state/`) o se pierde `megadaemon.env`, el cockpit queda **abierto a internet** por el túnel, con `root_exec` detrás. | Invertir el orden: si `forced` ⇒ exigir key (y **autogenerarla** si falta, con aviso ruidoso). Añadir `Decision::Unauthorized` + "key no configurada" al log. | S (1 h) |
 | **A-05** | P1 | `rust-core/src/api_key.rs:53-61` (`rate_applies_to`), `:316-318` | El rate limit (60/min) **no se aplica al loopback por defecto**. En el móvil TODO el tráfico entra por 127.0.0.1 (Chrome, el túnel Cloudflare, los agentes) ⇒ **no queda ningún cubo limitado**: el límite v13.3.0 que provocaba los 429 en cascada se ha desactivado sin sustituirlo. | **(T)** `adv_a05_…`: `rate_applies_to(127.0.0.1) == false` y 5000 peticiones seguidas de loopback ⇒ ninguna `RateLimited`. (C) `api_key.rs:274`. | Un agente con un bucle agresivo (o la UI con 20 peticiones por recarga) puede tumbar el móvil; y a la inversa, nadie puede afirmar que hay protección. | Limitar **por ruta** y por **agente** (cabecera `X-Agent-Id` → cubo propio), no por IP de origen; y poner el límite por defecto en el propio `X-Seere-Auth-Token` (que sí se puede exigir al loopback). | M (1 día) |
 | **A-06** | P1 | `rust-core/src/android.rs:712-718` (`write_requires_confirm`) | Sólo `/dev/block` y `/system` exigen `confirm`. **`/data/adb` no**: escribir un `post-fs-data.sh` en `/data/adb/modules/` es persistencia de código que se auto-arranca en cada arranque, sin confirmación. | **(T)** `adv_a06_…`: `fs_write("/data/adb/modules/…/post-fs-data.sh")` **no** devuelve `needs_confirm` y se ejecuta. (C) `android.rs:712-718`. | Backdoor permanente en el móvil vía MCP, sin `confirm_destructive`. | Ampliar la lista: `/data/adb`, `/data/local/tmp/megadaemon`, el directorio de la app, `/sdcard/Android`, y exigir `confirm` en cualquier escritura fuera de `uploads/`, `extracted/` y `state/`. | S (2 h) |
-| **A-07** | **P0** | `rust-core/src/cockpit_server.rs:889-921` (intercambio), `:123-151` (`requires_auth`), `:840-848` (gate de token), `:852-883` (HTML sin token), `:1795-1805` (catch-all) | El flujo de v14 "el HTML ya no lleva el token; el navegador lo pide con la API key" **no funciona**: (a) `/api/session/exchange` está en la rama **`GET`** (`if method == "GET" { match path { … } }`), pero el contrato documentado es **POST**; (b) `requires_auth()` devuelve `true` para ese path ⇒ **exige `X-Seere-Auth-Token` para poder obtenerlo** (círculo vicioso: el gate salta en `:840` **antes** del router); (c) la rama GET lee la API key del **cuerpo**, que un GET no tiene ⇒ nunca devuelve el token; (d) un POST con token cae en el `catch-all` que responde **200 `{"status":"executed"}`** sin token. | **(T)** `adv_a07_…`: POST sin token ⇒ **403**; POST con token ⇒ **200 "executed"** sin token; GET con token ⇒ **`{"ok":false}`**; GET sin token ⇒ **403**; `GET /` ⇒ `window.MEGADAEMON_TOKEN=""`; `GET /api/status` sin token ⇒ **403**, con token ⇒ 200. (C) las cinco líneas citadas. | **Al desplegar el ARM64 v14 la web del móvil deja de funcionar entera**: todos los `/api/*` dan 403 y la UI no tiene forma de pedir la API key. | (a) Mover el endpoint a la rama POST **y** eximirlo de `requires_auth` (es el único punto donde se puede obtener el token); (b) exigir **API key** sí o sí (cabecera o cuerpo); (c) emitir un token **de sesión** con caducidad, no el token root permanente; (d) en la UI, campo para la API key + llamada al intercambio al arrancar. | M (1 día) |
+| **A-07** | ✅ CORREGIDO | `rust-core/src/cockpit_server.rs:217-219` (+ `:183-228`) | **Detectado por esta auditoría a las 21:xx sobre el código de las 21:09** y **corregido por el owner del cockpit a las 22:48** (UI-16) mientras esta auditoría corría. El defecto era: `/api/session/exchange` estaba en la rama **GET**, `requires_auth()` lo exigía (círculo vicioso) y el HTML público ya no llevaba token ⇒ con el binario v14 **toda la UI devolvía 403**. El arreglo: la ruta existe en POST, `requires_auth()` la exime y se añade el concepto de `local_browser`. | (T) el test `adv_a18` **falla por otro motivo** (ver A-18): el deadlock sí está resuelto, pero el arreglo abrió una puerta peor. (C) `cockpit_server.rs:217-219`. | **Si se hubiera desplegado el ARM64 v14 sin este arreglo, la web del móvil quedaba muerta.** Ya no aplica. | — (hecho) | — |
+| **A-18** | **P0** | `rust-core/src/cockpit_server.rs:846` (`local_browser`), `:855` (gate de API key), `:921` (gate de token), `:959-966` (HTML con token), `:1380-1400` (intercambio), `:129-165` (`host_is_loopback` / `has_proxy_headers`) | **Nuevo P0 introducido por el arreglo de A-07 (22:48).** La exención `local_browser` se decide con (a) el **IP de peer** loopback, (b) la **cabecera `Host`** loopback y (c) la **ausencia** de cabeceras de proxy — **las tres son falsificables**. Y el efecto es: (1) `POST /api/session/exchange` con **cualquier** `api_key` no vacío devuelve el **token de sesión root** (`local_browser && !provided.is_empty()` ⇒ la key real **no se comprueba**); (2) `GET /` incrusta el **token root** en el HTML; (3) **todos** los `GET /api/*` responden sin token (el gate de la API key también se salta: `Decision::Unauthorized if … \|\| local_browser`). El **puente web** (`0.0.0.0:80/3000/3030/8080/8090`) entra desde loopback (**`SRC_IP = 127.0.0.2`**, `web_bridge.py:129`, que `api_key::is_loopback` considera loopback porque mira `octets()[0] == 127`) y **reescribe el `Host` a `127.0.0.1:9090`** (`web_bridge.py:166-199`: `host` está en `HOP_BY_HOP` ⇒ `http.client` pone el suyo) ⇒ cualquier equipo de la wifi encaja **exactamente** en el perfil "local". | **(T)** `adv_a18_la_exencion_local_entrega_el_token_root`: POST con `api_key:"esta-no-es-la-key"` ⇒ **200 `ok:true` + el token root real**; `GET /` ⇒ el HTML **contiene el token root**; `GET /api/status` sin token ⇒ **200**. (T) `adv_a19_el_tunel_no_recibe_el_token_root` (control positivo): con `Host` de dominio + `CF-Connecting-IP` el túnel **sí** queda fuera ⇒ el discriminante es **una cabecera**, y el puente la borra. | **RCE root desde la wifi del usuario** (y desde cualquier proceso del móvil): `curl http://192.168.1.124/api/session/exchange -d '{"api_key":"x"}'` → token root → `POST /api/chat {"message":"$ id"}` → root. El túnel público está a salvo **por suerte** (cabeceras de proxy), no por diseño. | (a) `local_browser` **no** puede depender del `Host` ni de "no hay cabeceras de proxy" (se falsifican); (b) el intercambio **debe** comprobar la API key real **siempre** (`provided == cfg.key`), sin la rama `local_browser`; (c) el token que se entrega debe ser **de sesión** (con caducidad y sin permisos root), no el token root; (d) el puente debe dejar de reescribir el `Host` a loopback o dejar de existir (A-15). | M (½ día) |
 | **A-08** | P2 | `rust-core/src/cockpit_server.rs:1795-1805` | El `catch-all` del router POST responde **HTTP 200** con `{"status":"executed","endpoint":…}` a **cualquier** ruta inexistente. | **(T)** `adv_a08_…`: `POST /api/no-existe-esta-ruta` ⇒ 200 + `"status":"executed"`. (C) `cockpit_server.rs:1795`. | Un cliente (o un agente) que escriba a una ruta mal escrita believes que la operación se ejecutó. | Responder **404** (`{"error":"not_found"}`) y reservar el 200 para rutas implementadas. | S (30 min) |
 | **A-09** | P2 | `rust-core/src/cockpit_server.rs:453-459` (`check_llama_online`), `:1016` (uso), `:1948` (`ALIAS_PORTS`) | `brain_active` se calcula **conectando a `127.0.0.1:8080`**. En el móvil el 8080 lo sirve el **puente web** (o cualquier proceso) ⇒ el indicador dice "cerebro activo" aunque no haya ningún LLM. | **(T)** `adv_a09_…`: con un `TcpListener` vacío en 8080, `/api/brain_status` devuelve `"brain_active":true`. (C) `cockpit_server.rs:453-459`. | La UI miente sobre el estado del LLM ⇒ el usuario diagnostica mal por qué el chat no responde. | Sondear el **PID** de `llama-server` (como ya hace `npu_bridge.rs:260`) o leer el socket real del daemon; nunca el 8080 genérico. | S (1 h) |
 | **A-10** | P2 | `rust-core/src/cockpit_server.rs:1948` vs `deploy/99-megadaemon.sh:116-125` y `deploy/web_bridge.py:104` | `ALIAS_PORTS = [3000, 3030, 8090, 9090]` — **sin 8080**. Pero el supervisor (`alias_ports_listening` mira 0050/0BB8/0BC6/1F90/1F9A) y el puente (puertos `3000,3030,8090,8080,80`) y `write_url` asumen que 8080 sirve la UI. | **(T)** `adv_a10_…`: `!ALIAS_PORTS.contains(&8080)`. (C) `cockpit_server.rs:1948` vs `99-megadaemon.sh:116`. | Al desplegar v14, `http://localhost:8080` vuelve a estar muerto (justo la URL que el supervisor anuncia como OK) ⇒ otro "la web no me funciona". | Una **única** fuente de verdad para la lista de puertos (`ALIAS_PORTS` exportada al shell vía `/health`), y el supervisor la lee de ahí en vez de hardcodearla. | S (2 h) |
@@ -288,9 +293,11 @@ hereda y porque el usuario debe saber qué **no** se puede prometer.
 
 Objetivo: que desplegar v14 no tumbe el móvil ni regale root.
 
-1. **A-07** (intercambio de token) — sin esto, el ARM64 v14 deja la web muerta.
-   Mover el endpoint a POST + eximirlo de `requires_auth` + UI con campo de API key.
-   **Es el primer paso**: todo lo demás del frente web depende de él.
+1. **A-18** (el arreglo de A-07 entrega el token root a lo "local") — es el
+   P0 más grave del repo ahora mismo y **es una regresión de hace 10 minutos**:
+   el intercambio **debe** exigir la API key real siempre, y `local_browser`
+   **no** puede depender del `Host` ni de la ausencia de cabeceras de proxy.
+   (A-07 ya lo arregló el owner del cockpit a las 22:48.)
 2. **A-01** y **A-02** (RCE root por `fs_write` y por `find_duplicates`) — 2 vectores
    de ejecución como root alcanzables desde el MCP que usa el agente externo.
    Mitigación inmediata: base64 siempre en `fs_write` + `stat` fuera de AWK.
@@ -374,7 +381,7 @@ G-01 (arneses versionados) ───────────► todas (nada se p
 | **2** | **A-02** | P0 | `find_duplicates` ejecuta el **nombre del fichero** (AWK → shell) como root | **Test** `adv_a02_find_duplicates_inyecta_comandos_por_el_nombre_de_fichero` + `android.rs:808` |
 | **3** | **A-15** | P0 | El puente web (0.0.0.0:80/3000/…) inyecta API key **y** token de sesión a cualquier cliente de la LAN | `deploy/web_bridge.py:201-204` + `:265-270` |
 | **4** | **A-04** | P0 | `MEGADAEMON_REQUIRE_API_KEY=1` no fuerza nada si no hay key ⇒ fail-open del túnel | **Test** `adv_a04_require_api_key_se_ignora_sin_key_configurada` + `api_key.rs:311-318` |
-| **5** | **A-07** | P0 | El intercambio de token de sesión es inalcanzable ⇒ con v14 la web devuelve 403 en todo | **Test** `adv_a07_el_intercambio_de_token_de_sesion_es_inalcanzable` + `cockpit_server.rs:889/123/1795` |
+| **5** | **A-18** | P0 | La exención `local_browser` entrega el **token root** a cualquier petición "local" (el puente falsea el `Host`) ⇒ RCE root desde la LAN | **Test** `adv_a18_la_exencion_local_entrega_el_token_root` + `cockpit_server.rs:846/855/921/959/1390` |
 | **6** | **B-01** | P0 | API key real (`mdaemon_sk_live_<prefijo redactado>`) y token de sesión root (`c17398e1…`) publicados en el árbol de trabajo | `docs/EXTERNAL_AGENT_PROMPT_FINAL.md` (líneas 37/63/64 a las 21:21; redactado a las 21:28) → **rotar** |
 | **7** | **B-02** | P0 | Token de un túnel Cloudflare en claro en un fichero **versionado** | `tools/upload_bin.py:10-11` |
 | **8** | **A-16 / E-03** | P1 | 64 clientes × 8 MB = **512 MB** de buffers (+128 MB de pilas) en un móvil con ~300 MB libres | **Test** `adv_e02_el_techo_de_memoria_del_cockpit_supera_la_ram_libre` + `cockpit_server.rs:695-718` |

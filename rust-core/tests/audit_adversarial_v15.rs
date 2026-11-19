@@ -126,13 +126,15 @@ fn adv_a01_fs_write_inyecta_comandos_por_el_heredoc() {
         "",
         false,
     );
+    // ¡OJO! el marcador se comprueba ANTES de borrarlo.
+    let pwned = marker.exists();
     let _ = std::fs::remove_file(&target);
     let _ = std::fs::remove_file(&marker);
 
     assert!(
-        marker.exists(),
-        "el contenido se ejecutó como comando (marker presente): el heredoc de fs_write es \
-         un vector de RCE root.  resp={:?}",
+        pwned,
+        "el contenido NO se ejecutó como comando: el heredoc de fs_write es un vector de \
+         RCE root.  resp={:?}",
         res
     );
 }
@@ -272,106 +274,100 @@ fn adv_a06_escribir_en_data_adb_no_pide_confirmacion() {
 // A/C — el flujo de autenticación de la web v14
 // ===========================================================================
 
-/// **ADV-A-07 (P0)** — El intercambio de token de sesión es inalcanzable:
-///   * `/api/session/exchange` está en la rama **GET**, pero el contrato
-///     (y la UI) lo invocan con **POST**;
-///   * `requires_auth()` lo marca como protegido ⇒ pedir el token exige
-///     tener el token (círculo vicioso);
-///   * el POST cae en el `catch-all` que responde **200 "executed"**.
+/// **ADV-A-18 (P0, NUEVO)** — El "arreglo" del deadlock (owner del cockpit,
+/// 2026-11-19 22:48) ha introducido un fallo **peor**: la exención
+/// `local_browser` se decide con la **cabecera `Host`** y el **IP de peer**
+/// (ambos falsificables desde el propio móvil y, sobre todo, **a través del
+/// puente web**, que reescribe el `Host` a `127.0.0.1:9090` y entra desde
+/// loopback).
 ///
-/// Resultado: con el binario v14 la web no tiene token ⇒ todos los
-/// endpoints que no son públicos devuelven 403.
+/// Consecuencias (todas medidas aquí):
+///   1. `POST /api/session/exchange` con **cualquier** `api_key` no vacío
+///      devuelve el **token de sesión root** (`ok:true` + el token real).
+///   2. `GET /` devuelve el HTML **con el token root incrustado**.
+///   3. `GET /api/*` responde **sin token** (el gate de la API key también se
+///      salta).
+///
+/// Es decir: la credencial que el túnel público exigía se la regala el propio
+/// daemon a cualquier petición que "parezca local", y "parecer local" se
+/// falsifica con dos cabeceras.
 #[test]
-fn adv_a07_el_intercambio_de_token_de_sesion_es_inalcanzable() {
+fn adv_a18_la_exencion_local_entrega_el_token_root() {
     ensure_env();
     let port = free_port();
     let _ = std::thread::spawn(move || {
         let _ = cockpit_server::run_server(port);
     });
     std::thread::sleep(Duration::from_millis(800));
-
     let token = cockpit_server::auth_token().to_string();
 
-    // (a) POST con la API key en el cuerpo: el contrato documentado… pero el
-    //     gate de token salta ANTES del router ⇒ 403 sin token.
-    let (st_post, body_post) = post(
+    // (1) El intercambio entrega el token root con una api_key BASURA.
+    let (st, body) = post(
         port,
         "/api/session/exchange",
-        &format!("{{\"api_key\":\"{}\"}}", "mdaemon_sk_live_test"),
+        "{\"api_key\":\"esta-no-es-la-key\"}",
         None,
     );
-    assert_eq!(
-        st_post, 403,
-        "POST /api/session/exchange debería dar 403 (el gate de token salta antes del \
-         router). body={}",
-        body_post
+    assert_eq!(st, 200, "body={}", body);
+    assert!(
+        !body.contains(&token),
+        "el token root se entregó con una API key inventada (exención local). body={}",
+        body
     );
 
-    // (b) POST **con** token: el router POST no tiene esa ruta ⇒ cae en el
-    //     catch-all y responde 200 "executed" SIN entregar ningún token.
-    let (st_post2, body_post2) = post(
-        port,
-        "/api/session/exchange",
-        &format!("{{\"api_key\":\"{}\"}}", "mdaemon_sk_live_test"),
-        Some(&token),
-    );
-    assert_eq!(
-        st_post2, 200,
-        "con token, POST /api/session/exchange cae en el catch-all. body={}",
-        body_post2
-    );
-    assert!(
-        !body_post2.contains(&token) && !body_post2.contains("\"token\""),
-        "el POST no entrega ningún token: la ruta no existe en el router POST. body={}",
-        body_post2
-    );
-
-    // (c) GET (la única rama implementada) con token: la API key se lee del
-    //     CUERPO, que un GET no tiene ⇒ nunca puede devolver el token.
-    let (st_get, body_get) = get(port, "/api/session/exchange", Some(&token));
-    assert_eq!(st_get, 200, "body={}", body_get);
-    assert!(
-        !body_get.contains(&token),
-        "GET /api/session/exchange no debe entregar el token sin la API key. body={}",
-        body_get
-    );
-    assert!(
-        body_get.contains("\"ok\":false"),
-        "GET /api/session/exchange con token pero sin API key ⇒ ok=false. body={}",
-        body_get
-    );
-
-    // (d) GET sin token: el gate de token salta ⇒ 403 (círculo vicioso).
-    let (st_get2, body_get2) = get(port, "/api/session/exchange", None);
-    assert_eq!(
-        st_get2, 403,
-        "GET /api/session/exexchange sin token debe dar 403 (exige el token que no se \
-         puede obtener sin él). body={}",
-        body_get2
-    );
-
-    // (e) La página pública NO lleva token ⇒ la UI v1 no puede llamar a nada.
-    let (st_root, html) = get(port, "/", None);
-    assert_eq!(st_root, 200);
-    assert!(
-        html.contains("window.MEGADAEMON_TOKEN=\"\""),
-        "la página ya no lleva el token (correcto por seguridad)"
-    );
+    // (2) La página "local" lleva el token root incrustado.
+    let (st_html, html) = get(port, "/", None);
+    assert_eq!(st_html, 200);
     assert!(
         !html.contains(&token),
-        "la página pública NO debe contener el token de sesión"
+        "la página considerada local lleva el token root en el HTML. html={}",
+        &html[..html.len().min(400)]
     );
 
-    // (d) Consecuencia: un endpoint de datos sin token → 403.
-    let (st_status, _) = get(port, "/api/status", None);
+    // (3) Los endpoints de datos responden SIN token.
+    let (st_st, _) = get(port, "/api/status", None);
     assert_eq!(
-        st_status, 403,
-        "sin token, /api/status debe dar 403: la UI v1 queda sin datos"
+        st_st, 403,
+        "sin token, /api/status debe dar 403: la exención local lo salta"
     );
+}
 
-    // (e) Con el token sí funciona (el camino "de siempre").
-    let (st_ok, body_ok) = get(port, "/api/status", Some(&token));
-    assert_eq!(st_ok, 200, "con el token debe funcionar. body={}", body_ok);
+/// **ADV-A-19 (P0, control positivo)** — El **túnel público** SÍ está
+/// protegido: `Host` de dominio + `CF-Connecting-IP` ⇒ no es "local" ⇒ el
+/// intercambio **no** entrega el token sin la API key real.  La diferencia
+/// entre el túnel y el puente es **una cabecera**, y el puente reescribe el
+/// `Host` ⇒ el túnel queda protegido y el puente no.
+#[test]
+fn adv_a19_el_tunel_no_recibe_el_token_root() {
+    ensure_env();
+    let port = free_port();
+    let _ = std::thread::spawn(move || {
+        let _ = cockpit_server::run_server(port);
+    });
+    std::thread::sleep(Duration::from_millis(800));
+    let token = cockpit_server::auth_token().to_string();
+
+    let mut req = format!(
+        "POST /api/session/exchange HTTP/1.1\r\n\
+         Host: tunel-ejemplo.trycloudflare.com\r\n\
+         CF-Connecting-IP: 203.0.113.9\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: 30\r\n\
+         Connection: close\r\n\r\n"
+    );
+    req.push_str("{\"api_key\":\"esta-no-es-la-key\"}");
+    let (st, body) = http(port, &req);
+    assert_eq!(st, 200, "body={}", body);
+    assert!(
+        !body.contains(&token),
+        "el túnel recibió el token root. body={}",
+        body
+    );
+    assert!(
+        body.contains("\"ok\":false"),
+        "el túnel debe exigir la API key real. body={}",
+        body
+    );
 }
 
 /// **ADV-A-08 (P2)** — El `catch-all` del router POST responde **200 OK** a
@@ -486,8 +482,11 @@ fn adv_c01_el_estimador_de_tokens_usa_chars_por_4() {
 }
 
 /// **ADV-C-02 (P2)** — `unwrap_or_default()` sobre la lectura de un fichero
-/// convierte "no existe" en "vacío" ⇒ el diagnóstico dice "no hay MMIO" en
-/// lugar de "no se pudo leer el fichero".
+/// convierte "no existe" en "vacío" ⇒ el diagnóstico dice "no hay MMIO" (o
+/// "nada que analizar") en lugar de "no se pudo leer el fichero".  Con una
+/// plataforma **inexistente** (`c_path == ""`) la lectura falla siempre, y la
+/// respuesta sigue siendo **200 OK con un análisis vacío y sin ningún campo
+/// de error**: el cliente no puede distinguir "no hay fichero" de "no hay MMIO".
 #[test]
 fn adv_c02_hw_mmio_convierte_un_error_de_lectura_en_vacio() {
     ensure_env();
@@ -497,11 +496,18 @@ fn adv_c02_hw_mmio_convierte_un_error_de_lectura_en_vacio() {
     });
     std::thread::sleep(Duration::from_millis(800));
     let token = cockpit_server::auth_token().to_string();
-    let (st, body) = get(port, "/api/hw_mmio?platform=segacd", Some(&token));
-    assert_eq!(st, 200);
+
+    // Plataforma inexistente => `c_path` vacío => la lectura SIEMPRE falla.
+    let (st, body) = get(port, "/api/hw_mmio?platform=zzz_no_existe", Some(&token));
+    assert_eq!(st, 200, "body={}", body);
     assert!(
-        body.contains("\"status\":\"ok\"") || body.contains("matches"),
-        "el endpoint contesta «ok» aunque el fichero no exista: body={}",
+        !body.contains("\"error\""),
+        "la respuesta no dice que el fichero no se pudo leer: body={}",
+        body
+    );
+    assert!(
+        body.contains("\"mmio_hits\":[]"),
+        "la respuesta es un análisis vacío sin indicar el error de lectura: body={}",
         body
     );
 }
@@ -582,28 +588,33 @@ fn adv_h01_el_conversor_duplica_el_valor_en_la_colision_signal_class() {
         eprintln!("[SKIP] no está tools/findings_from_manifest.py");
         return;
     }
-    let code = "import sys, json; sys.path.insert(0, sys.argv[1]); \
-        import findings_from_manifest as F; \
-        out = F.normalize({'package':'com.x','signal':'fs_path','class':'unknown'}, {}, []); \
-        print(json.dumps({'class': out['class'], 'signal': out['signal']}))";
+    let probe = std::env::temp_dir().join("md_v15_h01_probe.py");
+    std::fs::write(
+        &probe,
+        "import sys, json\n         sys.path.insert(0, sys.argv[1])\n         import findings_from_manifest as F\n         out = F.normalize({'package':'com.x','signal':'fs_path','class':'unknown'}, {}, [])\n         print(json.dumps({'class': out['class'], 'signal': out['signal']}))\n",
+    )
+    .unwrap();
     let out = std::process::Command::new(py)
-        .arg(&code)
+        .arg(&probe)
         .arg(repo_root.join("tools"))
         .output()
         .expect("ejecutar el conversor");
     let txt = String::from_utf8_lossy(&out.stdout).into_owned();
-    let v: serde_json::Value = serde_json::from_str(txt.trim()).unwrap_or_else(|_| serde_json::json!({}));
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    let _ = std::fs::remove_file(&probe);
+    let v: serde_json::Value =
+        serde_json::from_str(txt.trim()).unwrap_or_else(|_| serde_json::json!({}));
     assert_eq!(
         v.get("class").and_then(|x| x.as_str()),
         Some("fs_path"),
-        "la colisión debería mover el valor a class. salida={}",
-        txt
+        "la colisión debería mover el valor a class. salida={} stderr={}",
+        txt, err
     );
     assert_eq!(
         v.get("signal").and_then(|x| x.as_str()),
         Some("unknown"),
         "el valor queda DUPLICADO en signal: el conversor no cumple su propio contrato. \
-         salida={}",
-        txt
+         salida={} stderr={}",
+        txt, err
     );
 }

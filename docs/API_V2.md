@@ -113,6 +113,10 @@ Un test de Rust comprueba que **la UI llama exactamente a estas rutas** y que
 | POST | `/api/v2/share/put` | sube un fichero completo verificando su hash |
 | POST | `/api/v2/share/chunk` | sube un trozo (64 KiB) de un fichero |
 | POST | `/api/v2/share/commit` | ensambla los trozos y publica en el manifiesto |
+| GET | `/api/v2/market` | mercado de capacidades: oferta, demanda, plan de reparto y ledger de contribución |
+| GET | `/api/v2/market/rules` | reglas locales de compartición de un nodo (`?node=…`) |
+| POST | `/api/v2/market/rules` | guarda las reglas locales de un nodo (validadas) |
+| POST | `/api/v2/market/route` | elige el nodo que debe tomar una demanda y opcionalmente la publica en el bus |
 | GET | `/api/v2/routes` | esta tabla en JSON + política de auth |
 
 Rutas de la v1 que la v2 **reutiliza** (no se duplican): `POST /api/tool/agent`
@@ -464,6 +468,126 @@ Ejemplo de error:
 
 ---
 
+## 5.12 Mercado de capacidades (`/api/v2/market*`)
+
+El reparto de trabajo entre nodos es **automático y local**: cada instancia
+declara con sus **reglas locales** qué parte de sí misma comparte y en qué
+condiciones; el motor cruza oferta y demanda y reparte.  Si un nodo no puede
+compartir (batería, calor, modo *dedicada*, sin cargador) **no se le ofrece
+nada**: la regla manda antes que la urgencia.
+
+### Tipos de trabajo
+
+`inference` (LLM/embeddings) · `build` (compilación, DEX, firma) ·
+`compute` (CPU genérica) · `network` (scrape, sincronización) ·
+`storage` (vault, backups).
+
+El mapeo desde el `kind` de una tarea es automático
+(`webui::work_kind_for`): `sync.web`→`network`, `apk.analyze`→`build`,
+`agent.*`→`inference`, `share.*`→`storage`, resto→`compute`.
+
+### Reglas locales (`ShareRules`)
+
+| Campo | Meaning | Por defecto |
+|---|---|---|
+| `dedicated` | instancia dedicada: no comparte nada | `false` |
+| `only_when_charging` | sólo comparte con cargador | `false` |
+| `min_battery_pct` | batería mínima para compartir | 30 (móvil) |
+| `max_cpu_temp_c` | temperatura máxima de CPU | 45 °C |
+| `max_concurrent` | concurrencia máxima de tareas compartidas | 2 (1 en móvil) |
+| `reserved_ratio` | fracción reservada para uso local | 0.5 (0.7 en móvil) |
+| `offers` / `denies` | tipos de trabajo que ofrece / nunca ofrece | compute, network, storage (+inference si hay LLM local) |
+| `priority_bias` | desempate (‑100..100) | 0 |
+| `share_inference` | compartir el LLM local | `true` |
+
+Se guardan en `<cockpit_state>/mesh_rules.json`
+(`{"version":1,"nodes":{"<id>":{…},"*":{…}}}`); la clave `"*"` es la política
+común para los nodos que no tienen reglas propias.
+
+### Capacidad ofrecida
+
+```
+capacidad = (1 − reserved_ratio) × (1 − carga)
+            × 0.5 si la batería < 40 %
+```
+
+Si la capacidad baja del 5 % o hay un bloqueo (dedicada, sin cargador,
+batería baja, térmico, temperatura alta) el nodo **no comparte** y la
+respuesta explica por qué.
+
+### Puntuação (equidad: todos deben contribuir)
+
+```
+puntuación = capacidad × (1 + priority_bias/100) × equidad
+equidad    = 1 + (1 − %contribución/100) × 0.5
+```
+
+Quien menos ha contribuido recibe hasta un ×1.5 de empujón: el reparto
+empuja a que **todos los nodos aporten** trabajo en vez de que uno se coma todo.
+
+### Contrato JSON
+
+```jsonc
+// GET /api/v2/market
+{
+  "ok": true,
+  "generated_at": "2026-11-19T23:10:00Z",
+  "device": { "capacity_pct": 72, "charging": false, "cpu_temp_c": 44.0,
+              "thermal_hot": false, "load": 0.18, "policy": "balanced",
+              "is_mobile": true },
+  "kinds": ["inference", "build", "compute", "network", "storage"],
+  "supply": [ { "id": "pc-linux", "role": "worker", "load": 0.12,
+                "capabilities": ["reverse", "llm"],
+                "rules": { "dedicated": false, "min_battery_pct": 30, "…": "…" },
+                "offer": { "available": true, "capacity": 0.44,
+                           "offers": ["compute", "network", "storage", "inference"],
+                           "blocked_by": [], "reason": "ofrece compute/network/storage con 44 % de capacidad libre" },
+                "contribution": { "node": "pc-linux", "tasks": 7, "share_pct": 63.6, "verdict": "ok" } } ],
+  "demand": [ { "id": "t-8f2a", "kind": "sync.web", "work_kind": "network",
+                "priority": 5, "state": "pending", "source": "cola local" } ],
+  "plan": [ { "demand": { "…": "…" },
+              "assignment": { "demand_id": "t-8f2a", "node": "pc-linux",
+                              "work_kind": "network", "score": 0.412,
+                              "reason": "pc-linux ofrece network · capacidad 44 % · prioridad +0 · contribución 63.6 % (equidad ×1.18)",
+                              "assigned": true },
+              "candidates": [ { "node": "samsung", "score": 0.0,
+                                "reason": "batería 12 % por debajo del mínimo 30 %" } ] } ],
+  "contribution": [ { "node": "pc-linux", "tasks": 7, "ok": 7, "failed": 0,
+                      "ok_rate": 100.0, "share_pct": 63.6, "verdict": "ok" } ],
+  "must_contribute": [ { "node": "pc-linux-2", "reason": "tiene capacidad libre y reglas compatibles pero no ha tomado ninguna tarea" } ],
+  "rules_source": "…/state/mesh_rules.json"
+}
+
+// GET /api/v2/market/rules?node=pc-linux
+{ "ok": true, "node": "pc-linux", "rules": { "…": "…" }, "explicit": true,
+  "source": "…", "policy": { "…": "…" }, "device": { "…": "…" } }
+
+// POST /api/v2/market/rules
+{ "node": "pc-linux",
+  "rules": { "dedicated": false, "only_when_charging": true, "min_battery_pct": 40,
+             "max_cpu_temp_c": 42, "max_concurrent": 3, "reserved_ratio": 0.4,
+             "priority_bias": 10, "share_inference": true,
+             "offers": ["compute", "network", "inference"] } }
+// → 200
+{ "ok": true, "node": "pc-linux", "rules": { "…": "…" }, "source": "…" }
+// → si el valor es imposible
+{ "ok": false, "error": "bad_value",
+  "detail": "reserved_ratio debe estar entre 0.0 y 0.95" }
+
+// POST /api/v2/market/route
+{ "demand_id": "t-8f2a", "publish": false }
+// → 200
+{ "ok": true,
+  "assignment": { "node": "pc-linux", "score": 0.412, "reason": "…", "assigned": true },
+  "published": null,
+  "note": "el plan es una recomendación de las reglas locales; publicarla en el bus es opcional" }
+```
+
+Con `publish: true` la demanda se publica en el bus (`nodes/assign`) para que
+la otra instancia la reclame con un lease.
+
+---
+
 ## 6. Firmas públicas de `rust-core/src/webui.rs`
 
 ```rust
@@ -489,6 +613,13 @@ pub fn node_migrate(target_version: &str) -> Value;
 pub fn api_v2_routes() -> Vec<(&'static str, &'static str)>;
 pub fn routes_doc() -> Value;
 pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value>;
+pub fn work_market() -> Value;
+pub fn work_rules(node: &str) -> Value;
+pub fn work_rules_set(node: &str, payload: &Value) -> Value;
+pub fn work_route(demand: &Value) -> Value;
+pub fn rules_for(node: &str) -> ShareRules;
+pub fn default_rules(node: &str) -> ShareRules;
+pub fn work_kind_for(kind: &str) -> &'static str;
 pub fn sha256_hex(data: &[u8]) -> String;
 pub fn base64_encode(data: &[u8]) -> String;
 pub fn base64_decode(text: &str) -> Result<Vec<u8>, String>;
