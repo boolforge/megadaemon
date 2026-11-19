@@ -65,4 +65,27 @@ Detalle y reproducción en `docs/AUDIT_HARNESS_V13_4.md`.
   app, instalación del supervisor, espera ACTIVA de /health (timeout 45 s, reintentos) en vez de los
   6 s que daban falso negativo, exige 200 EXACTO (el `toybox wget && echo 200` daba falso OK con
   404), y ROLLBACK al .bak con el motivo en el log si no arranca. Idempotente.
+<<<<<<< HEAD
 - 2026-11-19 21:15 · agente perfil · **feat(v13.4) analizador de perfil del usuario**: `rust-core/src/profile_analysis.rs` (modulo mio, unico) implementado: `analyze()` (corpus/intereses/actividad/temas/pendientes/fortalezas/bloqueos/preguntas recurrentes/stats), `briefing(markdown)` (informe para psicologo en Markdown o JSON por secciones), `topic_drift(window_days)` (ventana reciente vs anterior) y `daily_digest(days)` (actividad por dia). Nucleo puro `analyze_conversations(&[Value])` (testeable sin state dir) + lectura de `<state_dir>/sync/*.ndjson`. Stopwords ES/EN + UI + lexico generico; marcadores de pendiente/logro/bloqueo con deteccion de negacion; cada evidencia cita `conversation_id` + `ts`. 15 tests sinteticos verdes. Target dir exclusivo: `/workspace/md-t-profile`. Commiteado y pusheado: `72962de`.
+=======
+- 2026-11-19 21:2x · agente MegaDaemon-APK · **fix(v14) build bloqueado + apk_inventory + cola de builds**:
+  (a) `src/coordination.rs` tenía el bloque `impl TaskBoard` de sync DUPLICADO byte a byte
+  (239 líneas: `export_for_sync`/`merge_remote`/`sync_with_peer` repetidas) -> el crate no compilaba
+  y bloqueaba el build ARM64 que sube el binario nuevo al Samsung. Bloque duplicado eliminado
+  (backup en /tmp/coordination.rs.bak). Regla: antes de commitear, COMPROBAR que el crate compila;
+  una copia literal rompe a los demás, no a quien la escribe.
+  (b) `src/apk_inventory.rs` reescrito (dueño: este agente) y declarado en `lib.rs`: el ZIP se lee
+  con el crate `zip` mediante un lector `Read+Seek` propio sobre `root_exec`+base64 (NO se
+  reimplementa el ZIP); SHA-256 con `sha2` en Rust a trozos; parser AXML propio corregido
+  (min_sdk/target_sdk, `exported`, intent-filters, tipos 0x03/0x10/0x12); fingerprint canónica;
+  `drift_compare()` pura y testeable; `dump_all` con hashes; `inventory(limit: usize)` con firma
+  única. 13 tests sintéticos (SHA-256 vector, AXML construido a mano, drift, APK sintética, parser
+  de `pm list packages -f`). `Cargo.toml`: se restauran `zip`/`sha2`/`flate2`/`rusqlite` (el código
+  de origin/main YA usaba sha2 y rusqlite sin declararlos -> main no compilaba).
+  (c) `tools/build-queue.sh`: COLA DE BUILDS (flock, 3 slots, target compartido, incremental=0,
+  -j2) porque se contaron 52 procesos `cargo` simultáneos sobre un NAS compartido y generaban
+  errores FALSOS ("failed to copy bitcode", "rust-lld: cannot open ...rcgu.o"). Todos deben usar
+  `tools/build-queue.sh`.
+  (d) Web: puerto local 9090 (el README decía 3000) + alias 3000/3030/8090/8080; el Samsung se
+  alcanza por `https://webpage-ultram-please-communicate.trycloudflare.com` y su MCP en `/mcp`.
+>>>>>>> b1e8dc1 (fix(v14): origin/main no compilaba (deps ausentes) + modulo de APKs + cola de builds)

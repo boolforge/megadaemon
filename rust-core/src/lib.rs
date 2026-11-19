@@ -8,6 +8,10 @@
 
 pub mod accelerator_policy;
 pub mod android;
+pub mod coordination;
+pub mod cockpit_doctor;
+pub mod adb_client;
+pub mod apk_inventory;
 pub mod sync;
 pub mod sync_web;
 pub mod api_key;
