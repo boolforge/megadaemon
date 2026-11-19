@@ -52,6 +52,7 @@ pub mod npu_bridge;
 pub mod npu_cv;
 pub mod npu_nnapi;
 pub mod pattern;
+pub mod peers;
 pub mod pointers;
 pub mod power_policy;
 pub mod profile_analysis;
