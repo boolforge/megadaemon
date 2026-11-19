@@ -31,3 +31,8 @@ _IA_Cuarentena/
 *.img
 *.bin
 !.gitignore
+
+# Tablero de coordinación (estado local, no se versiona)
+state/board.sqlite
+state/board.sqlite-*
+state/instance.json

@@ -126,10 +126,23 @@ fn main() -> ExitCode {
                 let task_id = args.get(2).cloned().unwrap_or_default();
                 let owner = arg("--owner").ok_or("falta --owner")?;
                 let ok = has("--ok");
-                let report = args
-                    .get(3)
-                    .cloned()
+                // El informe de 3 líneas puede venir de varias formas:
+                //   --text "..." | --report "..." | --ok "..." | --ok (bandera)
+                //   o posicional: report <id> "..." --owner x --ok
+                // OJO: `args.get(3)` NO vale (con banderas detrás, la
+                // posición 3 es "--owner" y el informe se perdía).
+                let report = arg("--text")
                     .or_else(|| arg("--report"))
+                    .or_else(|| arg("--ok-text"))
+                    .or_else(|| {
+                        // `--ok` puede actuar como bandera o端口ar el texto.
+                        arg("--ok").filter(|v| !v.starts_with("--"))
+                    })
+                    .or_else(|| {
+                        args.get(3)
+                            .cloned()
+                            .filter(|v| !v.starts_with("--"))
+                    })
                     .unwrap_or_else(|| "sin informe".into());
                 let board = TaskBoard::open(&board_path)?;
                 board.report_task(&task_id, &owner, ok, &report)?;
