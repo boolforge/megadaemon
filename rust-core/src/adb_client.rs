@@ -174,9 +174,11 @@ impl HostKey {
             TokenHash::Full => token,
         };
         let signer = RsaSigningKey::<Sha1>::new(self.key.clone());
-        let sig = signer
-            .sign(msg)
-            .map_err(|e| AdbError::Protocol(format!("fallo al firmar el token AUTH: {e}")))?;
+        // `signature` 2.x: `sign()` devuelve la firma directamente y hace
+        // panic si falla; `try_sign()` devuelve Result.
+        let sig = signer.try_sign(msg).map_err(|e| {
+            AdbError::Protocol(format!("fallo al firmar el token AUTH: {e}"))
+        })?;
         Ok(sig.to_vec())
     }
 
@@ -189,11 +191,13 @@ impl HostKey {
             .to_public_key()
             .to_public_key_der()
             .map_err(|e| AdbError::Protocol(format!("no se pudo derivar la clave pública: {e}")))?;
+        use base64ct::Encoding;
         Ok(base64ct::Base64::encode_string(der.as_bytes()))
     }
 
     /// Tamaño del módulo en bits (2048 de serie).
     pub fn bits(&self) -> usize {
+        use rsa::traits::PublicKeyParts;
         self.key.n().bits()
     }
 }

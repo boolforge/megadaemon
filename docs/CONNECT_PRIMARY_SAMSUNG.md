@@ -382,3 +382,48 @@ REGLAS DURAS
     OOM y errores falsos de compilación).
   - Si algo falla, MEJÓRALO en tu módulo y repórtalo en 3 líneas.
 ```
+
+---
+
+## 6. ADB nativo en MegaDaemon (v13.4.1) — sin binario `adb`, sin Java
+
+Desde v13.4.1 el daemon habla el protocolo ADB directamente y expone una **tool MCP
+`adb`**. Desde el móvil habla con su propio `adbd` por `127.0.0.1:5555`; desde fuera,
+por el túnel (misma ruta que el resto ⇒ **inmune al bloqueo por IP**).
+
+| Pieza | Estado |
+|---|---|
+| Cliente ADB en Rust puro | `rust-core/src/adb_client.rs` (CNXN/AUTH/OPEN/WRTE/OKAY/CLSE + SYNC) |
+| Firma RSA-SHA1 del token AUTH | `HostKey::sign_token()` — RSASSA-PKCS1-v1_5 sobre SHA-1 (igual que `EVP_DigestSign` de AOSP) |
+| Tool MCP `adb` | `rust-core/src/adb_tool.rs` — `status\|shell\|devices\|keyinfo\|push\|pull` |
+| Claves de host registradas | `mavis@samsung`, `mavis@fleet`, `mavis@user-pc` en `/data/misc/adb/adb_keys` |
+| Dónde vive la clave privada | `<state_dir>/adb_host_key.pem` (0600) o `/data/local/tmp/megadaemon/adb_host_key.pem` — **nunca** en el repo |
+
+Llamadas:
+
+```json
+{"action":"status"}
+{"action":"shell","command":"id"}
+{"action":"pull","src":"/data/app/…/base.apk","dst":"/tmp/base.apk"}
+{"action":"push","src":"/tmp/x.bin","dst":"/data/local/tmp/x.bin"}
+```
+
+### 6.1 API key por agente (revocable)
+
+`megadaemon_api.key` = clave principal (intocable). `megadaemon_api.keys` = una clave por
+línea para cada agente; se revocan quitando su línea. La clave principal no se toca, así
+que **nadie se queda fuera** al acuñar una clave nueva.
+
+```sh
+# acuñar una clave para un agente (en el móvil)
+su -c 'printf "%s\n" "mdaemon_sk_live_…" >> /data/local/tmp/megadaemon/state/megadaemon_api.keys'
+```
+
+### 6.2 Inmunidad al bloqueo por IP
+
+| Ruta | ¿Depende de la IP de la LAN? |
+|---|---|
+| Túnel Cloudflare (cockpit + MCP + tool `adb`) | **No** |
+| `192.168.1.124:3000` / `:5555` | Sí (sólo desde casa) |
+
+Regla: **todo lo que deba funcionar desde fuera va por el túnel.**
