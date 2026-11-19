@@ -183,6 +183,94 @@ pub fn resolve_template() -> Option<String> {
     None
 }
 
+/// Plantilla HTML embebida en el binario.
+///
+/// BUG v13.4 (AUDIT-WEB-01): la UI "no funcionaba" en el PC del usuario
+/// (localhost:3000) porque `resolve_template()` sólo miraba en disco y el
+/// binario del PC no tenía `web/` al lado.  Con el `include_str!` el binario
+/// es autosuficiente en cualquier plataforma; el fichero en disco sigue
+/// teniendo prioridad para poder parchear la UI sin recompilar.
+pub const EMBEDDED_TEMPLATE: &str = include_str!("../../web/cockpit_template.html");
+
+/// Puertos realmente enlazados (los alias son best-effort).
+static OPEN_PORTS: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
+/// Puerto principal del cockpit.
+static PRIMARY_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+/// Instante en el que el listener nació.
+static LISTENER_BORN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// IPs locales de la máquina (heurística: la que usaría el tráfico
+/// saliente). Sirve para construir las URLs que el usuario debe abrir
+/// desde el PC contra el móvil.
+pub fn local_ips() -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
+        if sock.connect("8.8.8.8:80").is_ok() {
+            if let Ok(addr) = sock.local_addr() {
+                let ip = addr.ip().to_string();
+                if !ip.is_empty() && ip != "0.0.0.0" {
+                    out.push(ip);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Diagnóstico de la capa web.
+///
+/// El usuario dijo "la interfaz web no me funciona" sin poder saber por
+/// qué.  Con esto, un `curl /health` dice TODO lo necesario: dónde
+/// escucha, qué puertos están vivos, qué plantilla se sirve, si el token
+/// está materializado y qué URLs exactas hay que abrir.
+pub fn web_diagnostics() -> Value {
+    let template_path = resolve_template();
+    let template_source = if template_path.is_some() {
+        "file"
+    } else if EMBEDDED_TEMPLATE.trim().is_empty() {
+        "NINGUNA"
+    } else {
+        "embedded"
+    };
+    let template_bytes = template_path
+        .as_ref()
+        .and_then(|p| fs::metadata(p).ok())
+        .map(|m| m.len())
+        .unwrap_or(EMBEDDED_TEMPLATE.len() as u64);
+    let token_path = format!("{}/cockpit_token", state_dir());
+    let token_materialized = Path::new(&token_path).exists();
+    let ports_open = OPEN_PORTS.get().cloned().unwrap_or_default();
+    let primary = PRIMARY_PORT.get().copied().unwrap_or(3000);
+    let ips = local_ips();
+
+    let mut urls: Vec<String> = Vec::new();
+    for p in &ports_open {
+        urls.push(format!("http://127.0.0.1:{}", p));
+    }
+    for ip in &ips {
+        for p in &ports_open {
+            urls.push(format!("http://{}:{}", ip, p));
+        }
+    }
+
+    json!({
+        "bind": "0.0.0.0",
+        "primary_port": primary,
+        "ports_open": ports_open,
+        "ports_alias": ALIAS_PORTS,
+        "listener_alive": LISTENER_BORN.get().is_some(),
+        "template_source": template_source,
+        "template_path": template_path,
+        "template_bytes": template_bytes,
+        "template_missing": template_source == "NINGUNA",
+        "token_materialized": token_materialized,
+        "token_path": token_path,
+        "local_ips": ips,
+        "urls": urls,
+        "state_dir": state_dir(),
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunnerState {
     pub status: String,
@@ -648,6 +736,26 @@ fn handle_client(mut stream: TcpStream) {
         .map(|a| a.ip())
         .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
     let cfg = api_key::ApiKeyConfig::load(&state_dir());
+    // BUG v13.4 (AUDIT-WEB-02): la página pública (`/`) se servía DESPUÉS del
+    // gate de API key, así que el navegador recibía 401 y la UI "no
+    // funcionaba" (ni en localhost:3000 del PC ni por el túnel Cloudflare).
+    //
+    // La página no es un endpoint de datos: sólo sirve el HTML+JS. El token
+    // de sesión va embebido en ella, y la API key protege los DATOS vía
+    // `requires_auth()` + `auth_ok()`. Servir el HTML sin API key mantiene el
+    // fail-closed de los datos (que es lo que importa) y arregla la UI.
+    // El cliente JS pide la API key al usuario si las llamadas fallan con 401.
+    //
+    // v14 (AUDIT-WEB-05): `/health` y `/metrics` también estaban exentos del
+    // *token* de sesión pero NO del gate de API key ⇒ devolvían 401 y el
+    // diagnóstico era invisible justo cuando hacía falta. Ahora son públicos
+    // (no exponen datos de usuario: versión, uptime, puertos y contadores),
+    // igual que ya se documentaba en el commit 4771277.
+    let is_public_page = path == "/" || path == "/index.html";
+    let is_public_probe = matches!(
+        path,
+        "/health" | "/api/health" | "/metrics" | "/api/metrics" | "/api/ping"
+    );
     match api_key::decide(
         &cfg,
         &RATE_LIMITER,
@@ -656,6 +764,10 @@ fn handle_client(mut stream: TcpStream) {
         std::time::Instant::now(),
     ) {
         api_key::Decision::Allow => {}
+        api_key::Decision::Unauthorized if is_public_page || is_public_probe => {
+            // Se permite la página/sonda; el resto de endpoints siguen protegidos.
+            REQ_REJECTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         api_key::Decision::Unauthorized => {
             REQ_REJECTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             println!(
@@ -733,17 +845,24 @@ fn handle_client(mut stream: TcpStream) {
             "/" | "/index.html" => {
                 let html = resolve_template()
                     .and_then(|p| fs::read(&p).ok())
-                    .unwrap_or_else(|| {
-                        b"<!doctype html><meta charset=utf-8><h1>MegaDaemon v13.1 Zenith Rust Cockpit</h1>                          <p>cockpit_template.html no encontrado. Rutas probadas: $MEGADAEMON_WEB_TEMPLATE,                           &lt;bin&gt;/../../web/, ./web/. Copia el fichero o exporta MEGADAEMON_WEB_TEMPLATE.</p>"
-                            .to_vec()
-                    });
-                // El token se inyecta en la página (legible sólo same-origin,
-                // porque el CORS ya no es `*`).
+                    .unwrap_or_else(|| EMBEDDED_TEMPLATE.as_bytes().to_vec());
+                // BUG v13.4 (AUDIT-WEB-06 · SEGURIDAD): la página pública
+                // llevaba el token de sesión INCRUSTADO.  Con `GET /` público
+                // (necesario para que el navegador pueda abrir la UI) eso
+                // significa que cualquiera que llegue al puerto obtiene el
+                // token → POST /api/chat → RCE root en el móvil.  El CORS
+                // same-origin no protege: el atacante no usa un navegador
+                // ajeno, usa curl.
+                //
+                // Solución: la página NO lleva el token.  El cliente pide la
+                // API key (que es la credencial remota) y la intercambia por
+                // un token de sesión en `POST /api/session/exchange`, que
+                // exige la API key válida.  Así:
+                //   * `GET /`               → público, sin secretos.
+                //   * `GET /api/*`          → exige API key (o loopback).
+                //   * `POST /api/*`         → exige API key + token de sesión.
                 let html = String::from_utf8_lossy(&html).into_owned();
-                let inject = format!(
-                    "<script>window.MEGADAEMON_TOKEN=\"{}\";</script>",
-                    auth_token()
-                );
+                let inject = "<script>window.MEGADAEMON_TOKEN=\"\";window.MEGADAEMON_TOKEN_ISSUED=false;</script>";
                 let html = match html.find("<script>") {
                     Some(i) => format!("{}{}{}", &html[..i], inject, &html[i..]),
                     None => format!("{}{}", inject, html),
@@ -755,9 +874,54 @@ fn handle_client(mut stream: TcpStream) {
                     html.as_bytes(),
                 );
             }
+            // Intercambio: API key válida → token de sesión para el navegador.
+            //
+            // POST /api/session/exchange   body: {"api_key": "..."}
+            // → 200 {"ok":true,"token":"..."}  (el token va al navegador, no al
+            //   HTML público).  Con la API key incorrecta → 403.
+            "/api/session/exchange" => {
+                let body: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);
+                let provided = body
+                    .get("api_key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let ok = !provided.is_empty()
+                    && cfg.enabled
+                    && provided == cfg.key
+                    && !cfg.key.is_empty();
+                if ok {
+                    send_json(
+                        &mut stream,
+                        &json!({
+                            "ok": true,
+                            "token": auth_token(),
+                            "expires_hint": "el token es de la instancia; rotarlo reinicia la sesión",
+                        }),
+                    );
+                } else {
+                    REQ_REJECTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    send_json(
+                        &mut stream,
+                        &json!({
+                            "ok": false,
+                            "error": "invalid_api_key",
+                            "hint": "la API key no coincide con la configurada en la instancia",
+                        }),
+                    );
+                }
+            }
             "/health" | "/api/health" => {
                 // Fase 3: endpoint de salud del demonio (monitorizable por
                 // Termux, Uptime Kuma, etc.).
+                //
+                // v14 (AUDIT-WEB-05): "la interfaz web no me funciona" era
+                // imposible de diagnosticar porque /health sólo decía
+                // "ok".  Ahora devuelve el DIAGNÓSTICO: dónde escucha, qué
+                // puertos están abiertos, qué plantilla se está sirviendo,
+                // si el token está materializado y las URLs exactas que
+                // debe abrir el usuario.
                 send_json(
                     &mut stream,
                     &json!({
@@ -765,6 +929,7 @@ fn handle_client(mut stream: TcpStream) {
                         "uptime": uptime_secs(),
                         "version": env!("CARGO_PKG_VERSION"),
                         "requests": REQ_TOTAL.load(std::sync::atomic::Ordering::Relaxed),
+                        "web": web_diagnostics(),
                     }),
                 );
             }
@@ -1151,6 +1316,32 @@ fn handle_client(mut stream: TcpStream) {
                 .unwrap_or(false);
             let r = sync::run_sync(services, cookies);
             send_json(&mut stream, &r);
+        }
+        // v13.4 — genérico: cualquier herramienta del catálogo extendido
+        // accesible como POST /api/tool/<nombre> con el cuerpo como args.
+        _ if path.starts_with("/api/tool/") => {
+            let tool = path.trim_start_matches("/api/tool/").to_string();
+            match crate::mcp_ext::dispatch(&tool, &body_json) {
+                Some(r) => send_json(&mut stream, &r),
+                None => send_http_response(
+                    &mut stream,
+                    404,
+                    "application/json",
+                    b"{\"error\":\"unknown_tool\"}",
+                ),
+            }
+        }
+        "/api/capabilities" => {
+            send_json(&mut stream, &crate::capability::verify());
+        }
+        "/api/tasks" => {
+            send_json(&mut stream, &crate::task_scheduler::list_json());
+        }
+        "/api/alerts" => {
+            send_json(&mut stream, &crate::alerts::list(None, false, 50));
+        }
+        "/api/profile" => {
+            send_json(&mut stream, &crate::profile_analysis::analyze());
         }
         "/api/sync/status" => {
             send_json(&mut stream, &sync::status());
@@ -1630,22 +1821,94 @@ pub fn run_server(port: u16) -> Result<(), String> {
     // principio y el operador puede leerlo sin tener que hacer una llamada.
     let _ = auth_token();
 
-    let addr = format!("127.0.0.1:{}", port);
-    let listener = TcpListener::bind(&addr)
-        .map_err(|e| format!("Failed to bind Rust Cockpit on {}: {}", addr, e))?;
+    // BUG v13.4 (AUDIT-WEB-04): el cockpit escuchaba sólo en 127.0.0.1 y en
+    // UN puerto.  El usuario probaba 3000, 3030 y 8090 y "no iba" en ninguno:
+    //   * si el binario arrancaba con 9090 (lo que hace el supervisor del
+    //     móvil) los otros puertos estén muertos;
+    //   * con 127.0.0.1 no se llega a la LAN ni el túnel si el proxy no está en
+    //     la misma máquina.
+    // Ahora se escucha en 0.0.0.0 (LAN + túnel + loopback) y en un conjunto
+    // de puertos alias, de modo que cualquier URL histórica del usuario
+    // (3000, 3030, 8090, 9090) sirve la MISMA instancia.
+    let mut ports: Vec<u16> = vec![port];
+    for alias in ALIAS_PORTS {
+        if !ports.contains(alias) {
+            ports.push(*alias);
+        }
+    }
+    ports.sort_unstable();
+    ports.dedup();
+
+    let mut listeners: Vec<(u16, TcpListener)> = Vec::new();
+    for p in &ports {
+        let addr = format!("0.0.0.0:{}", p);
+        match TcpListener::bind(&addr) {
+            Ok(l) => listeners.push((*p, l)),
+            Err(e) => {
+                // Si el puerto principal falla, es un error fatal (el usuario
+                // lo pidió explícitamente).  Los alias son best-effort.
+                if *p == port {
+                    return Err(format!("Failed to bind Rust Cockpit on {}: {}", addr, e));
+                }
+                eprintln!("cockpit: puerto alias {} no disponible ({})", p, e);
+            }
+        }
+    }
+    if listeners.is_empty() {
+        return Err("no se pudo enlazar ningún puerto".to_string());
+    }
+
+    // v14 (AUDIT-WEB-05): sin plantilla (ni en disco ni embebida) la UI
+    // sería un <h1> de 45 bytes.  Fallamos ruidosamente en vez de
+    // fingir que todo va bien.
+    if resolve_template().is_none() && EMBEDDED_TEMPLATE.trim().is_empty() {
+        return Err(
+            "no hay plantilla web: ni MEGADAEMON_WEB_TEMPLATE, ni web/cockpit_template.html, \
+             ni plantilla embebida. La UI no puede servirse."
+                .to_string(),
+        );
+    }
+
+    // Publica el estado real del listener para /health.
+    let open: Vec<u16> = listeners.iter().map(|(p, _)| *p).collect();
+    let _ = PRIMARY_PORT.set(port);
+    let _ = OPEN_PORTS.set(open.clone());
+    let _ = LISTENER_BORN.set(std::time::Instant::now());
 
     println!("==================================================================");
-    println!("MEGADAEMON v13.0 ZENITH — 100% PURE RUST COCKPIT SERVER ONLINE");
-    println!("  Listen:    http://{}", addr);
-    println!("  Swarm:     18 proveedores (2 offline, 2 zero-key, 13 free con key, MiniMax M3.1-Flash/M3) + SEERE v13.1");
+    println!("MEGADAEMON v14 ZENITH — 100% PURE RUST COCKPIT SERVER ONLINE");
+    for (p, _) in &listeners {
+        println!("  Listen:    http://127.0.0.1:{}  (LAN: http://<ip-de-la-maquina>:{})", p, p);
+    }
+    for ip in local_ips() {
+        println!("  URL LAN:   http://{}:{}", ip, port);
+    }
+    println!("  Plantilla: {}", web_diagnostics()["template_source"]);
+    println!("  Token:     {}", if Path::new(&format!("{}/cockpit_token", state_dir())).exists() { "materializado" } else { "AUSENTE" });
+    println!("  Swarm:     catálogo de proveedores + SEERE v13.1 + MCP nativo");
     println!("  RE Engine: DiE/Binwalk + Tile VRAM + Kaitai + MBA + CIRX v3.4 + Rizin + Frida");
     println!("  Hardware:  Exynos 2100 NPU (/dev/vertex10) + KleidiAI Cores 4-7");
     println!("==================================================================");
 
-    for stream in listener.incoming().flatten() {
-        thread::spawn(move || {
-            handle_client(stream);
+    for (_, listener) in listeners {
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                thread::spawn(move || {
+                    handle_client(stream);
+                });
+            }
         });
+    }
+    // El hilo principal se queda vivo (los workers atienden).
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(3600));
     }
     Ok(())
 }
+
+/// Puertos alias del cockpit.
+///
+/// Se mantienen los puertos que el usuario ha usado historicamente para no
+/// romper ningún acceso existente (bookmarks, túnel, scripts).  Todos sirven
+/// la MISMA instancia y comparten token, estado y cola de tareas.
+pub const ALIAS_PORTS: &[u16] = &[3000, 3030, 8090, 9090];

@@ -66,3 +66,13 @@ Detalle y reproducción en `docs/AUDIT_HARNESS_V13_4.md`.
   6 s que daban falso negativo, exige 200 EXACTO (el `toybox wget && echo 200` daba falso OK con
   404), y ROLLBACK al .bak con el motivo en el log si no arranca. Idempotente.
 - 2026-11-19 21:15 · agente perfil · **feat(v13.4) analizador de perfil del usuario**: `rust-core/src/profile_analysis.rs` (modulo mio, unico) implementado: `analyze()` (corpus/intereses/actividad/temas/pendientes/fortalezas/bloqueos/preguntas recurrentes/stats), `briefing(markdown)` (informe para psicologo en Markdown o JSON por secciones), `topic_drift(window_days)` (ventana reciente vs anterior) y `daily_digest(days)` (actividad por dia). Nucleo puro `analyze_conversations(&[Value])` (testeable sin state dir) + lectura de `<state_dir>/sync/*.ndjson`. Stopwords ES/EN + UI + lexico generico; marcadores de pendiente/logro/bloqueo con deteccion de negacion; cada evidencia cita `conversation_id` + `ts`. 15 tests sinteticos verdes. Target dir exclusivo: `/workspace/md-t-profile`. Commiteado y pusheado: `72962de`.
+- 2026-11-19 20:5x · dueño del cockpit · **plan v14 + tablero distribuido**: `docs/MASTER_PLAN.md`
+  (backlog consolidado P0-P3 con dueño y olas, DoD por tarea) + `src/coordination.rs` (roles
+  primary/worker/observer en `instance.json`, tablero SQLite con reclamo atómico y lease,
+  merge convergente peer-a-peer, plan de migración observers→workers→primary) + binario
+  `md-coord`. Diagnóstico real del móvil: el daemon está vivo (pid 2580) pero el binario
+  desplejado es anterior al fix ⇒ la URL pública devuelve **401** también en `/` y `/health`
+  (gate de API key) y hace bind sólo a 127.0.0.1 ⇒ `ERR_CONNECTION_REFUSED` desde el PC.
+  Fix en el árbol: `/` y sondas exentas del gate, `/health` con diagnóstico (bind, puertos,
+  plantilla, token, URLs) y bind 0.0.0.0 con alias 9090/3000/3030/8090. Falta desplegar el
+  binario ARM64 nuevo en el Samsung.
