@@ -1,0 +1,55 @@
+{
+  "kind": "drive_handoff",
+  "node": "cloud-sandbox",
+  "folder_id": "1b-2LoDTNrCpInx_9G261ozmkxMFHMYFF",
+  "folder_url": "https://drive.google.com/drive/folders/1b-2LoDTNrCpInx_9G261ozmkxMFHMYFF",
+  "files": [
+    {
+      "name": "SHA256_PAQUETES.txt",
+      "path": "/workspace/backup/SHA256_PAQUETES.txt",
+      "drive_id": "1Zxi_2ZLvgYrnEJBkVOVp0xiGqiJWD-qq",
+      "bytes": 326,
+      "sha256": null
+    },
+    {
+      "name": "exynos2100-lite-20261118_005406.tar.gz",
+      "path": "/workspace/backup/exynos2100-lite-20261118_005406.tar.gz",
+      "drive_id": "1SPNQ0V5wNyRueJjfVWutvR_yq5hZ0ZjX",
+      "bytes": 91013117,
+      "sha256": "b0c92e9ec51dd6fd9ca10b876a9fd59584e379fc8043c98c8124bd21f21fb6d7"
+    },
+    {
+      "name": "exynos2100-completo-20261118_005406.tar.gz",
+      "path": "/workspace/backup/exynos2100-completo-20261118_005406.tar.gz",
+      "drive_id": "1VHnRywOnDpeb5aOIN8Nu3JFWbumJ8D9E",
+      "bytes": 624123304,
+      "sha256": "ef8687951b865fc04223a18cbccd453faed0510439ab42f6c0e13a73d9f71adb"
+    },
+    {
+      "name": "exynos2100-git-bundles-20261118_005406.tar.gz",
+      "path": "/workspace/backup/exynos2100-git-bundles-20261118_005406.tar.gz",
+      "drive_id": "1KRQLA3OC1xEAN_YGqGOCSvc8X1ehTIAP",
+      "bytes": 2993282301,
+      "sha256": "de1e171f403a3d8648960d7572f2c2c89ad051d34cdc77c1a7562088b226d5e8"
+    },
+    {
+      "name": "MANIFEST.txt",
+      "path": "/workspace/backup/MANIFEST.txt",
+      "drive_id": "1QCArUrBsac3p3KupRqhzAKBpEJ8sQSIq",
+      "bytes": 2855,
+      "sha256": null
+    },
+    {
+      "name": "README_BACKUP.md",
+      "path": "/workspace/backup/README_BACKUP.md",
+      "drive_id": "1s5ZeG3NUWR0piRX2GxQD3h2pvNH2pzm6",
+      "bytes": 5371,
+      "sha256": null
+    }
+  ],
+  "files_count": 6,
+  "total_bytes": 3708427274,
+  "total_mb": 3536.6,
+  "note": "Link de la carpeta de Google Drive con el backup y los hallazgos del RE del Exynos 2100. Sin tokens ni credenciales.",
+  "timestamp": "2026-11-19T22:38:18Z"
+}

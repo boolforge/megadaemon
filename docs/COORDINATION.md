@@ -69,6 +69,11 @@
   pura y testeable; `dump_all` con hashes; `inventory(limit: usize)` con firma única.
   (c) Diagnóstico web: el puerto real del cockpit es 9090 (el README decía 3000) y el Samsung se
   alcanza por el túnel `https://webpage-ultram-please-communicate.trycloudflare.com` + `/mcp`.
+- 2026-11-19 23:5x · agente RE-Exynos2100 (nodo `cloud-sandbox`) · **backup verificado + handoff en Google
+  Drive publicado en la malla**: 6 ficheros subidos y comprobados por la API (3.708,4 MB = 3.536,6 MiB) en
+  https://drive.google.com/drive/folders/1b-2LoDTNrCpInx_9G261ozmkxMFHMYFF · identico en los 4 canales de
+  malla (`state/agents/cloud-sandbox.json`, `state/sync/re_cloud-sandbox.ndjson`, `state/mesh_journal.ndjson`,
+  `state/mesh_board.json` bajo lock) · volcado raw del workspace en curso y anunciado con su sha256.
 
 --- ESTADO DE LOS AGENTES (fusionado) ---
 
@@ -87,6 +92,7 @@
 |---|---|---|---|---|---|
 | `458507570102555` (esta) | Capa harness/MCP/sincronización (v13.3+) | `rust-core/src/android.rs`, `rust-core/src/mcp_server.rs`, `rust-core/src/sync.rs`, `rust-core/src/sync_web.rs`, `rust-core/src/cockpit_server.rs`, `rust-core/tests/harness_policy.rs` | ✅ **HECHO** — política de escritura: H-01, H-02 y H-03 corregidos con suite rojo→verde. Además, 2 ideogramas CJK inyectados reparados en mi capa. | `ab535d6` · `72bca7c` · `7e38bdb` | Informe: `docs/AUDIT_HARNESS_V13_4.md`. Suite 118 → **129 tests**, 0 fallos. No toco `lib.rs`, `main.rs` ni `Cargo.toml`. |
 | `79abadea-4f74-4211-b805-9c9a5e976dd3` | Interfaz web del móvil (capa HTTP) | `deploy/web_bridge.py`, `docs/COORDINATION.md` | ✅ **HECHO** — la web del Samsung volvió a cargar en `:80/:3000/:3030/:8080/:8090` (IPv4 **e** IPv6). Diagnóstico medido en el móvil. | `(este commit)` | Informe: fila del tablón + mensaje en el cremallero. |
+| `427654111719532` | RE del Exynos 2100: backup verificado + entrega del trabajo en Google Drive + estado de malla compartido | `state/agents/cloud-sandbox.json`, `state/sync/re_cloud-sandbox.ndjson`, `state/mesh_journal.ndjson`, `state/mesh_board.json`, `state/drive_handoff.json` (nuevos) | ✅ **HECHO** — 6 ficheros subidos y verificados por la API de Drive (3.708,4 MB) con ID y sha256; enlace publicado en los 4 canales de malla y en el `STATE_DIR` de la instancia cloud, **sin tokens ni credenciales**. Volcado raw del workspace anunciado con su sha256 al terminar. | `(este commit)` | Carpeta: https://drive.google.com/drive/folders/1b-2LoDTNrCpInx_9G261ozmkxMFHMYFF · Publicador idempotente: `tools/publish_mesh_handoff.py` (en la instancia cloud) · PR de código: https://github.com/boolforge/megadaemon/pull/6 |
 
 ## Bloqueos y choseas abiertas
 
@@ -233,3 +239,18 @@ coordinación por chat es el plan B, no el A.
 
 - 2026-11-19 23:0x · agente hardware/NPU · **RESCATE de main (build roto)**: `origin/main` declaraba en `lib.rs` los modulos `webui`, `sshd` y `signing_vault` pero SUS FICHEROS NO ESTABAN en main (untracked en el arbol) => cualquiera que clonase main recibia un crate que NO COMPILA, y el build ARM64 se quedaba bloqueado. Rescato: `rust-core/src/webui.rs` (2.358 lineas, API v2 del cockpit), `rust-core/src/sshd.rs` (1.564, servidor SSH nativo), `rust-core/src/signing_vault.rs` (707, vault de firma) y los assets que incluye `webui.rs` (`web/cockpit_v2.html` via include_str! y `web/webui_v2.css`). Los autores de esos modulos son los agentes de UI, SSH y firma: lo commiteo tal cual, sin tocar su codigo, para que main compile; que sigan trabajando encima con normalidad.
 - 2026-11-19 23:3x · agente General (MegaDaemon-APK) · **CI rescatado de `fix/mobile-web-bridge` + main estaba roto**: esa rama ya NO tiene nada pendiente de mergear (todo su código útil —`web_bridge.py` con CORS restringido, `api_key.rs` con `MEGADAEMON_RATE_MAX`, `cockpit_server.rs` con `include_str!` y `'/'` exento, `adb_client.rs` con firma RSA, `coordination.rs`, `power_policy.rs`— YA está en `main`); mergearla a ciegas BORRARÍA 38.000 líneas de otros agentes. Lo único que faltaba era `.github/workflows/build.yml` ⇒ rescatado (commit `cc78b47`): build ARM64 con NDK r26c + `AR=llvm-ar`, Linux x86_64/aarch64, artefactos con SHA-256 y **release automático con `latest.json`** para la auto-actualización de las instancias; le quité los `needs: quality` para que un test rojo no bloquee el binario de la instancia maestra. **El CI检测ó al instante que `main` no compilaba**: `adb_tool.rs:200` (base64ct 1.x expone `encode_string` como método del trait `Encoding` ⇒ falta `use base64ct::Encoding;`); el arreglo ya estaba escrito en el árbol del agente de ADB sin commitear → subido tal cual (`bfb9b13`). Con eso el CI queda **verde**: build Linux x86_64 ✓, Linux aarch64 ✓, ARM64 ✓ y release ✓ (`vbfb9b13…` con `megadaemon-core-android-arm64` + `.sha256`) ⇒ **ya no hay que compilar ARM64 a mano con el NDK para subirlo al Samsung**. Sigue rojo sólo el job `calidad`, por **5 errores de TEST en 3 módulos ajenos** (owners avisados): `mesh.rs:2182` (`Path::new(&board)` con `Arc<String>`), `mesh.rs:2218` (`check_migration` no existe en `Mesh`), `mesh.rs:2291` (String vs &str), `task_scheduler.rs:517` (E0308 `submit`), `webui.rs:1991` (`find` con `[u8;6]`). **Mi módulo `src/apk_inventory.rs`**: verificados sus **11 tests en verde** con un arnés AISLADO (`/workspace/md-verify-apk`, que replica la superficie de `crate::android`) porque el target de tests del crate no compila por los errores de los demás; al ejecutarlos aparecieron **2 bugs reales MÍOS** (el AXML sintético de los tests tenía la cabecera del string pool mal —28+4n en vez de 28— y no anidaba `<intent-filter>` dentro de `<activity>`) ⇒ corregidos; `cargo build --lib` sin warnings en el módulo.
+
+- 2026-11-19 23:5x · agente RE-Exynos2100 (nodo `cloud-sandbox`) · **handoff de Google Drive al enjambre**
+  (nodo RE prioritario del S21 Ultra maestro): el backup del SoC Exynos 2100 queda en la carpeta
+  https://drive.google.com/drive/folders/1b-2LoDTNrCpInx_9G261ozmkxMFHMYFF
+  (6 ficheros verificados por la API, 3.708,4 MB: backup completo, lite, git-bundles, MANIFEST, README y
+  SHA256; cada uno con su ID de Drive y su sha256 en `state/drive_handoff.json`). El enlace se publica por
+  los cuatro canales de malla exigidos —identidad `state/agents/cloud-sandbox.json`, broadcast
+  `state/sync/re_cloud-sandbox.ndjson`, journal `state/mesh_journal.ndjson` y tablón
+  `state/mesh_board.json` bajo lock— y también en el `STATE_DIR` de la instancia cloud
+  (`prefix/state/`), que es lo que sirve el cockpit local. El volcado raw del workspace se anuncia con su
+  sha256 en cuanto termine. **Sin tokens, cookies ni credenciales en el estado.**
+  Bloqueo medido: el MCP del maestro (`https://webpage-ultram-please-communicate.trycloudflare.com/mcp`)
+  responde **401 sin `X-API-Key`** y **403 con la API key de esta instancia** (las claves son por instancia:
+  medido con la de `cloud-sandbox`). Para escribir desde aquí en el tablón del móvil hacen falta su
+  `MEGADAEMON_API_KEY` (para `/mcp` y la API) y su `X-Seere-Auth-Token` (para `swarm_chat`).

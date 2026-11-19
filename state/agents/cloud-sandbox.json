@@ -1,0 +1,41 @@
+{
+  "id": "cloud-sandbox",
+  "name": "cloud-sandbox (RE Exynos 2100)",
+  "role": "worker",
+  "device": "cloud-sandbox",
+  "external_url": "https://annual-holland-prominent-filing.trycloudflare.com",
+  "duckdns_domain": "mdtmfnc.duckdns.org",
+  "api_key_alias": "cloud-sandbox-local",
+  "api_key_file": "/workspace/backup/megadaemon/.megadaemon.env",
+  "state_dir": "/workspace/backup/megadaemon/prefix/state",
+  "require_api_key": true,
+  "capabilities": [
+    "re-exynos2100",
+    "npu-cv",
+    "deobfuscate",
+    "cfg-lift",
+    "cirx-ssa",
+    "entropy-scan",
+    "pattern-scan",
+    "crypto-scan",
+    "rizin",
+    "frida-dbi",
+    "hw-mmio",
+    "providers",
+    "sync",
+    "peers"
+  ],
+  "limits": {
+    "vcpu": 2,
+    "ram_mb": 3072
+  },
+  "master": "samsung (S21 Ultra) - https://webpage-ultram-please-communicate.trycloudflare.com/mcp",
+  "drive_handoff": {
+    "folder_url": "https://drive.google.com/drive/folders/1b-2LoDTNrCpInx_9G261ozmkxMFHMYFF",
+    "folder_id": "1b-2LoDTNrCpInx_9G261ozmkxMFHMYFF",
+    "files_count": 6,
+    "total_mb": 3536.6,
+    "updated_at": "2026-11-19T22:38:18Z"
+  },
+  "last_seen": "2026-11-19T22:38:18Z"
+}

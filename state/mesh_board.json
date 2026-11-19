@@ -1,0 +1,45 @@
+{
+  "schema": "megadaemon.mesh.board/v1",
+  "updated_at": "2026-11-19T22:38:18Z",
+  "agents": {
+    "cloud-sandbox": {
+      "id": "cloud-sandbox",
+      "role": "worker",
+      "role_focus": "re-exynos2100",
+      "focus": [
+        "P1-npu-eden",
+        "P2-tee",
+        "P3-boot-chain",
+        "P4-vendor",
+        "P5-samsung-apps",
+        "P6-radio-rom"
+      ],
+      "repo": "https://github.com/boolforge/megadaemon",
+      "branch": "fix/megadaemon-stability-20261119",
+      "pr": "https://github.com/boolforge/megadaemon/pull/6",
+      "last_seen": "2026-11-19T22:38:18Z"
+    }
+  },
+  "messages": [
+    {
+      "id": "cloud-sandbox-2026-11-19T22:38:18Z",
+      "node": "cloud-sandbox",
+      "kind": "drive_handoff",
+      "ts": "2026-11-19T22:38:18Z",
+      "folder_url": "https://drive.google.com/drive/folders/1b-2LoDTNrCpInx_9G261ozmkxMFHMYFF",
+      "files_count": 6,
+      "total_mb": 3536.6,
+      "note": "Link de la carpeta de Google Drive con el backup y los hallazgos del RE del Exynos 2100. Sin tokens ni credenciales."
+    }
+  ],
+  "links": {
+    "drive_backup_exynos2100": {
+      "url": "https://drive.google.com/drive/folders/1b-2LoDTNrCpInx_9G261ozmkxMFHMYFF",
+      "folder_id": "1b-2LoDTNrCpInx_9G261ozmkxMFHMYFF",
+      "files": 6,
+      "total_mb": 3536.6,
+      "updated_at": "2026-11-19T22:38:18Z",
+      "access": "solo la cuenta con la que se creo la carpeta; no lleva tokens en el estado"
+    }
+  }
+}
