@@ -9,7 +9,7 @@ use crate::{
     bindiff, binwalk_die, cfg_lifter, cirx_rtl, crypto_scan, deobfuscate, disasm, entropy,
     freezer, frida_dbi, hw_mapper, kaitai_imhex, npu_bridge, npu_cv, pattern, pointers, providers,
     rea_assistant, rom_locator, seere_v11, shm, snapshot, tile_vram, unifier, power_policy,
-    accelerator_policy, npu_nnapi,
+    accelerator_policy, npu_nnapi, mcp_server, sync, sync_web,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1134,7 +1134,105 @@ fn handle_client(mut stream: TcpStream) {
     // POST endpoints
     let body_json: Value = serde_json::from_slice(body_slice).unwrap_or_else(|_| json!({}));
 
+    let qp = parse_query_params(query);
     match path {
+        // ------------------------------------------------------------------
+        // v13.3 — API del motor de sincronización de conversaciones.
+        // ------------------------------------------------------------------
+        "/api/sync/run" => {
+            let services = body_json.get("services").and_then(|v| v.as_array()).map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<String>>()
+            });
+            let cookies = body_json
+                .get("include_cookies")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let r = sync::run_sync(services, cookies);
+            send_json(&mut stream, &r);
+        }
+        "/api/sync/status" => {
+            send_json(&mut stream, &sync::status());
+        }
+        "/api/sync/harvest" => {
+            let r = sync_web::harvest_sessions();
+            send_json(&mut stream, &r);
+        }
+        "/api/sync/web" => {
+            let services = body_json.get("services").and_then(|v| v.as_array()).map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<String>>()
+            });
+            let r = sync_web::web_pull(services);
+            send_json(&mut stream, &r);
+        }
+        "/api/sync/ingest" => {
+            let path = body_json
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let r = sync_web::ingest_export(&path);
+            send_json(&mut stream, &r);
+        }
+        "/api/conversations/search" => {
+            let q: String = body_json
+                .get("query")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| qp.get("q").cloned())
+                .unwrap_or_default();
+            let svc: Option<String> = body_json
+                .get("service")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| qp.get("service").cloned());
+            let limit = body_json
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .or_else(|| qp.get("limit").and_then(|v| v.parse::<u64>().ok()))
+                .unwrap_or(20) as usize;
+            let r = sync::search(&q, svc.as_deref(), limit);
+            send_json(&mut stream, &r);
+        }
+        "/api/conversations/list" => {
+            let svc: Option<String> = body_json
+                .get("service")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| qp.get("service").cloned());
+            let limit = body_json
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(50) as usize;
+            let r = sync::list_conversations(svc.as_deref(), limit);
+            send_json(&mut stream, &r);
+        }
+        // ------------------------------------------------------------------
+        // v13.3 — Endpoint MCP nativo sobre HTTP (Streamable HTTP, JSON-RPC
+        // 2.0).  Es el MISMO catálogo que el servidor stdio: RE + control
+        // tipado del dispositivo.  La autenticación es la misma del cockpit
+        // (API key / Bearer), evaluada antes de llegar aquí, de modo que el
+        // túnel Cloudflare expone un único plano de control.
+        // ------------------------------------------------------------------
+        "/mcp" | "/mcp/" => {
+            // Permite lote (batch) estilo JSON-RPC 2.0.
+            let response = if let Some(batch) = body_json.as_array() {
+                let out: Vec<Value> = batch
+                    .iter()
+                    .filter_map(|r| mcp_server::handle_rpc(r))
+                    .collect();
+                json!(out)
+            } else {
+                match mcp_server::handle_rpc(&body_json) {
+                    Some(r) => r,
+                    None => json!({ "jsonrpc": "2.0", "result": {} }),
+                }
+            };
+            send_json(&mut stream, &response);
+        }
         "/api/chat" => {
             let msg = body_json["message"].as_str().unwrap_or("");
             let model = body_json["model"].as_str();
