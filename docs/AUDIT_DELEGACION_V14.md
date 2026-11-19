@@ -85,15 +85,29 @@ agregador revende con su propio margen.
 
 ```bash
 # Arnés propio (no toca lib.rs): incluye el módulo por #[path]
-cargo test --release --test delegate
+cargo test --test delegate
 
-# Espera: el módulo aún no está en lib.rs (ver §5). El arnés lo compila
-# como módulo de test, que es la convención del repo
-# (tests/signing.rs, tests/root_hide_app_intel.rs, tests/cockpit_doctor_smoke.rs).
+# El módulo ya está cableado en lib.rs (pub mod delegate;), así que el
+# arnés hace de belt-and-suspenders: si el módulo no compila, el arnés lo
+# dice antes de que rompa el build de los demás agentes.
 ```
 
-Tests: 25 en el propio módulo + 6 de integración en
-`rust-core/tests/delegate.rs`.
+**Resultado medido el 2026-11-19**: `25 passed` (tests del propio módulo) +
+`30 passed` (arnés de integración) · **0 fallos** · 0 warnings.
+
+Detalle importante sobre el entorno: el build **no puede** hacerse en
+`/workspace` (está en NFS contra una NAS). Compilado y ejecutado con
+registro y target en disco local:
+
+```bash
+export CARGO_HOME=/run/agent-runtime/md/cargo2
+export CARGO_TARGET_DIR=/run/agent-runtime/md/target2
+cargo test -j 2        # 33 s, de cero a verde
+```
+
+Tests del módulo: 25 en `src/delegate.rs` (`mod tests`) + 6 de integración en
+`rust-core/tests/delegate.rs` (que al incluir el módulo por `#[path]` ejecuta
+también los 25 internos).
 
 ## 5. Pendiente / bloqueos (honestos)
 

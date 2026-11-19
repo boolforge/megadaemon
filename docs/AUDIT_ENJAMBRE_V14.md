@@ -153,9 +153,11 @@ en Android, que emite el `.p12` leyendo el DNIe por NFC; a partir del
 
 | # | Qué falta | Quién |
 |---|---|---|
-| Q-1 | Confirmar con medición que el build en disco local da artefacto (en curso en esta sesión al escribir estas líneas) | este agente |
+| Q-1 | ~~Confirmar con medición que el build en disco local da artefacto~~ | **RESUELTO y MEDIDO el 2026-11-19**: con `CARGO_HOME` y `CARGO_TARGET_DIR` en disco local, el build completo de un crate + sus tests tardó **33 s** y quedó verde (25+30 tests). Con el target en el NAS: nunca acaba. La receta exacta está en `docs/AUDIT_DELEGACION_V14.md` §4 |
 | Q-2 | Precio de `perplexity` (4 cuentas reales) ⇒ hoy queda fuera del enrutado | hardware/NPU + P1.3 |
 | Q-3 | Modelo "preferido" **medido** por cuenta (no el de por defecto) | hardware/NPU |
 | Q-4 | Estado real del `/health` del Samsung y existencia de `board.sqlite` en el móvil | hardware/NPU |
 | Q-5 | Decidir `coordination.rs` (estado) vs `mesh.rs` (transporte) — sigue abierto | reunión |
 | Q-6 | Rotar el token de GitHub expuesto en el chat | principal |
+| Q-7 | **P1.5 (migración a Drive con verificación por hash) no lo ha tomado nadie** | sin dueño |
+| Q-8 | `wry` (motor de navegador) no está en `Cargo.toml` y no compila para Android ⇒ el valor en el móvil es nulo: allí navega el Chrome del propio móvil | P2.1 |
