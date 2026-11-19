@@ -326,7 +326,14 @@ ensure_tunnel() {
     if [ "$t_n" -gt 0 ]; then
         t_code=$(tunnel_status "$t_url")
         t_ha=$(tunnel_ha_connections "$t_log")
-        if [ -n "$t_ha" ] && [ "$t_ha" = "0" ]; then
+        if [ -n "$t_ha" ] && [ "$t_ha" -gt 0 ] 2>/dev/null; then
+            # Hay conexion con el edge: el tunel esta VIVO.  Un 530 aqui
+            # puede ser un falso positivo del propio hairpin (el tunel
+            # acaba de arrancar y aun no se propagó) -> no se toca nada.
+            tunnel_strikes=0
+            t_code="edge-ok"
+        elif [ -n "$t_ha" ]; then
+            # 0 conexiones con el edge: el tunel esta CAIDO de verdad.
             t_code="0-edge"
         fi
         if tunnel_is_dead "$t_code" || [ "$t_code" = "0-edge" ]; then
