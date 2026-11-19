@@ -792,23 +792,90 @@ document.addEventListener("click", function (e) {
   if (b) { testProviderById(b.getAttribute("data-test-provider")); }
 });
 
-// v13.2 (S08): el cockpit exige `X-Seere-Auth-Token` en los endpoints que
-// ejecutan o modifican estado.  El token lo inyecta el servidor en la propia
-// página (legible sólo same-origin: el CORS ya no es `*`).
+// v13.4 (AUDIT-WEB-03/06): los endpoints de DATOS exigen la API key cuando la
+// petición no viene de loopback, y los de ESCRITURA exigen además el token de
+// sesión.  El navegador no puede mandar cabeceras al abrir la URL, así que:
+//   1. el usuario pega su API key (una vez, queda en localStorage);
+//   2. el cliente la intercambia por un token de sesión en
+//      POST /api/session/exchange;
+//   3. a partir de ahí, todas las llamadas llevan ambas credenciales.
+//
+// La página HTML pública NO lleva ningún token incrustado: si lo llevara,
+// cualquiera que llegase al puerto obtendría el control del daemon.
+const MD_KEY_STORE = "megadaemon_api_key";
+const MD_TOKEN_STORE = "megadaemon_session_token";
+function storedApiKey() {
+  try { return window.localStorage.getItem(MD_KEY_STORE) || ""; } catch (e) { return ""; }
+}
+function setApiKey(k) {
+  try { window.localStorage.setItem(MD_KEY_STORE, k || ""); } catch (e) {}
+}
+function storedToken() {
+  try { return window.localStorage.getItem(MD_TOKEN_STORE) || ""; } catch (e) { return ""; }
+}
+function setToken(t) {
+  try { window.localStorage.setItem(MD_TOKEN_STORE, t || ""); } catch (e) {}
+}
+function askApiKey() {
+  const k = window.prompt(
+    "MegaDaemon: pega la API key de la instancia\n" +
+    "(fichero state/megadaemon_api.key)\n" +
+    "Se guarda en localStorage de este navegador."
+  );
+  if (k) { setApiKey(k.trim()); }
+  return k ? k.trim() : "";
+}
+
+// Canjea la API key por un token de sesión.
+async function exchangeSession(apiKey) {
+  const res = await fetch("/api/session/exchange", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: apiKey })
+  });
+  let j = null;
+  try { j = await res.json(); } catch (e) { j = null; }
+  if (res.ok && j && j.ok && j.token) {
+    setToken(j.token);
+    window.MEGADAEMON_TOKEN = j.token;
+    window.MEGADAEMON_TOKEN_ISSUED = true;
+    return true;
+  }
+  return false;
+}
+
 function authHeaders(extra) {
   const h = Object.assign({}, extra || {});
-  if (window.MEGADAEMON_TOKEN) h["X-Seere-Auth-Token"] = window.MEGADAEMON_TOKEN;
+  const t = storedToken() || (window.MEGADAEMON_TOKEN || "");
+  if (t) h["X-Seere-Auth-Token"] = t;
+  const k = storedApiKey();
+  if (k) h["X-API-Key"] = k;
   return h;
 }
 
+// Reintenta una vez pidiendo la API key si el daemon responde 401.
+async function mdFetch(url, opts) {
+  let res = await fetch(url, Object.assign({ cache: "no-store" }, opts || {}));
+  if (res.status === 401 && !window.__mdKeyAsked) {
+    window.__mdKeyAsked = true;
+    const k = askApiKey();
+    if (k && await exchangeSession(k)) {
+      const h = Object.assign({}, (opts && opts.headers) || {});
+      Object.assign(h, authHeaders());
+      res = await fetch(url, Object.assign({ cache: "no-store" }, opts || {}, { headers: h }));
+    }
+  }
+  return res;
+}
+
 async function apiGet(url) {
-  const res = await fetch(url, { cache: "no-store", headers: authHeaders() });
+  const res = await mdFetch(url, { headers: authHeaders() });
   if (!res.ok) throw new Error("HTTP " + res.status);
   return await res.json();
 }
 
 async function apiPost(url, payload) {
-  const res = await fetch(url, {
+  const res = await mdFetch(url, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload || {})
@@ -816,6 +883,13 @@ async function apiPost(url, payload) {
   if (!res.ok) throw new Error("HTTP " + res.status);
   return await res.json();
 }
+
+// Al cargar la página: si ya hay API key guardada, se pide el token de
+// sesión en segundo plano para que la UI funcione sin intervención.
+(async function mdBootstrapSession() {
+  const k = storedApiKey();
+  if (k) { await exchangeSession(k); }
+})();
 
 function switchView(viewId, btnEl) {
   document.querySelectorAll(".view").forEach(function (v) { v.classList.remove("active"); });

@@ -21,6 +21,7 @@
 
 | ID | Severidad | Fichero:línea | Defecto |
 |----|-----------|---------------|---------|
+| **UI-00** | **CRÍTICA** | `deploy/web_bridge.py:135-136` + `:150` | **RCE root desde cualquier web**: el puente de `:3000` inyectaba el `X-Seere-Auth-Token` real y servía `Access-Control-Allow-Origin: *` → cualquier página que abriera el usuario en el móvil leía el token y hacía `POST /api/chat` **como root** |
 | UI-01 | MEDIA | `cockpit_server.rs:1195-1201` | `/api/input` responde `{"status":"ok"}` aunque la escritura en el registro de mando de la SHM sea imposible |
 | UI-03 | ALTA | `cockpit_server.rs:1203` + `shm.rs:75` | La cabecera de la SHM controla una asignación de hasta 12,9 GB en `/api/live_frame`: panic por overflow en debug, **abort del proceso entero en release** (`panic = "abort"`) |
 | UI-04 | ALTA | `cockpit_server.rs:249` (`resolve_target_or_file`) | Lectura arbitraria de ficheros por los endpoints RE (`/api/hex_inspect`, `/api/die_binwalk`, …); el token sale de la página **pública** |
@@ -44,6 +45,57 @@ completo, y la API key remota no está forzada por defecto.
 
 > Salida real de `cargo test --test audit_scout_ui -- --nocapture --test-threads=1`.
 > Cada bloque es el `stdout` del test que falla.
+
+
+### UI-00 · CRÍTICA · `deploy/web_bridge.py:135-136` y `:150` — RCE root desde cualquier web
+
+El puente local que hace funcionar la web del móvil en `:3000` (y 3030/8080/8090)
+reía **exactamente** el hueco que cerraron S08 y v13.2.3 (fail-closed + CORS
+restringido):
+
+```python
+# web_bridge.py:135-136  -> se INYECTA el token de escritura real
+if COCKPIT_TOKEN and not self.headers.get("X-Seere-Auth-Token"):
+    req.add_header("X-Seere-Auth-Token", COCKPIT_TOKEN)
+# web_bridge.py:150       -> CORS ABIERTO a cualquier origen
+self.send_header("Access-Control-Allow-Origin", "*")
+```
+
+**Cadena de ataque (medida en el Samsung, no es teoría)**
+
+```
+1) GET  http://127.0.0.1:3000/            (Origin: https://evil.example)
+   -> 200 + Access-Control-Allow-Origin: *  +  window.MEGADAEMON_TOKEN="…"
+2) POST http://127.0.0.1:3000/api/chat    con X-Seere-Auth-Token: <token robado>
+   -> el puente lo reenvía al cockpit -> ejecuta la orden como ROOT
+```
+
+Evidencia medida en el móvil (`nc 127.0.0.1 3000`, origen foráneo, sin key):
+
+| Antes | Después del parche |
+|-------|--------------------|
+| `HTTP/1.1 200 OK` + `Access-Control-Allow-Origin: *` + `{"status":"online"}` | `HTTP/1.1 403 Forbidden` + `Access-Control-Allow-Origin: ` (vacío) |
+| `POST /api/chat` con el token inyectado → RCE | el token **no** se inyecta si la petición trae `Origin` |
+
+Y el caso legítimo sigue intacto: `GET /` **sin** `Origin` (la navegación normal del
+móvil) → `HTTP/1.1 200 OK` con los 89.707 bytes de la UI.
+
+**Arreglo aplicado** (commit `0cc1ca5`, pushed a `fix/mobile-web-bridge` y **ya
+desplegado y verificado en el Samsung**):
+
+```diff
+-        if COCKPIT_TOKEN and not self.headers.get("X-Seere-Auth-Token"):
++        if COCKPIT_TOKEN and not self.headers.get("X-Seere-Auth-Token") and not self.headers.get("Origin"):
+...
+-        self.send_header("Access-Control-Allow-Origin", "*")
++        self.send_header("Access-Control-Allow-Origin", allowed_origin(self.headers))
+```
+con `allowed_origin()` reflejando el `Origin` sólo si su host == `Host` o está en
+`MEGADAEMON_ALLOWED_ORIGINS` (el mismo criterio que `cockpit_server.rs::cors_allowed`).
+
+**Aviso**: el mismo patrón es peligroso en cualquier proxy delante del cockpit
+(túnel, nginx, `web_bridge.py`): *nunca* `ACAO: *` + cabeceras de autenticación
+inyectadas.
 
 ### UI-01 · MEDIA · `cockpit_server.rs:1195-1201` — respuesta "ok" sin escritura
 
@@ -438,6 +490,25 @@ HW-02 introdujo, por un camino distinto.
 
 (y en el hilo, abrir con `O_NOFOLLOW` para symlinks).
 
+
+### UI-15 · MEDIA · `cockpit_server.rs:226-271` — `/health` público = reconocimiento
+
+`/health` (y `/api/ping`) **no exigen API key** (`is_public_probe`) y el túnel
+público los sirve: el atacante que llega por Internet obtiene el mapa interno del
+móvil (`state_dir`, `token_path`, `template_path`, `local_ips`, puertos abiertos).
+No filtra el **valor** del token ni de la key (sólo su existencia y su ruta), pero
+un endpoint público de diagnóstico en un dispositivo con root no debería dar la
+ruta del cofre de credenciales.
+
+```json
+{"status":"ok","uptime":…,"version":"…","web":{"bind":"0.0.0.0","primary_port":9090,
+ "ports_open":[…],"token_materialized":true,"token_path":"/data/local/tmp/megadaemon/state/cockpit_token",
+ "state_dir":"/data/local/tmp/megadaemon/state","local_ips":["192.168.1.124"],"urls":[…]}}
+```
+
+**Arreglo propuesto**: partir el diagnóstico en dos niveles: `/health` público con
+lo mínimo (`status`, `uptime`, `version`) y el detalle (`web`) sólo con API key.
+
 ### UI-13 · MEDIA · `web/cockpit_template.html:1528` — estado obsoleto por carrera
 
 `refreshHardware()` se llama cada 12 s y también al arrancar.  Si dos llamadas
@@ -529,12 +600,21 @@ KEY") se aplica al proveedor equivocado, sin que nada lo indique.
    el cockpit abierto a la LAN (y el token en la página pública, UI-09).
    *Arreglo*: `MEGADAEMON_REQUIRE_API_KEY=1` en `megadaemon.env` + generar la
    key si falta.
-5. **El túnel público responde 401 en todo** (verificado desde el sandbox):
-   `/health`, `/api/ping`, `/metrics`, `/` y `/mcp` → `{"error":"unauthorized"}`.
-   El daemon **está vivo** (el túnel responde), pero el binario desplegado aún
-   no trae el arreglo AUDIT-WEB-02 (la página pública se servía **después** del
-   gate de API key) → hay que volver a subir el binario ARM64 con la plantilla
-   embebida.
+5. **Estado VERIFICADO del Samsung (medido con `root_exec` vía el MCP)**:
+   - El daemon **está vivo**: `127.0.0.1:{3000,3030,8080,8090,9090}` escuchando;
+     `/health` → `200 {"status":"ok","uptime":12040,"version":"13.3.0"}`.
+   - La plantilla **está desplegada**: `/data/local/tmp/megadaemon/web/cockpit_template.html`
+     (89.599 bytes) → `GET /` devuelve los 89.707 bytes de la UI con
+     `window.MEGADAEMON_TOKEN` inyectado.
+   - Por el túnel: `GET /` **sin** key → 401; **con** key → 200 + HTML;
+     `/api/ping` sin token de sesión → 403 (fail-closed ✓); `/mcp` → 200 con 25
+     herramientas.
+   - A las 20:29-20:30 (las capturas del usuario) no había daemon escuchando:
+     `ERR_CONNECTION_REFUSED` = proceso muerto, no bug de la UI.  Por eso el
+     estado `not_operational` de `cockpit_doctor`: "proceso vivo pero /health
+     mudo" era el fallo invisible.
+   - `deploy/web_bridge.py` (el puente de `:3000`) era el que reintroducía el RCE
+     de UI-00: **ya está parcheado en el móvil y verificado**.
 
 ---
 
