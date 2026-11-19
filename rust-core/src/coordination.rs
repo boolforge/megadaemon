@@ -263,7 +263,14 @@ impl TaskBoard {
         self.conn
             .execute_batch(
                 r#"
-                PRAGMA journal_mode=WAL;
+                -- v14: el tablero es el SUBSTRATO de coordinación: si sus filas
+                -- viven en un -wal que se pierde (reinicio del daemon, limpieza
+                -- del state_dir, fallo de E/S), el plan desaparece.  Por eso:
+                -- journal_mode=DELETE (rollback journal: cada commit queda en el
+                -- fichero principal, sin ficheros -wal/-shm que perder) y
+                -- synchronous=FULL (durable frente a corte de luz).
+                PRAGMA journal_mode=DELETE;
+                PRAGMA synchronous=FULL;
                 PRAGMA foreign_keys=ON;
 
                 CREATE TABLE IF NOT EXISTS instances (
