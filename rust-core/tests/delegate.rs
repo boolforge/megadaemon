@@ -142,8 +142,14 @@ fn el_coste_real_es_cero_en_cuentas_gratuitas_y_el_sombra_no() {
     assert_eq!(st[0].cost_usd, 0.0, "una cuenta gratuita no cuesta dinero");
     assert!(st[0].shadow_cost_usd > 0.0, "el coste sombra sí es el de lista");
     let stats = e.stats();
-    assert_eq!(stats["free_accounts"], 1);
-    assert_eq!(stats["paid_accounts"], 0);
+    assert_eq!(stats["accounts"]["free"].as_u64(), Some(1));
+    assert_eq!(stats["accounts"]["paid"].as_u64(), Some(0));
+    // El presupuesto se mide: lo que cuesta de verdad frente a lo que
+    // habría costado con cuentas de pago.
+    assert_eq!(stats["cost_usd"]["estimated"].as_f64(), Some(0.0));
+    let sombra = stats["cost_usd"]["shadow_if_paid"].as_f64().unwrap();
+    assert!(sombra > 0.0, "el coste sombra debe ser el de lista: {}", sombra);
+    assert_eq!(stats["cost_usd"]["savings"].as_f64(), Some(sombra));
 }
 
 /// La detección de precios rancios tiene que ser utilizable por el cockpit.

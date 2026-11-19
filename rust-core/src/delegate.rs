@@ -476,7 +476,9 @@ pub fn price_provenance(model: &str) -> Option<PriceProvenance> {
     let (name, inp, out, prov) = lookup_price_entry(&m)?;
 
     for (om, url, date, note) in PRICING_OVERRIDES {
-        if m.starts_with(om) {
+        // Casa por el nombre canónico de la tabla ("gpt-5.6-sol") y por el
+        // modelo pedido con prefijo de vendedor ("openai/gpt-5.6-sol").
+        if name.starts_with(om) || m.starts_with(om) {
             return Some(PriceProvenance {
                 model: name.to_string(),
                 provider: prov.to_string(),
@@ -2507,12 +2509,19 @@ mod tests {
             "lo verificado hoy no puede estar rancio: {:?}",
             hoy
         );
-        // 30 días después, lo verificado hace más de 30 días sí lo está.
-        let rancios = pricing_stale(30, fecha_max + 30);
+        // En el límite (exactamente 30 días) todavía no está rancio...
+        let limite = pricing_stale(30, fecha_max + 30);
+        assert!(
+            limite.iter().all(|p| p.verified_on != PRICING_VERIFIED_ON),
+            "a 30 días exactos no está rancio todavía: {:?}",
+            limite
+        );
+        // ...y un día más sí.
+        let rancios = pricing_stale(30, fecha_max + 31);
         assert!(!rancios.is_empty(), "debería detectar precios rancios");
         assert!(
             rancios.iter().all(|p| {
-                days_since(&p.verified_on, fecha_max + 30).map(|d| d > 30).unwrap_or(false)
+                days_since(&p.verified_on, fecha_max + 31).map(|d| d > 30).unwrap_or(false)
             }),
             "todos los rancios deben superar el margen: {:?}",
             rancios
