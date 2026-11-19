@@ -156,7 +156,7 @@ alias_ports_free() {
     for p in $BRIDGE_CANDIDATES; do
         hp=$(printf '%04X' "$p")
         if ! grep -qiE ":$hp [0-9a-f]{8}:[0-9a-f]{4} 0A" /proc/net/tcp /proc/net/tcp6 2>/dev/null; then
-            out="$out $p"
+            if [ -z "$out" ]; then out="$p"; else out="$out,$p"; fi
         fi
     done
     echo "$out"
@@ -176,7 +176,7 @@ ensure_web_bridge() {
             return 0
         fi
         # La lista del puente va separada por COMAS (ver read_ports()).
-        export MEGADAEMON_BRIDGE_PORTS=$(echo "$free" | tr -s ' ' ',')
+        export MEGADAEMON_BRIDGE_PORTS="$free"
         log "el daemon ya escucha los puertos alias: el puente solo cogera $MEGADAEMON_BRIDGE_PORTS"
     fi
     py=""
