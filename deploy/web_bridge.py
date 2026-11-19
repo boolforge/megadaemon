@@ -28,6 +28,7 @@ Variables de entorno opcionales:
     MEGADAEMON_COCKPIT_PORT  puerto real del cockpit (por defecto 9090)
     MEGADAEMON_BRIDGE_PORTS  puertos alias (por defecto 3000,3030,8090,8080)
 """
+import errno
 import http.client
 import http.server
 import os
@@ -242,12 +243,23 @@ def _serve(bind, port):
     mataba ese hilo para siempre: el proceso seguia vivo, el supervisor veia
     el proceso y no relanzaba nada, y el usuario veia ERR_CONNECTION_REFUSED
     en ese puerto sin ninguna pista en el log.
+
+    Con el binario v13.4+ el PROPIO daemon ya sirve los puertos alias
+    (3000/3030/8090/9090) y el puente no puede ocuparlos (EADDRINUSE).  Eso
+    no es un fallo: el puente CEDE el puerto al que lo tiene y no reintenta
+    (un reintento cada 5 s en un movil que va justo de RAM es justo lo que
+    no queremos).  El resto de errores si se reintentan.
     """
     cls = Server6 if ":" in bind else Server
     while True:
         try:
             srv = cls((bind, port), Handler)
         except OSError as e:
+            if e.errno == errno.EADDRINUSE:
+                print("md-web-bridge: %s:%d ya lo sirve otro proceso; el puente lo cede"
+                      % (bind, port))
+                sys.stdout.flush()
+                return
             print("md-web-bridge: no se pudo escuchar en %s:%d (%s); reintento en 5 s"
                   % (bind, port, e))
             sys.stdout.flush()
