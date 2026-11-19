@@ -558,7 +558,7 @@ pub fn pricing_report(max_age_days: u64) -> Value {
 /// `None` si la fecha no es válida.  Si la fecha es futura devuelve `0`.
 pub fn days_since(iso: &str, today_epoch_day: u64) -> Option<u64> {
     let d = parse_iso_date(iso)?;
-    let today = today as i64;
+    let today = today_epoch_day as i64;
     if today <= d {
         return Some(0);
     }
