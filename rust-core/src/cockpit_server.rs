@@ -1911,8 +1911,25 @@ pub fn run_server(port: u16) -> Result<(), String> {
 
     println!("==================================================================");
     println!("MEGADAEMON v14 ZENITH — 100% PURE RUST COCKPIT SERVER ONLINE");
-    for (p, _) in &listeners {
-        println!("  Listen:    http://127.0.0.1:{}  (LAN: http://<ip-de-la-maquina>:{})", p, p);
+    // BUG v14 (AUDIT-WEB-06): el banner imprimía SIEMPRE "127.0.0.1" aunque el
+    // bind real es 0.0.0.0, y repetía la misma línea por cada listener (IPv4 +
+    // IPv6 del mismo puerto). Eso hacía leer "no trae bind 0.0.0.0 ni alias"
+    // en un binario que SÍ los traía, yprovocaba recompilarlo sin motivo.
+    // Ahora: un puerto por línea, con los binds reales.
+    {
+        let mut seen: Vec<u16> = Vec::new();
+        for (p, _) in &listeners {
+            if !seen.contains(p) {
+                seen.push(*p);
+            }
+        }
+        seen.sort_unstable();
+        for p in &seen {
+            println!(
+                "  Listen:    http://0.0.0.0:{}  ·  http://[::1]:{}  (LAN: http://<ip-de-la-maquina>:{})",
+                p, p, p
+            );
+        }
     }
     for ip in local_ips() {
         println!("  URL LAN:   http://{}:{}", ip, port);
