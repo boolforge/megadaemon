@@ -792,23 +792,99 @@ document.addEventListener("click", function (e) {
   if (b) { testProviderById(b.getAttribute("data-test-provider")); }
 });
 
+// =============================================================================
+// v14 · BOOTSTRAP DE SESIÓN (decisión (b) del equipo, cierra el bug UI-16)
+//
+// La página pública `GET /` NO lleva el token de sesión incrustado: si lo
+// llevara, cualquiera que alcanzase el puerto obtendría el control del
+// daemon (RCE root).  Pero sin token, todas las llamadas de datos devuelven
+// 403 y los paneles salen con "Failed to fetch".
+//
+// Solución: el navegador pide al usuario su API key UNA vez, la canjea por un
+// token de sesión en `POST /api/session/exchange` (que exige la API key, no
+// el token) y guarda ambos en localStorage.  A partir de ahí la UI funciona
+// nativa, sin puente Python y sin que el token viaje en el HTML.
+// =============================================================================
+const MD_KEY_STORE = "megadaemon_api_key";
+const MD_TOKEN_STORE = "megadaemon_session_token";
+
+function storedApiKey() {
+  try { return window.localStorage.getItem(MD_KEY_STORE) || ""; } catch (e) { return ""; }
+}
+function setApiKey(k) {
+  try { window.localStorage.setItem(MD_KEY_STORE, k || ""); } catch (e) {}
+}
+function storedToken() {
+  try { return window.localStorage.getItem(MD_TOKEN_STORE) || ""; } catch (e) { return ""; }
+}
+function setToken(t) {
+  try { window.localStorage.setItem(MD_TOKEN_STORE, t || ""); } catch (e) {}
+}
+
+function askApiKey() {
+  const k = window.prompt(
+    "MegaDaemon — pega la API key de la instancia\n" +
+    "(fichero state/megadaemon_api.key en el dispositivo)\n" +
+    "Se guarda en el localStorage de este navegador."
+  );
+  if (k) { setApiKey(k.trim()); }
+  return k ? k.trim() : "";
+}
+
+// Canjea la API key por un token de sesión.
+async function exchangeSession(apiKey) {
+  try {
+    const res = await fetch("/api/session/exchange", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+      body: JSON.stringify({ api_key: apiKey })
+    });
+    if (!res.ok) return false;
+    const j = await res.json();
+    if (j && j.ok && j.token) {
+      setToken(j.token);
+      window.MEGADAEMON_TOKEN = j.token;
+      window.MEGADAEMON_TOKEN_ISSUED = true;
+      return true;
+    }
+  } catch (e) { /* sin red o CORS */ }
+  return false;
+}
+
 // v13.2 (S08): el cockpit exige `X-Seere-Auth-Token` en los endpoints que
-// ejecutan o modifican estado.  El token lo inyecta el servidor en la propia
-// página (legible sólo same-origin: el CORS ya no es `*`).
+// ejecutan o modifican estado, y `X-API-Key` para el acceso remoto.
 function authHeaders(extra) {
   const h = Object.assign({}, extra || {});
-  if (window.MEGADAEMON_TOKEN) h["X-Seere-Auth-Token"] = window.MEGADAEMON_TOKEN;
+  const t = storedToken() || (window.MEGADAEMON_TOKEN || "");
+  if (t) h["X-Seere-Auth-Token"] = t;
+  const k = storedApiKey();
+  if (k) h["X-API-Key"] = k;
   return h;
 }
 
+// Reintenta una vez pidiendo la API key si el daemon responde 401.
+async function mdFetch(url, opts) {
+  let res = await fetch(url, Object.assign({ cache: "no-store" }, opts || {}));
+  if (res.status === 401 && !window.__mdKeyAsked) {
+    window.__mdKeyAsked = true;
+    const k = askApiKey();
+    if (k && await exchangeSession(k)) {
+      const h = Object.assign({}, (opts && opts.headers) || {});
+      Object.assign(h, authHeaders());
+      res = await fetch(url, Object.assign({ cache: "no-store" }, opts || {}, { headers: h }));
+    }
+  }
+  return res;
+}
+
 async function apiGet(url) {
-  const res = await fetch(url, { cache: "no-store", headers: authHeaders() });
+  const res = await mdFetch(url, { headers: authHeaders() });
   if (!res.ok) throw new Error("HTTP " + res.status);
   return await res.json();
 }
 
 async function apiPost(url, payload) {
-  const res = await fetch(url, {
+  const res = await mdFetch(url, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload || {})
@@ -816,6 +892,12 @@ async function apiPost(url, payload) {
   if (!res.ok) throw new Error("HTTP " + res.status);
   return await res.json();
 }
+
+// Al cargar: si ya hay API key guardada, se pide el token en segundo plano.
+(async function mdBootstrapSession() {
+  const k = storedApiKey();
+  if (k) { await exchangeSession(k); }
+})();
 
 function switchView(viewId, btnEl) {
   document.querySelectorAll(".view").forEach(function (v) { v.classList.remove("active"); });
