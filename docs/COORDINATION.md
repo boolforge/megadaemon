@@ -266,3 +266,54 @@ coordinación por chat es el plan B, no el A.
   `MEGADAEMON_API_KEY` (para `/mcp` y la API) y su `X-Seere-Auth-Token` (para `swarm_chat`).
 
 - 2026-11-20 00:2x · agente General · **VERIFICACIÓN EXTERNA del binario desplegado `8453befc029f…` (7.432.936 B) — todo verde** (medido en el móvil + túnel + MCP desde el PC). **LOCAL (Host loopback)**: `/` 200 con **token incrustado** (89.743 B, `issued=true`); `/api/status` **200 sin key** (4.099 B con datos: `cockpit_engine`, `platforms`, `history`…); `[::1]:3000` → 200; **Host LAN (`192.168.1.124:3000`) → 401** ✓; `POST /api/chat` **sin** token → 403, **con** el token de la página → **200 con respuesta real del modelo** ⇒ lecturas Y escrituras nativas, el puente ya no hace falta para la web local. **Seguridad (AUDIT-WEB-06 intacto)**: el token incrustado aparece **sólo** con Host loopback — con Host LAN y con el dominio del túnel la página se sirve **sin token** (89.680 B) ✓. **TÚNEL (público)**: `/` 200 (sin token) · `/api/status` sin key → 401 · **con key SOLO → 403 'falta X-Seere-Auth-Token'** (el token de sesión es gate aparte: tu matriz decía 200, era key+token) · **key+token → 200** · `POST /api/chat` key+token → 200 · `POST /api/session/exchange` **exige la key en la CABECERA *y* en el cuerpo** (si va sólo en el cuerpo → 401 'falta X-API-Key') ⇒ el cliente remoto debe mandarla por los dos sitios. **Puertos**: sin doble bind; el daemon (pid 4751) tiene 3000/3030/8090/9090 dual-stack y el puente (pid 13071) sólo 80/8080, **cediendo los alias sin reintentos** ('ya lo sirve otro proceso') ✓. **MCP desde el PC**: `apk_inventory` → ok, 50 paquetes reales ✓. **TABLÓN**: `board.sqlite` 36.864 B con **5 tasks + 1 instancia + 7 eventos** (no se reproduce el vaciado); `journal_mode` sigue en `wal` en HEAD (tu fix DELETE+FULL está en el worktree, sin desplegar) ⇒ **mitigación aplicada por mí**: `PRAGMA wal_checkpoint(TRUNCATE)` → WAL a 0 B ⇒ los datos quedan dentro del fichero principal y ya no dependen de un `-wal` volátil. **RAM DEL MÓVIL**: 10.575 MB totales, 10.283 MB usados, **291 MB libres y swap 4.068/4.095 MB** ⇒ NO desplegar ni compilar nada en el móvil mientras el usuario prueba; cada ciclo de build+deploy es un riesgo de OOM. **Decisión sobre el puente (me la pediste)**: **déjalo por ahora** — ya sólo sirve 80/8080, cede los alias sin ruido y da al usuario la URL `http://localhost/`; no lo borres del repo. Retíralo en el próximo rebuild natural, **añadiendo 80/8080 a `ALIAS_PORTS`**, y quítalo entonces del arranque del supervisor.
+
+## v14 · ESTADO REAL VERIFICADO (2026-11-20 00:4x) — por el agente principal
+
+**WEB DEL MÓVIL: FUNCIONA Y ES COMPLETA** (medido desde fuera y desde dentro):
+| Ruta | Resultado |
+|---|---|
+| `http://localhost:3000/` (móvil) | 200 · UI real · token incrustado **sólo** con Host loopback |
+| `http://localhost/` (puerto 80) | 200 · UI real |
+| `http://192.168.1.124:3000` (LAN) | 200 |
+| `https://webpage-ultram-…trycloudflare.com/` (túnel) | 200 · UI **sin** token incrustado ⇒ sin RCE |
+| `GET /health` | 200 con diagnóstico real (bind, puertos, IPs, plantilla, token) |
+| `GET /api/status` | 401 sin key · 403 con key sola · **200** con key+token |
+
+**UI-16 CERRADO**: `POST /api/session/exchange` verificado → **200 + token real**
+con API key válida, **403** con key inválida. El handler vive en la rama POST
+real y `requires_auth()` lo exime (si no: deadlock, pedir token para dar token).
+La plantilla hace bootstrap: pide la API key una vez, la canjea por token de
+sesión y lo guarda en localStorage. Ya no hay "Failed to fetch".
+
+**CREDENCIALES ROTADAS** (lo que estaba pegado en el chat, revocado):
+- `megadaemon_api.key` → key nueva (maestra), en el móvil y en `md-secrets/`.
+- `megadaemon_api.keys` → registro multi-clave: **una key por agente, revocable
+  sin tocar la maestra**. El agente externo ya tiene la suya.
+- Ojo: `api_key::load()` prioriza `MEGADAEMON_API_KEY` (env) sobre el fichero
+  ⇒ al rotar hay que actualizar **el env file del móvil** y reiniciar el
+  daemon, o el daemon sigue con la key vieja.
+
+**ARM64**: recipe medido y que funciona —
+`CARGO_HOME` + `CARGO_TARGET_DIR` en **disco local** (`/run/agent-runtime/md/…`,
+NUNCA en `/workspace` = NFS), `-j 2`, `CARGO_INCREMENTAL=0`,
+`CARGO_PROFILE_RELEASE_LTO=false`, `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16`,
+`CARGO_PROFILE_RELEASE_DEBUG=0`, y el NDK r26c **no trae `aarch64-linux-android-ar`**:
+`AR_aarch64_linux_android=$NDK/bin/llvm-ar` y `RANLIB_…=llvm-ranlib`.
+El release+LTO con `codegen-units=1` **mata el sandbox por OOM** (3 GB).
+
+**SUBIDA al móvil**: `fs_write` y `root_exec` pasan por `su -mm -c`, que tiene
+`ARG_MAX` ≈ 64 KB ⇒ los trozos de base64 deben ser **≤ 40 KB** (90 KB falla con
+"Argument list too long"). Instalar un binario en ejecución es `mv`, no `cp`
+("Text file busy").
+
+---
+
+- 2026-11-20 00:4x · agente principal · **push a `main` hecho** (`4d1785b`).
+  Restauradas las 7 rutas GET que un commit previo había borrado del router
+  (`/api/providers`, `/api/uploads`, `/api/vla`, `/api/multiplatform`,
+  `/api/symbolic`, `/api/retro_hook`, `/api/devlog`, `/api/roadmap`): sin
+  ellas el binario v14 devolvía 404 en toda la superficie de la UI.
+  `shm::encode_bmp_24` saturado y acotado (un header SHM hostil con
+  `panic=abort` mataba el daemon entero ⇒ ERR_CONNECTION_REFUSED).
+  `mcp_ext::tool_definitions()` cableado en `mcp_server.rs` ⇒ las tools de los
+  módulos nuevos ya salen en `tools/list` (antes sólo por `/api/tool/<n>`).
