@@ -2,13 +2,16 @@
 # -*- coding: utf-8 -*-
 """Sube un binario al dispositivo por trozos (fs_write base64) y verifica SHA-256."""
 import base64
+import os
 import hashlib
 import json
 import sys
 import urllib.request
 
 ENDPOINT = "https://lou-larry-telecharger-changed.trycloudflare.com/mcp"
-TOKEN = "JxPRvM7GVyL3QILIu4vZnJ39_tnC9GqIhsjszZY5Enw"
+# v14: la credencial NO vive en el repo (es público).  Se lee del entorno o
+# del almacén local; si no está, el script avisa en vez de fallar en silencio.
+TOKEN = os.environ.get("MEGADAEMON_LEGACY_TOKEN", "")
 
 
 def rpc(tool, args, _id=1, timeout=900):
