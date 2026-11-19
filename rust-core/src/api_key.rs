@@ -50,25 +50,37 @@ pub struct ApiKeyConfig {
     pub key: String,
     /// Si está activa, se exige fuera de loopback.
     pub enabled: bool,
+    /// Fuerza la key incluso para loopback.
+    ///
+    /// Necesario cuando el cockpit está **detrás de un proxy local** (túnel
+    /// Cloudflare, nginx, caddy): el proxy conecta desde 127.0.0.1, así que
+    /// sin esto la exemption de loopback dejaría el servicio abierto a
+    /// cualquiera que alcance el proxy.  Se activa con
+    /// `MEGADAEMON_REQUIRE_API_KEY=1`.
+    pub forced: bool,
 }
 
 impl ApiKeyConfig {
     /// Carga la configuración: env primero, luego fichero.
     pub fn load(state_dir: &str) -> Self {
+        let forced = matches!(
+            std::env::var("MEGADAEMON_REQUIRE_API_KEY").unwrap_or_default().trim(),
+            "1" | "true" | "yes" | "on"
+        );
         if let Ok(k) = std::env::var("MEGADAEMON_API_KEY") {
             let k = k.trim().to_string();
             if !k.is_empty() {
-                return Self { key: k, enabled: true };
+                return Self { key: k, enabled: true, forced };
             }
         }
         let path = format!("{}/megadaemon_api.key", state_dir);
         if let Ok(existing) = fs::read_to_string(&path) {
             let k = existing.trim().to_string();
             if k.len() >= 16 {
-                return Self { key: k, enabled: true };
+                return Self { key: k, enabled: true, forced };
             }
         }
-        Self::default()
+        Self { key: String::new(), enabled: false, forced }
     }
 
     /// Crea una key nueva con el prefijo de la casa y la deja en el disco
@@ -205,8 +217,9 @@ pub fn decide(
     if !cfg.enabled {
         return Decision::Allow;
     }
-    // Loopback siempre exento: uso local (UI, reverse proxy en la misma caja).
-    if is_loopback(peer) {
+    // Loopback exento, EXCEPTO si se fuerza (cockpit detrás de un proxy
+    // local: el proxy entra por 127.0.0.1 y la exemption abriría el servicio).
+    if is_loopback(peer) && !cfg.forced {
         return Decision::Allow;
     }
     match extract_key(headers) {
@@ -269,7 +282,7 @@ mod tests {
 
     #[test]
     fn loopback_exento() {
-        let cfg = ApiKeyConfig { key: "k".into(), enabled: true };
+        let cfg = ApiKeyConfig { key: "k".into(), enabled: true, forced: false };
         let lim = RateLimiter::new();
         assert_eq!(decide(&cfg, &lim, &ip4(127, 0, 0, 1), "", Instant::now()), Decision::Allow);
         assert_eq!(
@@ -280,7 +293,7 @@ mod tests {
 
     #[test]
     fn sin_key_401_invalida_403() {
-        let cfg = ApiKeyConfig { key: "secreta".into(), enabled: true };
+        let cfg = ApiKeyConfig { key: "secreta".into(), enabled: true, forced: false };
         let lim = RateLimiter::new();
         let ext = ip4(203, 0, 113, 9);
         assert_eq!(decide(&cfg, &lim, &ext, "", Instant::now()), Decision::Unauthorized);
@@ -296,7 +309,7 @@ mod tests {
 
     #[test]
     fn bearer_tambien_sirve() {
-        let cfg = ApiKeyConfig { key: "secreta".into(), enabled: true };
+        let cfg = ApiKeyConfig { key: "secreta".into(), enabled: true, forced: false };
         let lim = RateLimiter::new();
         let ext = ip4(198, 51, 100, 7);
         assert_eq!(
@@ -307,7 +320,7 @@ mod tests {
 
     #[test]
     fn rate_limit_60_por_minuto() {
-        let cfg = ApiKeyConfig { key: "secreta".into(), enabled: true };
+        let cfg = ApiKeyConfig { key: "secreta".into(), enabled: true, forced: false };
         let lim = RateLimiter::new();
         let ext = ip4(192, 0, 2, 55);
         let now = Instant::now();
@@ -327,6 +340,22 @@ mod tests {
         let later = now + std::time::Duration::from_secs(RATE_WINDOW_SECS + 1);
         assert_eq!(
             decide(&cfg, &lim, &ext, "X-API-Key: secreta\r\n", later),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn forced_exige_key_aunque_venga_de_loopback() {
+        // Caso del túnel: el proxy conecta desde 127.0.0.1, pero el servicio
+        // está expuesto -> la key es obligatoria.
+        let cfg = ApiKeyConfig { key: "secreta".into(), enabled: true, forced: true };
+        let lim = RateLimiter::new();
+        assert_eq!(
+            decide(&cfg, &lim, &ip4(127, 0, 0, 1), "", Instant::now()),
+            Decision::Unauthorized
+        );
+        assert_eq!(
+            decide(&cfg, &lim, &ip4(127, 0, 0, 1), "X-API-Key: secreta\r\n", Instant::now()),
             Decision::Allow
         );
     }

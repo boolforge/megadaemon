@@ -141,6 +141,11 @@ fn requires_auth(path: &str, _method: &str) -> bool {
     if path == "/" || path == "/index.html" {
         return false;
     }
+    // Los endpoints de monitorización son de SÓLO LECTURA: no exigen el
+    // token de sesión local (el control de acceso remoto es la API key).
+    if matches!(path, "/health" | "/api/health" | "/metrics" | "/api/metrics") {
+        return false;
+    }
     true
 }
 
