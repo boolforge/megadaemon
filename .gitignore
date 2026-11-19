@@ -32,7 +32,5 @@ _IA_Cuarentena/
 *.bin
 !.gitignore
 
-# Tablero de coordinación (estado local, no se versiona)
-state/board.sqlite
-state/board.sqlite-*
-state/instance.json
+# registro local de pares: puede contener claves de peer -> fuera del repo
+state/peers.json

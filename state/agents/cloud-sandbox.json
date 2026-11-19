@@ -3,7 +3,7 @@
   "name": "cloud-sandbox (RE Exynos 2100)",
   "role": "worker",
   "device": "cloud-sandbox",
-  "external_url": "https://annual-holland-prominent-filing.trycloudflare.com",
+  "external_url": "https://rom-performing-usd-stan.trycloudflare.com",
   "duckdns_domain": "mdtmfnc.duckdns.org",
   "api_key_alias": "cloud-sandbox-local",
   "api_key_file": "/workspace/backup/megadaemon/.megadaemon.env",
@@ -33,9 +33,9 @@
   "drive_handoff": {
     "folder_url": "https://drive.google.com/drive/folders/1b-2LoDTNrCpInx_9G261ozmkxMFHMYFF",
     "folder_id": "1b-2LoDTNrCpInx_9G261ozmkxMFHMYFF",
-    "files_count": 6,
-    "total_mb": 3536.6,
-    "updated_at": "2026-11-19T22:38:18Z"
+    "files_count": 7,
+    "total_mb": 34065.2,
+    "updated_at": "2026-11-19T23:13:31Z"
   },
-  "last_seen": "2026-11-19T22:38:18Z"
+  "last_seen": "2026-11-19T23:24:40Z"
 }

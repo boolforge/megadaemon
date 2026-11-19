@@ -8,7 +8,7 @@
       "name": "SHA256_PAQUETES.txt",
       "path": "/workspace/backup/SHA256_PAQUETES.txt",
       "drive_id": "1Zxi_2ZLvgYrnEJBkVOVp0xiGqiJWD-qq",
-      "bytes": 326,
+      "bytes": 438,
       "sha256": null
     },
     {
@@ -45,11 +45,18 @@
       "drive_id": "1s5ZeG3NUWR0piRX2GxQD3h2pvNH2pzm6",
       "bytes": 5371,
       "sha256": null
+    },
+    {
+      "name": "raw_workspace_20261119_221325.tar.gz",
+      "path": "/workspace/backup/raw_dump/raw_workspace_20261119_221325.tar.gz",
+      "drive_id": "1WY89x97b07E9Oh8JnhmQxJsQNawilcaz",
+      "bytes": 32011523122,
+      "sha256": "78664ed510df90e268f57c832485826b505e414fd06dafe061051cc2d098592b"
     }
   ],
-  "files_count": 6,
-  "total_bytes": 3708427274,
-  "total_mb": 3536.6,
-  "note": "Link de la carpeta de Google Drive con el backup y los hallazgos del RE del Exynos 2100. Sin tokens ni credenciales.",
-  "timestamp": "2026-11-19T22:38:18Z"
+  "files_count": 7,
+  "total_bytes": 35719950508,
+  "total_mb": 34065.2,
+  "note": "Handoff completo: backup verificado (3 paquetes + manifiesto) y volcado raw del workspace (32.011,5 MB, sha256 78664ed510df90e268f57c832485826b505e414fd06dafe061051cc2d098592b). 7 ficheros, 35,72 GB, verificados por la API de Drive. Sin tokens.",
+  "timestamp": "2026-11-19T23:13:31Z"
 }

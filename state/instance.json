@@ -1,0 +1,42 @@
+{
+  "id": "cloud-sandbox",
+  "role": "worker",
+  "device": "cloud-sandbox",
+  "url": "http://127.0.0.1:9090",
+  "external_url": "https://rom-performing-usd-stan.trycloudflare.com",
+  "duckdns_domain": "mdtmfnc.duckdns.org",
+  "api_key_alias": "cloud-sandbox-local",
+  "api_key_file": "/workspace/backup/megadaemon/.megadaemon.env",
+  "state_dir": "/workspace/backup/megadaemon/prefix/state",
+  "listen": "127.0.0.1:9090",
+  "require_api_key": true,
+  "capabilities": [
+    "cfg-lift",
+    "cirx-ssa",
+    "mba-simplify",
+    "deobfuscate",
+    "entropy-scan",
+    "pattern-scan",
+    "pointer-scan",
+    "crypto-scan",
+    "kaitai-parse",
+    "die-binwalk",
+    "rizin",
+    "frida-dbi",
+    "npu-cv",
+    "npu-bench",
+    "hw-mmio",
+    "providers",
+    "sync",
+    "peers"
+  ],
+  "limits": {
+    "vcpu": 2,
+    "ram_mb": 3072,
+    "note": "Techo local de esta instancia: 2 vCPU / 3 GiB. Ghidra (900 MB de heap) y git pack-objects (1.5 GB) se quedan sin memoria; el trabajo pesado se reparte a las instancias con mas recursos via el tablón."
+  },
+  "last_seen": "2026-11-19T23:24:40Z",
+  "master": "samsung (S21 Ultra) - https://webpage-ultram-please-communicate.trycloudflare.com",
+  "session_token_file": "/workspace/backup/megadaemon/src/state/cockpit_token",
+  "auth_headers": "X-API-Key (MEGADAEMON_API_KEY) + X-Seere-Auth-Token (state/cockpit_token)"
+}
