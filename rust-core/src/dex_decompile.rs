@@ -2858,6 +2858,17 @@ fn find_encrypted_strings(dex: &DexFile) -> Vec<EncryptedString> {
                     continue;
                 }
                 let candidate = String::from_utf8_lossy(&decoded).to_string();
+                // Un XOR que SÓLO cambia las mayúsculas (clave 0x20 = 32) no es
+                // evidencia de cifrado: cualquier texto en inglés "cifrado"
+                // con la clave 32 sale en mayúsculas y puntúa EXACTAMENTE
+                // igual (mismas letras ⇒ misma frecuencia). Sin esta
+                // comprobación el detector marcaba como cifradas sus propias
+                // cadenas en claro: "hello" -> "HELLO" (clave 32) ganaba al
+                // XOR real y devolvía un falso positivo por delante del
+                // hallazgo bueno.
+                if candidate.eq_ignore_ascii_case(text) {
+                    continue;
+                }
                 let letters = candidate.chars().filter(|c| c.is_ascii_alphabetic()).count();
                 if letters < 3 {
                     continue;
