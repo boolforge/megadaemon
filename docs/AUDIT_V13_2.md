@@ -26,8 +26,9 @@
   y `routed=8/12 sens=8/12` (sin huella) — **idéntico a v13.1**: los arreglos no degradan el
   comportamiento medido.
 
-**Totales históricos**: 31 (v13.1) + 16 (HW) + 17 (S) = **64 defectos** encontrados y corregidos.
-Ninguno "fantasmado": sin test en rojo antes, no hay entrada en esta tabla.
+**Totales históricos**: 31 (v13.1) + 16 (HW) + 17 (S) + 7 (AUTH) + 2 (UI) = **73 defectos**
+encontrados y corregidos. Ninguno "fantasmado": sin test en rojo antes, no hay entrada en esta
+tabla.
 
 ---
 
