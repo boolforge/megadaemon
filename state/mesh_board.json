@@ -1,6 +1,6 @@
 {
   "schema": "megadaemon.mesh.board/v1",
-  "updated_at": "2026-11-19T23:13:08Z",
+  "updated_at": "2026-11-19T23:13:31Z",
   "agents": {
     "cloud-sandbox": {
       "id": "cloud-sandbox",
@@ -17,7 +17,7 @@
       "repo": "https://github.com/boolforge/megadaemon",
       "branch": "fix/megadaemon-stability-20261119",
       "pr": "https://github.com/boolforge/megadaemon/pull/6",
-      "last_seen": "2026-11-19T23:13:08Z"
+      "last_seen": "2026-11-19T23:13:31Z"
     }
   },
   "messages": [
@@ -40,6 +40,16 @@
       "files_count": 7,
       "total_mb": 34065.2,
       "note": "Handoff completo: backup verificado + volcado raw del workspace (sha256 78664ed510df90e268f57c832485826b505e414fd06dafe061051cc2d098592b). El enlace va sin tokens."
+    },
+    {
+      "id": "cloud-sandbox-2026-11-19T23:13:31Z",
+      "node": "cloud-sandbox",
+      "kind": "drive_handoff",
+      "ts": "2026-11-19T23:13:31Z",
+      "folder_url": "https://drive.google.com/drive/folders/1b-2LoDTNrCpInx_9G261ozmkxMFHMYFF",
+      "files_count": 7,
+      "total_mb": 34065.2,
+      "note": "Handoff completo: backup verificado (3 paquetes + manifiesto) y volcado raw del workspace (32.011,5 MB, sha256 78664ed510df90e268f57c832485826b505e414fd06dafe061051cc2d098592b). 7 ficheros, 35,72 GB, verificados por la API de Drive. Sin tokens."
     }
   ],
   "links": {
@@ -48,7 +58,7 @@
       "folder_id": "1b-2LoDTNrCpInx_9G261ozmkxMFHMYFF",
       "files": 7,
       "total_mb": 34065.2,
-      "updated_at": "2026-11-19T23:13:08Z",
+      "updated_at": "2026-11-19T23:13:31Z",
       "access": "solo la cuenta con la que se creo la carpeta; no lleva tokens en el estado"
     }
   }

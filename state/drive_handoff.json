@@ -51,12 +51,12 @@
       "path": "/workspace/backup/raw_dump/raw_workspace_20261119_221325.tar.gz",
       "drive_id": "1WY89x97b07E9Oh8JnhmQxJsQNawilcaz",
       "bytes": 32011523122,
-      "sha256": null
+      "sha256": "78664ed510df90e268f57c832485826b505e414fd06dafe061051cc2d098592b"
     }
   ],
   "files_count": 7,
   "total_bytes": 35719950508,
   "total_mb": 34065.2,
-  "note": "Handoff completo: backup verificado + volcado raw del workspace (sha256 78664ed510df90e268f57c832485826b505e414fd06dafe061051cc2d098592b). El enlace va sin tokens.",
-  "timestamp": "2026-11-19T23:13:08Z"
+  "note": "Handoff completo: backup verificado (3 paquetes + manifiesto) y volcado raw del workspace (32.011,5 MB, sha256 78664ed510df90e268f57c832485826b505e414fd06dafe061051cc2d098592b). 7 ficheros, 35,72 GB, verificados por la API de Drive. Sin tokens.",
+  "timestamp": "2026-11-19T23:13:31Z"
 }
