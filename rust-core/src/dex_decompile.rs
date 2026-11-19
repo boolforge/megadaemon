@@ -2862,13 +2862,22 @@ fn find_encrypted_strings(dex: &DexFile) -> Vec<EncryptedString> {
                 if letters < 3 {
                     continue;
                 }
+                if !is_prose_candidate(&candidate) {
+                    continue;
+                }
+                // Un nombre con punto ("Obf.java", "a.b.c") es un
+                // identificador o un fichero, no una cadena cifrada: su
+                // descifrado es ruido ("Alh doxo") y genera falsos positivos.
+                if looks_like_dotted_name(text) {
+                    continue;
+                }
                 if !candidate
                     .chars()
                     .any(|c| matches!(c, 'a' | 'e' | 'i' | 'o' | 'u' | 'A' | 'E' | 'I' | 'O' | 'U'))
                 {
                     continue;
                 }
-                let score = english_score(&candidate);
+                let score = english_score(&candidate) + english_word_bonus(&candidate);
                 if score > best_score {
                     best_score = score;
                     best_key = key;
@@ -3687,6 +3696,80 @@ fn string_origins(dex: &DexFile) -> HashMap<u32, (String, String)> {
     origin
 }
 
+/// ¿El texto es un nombre con punto (paquete, clase o fichero) tipo
+/// "Obf.java" o "a.b.c"?
+fn looks_like_dotted_name(text: &str) -> bool {
+    if !text.contains('.') || text.len() > 128 {
+        return false;
+    }
+    text.split('.').all(|part| {
+        if part.is_empty() {
+            return false;
+        }
+        let mut chars = part.chars();
+        let first = chars.next().unwrap();
+        (first.is_ascii_alphabetic() || first == '_' || first == '$')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+    })
+}
+
+/// ¿El texto descifrado parece prosa y no ruido?
+///
+/// Un XOR de un byte aplicado a un identificador produce textos con símbolos
+/// raros ("Obf.java" → "@mi!enyn"): no son prosa, son basura. Sin esta
+/// comprobación el detector se disparaba sobre nombres de fichero y de clase
+/// (falsos positivos) y tapaba los hallazgos reales.
+fn is_prose_candidate(text: &str) -> bool {
+    /// Signos que sí aparecen en texto plano de verdad (nótese que NO
+    /// incluye '@' ni otros símbolos de ruido).
+    const PROSE_PUNCT: &str = " \t.,;:!?()[]{}'\"-_+*/&%$#=<>|~^`";
+    text.chars()
+        .all(|c| c.is_ascii_alphanumeric() || PROSE_PUNCT.contains(c))
+}
+
+/// Palabras inglesas frecuentes: sirven para desempatar candidatos XOR
+/// cortos. La frecuencia de letras por sí sola no basta ("aleef" puntúa
+/// más alto que "hello" con 5 letras porque 'a' es más común que 'h'), pero
+/// una PALABRA de verdad es un candidato mucho más probable.
+const COMMON_WORDS: &[&str] = &[
+    "about", "above", "after", "again", "against", "along", "already", "also", "always",
+    "among", "another", "answer", "any", "app", "apply", "area", "around", "ask", "back",
+    "because", "been", "before", "begin", "being", "below", "best", "better", "between",
+    "both", "bring", "build", "business", "call", "came", "can", "case", "change", "check",
+    "child", "come", "could", "country", "create", "data", "day", "default", "delete",
+    "did", "different", "do", "does", "done", "down", "each", "early", "email", "end",
+    "error", "even", "every", "example", "family", "file", "find", "first", "follow",
+    "for", "form", "from", "get", "give", "good", "great", "group", "grow", "had", "has",
+    "have", "he", "hello", "help", "here", "high", "home", "how", "if", "image", "import",
+    "in", "info", "input", "into", "is", "it", "item", "its", "just", "key", "know", "large",
+    "last", "let", "like", "line", "list", "little", "long", "look", "made", "make", "man",
+    "many", "may", "me", "message", "more", "most", "name", "need", "new", "next", "not",
+    "now", "number", "object", "of", "off", "old", "on", "one", "only", "open", "or",
+    "other", "our", "out", "over", "page", "part", "people", "phone", "place", "point",
+    "public", "put", "read", "result", "run", "said", "same", "save", "say", "see", "send",
+    "server", "set", "should", "show", "sign", "simple", "since", "size", "so", "some",
+    "start", "state", "still", "stop", "such", "support", "system", "take", "test",
+    "text", "than", "that", "the", "their", "them", "then", "there", "these", "they",
+    "this", "those", "time", "title", "to", "today", "together", "too", "true", "under",
+    "until", "up", "use", "user", "value", "very", "want", "was", "water", "way", "we",
+    "well", "were", "what", "when", "where", "which", "while", "white", "who", "will",
+    "with", "word", "work", "world", "would", "write", "year", "you", "your",
+];
+
+/// Bonus de puntuación si el candidato es una palabra englisha real.
+fn english_word_bonus(text: &str) -> f64 {
+    let word: String = text
+        .chars()
+        .filter(|c| c.is_ascii_alphabetic())
+        .collect::<String>()
+        .to_lowercase();
+    if word.len() >= 3 && COMMON_WORDS.contains(&word.as_str()) {
+        0.5
+    } else {
+        0.0
+    }
+}
+
 /// ¿El texto tiene forma de clave API? → (tipo, confianza).
 fn api_key_shape(text: &str) -> Option<(&'static str, u8)> {
     if text.len() < 16 || text.chars().any(|c| c.is_whitespace()) {
@@ -4492,7 +4575,7 @@ mod tests {
                     registers: 2,
                     ins: 1,
                     outs: 0,
-                    // 0000: fill-array-data v0, +4
+                    // 0000: fill-array-data v0, +8
                     // 0003: goto +1 (salto nulo)
                     // 0004: goto +1
                     // 0005: goto +1
@@ -4500,7 +4583,7 @@ mod tests {
                     // 0007: nop (alineación)
                     // 0008: payload fill-array-data (ident 0x0300)
                     insns: vec![
-                        0x0026, 0x0004, 0x0000, // fill-array-data v0, +4
+                        0x0026, 0x0008, 0x0000, // fill-array-data v0, +8
                         0x0128, 0x0128, 0x0128, // goto +1 (x3, código basura)
                         0x000e, // return-void
                         0x0000, // relleno
