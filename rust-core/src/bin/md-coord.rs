@@ -50,8 +50,25 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
     let cmd = args[1].clone();
+    // v14: el state_dir por defecto debe ser el MISMO que usa el daemon
+    // (`MEGADAEMON_STATE_DIR` en megadaemon.env = <PREFIX>/state).  Antes el
+    // CLI caía en <PREFIX> y abría OTRO tablero (board.sqlite vacío) mientras
+    // el daemon escribía en <PREFIX>/state/board.sqlite ⇒ el CLI veía 0
+    // tareas y 0 instancias.  Ahora: env > <PREFIX>/state > ~/.megadaemon.
     let state = arg("--state").unwrap_or_else(|| {
-        std::env::var("MEGADAEMON_STATE_DIR").unwrap_or_else(|_| "/data/local/tmp/megadaemon".into())
+        std::env::var("MEGADAEMON_STATE_DIR")
+            .ok()
+            .filter(|d| !d.trim().is_empty())
+            .unwrap_or_else(|| {
+                if megadaemon_core::mesh::platform_is_android() {
+                    "/data/local/tmp/megadaemon/state".into()
+                } else {
+                    match std::env::var("HOME") {
+                        Ok(h) if !h.trim().is_empty() => format!("{}/.megadaemon", h.trim()),
+                        _ => "/tmp/megadaemon".into(),
+                    }
+                }
+            })
     });
     let board_path = format!("{}/board.sqlite", state);
 

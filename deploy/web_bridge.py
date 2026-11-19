@@ -68,13 +68,20 @@ def _from_env(name):
 
 
 def read_key():
-    """API key real del daemon (mdaemon_sk_live_...)."""
+    """API key real del daemon (mdaemon_sk_live_...).
+
+    v14: se aplica el MISMO criterio de validez que el daemon (>= 16 chars).
+    Antes el puente cogía la primera key que encontraba, incluso una basura
+    de 5 caracteres del env => el daemon la rechazaba con 403 y las URLs
+    :80/:8080 quedaban muertos mientras :3000 iba bien.  Ahora: env (si es
+    válida) -> fichero del estado (si es válida).
+    """
     v = _from_env("MEGADAEMON_API_KEY")
-    if v:
+    if len(v) >= 16:
         return v
     for d in STATE_DIRS:
         v = _read_file(os.path.join(d, "megadaemon_api.key"))
-        if v:
+        if len(v) >= 16:
             return v
     return ""
 

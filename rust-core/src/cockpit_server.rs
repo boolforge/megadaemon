@@ -844,6 +844,21 @@ fn handle_client(mut stream: TcpStream) {
     // (decisión por Host + veto de cabeceras de proxy; ver el comentario de
     // `local_browser_request`).  El túnel público NO se exime.
     let local_browser = local_browser_request(&peer_ip, &header_str);
+    // v14: el canje remoto `POST /api/session/exchange` lleva la API key en
+    // el CUERPO (así lo hace el JS de la UI) pero el gate sólo miraba la
+    // cabecera => el cliente remoto se comía un 401 ANTES de llegar al
+    // handler y nunca conseguía token.  Para ESA ruta se acepta también la
+    // key del cuerpo (cabecera + cuerpo siguen siendo válidos).
+    let body_key_ok = path == "/api/session/exchange"
+        && serde_json::from_slice::<Value>(body_slice)
+            .ok()
+            .and_then(|v| {
+                v.get("api_key")
+                    .and_then(|k| k.as_str())
+                    .map(|s| s.trim().to_string())
+            })
+            .map(|k| cfg.enabled && !k.is_empty() && cfg.accepts(&k))
+            .unwrap_or(false);
     match api_key::decide(
         &cfg,
         &RATE_LIMITER,
@@ -852,7 +867,8 @@ fn handle_client(mut stream: TcpStream) {
         std::time::Instant::now(),
     ) {
         api_key::Decision::Allow => {}
-        api_key::Decision::Unauthorized if is_public_page || is_public_probe || local_browser => {
+        api_key::Decision::Unauthorized
+            if is_public_page || is_public_probe || local_browser || body_key_ok => {
             // Se permite la página/sonda; el resto de endpoints siguen protegidos.
             REQ_REJECTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
@@ -1388,7 +1404,7 @@ fn handle_client(mut stream: TcpStream) {
             // autenticado por ser local (Host loopback, sin cabeceras de
             // proxy).  El túnel público sigue necesitando la key.
             let ok = (local_browser && !provided.is_empty())
-                || (!provided.is_empty() && cfg.enabled && !cfg.key.is_empty() && provided == cfg.key);
+                || (!provided.is_empty() && cfg.enabled && cfg.accepts(&provided));
             if ok {
                 send_json(
                     &mut stream,
