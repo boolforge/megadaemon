@@ -66,6 +66,14 @@ Robustez ante bloqueos (léelo, no te lo saltes):
     /mcp + tools/list para ver la superficie REAL.
   · Si el túnel cae → reintenta cada 30 s, hasta 10 veces: es un quick tunnel,
     se regenera al reiniciar el móvil y la URL puede cambiar.
+  · Si tras los 10 reintentos sigue en 530 (o 502), NO adivines ni inventes
+    una URL: un 530 también es la respuesta a una URL inventada.
+      → PIDE AL USUARIO LA URL VIGENTE. Está en el móvil, en
+        /data/local/tmp/megadaemon/tunnel.url (y en tunnel.log), y el
+        supervisor la imprime al arrancar.
+      → Si estás en la misma red que el móvil, ruta directa alternativa:
+        http://192.168.1.124:3000 (mismo MCP: X-API-Key + X-Seere-Auth-Token).
+      → La web local del propio móvil (http://localhost:3000) NO pide key.
 
 ═══════════════════════════════════════════════════════════════════
 1b. SEGUNDO CANAL: EL MOTOR DE APKs/DEX NO ESTÁ EN tools/list (HTTP)
