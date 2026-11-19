@@ -8,6 +8,10 @@
 
 pub mod accelerator_policy;
 pub mod android;
+pub mod coordination;
+pub mod cockpit_doctor;
+pub mod adb_client;
+pub mod apk_inventory;
 pub mod sync;
 pub mod sync_web;
 pub mod api_key;
@@ -41,3 +45,11 @@ pub mod snapshot;
 pub mod tile_vram;
 pub mod unifier;
 pub mod util_text;
+pub mod delegate;
+pub mod signing;
+pub mod dex_decompile;
+pub mod root_hide;
+pub mod app_intel;
+pub mod magisk_module;
+pub mod battery_advanced;
+pub mod mesh;
