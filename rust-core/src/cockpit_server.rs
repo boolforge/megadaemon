@@ -147,14 +147,6 @@ fn requires_auth(path: &str, _method: &str) -> bool {
     if matches!(path, "/health" | "/api/health" | "/metrics" | "/api/metrics") {
         return false;
     }
-    // v14 (UI-16 · CRÍTICA): el intercambio API key → token de sesión NO
-    // puede exigir el token de sesión: sería un deadlock (pide un token para
-    // poder entregar un token) y la UI quedaría muerta con 403 en todas las
-    // llamadas de datos.  La credencial que lo protege es la API key, que el
-    // gate anterior ya validó.
-    if path == "/api/session/exchange" {
-        return false;
-    }
     true
 }
 
@@ -232,63 +224,6 @@ pub fn local_ips() -> Vec<String> {
 /// qué.  Con esto, un `curl /health` dice TODO lo necesario: dónde
 /// escucha, qué puertos están vivos, qué plantilla se sirve, si el token
 /// está materializado y qué URLs exactas hay que abrir.
-/// ¿El `Host` de la petición es loopback (localhost, 127.0.0.1, [::1])?
-///
-/// v14 (medido en el Samsung): el gate de API key se apoyaba en la IP de
-/// peer (loopback) ⇒ el túnel (cloudflared entra por 127.0.0.1) quedaba
-/// indistinguible del navegador local.  Con `MEGADAEMON_REQUIRE_API_KEY=1`
-/// (obligatorio para no abrir la API a internet) el Chrome del móvil se
-/// comía un 401 en CADA panel en vivo, porque el navegador no puede mandar
-/// la cabecera `X-API-Key`.  La exención pasa a decidirse por el Host.
-fn host_is_loopback(headers: &str) -> bool {
-    for line in headers.lines() {
-        let low = line.to_ascii_lowercase();
-        let Some(rest) = low.strip_prefix("host:") else { continue };
-        let mut h = rest.trim();
-        // "[::1]:3000" -> "::1" ; "localhost:3000" -> "localhost"
-        if let Some(inner) = h.strip_prefix('[') {
-            h = inner.split(']').next().unwrap_or("").trim();
-        } else {
-            h = h.split(':').next().unwrap_or("").trim();
-        }
-        if h.eq_ignore_ascii_case("localhost") || h == "::1" {
-            return true;
-        }
-        if let Ok(ip) = h.parse::<std::net::IpAddr>() {
-            if api_key::is_loopback(&ip) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// ¿La petición trae cabeceras de proxy (túnel, reverse proxy)?
-///
-/// Sirven para que un cliente **no pueda falsear el Host** y colarse por la
-/// exención local: cloudflared añade `CF-Connecting-IP`, los proxies
-/// normales añaden `X-Forwarded-For`/`X-Real-IP`/`Forwarded`.
-fn has_proxy_headers(headers: &str) -> bool {
-    let low = headers.to_ascii_lowercase();
-    ["cf-connecting-ip:", "x-forwarded-for:", "x-real-ip:", "forwarded:", "x-forwarded-host:"]
-        .iter()
-        .any(|h| low.contains(h))
-}
-
-/// ¿La petición viene de un navegador LOCAL del propio dispositivo?
-///
-/// Se permite sin API key cuando TODO se cumple:
-///   1. el peer es loopback (el navegador del propio móvil),
-///   2. el Host es loopback (`localhost`, `127.0.0.1`, `[::1]`),
-///   3. no hay cabeceras de proxy (o sea: no viene por el túnel).
-///
-/// El túnel público sigue exigiendo API key: su Host es un dominio y sus
-/// peticiones llevan cabeceras de proxy.  El token de sesión sigue
-/// protegiendo las escrituras en cualquier caso.
-fn local_browser_request(peer: &std::net::IpAddr, headers: &str) -> bool {
-    api_key::is_loopback(peer) && host_is_loopback(headers) && !has_proxy_headers(headers)
-}
-
 pub fn web_diagnostics() -> Value {
     let template_path = resolve_template();
     let template_source = if template_path.is_some() {
@@ -330,8 +265,6 @@ pub fn web_diagnostics() -> Value {
         "template_bytes": template_bytes,
         "template_missing": template_source == "NINGUNA",
         "token_materialized": token_materialized,
-        "local_browser_exemption": true,
-        "api_key_required_for": "túnel, LAN y cualquier Host no loopback",
         "token_path": token_path,
         "local_ips": ips,
         "urls": urls,
@@ -830,10 +763,6 @@ fn handle_client(mut stream: TcpStream) {
         path,
         "/health" | "/api/health" | "/metrics" | "/api/metrics" | "/api/ping"
     );
-    // v14: exención del navegador LOCAL (ver `local_browser_request`).
-    // Sustituye a la exención por IP: el túnel entra por loopback, así que
-    // la IP no distingue; el Host + la ausencia de cabeceras de proxy sí.
-    let local_browser = local_browser_request(&peer_ip, &header_str);
     match api_key::decide(
         &cfg,
         &RATE_LIMITER,
@@ -842,7 +771,7 @@ fn handle_client(mut stream: TcpStream) {
         std::time::Instant::now(),
     ) {
         api_key::Decision::Allow => {}
-        api_key::Decision::Unauthorized if is_public_page || is_public_probe || local_browser => {
+        api_key::Decision::Unauthorized if is_public_page || is_public_probe => {
             // Se permite la página/sonda; el resto de endpoints siguen protegidos.
             REQ_REJECTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
@@ -952,17 +881,43 @@ fn handle_client(mut stream: TcpStream) {
                     html.as_bytes(),
                 );
             }
-            "/api/remote_auth" => {
-                send_json(
-                    &mut stream,
-                    &json!({
-                        "status": "ok",
-                        "authenticated": true,
-                        "server": "megadaemon-zenith-rust",
-                        "mode": "100%-pure-rust-v13",
-                        "version": "13.0.0"
-                    }),
-                );
+            // Intercambio: API key válida → token de sesión para el navegador.
+            //
+            // POST /api/session/exchange   body: {"api_key": "..."}
+            // → 200 {"ok":true,"token":"..."}  (el token va al navegador, no al
+            //   HTML público).  Con la API key incorrecta → 403.
+            "/api/session/exchange" => {
+                let body: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);
+                let provided = body
+                    .get("api_key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let ok = !provided.is_empty()
+                    && cfg.enabled
+                    && provided == cfg.key
+                    && !cfg.key.is_empty();
+                if ok {
+                    send_json(
+                        &mut stream,
+                        &json!({
+                            "ok": true,
+                            "token": auth_token(),
+                            "expires_hint": "el token es de la instancia; rotarlo reinicia la sesión",
+                        }),
+                    );
+                } else {
+                    REQ_REJECTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    send_json(
+                        &mut stream,
+                        &json!({
+                            "ok": false,
+                            "error": "invalid_api_key",
+                            "hint": "la API key no coincide con la configurada en la instancia",
+                        }),
+                    );
+                }
             }
             "/health" | "/api/health" => {
                 // Fase 3: endpoint de salud del demonio (monitorizable por
@@ -1007,6 +962,7 @@ fn handle_client(mut stream: TcpStream) {
                     }),
                 );
             }
+            "/api/providers" => send_json(&mut stream, &providers::list_providers_redacted()),
             "/api/power" => {
                 let (st, pol) = power_policy::current_policy();
                 send_json(&mut stream, &json!({
@@ -1026,6 +982,7 @@ fn handle_client(mut stream: TcpStream) {
                     "usb_plugged": st.usb_plugged
                 }));
             }
+            "/api/uploads" => send_json(&mut stream, &list_uploaded_files()),
             "/api/status" => {
                 let mut st = read_json_file_fallback(
                     "megadaemon_state.json",
@@ -1034,6 +991,12 @@ fn handle_client(mut stream: TcpStream) {
                 st["cockpit_engine"] = json!("rust-zenith-v13.0");
                 send_json(&mut stream, &st);
             }
+            "/api/vla" => send_json(&mut stream, &read_json_file_fallback("vla_telemetry.json", json!({}))),
+            "/api/multiplatform" => send_json(&mut stream, &read_json_file_fallback("multiplatform_memory_telemetry.json", json!({}))),
+            "/api/symbolic" => send_json(&mut stream, &read_json_file_fallback("symbolic_execution_report.json", json!({}))),
+            "/api/retro_hook" => send_json(&mut stream, &read_json_file_fallback("retro_frida_symbolic_telemetry.json", json!({}))),
+            "/api/devlog" => send_json(&mut stream, &read_json_file_fallback("devlog.json", json!([]))),
+            "/api/roadmap" => send_json(&mut stream, &read_json_file_fallback("roadmap.json", json!({"items": []}))),
             "/api/minidaemon" => {
                 let mut md = read_json_file_fallback(
                     "minidaemon_state.json",
@@ -1321,6 +1284,18 @@ fn handle_client(mut stream: TcpStream) {
                 };
                 send_http_response(&mut stream, 200, "image/bmp", &bmp_bytes);
             }
+            "/api/remote_auth" => {
+                send_json(
+                    &mut stream,
+                    &json!({
+                        "status": "ok",
+                        "authenticated": true,
+                        "server": "megadaemon-zenith-rust",
+                        "mode": "100%-pure-rust-v13",
+                        "version": "13.0.0"
+                    }),
+                );
+            }
             _ => {
                 send_http_response(&mut stream, 404, "application/json", b"{\"error\":\"not_found\"}");
             }
@@ -1333,49 +1308,6 @@ fn handle_client(mut stream: TcpStream) {
 
     let qp = parse_query_params(query);
     match path {
-        // ------------------------------------------------------------------
-        // v14 (UI-16 · CRÍTICA) — Intercambio: API key → token de sesión.
-        //
-        // La página pública `GET /` NO lleva el token incrustado (si lo
-        // llevara, cualquiera que alcanzase el puerto obtendría el control
-        // del daemon).  El navegador pide la API key al usuario y la canjea
-        // aquí por un token de sesión.
-        //
-        // El endpoint NO puede exigir el token de sesión (sería un deadlock:
-        // pedir un token para poder entregar un token) → `requires_auth()`
-        // lo exime.  La credencial que lo protege es la API key, que el gate
-        // de API key ya validó antes de llegar aquí.
-        // ------------------------------------------------------------------
-        "/api/session/exchange" => {
-            let provided = body_json
-                .get("api_key")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            let ok = !provided.is_empty()
-                && cfg.enabled
-                && !cfg.key.is_empty()
-                && provided == cfg.key;
-            if ok {
-                send_json(
-                    &mut stream,
-                    &json!({
-                        "ok": true,
-                        "token": auth_token(),
-                        "expires_hint": "el token pertenece a la instancia; rotarlo reinicia la sesion",
-                    }),
-                );
-            } else {
-                REQ_REJECTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                send_http_response(
-                    &mut stream,
-                    403,
-                    "application/json",
-                    b"{\"ok\":false,\"error\":\"invalid_api_key\",\"hint\":\"la API key no coincide con la configurada en la instancia\"}",
-                );
-            }
-        }
         // ------------------------------------------------------------------
         // v13.3 — API del motor de sincronización de conversaciones.
         // ------------------------------------------------------------------
