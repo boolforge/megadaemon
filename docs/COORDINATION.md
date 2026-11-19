@@ -38,3 +38,30 @@ Detalle y reproducción en `docs/AUDIT_HARNESS_V13_4.md`.
 
 - `458507570102555` — Política del harness: `fs_write` saltaba la confirmación en `/system` con `chmod` (precedencia `||`/`&&`) y su error `needs_confirm` era un contrato muerto; corregido en `ab535d6` con suite rojo→verde en `rust-core/tests/harness_policy.rs` (118 → 129 tests).
 - `458507570102555` — Barrido de ideogramas inyectados: reparados `android.rs` y `sync_web.rs` (`7e38bdb`); los de otras sesiones quedan en B-5.
+- 2026-11-19 20:5x · agente mensajería · **feat(v14) extractores de mensajería y citas médicas**: `src/messaging.rs`
+  (3.3 k líneas, único fichero tocado) con `inventory/telegram/sms/whatsapp/medical/ingest_all/alert_candidates`;
+  normaliza al esquema de `sync.rs` (`service/id/title/updated_at/messages[{role,content,ts}]`), roles `user`=saliente
+  y `peer`=entrante; Telegram: copia `msgstore.db` (+`-wal`/`-shm`) a snapshot, detecta el esquema real por
+  `sqlite_master`+`PRAGMA`, tu `user_id` por tabla `info`/`users` o por patrón, texto de blob TL por heurística;
+  SMS/MMS por content provider agrupados por hilo (`address`+`thread_id`) y citas por keywords ES sin acentos;
+  WhatsApp honesto: `wa.db` (contactos/chats) + texto visible de `dumpsys notification --noredact` +
+  `encrypted_messages_unreadable:true` con el motivo (clave AES en AndroidKeyStore, requiere Frida) — sin inventar
+  texto; Salud Responde (`citamovil.saludresponde`): busca tablas `cita/appointment/evento` y si el esquema no
+  encaja devuelve `schema_detected` + `readable:false`; 33 tests verdes sin dispositivo (BD SQLite temporal),
+  0 warnings, lógica pura separada de la E/S. Además: tarea `device.cockpit_health` encolada y asignada en el
+  móvil (`state/task_queue.json`) e instancia Samsung marcada `primary` (`state/instance.json`).
+- 2026-11-19 21:0x · agente MegaDaemon-Cockpit · **fix(v14) cockpit diagnosticable**: nuevo
+  `rust-core/src/cockpit_doctor.rs` (MÓDULO PURO: sondas `Probe` inyectables + `DoctorEnv` por
+  parámetro; NO toco `cockpit_server.rs`/`main.rs`/`lib.rs` → el principal cablea `pub mod
+  cockpit_doctor;` y el subcomando `doctor` con `run_doctor_cli`). Introduce el estado que faltaba:
+  `not_operational` = el proceso `megadaemon-core cockpit` está VIVO pero /health no responde en
+  ningún puerto (el fallo invisible que daba ERR_CONNECTION_REFUSED en el Samsung: el supervisor ve el
+  proceso vivo, no lo relanza, y no dice nada). También `down` (ni proceso ni puerto) y `ok`
+  (/health 200 exacto). Diagnostica binario+versión, proceso, puertos, plantilla (disco o EMBEBIDA),
+  token de sesión, API key remota, antigüedad del último sync y el último error del log → JSON +
+  resumen en español. `rust-core/tests/cockpit_doctor_smoke.rs`: 7 tests verdes con sonda falsa.
+  `deploy/install-phone.sh` REESCRITO (era de repo_updates): verificación SHA-256 del binario en el
+  móvil (aborta y restaura si no coincide), copia de plantilla a <prefix>/web/ y al dir privado de la
+  app, instalación del supervisor, espera ACTIVA de /health (timeout 45 s, reintentos) en vez de los
+  6 s que daban falso negativo, exige 200 EXACTO (el `toybox wget && echo 200` daba falso OK con
+  404), y ROLLBACK al .bak con el motivo en el log si no arranca. Idempotente.
