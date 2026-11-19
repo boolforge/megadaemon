@@ -26,6 +26,9 @@ pub fn tool_definitions() -> Value {
         if let Some(sync_arr) = crate::sync::tool_definitions().as_array().cloned() {
             arr.extend(sync_arr);
         }
+        if let Some(adb_arr) = crate::adb_tool::tool_definitions().as_array().cloned() {
+            arr.extend(adb_arr);
+        }
     }
     base
 }
@@ -141,6 +144,16 @@ pub fn dispatch_tool(name: &str, args: &Value) -> Value {
         let r = crate::android::dispatch(name, args);
         // Formato MCP: el contenido va en `content[].text`; los campos
         // estructurados se añaden aparte para clientes que los saben usar.
+        let text = serde_json::to_string_pretty(&r).unwrap_or_default();
+        return json!({
+            "content": [{ "type": "text", "text": text }],
+            "structuredContent": r,
+            "isError": r.get("ok").and_then(|v| v.as_bool()) == Some(false),
+        });
+    }
+    if name == "adb" {
+        let r = crate::adb_tool::dispatch(name, args)
+            .unwrap_or(json!({ "ok": false, "error": "sin resultado" }));
         let text = serde_json::to_string_pretty(&r).unwrap_or_default();
         return json!({
             "content": [{ "type": "text", "text": text }],

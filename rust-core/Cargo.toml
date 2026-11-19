@@ -18,6 +18,13 @@ sha2 = "0.10"          # SHA-256 nativo (inventario de APK, dedup, firmados)
 flate2 = "1"           # inflate (entradas deflate de los ZIP/APK)
 zip = { version = "2.2", default-features = false, features = ["deflate"] }  # lectura de APK/DEX
 rusqlite = { version = "0.32", features = ["bundled"] }  # SQLite nativo: navegadores, gestores, Telegram, SMS
+# --- v13.4.1: ADB real (firma RSA-SHA1 del token AUTH de adbd) ---
+# rsa/sha1 YA estaban en el Cargo.lock (heredados de la capa de firma); se declaran
+# porque el cliente ADB necesita RSASSA-PKCS1-v1_5 sobre SHA-1 para autenticarse
+# contra adbd con ro.adb.secure=1.
+rsa = { version = "0.9", features = ["pem"] }
+sha1 = "0.10"
+base64ct = { version = "1", features = ["alloc"] }   # base64 de la clave publica (SPKI)
 
 [profile.release]
 opt-level = 3

@@ -193,8 +193,8 @@ CONTRATO ÚNICO DE CADA LÍNEA (campos exactos):
      "class":"<enum cerrado, abajo>",
      "method":"<cómo lo obtuviste, enum abajo>",
      "signal":"<valor crudo observado>",
-     "target_class":"<clase Java donde está, o vacío>",
-     "target_method":"<método Java donde está, o vacío>",
+     "java_class":"<clase Java donde está, o vacío>",
+     "java_method":"<método Java donde está, o vacío>",
      "original":"<texto literal tal cual aparece>",
      "decoded":"<candidata descifrada, o vacío>",
      "kind":"<subtipo libre>",
@@ -221,7 +221,7 @@ REGLAS DE LOS CAMPOS:
     "ro.debuggable=1", "TracerPid=1234", "api.anthropic.com", "sk-…").
   · `class` = TIPO de evidencia (fs_path/property/process/…). `method` = CÓMO lo
     obtuviste (stat/readlink/grep_props/…). NO son la clase Java.
-  · `target_class` / `target_method` = la clase y el método JAVA donde está el
+  · `java_class` / `java_method` = la clase y el método JAVA donde está el
     hallazgo ("" si no aplica). Éstos alimentan el mapa de desofuscación.
   · `original` = texto literal (para strings ofuscadas: la ofuscada). `decoded` =
     tu candidata. `kind` = subtipo libre ("xor", "base64", "array_bytes").

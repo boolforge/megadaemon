@@ -30,6 +30,36 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 const RATE_WINDOW_SECS: u64 = 60;
 const RATE_MAX_REQUESTS: u32 = 60;
 
+/// Límite de peticiones por IP y ventana, configurable por entorno.
+///
+/// v14 (AUDIT-OPS-01): el límite fijo de 60/min hacía que TODOS los agentes
+/// que entran por el túnel Cloudflare compartieran el mismo cubo (el peer
+/// Seen es 127.0.0.1) ⇒ 429 en cascada ⇒ los agentes leían "la instancia
+/// está caída" y se rendían.  Con esto el operador puede subirlo, y el
+/// loopback (UI local y proxy) queda exento por defecto.
+pub fn rate_max_requests() -> u32 {
+    std::env::var("MEGADAEMON_RATE_MAX")
+        .ok()
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(RATE_MAX_REQUESTS)
+}
+
+/// ¿El límite de ritmo se aplica a esta IP?
+///
+/// Por defecto NO se aplica al loopback: la UI local y el proxy interno no
+/// deben competir por el cubo de los agentes remotos.  Se puede forzar con
+/// `MEGADAEMON_RATE_LOOPBACK=1`.
+pub fn rate_applies_to(ip: &IpAddr) -> bool {
+    let force = std::env::var("MEGADAEMON_RATE_LOOPBACK")
+        .map(|v| v.trim() == "1")
+        .unwrap_or(false);
+    if force {
+        return true;
+    }
+    !is_loopback(ip)
+}
+
 /// Resultado de la comprobación de acceso.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
@@ -180,6 +210,11 @@ impl RateLimiter {
 
     /// Cuenta una petición de `ip` y devuelve `true` si está dentro del límite.
     pub fn allow(&self, ip: &IpAddr, now: Instant) -> bool {
+        // Exención de loopback (ver `rate_applies_to`): la UI local y el proxy
+        // interno no deben agotar el cubo de los agentes remotos.
+        if !rate_applies_to(ip) {
+            return true;
+        }
         let mut map = match self.buckets.lock() {
             Ok(m) => m,
             Err(p) => p.into_inner(),
@@ -189,7 +224,7 @@ impl RateLimiter {
             *entry = (now, 1);
             return true;
         }
-        if entry.1 >= RATE_MAX_REQUESTS {
+        if entry.1 >= rate_max_requests() {
             return false;
         }
         entry.1 += 1;
