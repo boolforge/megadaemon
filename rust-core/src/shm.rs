@@ -4,8 +4,12 @@ use serde::{Deserialize, Serialize};
 
 pub const SHM_PATH: &str = "/data/user/0/com.agy/files/snatcher_vla_shm.bin";
 pub const SHM_SIZE: usize = 1048576; // 1 MB
+/// Offset del payload del frame dentro del fichero SHM (cabecera + metadatos).
+pub const FRAME_OFFSET: usize = 32824;
+/// Longitud de la cabecera (magic..format).
+pub const HEADER_SIZE: usize = 28;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShmHeader {
     pub magic: u32,
     pub version: u32,
@@ -25,7 +29,7 @@ pub fn read_shm_status() -> Result<ShmHeader, String> {
     file.read_exact(&mut buf)
         .map_err(|e| format!("Failed to read SHM: {}", e))?;
 
-    if buf.len() < 28 {
+    if buf.len() < HEADER_SIZE {
         return Err("SHM file too small for header".to_string());
     }
 
@@ -38,7 +42,10 @@ pub fn read_shm_status() -> Result<ShmHeader, String> {
     let bpp = u16::from_le_bytes(buf[24..26].try_into().unwrap());
     let format = u16::from_le_bytes(buf[26..28].try_into().unwrap());
 
-    let payload = &buf[32824..];
+    if buf.len() <= FRAME_OFFSET {
+        return Err("SHM file too small for frame payload".to_string());
+    }
+    let payload = &buf[FRAME_OFFSET..];
     let nonzero = payload.iter().filter(|&&b| b != 0).count();
 
     Ok(ShmHeader {
@@ -158,4 +165,71 @@ pub fn generate_tactical_hud_bmp(width: u32, height: u32) -> Vec<u8> {
     }
 
     encode_bmp_24(width, height, &rgb)
+}
+
+/// Instantánea del frame leída de forma **coherente**.
+///
+/// La v13.2 leía el fichero SHM dos veces por análisis (2 MB de E/S) y sin
+/// comprobar que el frame no hubiera cambiado a mitad de la copia: el
+/// productor (la app Android) escribe mientras nosotros leemos, así que
+/// podíamos analizar un frame "a medio escribir".
+///
+/// Ahora: una sola lectura del payload + lectura del contador antes y después.
+/// Si el contador cambió, el frame estaba cambiando: se marca `torn` y el
+/// análisis lo declara en vez de dar un resultado silenciosamente corrupto.
+#[derive(Debug, Clone)]
+pub struct FrameSnapshot {
+    pub header: ShmHeader,
+    pub rgb: Vec<u8>,
+    /// `true` si el frame cambió mientras se copiaba.
+    pub torn: bool,
+}
+
+/// Lee cabecera + frame con verificación de coherencia.
+pub fn read_frame_snapshot() -> Result<FrameSnapshot, String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = File::open(SHM_PATH).map_err(|e| format!("Failed to open SHM: {}", e))?;
+
+    // 1) Cabecera "antes".
+    let mut head = [0u8; HEADER_SIZE];
+    file.seek(SeekFrom::Start(0))
+        .and_then(|_| file.read_exact(&mut head))
+        .map_err(|e| format!("SHM header read: {}", e))?;
+
+    let width = u16::from_le_bytes(head[20..22].try_into().unwrap()) as usize;
+    let height = u16::from_le_bytes(head[22..24].try_into().unwrap()) as usize;
+    if width == 0 || height == 0 {
+        return Err("SHM header reports an empty frame".to_string());
+    }
+    let frame_len = width * height * 3;
+
+    // 2) Payload (una sola copia).
+    let mut rgb = vec![0u8; frame_len];
+    file.seek(SeekFrom::Start(FRAME_OFFSET as u64))
+        .and_then(|_| file.read_exact(&mut rgb))
+        .map_err(|e| format!("SHM frame read: {}", e))?;
+
+    // 3) Cabecera "después": si el contador cambió, el frame estaba en
+    //    mitad de actualización.
+    let mut head2 = [0u8; HEADER_SIZE];
+    file.seek(SeekFrom::Start(0))
+        .and_then(|_| file.read_exact(&mut head2))
+        .map_err(|e| format!("SHM header re-read: {}", e))?;
+    let torn = head2[8..12] != head[8..12];
+
+    let header = ShmHeader {
+        magic: u32::from_le_bytes(head[0..4].try_into().unwrap()),
+        version: u32::from_le_bytes(head[4..8].try_into().unwrap()),
+        frame_counter: u32::from_le_bytes(head2[8..12].try_into().unwrap()),
+        timestamp_us: u64::from_le_bytes(head2[12..20].try_into().unwrap()),
+        width: width as u16,
+        height: height as u16,
+        bpp: u16::from_le_bytes(head2[24..26].try_into().unwrap()),
+        format: u16::from_le_bytes(head2[26..28].try_into().unwrap()),
+        nonzero_bytes: 0,
+        is_active: true,
+    };
+
+    Ok(FrameSnapshot { header, rgb, torn })
 }

@@ -8,6 +8,7 @@ use crate::{
     bindiff, binwalk_die, cfg_lifter, cirx_rtl, crypto_scan, deobfuscate, disasm, entropy,
     freezer, frida_dbi, hw_mapper, kaitai_imhex, npu_bridge, npu_cv, pattern, pointers, providers,
     rea_assistant, rom_locator, seere_v11, shm, snapshot, tile_vram, unifier, power_policy,
+    accelerator_policy, npu_nnapi,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -212,6 +213,12 @@ fn percent_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Lee un parámetro numérico de la query string.
+fn query_u64(query: &str, key: &str) -> Option<u64> {
+    let qs = parse_query_params(query);
+    qs.get(key).and_then(|v| v.parse::<u64>().ok())
 }
 
 fn parse_query_params(query: &str) -> HashMap<String, String> {
@@ -485,13 +492,51 @@ fn handle_client(mut stream: TcpStream) {
                         "cpu_freqs_mhz": npu.cpu_freqs_mhz,
                         "cpu_temp_c": npu.cpu_temp_c,
                         "battery_temp_c": npu.battery_temp_c,
-                        "cockpit": "rust-arm64-v13.0"
+                        "cockpit": "rust-arm64-v13.2"
                     }),
                 );
             }
             "/api/npu_status" | "/api/hardware_telemetry" => {
                 let npu_info = npu_bridge::probe_exynos_npu();
                 send_json(&mut stream, &serde_json::to_value(npu_info).unwrap_or_else(|_| json!({})));
+            }
+            "/api/vision_status" => {
+                send_json(&mut stream, &serde_json::to_value(npu_cv::vision_status()).unwrap_or_else(|_| json!({})));
+            }
+            "/api/vision_start" => {
+                npu_cv::start_continuous();
+                send_json(&mut stream, &json!({"status": "VISION_CONTINUOUS_STARTED", "state": npu_cv::vision_status()}));
+            }
+            "/api/vision_stop" => {
+                npu_cv::stop_continuous();
+                send_json(&mut stream, &json!({"status": "VISION_CONTINUOUS_STOPPED", "state": npu_cv::vision_status()}));
+            }
+            "/api/npu_bench" => {
+                // Benchmark A/B en el dispositivo real: ruta NNAPI vs referencia
+                // CPU sobre el MISMO frame, con verificación de equivalencia.
+                let iters = query_u64(query, "iters").unwrap_or(10).clamp(1, 50) as u32;
+                let snap = shm::read_frame_snapshot().ok();
+                let (w, h, luma) = match snap {
+                    Some(s) if s.header.width > 0 && s.header.height > 0 => {
+                        let (w, h) = (s.header.width as usize, s.header.height as usize);
+                        let mut luma = vec![0u8; w * h];
+                        for i in 0..w * h {
+                            let b = i * 3;
+                            if b + 2 < s.rgb.len() {
+                                luma[i] = ((s.rgb[b] as u32 * 77 + s.rgb[b + 1] as u32 * 150 + s.rgb[b + 2] as u32 * 29) >> 8) as u8;
+                            }
+                        }
+                        (w, h, luma)
+                    }
+                    _ => (320, 224, vec![16u8; 320 * 224]),
+                };
+                let res = npu_nnapi::bench(&luma, w as u32, h as u32, iters);
+                send_json(&mut stream, &serde_json::to_value(res).unwrap_or_else(|_| json!({})));
+            }
+            "/api/llm_route" => {
+                let prompt = query_u64(query, "prompt").unwrap_or(207) as u32;
+                let output = query_u64(query, "output").unwrap_or(40) as u32;
+                send_json(&mut stream, &serde_json::to_value(accelerator_policy::llm_route_decision(prompt, output)).unwrap_or_else(|_| json!({})));
             }
             "/api/npu_cv" => {
                 let (_, pol) = power_policy::current_policy();

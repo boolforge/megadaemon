@@ -130,6 +130,80 @@ pub fn policy() -> AcceleratorPolicy {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Decisión de ruta CPU/GPU para el LLM, basada en MEDICIONES del Galaxy S21
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Rendimientos medidos en el Galaxy S21 (Exynos 2100 / Mali-G78 MP14) con
+/// Qwen2.5-0.5B-Instruct Q4_K_M, 4 hilos (ameva-runtime, 2026-10-04).
+/// Tokens por segundo.
+pub const S21_CPU_PREFILL_TPS: f64 = 117.0;
+pub const S21_CPU_DECODE_TPS: f64 = 46.5;
+pub const S21_GPU_PREFILL_TPS: f64 = 227.0;
+pub const S21_GPU_DECODE_TPS: f64 = 23.1;
+
+/// Veredicto de ruta para el LLM local.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteDecision {
+    /// "cpu" | "gpu"
+    pub device: String,
+    pub prompt_tokens: u32,
+    pub output_tokens: u32,
+    pub est_cpu_ms: f64,
+    pub est_gpu_ms: f64,
+    /// `true` si conviene GPU (y se puede: `--n-gpu-layers`).
+    pub gpu_preferred: bool,
+    /// Prompt mínimo (para la salida dada) a partir del cual la GPU gana.
+    pub gpu_threshold_prompt_tokens: u32,
+    /// Umbral como ratio prompt/salida (5,26x con las cifras del S21).
+    pub gpu_threshold_ratio: f64,
+    pub reason: String,
+}
+
+/// Decide CPU vs GPU para el LLM local con las cifras medidas.
+///
+/// El modelo de coste es `t = prompt/prefill_tps + output/decode_tps`.
+/// Con las cifras del S21, la GPU gana cuando el prompt es más de
+/// `5.26x` la salida (prefill 2x más rápido, decode 2x más lento).
+/// En los episodios del SEERE (prompt ~200 tok, salida ~40 tok) **gana la
+/// CPU**, que es por lo que la ruta por defecto es CPU.
+pub fn llm_route_decision(prompt_tokens: u32, output_tokens: u32) -> RouteDecision {
+    let p = prompt_tokens as f64;
+    let o = output_tokens as f64;
+    let est_cpu = (p / S21_CPU_PREFILL_TPS + o / S21_CPU_DECODE_TPS) * 1000.0;
+    let est_gpu = (p / S21_GPU_PREFILL_TPS + o / S21_GPU_DECODE_TPS) * 1000.0;
+
+    // Umbral analítico: la GPU gana cuando
+    //   p*(1/pp_gpu - 1/pp_cpu) > o*(1/dec_cpu - 1/dec_gpu)
+    // es decir, cuando el prompt es más de `ratio` veces la salida.
+    let a = (1.0 / S21_GPU_PREFILL_TPS - 1.0 / S21_CPU_PREFILL_TPS).abs();
+    let b = (1.0 / S21_CPU_DECODE_TPS - 1.0 / S21_GPU_DECODE_TPS).abs();
+    let ratio = if a > 0.0 { b / a } else { f64::MAX };
+    // Prompt mínimo para la salida dada (redondeado al alza).
+    let threshold = (ratio * output_tokens as f64).ceil().max(1.0) as u32;
+
+    let gpu_preferred = (prompt_tokens as f64) > ratio * output_tokens as f64;
+    RouteDecision {
+        device: if gpu_preferred { "gpu".into() } else { "cpu".into() },
+        prompt_tokens,
+        output_tokens,
+        est_cpu_ms: (est_cpu * 10.0).round() / 10.0,
+        est_gpu_ms: (est_gpu * 10.0).round() / 10.0,
+        gpu_preferred,
+        gpu_threshold_prompt_tokens: threshold,
+        gpu_threshold_ratio: (ratio * 100.0).round() / 100.0,
+        reason: format!(
+            "medido en Galaxy S21 (Exynos 2100): CPU {:.0} tok/s prefill / {:.1} decode;              GPU Vulkan {:.0} / {:.1}. La GPU gana cuando el prompt supera {:.1}x la salida              (umbral {} tok). Episodio SEERE típico: 200 tok de prompt y 40 de salida -> CPU.",
+            S21_CPU_PREFILL_TPS,
+            S21_CPU_DECODE_TPS,
+            S21_GPU_PREFILL_TPS,
+            S21_GPU_DECODE_TPS,
+            b / a,
+            threshold
+        ),
+    }
+}
+
 #[cfg(test)]
 mod unit {
     use super::*;
@@ -144,6 +218,43 @@ mod unit {
             .expect("debe existir la regla llm-on-npu");
         assert_eq!(llm_npu.device, "none");
         assert!(!llm_npu.implemented);
+    }
+
+    #[test]
+    fn la_ruta_por_defecto_es_cpu_para_episodios_cortos() {
+        // Episodio SEERE típico (207 tok de prompt, 40 de salida): gana la CPU,
+        // pero por POCO (≈2,63 s vs ≈2,64 s: empate técnico).  El defecto
+        // siempre es la CPU porque el decode en Mali es el doble de lento.
+        let d = llm_route_decision(207, 40);
+        assert_eq!(d.device, "cpu");
+        assert!(!d.gpu_preferred);
+        assert!(d.est_cpu_ms <= d.est_gpu_ms * 1.02, "la CPU no debe perder");
+        assert!(
+            (d.est_cpu_ms - d.est_gpu_ms).abs() < 100.0,
+            "con prompt corto la diferencia CPU/GPU es un empate técnico"
+        );
+    }
+
+    #[test]
+    fn la_gpu_gana_con_contexto_largo() {
+        // Contexto largo y salida corta: la GPU (prefill) gana.
+        let d = llm_route_decision(2000, 40);
+        assert!(d.gpu_preferred);
+        assert_eq!(d.device, "gpu");
+        assert!(d.est_gpu_ms < d.est_cpu_ms);
+    }
+
+    #[test]
+    fn el_umbral_es_coherente_con_las_medidas() {
+        // prompt == salida -> claramente CPU (el decode es 2x mas lento en GPU).
+        let d = llm_route_decision(100, 100);
+        assert!(!d.gpu_preferred);
+        // El umbral es un RATIO prompt/salida (5,26x), no un número absoluto.
+        assert!((d.gpu_threshold_ratio - 5.26).abs() < 0.2, "ratio={}", d.gpu_threshold_ratio);
+        assert_eq!(d.gpu_threshold_prompt_tokens, 526);
+        // Con la salida larga, la GPU sí gana.
+        let g = llm_route_decision(2000, 100);
+        assert!(g.gpu_preferred);
     }
 
     #[test]
