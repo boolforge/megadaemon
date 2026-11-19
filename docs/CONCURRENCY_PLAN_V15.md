@@ -141,6 +141,7 @@ Cuatro causas, cada una con su hecho:
 | P-3 | Coste real (µs y bytes) de `sha256` por MB en el Exynos 2100 | benchmark con el crate `sha2` | §8 verificación de manifiestos |
 | P-4 | Throughput real de `POST /api/v2/share/put` por la red del móvil | pushing de un artefacto de 50 MB | §8 idempotencia y coste |
 | P-5 | Deriva de calidad por proveedor (EWMA de `delegate.rs`) con ventana de 24 h | `delegate::adjustments()` + ledger de precios | §4.6 |
+| P-6 | Coste real de `fsync` y de commit en el **flash** del Samsung (el sandbox es NFS, no es representativo) | 1.000 commits sobre `state_dir` + `sync()` vía `root_exec` | §10.8: elegir el almacén del primary |
 
 > Regla: un número que no viene de una medición entra en el documento
 > marcado `pendiente` y con su método de medición. **Nunca** con "≈" ni con
@@ -2251,6 +2252,141 @@ Honestidad sobre los límites del contrato:
 una objeción `rejected` **mejora el argumento** del contrato (y se escribe el
 motivo, no se borra la objeción). En ninguno de los dos casos se borra la
 prueba: el test que falla sigue en el repo hasta que el defecto se corrija.
+
+---
+
+### 10.8 El almacén de estado del primary: medición y decisión
+
+> Pregunta planteada: *"¿hay algo más eficiente que SQLite en un dispositivo
+> limitado como el primary, en Rust puro, que maximice la capacidad de
+> coordinación entre procesos, y que escale de patatas a megaservers?"*.
+> Respuesta corta: **el motor no es el cuello de botella; lo son el `fsync`
+> y la topología multi-escritor.** Se midió para responder con números, no
+> con opiniones.
+
+#### 10.8.1 Lo medido (2026-11-19, sandbox; el móvil está pendiente)
+
+| # | Medida | Valor | Cómo |
+|---|---|---|---|
+| M-1 | Motor actual | `rusqlite 0.32.1` + `libsqlite3-sys 0.30.1` **bundled** ⇒ **el SQLite es C compilado dentro del binario** | `Cargo.toml` / `Cargo.lock` |
+| M-2 | Peso del SQLite en el árbol de build | `libsqlite3.a` = **3.061.638 B** (3,06 MB) sobre un binario release de **6.929.200 B** | `target/release/build/libsqlite3-sys/*/out/libsqlite3.a` |
+| M-3 | Tamaño real del tablero | `board.sqlite` 36.864 B (9 páginas de 4096) + `-wal` + **`-shm` 32.768 B** | `pragma page_count` |
+| M-4 | Caché por conexión | `cache_size = -2000` ⇒ **~1,95 MB por conexión** (daemon + `md-coord` = 2 conexiones) | `pragma cache_size` |
+| M-5 | Coste de commit, disco local, WAL + `synchronous=FULL` | **8,66 ms/commit** | 300 commits medidos |
+| M-6 | Coste de commit, disco local, WAL + `synchronous=NORMAL` | **0,024 ms/commit** (360× menos) | ídem |
+| M-7 | Coste de commit, **NFS del workspace**, WAL + FULL | **84,6 ms/commit** | ídem (10× peor que local) |
+| M-8 | Log append-only + `fsync` por registro | **12,6 ms/registro** | ídem |
+| M-9 | Log append-only + **`fsync` agrupado** (50 registros) | **0,196 ms/registro** | ídem |
+| M-10 | Log append-only sin `fsync` | 0,002 ms/registro | ídem |
+
+> M-5…M-10 están medidos en el **sandbox (NFS)**, no en el flash del
+> Samsung: la cifra del móvil será distinta (probablemente 5-20 ms por
+> `fsync`), pero **el orden de magnitud y la conclusión no cambian**.
+> Pendiente de medir en el dispositivo: **P-6** (añadido a §1.4).
+
+#### 10.8.2 El diagnóstico
+
+| Observación | Consecuencia |
+|---|---|
+| De 8,66 ms (SQLite FULL) a 0,196 ms (log con group commit) hay un factor **44×**, y **el motor es el mismo SQLite** en la primera mitad de la comparación | **El fsync por commit es el cuello**, no el B-tree, ni el WAL, ni el parser SQL. |
+| SQLite ya sabe agrupar: `synchronous=NORMAL` da **0,024 ms** sin escribir una línea | El 99% del beneficio se consigue **cambiando una pragma**, sin reescribir nada. |
+| `cache_size = -2000` ⇒ ~2 MB de caché **por conexión**, y el `-shm` son 32 KB | En un móvil con ~300 MB libres, el motor se lleva una parte no despreciable por abrir la segunda conexión. |
+| `libsqlite3.a` = **3,06 MB de C** dentro del binario | El requisito "**Rust puro**" **no se cumple hoy**: hay FFI a C en el crate. |
+| `md-coord` y el daemon **abren el mismo fichero** ⇒ multi-escritor ⇒ `busy_timeout` (hoy **0**: `D-06`) y `database is locked` | El modo multi-proceso de SQLite es justo lo que en NFS da la castaña (`D-1` de §1.1). |
+
+#### 10.8.3 Candidatos evaluados
+
+| Opción | ¿Puro Rust? | ACID | Multi-proceso | RAM | fsync/commit | Tamaño | Veredicto |
+|---|---|---|---|---|---|---|---|
+| **`rusqlite` (actual)** | ❌ C (3,06 MB) | ✅ | ✅ (WAL + `busy_timeout`) | ~1,95 MB/conexión + 32 KB shm | 8,66 ms (FULL) / 0,024 (NORMAL) | 3 ficheros | **Se queda, pero afinado** (10.8.4 Fase 0) |
+| **`redb`** | ✅ | ✅ (MVCC) | ❌ **un solo escritor por fichero** | configurable | 1 `fsync`/transacción | 1 fichero | Alternativa seria si se acepta "un solo escritor". A verificar su consumo real de RAM antes de decidir |
+| `sled` | ✅ | ❌ | ❌ | — | — | — | **Abandonado** (sin mantenimiento): descartado |
+| `fjall` (LSM) | ✅ | parcial | ❌ | LSM: pesado (compaction + hilos) | — | — | Descartado: demasiado para un teléfono |
+| **Limbo** (rewrite de SQLite en Rust) | ✅ | ✅ | ✅ | — | — | — | **No está en producción**: no sirve "para ahora" |
+| **Store propio "coordlog"** (log + índice en memoria) | ✅ **0 C** | durability por diseño | ❌ a propósito (**1 escritor**) | **KBs** (índice en RAM) | **0,196 ms** (group commit) | 1-2 ficheros | **Propuesto para v16** (10.8.5) |
+
+#### 10.8.4 Fase 0 — AHORA (riesgo nulo, ~30 min, sin reescribir nada)
+
+Cambios de **configuración** en `coordination.rs` (fichero de `coord`; por eso
+son **propuesta**, no cambio aplicado — §3.4 NP-3):
+
+| # | Cambio | Efecto medido |
+|---|---|---|
+| F-1 | `PRAGMA synchronous = NORMAL` (WAL ya activo) | 8,66 ms → **0,024 ms** por commit. WAL + NORMAL sobrevive a la caída del **proceso**; ante power-loss se pierde el último commit, que es aceptable para un tablero (la tarea se re-reclama por expiración de lease, §3.2) |
+| F-2 | `PRAGMA busy_timeout = 5000` (hoy 0 → `D-06`) | Elimina `database is locked` entre daemon y `md-coord` |
+| F-3 | `PRAGMA cache_size = -512` (de -2000) | 1,95 MB → ~0,5 MB por conexión |
+| F-4 | `PRAGMA wal_autocheckpoint = 256` (de 1000) | Mantiene el `-wal` pequeño en un móvil con 1,5 GB de state_dir |
+| F-5 | `PRAGMA foreign_keys = ON` (hoy 0) | Coherencia del esquema |
+| F-6 | **Un solo escritor**: el daemon. `md-coord` deja de abrir el fichero y **habla con el daemon por HTTP v2** (`POST /api/v2/tasks`, R-05) | Fin del multi-escritor ⇒ fin de los locks. `md-coord` pasa a ser un cliente HTTP de 40 líneas |
+
+**Criterio de aceptación de la Fase 0:** con 10.000 `add` seguidos, el tiempo
+total baja de **86,6 s** (con FULL) a **< 1 s** (con NORMAL), y dos procesos
+escribiendo a la vez durante 10 minutos **no** producen ni un `database is
+locked`. Medición en el móvil (P-6).
+
+#### 10.8.5 Fase 1 — v16: store de coordinación en Rust puro ("coordlog")
+
+**Topología objetivo (la clave del cambio):**
+
+```
+   ┌──────────────────── megadaemon-core (primary) ───────────────────┐
+   │                                                                  │
+   │  HTTP v2 (socket Unix / loopback)                                │
+   │      ▲            ▲                    ▲                        │
+   │      │            │                    │                        │
+   │  ┌───┴────────────┴────────────────────┴───┐                    │
+   │  │  ESTADO EN MEMORIA (índice)             │                    │
+   │  │  tasks: HashMap<id,Task>  (~200 B/tarea)│                    │
+   │  │  leases: heap por vencimiento            │                    │
+   │  │  events: deque podado (tope 30 días)    │                    │
+   │  └───────────────┬─────────────────────────┘                    │
+   │                  │ append + group commit                         │
+   │  ┌───────────────▼─────────────────────────────────┐            │
+   │  │  coordlog: log canónico (append-only, CRC32)    │            │
+   │  │  + snapshot periódico (estado completo)          │            │
+   │  └──────────────────────────────────────────────────┘            │
+   └──────────────────────────────────────────────────────────────────┘
+                     │ export (NDJSON/SQLite) para análisis
+                     ▼
+        board.sqlite  ← **sólo lectura**, se puede regenerar o borrar
+```
+
+| # | Regla del store |
+|---|---|
+| ST-1 | **Formato de registro**: `[u32 len][u32 crc32][payload JSON]`. Append-only. El CRC permite descartar un último registro truncado (crash) sin perder los anteriores. |
+| ST-2 | **Group commit**: un `fsync` por batch (cada 50 ms o cada 20 registros, lo que llegue antes) ⇒ **0,196 ms/registro** medidos. |
+| ST-3 | **Un solo escritor**: el daemon. Todo lo demás entra por **HTTP v2** (R-05…R-13) ⇒ **cero locks**, cero cachés duplicadas, cero ficheros `-shm`. |
+| ST-4 | **Índice en RAM**: el estado *consultable* (tareas, leases, agentes) vive en memoria; el log es la verdad. RAM ≈ **200 B por tarea viva** ⇒ 10.000 tareas ≈ 2 MB, y el histórico se poda (eventos: 30 días). |
+| ST-5 | **Snapshot**: cada N registros o cada T, se vuelca el estado y se trunca el log. Arranque = snapshot + replay del log. |
+| ST-6 | **Export**: `coordlog` ⇒ `board.sqlite` como **espejo derivado** (igual que `dist.sqlite` en §3.2). Se puede regenerar, abrir con `sqlite3` para análisis, o borrar. Ningún proceso escribe en él. |
+| ST-7 | **Compatibilidad**: `md-coord` mantiene su CLI actual (misma salida JSON); por debajo habla HTTP. `md-coord snapshot` sigue devolviendo el mismo JSON. |
+| ST-8 | **El bus (§3.5) se apoya en el mismo índice**: los mensajes del bus son entradas del log, no una tabla aparte ⇒ una sola escritura, un solo `fsync`. |
+| ST-9 | **Genuino "una fuente de verdad"**: con `coordination.rs` + `mesh.rs` vivos (§10.4, `F-01`) hay **dos** tableros. v16 elimina uno: el `mesh_board.json` se **vacía** (queda como transporte de peers, §5.4). |
+
+**Por qué esto maximiza la "capacidad de coordinación" (la pregunta de fondo):**
+
+| Ganancia | Por qué |
+|---|---|
+| **CPU y RAM** | El índice en RAM hace que "listar tareas por prioridad" sea un recorrido de heap, no un `SELECT` con B-tree + caché. La RAM pasa de MB a KB. |
+| **Latencia de commit** | 8,66 ms → 0,196 ms: el tablero deja de ser un cuello para *procesos* que coordinan a 60 Hz. |
+| **Interconexión** | Con **un solo escritor**, desaparece la necesidad de locks, `busy_timeout` y reintentos. Los procesos no se pelean por el fichero: **hablan con el daemon**, que ya es el punto de entrada HTTP que define el contrato. |
+| **Robustez** | Un log con CRC + snapshot + replay es **más fácil de auditar** que un B-tree: cada registro es autosuficiente y se puede verificar fuera del proceso. |
+| **Pureza** | 0 bytes de C: −3,06 MB de `libsqlite3.a` en el árbol de build y −FFI. |
+| **Escala** | El índice en RAM es el límite ⇒ en un mega-server caben cientos de miles de tareas activas; y el historical (eventos) se poda. El escalado **no** viene del motor: viene del modelo **primary + merge idempotente** (§5.3), que funciona igual en una patata que en un clúster. |
+
+**Lo que se pierde (honestidad):**
+
+| Se pierde | Mitigación |
+|---|---|
+| SQL (consultas ad-hoc sobre el tablero) | El contrato ya define las 4-5 consultas que hacen falta (`tasks` por estado/prioridad, leases vencidos, dedup por id); se implementan como índices en memoria. Y el export a SQLite permite analítica offline. |
+| La madurez de SQLite (ACID battle-tested) | Se compensa con CRC por registro, snapshot y replay, y con **tests de property** (mismo estado tras N replay). |
+| La escritura multi-proceso directa | Es **deliberado**: un solo escritor es más rápido y no se puede bloquear. |
+
+**Decisión propuesta:** **Fase 0 ahora** (afinar SQLite, 30 min, riesgo nulo),
+**Fase 1 en v16** (coordlog) cuando el tablero tenga > 1.000 tareas activas o
+cuando el multi-escritor sea un problema real. **No** se tira SQLite antes de
+eso: es la opción con mejor relación riesgo/beneficio hoy, y tirarlo ahora
+sería rehacer trabajo que ya funciona.
 
 ---
 
