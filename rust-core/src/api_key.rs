@@ -106,7 +106,12 @@ impl ApiKeyConfig {
         let extra_keys = load_extra_keys(state_dir);
         if let Ok(k) = std::env::var("MEGADAEMON_API_KEY") {
             let k = k.trim().to_string();
-            if !k.is_empty() {
+            // v14: el env manda sólo si contiene una key REAL.  Antes una
+            // basura de 5 caracteres en `megadaemon.env` (p. ej. "none")
+            // tapaba la key buena del fichero de estado => el daemon
+            // rechazaba a todos con "API key invalida" y el puente inyectaba
+            // la misma basura.  Mismo criterio de longitud que el fichero.
+            if k.len() >= 16 {
                 return Self { key: k, extra_keys, enabled: true, forced };
             }
         }
