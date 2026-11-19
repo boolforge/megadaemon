@@ -103,14 +103,33 @@ impl Backup {
 
 /// Petición HTTP cruda contra el cockpit.  Devuelve (cabeceras, cuerpo).
 fn http_raw(port: u16, method: &str, path: &str, body: Option<&str>) -> (String, String) {
+    http_raw_auth(port, method, path, body, false)
+}
+
+/// v13.2.3: el cockpit es fail-closed (todo /api/* exige token).  Con
+/// `with_token` se manda `X-Seere-Auth-Token` para poder ejercitar los
+/// handlers; sin él se comprueba que el endpoint RECHAZA la llamada.
+fn http_raw_auth(
+    port: u16,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    with_token: bool,
+) -> (String, String) {
     let mut s = TcpStream::connect(("127.0.0.1", port)).expect("no se pudo conectar al cockpit");
     s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
     s.set_write_timeout(Some(Duration::from_secs(20))).unwrap();
     let payload = body.unwrap_or("");
+    let auth = if with_token {
+        format!("X-Seere-Auth-Token: {}\r\n", megadaemon_core::cockpit_server::auth_token())
+    } else {
+        String::new()
+    };
     let req = format!(
-        "{} {} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "{} {} HTTP/1.1\r\nHost: 127.0.0.1\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         method,
         path,
+        auth,
         payload.len(),
         payload
     );
@@ -299,7 +318,7 @@ fn hw01_status_handler_no_debe_panicar_con_estado_corrupto() {
 
     let port = 39411u16;
     start_cockpit(port);
-    let (headers, body) = http_raw(port, "GET", "/api/status", None);
+    let (headers, body) = http_raw_auth(port, "GET", "/api/status", None, true);
     println!("[HW-01] headers={:?} body_len={}", headers, body.len());
 
     backup.restore();

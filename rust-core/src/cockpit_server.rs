@@ -25,6 +25,22 @@ const MEGADAEMON_DIR: &str = "/data/user/0/com.agy/files/megadaemon";
 const RE_DIR: &str = "/data/user/0/com.agy/files/megadaemon/re_pipeline";
 const SCUMMVM_TOOLS_DIR: &str = "/data/user/0/com.agy/files/scummvm/tools/re_pipeline";
 const STATE_DIR: &str = "/data/user/0/com.agy/files/megadaemon/state";
+
+/// Directorio de estado efectivo.
+///
+/// Por defecto es la ruta de la app en Android, pero se puede sobreescribir
+/// con `MEGADAEMON_STATE_DIR` (tests, despliegues fuera de Android, entornos
+/// de escritorio).  Sin esto el cockpit escribía siempre en
+/// `/data/user/0/...`, que en un escritorio no existe (o requiere root).
+pub fn state_dir() -> String {
+    if let Ok(d) = std::env::var("MEGADAEMON_STATE_DIR") {
+        let d = d.trim();
+        if !d.is_empty() {
+            return d.to_string();
+        }
+    }
+    STATE_DIR.to_string()
+}
 const UPLOADS_DIR: &str = "/data/user/0/com.agy/files/megadaemon/uploads";
 const EXTRACTED_DIR: &str = "/data/user/0/com.agy/files/megadaemon/extracted";
 const TEMPLATE_PATH: &str = "/data/user/0/com.agy/files/megadaemon/web/cockpit_template.html";
@@ -70,7 +86,7 @@ pub fn auth_token() -> &'static str {
                 return t;
             }
         }
-        let path = format!("{}/cockpit_token", STATE_DIR);
+        let path = format!("{}/cockpit_token", state_dir());
         if let Ok(existing) = fs::read_to_string(&path) {
             let t = existing.trim().to_string();
             if t.len() >= 16 {
@@ -78,7 +94,7 @@ pub fn auth_token() -> &'static str {
             }
         }
         let t = random_hex(32);
-        let _ = fs::create_dir_all(STATE_DIR);
+        let _ = fs::create_dir_all(state_dir());
         let _ = fs::write(&path, &t);
         #[cfg(unix)]
         {
@@ -102,24 +118,29 @@ fn auth_ok(headers: &str) -> bool {
 }
 
 /// ¿Este endpoint exige autenticación?
-fn requires_auth(path: &str, method: &str) -> bool {
-    if method == "GET" {
+fn requires_auth(path: &str, _method: &str) -> bool {
+    // v13.2.3 (AUTH-01…AUTH-06): FAIL-CLOSED.
+    //
+    // Antes sólo se protegían los POST, y en la rama GET quedaban endpoints
+    // con efecto de estado o con datos sensibles:
+    //   * GET /api/vision_start  -> arrancaba el worker de visión continua
+    //     (un hilo PERMANENTE que quema CPU en el dispositivo) sin token;
+    //   * GET /api/memory_freeze -> escribía/congelaba ficheros sin token;
+    //   * GET /api/providers     -> volcaba el catálogo de proveedores;
+    //   * GET /api/live_frame    -> devolvía un frame de la cámara.
+    //
+    // El CORS restringido cierra el vector "cualquier web del móvil", pero el
+    // cockpit también escucha en la LAN: cualquier proceso del dispositivo
+    // puede llamar a 127.0.0.1:<puerto>.  Por eso ahora TODO lo que no sea
+    // la página HTML exige token, con independencia del método.
+    //
+    // La única superficie pública es `GET /` (y `/index.html`): es la propia
+    // página, que lleva el token embebido en `window.MEGADAEMON_TOKEN`.  Sin
+    // CORS abierto, un origen externo no puede leerla.
+    if path == "/" || path == "/index.html" {
         return false;
     }
-    matches!(
-        path,
-        "/api/chat"
-            | "/api/llm_agent"
-            | "/api/brain_query"
-            | "/api/run_vla"
-            | "/api/memory_freeze"
-            | "/api/trigger_boost"
-            | "/api/purge_cache"
-            | "/api/providers"
-            | "/api/vision_start"
-            | "/api/vision_stop"
-            | "/api/chat_upload"
-    )
+    true
 }
 
 /// Resuelve el HTML del cockpit.
@@ -193,7 +214,7 @@ fn get_cockpit_state() -> &'static Mutex<GlobalCockpitState> {
 fn read_json_file_fallback(filename: &str, default_val: Value) -> Value {
     let p1 = format!("{}/{}", SCUMMVM_TOOLS_DIR, filename);
     let p2 = format!("{}/{}", RE_DIR, filename);
-    let p3 = format!("{}/{}", STATE_DIR, filename);
+    let p3 = format!("{}/{}", state_dir(), filename);
     for p in &[p1, p2, p3] {
         if let Ok(s) = fs::read_to_string(p) {
             if let Ok(v) = serde_json::from_str::<Value>(&s) {
@@ -512,7 +533,7 @@ fn handle_client(mut stream: TcpStream) {
             &mut stream,
             413,
             "application/json",
-            b"{\"error\":\"payload_over_100mb\"}",
+            b"{\"error\":\"payload_too_large\",\"limit_bytes\":8388608}",
         );
         return;
     }
@@ -1331,6 +1352,10 @@ pub fn run_server(port: u16) -> Result<(), String> {
     let _ = seere_v11::export_shared_ssot_files();
     let _ = npu_bridge::pin_performance_cluster();
     ensure_live_shm("segacd");
+    // v13.2.3: el token se materializa AL ARRANCAR (no de forma perezosa al
+    // primer request).  Así `<STATE_DIR>/cockpit_token` existe desde el
+    // principio y el operador puede leerlo sin tener que hacer una llamada.
+    let _ = auth_token();
 
     let addr = format!("127.0.0.1:{}", port);
     let listener = TcpListener::bind(&addr)
