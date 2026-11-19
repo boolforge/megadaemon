@@ -27,14 +27,18 @@ anti-root, endpoints, datos locales y bibliotecas nativas.
 ═══════════════════════════════════════════════════════════════════
 1. CONEXIÓN (MCP JSON-RPC 2.0 sobre HTTP POST — NO uses /sse)
 ═══════════════════════════════════════════════════════════════════
-  POST https://webpage-ultram-please-communicate.trycloudflare.com/mcp
+  POST {{MEGADAEMON_URL}}/mcp
+  ({{MEGADAEMON_URL}} = la URL VIGENTE del túnel. Es EFÍMERA: cambia cada vez
+   que el supervisor relanza cloudflared en el móvil. Si te la dio alguien hace
+   un rato, puede que ya no valga: si da 530, PIDE LA ACTUAL (ver «Robustez
+   ante bloqueos» más abajo) en vez de inventarte una.)
   Headers obligatorios:
     X-API-Key:          {{MEGADAEMON_API_KEY}}
     X-Seere-Auth-Token: {{MEGADAEMON_COCKPIT_TOKEN}}   (en POST/PUT: fs_write,
                                                         root_exec, chat_upload)
 
 Ejemplo mínimo (comprueba que estás dentro antes de nada):
-  curl -s -X POST https://webpage-ultram-please-communicate.trycloudflare.com/mcp \
+  curl -s -X POST {{MEGADAEMON_URL}}/mcp \
     -H "Content-Type: application/json" \
     -H "X-API-Key: {{MEGADAEMON_API_KEY}}" \
     -H "X-Seere-Auth-Token: {{MEGADAEMON_COCKPIT_TOKEN}}" \
@@ -42,7 +46,7 @@ Ejemplo mínimo (comprueba que estás dentro antes de nada):
 
 Cliente ya hecho (recomendado): tools/mdmcp.py en el repo
 https://github.com/boolforge/megadaemon (rama main)
-  export MEGADAEMON_MCP="https://webpage-ultram-please-communicate.trycloudflare.com/mcp"
+  export MEGADAEMON_MCP="{{MEGADAEMON_URL}}/mcp"
   export MEGADAEMON_API_KEY="{{MEGADAEMON_API_KEY}}"
   export MEGADAEMON_TOKEN="{{MEGADAEMON_COCKPIT_TOKEN}}"
   python3 tools/mdmcp.py tools                      # catálogo real
