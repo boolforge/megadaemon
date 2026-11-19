@@ -36,3 +36,4 @@ pub mod shm;
 pub mod snapshot;
 pub mod tile_vram;
 pub mod unifier;
+pub mod util_text;

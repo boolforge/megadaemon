@@ -116,12 +116,14 @@ fn mask_key(k: &str) -> String {
     if k == "AUTO_GH_CLI" {
         return "AUTO (gh auth token)".to_string();
     }
+    // v13.2 (HW-12): antes se revelaban 6+4 = 10 caracteres (casi toda la
+    // key).  Ahora como máximo 2+2.
     let chars: Vec<char> = k.chars().collect();
-    if chars.len() <= 10 {
+    if chars.len() < 12 {
         return "***".to_string();
     }
-    let head: String = chars[..6].iter().collect();
-    let tail: String = chars[chars.len() - 4..].iter().collect();
+    let head: String = chars[..2].iter().collect();
+    let tail: String = chars[chars.len() - 2..].iter().collect();
     format!("{}...{}", head, tail)
 }
 
@@ -195,7 +197,23 @@ pub fn update_provider(
             }
             if let Some(ep) = endpoint {
                 if !ep.trim().is_empty() {
-                    p.endpoint = ep.trim().to_string();
+                    // v13.2 (HW-03): cambiar el endpoint de un proveedor que ya
+                    // tiene una key guardada enviaba esa key al host nuevo
+                    // (SSRF + robo de credenciales) sin pedir la key.
+                    // Ahora hay que re-introducir la key al cambiar de host.
+                    let nuevo = ep.trim();
+                    if p.endpoint.trim() != nuevo && !p.api_key.trim().is_empty() {
+                        // v13.2 (HW-03): la API key queda ATADA al endpoint
+                        // completo (esquema+host+ruta), no sólo al host.  El
+                        // endpoint HTTP del cockpit no tiene autenticación, así
+                        // que sin esta regla cualquiera podía re-apuntar un
+                        // proveedor con key guardada yeysar esa key (SSRF +
+                        // robo de credenciales).  Al cambiar el endpoint, la
+                        // key se vacía y hay que re-introducirla.
+                        p.api_key = String::new();
+                        p.auth_type = "none".to_string();
+                    }
+                    p.endpoint = nuevo.to_string();
                 }
             }
             if let Some(en) = enabled {
@@ -434,13 +452,44 @@ fn default_re_system_prompt() -> &'static str {
 
 /// Executes optional deterministic Rust RE pre-analysis when an attachment or special intent is detected,
 /// giving even cloud models grounded byte-level telemetry without hallucination.
+/// Directorios donde puede estar un adjunto legible por el daemon.
+///
+/// v13.2 (HW-04): antes se analizaba (y subía al proveedor) CUALQUIER ruta
+/// que llegara en el campo `attachment`: con el endpoint HTTP sin
+/// autenticación eso es una lectura de ficheros arbitraria + exfiltración.
+pub const ATTACHMENT_ROOTS: &[&str] = &[
+    "/data/user/0/com.agy/files/megadaemon/uploads",
+    "/data/user/0/com.agy/files/megadaemon/extracted",
+    "/data/user/0/com.agy/files/megadaemon/re_pipeline",
+    "/data/user/0/com.agy/files/snatcher",
+];
+
+/// ¿Este adjunto está permitido?
+pub fn attachment_allowed(path: &str) -> bool {
+    if path.is_empty() || !path.starts_with('/') || path.contains("..") {
+        return false;
+    }
+    let canon = match std::fs::canonicalize(path) {
+        Ok(c) => c.to_string_lossy().to_string(),
+        Err(_) => return false,
+    };
+    ATTACHMENT_ROOTS.iter().any(|r| canon.starts_with(r))
+}
+
 fn build_grounded_re_context(prompt: &str, attachment_path: Option<&str>) -> (String, Vec<String>) {
     let mut ctx = String::new();
     let mut tools = Vec::new();
     let low = prompt.to_lowercase();
 
     if let Some(fp) = attachment_path {
-        if !fp.is_empty() && Path::new(fp).exists() {
+        if !attachment_allowed(fp) {
+            // Adjunto fuera del sandbox: se ignora y se declara.
+            ctx.push_str(&format!(
+                "\n[ADJUNTO IGNORADO: la ruta no está dentro de las carpetas permitidas del daemon: {}]\n",
+                fp
+            ));
+            tools.push(format!("AttachmentRejected({})", fp));
+        } else if !fp.is_empty() && Path::new(fp).exists() {
             let die = binwalk_die::analyze_binary_full(fp);
             tools.push(format!("DiE+Binwalk({})", die.format_family));
             ctx.push_str(&format!(
@@ -542,6 +591,26 @@ pub fn execute_chat(
         .filter(|s| !s.is_empty())
         .unwrap_or(&vault.default_model);
 
+    // v13.2 (HW-13): pedir un modelo RETIRADO no puede terminar en otro
+    // proveedor sin avisar.  Se responde con el aviso y el sustituto.
+    if let Some((rid, rmodel, rnote)) = provider_catalog::is_retired(target_id) {
+        return ChatResult {
+            reply: format!(
+                "MODELO RETIRADO: {} ({}) -> {}. El daemon NO lo sustituye por otro \
+                 proveedor en silencio; elige un modelo vigente.",
+                rmodel, rid, rnote
+            ),
+            reasoning: String::new(),
+            model_id: rid.to_string(),
+            model_name: rmodel.to_string(),
+            vendor: "catalog".to_string(),
+            latency_ms: (t0.elapsed().as_secs_f64() * 1000.0).round(),
+            tokens_used: 0,
+            tools_used: Vec::new(),
+            fallback_used: false,
+        };
+    }
+
     let (re_ctx, mut tools_used) = build_grounded_re_context(prompt, attachment_path);
     let enriched_prompt = if re_ctx.is_empty() {
         prompt.to_string()
@@ -551,7 +620,9 @@ pub fn execute_chat(
 
     // Explicit Local SEERE v12 offline path
     if target_id == "local-seere" || target_id == "local" {
-        let res = seere_v11::run_seere_v11(&enriched_prompt, 4, true, false, false, true, true);
+        // v13.2 (S09): el fallback local respeta la política de energía.
+        let (_, pol) = crate::power_policy::current_policy();
+        let res = seere_v11::run_seere_v11(&enriched_prompt, pol.max_turns.max(1), true, false, false, true, true);
         let ans = res["answer"].as_str().unwrap_or("Sin respuesta local").to_string();
         if let Some(arr) = res["tools"].as_array() {
             for t in arr {
@@ -589,7 +660,7 @@ pub fn execute_chat(
             tools_used.push("RootSnap".to_string());
             let _ = sys_snap;
         }
-        "minimax-m2.7-fast"
+        "minimax-m3.1-flash"
     } else {
         target_id
     };
@@ -653,7 +724,8 @@ pub fn execute_chat(
     }
 
     // Final guaranteed offline fallback to Local SEERE v12 Rust GBNF
-    let res = seere_v11::run_seere_v11(&enriched_prompt, 4, true, false, false, true, true);
+    let (_, pol) = crate::power_policy::current_policy();
+    let res = seere_v11::run_seere_v11(&enriched_prompt, pol.max_turns.max(1), true, false, false, true, true);
     let ans = res["answer"].as_str().unwrap_or("Sin respuesta").to_string();
     let note = if errors.is_empty() {
         ans

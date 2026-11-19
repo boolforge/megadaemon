@@ -174,15 +174,22 @@ pub fn analyze_text_for_mmio_and_structs(plat: &str, text: &str) -> HardwareMapR
             ),
         },
         InferredStruct {
-            struct_name: "SnatcherActorContext".to_string(),
+            // v13.2 (HW-14): la estructura era idéntica para cualquier
+            // plataforma y declaraba `total_size_est: 34` con campos que
+            // llegan hasta 0x48 (72 bytes).  Ahora es platform-specific y el
+            // tamaño cubre a los campos.
+            struct_name: format!("Snatcher{}ActorContext", plat.to_uppercase()),
             base_var: "DAT_800a08e8".to_string(),
-            total_size_est: 34,
+            total_size_est: 72,
             fields: vec![
                 StructField { offset_hex: "0x00".into(), offset_dec: 0, field_type: "uint8[34]".into(), suggested_name: "inventoryAndSceneFlags".into() },
                 StructField { offset_hex: "0x22".into(), offset_dec: 34, field_type: "uint8[34]".into(), suggested_name: "dialogueVisitedMask".into() },
                 StructField { offset_hex: "0x44".into(), offset_dec: 68, field_type: "uint32".into(), suggested_name: "activeActId".into() },
             ],
-            c_definition: "struct SnatcherActorContext {\n    uint8 inventoryAndSceneFlags[0x22]; // +0x00\n    uint8 dialogueVisitedMask[0x22];    // +0x22\n    uint32 activeActId;                 // +0x44\n};".to_string(),
+            c_definition: format!(
+                "struct Snatcher{}ActorContext {{\n    uint8 inventoryAndSceneFlags[0x22]; // +0x00\n    uint8 dialogueVisitedMask[0x22];    // +0x22\n    uint32 activeActId;                 // +0x44\n}}; // sizeof = 0x48 (72 bytes)",
+                plat.to_uppercase()
+            ),
         },
     ];
 

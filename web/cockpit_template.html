@@ -4,581 +4,308 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#080c12">
-<title>MEGADAEMON v13.0 ZENITH</title>
+<title>MEGADAEMON v13.2 ZENITH</title>
 <style>
+  /* ================================================================
+     MEGADAEMON v13.2 — Design system
+     Capas: canvas -> surface -> surface-2 -> hairline -> accent
+     Mobile-first (el daemon vive en un teléfono); 2 columnas en >=900px
+     ================================================================ */
   :root {
-    --canvas: #080c12;
-    --l1: #101721;
-    --l2: #16202c;
-    --l3: #1d2a3a;
-    --mint: #00f59b;
-    --mint-dim: rgba(0, 245, 155, 0.14);
-    --cyan: #00d2ff;
-    --cyan-dim: rgba(0, 210, 255, 0.14);
-    --amber: #ffb800;
-    --amber-dim: rgba(255, 184, 0, 0.14);
-    --hazard: #ff2d55;
-    --hazard-dim: rgba(255, 45, 85, 0.14);
-    --ink: #edf3fa;
-    --ink-2: #a8b8cc;
-    --ink-3: #7d90a8;
-    --hairline: rgba(168, 184, 204, 0.12);
-    --radius-sm: 8px;
-    --radius-md: 12px;
+    --canvas: #06090f;
+    --l1: #0c1119;
+    --l2: #121a25;
+    --l3: #18222f;
+    --l4: #1f2b3b;
+    --mint: #00f5a0;
+    --mint-dim: rgba(0, 245, 160, 0.13);
+    --cyan: #22d3ee;
+    --cyan-dim: rgba(34, 211, 238, 0.13);
+    --violet: #a78bfa;
+    --violet-dim: rgba(167, 139, 250, 0.14);
+    --amber: #ffb224;
+    --amber-dim: rgba(255, 178, 36, 0.14);
+    --hazard: #ff3b5c;
+    --hazard-dim: rgba(255, 59, 92, 0.14);
+    --ink: #eef4fb;
+    --ink-2: #a9bacf;
+    --ink-3: #70839c;
+    --hairline: rgba(140, 165, 195, 0.13);
+    --hairline-2: rgba(140, 165, 195, 0.22);
+    --r-sm: 8px;
+    --r-md: 12px;
+    --r-lg: 18px;
     --mono: ui-monospace, "JetBrains Mono", "Fira Code", SFMono-Regular, Menlo, monospace;
     --sans: system-ui, -apple-system, "Segoe UI", Roboto, Inter, sans-serif;
-    --nav-h: 60px;
-    --hdr-h: 48px;
+    --nav-h: 62px;
+    --hdr-h: 52px;
+    --sh-1: 0 1px 2px rgba(0,0,0,.5);
+    --sh-2: 0 8px 30px rgba(0,0,0,.45);
   }
 
-  * {
-    box-sizing: border-box;
-    -webkit-tap-highlight-color: transparent;
-  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
   html, body {
-    margin: 0;
-    padding: 0;
-    width: 100%;
-    height: 100dvh;
-    overflow: hidden;
-    background: var(--canvas);
-    color: var(--ink);
-    font-family: var(--sans);
-    font-size: 15px;
-    line-height: 1.45;
+    margin: 0; padding: 0; width: 100%; height: 100dvh; overflow: hidden;
+    background: var(--canvas); color: var(--ink);
+    font-family: var(--sans); font-size: 15px; line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
   }
 
-  .mono, code, pre {
-    font-family: var(--mono);
-    font-feature-settings: "tnum" 1, "zero" 1;
-    font-variant-numeric: tabular-nums;
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background:
+      radial-gradient(900px 420px at 12% -8%, rgba(0,245,160,.10), transparent 60%),
+      radial-gradient(760px 380px at 96% 4%, rgba(167,139,250,.09), transparent 62%),
+      radial-gradient(700px 500px at 50% 110%, rgba(34,211,238,.06), transparent 60%);
   }
 
-  /* App Shell: Top passive telemetry header, middle scrolling viewport, fixed bottom thumb nav */
+  .mono, code, pre { font-family: var(--mono); font-feature-settings: "tnum" 1, "zero" 1; font-variant-numeric: tabular-nums; }
+
   .app-shell {
-    display: flex;
-    flex-direction: column;
-    height: 100dvh;
-    width: 100%;
-    max-width: 1080px;
-    margin: 0 auto;
-    background: var(--canvas);
+    position: relative; z-index: 1;
+    display: flex; flex-direction: column; height: 100dvh; width: 100%;
+    max-width: 1180px; margin: 0 auto; background: transparent;
   }
 
-  /* Top Passive Telemetry Bar (Ow Zone — zero frequent controls) */
+  /* ---------- Barra superior: estado real, todo clicable ---------- */
   .top-bar {
-    height: var(--hdr-h);
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 16px;
-    background: var(--l1);
-    border-bottom: 1px solid var(--hairline);
-    gap: 8px;
+    height: var(--hdr-h); flex-shrink: 0; display: flex; align-items: center;
+    justify-content: space-between; gap: 10px; padding: 0 12px;
+    background: linear-gradient(180deg, rgba(18,26,37,.92), rgba(12,17,25,.92));
+    backdrop-filter: blur(14px); border-bottom: 1px solid var(--hairline);
+    box-shadow: var(--sh-1);
   }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 13px; letter-spacing: .08em; white-space: nowrap; }
+  .brand-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 10px var(--mint); animation: pulse 2.6s ease-in-out infinite; }
+  .brand-dot.degraded { background: var(--amber); box-shadow: 0 0 10px var(--amber); }
+  .brand-dot.offline { background: var(--hazard); box-shadow: 0 0 10px var(--hazard); }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .45 } }
 
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-weight: 700;
-    font-size: 14px;
-    letter-spacing: 0.06em;
-    color: var(--ink);
-    white-space: nowrap;
+  .telemetry-strip { display: flex; align-items: center; gap: 6px; font-size: 11px; letter-spacing: .03em; color: var(--ink-2); overflow-x: auto; scrollbar-width: none; white-space: nowrap; flex: 1 1 auto; justify-content: flex-end; min-width: 0; }
+  .telemetry-strip::-webkit-scrollbar { height: 0; }
+  @media (max-width: 560px) {
+    .brand > span:not(.brand-dot):not(.pill) { display: none; }
+    .telemetry-strip .pill { padding: 4px 7px; font-size: 9.5px; }
+    .top-bar { padding: 0 10px; gap: 6px; }
   }
-
-  .brand-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--mint);
-    box-shadow: 0 0 8px var(--mint);
-  }
-  .brand-dot.degraded { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
-  .brand-dot.offline { background: var(--hazard); box-shadow: 0 0 8px var(--hazard); }
-
-  .telemetry-strip {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 11px;
-    letter-spacing: 0.04em;
-    color: var(--ink-2);
-    overflow: hidden;
-    white-space: nowrap;
-  }
+  .telemetry-strip::-webkit-scrollbar { display: none; }
 
   .pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 3px 8px;
-    border-radius: 6px;
-    background: var(--l2);
-    color: var(--cyan);
-    font-size: 11px;
-    font-weight: 600;
+    display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border-radius: 999px;
+    background: var(--l2); border: 1px solid var(--hairline); color: var(--ink-2);
+    font-size: 10.5px; font-weight: 700; letter-spacing: .05em; cursor: default;
   }
-  .pill.mint { color: var(--mint); background: var(--mint-dim); }
-  .pill.amber { color: var(--amber); background: var(--amber-dim); }
-  .pill.hazard { color: var(--hazard); background: var(--hazard-dim); }
+  .pill.mint { color: var(--mint); background: var(--mint-dim); border-color: rgba(0,245,160,.28); }
+  .pill.cyan { color: var(--cyan); background: var(--cyan-dim); border-color: rgba(34,211,238,.28); }
+  .pill.amber { color: var(--amber); background: var(--amber-dim); border-color: rgba(255,178,36,.28); }
+  .pill.hazard { color: var(--hazard); background: var(--hazard-dim); border-color: rgba(255,59,92,.28); }
+  .pill.violet { color: var(--violet); background: var(--violet-dim); border-color: rgba(167,139,250,.30); }
+  .pill.tap { cursor: pointer; transition: transform .12s ease, filter .12s ease; }
+  .pill.tap:active { transform: scale(.95); }
+  .pill.live { position: relative; }
+  .pill.live::after { content: ""; position: absolute; top: 3px; right: 4px; width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: pulse 1.6s ease-in-out infinite; }
 
-  /* Main View Container */
-  .views-wrap {
-    flex: 1 1 auto;
-    min-height: 0;
-    position: relative;
-    overflow: hidden;
-  }
+  /* ---------- Contenedor de vistas ---------- */
+  .views-wrap { flex: 1 1 auto; min-height: 0; position: relative; }
+  .view { display: none; position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain;
+          padding: 12px 12px calc(var(--nav-h) + 18px); -webkit-overflow-scrolling: touch; }
+  .view.active { display: block; animation: fade .18s ease; }
+  @keyframes fade { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: none } }
 
-  .view {
-    display: none;
-    height: 100%;
-    width: 100%;
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
-    padding: 12px 16px 20px;
-  }
+  /* ---------- Tarjetas ---------- */
+  .card { background: linear-gradient(180deg, rgba(24,34,47,.92), rgba(18,26,37,.92));
+          border: 1px solid var(--hairline); border-radius: var(--r-lg); padding: 14px;
+          margin-bottom: 12px; box-shadow: var(--sh-1); }
+  .section-title { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+                   font-size: 11px; font-weight: 800; letter-spacing: .12em; color: var(--ink-3);
+                   text-transform: uppercase; margin-bottom: 12px; }
+  .section-title > span { display: flex; align-items: center; gap: 7px; }
+  .section-title > span::before { content: ""; width: 3px; height: 13px; border-radius: 2px; background: linear-gradient(180deg, var(--mint), var(--cyan)); }
 
-  .view.active {
-    display: block;
-  }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .grow { flex: 1 1 auto; min-width: 0; }
+  .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+  @media (min-width: 760px) { .grid-4 { grid-template-columns: repeat(4, minmax(0,1fr)); } }
 
-  /* Chat View uses full-height flexbox so composer is ALWAYS visible in bottom comfort zone */
-  #view-swarm.active {
-    display: flex;
-    flex-direction: column;
-    padding: 0;
-    overflow: hidden;
-  }
+  /* ---------- Métricas ---------- */
+  .stat-box { background: var(--l2); border: 1px solid var(--hairline); border-radius: var(--r-md);
+              padding: 10px 11px; min-width: 0; }
+  .stat-label { font-size: 9.5px; font-weight: 700; letter-spacing: .1em; color: var(--ink-3); text-transform: uppercase;
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stat-val { font-size: 17px; font-weight: 700; color: var(--ink); margin-top: 3px;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stat-val.ok { color: var(--mint); } .stat-val.warn { color: var(--amber); } .stat-val.bad { color: var(--hazard); }
+  .stat-val.info { color: var(--cyan); } .stat-val.violet { color: var(--violet); }
+  .stat-val small { font-size: 11px; font-weight: 600; color: var(--ink-3); margin-left: 3px; }
 
-  .chat-toolbar {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    background: var(--l1);
-    border-bottom: 1px solid var(--hairline);
-  }
+  /* ---------- Botones ---------- */
+  .btn { appearance: none; border: 1px solid var(--hairline-2); background: var(--l3); color: var(--ink);
+         font-family: inherit; font-size: 11.5px; font-weight: 800; letter-spacing: .07em;
+         padding: 9px 13px; border-radius: 10px; cursor: pointer; transition: transform .1s ease, background .15s ease, border-color .15s ease;
+         min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; }
+  .btn:hover { background: var(--l4); }
+  .btn:active { transform: scale(.96); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.sm { padding: 6px 10px; font-size: 10.5px; min-height: 30px; border-radius: 8px; }
+  .btn.primary { background: linear-gradient(180deg, rgba(0,245,160,.20), rgba(0,245,160,.10)); color: var(--mint); border-color: rgba(0,245,160,.42); }
+  .btn.cyan { background: linear-gradient(180deg, rgba(34,211,238,.20), rgba(34,211,238,.10)); color: var(--cyan); border-color: rgba(34,211,238,.40); }
+  .btn.amber { background: linear-gradient(180deg, rgba(255,178,36,.20), rgba(255,178,36,.10)); color: var(--amber); border-color: rgba(255,178,36,.40); }
+  .btn.hazard { background: linear-gradient(180deg, rgba(255,59,92,.20), rgba(255,59,92,.10)); color: var(--hazard); border-color: rgba(255,59,92,.40); }
+  .btn.violet { background: linear-gradient(180deg, rgba(167,139,250,.22), rgba(167,139,250,.10)); color: var(--violet); border-color: rgba(167,139,250,.42); }
+  .btn.ghost { background: transparent; }
+  .btn.on { background: linear-gradient(180deg, rgba(0,245,160,.30), rgba(0,245,160,.16)); color: var(--mint); border-color: rgba(0,245,160,.60); }
 
-  .chat-messages {
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
-    padding: 12px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
+  .chip { appearance: none; border: 1px solid var(--hairline-2); background: var(--l2); color: var(--ink-2);
+          font-family: inherit; font-size: 11.5px; font-weight: 600; padding: 8px 11px; border-radius: 999px;
+          cursor: pointer; transition: all .13s ease; white-space: nowrap; }
+  .chip:hover { color: var(--ink); border-color: var(--mint); background: var(--mint-dim); }
+  .chip:active { transform: scale(.95); }
 
-  .msg {
-    max-width: 94%;
-    padding: 12px 14px;
-    border-radius: var(--radius-md);
-    font-size: 14px;
-    line-height: 1.5;
-    word-break: break-word;
-    white-space: pre-wrap;
-  }
-
-  .msg.user {
-    align-self: flex-end;
-    background: var(--l3);
-    color: var(--ink);
-  }
-
-  .msg.bot {
-    align-self: flex-start;
-    background: var(--l1);
-    color: var(--ink);
-    width: 100%;
-  }
-
-  .msg-meta {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    font-size: 11px;
-    color: var(--cyan);
-    margin-bottom: 6px;
-    letter-spacing: 0.03em;
-  }
-
-  .think-details {
-    margin: 6px 0 8px;
-    padding: 8px 10px;
-    border-radius: var(--radius-sm);
-    background: var(--canvas);
-    font-size: 12px;
-    color: var(--ink-2);
-  }
-  .think-details summary {
-    cursor: pointer;
-    color: var(--amber);
-    font-weight: 600;
-    user-select: none;
-  }
-
-  .chat-quick-chips {
-    flex-shrink: 0;
-    display: flex;
-    gap: 8px;
-    overflow-x: auto;
-    padding: 6px 12px;
-    background: var(--canvas);
-    scrollbar-width: none;
-  }
-  .chat-quick-chips::-webkit-scrollbar { display: none; }
-
-  .chip {
-    flex-shrink: 0;
-    min-height: 36px;
-    padding: 6px 12px;
-    border: none;
-    border-radius: 8px;
-    background: var(--l2);
-    color: var(--ink-2);
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: transform 0.12s ease, background 0.12s ease;
-  }
-  .chip:active { transform: scale(0.96); background: var(--l3); color: var(--mint); }
-
-  .attachment-bar {
-    display: none;
-    flex-shrink: 0;
-    padding: 8px 12px;
-    background: var(--l2);
-    border-top: 1px solid var(--hairline);
-    font-size: 12px;
-    color: var(--mint);
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-  .attachment-bar.visible { display: flex; }
-
-  .chat-composer {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    background: var(--l1);
-    border-top: 1px solid var(--hairline);
-  }
-
-  .chat-input {
-    flex: 1 1 auto;
-    min-height: 48px;
-    max-height: 112px;
-    padding: 10px 14px;
-    border-radius: var(--radius-md);
-    border: 1px solid var(--hairline);
-    background: var(--canvas);
-    color: var(--ink);
-    font-family: var(--sans);
-    font-size: 15px;
-    resize: none;
-    outline: none;
-  }
-  .chat-input:focus { border-color: var(--mint); }
-
-  /* Controls & Inputs (min 48px touch target mandate) */
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    min-height: 48px;
-    min-width: 48px;
-    padding: 0 16px;
-    border: none;
-    border-radius: var(--radius-md);
-    background: var(--l2);
-    color: var(--ink);
-    font-family: var(--sans);
-    font-size: 13px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    cursor: pointer;
-    transition: transform 0.1s ease, background 0.15s ease;
-  }
-  .btn:active { transform: scale(0.96); }
-  .btn.primary { background: var(--mint); color: #06130e; }
-  .btn.cyan { background: var(--cyan-dim); color: var(--cyan); }
-  .btn.amber { background: var(--amber-dim); color: var(--amber); }
-  .btn.hazard { background: var(--hazard-dim); color: var(--hazard); }
-  .btn.sm { min-height: 40px; padding: 0 12px; font-size: 12px; }
-  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
+  /* ---------- Formularios ---------- */
   select, input[type="text"], input[type="password"], input[type="number"], textarea.code-input {
-    min-height: 44px;
-    padding: 8px 12px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--hairline);
-    background: var(--canvas);
-    color: var(--ink);
-    font-family: var(--mono);
-    font-size: 13px;
-    outline: none;
-    width: 100%;
-  }
-  select:focus, input:focus, textarea:focus { border-color: var(--cyan); }
+    background: var(--l1); color: var(--ink); border: 1px solid var(--hairline-2); border-radius: 10px;
+    padding: 9px 11px; font-family: inherit; font-size: 13px; min-height: 38px; width: 100%; }
+  select:focus, input:focus, textarea:focus { outline: none; border-color: var(--mint); box-shadow: 0 0 0 3px var(--mint-dim); }
+  option { background: var(--l2); color: var(--ink); }
 
-  /* Surfaces (Elevation by contrast, NOT repetitive borders) */
-  .card {
-    background: var(--l1);
-    border-radius: var(--radius-md);
-    padding: 14px;
-    margin-bottom: 12px;
-  }
+  /* ---------- Chat ---------- */
+  .chat-toolbar { display: flex; gap: 8px; margin-bottom: 10px; }
+  #view-swarm { display: none; flex-direction: column; }
+  #view-swarm.active { display: flex; }
+  .chat-messages { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; flex: 1 1 auto; min-height: 0; }
+  .chat-quick-chips { flex: 0 0 auto; }
+  .chat-composer { flex: 0 0 auto; }
+  .msg { border-radius: var(--r-md); padding: 11px 13px; border: 1px solid var(--hairline); background: var(--l2); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+  .msg.user { background: linear-gradient(180deg, rgba(34,211,238,.14), rgba(34,211,238,.06)); border-color: rgba(34,211,238,.28); }
+  .msg.bot { background: linear-gradient(180deg, rgba(24,34,47,.9), rgba(18,26,37,.9)); }
+  .msg-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 10px; letter-spacing: .08em; color: var(--ink-3); }
+  .msg code { background: var(--l1); padding: 1px 5px; border-radius: 5px; font-size: 12.5px; border: 1px solid var(--hairline); }
+  .think-details { margin-top: 8px; border-top: 1px dashed var(--hairline-2); padding-top: 7px; }
+  .think-details summary { cursor: pointer; font-size: 10.5px; letter-spacing: .08em; color: var(--violet); font-weight: 700; }
+  .chat-quick-chips { display: flex; gap: 7px; overflow-x: auto; padding-bottom: 9px; scrollbar-width: none; }
+  .chat-quick-chips::-webkit-scrollbar { display: none; }
+  .attachment-bar { display: flex; align-items: center; gap: 8px; background: var(--cyan-dim); border: 1px solid rgba(34,211,238,.28);
+                    border-radius: var(--r-md); padding: 7px 10px; margin-bottom: 9px; font-size: 11.5px; color: var(--cyan); }
+  .chat-composer { display: flex; gap: 8px; align-items: flex-end; background: var(--l2); border: 1px solid var(--hairline-2);
+                   border-radius: var(--r-lg); padding: 8px; box-shadow: var(--sh-2); }
+  .chat-input { flex: 1 1 auto; background: transparent; border: none; color: var(--ink); font-family: inherit;
+                font-size: 15px; resize: none; min-height: 38px; max-height: 140px; padding: 9px 6px; line-height: 1.35; }
+  .chat-input:focus { outline: none; }
+  .chat-input::placeholder { color: var(--ink-3); }
 
-  .card-l2 {
-    background: var(--l2);
-    border-radius: var(--radius-sm);
-    padding: 12px;
-    margin-top: 10px;
-  }
-
-  .section-title {
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    color: var(--cyan);
-    text-transform: uppercase;
-    margin: 0 0 10px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .row {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-  .row > .grow { flex: 1 1 140px; }
-
-  .grid-2 {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-  }
-
-  .grid-4 {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 8px;
-  }
-
-  @media (max-width: 520px) {
-    .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  }
-
-  .stat-box {
-    background: var(--l2);
-    border-radius: var(--radius-sm);
-    padding: 10px 12px;
-  }
-  .stat-label { font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.05em; }
-  .stat-val { font-size: 16px; font-weight: 700; color: var(--ink); margin-top: 2px; }
-
-  /* Sub-tab pill bar (max 5 options per Hick-Hyman) */
-  .subtabs {
-    display: flex;
-    gap: 6px;
-    overflow-x: auto;
-    margin-bottom: 12px;
-    scrollbar-width: none;
-  }
+  /* ---------- Sub-pestañas ---------- */
+  .subtabs { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 10px; scrollbar-width: none; }
   .subtabs::-webkit-scrollbar { display: none; }
+  .subtab { appearance: none; border: 1px solid var(--hairline); background: var(--l2); color: var(--ink-3);
+            font-family: inherit; font-size: 10.5px; font-weight: 800; letter-spacing: .08em; padding: 8px 11px;
+            border-radius: 999px; cursor: pointer; white-space: nowrap; }
+  .subtab.active { color: var(--mint); border-color: rgba(0,245,160,.45); background: var(--mint-dim); }
+  .subpanel { display: none; } .subpanel.active { display: block; animation: fade .16s ease; }
 
-  .subtab {
-    flex: 1 0 auto;
-    min-height: 44px;
-    padding: 0 12px;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: var(--l1);
-    color: var(--ink-2);
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .subtab.active {
-    background: var(--mint-dim);
-    color: var(--mint);
-    box-shadow: inset 0 -2px 0 var(--mint);
-  }
+  /* ---------- Terminal ---------- */
+  .terminal-out { background: #05080d; border: 1px solid var(--hairline); border-radius: var(--r-md);
+                  padding: 11px; font-size: 11.5px; line-height: 1.5; color: #9fe8c8; overflow: auto;
+                  max-height: 320px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+  .terminal-out:empty::before { content: "—"; color: var(--ink-3); }
 
-  .subpanel { display: none; }
-  .subpanel.active { display: block; }
+  /* ---------- Tablas ---------- */
+  .data-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  .data-table th { text-align: left; font-size: 9.5px; letter-spacing: .1em; color: var(--ink-3); text-transform: uppercase;
+                   padding: 7px 8px; border-bottom: 1px solid var(--hairline-2); font-weight: 800; }
+  .data-table td { padding: 8px; border-bottom: 1px solid var(--hairline); color: var(--ink-2); vertical-align: top; }
+  .data-table tr:hover td { background: rgba(255,255,255,.02); color: var(--ink); }
 
-  /* Data Output Pre Boxes */
-  .terminal-out {
-    background: var(--canvas);
-    border-radius: var(--radius-sm);
-    padding: 12px;
-    font-size: 12px;
-    line-height: 1.5;
-    color: var(--ink);
-    overflow-x: auto;
-    max-height: 360px;
-    overflow-y: auto;
-    white-space: pre;
-    margin: 8px 0 0;
-  }
+  /* ---------- NPU / aceleradores (v13.2) ---------- */
+  .npu-hero { display: flex; flex-direction: column; gap: 12px; }
+  .hero-badge { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: var(--r-md);
+                background: var(--l1); border: 1px solid var(--hairline-2); }
+  .hero-badge .big { font-size: 22px; font-weight: 800; letter-spacing: -.01em; }
+  .hero-icon { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; font-size: 20px;
+               background: var(--l3); border: 1px solid var(--hairline-2); flex-shrink: 0; }
+  .hero-icon.on { background: var(--mint-dim); border-color: rgba(0,245,160,.4); color: var(--mint); }
+  .hero-icon.off { background: var(--amber-dim); border-color: rgba(255,178,36,.4); color: var(--amber); }
+  .meter { height: 7px; border-radius: 999px; background: var(--l1); overflow: hidden; border: 1px solid var(--hairline); }
+  .meter > i { display: block; height: 100%; background: linear-gradient(90deg, var(--mint), var(--cyan)); border-radius: 999px; transition: width .3s ease; }
+  .meter.amber > i { background: linear-gradient(90deg, var(--amber), var(--hazard)); }
+  .heat-canvas { width: 100%; height: 190px; border-radius: var(--r-md); background: #04070c;
+                 border: 1px solid var(--hairline); image-rendering: pixelated; display: block; }
+  .rule { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--hairline); }
+  .rule:last-child { border-bottom: none; }
+  .rule-dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 6px; flex-shrink: 0; background: var(--ink-3); }
+  .rule-dot.ok { background: var(--mint); box-shadow: 0 0 8px var(--mint); }
+  .rule-dot.no { background: var(--hazard); box-shadow: 0 0 8px var(--hazard); }
+  .rule-dot.info { background: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
+  .rule-name { font-size: 12px; font-weight: 800; letter-spacing: .05em; color: var(--ink); }
+  .rule-dev { font-size: 10px; font-weight: 800; letter-spacing: .1em; margin-left: 6px; }
+  .rule-dev.cpu { color: var(--mint); } .rule-dev.npu { color: var(--violet); }
+  .rule-dev.gpu { color: var(--cyan); } .rule-dev.none { color: var(--hazard); }
+  .rule-why { font-size: 11.5px; color: var(--ink-2); margin-top: 3px; line-height: 1.45; }
+  .rule-measured { font-size: 10.5px; color: var(--ink-3); margin-top: 3px; font-family: var(--mono); }
+  .kv { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px dashed var(--hairline); font-size: 12px; }
+  .kv:last-child { border-bottom: none; }
+  .kv > span:first-child { color: var(--ink-3); }
+  .kv > span:last-child { color: var(--ink); text-align: right; overflow-wrap: anywhere; }
 
-  /* Tables */
-  table.data-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
-    margin-top: 8px;
-  }
-  table.data-table th {
-    text-align: left;
-    padding: 8px 6px;
-    color: var(--ink-3);
-    font-weight: 700;
-    border-bottom: 1px solid var(--hairline);
-    text-transform: uppercase;
-    font-size: 11px;
-  }
-  table.data-table td {
-    padding: 7px 6px;
-    border-bottom: 1px solid rgba(168, 184, 204, 0.06);
-    color: var(--ink);
-    vertical-align: top;
-  }
+  /* ---------- VRAM / frame ---------- */
+  .vram-stage { background: #04070c; border: 1px solid var(--hairline); border-radius: var(--r-md); overflow: auto;
+                display: grid; place-items: center; min-height: 120px; }
+  .vram-stage img { max-width: 100%; display: block; image-rendering: pixelated; }
+  .pad-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 9px; }
 
-  /* Tile Molester & VLA Visual Frame */
-  .vram-stage {
-    background: var(--canvas);
-    border-radius: var(--radius-sm);
-    padding: 8px;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    min-height: 220px;
-    overflow: auto;
-  }
-  .vram-stage img {
-    image-rendering: pixelated;
-    max-width: 100%;
-    height: auto;
-    border-radius: 4px;
-  }
-
-  /* Retro Pad */
-  .pad-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 8px;
-    margin-top: 8px;
-  }
-
-  /* Fixed Bottom Thumb Navigation Bar (Infinite Edge Effect) */
-  .bottom-nav {
-    height: var(--nav-h);
-    flex-shrink: 0;
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    background: var(--l1);
-    border-top: 1px solid var(--hairline);
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-  }
-
-  .nav-btn {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    min-height: 56px;
-    border: none;
-    background: transparent;
-    color: var(--ink-3);
-    font-family: var(--sans);
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    cursor: pointer;
-    position: relative;
-  }
-  .nav-btn svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.7; }
-  .nav-btn.active { color: var(--mint); }
-  .nav-btn.active::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 20%;
-    right: 20%;
-    height: 2px;
-    background: var(--mint);
-  }
-
-  /* Toast Banner */
-  .toast {
-    position: fixed;
-    top: 56px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 999;
-    padding: 10px 16px;
-    border-radius: var(--radius-sm);
-    background: var(--l3);
-    color: var(--mint);
-    font-size: 12px;
-    font-weight: 700;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-    display: none;
-    max-width: 92vw;
-  }
-  .toast.show { display: block; }
-  .toast.err { color: var(--hazard); }
-
-  /* Drop Overlay */
-  .drop-zone {
-    border: 1px dashed rgba(0, 210, 255, 0.35);
-    border-radius: var(--radius-sm);
-    padding: 12px;
-    text-align: center;
-    color: var(--ink-2);
-    font-size: 12px;
-    cursor: pointer;
-    background: var(--l2);
-  }
+  /* ---------- Dropzone / toast ---------- */
+  .drop-zone { border: 2px dashed var(--hairline-2); border-radius: var(--r-lg); padding: 26px; text-align: center;
+               color: var(--ink-2); font-size: 12px; cursor: pointer; transition: all .16s ease; }
+  .drop-zone.over { border-color: var(--mint); color: var(--mint); background: var(--mint-dim); }
   .drop-zone:active { border-color: var(--mint); color: var(--mint); }
+
+  .toast { position: fixed; left: 50%; bottom: calc(var(--nav-h) + 16px); transform: translate(-50%, 20px);
+           background: var(--l3); color: var(--ink); border: 1px solid var(--hairline-2); border-radius: 10px;
+           padding: 10px 15px; font-size: 12.5px; opacity: 0; pointer-events: none; transition: all .22s ease;
+           z-index: 60; box-shadow: var(--sh-2); max-width: 88vw; text-align: center; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  .toast.err { border-color: rgba(255,59,92,.55); color: #ffd7de; background: rgba(60,16,26,.96); }
+
+  /* ---------- Navegación inferior ---------- */
+  .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; height: var(--nav-h); z-index: 40;
+                display: grid; grid-template-columns: repeat(5, 1fr);
+                background: rgba(12,17,25,.96); backdrop-filter: blur(14px);
+                border-top: 1px solid var(--hairline); padding-bottom: env(safe-area-inset-bottom); }
+  .nav-btn { appearance: none; background: none; border: none; color: var(--ink-3); font-family: inherit;
+             font-size: 9px; font-weight: 800; letter-spacing: .1em; cursor: pointer;
+             display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+             transition: color .15s ease; position: relative; }
+  .nav-btn svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .nav-btn.active { color: var(--mint); }
+  .nav-btn.active::before { content: ""; position: absolute; top: 0; left: 22%; right: 22%; height: 2px;
+                            background: var(--mint); border-radius: 0 0 3px 3px; box-shadow: 0 0 10px var(--mint); }
+  .nav-btn:active { transform: scale(.94); }
+
+  @media (min-width: 900px) {
+    .view { padding: 16px 18px calc(var(--nav-h) + 22px); }
+    .bottom-nav { left: 50%; transform: translateX(-50%); max-width: 1180px; border-radius: var(--r-lg) var(--r-lg) 0 0; }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  }
+
 </style>
 </head>
 <body>
 <div class="toast" id="toast"></div>
 
 <div class="app-shell">
-  <!-- TOP PASSIVE TELEMETRY BAR -->
+  <!-- CABECERA: estado real (nada de "NPU LIVE" por un nodo que existe) -->
   <header class="top-bar">
     <div class="brand">
       <span class="brand-dot" id="statusDot"></span>
       <span>MEGADAEMON</span>
-      <span class="pill mint mono">v13</span>
+      <span class="pill violet mono">v13.2</span>
     </div>
     <div class="telemetry-strip mono">
-      <span id="hdrModel" class="pill">LOCAL</span>
-      <span id="hdrPower" class="pill" title="Estado de energia / politica activa">BAT --</span>
-      <span id="hdrNpu" class="pill">NPU --</span>
-      <span id="hdrTemp">--C</span>
+      <span id="hdrModel" class="pill tap" title="Modelo por defecto" onclick="switchView('view-system', this)">MODEL --</span>
+      <span id="hdrPower" class="pill tap" title="Politica de energia" onclick="switchView('view-system', this)">PWR --</span>
+      <span id="hdrNpu" class="pill tap violet" title="Backend real de vision" onclick="switchView('view-npu', this)">NPU --</span>
+      <span id="hdrTemp" class="pill">--C</span>
     </div>
   </header>
 
@@ -597,11 +324,17 @@
       <div class="chat-messages" id="chatMessages">
         <div class="msg bot">
           <div class="msg-meta mono">
-            <span>◈ MEGADAEMON ZENITH v13.0</span>
-            <span class="pill mint">100% PURE RUST</span>
+            <span>◈ MEGADAEMON ZENITH v13.2</span>
+            <span class="pill mint">RUST PURO</span>
+            <span class="pill violet">NNAPI INT8</span>
           </div>
-          Entorno unificado listo. Puedes seleccionar <b>MiniMax M2.7 / M2.5</b>, <b>GitHub Models (Free)</b>, <b>Pollinations (Zero-Key)</b>, <b>Swarm Free Keys</b> o <b>Local SEERE v12 (Offline)</b>.<br><br>
-          Adjunta cualquier archivo sin restriccion de extension (<code>.7z</code>, <code>.exe</code>, <code>.dll</code>, <code>.apk</code>, <code>.dex</code>, <code>.elf</code>, <code>.so</code>, <code>.macho</code>, <code>.md</code>, <code>.py</code>, <code>.bin</code>) para analisis DiE/Binwalk + Rizin + Chat instantaneo.
+          Entorno listo. El modelo por defecto es <b>SEERE local (offline)</b>; el catálogo incluye
+          proveedores gratuitos con clave y dos sin clave. Los modelos <b>retirados</b> aparecen
+          desactivados y con el motivo, no se ofrecen.<br><br>
+          Adjunta cualquier archivo (<code>.apk</code>, <code>.dex</code>, <code>.elf</code>,
+          <code>.so</code>, <code>.exe</code>, <code>.7z</code>…) para DiE/Binwalk + Rizin + chat.
+          La pestaña <b>NPU</b> muestra qué backend ejecutó realmente la visión y el benchmark
+          NPU-vs-CPU medido en este dispositivo.
         </div>
       </div>
 
@@ -612,7 +345,7 @@
         <button class="chip" onclick="sendQuickPrompt('Analiza el archivo adjunto en profundidad: formato, arquitectura, firmas embebidas y posibles rutinas clave.')">Analizar Adjunto</button>
       </div>
 
-      <div class="attachment-bar" id="attachmentBar">
+      <div class="attachment-bar" id="attachmentBar" style="display:none;">
         <span class="mono" id="attachmentSummary" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
         <div class="row" style="flex-wrap:nowrap;">
           <button class="btn sm cyan" onclick="jumpAttachmentToInspector()">INSPECT</button>
@@ -627,7 +360,7 @@
         <button class="btn cyan" title="Adjuntar cualquier archivo" onclick="document.getElementById('unrestrictedFileInput').click()">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
         </button>
-        <textarea id="chatInput" class="chat-input" rows="1" placeholder="Consulta RE, comando, analisis o archivo..." onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();sendChat();}"></textarea>
+        <textarea id="chatInput" class="chat-input" rows="1" placeholder="Escribe o adjunta un archivo..." onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();sendChat();}"></textarea>
         <button class="btn primary" id="btnSendChat" onclick="sendChat()">SEND</button>
       </div>
     </section>
@@ -874,7 +607,7 @@
           </div>
         </div>
         <div class="grid-4" id="hwStatsGrid">
-          <div class="stat-box"><div class="stat-label">NPU /dev/vertex10</div><div class="stat-val mono" id="stNpu">--</div></div>
+          <div class="stat-box"><div class="stat-label">Offload NPU (NNAPI)</div><div class="stat-val mono" id="stNpu">--</div></div>
           <div class="stat-box"><div class="stat-label">EDEN dlopen</div><div class="stat-val mono" id="stEden">--</div></div>
           <div class="stat-box"><div class="stat-label">CPU / Batt Temp</div><div class="stat-val mono" id="stTemp">--</div></div>
           <div class="stat-box"><div class="stat-label">Cortex-X1 MHz</div><div class="stat-val mono" id="stClock">--</div></div>
@@ -917,6 +650,84 @@
       </div>
     </section>
 
+
+    <!-- ========================================================== -->
+    <!-- VIEW: NPU REAL / ACELERADORES / TELEMETRIA DE VISION        -->
+    <!-- ========================================================== -->
+    <section id="view-npu" class="view">
+      <div class="card npu-hero">
+        <div class="section-title">
+          <span>◈ NPU REAL — NNAPI INT8 (CONV/RELU/MAXPOOL)</span>
+          <div class="row">
+            <button class="btn sm cyan" onclick="refreshNpuView()">SYNC</button>
+            <button class="btn sm violet" onclick="runNpuBench()">BENCH A/B</button>
+          </div>
+        </div>
+
+        <div class="hero-badge">
+          <div class="hero-icon" id="npuHeroIcon">◈</div>
+          <div class="grow">
+            <div class="stat-label">Backend que ejecutó la ultima vision</div>
+            <div class="big mono" id="npuBackend">--</div>
+            <div class="stat-val" style="font-size:11.5px;color:var(--ink-3);margin-top:2px;" id="npuBackendNote">--</div>
+          </div>
+        </div>
+
+        <div class="grid-4">
+          <div class="stat-box"><div class="stat-label">Dispositivo NNAPI</div><div class="stat-val mono" id="npuDevice">--</div></div>
+          <div class="stat-box"><div class="stat-label">Version API</div><div class="stat-val mono" id="npuVersion">--</div></div>
+          <div class="stat-box"><div class="stat-label">Latencia vision</div><div class="stat-val mono" id="npuLatency">--</div></div>
+          <div class="stat-box"><div class="stat-label">Vision continua</div><div class="stat-val mono" id="npuHz">--</div></div>
+        </div>
+
+        <div class="row">
+          <button class="btn sm primary" onclick="runNpuCvNow()">EJECUTAR VISION</button>
+          <button class="btn sm" id="btnVisionStream" onclick="toggleVisionStream()">VISION CONTINUA: OFF</button>
+          <button class="btn sm ghost" onclick="loadAccelPolicy()">POLITICA</button>
+        </div>
+        <div id="npuFallback" class="rule-why"></div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><span>◈ MAPA DE BORDES (SALIDA DEL NPU)</span>
+          <span class="pill" id="npuMapInfo">--</span>
+        </div>
+        <canvas class="heat-canvas" id="npuHeat" width="256" height="128"></canvas>
+        <div class="grid-4" style="margin-top:9px;">
+          <div class="stat-box"><div class="stat-label">HUD superior</div><div class="stat-val mono" id="band0">--</div></div>
+          <div class="stat-box"><div class="stat-label">Escena</div><div class="stat-val mono" id="band1">--</div></div>
+          <div class="stat-box"><div class="stat-label">Dialogo</div><div class="stat-val mono" id="band2">--</div></div>
+          <div class="stat-box"><div class="stat-label">Delta L1</div><div class="stat-val mono" id="npuDelta">--</div></div>
+        </div>
+        <div class="meter" style="margin-top:9px;"><i id="npuEnergyBar" style="width:0%"></i></div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><span>◈ BENCHMARK EN DISPOSITIVO (NPU vs CPU)</span></div>
+        <div class="grid-4">
+          <div class="stat-box"><div class="stat-label">NNAPI mediana</div><div class="stat-val mono" id="benchNnapi">--</div></div>
+          <div class="stat-box"><div class="stat-label">CPU mediana</div><div class="stat-val mono" id="benchCpu">--</div></div>
+          <div class="stat-box"><div class="stat-label">Salidas iguales</div><div class="stat-val mono" id="benchMatch">--</div></div>
+          <div class="stat-box"><div class="stat-label">Ganador</div><div class="stat-val mono" id="benchWinner">--</div></div>
+        </div>
+        <pre id="benchOut" class="terminal-out mono" style="margin-top:9px;">Pulsa BENCH A/B: ejecuta el MISMO frame por la ruta NNAPI y por la referencia CPU, compara latencias y verifica que las salidas coinciden.</pre>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><span>◈ POLITICA REAL DE ACELERADORES</span>
+          <button class="btn sm cyan" onclick="loadAccelPolicy()">RECARGAR</button>
+        </div>
+        <div id="accelRules"></div>
+        <div class="row" style="margin-top:10px;">
+          <button class="btn sm violet" onclick="decideLlmRoute()">DECIDIR RUTA LLM</button>
+          <span class="stat-label" style="flex:1 1 auto;">prompt / salida</span>
+          <input type="number" id="routePrompt" value="207" style="width:92px;">
+          <input type="number" id="routeOutput" value="40" style="width:92px;">
+        </div>
+        <div id="routeOut" class="rule-why" style="margin-top:8px;"></div>
+      </div>
+    </section>
+
   </main>
 
   <!-- FIXED BOTTOM THUMB NAVIGATION BAR (Bottom Comfort Zone, 4 Tabs) -->
@@ -924,6 +735,10 @@
     <button class="nav-btn active" data-view="view-swarm" onclick="switchView('view-swarm', this)">
       <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
       <span>SWARM</span>
+    </button>
+    <button class="nav-btn" data-view="view-npu" onclick="switchView('view-npu', this)">
+      <svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>
+      <span>NPU</span>
     </button>
     <button class="nav-btn" data-view="view-inspect" onclick="switchView('view-inspect', this)">
       <svg viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
@@ -946,7 +761,7 @@
 const STATE = {
   attachment: null,
   providers: [],
-  defaultModel: "minimax-m2.7",
+  defaultModel: "local-seere",
   targets: [],
   activeTarget: { type: "platform", platform: "segacd", file: "", label: "Sega CD (M68K)" }
 };
@@ -968,8 +783,17 @@ function escHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
+// v13.2 (S08): el cockpit exige `X-Seere-Auth-Token` en los endpoints que
+// ejecutan o modifican estado.  El token lo inyecta el servidor en la propia
+// página (legible sólo same-origin: el CORS ya no es `*`).
+function authHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  if (window.MEGADAEMON_TOKEN) h["X-Seere-Auth-Token"] = window.MEGADAEMON_TOKEN;
+  return h;
+}
+
 async function apiGet(url) {
-  const res = await fetch(url, { cache: "no-store" });
+  const res = await fetch(url, { cache: "no-store", headers: authHeaders() });
   if (!res.ok) throw new Error("HTTP " + res.status);
   return await res.json();
 }
@@ -977,7 +801,7 @@ async function apiGet(url) {
 async function apiPost(url, payload) {
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload || {})
   });
   if (!res.ok) throw new Error("HTTP " + res.status);
@@ -985,18 +809,14 @@ async function apiPost(url, payload) {
 }
 
 function switchView(viewId, btnEl) {
-  document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
-  document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
-  const target = document.getElementById(viewId);
-  if (target) target.classList.add("active");
+  document.querySelectorAll(".view").forEach(function (v) { v.classList.remove("active"); });
+  document.querySelectorAll(".nav-btn").forEach(function (b) { b.classList.remove("active"); });
+  const v = document.getElementById(viewId);
+  if (v) v.classList.add("active");
   if (btnEl) btnEl.classList.add("active");
-  if (viewId === "view-vram") {
-    renderVramTiles();
-    refreshVlaFrame();
-  } else if (viewId === "view-system") {
-    refreshHardware();
-    loadProviders();
-  }
+  if (viewId === "view-npu") { refreshNpuView(); loadAccelPolicy(); }
+  if (viewId === "view-system") { refreshHardware(); }
+  try { history.replaceState(null, "", "#" + viewId); } catch (e) {}
 }
 
 function switchInspectSub(subId, btnEl) {
@@ -1069,9 +889,19 @@ async function loadProviders() {
     if (data.retired && data.retired.length) {
       const warn = document.getElementById("retiredModelsWarn");
       if (warn) {
-        warn.innerHTML = data.retired.map(r =>
-          '<div class="pill amber" title="' + escHtml(r.note) + '">' +
-          escHtml(r.model) + " — RETIRADO</div>").join(" ");
+        // Agrupar por modelo: dos ids pueden apuntar al mismo modelo retirado
+        // y mostrarlo dos veces era ruido (M2.7-fast y M2.7-highspeed).
+        const byModel = {};
+        data.retired.forEach(function (r) {
+          const k = r.model || r.id;
+          if (!byModel[k]) byModel[k] = { model: k, note: r.note || "", ids: [] };
+          byModel[k].ids.push(r.id);
+        });
+        warn.innerHTML = Object.keys(byModel).map(function (k) {
+          const e = byModel[k];
+          return '<div class="pill amber" title="' + escHtml(e.note) + " | ids: " + escHtml(e.ids.join(", ")) + '">' +
+            escHtml(e.model) + " — RETIRADO</div>";
+        }).join(" ");
         warn.style.display = "flex";
       }
     }
@@ -1650,32 +1480,53 @@ async function refreshHardware() {
   try {
     const b = await apiGet("/api/brain_status");
     const dot = document.getElementById("statusDot");
-    dot.className = "brand-dot" + (b.minimax_configured || b.brain_active ? "" : " degraded");
+    dot.className = "brand-dot" + (b.brain_active ? "" : " degraded");
 
+    // v13.2: la cabecera refleja hechos, no la existencia de un nodo.
     const hdrNpu = document.getElementById("hdrNpu");
-    // v13.2: no se anuncia "NPU LIVE" por que exista /dev/vertex10: se
-    // anuncia el backend que REALMENTE ejecutó el análisis de visión.
     if (hdrNpu) {
       const vb = b.npu_vision_backend || "";
-      if (vb.indexOf("accelerator") >= 0) hdrNpu.textContent = "NPU ACCEL";
-      else if (vb.indexOf("gpu") >= 0) hdrNpu.textContent = "GPU NNAPI";
-      else if (vb.indexOf("cpu") >= 0) hdrNpu.textContent = "CPU FALLBACK";
-      else hdrNpu.textContent = "NPU N/A";
-      hdrNpu.title = "Backend real de visión: " + (vb || "desconocido") +
+      if (vb.indexOf("accelerator") >= 0) { hdrNpu.textContent = "NPU ACCEL"; hdrNpu.className = "pill tap violet live"; }
+      else if (vb.indexOf("gpu") >= 0) { hdrNpu.textContent = "GPU NNAPI"; hdrNpu.className = "pill tap cyan"; }
+      else if (vb.indexOf("cpu") >= 0) { hdrNpu.textContent = "CPU VISION"; hdrNpu.className = "pill tap amber"; }
+      else { hdrNpu.textContent = "NPU N/A"; hdrNpu.className = "pill tap"; }
+      hdrNpu.title = "Backend real de vision: " + (vb || "desconocido") +
                      " | offload NPU implementado: " + (b.npu_offload_implemented ? "si" : "no");
     }
     const hdrTemp = document.getElementById("hdrTemp");
     if (hdrTemp) hdrTemp.textContent = Math.round(b.cpu_temp_c || 0) + "C";
 
     const stNpu = document.getElementById("stNpu");
-    if (stNpu) stNpu.textContent = b.npu_vertex10 ? "ONLINE" : "NO";
+    if (stNpu) { stNpu.textContent = b.npu_offload_implemented ? "NNAPI ON" : "NO"; stNpu.className = "stat-val mono " + (b.npu_offload_implemented ? "ok" : "warn"); }
     const stEden = document.getElementById("stEden");
-    if (stEden) stEden.textContent = b.eden_dlopen ? "DLOPEN OK" : "BLOCKED";
+    if (stEden) { stEden.textContent = b.eden_dlopen ? "DLOPEN OK" : "NO HAL"; stEden.className = "stat-val mono " + (b.eden_dlopen ? "ok" : "warn"); }
     const stTemp = document.getElementById("stTemp");
     if (stTemp) stTemp.textContent = Math.round(b.cpu_temp_c || 0) + "C / " + Math.round(b.battery_temp_c || 0) + "C";
     const freqs = b.cpu_freqs_mhz || [];
     const stClock = document.getElementById("stClock");
     if (stClock) stClock.textContent = (freqs[7] || freqs[4] || 0) + " MHz";
+
+    const hdrModel = document.getElementById("hdrModel");
+    if (hdrModel) {
+      const m = b.default_model || "local-seere";
+      hdrModel.textContent = (m.length > 18 ? m.slice(0, 18) + "…" : m).toUpperCase();
+      hdrModel.className = "pill tap " + (m.indexOf("local") === 0 ? "mint" : "cyan");
+      hdrModel.title = "Modelo por defecto: " + m + " | motor: " + (b.engine || "?");
+    }
+
+    try {
+      const p = await apiGet("/api/power");
+      const hdrPower = document.getElementById("hdrPower");
+      if (hdrPower) {
+        hdrPower.textContent = (p.policy || "?").toUpperCase() + " " + (p.battery_pct != null ? p.battery_pct + "%" : "");
+        hdrPower.className = "pill tap " + (p.policy === "performance" ? "mint" : (p.policy === "critical" ? "hazard" : "amber"));
+        hdrPower.title = p.reason || "";
+      }
+      const psb = document.getElementById("powerStateBox");
+      if (psb) psb.textContent = "politica=" + p.policy + " | bateria=" + (p.battery_pct != null ? p.battery_pct + "%" : "?") +
+        " | cargando=" + p.charging + " | allow_heavy=" + p.allow_heavy + " | max_tokens=" + p.max_tokens +
+        " | turnos=" + p.max_turns + "\n" + (p.reason || "");
+    } catch (e) {}
 
     const hwOut = document.getElementById("hwDetailOut");
     if (hwOut) hwOut.textContent = JSON.stringify(b, null, 2);
@@ -1755,6 +1606,163 @@ async function initCockpit() {
 }
 
 window.addEventListener("DOMContentLoaded", initCockpit);
+
+
+/* ================================================================
+   v13.2 — Vista NPU: estado real, benchmark y politica
+   ================================================================ */
+function setText(id, txt, cls) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = txt;
+  if (cls !== undefined) el.className = el.className.replace(/\b(ok|warn|bad|info|violet)\b/g, "").trim() + " " + cls;
+}
+
+function renderHeatmap(map, w, h) {
+  const cv = document.getElementById("npuHeat");
+  if (!cv) return;
+  if (!map || !map.length || !w || !h) {
+    const ctx = cv.getContext("2d");
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    ctx.fillStyle = "#70839c"; ctx.font = "12px ui-monospace, monospace";
+    ctx.fillText("sin mapa de bordes todavia", 14, cv.height / 2);
+    return;
+  }
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext("2d");
+  const img = ctx.createImageData(w, h);
+  let max = 1;
+  for (let i = 0; i < map.length; i++) if (map[i] > max) max = map[i];
+  for (let i = 0; i < w * h; i++) {
+    const v = map[i] / max;
+    // rampa: negro -> violeta -> cian -> menta
+    // rampa tipo "inferno": negro -> violeta -> naranja -> blanco
+    const r = Math.min(255, Math.round(255 * Math.pow(v, 1.35)));
+    const g = Math.min(255, Math.round(190 * Math.pow(v, 2.4)));
+    const b = Math.min(255, Math.round(120 * Math.pow(v, 3.2) + 30 * (1 - v)));
+    img.data[i * 4] = r; img.data[i * 4 + 1] = g; img.data[i * 4 + 2] = b; img.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  setText("npuMapInfo", w + "x" + h + " · pico " + max);
+}
+
+async function refreshNpuView() {
+  try {
+    const cv = await apiGet("/api/npu_cv");
+    const icon = document.getElementById("npuHeroIcon");
+    const on = cv.vision_executed_on_hardware;
+    if (icon) { icon.textContent = on ? "⚡" : "◈"; icon.className = "hero-icon " + (on ? "on" : "off"); }
+    setText("npuBackend", cv.vision_backend || "?", on ? "ok" : "warn");
+    const note = [];
+    if (cv.vision_executed_on_hardware) note.push("ejecutado en hardware NNAPI real");
+    if (cv.frame_torn) note.push("AVISO: el frame cambio mientras se leia");
+    if (cv.power_allow_heavy === false) note.push("trabajo pesado bloqueado por la politica de energia");
+    setText("npuBackendNote", note.join(" · ") || "—");
+    const fb = document.getElementById("npuFallback");
+    if (fb) fb.textContent = cv.vision_fallback_reason ? ("Fallback: " + cv.vision_fallback_reason) : "";
+    setText("npuLatency", (cv.vision_latency_ms != null ? cv.vision_latency_ms : cv.cv_latency_ms) + " ms", "info");
+    const dev = (cv.nnapi_devices || [])[0];
+    setText("npuDevice", dev ? dev.type_label : "sin NNAPI", dev && dev.device_type === 4 ? "ok" : "warn");
+    setText("npuVersion", dev ? dev.version : "—");
+    setText("npuDelta", (cv.frame_delta_l1 != null ? cv.frame_delta_l1 : 0) + (cv.scene_changed ? " ⚡" : ""));
+    const rois = cv.hud_rois || [];
+    for (let i = 0; i < 3; i++) {
+      const r = rois[i];
+      setText("band" + i, r ? (r.edge_density != null ? r.edge_density.toFixed(3) : "—") : "—");
+    }
+    const total = (rois.reduce(function (a, r) { return a + (r.edge_density || 0); }, 0)) || 0;
+    const bar = document.getElementById("npuEnergyBar");
+    if (bar) bar.style.width = Math.min(100, Math.round(total * 220)) + "%";
+    renderHeatmap(cv.edge_map, cv.edge_map_w, cv.edge_map_h);
+
+    const vs = await apiGet("/api/vision_status");
+    setText("npuHz", vs.running ? (vs.computed_hz + " Hz") : "OFF", vs.running ? "ok" : "warn");
+    const btn = document.getElementById("btnVisionStream");
+    if (btn) {
+      btn.textContent = vs.running ? "VISION CONTINUA: ON (" + vs.computed_hz + " Hz)" : "VISION CONTINUA: OFF";
+      btn.className = "btn sm " + (vs.running ? "on" : "");
+    }
+  } catch (e) {
+    setText("npuBackend", "ERROR", "bad");
+  }
+}
+
+async function runNpuCvNow() {
+  showToast("Ejecutando analisis de vision...");
+  await refreshNpuView();
+  showToast("Vision ejecutada: " + (document.getElementById("npuBackend") || {}).textContent);
+}
+
+async function runNpuBench() {
+  const out = document.getElementById("benchOut");
+  if (out) out.textContent = "Ejecutando benchmark A/B (NNAPI vs CPU) sobre el frame actual...";
+  try {
+    const b = await apiGet("/api/npu_bench?iters=10");
+    setText("benchNnapi", b.nnapi ? (b.nnapi.median_ms + " ms") : "sin NPU", b.nnapi ? "violet" : "warn");
+    setText("benchCpu", b.cpu ? (b.cpu.median_ms + " ms") : "—", "info");
+    setText("benchMatch", b.outputs_match === null ? "—" : (b.outputs_match ? "SI" : "NO"), b.outputs_match ? "ok" : (b.outputs_match === null ? "" : "bad"));
+    const winner = b.nnapi ? (b.nnapi.median_ms < b.cpu.median_ms ? "NPU" : "CPU") : "CPU";
+    setText("benchWinner", winner, winner === "NPU" ? "ok" : "info");
+    if (out) out.textContent = JSON.stringify(b, null, 2);
+    showToast("Benchmark: " + b.verdict);
+  } catch (e) {
+    if (out) out.textContent = "Error en benchmark: " + e.message;
+  }
+}
+
+async function toggleVisionStream() {
+  const btn = document.getElementById("btnVisionStream");
+  const on = btn && btn.textContent.indexOf("ON") >= 0;
+  try {
+    const r = await apiPost(on ? "/api/vision_stop" : "/api/vision_start", {});
+    showToast(r.status === "VISION_CONTINUOUS_STARTED" ? "Vision continua activada (el NPU trabaja en continuo)" : "Vision continua detenida");
+    await refreshNpuView();
+  } catch (e) {
+    showToast("Error: " + e.message, true);
+  }
+}
+
+async function loadAccelPolicy() {
+  const box = document.getElementById("accelRules");
+  if (!box) return;
+  try {
+    const t = await apiGet("/api/npu_status");
+    const pol = t.accelerator_policy;
+    if (!pol) { box.innerHTML = '<div class="rule-why">Sin politica disponible.</div>'; return; }
+    let html = "";
+    (pol.rules || []).forEach(function (r) {
+      const dot = r.device === "none" ? "no" : (r.device === "npu" ? "info" : "ok");
+      html += '<div class="rule"><span class="rule-dot ' + dot + '"></span><div class="grow">' +
+        '<div class="rule-name">' + r.workload +
+        '<span class="rule-dev ' + r.device + '">' + (r.implemented ? r.device.toUpperCase() + " · IMPLEMENTADO" : r.device.toUpperCase()) + '</span></div>' +
+        '<div class="rule-why">' + r.reason + '</div>' +
+        (r.measured ? '<div class="rule-measured">medido: ' + r.measured + '</div>' : '') +
+        '</div></div>';
+    });
+    box.innerHTML = html;
+    const flags = document.getElementById("npuBuildFlags");
+    if (flags) flags.textContent = (pol.llama_build_flags || []).join("  ") + "\\n" + (pol.llama_server_flags || []).join("  ");
+  } catch (e) {
+    box.innerHTML = '<div class="rule-why">Error: ' + e.message + '</div>';
+  }
+}
+
+async function decideLlmRoute() {
+  const p = parseInt((document.getElementById("routePrompt") || {}).value || "207", 10);
+  const o = parseInt((document.getElementById("routeOutput") || {}).value || "40", 10);
+  const out = document.getElementById("routeOut");
+  try {
+    const r = await apiGet("/api/llm_route?prompt=" + p + "&output=" + o);
+    if (out) {
+      out.innerHTML = "<b class='mono' style='color:" + (r.gpu_preferred ? "var(--cyan)" : "var(--mint)") + "'>" +
+        r.device.toUpperCase() + "</b> — CPU " + r.est_cpu_ms + " ms vs GPU " + r.est_gpu_ms + " ms " +
+        "(umbral: prompt " + r.gpu_threshold_ratio + "x la salida = " + r.gpu_threshold_prompt_tokens + " tok)<br>" + r.reason;
+    }
+  } catch (e) {
+    if (out) out.textContent = "Error: " + e.message;
+  }
+}
+
 </script>
 </body>
 </html>

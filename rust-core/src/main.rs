@@ -163,7 +163,7 @@ fn main() {
             let plat = args.get(2).map(|s| s.as_str()).unwrap_or("segacd");
             let (_, _, _, c_path, _) = rom_locator::platform_metadata(&plat.to_lowercase());
             let sample = fs::read_to_string(c_path)
-                .map(|s| s[..s.len().min(65536)].to_string())
+                .map(|s| megadaemon_core::util_text::truncate_chars(&s, 65536))
                 .unwrap_or_default();
             let rep = hw_mapper::analyze_text_for_mmio_and_structs(plat, &sample);
             println!("{}", serde_json::to_string_pretty(&rep).unwrap());
@@ -188,25 +188,34 @@ fn main() {
             let mut query_parts: Vec<String> = Vec::new();
             let mut max_turns = 4usize;
             let mut env_in_prompt = false;
-            for a in &args[2..] {
+            // BUG v13.2 (HW-09): con "--max-turns 8", el "8" acababa en la
+            // consulta del LLM (la bandera se saltaba pero su valor no).
+            // Ahora se consume el valor de la bandera.
+            let rest = &args[2..];
+            let mut i = 0usize;
+            while i < rest.len() {
+                let a = &rest[i];
                 if a == "--env-in-prompt" {
                     env_in_prompt = true;
                 } else if a == "--max-turns" {
-                    continue;
+                    if let Some(v) = rest.get(i + 1) {
+                        max_turns = v.parse().unwrap_or(4);
+                        i += 1;
+                    }
                 } else if let Some(v) = a.strip_prefix("--max-turns=") {
                     max_turns = v.parse().unwrap_or(4);
                 } else {
                     query_parts.push(a.clone());
                 }
-            }
-            // "--max-turns N" (con N justo despues)
-            if let Some(i) = query_parts.iter().position(|x| x == "--max-turns") {
-                if i + 1 < query_parts.len() {
-                    max_turns = query_parts[i + 1].parse().unwrap_or(4);
-                    query_parts.drain(i..i + 2);
-                }
+                i += 1;
             }
             let query = query_parts.join(" ");
+            // v13.2 (S02): el guardián de taint bloquea la ejecución y la
+            // delegación cuando el contexto viene de contenido no fiable
+            // (web/fichero).  Escape hatch explícito del operador.
+            let allow_tainted = env::var("SEERE_ALLOW_TAINTED")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
             let cfg = seere_v11::SeereConfig {
                 max_turns,
                 allow_tools: true,
@@ -216,6 +225,7 @@ fn main() {
                 allow_external: false,
                 env_in_prompt,
                 re_opcodes: false,
+                allow_tainted,
             };
             let res = seere_v11::run_seere(&query, &cfg);
             println!("{}", serde_json::to_string(&res).unwrap());
@@ -441,14 +451,15 @@ fn main() {
         },
 
         "shm-frame-bmp" => {
-            let bmp_bytes = match shm::read_shm_status() {
-                Ok(hdr) if hdr.is_active => {
-                    let mut file = File::open(shm::SHM_PATH).unwrap();
-                    let mut buf = vec![0u8; shm::SHM_SIZE];
-                    file.read_exact(&mut buf).unwrap();
-                    let raw_rgb = &buf[32824..32824 + (hdr.width as usize * hdr.height as usize * 3)];
-                    shm::encode_bmp_24(hdr.width as u32, hdr.height as u32, raw_rgb)
-                }
+            // v13.2 (HW-08): la cabecera la escribe la app y puede ser
+            // incoherente (1000x1000 en un fichero de 1 MB) -> el slice
+            // reventaba con panic.  Ahora se usa la instantánea validada.
+            let bmp_bytes = match shm::read_frame_snapshot() {
+                Ok(snap) if snap.header.width > 0 && snap.header.height > 0 => shm::encode_bmp_24(
+                    snap.header.width as u32,
+                    snap.header.height as u32,
+                    &snap.rgb,
+                ),
                 _ => shm::generate_tactical_hud_bmp(682, 448),
             };
             io::stdout().write_all(&bmp_bytes).unwrap();

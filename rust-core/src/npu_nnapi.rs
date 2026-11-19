@@ -1278,3 +1278,170 @@ mod unit {
         assert!(out.iter().all(|v| *v == 0), "un frame plano no tiene bordes");
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Benchmark A/B: ruta NNAPI vs referencia CPU (mismo frame, misma aritmética)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Tiempos de una serie de ejecuciones.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Timings {
+    pub iterations: u32,
+    pub median_ms: f64,
+    pub min_ms: f64,
+    pub max_ms: f64,
+}
+
+/// Resultado del benchmark en dispositivo.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchResult {
+    pub frame_w: u32,
+    pub frame_h: u32,
+    /// `true` si la ruta NNAPI estuvo disponible y se ejecutó de verdad.
+    pub nnapi_executed: bool,
+    pub nnapi: Option<Timings>,
+    pub cpu: Timings,
+    /// Comparación de salidas (None si no hubo ruta NNAPI).
+    pub outputs_match: Option<bool>,
+    /// Diferencia absoluta máxima entre ambas salidas (en LSB de int8).
+    pub max_abs_diff: Option<i32>,
+    pub backend_label: String,
+    pub fallback_reason: String,
+    /// Veredicto: ¿merece la pena el NPU para este ancho de banda?
+    pub verdict: String,
+}
+
+/// Ejecuta el grafo N veces por cada camino y compara.
+///
+/// Es la prueba que permite decidir EN EL MÓVIL si el NPU aporta o no: en el
+/// sandbox no hay hardware, así que aquí sólo se puede validar la mecánica.
+pub fn bench(luma: &[u8], w: u32, h: u32, iterations: u32) -> BenchResult {
+    let graph = build_edge_graph(w, h);
+    let iters = iterations.clamp(1, 50);
+
+    // Referencia CPU.
+    let mut cpu_ms = Vec::with_capacity(iters as usize);
+    let mut cpu_out = Vec::new();
+    for _ in 0..iters {
+        let t0 = std::time::Instant::now();
+        let out = interpret_graph(&graph, luma).unwrap_or_default();
+        cpu_ms.push(t0.elapsed().as_secs_f64() * 1000.0);
+        if cpu_out.is_empty() {
+            cpu_out = out;
+        }
+    }
+
+    // Ruta NNAPI (compila una vez, ejecuta N).
+    let mut nnapi_ms: Vec<f64> = Vec::new();
+    let mut nnapi_out: Vec<i8> = Vec::new();
+    let mut fallback = String::new();
+    let mut backend_label = "cpu-reference".to_string();
+    let mut executed = false;
+
+    if let Some(api) = NnapiApi::open() {
+        match NnapiBackend::open(api, &graph) {
+            Ok((backend, info)) => {
+                backend_label = info.backend.clone();
+                for _ in 0..iters {
+                    let t0 = std::time::Instant::now();
+                    match backend.run(&graph, luma) {
+                        Ok(out) => {
+                            nnapi_ms.push(t0.elapsed().as_secs_f64() * 1000.0);
+                            if nnapi_out.is_empty() {
+                                nnapi_out = out;
+                            }
+                            executed = true;
+                        }
+                        Err(e) => {
+                            fallback = format!("NNAPI execution falló: {}", e);
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(e) => fallback = format!("NNAPI no utilizable: {}", e),
+        }
+    } else {
+        fallback = format!("libneuralnetworks.so no disponible en {}", NNAPI_LIB_PATH);
+    }
+
+    let cpu_timings = summarize(&cpu_ms);
+    let nnapi_timings = if nnapi_ms.is_empty() {
+        None
+    } else {
+        Some(summarize(&nnapi_ms))
+    };
+
+    let (outputs_match, max_abs_diff) = if nnapi_out.is_empty() || cpu_out.is_empty() {
+        (None, None)
+    } else {
+        let mut maxd = 0i32;
+        let mut ok = nnapi_out.len() == cpu_out.len();
+        if ok {
+            for (a, b) in nnapi_out.iter().zip(cpu_out.iter()) {
+                let d = (*a as i32 - *b as i32).abs();
+                if d > maxd {
+                    maxd = d;
+                }
+                if d > 1 {
+                    ok = false; // tolerancia de 1 LSB por el redondeo del driver
+                }
+            }
+        }
+        (Some(ok), Some(maxd))
+    };
+
+    let verdict = match (&nnapi_timings, executed) {
+        (Some(t), true) => {
+            if t.median_ms < cpu_timings.median_ms {
+                format!(
+                    "NPU {} ms vs CPU {} ms → el NPU gana (x{:.2})",
+                    t.median_ms,
+                    cpu_timings.median_ms,
+                    cpu_timings.median_ms / t.median_ms.max(0.001)
+                )
+            } else {
+                format!(
+                    "NPU {} ms vs CPU {} ms → la CPU gana en este ancho de banda",
+                    t.median_ms, cpu_timings.median_ms
+                )
+            }
+        }
+        _ => format!(
+            "sin ruta NNAPI en este dispositivo ({}): la visión va por CPU",
+            if fallback.is_empty() { "sin motivo" } else { &fallback }
+        ),
+    };
+
+    BenchResult {
+        frame_w: w,
+        frame_h: h,
+        nnapi_executed: executed,
+        nnapi: nnapi_timings,
+        cpu: cpu_timings,
+        outputs_match,
+        max_abs_diff,
+        backend_label,
+        fallback_reason: fallback,
+        verdict,
+    }
+}
+
+fn summarize(samples: &[f64]) -> Timings {
+    if samples.is_empty() {
+        return Timings {
+            iterations: 0,
+            median_ms: 0.0,
+            min_ms: 0.0,
+            max_ms: 0.0,
+        };
+    }
+    let mut v = samples.to_vec();
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    Timings {
+        iterations: v.len() as u32,
+        median_ms: round2(v[v.len() / 2]),
+        min_ms: round2(v[0]),
+        max_ms: round2(v[v.len() - 1]),
+    }
+}
