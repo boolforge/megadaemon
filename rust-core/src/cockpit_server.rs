@@ -1853,6 +1853,16 @@ pub fn run_server(port: u16) -> Result<(), String> {
                 eprintln!("cockpit: puerto alias {} no disponible ({})", p, e);
             }
         }
+        // DUAL-STACK (v14): Chrome en Android resuelve "localhost" a ::1
+        // PRIMERO (net::DnsConfigServiceAndroid::GetLocalhostAddresses ->
+        // [::1, 127.0.0.1]).  Si solo escuchamos en IPv4, el navegador recibe
+        // RST en ::1 y muestra ERR_CONNECTION_REFUSED aunque 127.0.0.1 este
+        // vivo.  Por eso abrimos tambien el loopback IPv6.
+        let v6 = format!("[::1]:{}", p);
+        match TcpListener::bind(&v6) {
+            Ok(l) => listeners.push((*p, l)),
+            Err(e) => eprintln!("cockpit: loopback IPv6 {} no disponible ({})", v6, e),
+        }
     }
     if listeners.is_empty() {
         return Err("no se pudo enlazar ningún puerto".to_string());
