@@ -204,9 +204,11 @@ ensure_web_bridge() {
 #   * el supervisor mantiene el túnel vivo (watchdog),
 #   * la URL vigente se escribe SIEMPRE en $PREFIX/tunnel.url (y en
 #     /sdcard/megadaemon.url), que es la fuente de verdad,
-#   * se fuerza --protocol http2: por UDP/QUIC este movil perdia la
-#     conexion con el edge ("failed to dial to edge with quic: timeout")
-#     y se quedaba sirviendo 530 sin que nadie se enterase.
+#   * el protocolo es el de por defecto (QUIC): MEDIDO en este movil, el
+#     tunel legacy 8765 lleva 9 h con QUIC y 0 cortes, mientras que con
+#     --protocol http2 el de 9090 perdia la conexion con el edge cada
+#     ~50 s (=> 530 para la flota).  Los fallos de QUIC que se vieron eran
+#     del incidente de OOM (184 MB libres), no de la red.
 CLOUDFLARED=""
 for cand in /data/data/com.termux/files/usr/bin/cloudflared \
             /data/data/com.agy/files/usr/bin/cloudflared; do
@@ -274,7 +276,7 @@ ensure_tunnel() {
 
     if [ "$t_n" -eq 0 ]; then
         log "tunel $t_tag caido: arrancando cloudflared (http2) -> 127.0.0.1:$t_port"
-        setsid nohup "$CLOUDFLARED" tunnel --no-autoupdate --protocol http2 \
+        setsid nohup "$CLOUDFLARED" tunnel --no-autoupdate \
             --url "http://127.0.0.1:$t_port" >>"$t_log" 2>&1 </dev/null &
         sleep 6
     elif [ "$t_dedup" -eq 1 ] && [ "$t_n" -gt 1 ]; then
@@ -309,7 +311,7 @@ ensure_tunnel() {
                 log "tunel $t_tag caido de verdad: reiniciando"
                 for p in $t_pids; do kill "$p" 2>/dev/null; done
                 sleep 2
-                setsid nohup "$CLOUDFLARED" tunnel --no-autoupdate --protocol http2 \
+                setsid nohup "$CLOUDFLARED" tunnel --no-autoupdate \
                     --url "http://127.0.0.1:$t_port" >>"$t_log" 2>&1 </dev/null &
                 sleep 8
                 t_new=$(tunnel_url_any "$t_log" "$t_fallback")
