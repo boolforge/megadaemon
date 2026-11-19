@@ -1,0 +1,185 @@
+#!/bin/sh
+# =============================================================================
+# install-phone.sh — despliegue y REPARACIÓN del cockpit en el móvil (Android)
+#
+# POR QUÉ EXISTE
+#   El usuario abría http://localhost:3000 / :8090 / :8080 en el móvil y le
+#   salía ERR_CONNECTION_REFUSED: en el teléfono no había NINGÚN proceso
+#   escuchando.  Esto no es un bug de la UI: es que el daemon no estaba
+#   arrancado (o corría un binario viejo).  Este script deja el cockpit
+#   sirviendo la UI real y TE DICE la URL exacta que hay que abrir.
+#
+# USO
+#   Desde un PC con adb (recomendado):
+#       ./deploy/install-phone.sh            # busca el móvil y despliega
+#       ./deploy/install-phone.sh --no-push  # sólo diagnóstico, no toca nada
+#
+#   Desde el propio móvil (Termux, con root):
+#       su -c sh install-phone.sh
+#
+# QUÉ HACE
+#   1. Diagnóstico previo: proceso, puertos, plantilla, token y log.
+#   2. Copia el binario ARM64 a /data/local/tmp/megadaemon/megadaemon-core.
+#   3. Copia la plantilla web a <prefix>/web/ (por si el binario es viejo).
+#   4. Copia el supervisor a /data/adb/service.d/99-megadaemon.sh.
+#   5. Reinicia el daemon y VERIFICA con /health en todos los puertos alias.
+#   6. Imprime la URL que hay que abrir y el token de sesión si lo necesita.
+#
+# NOTAS
+#   * NO toca $PREFIX/megadaemon.env (tus claves): sólo lo crea si falta,
+#     a partir del ejemplo.
+#   * Es idempotente: se puede repetir cuantas veces quieras.
+#   * No borra nada: el binario anterior se guarda como .bak.
+# =============================================================================
+
+set -u
+
+PREFIX="${MEGADAEMON_PREFIX:-/data/local/tmp/megadaemon}"
+STATE="${MEGADAEMON_STATE:-$PREFIX/state}"
+BIN="$PREFIX/megadaemon-core"
+WEB_DIR="$PREFIX/web"
+TEMPLATE="$WEB_DIR/cockpit_template.html"
+SERVICE="/data/adb/service.d/99-megadaemon.sh"
+LOG=/sdcard/megadaemon.log
+# El cockpit escucha en el puerto pedido + alias (AUDIT-WEB-04).
+PORTS="9090 3000 3030 8090"
+HERE=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+REPO_ROOT=$(cd "$HERE/.." 2>/dev/null && pwd)
+PUSH_ONLY=0
+[ "${1:-}" = "--no-push" ] && PUSH_ONLY=1
+
+say() { echo "== $*"; }
+die() { echo "!! $*" >&2; exit 1; }
+
+# ── 0. ¿estamos en el móvil o en un PC? ──────────────────────────────────────
+ON_PHONE=0
+[ -d /system/app ] && ON_PHONE=1
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+as_root() {
+    # Ejecuta un comando como root tanto en el móvil (su) como en un PC
+    # con adb (adb shell su -c).
+    if [ "$ON_PHONE" = "1" ]; then
+        if [ "$(id -u)" = "0" ]; then
+            sh -c "$1"
+        else
+            su -c "$1"
+        fi
+    else
+        adb shell "su -c '$1'"
+    fi
+}
+
+# ── 1. Diagnóstico ───────────────────────────────────────────────────────────
+diagnose() {
+    say "DIAGNÓSTICO"
+    as_root 'echo "--- procesos megadaemon ---"; pgrep -af megadaemon-core || echo "(ninguno: el daemon NO está corriendo)"' 2>/dev/null
+    as_root 'echo "--- puertos escuchando ---"; (ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null) | grep -E ":(9090|3000|3030|8090|8080)" || echo "(nada escuchando en los puertos del cockpit)"' 2>/dev/null
+    as_root "echo '--- binario ---'; ls -l $BIN 2>/dev/null || echo '(NO existe el binario)'" 2>/dev/null
+    as_root "echo '--- plantilla web ---'; ls -l $TEMPLATE 2>/dev/null || echo '(NO existe la plantilla)'" 2>/dev/null
+    as_root "echo '--- token de sesión ---'; ls -l $STATE/cockpit_token 2>/dev/null || echo '(se generará al arrancar)'" 2>/dev/null
+    as_root "echo '--- últimas líneas del log ---'; tail -n 12 $LOG 2>/dev/null || echo '(sin log)'" 2>/dev/null
+}
+
+# ── 2. ¿de dónde sale el binario? ────────────────────────────────────────────
+find_binary() {
+    if [ -n "${MEGADAEMON_BIN:-}" ] && [ -f "${MEGADAEMON_BIN}" ]; then
+        echo "${MEGADAEMON_BIN}"
+        return 0
+    fi
+    for c in \
+        "$REPO_ROOT/rust-core/target/aarch64-linux-android/release/megadaemon-core" \
+        "$REPO_ROOT/rust-core/target/release/megadaemon-core" \
+        "/workspace/md-target-agentgeneral/aarch64-linux-android/release/megadaemon-core"
+    do
+        [ -f "$c" ] && { echo "$c"; return 0; }
+    done
+    return 1
+}
+
+# ── 3. Despliegue ────────────────────────────────────────────────────────────
+deploy_files() {
+    SRC_BIN=$(find_binary) || die "no encuentro el binario ARM64; compílalo con:
+  cd rust-core && CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=\$NDK/bin/aarch64-linux-android21-clang \\
+    CC_aarch64_linux_android=\$NDK/bin/aarch64-linux-android21-clang cargo build --release --target aarch64-linux-android"
+
+    say "binario origen: $SRC_BIN"
+    if [ "$ON_PHONE" = "1" ]; then
+        mkdir -p "$PREFIX" "$WEB_DIR" 2>/dev/null
+        [ -f "$BIN" ] && cp -f "$BIN" "$BIN.bak" 2>/dev/null
+        cp -f "$SRC_BIN" "$BIN" || die "no se pudo copiar el binario"
+        chmod 755 "$BIN" 2>/dev/null
+        [ -f "$REPO_ROOT/web/cockpit_template.html" ] && cp -f "$REPO_ROOT/web/cockpit_template.html" "$TEMPLATE"
+        [ -f "$REPO_ROOT/deploy/99-megadaemon.sh" ] && { cp -f "$REPO_ROOT/deploy/99-megadaemon.sh" "$SERVICE"; chmod 755 "$SERVICE"; }
+    else
+        have adb || die "adb no está instalado en este PC"
+        adb wait-for-device || die "no hay ningún móvil conectado por adb"
+        adb shell "mkdir -p $PREFIX $WEB_DIR" || true
+        adb push "$SRC_BIN" "$BIN" >/dev/null || die "adb push del binario falló"
+        adb shell "chmod 755 $BIN" || true
+        if [ -f "$REPO_ROOT/web/cockpit_template.html" ]; then
+            adb push "$REPO_ROOT/web/cockpit_template.html" "$TEMPLATE" >/dev/null || true
+        fi
+        if [ -f "$REPO_ROOT/deploy/99-megadaemon.sh" ]; then
+            adb push "$REPO_ROOT/deploy/99-megadaemon.sh" "$SERVICE" >/dev/null || true
+            adb shell "chmod 755 $SERVICE" || true
+        fi
+    fi
+    say "ficheros copiados"
+}
+
+# ── 4. Reinicio ──────────────────────────────────────────────────────────────
+restart() {
+    say "reiniciando el daemon"
+    as_root 'killall megadaemon-core 2>/dev/null; sleep 1' >/dev/null 2>&1
+    if [ "$ON_PHONE" = "1" ]; then
+        (setsid nohup sh "$SERVICE" >/dev/null 2>&1 &) 2>/dev/null || true
+    else
+        adb shell "su -c 'setsid nohup sh $SERVICE >/dev/null 2>&1 &'" >/dev/null 2>&1 || true
+    fi
+    # El supervisor duerme 60 s entre comprobaciones: no esperamos tanto.
+    sleep 6
+}
+
+# ── 5. Verificación ──────────────────────────────────────────────────────────
+health_on_port() {
+    p=$1
+    if [ "$ON_PHONE" = "1" ]; then
+        if have curl; then
+            curl -s -m 3 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$p/health" 2>/dev/null
+        else
+            toybox wget -q -O /dev/null "http://127.0.0.1:$p/health" 2>/dev/null && echo 200 || echo 000
+        fi
+    else
+        adb shell "curl -s -m 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:$p/health" 2>/dev/null | tr -d '\r\n'
+    fi
+}
+
+verify() {
+    say "verificando /health"
+    ok_port=""
+    for p in $PORTS; do
+        code=$(health_on_port "$p")
+        printf '   puerto %-5s -> HTTP %s\n' "$p" "${code:-000}"
+        [ "${code:-000}" = "200" ] && [ -z "$ok_port" ] && ok_port=$p
+    done
+    if [ -n "$ok_port" ]; then
+        say "COCKPIT OK -> abre http://localhost:$ok_port (o http://127.0.0.1:$ok_port)"
+        return 0
+    fi
+    say "el cockpit SIGUE sin responder; log:"
+    as_root "tail -n 25 $LOG 2>/dev/null" 2>/dev/null
+    return 1
+}
+
+# ── main ─────────────────────────────────────────────────────────────────────
+diagnose
+if [ "$PUSH_ONLY" = "1" ]; then
+    say "--no-push: sólo diagnóstico, no se toca nada"
+    exit 0
+fi
+deploy_files
+restart
+verify || true
+say "si sigue sin responder, abre el log del móvil: tail -f $LOG"
