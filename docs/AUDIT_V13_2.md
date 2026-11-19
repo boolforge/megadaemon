@@ -14,10 +14,10 @@
 |---|---|---|
 | `tests/audit_v13.rs` (v13.1) | 21 | ✅ 21/21 |
 | `tests/audit_scout_hw.rs` (v13.2, hardware/servidor) | 16 | ✅ 16/16 |
-| `tests/audit_scout_seere.rs` (v13.2, harness SEERE) | 20 | ✅ 20/20 |
+| `tests/audit_scout_seere.rs` (v13.2, harness SEERE) | 31 | ✅ 31/31 |
 | `tests/npu_nnapi.rs` (v13.2, FFI NNAPI) | 9 | ✅ 9/9 |
 | `src/util_text.rs` (unit) | 9 | ✅ 9/9 |
-| **TOTAL** | **75** | **✅ 75/75** |
+| **TOTAL** | **86** | **✅ 86/86** |
 
 * `cargo build --release` → **0 errores, 0 warnings**.
 * `megadaemon-core seere-selftest` → `SELFTEST_V11_RUST_OK`.
@@ -132,7 +132,7 @@ Todos los endpoints que ejecutan o mutan estado exigen `X-Seere-Auth-Token`.
 cd rust-core
 export PATH="$HOME/.cargo/bin:$PATH"
 cargo build --release                 # 0 errores, 0 warnings
-cargo test                            # 75/75
+cargo test                            # 86/86
 ./target/release/megadaemon-core seere-selftest   # SELFTEST_V11_RUST_OK
 
 # FFI NNAPI real contra una implementación ABI independiente en C:
