@@ -3,7 +3,7 @@
 //! Supports MiniMax (M2.7 / M2.5), GitHub Models (via gh CLI), Pollinations (zero-key),
 //! OpenRouter (:free), Groq, Cerebras, Google AI Studio, Mistral, Hybrid Tool+Cloud, and Local SEERE v12.
 
-use crate::{binwalk_die, cirx_rtl, kaitai_imhex, npu_bridge, seere_v11};
+use crate::{binwalk_die, cirx_rtl, kaitai_imhex, npu_bridge, provider_catalog, seere_v11};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
@@ -64,45 +64,42 @@ pub struct ChatResult {
 
 fn default_vault() -> ProviderVault {
     ProviderVault {
+        // El default es el LOCAL: gratis, offline y sin latencia de red.  La
+        // nube entra como failover.  En v13.0 el default era "local-seere"
+        // pero el catálogo sólo tenía 2 entradas, así que la UI mostraba
+        // "minimax-m2.7" (hardcodeado en el HTML) y ese modelo estaba
+        // RETIRADO desde el 2026-11-18.
         default_model: "local-seere".to_string(),
-        providers: vec![
-            ProviderEntry {
-                id: "local-seere".into(),
-                name: "Local SEERE v12 (Offline Qwen + GBNF Tools)".into(),
-                vendor: "Local-Exynos".into(),
-                endpoint: "http://127.0.0.1:8080/v1/chat/completions".into(),
-                model: "local-qwen".into(),
-                api_key: String::new(),
-                auth_type: "local".into(),
-                tier: "offline".into(),
-                free_signup_url: String::new(),
-                enabled: true,
-                supports_reasoning: false,
-            },
-            ProviderEntry {
-                id: "pollinations-free".into(),
-                name: "Pollinations AI (Zero-Key Free Fallback)".into(),
-                vendor: "Pollinations".into(),
-                endpoint: "https://text.pollinations.ai/openai".into(),
-                model: "openai".into(),
-                api_key: String::new(),
-                auth_type: "none".into(),
-                tier: "free".into(),
-                free_signup_url: "https://pollinations.ai/".into(),
-                enabled: true,
-                supports_reasoning: false,
-            },
-        ],
+        providers: provider_catalog::catalog_v13_1(),
     }
 }
 
 pub fn load_vault() -> ProviderVault {
     if let Ok(raw) = fs::read_to_string(PROVIDERS_PATH) {
-        if let Ok(v) = serde_json::from_str::<ProviderVault>(&raw) {
-            return v;
+        match serde_json::from_str::<ProviderVault>(&raw) {
+            Ok(v) => return v,
+            Err(e) => {
+                // BUG v13.0: un providers.json corrupto devolvía el vault por
+                // defecto y el siguiente save_vault() SOBRESCRIBÍA el
+                // fichero, perdiendo TODAS las API keys del usuario.
+                // Ahora se hace una copia .corrupt-<ts> y se avisa.
+                let bak = format!("{}.corrupt-{}", PROVIDERS_PATH, ts_now());
+                let _ = fs::write(&bak, &raw);
+                eprintln!(
+                    "[providers] providers.json corrupto ({}); copia en {}; se usa el catálogo por defecto",
+                    e, bak
+                );
+            }
         }
     }
     default_vault()
+}
+
+fn ts_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 pub fn save_vault(vault: &ProviderVault) -> Result<(), String> {
@@ -158,10 +155,18 @@ pub fn list_providers_redacted() -> Value {
             })
         })
         .collect();
+    let retired: Vec<Value> = provider_catalog::retired_models()
+        .iter()
+        .map(|(id, model, note)| json!({"id": id, "model": model, "note": note}))
+        .collect();
     json!({
         "default_model": vault.default_model,
         "providers": list,
-        "engine": "rust-swarm-v13.0"
+        "retired": retired,
+        "catalog_size": vault.providers.len(),
+        "free_providers": vault.providers.iter().filter(|p| provider_catalog::tier_free(&p.tier)).count(),
+        "keyless_providers": vault.providers.iter().filter(|p| p.tier == "keyless").count(),
+        "engine": "rust-swarm-v13.1"
     })
 }
 
@@ -201,6 +206,15 @@ pub fn update_provider(
             break;
         }
     }
+    // Si el usuario pide un modelo RETIRADO, se avisa en lugar de fallar
+    // en silencio contra la API (M2.7/M2.5已于 el 2026-11-18; GitHub Models
+    // se retiró el 2026-07-30).
+    if let Some((rid, rmodel, rnote)) = provider_catalog::is_retired(id) {
+        return Err(format!(
+            "MODELO RETIRADO: {} ({}) -> {}",
+            rmodel, rid, rnote
+        ));
+    }
     if !found && !id.is_empty() {
         // Allow creating custom OpenAI-compatible provider dynamically
         vault.providers.push(ProviderEntry {
@@ -226,16 +240,35 @@ pub fn update_provider(
     Ok(list_providers_redacted())
 }
 
+use std::sync::Mutex;
+use std::sync::OnceLock;
+
+static GH_TOKEN_CACHE: OnceLock<Mutex<Option<(u64, String)>>> = OnceLock::new();
+
+/// Token de `gh auth token`, cacheado 300 s.
+///
+/// BUG v13.0: se ejecutaba `gh auth token` en CADA llamada (y en cada
+/// proveedor de la cascada): un fork+exec por petición.
 fn resolve_gh_token() -> Option<String> {
-    if let Ok(out) = Command::new("gh").args(["auth", "token"]).output() {
-        if out.status.success() {
-            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !s.is_empty() {
-                return Some(s);
+    let cache = GH_TOKEN_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = cache.lock() {
+        if let Some((ts, tok)) = guard.as_ref() {
+            if ts_now().saturating_sub(*ts) < 300 {
+                return Some(tok.clone());
             }
         }
     }
-    None
+    let fresh = Command::new("gh")
+        .args(["auth", "token"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty());
+    if let Ok(mut guard) = cache.lock() {
+        *guard = fresh.as_ref().map(|t| (ts_now(), t.clone()));
+    }
+    fresh
 }
 
 fn split_think_tags(raw: &str) -> (String, String) {
@@ -259,12 +292,27 @@ fn split_think_tags(raw: &str) -> (String, String) {
     (raw.trim().to_string(), String::new())
 }
 
-/// Calls an OpenAI-compatible HTTPS endpoint using native `curl` (passing headers & body via stdin/temp-config
-/// so API keys NEVER appear in command-line arguments / `ps` listings).
+/// Cliente HTTPS NATIVO (ureq + rustls).  Sin curl, sin fork/exec, sin
+/// ficheros temporales con la API key en disco.
+///
+/// BUGS QUE ARREGLA (v13.0 -> v13.1):
+///   * v13.0 hacía `Command::new("curl")` en CADA petición: un fork+exec por
+///     llamada, y en Android `curl` NO existe en el toybox de AOSP (el
+///     agente no podía hablar con la nube sin Termux).
+///   * v13.0 escribía la API key en `/data/user/0/com.agy/files/tmp/md_curl_*.cfg`
+///     (ruta HARDCODEADA) y la borraba al terminar.  Si el write fallaba
+///     (directorio sin permisos), la petición salía SIN cabecera de
+///     autenticación y el error que veía el usuario era "HTTP transport
+///     error", no "401 Unauthorized".
+///   * v13.0 no miraba el status HTTP: un 401/402/429 se parseaba como si
+///     fuera una respuesta vacía.
+///   * v13.0 no distinguía "quedate sin saldo" de "el modelo no existe":
+///     un 402 (credit exhausted) y un 404 (model retired) se mezclaban.
 pub fn call_openai_http(
     endpoint: &str,
     model: &str,
     api_key: &str,
+    auth_type: &str,
     system_prompt: &str,
     user_prompt: &str,
     max_tokens: u32,
@@ -279,73 +327,75 @@ pub fn call_openai_http(
         "max_tokens": max_tokens,
         "temperature": temperature
     });
-    let payload_bytes = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
 
-    let mut cmd = Command::new("curl");
-    cmd.args([
-        "-sS",
-        "--max-time",
-        "45",
-        "-X",
-        "POST",
-        endpoint,
-        "-H",
-        "Content-Type: application/json",
-        "-H",
-        "HTTP-Referer: https://github.com/boolforge/megadaemon",
-        "-H",
-        "X-Title: MegaDaemon Zenith v13",
-        "--data-binary",
-        "@-",
-    ]);
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(45)))
+        .timeout_connect(Some(std::time::Duration::from_secs(10)))
+        .build();
+    let agent = ureq::Agent::new_with_config(config);
 
-    // Write auth header to a private mode-600 temp file (removed right after call) to avoid cmdline exposure
-    let mut auth_cfg_path: Option<String> = None;
-    if !api_key.trim().is_empty() {
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let cfg_p = format!("/data/user/0/com.agy/files/tmp/md_curl_{}.cfg", ts);
-        let _ = fs::create_dir_all("/data/user/0/com.agy/files/tmp");
-        let cfg_content = format!("header = \"Authorization: Bearer {}\"\n", api_key.trim());
-        if fs::write(&cfg_p, cfg_content).is_ok() {
-            cmd.args(["-K", &cfg_p]);
-            auth_cfg_path = Some(cfg_p);
+    let mut req = agent.post(endpoint);
+    let key = api_key.trim();
+    match auth_type {
+        "anthropic" => {
+            if !key.is_empty() {
+                req = req.header("x-api-key", key);
+            }
+            req = req.header("anthropic-version", "2023-06-01");
+        }
+        _ => {
+            if !key.is_empty() {
+                req = req.header("Authorization", &format!("Bearer {}", key));
+            }
         }
     }
+    req = req
+        .header("Content-Type", "application/json")
+        .header("HTTP-Referer", "https://github.com/boolforge/megadaemon")
+        .header("X-Title", "MegaDaemon Zenith v13.1");
 
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn curl: {}", e))?;
+    let body_bytes = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
+    let resp = req
+        .send(body_bytes.as_slice())
+        .map_err(|e| format!("HTTP transport error: {}", e))?;
 
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(&payload_bytes);
+    let status = resp.status().as_u16();
+    let text = resp
+        .into_body()
+        .read_to_string()
+        .map_err(|e| format!("HTTP body read error: {}", e))?;
+
+    if status >= 400 {
+        // Diagnóstico accionable: distinguir saldo/agota/modelo-muerto.
+        let detail = serde_json::from_str::<Value>(text.trim())
+            .ok()
+            .and_then(|v| {
+                v.get("error")
+                    .and_then(|e| {
+                        e.get("message")
+                            .and_then(|m| m.as_str())
+                            .or_else(|| e.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .or_else(|| v.get("message").and_then(|m| m.as_str()).map(|s| s.to_string()))
+            })
+            .unwrap_or_else(|| text.chars().take(200).collect());
+        let hint = match status {
+            401 | 403 => " (API key invalida o sin permisos)",
+            402 => " (sin saldo / plan agotado)",
+            404 => " (modelo inexistente o RETIRADO - mira el catalogo)",
+            429 => " (rate limit o cuota diaria agotada)",
+            _ => "",
+        };
+        return Err(format!("HTTP {}: {}{}", status, detail, hint));
     }
 
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("curl wait failed: {}", e))?;
-
-    if let Some(p) = auth_cfg_path {
-        let _ = fs::remove_file(p);
-    }
-
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("HTTP transport error: {}", err.trim()));
-    }
-
-    let raw_body = String::from_utf8_lossy(&output.stdout).into_owned();
-    let trimmed = raw_body.trim();
+    let trimmed = text.trim();
     if trimmed.is_empty() {
         return Err("Empty HTTP response from provider".to_string());
     }
 
-    // Some zero-key endpoints (like Pollinations) occasionally return plain text or JSON
+    // Algunos endpoints zero-key devuelven texto plano.
     if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
         if let Some(err_obj) = v.get("error") {
             let msg = err_obj["message"]
@@ -376,7 +426,6 @@ pub fn call_openai_http(
         return Err(format!("Unexpected JSON payload: {}", &trimmed[..trimmed.len().min(200)]));
     }
 
-    // Plain-text response fallback
     Ok((trimmed.to_string(), String::new(), 0))
 }
 
@@ -579,6 +628,7 @@ pub fn execute_chat(
             &p.endpoint,
             &p.model,
             &key,
+            &p.auth_type,
             sys_prompt,
             &enriched_prompt,
             max_tokens,

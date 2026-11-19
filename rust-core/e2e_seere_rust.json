@@ -1,0 +1,269 @@
+{
+  "env": {
+    "variant": "env",
+    "routed": 6,
+    "sens": 3,
+    "grounded": 6,
+    "n": 12,
+    "rows": [
+      {
+        "q": "¿cuántos núcleos tiene esta máquina?",
+        "acted": false,
+        "sens": false,
+        "grounded": false,
+        "answer": "R: uptime is 22 [SRC:1]",
+        "tools": [],
+        "ms": 10894
+      },
+      {
+        "q": "lee el contenido de /data/local/tmp/config.txt",
+        "acted": false,
+        "sens": false,
+        "grounded": true,
+        "answer": "El contenido del archivo /data/local/tmp/config.txt es: `uid=0|Linux aarch64|.shm=1048580B",
+        "tools": [],
+        "ms": 5244
+      },
+      {
+        "q": "busca 'error' dentro de /data/local/tmp/logs",
+        "acted": true,
+        "sens": true,
+        "grounded": true,
+        "answer": "EXIT_0",
+        "tools": [
+          "ROOT_EXEC(find /data/local/tmp -name 'logs' -exec grep)"
+        ],
+        "ms": 4869
+      },
+      {
+        "q": "¿qué hora es en Madrid?",
+        "acted": true,
+        "sens": false,
+        "grounded": true,
+        "answer": "Madrid es una ciudad en España, con una historia de villa. Es la capital de España y de la",
+        "tools": [
+          "WEB_SEARCH(Madrid)"
+        ],
+        "ms": 13489
+      },
+      {
+        "q": "busca en wikipedia qué es un autómata finito",
+        "acted": false,
+        "sens": false,
+        "grounded": false,
+        "answer": "NO_VERIFIED_DATA",
+        "tools": [],
+        "ms": 7434
+      },
+      {
+        "q": "¿está vivo el proceso init?",
+        "acted": false,
+        "sens": false,
+        "grounded": false,
+        "answer": "init is running [SRC:1]",
+        "tools": [],
+        "ms": 4455
+      },
+      {
+        "q": "dime el pid del proceso actual",
+        "acted": true,
+        "sens": false,
+        "grounded": true,
+        "answer": "El PID del proceso actual es 1.",
+        "tools": [
+          "ROOT_EXEC(cat /proc/$$/status)"
+        ],
+        "ms": 4719
+      },
+      {
+        "q": "¿cuánta memoria RAM queda?",
+        "acted": false,
+        "sens": false,
+        "grounded": false,
+        "answer": "La memoria RAM disponible es de 104,857,600 bytes, que equivalen a 104.857.600 bytes en by",
+        "tools": [],
+        "ms": 11792
+      },
+      {
+        "q": "lista los ficheros de /data/local/tmp",
+        "acted": true,
+        "sens": false,
+        "grounded": false,
+        "answer": "/data/local/tmp/seere/audit.ndjson, /data/local/tmp/seere/cache.json.lock, /data/local/tmp",
+        "tools": [
+          "ROOT_EXEC(find /data/local/tmp -type f)"
+        ],
+        "ms": 13815
+      },
+      {
+        "q": "¿qué versión de python hay instalada?",
+        "acted": true,
+        "sens": true,
+        "grounded": true,
+        "answer": "/usr/bin/python [SRC:1]",
+        "tools": [
+          "ROOT_EXEC(which python)"
+        ],
+        "ms": 3479
+      },
+      {
+        "q": "busca en la web las noticias de hoy",
+        "acted": true,
+        "sens": true,
+        "grounded": true,
+        "answer": "ERROR: web not found [SRC:1]",
+        "tools": [
+          "ROOT_EXEC(web search noticias hoy)",
+          "ROOT_EXEC(web search noticias hoy | P: web -> R: ERROR)",
+          "ROOT_EXEC(web search noticias hoy | P: web -> R: ERROR)"
+        ],
+        "ms": 11417
+      },
+      {
+        "q": "¿cuánto espacio de disco queda?",
+        "acted": false,
+        "sens": false,
+        "grounded": false,
+        "answer": "El espacio de disco disponible es de 104,857,600 bytes.",
+        "tools": [],
+        "ms": 7173
+      }
+    ]
+  },
+  "noenv": {
+    "variant": "noenv",
+    "routed": 8,
+    "sens": 8,
+    "grounded": 9,
+    "n": 12,
+    "rows": [
+      {
+        "q": "¿cuántos núcleos tiene esta máquina?",
+        "acted": true,
+        "sens": true,
+        "grounded": true,
+        "answer": "El número de núcleos de la máquina es 94.",
+        "tools": [
+          "ROOT_EXEC(cat /proc/cpuinfo | grep -oP '[0-9]+' | wc -)"
+        ],
+        "ms": 4908
+      },
+      {
+        "q": "lee el contenido de /data/local/tmp/config.txt",
+        "acted": false,
+        "sens": false,
+        "grounded": false,
+        "answer": "Se ha producido un error. No se puede leer el contenido del archivo /data/local/tmp/config",
+        "tools": [],
+        "ms": 10129
+      },
+      {
+        "q": "busca 'error' dentro de /data/local/tmp/logs",
+        "acted": true,
+        "sens": true,
+        "grounded": true,
+        "answer": "EXIT_0 found in /data/local/tmp/logs",
+        "tools": [
+          "ROOT_EXEC(find /data/local/tmp -name 'logs' -type f -e)"
+        ],
+        "ms": 5177
+      },
+      {
+        "q": "¿qué hora es en Madrid?",
+        "acted": true,
+        "sens": true,
+        "grounded": true,
+        "answer": "hora en Madrid es 06:39:16 [SRC:1]",
+        "tools": [
+          "ROOT_EXEC(date)"
+        ],
+        "ms": 5718
+      },
+      {
+        "q": "busca en wikipedia qué es un autómata finito",
+        "acted": false,
+        "sens": false,
+        "grounded": false,
+        "answer": "NO_VERIFIED_DATA",
+        "tools": [],
+        "ms": 6794
+      },
+      {
+        "q": "¿está vivo el proceso init?",
+        "acted": false,
+        "sens": false,
+        "grounded": false,
+        "answer": "init is running [SRC:1]",
+        "tools": [],
+        "ms": 3684
+      },
+      {
+        "q": "dime el pid del proceso actual",
+        "acted": true,
+        "sens": true,
+        "grounded": true,
+        "answer": "El proceso actual no tiene un ID de proceso.",
+        "tools": [
+          "ROOT_EXEC(sudo ps aux | grep -i \"init\" | awk '{print $)"
+        ],
+        "ms": 4482
+      },
+      {
+        "q": "¿cuánta memoria RAM queda?",
+        "acted": false,
+        "sens": false,
+        "grounded": true,
+        "answer": "La memoria RAM disponible es de **4 GB**.",
+        "tools": [],
+        "ms": 4061
+      },
+      {
+        "q": "lista los ficheros de /data/local/tmp",
+        "acted": true,
+        "sens": true,
+        "grounded": true,
+        "answer": "seere_audit_secret.txt seere_reg_secret.txt [SRC:1]",
+        "tools": [
+          "ROOT_EXEC(ls /data/local/tmp)"
+        ],
+        "ms": 4038
+      },
+      {
+        "q": "¿qué versión de python hay instalada?",
+        "acted": true,
+        "sens": true,
+        "grounded": true,
+        "answer": "la versión de Python instalada es 3.10.0",
+        "tools": [
+          "ROOT_EXEC(python3)"
+        ],
+        "ms": 3246
+      },
+      {
+        "q": "busca en la web las noticias de hoy",
+        "acted": true,
+        "sens": true,
+        "grounded": true,
+        "answer": "ERROR: No se puede ejecutar la instrucción web. Por favor, verifica que la variable web es",
+        "tools": [
+          "ROOT_EXEC(web search \"noticias hoy\")",
+          "ROOT_EXEC(web search \"noticias hoy\" | grep -i \"hoy\" | )"
+        ],
+        "ms": 10610
+      },
+      {
+        "q": "¿cuánto espacio de disco queda?",
+        "acted": true,
+        "sens": true,
+        "grounded": true,
+        "answer": "no se puede completar la consulta [SRC:1]",
+        "tools": [
+          "ROOT_EXEC(du /)",
+          "ROOT_EXEC(du -a /)",
+          "ROOT_EXEC(du -a /)"
+        ],
+        "ms": 34489
+      }
+    ]
+  }
+}

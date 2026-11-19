@@ -1,41 +1,18 @@
-mod bindiff;
-mod binwalk_die;
-mod cfg_lifter;
-mod cirx_rtl;
-mod cockpit_server;
-mod crypto_scan;
-mod deobfuscate;
-mod disasm;
-mod entropy;
-mod freezer;
-mod frida_dbi;
-mod hw_mapper;
-mod kaitai_imhex;
-mod mcp_server;
-mod npu_bridge;
-mod npu_cv;
-mod pattern;
-mod pointers;
-mod providers;
-mod rea_assistant;
-mod rom_locator;
-mod seere_v11;
-mod shm;
-mod snapshot;
-mod tile_vram;
-mod unifier;
+// El binario es un envoltorio fino: toda la lógica vive en la lib
+// (megadaemon_core), que es lo que permite `cargo test`.
+use megadaemon_core::*;
 
 use std::env;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 
 fn print_usage() {
-    eprintln!("MegaDaemon Native Rust Core v13.0 Zenith (Pure Rust ARM64 + Exynos 2100 NPU + LTO-Decomp v3.4 CIRX)");
+    eprintln!("MegaDaemon Native Rust Core v13.1 Zenith (Pure Rust ARM64 + Exynos 2100 NPU + LTO-Decomp v3.4 CIRX)");
     eprintln!("Usage: megadaemon-core <command> [args...]");
     eprintln!("Commands:");
     eprintln!("  cockpit [port]                              Launch 100% Pure-Rust Multi-Threaded Cockpit HTTP Server (default: 3000)");
     eprintln!("  mcp-server                                  Run Antigravity JSON-RPC 2.0 MCP Server over stdio (MiniMax + RE Tools)");
-    eprintln!("  chat <model_id> <prompt>                    Query MiniMax M2.7/M2.5, GitHub Models, Free Swarm, or Local SEERE");
+    eprintln!("  chat <model_id> <prompt>                    Query any catalog provider (MiniMax M3.1-Flash/M3, Groq, OpenRouter, Google AI Studio, ...) or Local SEERE");
     eprintln!("  die-binwalk <file>                          Detect It Easy + Binwalk + Scalpel + Bulk Extractor + Comtype Scanner");
     eprintln!("  cirx-ssa [mas]                              LTO-Decomp v3.4 CIRX Micro-RTL SSA, Risk Score S/R & SMT-LIB2 Export");
     eprintln!("  mba <expr>                                  D810/Goomba Mixed Boolean-Arithmetic (MBA) Algebraic Simplifier");
@@ -49,7 +26,10 @@ fn print_usage() {
     eprintln!("  bindiff <plat>                              Multi-ISA Cross-Platform Function Matcher");
     eprintln!("  hw-mmio <plat>                              Hardware MMIO Register Annotator & Auto-Struct Reconstructor");
     eprintln!("  crypto-scan <plat>                          Shift-JIS String Decoder & Konami LZSS/RLE Scanner");
-    eprintln!("  seere <query>                               Execute SEERE v12 GBNF KV-Pinned Local Harness");
+    eprintln!("  seere <query> [--max-turns N] [--env-in-prompt]   Execute SEERE v13.1 GBNF Local Harness (0 tokens if possible)");
+    eprintln!("  seere-prompt [es|en]                         Dump the static SEERE system prompt (for token accounting)");
+    eprintln!("  seere-grammar                                Dump the active GBNF grammar");
+    eprintln!("  power                                        Show battery/charging/thermal state and the active policy");
     eprintln!("  seere-selftest                              Run SEERE v12 Assertion Suites & Export Shared GBNF/Prompts");
     eprintln!("  npu-probe                                   Probe Exynos 2100 NPU (/dev/vertex10, EDEN, KleidiAI) & Pin Cores 4-7");
     eprintln!("  locate-roms [refresh]                       Native Multi-Platform ROM & Binary Auto-Discovery");
@@ -205,11 +185,61 @@ fn main() {
                 eprintln!("Usage: megadaemon-core seere <query>");
                 std::process::exit(1);
             }
-            let query = args[2..].join(" ");
-            let res = seere_v11::run_seere_v11(&query, 4, true, false, false, true, true);
+            let mut query_parts: Vec<String> = Vec::new();
+            let mut max_turns = 4usize;
+            let mut env_in_prompt = false;
+            for a in &args[2..] {
+                if a == "--env-in-prompt" {
+                    env_in_prompt = true;
+                } else if a == "--max-turns" {
+                    continue;
+                } else if let Some(v) = a.strip_prefix("--max-turns=") {
+                    max_turns = v.parse().unwrap_or(4);
+                } else {
+                    query_parts.push(a.clone());
+                }
+            }
+            // "--max-turns N" (con N justo despues)
+            if let Some(i) = query_parts.iter().position(|x| x == "--max-turns") {
+                if i + 1 < query_parts.len() {
+                    max_turns = query_parts[i + 1].parse().unwrap_or(4);
+                    query_parts.drain(i..i + 2);
+                }
+            }
+            let query = query_parts.join(" ");
+            let cfg = seere_v11::SeereConfig {
+                max_turns,
+                allow_tools: true,
+                bin_mode: false,
+                plan_mode: false,
+                allow_exec: true,
+                allow_external: false,
+                env_in_prompt,
+                re_opcodes: false,
+            };
+            let res = seere_v11::run_seere(&query, &cfg);
             println!("{}", serde_json::to_string(&res).unwrap());
         }
 
+        "power" => {
+            let (st, pol) = power_policy::current_policy();
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                "policy": pol.name, "max_turns": pol.max_turns,
+                "prefer_local": pol.prefer_local, "allow_heavy": pol.allow_heavy,
+                "max_tokens": pol.max_tokens, "reason": pol.reason,
+                "charging": st.charging, "battery_pct": st.capacity_pct,
+                "battery_temp_c": st.battery_temp_c, "cpu_temp_c": st.cpu_temp_c,
+                "thermal_hot": st.thermal_hot, "system_power_save": st.system_power_save,
+                "governor": st.governor
+            })).unwrap());
+        }
+        "seere-prompt" => {
+            let lang = if args.len() > 2 { args[2].clone() } else { "es".to_string() };
+            println!("{}", seere_v11::sys_prompt("REACT", &lang));
+        }
+        "seere-grammar" => {
+            println!("{}", seere_v11::build_act_grammar());
+        }
         "seere-selftest" => match seere_v11::selftest() {
             Ok(msg) => println!("{}", msg),
             Err(e) => {

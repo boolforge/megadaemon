@@ -7,7 +7,7 @@
 use crate::{
     bindiff, binwalk_die, cfg_lifter, cirx_rtl, crypto_scan, deobfuscate, disasm, entropy,
     freezer, frida_dbi, hw_mapper, kaitai_imhex, npu_bridge, npu_cv, pattern, pointers, providers,
-    rea_assistant, rom_locator, seere_v11, shm, snapshot, tile_vram, unifier,
+    rea_assistant, rom_locator, seere_v11, shm, snapshot, tile_vram, unifier, power_policy,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -370,12 +370,31 @@ fn handle_client(mut stream: TcpStream) {
                     &json!({
                         "status": "online",
                         "daemon": "megadaemon-zenith-rust",
-                        "version": "13.0.0-zenith",
+                        "version": "13.1.0-zenith",
                         "engine": "100%-pure-rust-arm64"
                     }),
                 );
             }
             "/api/providers" => send_json(&mut stream, &providers::list_providers_redacted()),
+            "/api/power" => {
+                let (st, pol) = power_policy::current_policy();
+                send_json(&mut stream, &json!({
+                    "policy": pol.name,
+                    "max_turns": pol.max_turns,
+                    "prefer_local": pol.prefer_local,
+                    "allow_heavy": pol.allow_heavy,
+                    "max_tokens": pol.max_tokens,
+                    "reason": pol.reason,
+                    "charging": st.charging,
+                    "battery_pct": st.capacity_pct,
+                    "battery_temp_c": st.battery_temp_c,
+                    "cpu_temp_c": st.cpu_temp_c,
+                    "thermal_hot": st.thermal_hot,
+                    "system_power_save": st.system_power_save,
+                    "governor": st.governor,
+                    "usb_plugged": st.usb_plugged
+                }));
+            }
             "/api/uploads" => send_json(&mut stream, &list_uploaded_files()),
             "/api/status" => {
                 let mut st = read_json_file_fallback(
@@ -416,7 +435,7 @@ fn handle_client(mut stream: TcpStream) {
                         "brain_active": active,
                         "default_model": vault.default_model,
                         "minimax_configured": vault.providers.iter().any(|p| p.id.starts_with("minimax") && !p.api_key.is_empty()),
-                        "engine": "MegaDaemon Zenith v13.0 Pure Rust Swarm + SEERE v12",
+                        "engine": "MegaDaemon Zenith v13.1 Pure Rust Swarm + SEERE v13.1",
                         "npu_vertex10": npu.vs4l_present,
                         "eden_dlopen": npu.eden_runtime.dlopen_ok,
                         "kleidiai_dotprod": npu.kleidiai_dotprod_active,
@@ -660,8 +679,24 @@ fn handle_client(mut stream: TcpStream) {
                 .as_str()
                 .or_else(|| body_json["attachment_path"].as_str());
 
-            let res = providers::execute_chat(msg, model, att_path, system, max_tokens);
-            send_json(&mut stream, &serde_json::to_value(res).unwrap());
+            // Política de energía: el daemon se adapta al estado del móvil.
+            // Sin cargador y con la batería baja, el presupuesto de turnos y de
+            // tokens baja; con cargador, sube.
+            let (pstate, pol) = power_policy::current_policy();
+            let mut max_tokens = max_tokens.min(pol.max_tokens);
+            if !pol.allow_heavy {
+                // En modo ahorro/termico el techo de tokens se recorta.
+                max_tokens = max_tokens.min(384);
+            }
+            let mut res = providers::execute_chat(msg, model, att_path, system, max_tokens);
+            let mut v = serde_json::to_value(&mut res).unwrap();
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("power_policy".into(), json!(pol.name));
+                obj.insert("power_reason".into(), json!(pol.reason));
+                obj.insert("battery_pct".into(), json!(pstate.capacity_pct));
+                obj.insert("charging".into(), json!(pstate.charging));
+            }
+            send_json(&mut stream, &v);
         }
         "/api/providers" => {
             let id = body_json["id"].as_str().unwrap_or("");
@@ -676,7 +711,7 @@ fn handle_client(mut stream: TcpStream) {
             }
         }
         "/api/providers/test" => {
-            let id = body_json["id"].as_str().unwrap_or("minimax-m2.7");
+            let id = body_json["id"].as_str().unwrap_or("local-seere");
             let rep = providers::test_provider_connection(id);
             send_json(&mut stream, &rep);
         }
@@ -1008,7 +1043,7 @@ pub fn run_server(port: u16) -> Result<(), String> {
     println!("==================================================================");
     println!("MEGADAEMON v13.0 ZENITH — 100% PURE RUST COCKPIT SERVER ONLINE");
     println!("  Listen:    http://{}", addr);
-    println!("  Swarm:     MiniMax M2.7/M2.5 + GitHub Models + Free Swarm + SEERE v12");
+    println!("  Swarm:     18 proveedores (2 offline, 2 zero-key, 13 free con key, MiniMax M3.1-Flash/M3) + SEERE v13.1");
     println!("  RE Engine: DiE/Binwalk + Tile VRAM + Kaitai + MBA + CIRX v3.4 + Rizin + Frida");
     println!("  Hardware:  Exynos 2100 NPU (/dev/vertex10) + KleidiAI Cores 4-7");
     println!("==================================================================");

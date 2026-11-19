@@ -41,6 +41,13 @@ pub struct ExynosNpuTelemetry {
     pub throttle_state: String,
     pub throttle_delay_sec: f32,
     pub hybrid_routing_policy: String,
+    /// ¿Hay un CAMINO REAL de offload al NPU?  (v13.1: honestidad)
+    /// En v13.0 la "hybrid routing policy" era un STRING que prometía
+    /// "Prefill -> Exynos NPU (EDEN/NNAPI)" pero NINGÚN módulo del repo
+    /// invocaba EDEN/VNNI/NNAPI: el NPU era sólo telemetría.  Este flag lo
+    /// dice explícitamente para que la UI no prometa lo que no hay.
+    pub npu_offload_implemented: bool,
+    pub npu_offload_note: String,
 }
 
 fn probe_elf_symbols(lib_path: &str, symbols: &[&str]) -> EdenLibraryProbe {
@@ -234,14 +241,28 @@ fn check_kleidiai_dotprod() -> (bool, Vec<String>) {
 }
 
 pub fn read_cpu_and_thermal() -> (Vec<u32>, f32, f32, String, f32) {
-    let mut freqs = Vec::new();
-    for core in 0..8 {
-        let p = format!("/sys/devices/system/cpu/cpu{}/cpufreq/scaling_cur_freq", core);
-        if let Ok(s) = fs::read_to_string(&p) {
-            if let Ok(khz) = s.trim().parse::<u32>() {
-                freqs.push(khz / 1000);
+    // BUG v13.0: `freqs.push` sólo metía los núcleos que se podían leer, así
+    // que si el core0 estaba offline (o no tenía cpufreq) el vector se
+    // desplazaba y la UI atribtaba la frecuencia de un core a otro.  Ahora
+    // el índice ES el número de core (0 si no se pudo leer).
+    let ncpu = std::thread::available_parallelism()
+        .map(|n| n.get().min(16))
+        .unwrap_or(8);
+    let mut freqs: Vec<u32> = Vec::with_capacity(ncpu);
+    for core in 0..ncpu {
+        let mut mhz = 0u32;
+        for p in [
+            format!("/sys/devices/system/cpu/cpu{}/cpufreq/scaling_cur_freq", core),
+            format!("/sys/devices/system/cpu/cpu{}/cpufreq/cpuinfo_max_freq", core),
+        ] {
+            if let Ok(s) = fs::read_to_string(&p) {
+                if let Ok(khz) = s.trim().parse::<u32>() {
+                    mhz = khz / 1000;
+                    break;
+                }
             }
         }
+        freqs.push(mhz);
     }
 
     let mut bat_temp_c: f32 = 32.0;
@@ -257,14 +278,35 @@ pub fn read_cpu_and_thermal() -> (Vec<u32>, f32, f32, String, f32) {
         }
     }
 
+    // BUG v13.0: se tomaba el MAX de las 8 primeras zonas térmicas sin mirar
+    // su tipo: en Android eso incluye el sensor de piel, el cargador o el
+    // modem, y un "max" así puede declarar THROTTLE por el móvil que está en
+    // la mesa.  Ahora se priorizan las zonas de SoC/GPU/CPU.
     let mut cpu_temp_c: f32 = 35.0;
-    for tz in 0..8 {
-        let p = format!("/sys/class/thermal/thermal_zone{}/temp", tz);
+    let mut best_is_soc = false;
+    let zones = fs::read_dir("/sys/class/thermal").map(|it| it.flatten().count()).unwrap_or(16);
+    for tz in 0..zones {
+        let base = format!("/sys/class/thermal/thermal_zone{}", tz);
+        let p = format!("{}/temp", base);
+        let ztype = fs::read_to_string(format!("{}/type", base))
+            .unwrap_or_default()
+            .trim()
+            .to_lowercase();
+        let is_soc = ztype.contains("soc")
+            || ztype.contains("cpu")
+            || ztype.contains("gpu")
+            || ztype.contains("cluster")
+            || ztype.contains("big")
+            || ztype.contains("little");
         if let Ok(s) = fs::read_to_string(&p) {
             if let Ok(v) = s.trim().parse::<f32>() {
                 let c = if v > 1000.0 { v / 1000.0 } else { v };
-                if c > cpu_temp_c && c < 115.0 {
+                if c <= 20.0 || c >= 115.0 {
+                    continue;
+                }
+                if (is_soc && !best_is_soc) || (is_soc == best_is_soc && c > cpu_temp_c) {
                     cpu_temp_c = c;
+                    best_is_soc = is_soc;
                 }
             }
         }
@@ -383,5 +425,7 @@ pub fn probe_exynos_npu() -> ExynosNpuTelemetry {
         throttle_state,
         throttle_delay_sec,
         hybrid_routing_policy: "Prefill Batch (N>=32): Exynos NPU (EDEN/NNAPI /dev/vertex10) + Mali-G78 Vulkan | Decode (N=1): KleidiAI SDOT Q4_0_8x8_Q8_0 on Cores 4-7".to_string(),
+        npu_offload_implemented: false,
+        npu_offload_note: "v13.1: la politica hibrida sigue siendo una DECLARACION. No hay ningun modulo que invoque EDEN/VNNI/NNAPI: el NPU se observa (telemetria) pero no ejecuta trabajo del LLM. El prefill real va por las VNNI de ARM en CPU (KleidiAI), que es lo que hace llama.cpp con -DGGML_CUDA=off + ARM dotprod.".to_string(),
     }
 }
