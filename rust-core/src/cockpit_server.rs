@@ -473,10 +473,15 @@ fn handle_client(mut stream: TcpStream) {
                         "brain_active": active,
                         "default_model": vault.default_model,
                         "minimax_configured": vault.providers.iter().any(|p| p.id.starts_with("minimax") && !p.api_key.is_empty()),
-                        "engine": "MegaDaemon Zenith v13.1 Pure Rust Swarm + SEERE v13.1",
+                        "engine": "MegaDaemon Zenith v13.2 Pure Rust Swarm + SEERE v13.1 + NNAPI INT8",
                         "npu_vertex10": npu.vs4l_present,
                         "eden_dlopen": npu.eden_runtime.dlopen_ok,
                         "kleidiai_dotprod": npu.kleidiai_dotprod_active,
+                        // v13.2: el backend REAL de la vision (no "NPU LIVE"
+                        // por el simple hecho de que exista /dev/vertex10).
+                        "npu_offload_implemented": npu.npu_offload_implemented,
+                        "npu_vision_backend": npu.npu_vision_backend,
+                        "nnapi_device_count": npu.nnapi_device_count,
                         "cpu_freqs_mhz": npu.cpu_freqs_mhz,
                         "cpu_temp_c": npu.cpu_temp_c,
                         "battery_temp_c": npu.battery_temp_c,

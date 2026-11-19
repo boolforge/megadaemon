@@ -2,7 +2,7 @@
 //! Performs sub-millisecond frame-delta motion gating, Sobel edge energy, HUD/dialogue ROI extraction,
 //! dominant palette mining, and hardware accelerator telemetry (Exynos 2100 NPU EDEN / Mali-G78 / KleidiAI).
 
-use crate::{npu_bridge, shm};
+use crate::{npu_bridge, npu_nnapi, shm};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Read;
@@ -31,6 +31,19 @@ pub struct NpuCvReport {
     pub dominant_colors_hex: Vec<String>,
     pub cv_latency_ms: f64,
     pub hardware: HardwareAccelMatrix,
+    /// Backend REAL que ejecutó el análisis de bordes:
+    /// "nnapi:accelerator" | "nnapi:gpu" | "nnapi:cpu" | "cpu-reference".
+    pub vision_backend: String,
+    /// `true` sólo si la ejecución fue realmente sobre hardware NNAPI.
+    pub vision_executed_on_hardware: bool,
+    /// Motivo del fallback a CPU (vacío si no hubo fallback).
+    pub vision_fallback_reason: String,
+    /// Latencia del análisis de bordes por sí solo (sin I/O de frame).
+    pub vision_latency_ms: f64,
+    /// Algoritmo usado: la tubería es la misma en NPU y en CPU.
+    pub edge_energy_model: String,
+    pub nnapi_device_count: u32,
+    pub nnapi_devices: Vec<npu_nnapi::NnapiDevice>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,7 +57,12 @@ pub struct HardwareAccelMatrix {
     pub cpu_freqs_mhz: Vec<u32>,
     pub cpu_temp_c: f32,
     pub battery_temp_c: f32,
-    pub recommended_npu_workloads: Vec<String>,
+    /// Cargas de trabajo que el repo EJECUTA de verdad en el NPU (v13.2).
+    pub npu_workloads_implemented: Vec<String>,
+    /// Cargas de trabajo técnicamente posibles con un modelo cuantizado.
+    pub npu_workloads_possible: Vec<String>,
+    /// Cargas de trabajo IMPOSIBLES en el NPU de Exynos (con motivo).
+    pub npu_workloads_impossible: Vec<String>,
 }
 
 static PREV_LUMA: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
@@ -104,46 +122,14 @@ pub fn analyze_vla_frame_and_accel() -> NpuCvReport {
         (d * 100.0).round() / 100.0
     };
 
-    // Fast Sobel gradient magnitude on interior pixels (sampled stride 2 for sub-ms mobile perf)
-    let mut sobel_sum = 0.0f64;
-    let mut sobel_cnt = 0u64;
-    let mut top_edges = 0u64;
-    let mut mid_edges = 0u64;
-    let mut bot_edges = 0u64;
-
-    if w >= 4 && h >= 4 {
-        for y in (1..h - 1).step_by(2) {
-            for x in (1..w - 1).step_by(2) {
-                let p = |xx: usize, yy: usize| luma[yy * w + xx] as i32;
-                let gx = -p(x - 1, y - 1) + p(x + 1, y - 1) - 2 * p(x - 1, y) + 2 * p(x + 1, y)
-                    - p(x - 1, y + 1)
-                    + p(x + 1, y + 1);
-                let gy = -p(x - 1, y - 1) - 2 * p(x, y - 1) - p(x + 1, y - 1) + p(x - 1, y + 1)
-                    + 2 * p(x, y + 1)
-                    + p(x + 1, y + 1);
-                let mag = (gx.abs() + gy.abs()) as u64;
-                sobel_sum += mag as f64;
-                sobel_cnt += 1;
-                if mag > 80 {
-                    if y < h / 4 {
-                        top_edges += 1;
-                    } else if y > (h * 2) / 3 {
-                        bot_edges += 1;
-                    } else {
-                        mid_edges += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    let mean_sobel = if sobel_cnt > 0 {
-        ((sobel_sum / sobel_cnt as f64) * 100.0).round() / 100.0
-    } else {
-        0.0
-    };
-
-    let denom = (sobel_cnt.max(1) as f64) / 3.0;
+    // ── Detección de estructura (bordes) ───────────────────────────────────
+    // v13.2: la tubería de bordes pasa por el backend NNAPI real (grafo INT8
+    // conv3x3 Sobel + relu + maxpool2x2).  Si no hay NNAPI o el driver
+    // rechaza el modelo, se usa la REFERENCIA CPU con la MISMA aritmética
+    // entera, de modo que el resultado es comparable y sólo cambia quién
+    // ejecuta.  La telemetría dice siempre qué backend corrió.
+    let (edge, edge_exec) = npu_nnapi::analyze_edges(&luma, w as u32, h as u32);
+    let mean_sobel = edge.mean_energy;
     let rois = vec![
         RoiBox {
             label: "TOP_HUD_STATUS".into(),
@@ -151,7 +137,7 @@ pub fn analyze_vla_frame_and_accel() -> NpuCvReport {
             y: 0,
             w: w as u32,
             h: (h / 4) as u32,
-            edge_density: ((top_edges as f64 / denom) * 1000.0).round() / 1000.0,
+            edge_density: ((edge.band_density(0) * 1000.0).round()) / 1000.0,
         },
         RoiBox {
             label: "MAIN_VIEWPORT_SCENE".into(),
@@ -159,7 +145,7 @@ pub fn analyze_vla_frame_and_accel() -> NpuCvReport {
             y: (h / 4) as u32,
             w: w as u32,
             h: ((h * 5) / 12) as u32,
-            edge_density: ((mid_edges as f64 / denom) * 1000.0).round() / 1000.0,
+            edge_density: ((edge.band_density(1) * 1000.0).round()) / 1000.0,
         },
         RoiBox {
             label: "DIALOGUE_TEXT_BOX".into(),
@@ -167,7 +153,7 @@ pub fn analyze_vla_frame_and_accel() -> NpuCvReport {
             y: ((h * 2) / 3) as u32,
             w: w as u32,
             h: (h - (h * 2) / 3) as u32,
-            edge_density: ((bot_edges as f64 / denom) * 1000.0).round() / 1000.0,
+            edge_density: ((edge.band_density(2) * 1000.0).round()) / 1000.0,
         },
     ];
 
@@ -195,12 +181,17 @@ pub fn analyze_vla_frame_and_accel() -> NpuCvReport {
         cpu_freqs_mhz: npu.cpu_freqs_mhz,
         cpu_temp_c: npu.cpu_temp_c,
         battery_temp_c: npu.battery_temp_c,
-        recommended_npu_workloads: vec![
-            "INT8 Vision CNN (YOLO/MobileNetV3 sprite & HUD ROI detection @ 120 FPS on EDEN NPU)".into(),
-            "INT8 PaddleOCR / CRNN retro dialogue text extraction (zero CPU thermal load)".into(),
-            "INT8 CLIP / SigLIP visual embeddings for frame-to-script semantic indexing".into(),
-            "INT8 Audio Whisper-Tiny / KWS speech-to-text for Sega CD / PS1 voice clips".into(),
-            "CPU KleidiAI SDOT (Cortex-X1 + 3x A78) for autoregressive LLM decode (memory-bandwidth bound)".into(),
+        npu_workloads_implemented: vec![
+            "INT8 conv3x3(Sobel X/Y) + relu + maxpool2x2 sobre el frame SHM via NNAPI (deteccion de estructura HUD/dialogo)".into(),
+            "Muestreo de paleta dominante y delta L1 frame-a-frame en CPU (barato, no merece offload)".into(),
+        ],
+        npu_workloads_possible: vec![
+            "MobileNetV3/SSD/YOLO INT8 via NNAPI: requiere un modelo cuantizado por tensor + NMS en CPU (NO implementado; falta el .tflite/.int8)".into(),
+            "NPU para el LLM: NO. NNAPI no soporta atencion ni formas dinamicas y llama.cpp no tiene backend Exynos".into(),
+        ],
+        npu_workloads_impossible: vec![
+            "LLM autoregresivo (prefill/decode) en el NPU del Exynos 2100: sin ops de atencion en NNAPI y sin backend NPU en llama.cpp".into(),
+            "Vulkan/Mali-G78 para el LLM: medido 2x mas lento en decode que la CPU en el Galaxy S21 (Exynos 2100)".into(),
         ],
     };
 
@@ -214,5 +205,12 @@ pub fn analyze_vla_frame_and_accel() -> NpuCvReport {
         dominant_colors_hex: dominant,
         cv_latency_ms: (t0.elapsed().as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
         hardware: hw,
+        vision_backend: edge_exec.backend.clone(),
+        vision_executed_on_hardware: edge_exec.executed_on_hardware,
+        vision_fallback_reason: edge_exec.fallback_reason.clone(),
+        vision_latency_ms: edge_exec.latency_ms,
+        edge_energy_model: "int8 conv3x3-sobel -> relu -> maxpool2x2 (NHWC)".into(),
+        nnapi_device_count: edge_exec.nnapi_device_count,
+        nnapi_devices: edge_exec.nnapi_devices.clone(),
     }
 }

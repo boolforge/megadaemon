@@ -6,6 +6,7 @@
 //! (`tests/audit_v13.rs`) puede ejercitar el parser, el fundamento y el
 //! cliente HTTP del agente local.
 
+pub mod accelerator_policy;
 pub mod bindiff;
 pub mod binwalk_die;
 pub mod cfg_lifter;
@@ -22,6 +23,7 @@ pub mod kaitai_imhex;
 pub mod mcp_server;
 pub mod npu_bridge;
 pub mod npu_cv;
+pub mod npu_nnapi;
 pub mod pattern;
 pub mod pointers;
 pub mod power_policy;

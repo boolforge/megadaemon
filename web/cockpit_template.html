@@ -1653,7 +1653,17 @@ async function refreshHardware() {
     dot.className = "brand-dot" + (b.minimax_configured || b.brain_active ? "" : " degraded");
 
     const hdrNpu = document.getElementById("hdrNpu");
-    if (hdrNpu) hdrNpu.textContent = b.npu_vertex10 ? "NPU LIVE" : "NPU N/A";
+    // v13.2: no se anuncia "NPU LIVE" por que exista /dev/vertex10: se
+    // anuncia el backend que REALMENTE ejecutó el análisis de visión.
+    if (hdrNpu) {
+      const vb = b.npu_vision_backend || "";
+      if (vb.indexOf("accelerator") >= 0) hdrNpu.textContent = "NPU ACCEL";
+      else if (vb.indexOf("gpu") >= 0) hdrNpu.textContent = "GPU NNAPI";
+      else if (vb.indexOf("cpu") >= 0) hdrNpu.textContent = "CPU FALLBACK";
+      else hdrNpu.textContent = "NPU N/A";
+      hdrNpu.title = "Backend real de visión: " + (vb || "desconocido") +
+                     " | offload NPU implementado: " + (b.npu_offload_implemented ? "si" : "no");
+    }
     const hdrTemp = document.getElementById("hdrTemp");
     if (hdrTemp) hdrTemp.textContent = Math.round(b.cpu_temp_c || 0) + "C";
 
