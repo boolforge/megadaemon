@@ -6,6 +6,7 @@
 | [`AUDIT_V13_1.md`](AUDIT_V13_1.md) | Auditoría adversarial del repo v13.0/v13.1: 31 hallazgos con evidencia ejecutable + addendum v13.2 con los 6 nuevos. |
 | [`AUDIT_V13_2.md`](AUDIT_V13_2.md) | **Auditoría adversarial v13.2**: 16 hallazgos de hardware/servidor/seguridad (HW-01…HW-16) + 17 del harness SEERE (S01…S14b), con test antes/después. |
 | [`LLM_SWITCH_PLAN.md`](LLM_SWITCH_PLAN.md) | Plan de cambio de LLM con datos: 4 modelos medidos, jerarquía de palancas, 5 fases, umbrales, riesgos y rollback. |
+| [`DEVICE_DEPLOY.md`](DEVICE_DEPLOY.md) | **Despliegue real en el dispositivo** (Galaxy S21 Ultra / Exynos 2100): inventario, megadaemon como demonio, API key remota verificada, deduplicación de los tres entornos, subida a Drive y estado de cada fase. |
 | [`SEERE_V11.md`](SEERE_V11.md) | Harness SEERE: los 24 defectos de la v10, el diseño de la v11 (gramáticas tipadas, anti-eco, huella fuera del prompt) y los benchmarks E2E con modelos reales. |
 
 ## Código de referencia y evidencia
