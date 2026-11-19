@@ -28,6 +28,7 @@ Variables de entorno opcionales:
     MEGADAEMON_COCKPIT_PORT  puerto real del cockpit (por defecto 9090)
     MEGADAEMON_BRIDGE_PORTS  puertos alias (por defecto 3000,3030,8090,8080)
 """
+import http.client
 import http.server
 import os
 import re
@@ -115,6 +116,53 @@ KEY = read_key()
 COCKPIT_TOKEN = read_cockpit_token()
 TARGET = "http://127.0.0.1:%d" % read_port()
 PORTS = read_ports()
+
+# --- IP de origen propia para hablar con el cockpit ------------------------
+# El daemon aplica un rate limit de 60 req/min POR IP.  En el movil TODO el
+# trafico sale por 127.0.0.1: el navegador, el tunel de Cloudflare y las
+# llamadas de los agentes.  Con un cubo compartido, una recarga de la UI (20+
+# peticiones de golpe) deja sin presupuesto al tunel: los agentes empiezan a
+# recibir 429 y la instancia "parece caida".
+# Aqui el puente sale con IP de origen 127.0.0.2 -> la UI de Chrome tiene su
+# propio cubo y el tunel conserva el suyo (127.0.0.1).
+SRC_IP = os.environ.get("MEGADAEMON_BRIDGE_SRC_IP", "127.0.0.2").strip()
+TARGET_HOST = "127.0.0.1"
+TARGET_PORT = read_port()
+
+
+class _BoundHTTPConnection(http.client.HTTPConnection):
+    """HTTPConnection que fija la IP de origen (bind antes de connect)."""
+
+    def __init__(self, host, port, src_ip=None, timeout=60):
+        http.client.HTTPConnection.__init__(self, host, port, timeout=timeout)
+        self.src_ip = src_ip
+
+    def connect(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(self.timeout)
+        if self.src_ip:
+            try:
+                s.bind((self.src_ip, 0))
+            except OSError:
+                s.close()
+                self.src_ip = None
+        s.connect((self.host, self.port))
+        self.sock = s
+
+
+def _forward(method, path, headers, body):
+    """Reenvia la peticion al cockpit real: (codigo, content-type, cuerpo)."""
+    conn = _BoundHTTPConnection(TARGET_HOST, TARGET_PORT, SRC_IP, timeout=60)
+    try:
+        conn.request(method, path, body=body, headers=headers)
+        resp = conn.getresponse()
+        data = resp.read()
+        return resp.status, resp.getheader("Content-Type", "application/octet-stream"), data
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 HOP_BY_HOP = ("host", "content-length", "connection", "accept-encoding",
               "keep-alive", "proxy-authenticate", "proxy-authorization",
               "te", "trailers", "transfer-encoding", "upgrade")
@@ -144,24 +192,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _proxy(self):
         n = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(n) if n else None
-        req = urllib.request.Request(TARGET + self.path, data=body,
-                                     method=self.command)
+        fwd = {}
         for k, v in self.headers.items():
             if k.lower() in HOP_BY_HOP:
                 continue
-            req.add_header(k, v)
+            fwd[k] = v
         # cabeceras que el navegador no puede enviar
         if KEY and not self.headers.get("X-API-Key"):
-            req.add_header("X-API-Key", KEY)
+            fwd["X-API-Key"] = KEY
         if COCKPIT_TOKEN and not self.headers.get("X-Seere-Auth-Token") and not self.headers.get("Origin"):
-            req.add_header("X-Seere-Auth-Token", COCKPIT_TOKEN)
+            fwd["X-Seere-Auth-Token"] = COCKPIT_TOKEN
         try:
-            r = urllib.request.urlopen(req, timeout=60)
-            data, code = r.read(), r.status
-            ct = r.headers.get("Content-Type", "application/octet-stream")
-        except urllib.error.HTTPError as e:
-            data, code = e.read(), e.code
-            ct = e.headers.get("Content-Type", "application/json")
+            code, ct, data = _forward(self.command, self.path, fwd, body)
         except Exception as e:
             data = ('{"error":"bridge","hint":"%s"}' % e).encode()
             code, ct = 502, "application/json"
