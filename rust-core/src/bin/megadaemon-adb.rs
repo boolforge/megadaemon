@@ -261,7 +261,9 @@ pub fn diagnose(adb_path: Option<String>, repo: &str, port: u16) -> Diagnosis {
     let mut devices = Vec::new();
     let mut health_code = None;
     if adb_found {
-        devices = devices(&adb_path);
+        // `devices` (el Vec local) sombrea a la fn `devices()` de este binario:
+        // hay que cualificar la ruta para llamar a la función.
+        devices = crate::devices(&adb_path);
         if let Some(d) = devices.iter().find(|d| d.state == "device") {
             let (ok, out) = shell(
                 &adb_path,
