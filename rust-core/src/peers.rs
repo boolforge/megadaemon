@@ -150,6 +150,14 @@ pub fn host_port(url: &str) -> Option<(String, u16)> {
 /// "alcanzable" a un host que no sirve nada. Con HTTP se distingue de
 /// verdad "contesta" de "acepta y se queda colgado".
 pub fn probe_peer(url: &str, timeout_ms: u64) -> Option<String> {
+    probe_peer_with_key(url, timeout_ms, None)
+}
+
+/// Sondeo con clave: si la instancia exige API key (modo forzado), un
+/// GET /health sin cabecera vuelve 401 y el par pareceria caido aunque
+/// este muerto de vida. La clave que se usa es la del propio par (la
+/// local, si el par es uno mismo).
+pub fn probe_peer_with_key(url: &str, timeout_ms: u64, key: Option<&str>) -> Option<String> {
     let (host, port) = host_port(url)?;
     let scheme = if url.trim_start().starts_with("https://") {
         "https"
@@ -172,7 +180,11 @@ pub fn probe_peer(url: &str, timeout_ms: u64) -> Option<String> {
         "https" => {
             // HTTPS exige cliente TLS: el nucleo no arrastra uno para esto,
             // asi que se delega en ureq con rustls.
-            let resp = agent.get(&health).call();
+            let mut req = agent.get(&health);
+            if let Some(k) = key {
+                req = req.header("X-API-Key", k);
+            }
+            let resp = req.call();
             match resp {
                 Ok(r) if r.status() == 200 => Some(iso8601(epoch_secs())),
                 _ => None,
@@ -183,10 +195,14 @@ pub fn probe_peer(url: &str, timeout_ms: u64) -> Option<String> {
             // ureq, para no gastar un TLS handshake en cada par.
             let addr = (host.as_str(), port).to_socket_addrs().ok()?.next()?;
             let mut s = TcpStream::connect_timeout(&addr, Duration::from_millis(timeout_ms.max(500))).ok()?;
-            let req = format!(
-                "GET /health HTTP/1.1\r\nHost: {}\r\nUser-Agent: megadaemon-peers\r\nConnection: close\r\n\r\n",
+            let mut req = format!(
+                "GET /health HTTP/1.1\r\nHost: {}\r\nUser-Agent: megadaemon-peers\r\nConnection: close\r\n",
                 host
             );
+            if let Some(k) = key {
+                req.push_str(&format!("X-API-Key: {}\r\n", k));
+            }
+            req.push_str("\r\n");
             use std::io::Write;
             s.write_all(req.as_bytes()).ok()?;
             s.set_read_timeout(Some(Duration::from_millis(timeout_ms.max(800))))
@@ -304,7 +320,12 @@ pub fn peers_snapshot() -> Value {
     let mut reachable = serde_json::Map::new();
     let mut list: Vec<Peer> = Vec::new();
     for mut p in peers {
-        let ok = probe_peer(&p.url, 1200).is_some();
+        let key = if p.api_key.is_empty() {
+            None
+        } else {
+            Some(p.api_key.as_str())
+        };
+        let ok = probe_peer_with_key(&p.url, 1500, key).is_some();
         if ok {
             p.last_seen = iso8601(epoch_secs());
         }
