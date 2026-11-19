@@ -68,9 +68,44 @@ Robustez ante bloqueos (léelo, no te lo saltes):
     se regenera al reiniciar el móvil y la URL puede cambiar.
 
 ═══════════════════════════════════════════════════════════════════
+1b. SEGUNDO CANAL: EL MOTOR DE APKs/DEX NO ESTÁ EN tools/list (HTTP)
+═══════════════════════════════════════════════════════════════════
+El catálogo MCP (`tools/list`) NO incluye el motor de APKs y decompilación
+DEX. Ese motor se llama por HTTP POST, con las mismas dos cabeceras:
+
+    POST <BASE>/api/tool/<nombre>
+    X-API-Key: <API_KEY>
+    X-Seere-Auth-Token: <COCKPIT_TOKEN>
+    Content-Type: application/json
+    {"action":"...","path":"...","limit":50}
+
+Verificado EN VIVO contra la instancia:
+  · apk_inventory  {"action":"list"}  → inventario REAL de las apps instaladas:
+      package, apk_path, dex_count, fingerprint, native_libs, permisos,
+      activities, receivers, services, providers. (también "analyze" {path},
+      "dump" {dest_dir}, "drift")
+  · dex_decompile  {"action":"decompile"|"strings"|"obfuscation",
+      "path":<ruta ABSOLUTA de un .dex o de un APK>} → clases, métodos, POOL DE
+      CONSTANTES y mapa de desofuscación.
+  · capabilities   {"action":"verify"|"manifest"|"summary"}
+  · task_queue     {"action":"submit"|"run"|"stats"|"cancel"|"retry"|"export"|"journal"}
+  · alerts         {"action":"check"|"status"|"ack"|"prune"}
+  · agent          {"action":"plan"|"run"}
+  (No existen: `mesh` ni `signing_vault` en este binario.)
+
+► ESTO ES LO QUE HACE EL TRABAJO PESADO POR TI: `dex_decompile` extrae del
+  APK las CADENAS DE APIs Y CREDENCIALES EMBEBIDAS (api.anthropic.com,
+  api.openai.com, generativelanguage.googleapis.com, api.deepseek.com,
+  api.moonshot.cn/kimi, api.minimax.chat, y formas sk-…, ghp_…, "Bearer ",
+  x-api-key) y el mapa de desofuscación. Si subes el APK CRUDO, tú no
+  implementas el detector de strings ni el de ofuscación: ya está hecho.
+  ⇒ USA LOS DOS CANALES: MCP para el dispositivo, HTTP para el motor RE.
+
+═══════════════════════════════════════════════════════════════════
 2. PRIMERO: SELF-CHECK (4 llamadas, en este orden)
 ═══════════════════════════════════════════════════════════════════
-  1) tools/list                 → deben salir 27 tools (catálogo real, no supuesto)
+  1) tools/list                 → deben salir 45 tools (catálogo real, no supuesto;
+                                  el motor de APKs/DEX va por el SEGUNDO CANAL, §1b)
   2) system_overview            → RAM, Android, SELinux, Magisk, nº de apps
   3) app_control {action:list}  → todos los paquetes instalados
   4) fs_write {path:"/data/local/tmp/megadaemon/incoming/agent-android-re-01/PROBE.md",
@@ -250,7 +285,7 @@ Lo que NO se te da, y por qué:
 
 | Comprobación | Resultado |
 |---|---|
-| `POST /mcp` + `tools/list` | HTTP 200 · **27 tools** |
+| `POST /mcp` + `tools/list` | HTTP 200 · **45 tools** |
 | `tools/call fs_write` → `incoming/<id>/PROBE_MCP.md` | ✅ escrito y releído (round-trip) |
 | `tools/call root_exec` → mkdir + fichero en `incoming/<id>/` | ✅ |
 | `/health` por el túnel | 200 `{"status":"ok",...}` |
