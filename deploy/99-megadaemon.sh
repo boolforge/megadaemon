@@ -263,6 +263,21 @@ tunnel_is_dead() {
     esac
 }
 
+# Conexiones activas con el edge segun las metricas de cloudflared.  Es la
+# SENAL FIABLE: el proceso puede seguir vivo sin ninguna conexion (eso es
+# exactamente lo que pasaba y devolvia 530 a toda la flota).  El puerto de
+# metricas lo anuncia cloudflared en su propio log.
+tunnel_ha_connections() {
+    t_mlog=$1
+    t_mport=$(grep -ao "Starting metrics server on 127.0.0.1:[0-9]*" "$t_mlog" 2>/dev/null | tail -1 | cut -d: -f2)
+    [ -n "$t_mport" ] || return 1
+    [ -x "$TUNNEL_CURL" ] || return 1
+    t_mval=$("$TUNNEL_CURL" -s -m 6 "http://127.0.0.1:$t_mport/metrics" 2>/dev/null | awk "/^cloudflared_tunnel_ha_connections /{print \$2}")
+    [ -n "$t_mval" ] || return 1
+    echo "$t_mval"
+    return 0
+}
+
 # ensure_tunnel <puerto_origen> <log> <fichero_url> <etiqueta> <dedup>
 tunnel_strikes=0
 
@@ -275,7 +290,7 @@ ensure_tunnel() {
     for p in $t_pids; do t_n=$((t_n + 1)); done
 
     if [ "$t_n" -eq 0 ]; then
-        log "tunel $t_tag caido: arrancando cloudflared (http2) -> 127.0.0.1:$t_port"
+        log "tunel $t_tag caido: arrancando cloudflared (quic) -> 127.0.0.1:$t_port"
         setsid nohup "$CLOUDFLARED" tunnel --no-autoupdate \
             --url "http://127.0.0.1:$t_port" >>"$t_log" 2>&1 </dev/null &
         sleep 6
@@ -290,7 +305,14 @@ ensure_tunnel() {
     fi
 
     # La URL vigente: del log si acaba de arrancar, si no del fichero.
-    t_new=$(tunnel_url_any "$t_log" "$t_fallback")
+    # Tras arrancar se espera a que cloudflared la publique (tarda ~10 s).
+    t_wait=0
+    while [ "$t_wait" -lt 6 ]; do
+        t_new=$(tunnel_url_any "$t_log" "$t_fallback")
+        [ -n "$t_new" ] && break
+        sleep 4
+        t_wait=$((t_wait + 1))
+    done
     if [ -n "$t_new" ] && [ "$t_new" != "$t_url" ]; then
         printf '%s\n' "$t_new" > "$t_urlfile" 2>/dev/null
         log "tunel $t_tag URL VIGENTE: $t_new  (guardada en $t_urlfile)"
@@ -303,7 +325,11 @@ ensure_tunnel() {
     # túnel cambia la URL publica (y deja a la flota con un 530).
     if [ "$t_n" -gt 0 ]; then
         t_code=$(tunnel_status "$t_url")
-        if tunnel_is_dead "$t_code"; then
+        t_ha=$(tunnel_ha_connections "$t_log")
+        if [ -n "$t_ha" ] && [ "$t_ha" = "0" ]; then
+            t_code="0-edge"
+        fi
+        if tunnel_is_dead "$t_code" || [ "$t_code" = "0-edge" ]; then
             tunnel_strikes=$((tunnel_strikes + 1))
             log "tunel $t_tag sin conexion (HTTP $t_code) [$tunnel_strikes/2]"
             if [ "$tunnel_strikes" -ge 2 ]; then
