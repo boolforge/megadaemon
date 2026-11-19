@@ -175,7 +175,8 @@ ensure_web_bridge() {
             log "el daemon sirve TODOS los puertos alias: no hace falta puente web (ahorra RAM)"
             return 0
         fi
-        export MEGADAEMON_BRIDGE_PORTS=$(echo "$free" | tr -d ' ')
+        # La lista del puente va separada por COMAS (ver read_ports()).
+        export MEGADAEMON_BRIDGE_PORTS=$(echo "$free" | tr -s ' ' ',')
         log "el daemon ya escucha los puertos alias: el puente solo cogera $MEGADAEMON_BRIDGE_PORTS"
     fi
     py=""
@@ -249,14 +250,20 @@ tunnel_status() {
     echo "$code"
 }
 
+# Un tunel CAIDO devuelve 530.  Un 502/503/504 significa otra cosa: el
+# tunel esta bien pero el ORIGEN (el daemon) no responde -> no hay que
+# tocar el tunel (el supervisor ya relanza el daemon).  Reiniciar el tunel
+# por eso cambia la URL publica y deja a toda la flota con un 530.
 tunnel_is_dead() {
     case "$1" in
-        530|502|503|504) return 0 ;;
+        530|521|522) return 0 ;;
         *) return 1 ;;
     esac
 }
 
 # ensure_tunnel <puerto_origen> <log> <fichero_url> <etiqueta> <dedup>
+tunnel_strikes=0
+
 ensure_tunnel() {
     t_port=$1; t_log=$2; t_urlfile=$3; t_tag=$4; t_dedup=${5:-1}; t_fallback=${6:-}
     [ -x "$CLOUDFLARED" ] || return 0
@@ -288,21 +295,32 @@ ensure_tunnel() {
     fi
     t_url=$(cat "$t_urlfile" 2>/dev/null)
 
-    # Vivo el proceso pero túnel caido (530 explicito): se reinicia.
+    # Vivo el proceso pero túnel caido (530 explicito): se reinicia, pero
+    # solo tras DOS comprobaciones seguidas: con la red del movil
+    # inestable, un unico fallo puede ser un falso positivo y reiniciar el
+    # túnel cambia la URL publica (y deja a la flota con un 530).
     if [ "$t_n" -gt 0 ]; then
         t_code=$(tunnel_status "$t_url")
         if tunnel_is_dead "$t_code"; then
-            log "tunel $t_tag caido (HTTP $t_code): reiniciando"
-            for p in $t_pids; do kill "$p" 2>/dev/null; done
-            sleep 2
-            setsid nohup "$CLOUDFLARED" tunnel --no-autoupdate --protocol http2 \
-                --url "http://127.0.0.1:$t_port" >>"$t_log" 2>&1 </dev/null &
-            sleep 8
-            t_new=$(tunnel_url_any "$t_log" "$t_fallback")
-            if [ -n "$t_new" ]; then
-                printf '%s\n' "$t_new" > "$t_urlfile" 2>/dev/null
-                log "tunel $t_tag URL VIGENTE: $t_new  (guardada en $t_urlfile)"
+            tunnel_strikes=$((tunnel_strikes + 1))
+            log "tunel $t_tag sin conexion (HTTP $t_code) [$tunnel_strikes/2]"
+            if [ "$tunnel_strikes" -ge 2 ]; then
+                tunnel_strikes=0
+                log "tunel $t_tag caido de verdad: reiniciando"
+                for p in $t_pids; do kill "$p" 2>/dev/null; done
+                sleep 2
+                setsid nohup "$CLOUDFLARED" tunnel --no-autoupdate --protocol http2 \
+                    --url "http://127.0.0.1:$t_port" >>"$t_log" 2>&1 </dev/null &
+                sleep 8
+                t_new=$(tunnel_url_any "$t_log" "$t_fallback")
+                if [ -n "$t_new" ]; then
+                    printf '%s\n' "$t_new" > "$t_urlfile" 2>/dev/null
+                    log "tunel $t_tag URL VIGENTE: $t_new  (guardada en $t_urlfile)"
+                fi
             fi
+        else
+            [ "$tunnel_strikes" -gt 0 ] && log "tunel $t_tag recuperado (HTTP $t_code)"
+            tunnel_strikes=0
         fi
     fi
 }
