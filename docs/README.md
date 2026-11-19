@@ -14,7 +14,7 @@
 cd rust-core
 export PATH="$HOME/.cargo/bin:$PATH"
 cargo build --release                    # 0 errores, 0 warnings
-cargo test                               # 75 pruebas (21 v13.1 + 16 HW + 20 SEERE + 9 NNAPI + 9 unit)
+cargo test                               # 86 pruebas (21 v13.1 + 16 HW + 31 SEERE + 9 NNAPI + 9 unit)
 ./target/release/megadaemon-core seere-selftest   # SELFTEST_V11_RUST_OK
 ./target/release/megadaemon-core npu-cv           # informe de visión con el backend real
 ./target/release/megadaemon-core npu-probe        # telemetría de hardware + política de aceleradores

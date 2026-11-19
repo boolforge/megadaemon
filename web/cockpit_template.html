@@ -783,6 +783,15 @@ function escHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
+// v13.2: el botón TEST lleva el id en un atributo `data-` y se resuelve por
+// delegación, NO con un `onclick` inline: interpolar el id dentro de una
+// cadena JS en un atributo HTML es un sink de inyección (el parser HTML
+// decodifica las entidades ANTES de que el JS se evalúe).
+document.addEventListener("click", function (e) {
+  const b = e.target && e.target.closest ? e.target.closest("[data-test-provider]") : null;
+  if (b) { testProviderById(b.getAttribute("data-test-provider")); }
+});
+
 // v13.2 (S08): el cockpit exige `X-Seere-Auth-Token` en los endpoints que
 // ejecutan o modifican estado.  El token lo inyecta el servidor en la propia
 // página (legible sólo same-origin: el CORS ya no es `*`).
@@ -867,14 +876,16 @@ async function loadProviders() {
       const statusBadge = p.ready
         ? '<span class="pill mint">READY</span>'
         : '<span class="pill amber">ADD KEY</span>';
-      const linkHtml = p.free_signup_url
-        ? '<a href="' + escHtml(p.free_signup_url) + '" target="_blank" style="color:var(--cyan);text-decoration:none;margin-right:8px;">GET KEY</a>'
+      // v13.2: sólo esquemas http/https (nada de javascript: ni data:).
+      const safeUrl = /^https?:\/\//i.test(String(p.free_signup_url || "")) ? p.free_signup_url : "";
+      const linkHtml = safeUrl
+        ? '<a href="' + escHtml(safeUrl) + '" target="_blank" rel="noopener noreferrer" style="color:var(--cyan);text-decoration:none;margin-right:8px;">GET KEY</a>'
         : "";
       tr.innerHTML =
         "<td>" + escHtml(p.id) + "</td>" +
         "<td>" + escHtml(p.model) + "</td>" +
         "<td>" + statusBadge + "</td>" +
-        '<td>' + linkHtml + '<button class="btn sm cyan" style="min-height:32px;padding:0 8px;" onclick="testProviderById(\'' + escHtml(p.id) + '\')">TEST</button></td>';
+        '<td>' + linkHtml + '<button class="btn sm cyan" style="min-height:32px;padding:0 8px;" data-test-provider="' + escHtml(p.id) + '">TEST</button></td>';
       tbody.appendChild(tr);
     });
 
