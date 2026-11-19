@@ -48,13 +48,24 @@ write_state() {
 write_url() {
     {
         echo "# MegaDaemon - cockpit (generado por 99-megadaemon.sh)"
-        echo "# ABRE EN EL MOVIL (Chrome) - cualquiera de estos 5 funciona:"
+        echo "# ABRE EN EL MOVIL (Chrome) - cualquiera de estos funciona:"
         for p in 80 3000 3030 8090 8080; do
-            echo "UI=http://localhost:$p/"
+            hp=$(printf '%04X' "$p")
+            # Solo los que de verdad estan escuchando (si no, el navegador
+            # da ERR_CONNECTION_REFUSED).
+            if grep -qiE ":$hp [0-9a-f]{8}:[0-9a-f]{4} 0A" /proc/net/tcp /proc/net/tcp6 2>/dev/null; then
+                echo "UI=http://localhost:$p/"
+            fi
         done
-        echo "HEALTH=http://localhost:3000/health"
+        echo "HEALTH=http://localhost:$PORT/health"
         echo "# Cockpit puro (solo loopback, EXIGE cabecera X-API-Key):"
         echo "RAW=http://127.0.0.1:$PORT/"
+        tun=$(cat "$WEB_TUNNEL_URL_FILE" 2>/dev/null)
+        if [ -n "$tun" ]; then
+            echo "# Tunel publico (URL EFIMERA: se regenera al reiniciar el tunel):"
+            echo "PUBLIC=$tun/"
+            echo "PUBLIC_HEALTH=$tun/health"
+        fi
     } > "$URL_FILE" 2>/dev/null
 }
 
@@ -132,6 +143,25 @@ alias_ports_listening() {
 # dispositivo, de modo que la UI carga igual en el móvil.
 BRIDGE="$PREFIX/web_bridge.py"
 
+# Puertos alias que el puente puede coger.  El daemon nuevo sirve 3000/3030/
+# 8090 (y 9090); el puente solo debe quedarse con los que el daemon NO
+# sirve (80 y 8080).  Menos puertos = menos hilos = menos RAM en el movil.
+BRIDGE_CANDIDATES="80 3000 3030 8090 8080"
+
+# Puertos alias que NADIE esta sirviendo todavia: son los que el puente debe
+# coger.  Si el daemon los sirve ya, se los cede (si no, EADDRINUSE y el
+# daemon nuevo se cae al arrancar).
+alias_ports_free() {
+    out=""
+    for p in $BRIDGE_CANDIDATES; do
+        hp=$(printf '%04X' "$p")
+        if ! grep -qiE ":$hp [0-9a-f]{8}:[0-9a-f]{4} 0A" /proc/net/tcp /proc/net/tcp6 2>/dev/null; then
+            out="$out $p"
+        fi
+    done
+    echo "$out"
+}
+
 ensure_web_bridge() {
     [ -f "$BRIDGE" ] || return 0
     if pgrep -f "web_bridge.py" > /dev/null 2>&1; then
@@ -140,8 +170,13 @@ ensure_web_bridge() {
     # El daemon ya sirve los alias (binario nuevo): el puente sobra y solo
     # provocaria un EADDRINUSE que tumba al daemon.
     if alias_ports_listening; then
-        log "el daemon ya escucha los puertos alias: no hace falta puente web"
-        return 0
+        free=$(alias_ports_free)
+        if [ -z "$free" ]; then
+            log "el daemon sirve TODOS los puertos alias: no hace falta puente web (ahorra RAM)"
+            return 0
+        fi
+        export MEGADAEMON_BRIDGE_PORTS=$(echo "$free" | tr -d ' ')
+        log "el daemon ya escucha los puertos alias: el puente solo cogera $MEGADAEMON_BRIDGE_PORTS"
     fi
     py=""
     for cand in /data/data/com.termux/files/usr/bin/python3 \
@@ -159,6 +194,117 @@ ensure_web_bridge() {
     setsid nohup sh -c "while true; do '$py' '$BRIDGE' >>'$PREFIX/bridge.log' 2>&1; sleep 5; done" >/dev/null 2>&1 </dev/null &
     log "puente web arrancado (con keeper): 3000/3030/8090/8080/80 -> 127.0.0.1:$PORT (python3: $py)"
     return 0
+}
+
+# --- túneles públicos (cloudflared) ---------------------------------------
+# La URL de un túnel rápido de trycloudflare es EFÍMERA: cambia en cada
+# arranque.  Si el móvil se queda sin túnel, TODOS los que tienen la URL
+# hardcodeada caen a 530.  Por eso:
+#   * el supervisor mantiene el túnel vivo (watchdog),
+#   * la URL vigente se escribe SIEMPRE en $PREFIX/tunnel.url (y en
+#     /sdcard/megadaemon.url), que es la fuente de verdad,
+#   * se fuerza --protocol http2: por UDP/QUIC este movil perdia la
+#     conexion con el edge ("failed to dial to edge with quic: timeout")
+#     y se quedaba sirviendo 530 sin que nadie se enterase.
+CLOUDFLARED=""
+for cand in /data/data/com.termux/files/usr/bin/cloudflared \
+            /data/data/com.agy/files/usr/bin/cloudflared; do
+    [ -x "$cand" ] && { CLOUDFLARED="$cand"; break; }
+done
+TUNNEL_CURL=""
+for cand in /data/data/com.termux/files/usr/bin/curl \
+            /data/data/com.agy/files/usr/bin/curl; do
+    [ -x "$cand" ] && { TUNNEL_CURL="$cand"; break; }
+done
+WEB_TUNNEL_LOG=$PREFIX/tunnel.log
+WEB_TUNNEL_URL_FILE=$PREFIX/tunnel.url
+MCP_TUNNEL_LOG=$PREFIX/mcp_tunnel.log
+MCP_TUNNEL_URL_FILE=$PREFIX/mcp_tunnel.url
+
+tunnel_url_from_log() {
+    grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' "$1" 2>/dev/null | tail -1
+}
+
+# URL del log principal y, si no aparece, del log de respaldo (el túnel
+# legacy lo escribe en el home de Termux, no en $PREFIX).
+tunnel_url_any() {
+    u=$(tunnel_url_from_log "$1")
+    [ -n "$u" ] || u=$(tunnel_url_from_log "$2")
+    echo "$u"
+}
+
+# El proceso puede estar vivo y el túnel CAÍDO (530): el proceso solo no
+# basta.  Se comprueba el túnel de verdad (hairpin desde el propio móvil).
+# MUY importante: en este móvil la red hacia Cloudflare es INESTABLE
+# (timeouts de DNS y de UDP).  Por eso SOLO se reinicia el túnel cuando la
+# respuesta es un error EXPLICITO de túnel (530/502/503/504): un timeout o
+# un DNS fallido NO se tocan (si no, cada micro-corte de red cambiaría la
+# URL y dejaría a toda la flota con un 530).
+tunnel_status() {
+    url=$1
+    [ -n "$url" ] || { echo "sin-url"; return; }
+    [ -x "$TUNNEL_CURL" ] || { echo "sin-curl"; return; }
+    code=$("$TUNNEL_CURL" -s -m 15 -o /dev/null -w '%{http_code}' "$url/health" 2>/dev/null)
+    [ -n "$code" ] || code="000"
+    echo "$code"
+}
+
+tunnel_is_dead() {
+    case "$1" in
+        530|502|503|504) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# ensure_tunnel <puerto_origen> <log> <fichero_url> <etiqueta> <dedup>
+ensure_tunnel() {
+    t_port=$1; t_log=$2; t_urlfile=$3; t_tag=$4; t_dedup=${5:-1}; t_fallback=${6:-}
+    [ -x "$CLOUDFLARED" ] || return 0
+    t_url=$(cat "$t_urlfile" 2>/dev/null)
+    t_pids=$(pgrep -f "cloudflared tunnel .*127.0.0.1:$t_port" 2>/dev/null)
+    t_n=0
+    for p in $t_pids; do t_n=$((t_n + 1)); done
+
+    if [ "$t_n" -eq 0 ]; then
+        log "tunel $t_tag caido: arrancando cloudflared (http2) -> 127.0.0.1:$t_port"
+        setsid nohup "$CLOUDFLARED" tunnel --no-autoupdate --protocol http2 \
+            --url "http://127.0.0.1:$t_port" >>"$t_log" 2>&1 </dev/null &
+        sleep 6
+    elif [ "$t_dedup" -eq 1 ] && [ "$t_n" -gt 1 ]; then
+        # Varias instancias para el MISMO origen: sobra una y cada una
+        # consume RAM en un movil que va justo.  Se queda la mas antigua.
+        keep=$(echo "$t_pids" | head -1)
+        for p in $t_pids; do
+            [ "$p" = "$keep" ] && continue
+            kill "$p" 2>/dev/null && log "tunel $t_tag: instance duplicada PID $p eliminada"
+        done
+    fi
+
+    # La URL vigente: del log si acaba de arrancar, si no del fichero.
+    t_new=$(tunnel_url_any "$t_log" "$t_fallback")
+    if [ -n "$t_new" ] && [ "$t_new" != "$t_url" ]; then
+        printf '%s\n' "$t_new" > "$t_urlfile" 2>/dev/null
+        log "tunel $t_tag URL VIGENTE: $t_new  (guardada en $t_urlfile)"
+    fi
+    t_url=$(cat "$t_urlfile" 2>/dev/null)
+
+    # Vivo el proceso pero túnel caido (530 explicito): se reinicia.
+    if [ "$t_n" -gt 0 ]; then
+        t_code=$(tunnel_status "$t_url")
+        if tunnel_is_dead "$t_code"; then
+            log "tunel $t_tag caido (HTTP $t_code): reiniciando"
+            for p in $t_pids; do kill "$p" 2>/dev/null; done
+            sleep 2
+            setsid nohup "$CLOUDFLARED" tunnel --no-autoupdate --protocol http2 \
+                --url "http://127.0.0.1:$t_port" >>"$t_log" 2>&1 </dev/null &
+            sleep 8
+            t_new=$(tunnel_url_any "$t_log" "$t_fallback")
+            if [ -n "$t_new" ]; then
+                printf '%s\n' "$t_new" > "$t_urlfile" 2>/dev/null
+                log "tunel $t_tag URL VIGENTE: $t_new  (guardada en $t_urlfile)"
+            fi
+        fi
+    fi
 }
 
 # --- identidad de instancia ----------------------------------------------
@@ -244,6 +390,12 @@ try_update() {
 i=0
 last_update=0
 write_state "ARRANCANDO: supervisor activo, puerto $PORT"
+# Los túneles se levantan ANTES de arrancar el daemon: la URL pública (y la
+# del MCP legacy) no dependen de que el cockpit esté listo, y así el túnel
+# ya está cuando el daemon tarda unos segundos.
+ensure_tunnel "$PORT" "$WEB_TUNNEL_LOG" "$WEB_TUNNEL_URL_FILE" "web" 1
+ensure_tunnel 8765 "$MCP_TUNNEL_LOG" "$MCP_TUNNEL_URL_FILE" "mcp-legacy" 0 \
+    /data/data/com.termux/files/home/android-mcp/cloudflared.log
 while true; do
     rotate
     if ! pgrep -f "megadaemon-core cockpit" > /dev/null 2>&1; then
@@ -262,6 +414,10 @@ while true; do
     else
         i=0
         ensure_web_bridge
+        ensure_tunnel "$PORT" "$WEB_TUNNEL_LOG" "$WEB_TUNNEL_URL_FILE" "web" 1
+        ensure_tunnel 8765 "$MCP_TUNNEL_LOG" "$MCP_TUNNEL_URL_FILE" "mcp-legacy" 0 \
+    /data/data/com.termux/files/home/android-mcp/cloudflared.log
+        write_url
         try_update
         # Vigilancia cada 5 s en vez de cada 60 s: si el daemon o el puente
         # mueren, se relanzan casi al instante (antes el usuario podia verse
