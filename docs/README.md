@@ -14,7 +14,7 @@
 cd rust-core
 export PATH="$HOME/.cargo/bin:$PATH"
 cargo build --release                    # 0 errores, 0 warnings
-cargo test                               # 86 pruebas (21 v13.1 + 16 HW + 31 SEERE + 9 NNAPI + 9 unit)
+cargo test                               # 93 pruebas (21 v13.1 + 16 HW + 31 SEERE + 7 AUTH + 9 NNAPI + 9 unit)
 ./target/release/megadaemon-core seere-selftest   # SELFTEST_V11_RUST_OK
 ./target/release/megadaemon-core npu-cv           # informe de visión con el backend real
 ./target/release/megadaemon-core npu-probe        # telemetría de hardware + política de aceleradores
@@ -23,7 +23,8 @@ cargo test                               # 86 pruebas (21 v13.1 + 16 HW + 31 SEE
 
 ## Seguridad por defecto (v13.2)
 
-* El cockpit **exige token** (`X-Seere-Auth-Token`) en todo endpoint que ejecuta o muta estado.
+* El cockpit es **fail-closed**: exige token (`X-Seere-Auth-Token`) en **todo** `/api/*`,
+  sea GET o POST.  La única superficie pública es la página HTML (lleva el token embebido).
 * El token vive en `<STATE_DIR>/cockpit_token` (0600) o en `SEERE_AUTH_TOKEN`.
 * El CORS **no** es abierto: se refleja el `Origin` sólo si coincide con el `Host` o está en
   `MEGADAEMON_ALLOWED_ORIGINS`.

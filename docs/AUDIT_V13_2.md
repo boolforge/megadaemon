@@ -15,9 +15,10 @@
 | `tests/audit_v13.rs` (v13.1) | 21 | ✅ 21/21 |
 | `tests/audit_scout_hw.rs` (v13.2, hardware/servidor) | 16 | ✅ 16/16 |
 | `tests/audit_scout_seere.rs` (v13.2, harness SEERE) | 31 | ✅ 31/31 |
+| `tests/audit_scout_auth.rs` (v13.2.4, fail-closed del cockpit) | 7 | ✅ 7/7 |
 | `tests/npu_nnapi.rs` (v13.2, FFI NNAPI) | 9 | ✅ 9/9 |
 | `src/util_text.rs` (unit) | 9 | ✅ 9/9 |
-| **TOTAL** | **86** | **✅ 86/86** |
+| **TOTAL** | **93** | **✅ 93/93** |
 
 * `cargo build --release` → **0 errores, 0 warnings**.
 * `megadaemon-core seere-selftest` → `SELFTEST_V11_RUST_OK`.
@@ -111,6 +112,44 @@ salvo que alguien reintroduzca un bug.
 
 ---
 
+## 3-bis. Tercera ronda (v13.2.3 / v13.2.4): la capa de autenticación no era *fail-closed*
+
+Una tercera pasada manual sobre la capa HTTP del cockpit encontró un agujero
+**del mismo tipo** que S08 pero por el otro lado: `requires_auth()` protegía
+**sólo los POST**, mientras que la rama `GET` servía endpoints con efecto de
+estado o con datos sensibles.
+
+| ID | Sev | Endpoint | Defecto | Arreglo | Test |
+|---|---|---|---|---|---|
+| **AUTH-01** | **ALTA** | `GET /api/vision_start` | Arrancaba el worker de **visión continua** (un hilo permanente que quema CPU en el dispositivo) **sin token** | Fail-closed: todo `/api/*` exige token | `auth01` |
+| **AUTH-02** | **ALTA** | `GET /api/memory_freeze` | Congelaba/escribía ficheros **sin token** | Ídem | `auth02` |
+| **AUTH-03** | MEDIA | `GET /api/providers` | Volcaba el catálogo de proveedores (y la configuración de claves) **sin token** | Ídem | `auth03` |
+| **AUTH-04** | — | `POST /api/chat` | *Control*: el POST ya exigía token (no debe romperse) | — | `auth04` |
+| **AUTH-05** | — | con token | *Control*: vision_start/stop/status siguen funcionando con token | — | `auth05` |
+| **AUTH-06** | **ALTA** | 15 endpoints `/api/*` | *Fail-closed*: **ningún** endpoint respondía sin token (15/15 respondían 200) | Ídem | `auth06` |
+| **AUTH-07** | — | `GET /` | *Control*: la página HTML sigue pública e inyecta el token (si no, la UI no podría ni hacer fetch) | — | `auth07` |
+| **UI-01** | MEDIA | `web/cockpit_template.html` | El botón TEST interpolaba el id del proveedor dentro de un `onclick` inline: el parser HTML **decodifica las entidades antes de evaluar el JS**, así que un id con comillas escapaba del atributo | El id va en `data-test-provider` y se resuelve por delegación (sin `eval` de JS) | validación en Chromium headless |
+| **UI-02** | MEDIA-BAJA | `web/cockpit_template.html` | El enlace "GET KEY" aceptaba cualquier esquema de URL (`javascript:`, `data:`) | Sólo `http(s)://` | ídem |
+
+**Por qué importa**: el CORS restringido cerraba el vector "cualquier página web
+del móvil", pero el cockpit **también escucha en la LAN**: cualquier proceso del
+dispositivo (o una app sin permisos) puede llamar a `127.0.0.1:<puerto>`. El
+modelo correcto es **fail-closed**: la única superficie pública es la página
+HTML, que lleva el token embebido en `window.MEGADAEMON_TOKEN` (y sin CORS
+abierto nadie externo puede leerla).
+
+Además, en esta ronda:
+* `state_dir()` es configurable con `MEGADAEMON_STATE_DIR` (el cockpit escribía
+  **siempre** en `/data/user/0/com.agy/files/megadaemon/state`, impracticable
+  fuera de Android y en CI);
+* el token se materializa **al arrancar** (antes era perezoso: el fichero
+  `cockpit_token` no existía hasta la primera petición);
+* el mensaje 413 decía `payload_over_100mb` cuando el límite real es 8 MB
+  (**la telemetría también es un contrato**).
+
+
+---
+
 ## 3. Cambios de API (v13.2)
 
 | Endpoint | Cambio |
@@ -132,7 +171,7 @@ Todos los endpoints que ejecutan o mutan estado exigen `X-Seere-Auth-Token`.
 cd rust-core
 export PATH="$HOME/.cargo/bin:$PATH"
 cargo build --release                 # 0 errores, 0 warnings
-cargo test                            # 86/86
+cargo test                            # 93/93
 ./target/release/megadaemon-core seere-selftest   # SELFTEST_V11_RUST_OK
 
 # FFI NNAPI real contra una implementación ABI independiente en C:
