@@ -11,6 +11,7 @@ pub mod adb_client;
 pub mod adb_tool;
 pub mod agent_core;
 pub mod agent_loop;
+pub mod persistent_shell;
 pub mod agent_voice;
 pub mod alerts;
 pub mod android;
