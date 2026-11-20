@@ -83,6 +83,22 @@ confunde "no existe" con "buffer equivocado".
 | `0x40805608` | `_IOW('V',8,128)` | 8 | 128 | **128** | **existe · tamaño correcto** |
 | `0x4008560a` | `_IOW('V',10,8)` | 10 | 8 | **8** | **existe · tamaño correcto** |
 
+**Tabla machine-readable para el módulo DEX** (`live` = existe en el driver vivo; `driver_size` = tamaño que el driver declara al sondear sin argumento):
+
+```json
+[
+ {"code":"0x00005604","macro":"_IO('V',4,0)","nr":4,"size":0,  "live":false,"live_errno":"EINVAL(22)"},
+ {"code":"0x00005605","macro":"_IO('V',5,0)","nr":5,"size":0,  "live":false,"live_errno":"EINVAL(22)"},
+ {"code":"0x40205600","macro":"_IOW('V',0,32)", "nr":0, "size":32, "live":true, "driver_size":32},
+ {"code":"0x40105601","macro":"_IOW('V',1,16)", "nr":1, "size":16, "live":true, "driver_size":16},
+ {"code":"0x40105602","macro":"_IOW('V',2,16)", "nr":2, "size":16, "live":true, "driver_size":16},
+ {"code":"0x40805606","macro":"_IOW('V',6,128)","nr":6, "size":128,"live":true, "driver_size":128},
+ {"code":"0x40805607","macro":"_IOW('V',7,128)","nr":7, "size":128,"live":true, "driver_size":128},
+ {"code":"0x40805608","macro":"_IOW('V',8,128)","nr":8, "size":128,"live":true, "driver_size":128},
+ {"code":"0x4008560a","macro":"_IOW('V',10,8)", "nr":10,"size":8,  "live":true, "driver_size":8}
+]
+```
+
 ⇒ **Los 7 códigos `_IOW` de la tabla extraída del volcado son CORRECTOS contra el driver vivo**,
 y el campo `size` de cada uno **coincide exactamente** con el tamaño que el driver declara esperar
 ⇒ el `size` **no es advisory**: es el tamaño real de la struct que el driver copia.
@@ -617,3 +633,42 @@ va por una imagen de sistema (o `remount`), no escribiendo en vivo.
   están en el móvil (`/data/local/tmp/swift/classes.dex` 9.273.900 B / 50.772 cadenas).
   El agente DEX ya arregló el parser DEX (`VALUE_NULL`/`VALUE_BOOLEAN`) ⇒ su CLI
   `megadaemon-core dex` sirve de punto de partida.
+
+### 10.4 El consumidor en runtime (RESUELTO): `com.samsung.android.feature.SemCscFeature`
+
+El magic `2f2729b7` no aparece en el firmware ⇒ **el decodificador OMC tampoco**. Where está:
+**dentro del framework base**, no en `services.jar`:
+
+| Dato | Valor (medido) |
+|---|---|
+| Fichero | **`/system/framework/framework.jar`** → **`classes5.dex`** (10.684.140 B, sha16 `19688a3b1dde2fe1`) |
+| Clase | **`Lcom/samsung/android/feature/SemCscFeature;`** (28 métodos) |
+| Plantilla de ruta | **`/cscfeature.xml`** (⇒ `<csc_dir>/cscfeature.xml`) |
+| Parser auxiliar | `Lcom/samsung/android/util/CustomizedTextParser;` (9 métodos, `getValue`/`search`/`searchList`/`update`) |
+
+**Métodos de `SemCscFeature` (API pública)**:
+`getInstance()` · `loadFeatureFile(...)` (×2) · `isXmlEncoded()` · `decode(...)` · `_decode(...)` ·
+`_decompressGzip(...)` · `needToSkipElement(...)` · `isElementWithCountryISO(...)` ·
+**`getBoolean(...)` (×4)** · `getInt`/`getInteger`/`getString` (×2 cada uno).
+
+⇒ **La cadena literal `cscfeature.xml` aparece UNA vez en todo el firmware** (framework.jar) ⇒
+éste es **el** consumidor: `SemCscFeature.getBoolean("CscFeature_VoiceCall_ConfigRecording")`.
+El nombre **no** aparece literal (el framework compone `"CscFeature_"` + categoría + nombre, y
+sólo lleva embebidos algunos nombres concretos) ⇒ el valor se busca por **clave dinámica**.
+⇒ **El framework trae su propio decodificador OMC** (`isXmlEncoded()` + `decode()` +
+`_decompressGzip()`) ⇒ **es exactamente el algoritmo de §10.1** (rotación+XOR y gunzip) ⇒
+**confirma la implementación** y explica por qué el magic no aparece: no se busca una constante,
+se *detecta* el formato (`isXmlEncoded`).
+⇒ **Implicación para el parche**: añadir `<CscFeature_VoiceCall_ConfigRecording>RecordingAllowed</…>`
+al `cscfeature.xml` de AMO ⇒ lo leerá `SemCscFeature` al cargar ⇒ **el flag llega al sistema**
+(sin tocar el CSC, sin triangular el Knox). Requisitos: (a) `/optics` sólo lectura ⇒ imagen o
+bind-mount de Magisk; (b) actualizar el `fileSize` en `contents.db` a la vez; (c) reiniciar
+(la feature se cachea al boot).
+⇒ **Cómo se comprueba** (sin root, con el binario del repo):
+```bash
+# 1) el fichero real descifrado con nuestra herramienta
+python3 tools/omc_codec.py decode /optics/configs/carriers/single/AMO/conf/system/cscfeature.xml | head
+# 2) la clase que lo consume (dex de framework.jar)
+unzip -p /system/framework/framework.jar classes5.dex > /data/local/tmp/classes5.dex
+strings /data/local/tmp/classes5.dex | grep -E "SemCscFeature|cscfeature.xml"
+```
