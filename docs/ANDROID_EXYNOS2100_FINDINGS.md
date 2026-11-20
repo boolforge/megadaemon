@@ -306,6 +306,31 @@ pm path com.samsung.android.app.contacts
 dumpsys package com.samsung.android.app.contacts | grep versionName
 ```
 
+### 5.1 Evidencia visual del inventario (y un dato que conecta con el CSC)
+
+![Inventario real de apps en el S21 Ultra](../assets/apps_apk_extractor_2026-11-20.jpg)
+
+* `docs/assets/apps_apk_extractor_2026-11-20.jpg` — captura del **Apk Extractor** del propio
+  móvil (lista de apps instaladas, sección M). sha256 `d912fb28f3897722c3c4598127b9befaccce5c2b0182633a6142397c28055c85`.
+* **Lo que se ve**: `Manual Selector` (`com.aura.oobe.samsung`) · `Marina` (`g.pyn.fi`) ·
+  `MarinaPatcher` (`ru.drjmwdme.cgwbfzijr`, nombre ofuscado) · `Markor` · `Marxist Tamil` ·
+  `Maskan` · `MasterClass` (`com.yanka.mc`) · `Mastodon` · `Maps` ·
+  `Mantenimiento del dispositivo` (`com.samsung.android.ool`).
+
+**Hallazgo que conecta §5 con §6 y §10 (alto)**: `com.aura.oobe.samsung` = "Manual Selector"
+es la app de OOBE del **operador**, y en `contents.db` (§P3) aparecen sus ficheros **de AMO**:
+`/prism/etc/carriers/single/AMO/sysconfig/config-com.orange.update.xml` ·
+`.../config-com.aura.oobe.samsung.xml` · `.../default-permissions/privapp-permissions-com.orange.update.xml`.
+⇒ **AMO = Orange España**, coherente con lo que dice el XML descifrado del CSC
+(`<Country>SPAIN</Country>`, `<CountryISO>ES</CountryISO>`) y con el CSC propietario
+(`com.orange.update`).
+⇒ **Aviso para el cambio de CSC**: cambiar AMO→THL/ILO/XXV **no es sólo un flag**: se cambia
+también el **perfil de operador** (OOBE, permisos por defecto, configuración de APN/VoLTE y apps
+del carrier) ⇒ puede dejar de funcionar la configuración específica de Orange (APN, VoLTE, roaming).
+**El parche mínimo y menos invasivo es editar el `cscfeature.xml` de AMO** (añadir el
+`<CscFeature_VoiceCall_ConfigRecording>` que falta) en vez de cambiar el CSC entero ⇒ eso exige
+actualizar `contents.db` (su `fileSize`) y el CRC/formato que el sistema compruebe.
+
 ---
 
 ## 6. Radio y ROM (P6)
@@ -488,3 +513,107 @@ P1–P6 medidos; **P2 bloqueado por un bug del parser DEX de la flota** (§P2) y
 OMC con su sha256; (b) confirmación del nombre de la clase de Swift Backup que deriva la clave
 AEGIS (o el APK y su sha256 para que lo extraiga); (c) confirmación del **CSC objetivo** para
 poder medir la diferencia de `cscfeature.xml` entre AMO y ese CSC.
+
+---
+
+## 10. El formato OMC (P4 **RESUELTO**) — rotación + XOR posicional, NO gzip+XOR
+
+### 10.1 El algoritmo (exacto, con referencia)
+
+Fuente: **`soulr344/OMCDecoder`** → `include.h` (C++), reimplementado en
+**`tools/omc_codec.py`** (en este repo, Python de referencia, listo para portar a Rust).
+
+El fichero OMC **no** está "gzip + XOR": es
+
+```
+fichero OMC  --omc_decode()-->  stream gzip  --gunzip-->  XML plano
+```
+
+donde `omc_decode` es, byte a byte y **dependiente de la posición** (la clave gira cada 256 bytes):
+
+```python
+def omc_decode(data):
+    out = bytearray(len(data))
+    for i, b in enumerate(data):
+        s = SHIFTS[i % 256]                     # 0..7, tabla de 256
+        out[i] = ((((b << s) | (b >> (8 - s))) & 0xFF) ^ (SALTS[i % 256] & 0xFF))
+    return bytes(out)                          # -> gunzip -> XML
+```
+
+y el inverso para **re-codificar**:
+
+```python
+def omc_encode(data):                          # data = XML plano -> gunzip -> gunzip? no: gunzip->zip
+    out = bytearray(len(data))
+    for i, b in enumerate(data):
+        a = b ^ (SALTS[i % 256] & 0xFF)
+        s = SHIFTS[i % 256]
+        out[i] = ((a >> s) | (a << (8 - s))) & 0xFF
+    return bytes(out)
+```
+
+**Esquema en Rust** (equivalente exacto; `salts` puede ser negativo ⇒ `as u8` trunca a 2's complement):
+
+```rust
+fn omc_decode(data: &[u8]) -> Result<Vec<u8>, OmcError> {
+    let mut out = Vec::with_capacity(data.len());
+    for (i, &b) in data.iter().enumerate() {
+        let s = SHIFTS[i % 256] as u32;
+        let rot = (((b as u32) << s) | ((b as u32) >> (8 - s))) as u8;
+        out.push(rot ^ (SALTS[i % 256] as u8));
+    }
+    gzip::decompress(&out)
+}
+```
+
+**Cómo se comprueba** (validado hoy sobre el móvil, no sobre un volcado):
+
+```bash
+python3 tools/omc_codec.py decode <fichero.omc>            # -> XML por stdout
+python3 tools/omc_codec.py feature <fichero.omc> CscFeature_VoiceCall_ConfigRecording
+python3 tools/omc_codec.py encode <plano.xml> -o out.omc
+```
+
+| Comprobación | Resultado |
+|---|---|
+| Descifrar el fichero **real** de AMO (`/optics/configs/carriers/single/AMO/conf/system/cscfeature.xml`, 1.109 B, sha16 `ef110140f7bb95e1`) | XML `<SamsungMobileFeature>` con `<SalesCode>AMO</SalesCode>`, `<Country>SPAIN</Country>`, `<CountryISO>ES</CountryISO>` ✓ |
+| **Round-trip** `encode(decode(x)) == x` | **True** en los **126/126** CSC del móvil ✓ |
+| Contenido tras descifrar | 1.109 B → **3.589 B** de XML plano (AMO) |
+
+⇒ **Confianza: high.** No es una hipótesis: es el algoritmo exacto, con round-trip verificado.
+
+### 10.2 Qué CSC traen grabación nativa de llamadas (medido en los 126 CSC del móvil)
+
+`CscFeature_VoiceCall_ConfigRecording` **sólo existe en 19 de 126** CSCs:
+
+| Valor | CSCs |
+|---|---|
+| `RecordingAllowed` | **BKD · BTC · CAL · EGY · ILO · ILP · LYS · MYM · NPL · SEK · SLK · THL · TUN · XXV** |
+| `RecordingAllowedByMenu,disclaimer_latin` | CHO · EON · GTO · TPA |
+| `RecordingAllowedByMenu,disclaimer_india` | INU |
+| **AUSENTE** (107 CSCs) | **AMO** (nuestro), y los demás |
+
+⇒ **AMO NO tiene la feature de grabación** ⇒ con CSC=AMO **no hay grabación nativa**, y esto
+confirma la hipótesis del agente RE con dato duro (no con suposición).
+⇒ **Candidatos para el CSC**: **THL** (Tailandia, 630 B, sha16 `a108771bde4cdfbf`),
+**ILO** (Israel, 422 B, sha16 `cc1e85ef88546bd5`), **XXV** (627 B, sha16 `81c622acb4ffb78b`):
+los tres con `RecordingAllowed` **sin** disclaimer (⇒ grabación sin menú de aviso).
+⇒ **Nota de riesgo**: `contents.db` guarda el `fileSize` de cada fichero del CSC ⇒ un
+`cscfeature.xml` parcheado con otro tamaño **se detecta** en el inventario ⇒ hay que
+actualizar **a la vez** `contents.db` (y el CSC en `mps_code.dat`) o el sistema puede
+invalidar el paquete. Además el árbol `/optics` es de sólo lectura en runtime ⇒ el cambio
+va por una imagen de sistema (o `remount`), no escribiendo en vivo.
+
+### 10.3 Lo que esto NO resuelve (para que nadie lo dé por hecho)
+
+* **El mecanismo en runtime** (qué componente lee `cscfeature.xml` y cómo lo cachea) **sigue
+  sin localizar**: el magic `2f2729b7` **no aparece en ninguno de los 2.476 ficheros**
+  del firmware (barrido de `/system`, `/vendor`, `/system_ext`, jars incluidos) ⇒ el decodificador
+  **no está en el firmware**, sino en las herramientas de build de Samsung (y en el APK de CSC
+  del que sale `OMCDecoder`). Los candidatos en el firmware son los que **consumen** la feature
+  (`services.jar` 29 hits, `vsimmanager.jar` 428, `telephony-common.jar` 19, `imsmanager.jar` 3).
+* **P5 (Swift Backup: derivación de clave AEGIS-256, formato `.splits`/`.dat`/`.med`, JSON de
+  `Config`/`Blacklist`, proveedores cloud, caso Chrome) sigue ABIERTA**: no la he tocado. Los DEX
+  están en el móvil (`/data/local/tmp/swift/classes.dex` 9.273.900 B / 50.772 cadenas).
+  El agente DEX ya arregló el parser DEX (`VALUE_NULL`/`VALUE_BOOLEAN`) ⇒ su CLI
+  `megadaemon-core dex` sirve de punto de partida.

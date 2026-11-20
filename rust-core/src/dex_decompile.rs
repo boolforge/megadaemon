@@ -4163,12 +4163,189 @@ pub fn findings_ndjson_file(path: &str) -> Result<String, String> {
 }
 
 // ========================================================================= //
+// Lucky Patcher / Marina Patcher
+// ========================================================================= //
+
+/// Huellas SHA-256 de los certificados **AOSP públicos** que Lucky Patcher
+/// (Marina Patcher) empaqueta en `keys/` y `assets/` para re-firmar las APKs
+/// que parchea. Son claves públicas del AOSP (2008, "O=Android, CN=Android"):
+/// si una APK instalada está firmada con una de ellas, ha pasado por un
+/// parcheador de firmas (o es una app de sistema con firma de plataforma).
+pub const AOSP_SIGNING_KEYS: &[(&str, &str)] = &[
+    (
+        "aosp_testkey",
+        "A40DA80A59D170CAA950CF15C18C454D47A39B26989D8B640ECD745BA71BF5DC",
+    ),
+    (
+        "aosp_platform",
+        "C8A2E9BCCF597C2FB6DC66BEE293FC13F2FC47EC77BC6B2B0D52C11F51192AB8",
+    ),
+    (
+        "aosp_media",
+        "465983F7791F2ABEB43EA2CBDC7F21A8260B72BC08A55C839FC1A43BC741A81E",
+    ),
+    (
+        "aosp_shared",
+        "28BBFE4A7B97E74681DC55C2FBB6CCB8D6C74963733F6AF674D8C3A6E879FD",
+    ),
+];
+
+/// Nombre de la clave AOSP con la que está firmado un APK, si se reconoce.
+///
+/// `cert_sha256` se acepta en hexadecimal con o sin `:` y en cualquier
+/// mayúsculas/minúsculas.
+pub fn aosp_signing_key(cert_sha256: &str) -> Option<&'static str> {
+    let norm: String = cert_sha256
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    if norm.len() != 64 {
+        return None;
+    }
+    AOSP_SIGNING_KEYS
+        .iter()
+        .find(|(_, fp)| *fp == norm)
+        .map(|(name, _)| *name)
+}
+
+/// Marcadores que identifican al módulo Lucky Patcher (Marina Patcher) y a
+/// sus librerías de terceros dentro de un DEX.
+pub const LP_MODULE_MARKERS: &[(&str, &str, &str)] = &[
+    (
+        "lp_module",
+        "com/xposed/XSupport",
+        "clase principal del módulo Xposed de Lucky Patcher",
+    ),
+    (
+        "lp_module",
+        "vnd.luckypatcher.archive",
+        "MIME type del contenedor .lpzip de Lucky Patcher",
+    ),
+    (
+        "lp_module",
+        "cc/binmt/signature/",
+        "hooks de CorePatch sobre la firma del PackageManager",
+    ),
+    (
+        "lp_module",
+        "com/v7878/hooks/pmpatch",
+        "módulo PMPatch (parcheo de ART/OAT en runtime)",
+    ),
+    (
+        "lp_module",
+        "com/v7878/oat/",
+        "librería de parcheo de OAT de vova7878",
+    ),
+    (
+        "lp_module",
+        "ru/drjmwdme/cgwbfzijr",
+        "paquete de Lucky Patcher",
+    ),
+    (
+        "lp_module",
+        "lucky_patcher_package",
+        "recurso de fingerprint de Lucky Patcher",
+    ),
+];
+
+/// Hallazgos de tipo `lp_module`: la APK analizada **es** Lucky Patcher
+/// (o embebe su módulo). Sirve para普查ar el móvil y saber qué otras apps
+/// arrastran el módulo.
+pub fn lp_module_findings(dex: &DexFile) -> Vec<Finding> {
+    let ts = now_ts();
+    let mut out: Vec<Finding> = Vec::new();
+    for (index, text) in dex.strings.iter().enumerate() {
+        for (detector, needle, note) in LP_MODULE_MARKERS {
+            if !text.contains(needle) {
+                continue;
+            }
+            out.push(Finding {
+                ts,
+                detector: (*detector).to_string(),
+                evidence_class: String::from("pool_string"),
+                method: String::from("dex_pool_scan"),
+                signal: text.clone(),
+                java_class: String::from("<string-pool>"),
+                java_method: String::new(),
+                original: text.clone(),
+                kind: String::from("packer_module"),
+                severity: String::from("info"),
+                confidence: 90,
+                bypassable: false,
+                offset: index as i64,
+                evidence_offset: -1,
+                notes: (*note).to_string(),
+                ..Default::default()
+            });
+        }
+    }
+    out
+}
+
+// ========================================================================= //
 // Tests
 // ========================================================================= //
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ------------------------------------------------------------------ //
+    // Lucky Patcher: detector de firma AOSP y de módulo embebido
+    // ------------------------------------------------------------------ //
+
+    #[test]
+    fn test_aosp_signing_key_reconoce_las_cuatro_claves() {
+        // Huella real de `assets/testkey.x509.pem` (AOSP pública, dentro de
+        // Marina Patcher) y de `keys/platform.x509.pem`.
+        assert_eq!(
+            aosp_signing_key(
+                "A4:0D:A8:0A:59:D1:70:CA:A9:50:CF:15:C1:8C:45:4D:47:A3:9B:26:98:9D:8B:64:0E:CD:74:5B:A7:1B:F5:DC"
+            ),
+            Some("aosp_testkey")
+        );
+        assert_eq!(
+            aosp_signing_key(
+                "c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8"
+            ),
+            Some("aosp_platform")
+        );
+        assert_eq!(
+            aosp_signing_key("465983F7791F2ABEB43EA2CBDC7F21A8260B72BC08A55C839FC1A43BC741A81E"),
+            Some("aosp_media")
+        );
+        assert_eq!(
+            aosp_signing_key("28BBFE4A7B97E74681DC55C2FBB6CCB8D6C74963733F6AF674D8C3A6E879FD"),
+            Some("aosp_shared")
+        );
+        // Una firma cualquiera NO es una clave AOSP.
+        assert_eq!(
+            aosp_signing_key("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"),
+            None
+        );
+        // Ni una cadena corrupta.
+        assert_eq!(aosp_signing_key("no-es-una-huella"), None);
+    }
+
+    #[test]
+    fn test_lp_module_findings_detecta_los_marcadores() {
+        // Se construye un DEX mínimo con los marcadores en el pool de
+        // cadenas.
+        let mut b = TestDexBuilder::new();
+        b.string("com/xposed/XSupport");
+        b.string("application/vnd.luckypatcher.archive");
+        b.string("cc/binmt/signature/PmsHookApplication");
+        b.string("com/v7878/hooks/pmpatch/Main");
+        let bytes = b.build();
+        let dex = DexFile::parse(&bytes).unwrap();
+        let findings = lp_module_findings(&dex);
+        assert!(findings.iter().any(|f| f.signal.contains("XSupport")));
+        assert!(findings.iter().any(|f| f.signal.contains("luckypatcher")));
+        assert!(findings.iter().any(|f| f.signal.contains("binmt/signature")));
+        assert!(findings.iter().any(|f| f.signal.contains("pmpatch")));
+        assert!(findings.iter().all(|f| f.kind == "packer_module"));
+    }
 
     // ------------------------------------------------------------------ //
     // Utilidades para construir DEX sintéticos válidos
