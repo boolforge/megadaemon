@@ -82,20 +82,29 @@ fn la_seleccion_es_parasita_y_tiene_fallback() {
     let sel2 = bus2.select(TaskType::Inference);
     assert_eq!(sel2.chosen.as_deref(), Some("caro"));
 
-    // Y el fallback real: si el primero falla, responde el segundo.
-    let mut bus3 = ServiceBus::new(vec![caro, gratis]);
-    let mut calls = Vec::new();
+    // Fallback real: el más barato falla → responde el siguiente.
+    // (La cadena va de MENOR a MAYOR coste: el "barato" va primero.)
+    let mut barato = model("barato", &["inference"], false);
+    barato.cost_estimate = CostEstimate::per_token(0.001, 0.002);
+    let mut medio = model("medio", &["inference"], false);
+    medio.cost_estimate = CostEstimate::per_token(0.002, 0.004);
+    let mut bus3 = ServiceBus::new(vec![medio, barato]);
+    let mut calls: Vec<String> = Vec::new();
     let out = bus3.route(TaskType::Inference, &mut |e| {
         calls.push(e.id.clone());
-        if e.id == "caro" {
+        if e.id == "barato" {
             Err("timeout".into())
         } else {
             Ok("ok".into())
         }
     });
     assert!(out.ok);
-    assert_eq!(out.used.as_deref(), Some("gratis"));
-    assert_eq!(calls.len(), 2);
+    assert_eq!(out.used.as_deref(), Some("medio"));
+    assert_eq!(calls, vec!["barato", "medio"], "prueba el barato y cae al medio");
+    assert_eq!(out.attempts.len(), 1);
+    assert_eq!(out.attempts[0].0, "barato");
+    // El que falló queda marcado como caído (evidencia real).
+    assert!(!bus3.entry("barato").unwrap().health.available);
 }
 
 #[test]
