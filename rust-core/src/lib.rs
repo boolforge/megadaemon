@@ -59,6 +59,7 @@ pub mod messaging;
 pub mod npu_bridge;
 pub mod npu_vs4l;
 pub mod csc_verify;
+pub mod rom_migration;
 pub mod npu_cv;
 pub mod npu_nnapi;
 pub mod pattern;

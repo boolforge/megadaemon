@@ -144,19 +144,29 @@ pub fn errno_name(e: i32) -> &'static str {
 // Sondeo
 // --------------------------------------------------------------------------
 
+/// `libc::ioctl` cambia el tipo del *request* segun la arquitectura: en
+/// x86/x86_64 es `c_ulong` (u64) y en el resto (aarch64-android) es `c_int`
+/// (i32).  Sin este envoltorio el crate **no compila para ARM64**:
+/// `E0308: expected i32, found u64`.
+#[inline]
+unsafe fn ioctl_raw(fd: RawFd, code: u32, arg: *mut libc::c_void) -> libc::c_int {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        libc::ioctl(fd, code as libc::c_ulong, arg)
+    }
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    {
+        libc::ioctl(fd, code as libc::c_int, arg)
+    }
+}
+
 /// Emite **un** ioctl **sin argumento** contra un fd ya abierto.
 ///
 /// Devuelve `(live, driver_size, errno)`. Con `arg = NULL` el driver responde
 /// con el tamaño que espera; si el código no existe ⇒ `EINVAL`/`ENOTTY`.
 pub fn probe_code(fd: RawFd, code: u32) -> (bool, Option<i64>, Option<i32>) {
     // `arg = NULL` ⇒ el driver ve `!arg` ⇒ devuelve el tamaño que espera.
-    let ret = unsafe {
-        libc::ioctl(
-            fd,
-            code as libc::c_ulong,
-            std::ptr::null_mut::<libc::c_void>(),
-        )
-    };
+    let ret = unsafe { ioctl_raw(fd, code, std::ptr::null_mut::<libc::c_void>()) };
     if ret >= 0 {
         (true, Some(ret as i64), None)
     } else {
