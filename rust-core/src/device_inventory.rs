@@ -443,20 +443,16 @@ pub fn parse_accounts(text: &str) -> Value {
 }
 
 /// `WifiConfigStore.xml` → SSID/BSSID guardados (hasheados en claro no).
+///
+/// Android 11+ usa `<string name="SSID">&quot;MiRed&quot;</string>`, no
+/// `<SSID>`. Sólo se extrae nombre y BSSID: la PSK **no** se toca (es una
+/// clave); sólo se cuenta cuántas redes la tienen.
 pub fn parse_wifi_saved(text: &str) -> Value {
     let mut nets = Vec::new();
     for chunk in text.split("<Network>").skip(1) {
-        let mut ssid = String::new();
-        let mut bssid = String::new();
-        for (key, dest) in [("SSID", &mut ssid), ("BSSID", &mut bssid)] {
-            let needle = format!("<{key}>");
-            if let Some(i) = chunk.find(&needle) {
-                let rest = &chunk[i + needle.len()..];
-                if let Some(end) = rest.find("</") {
-                    *dest = rest[..end].trim().to_string();
-                }
-            }
-        }
+        let ssid = xml_value(chunk, "SSID").unwrap_or_default();
+        let bssid = xml_value(chunk, "BSSID").unwrap_or_default();
+        let psk = xml_value(chunk, "PreSharedKey").unwrap_or_default();
         if ssid.is_empty() && bssid.is_empty() {
             continue;
         }
@@ -464,13 +460,36 @@ pub fn parse_wifi_saved(text: &str) -> Value {
             "ssid_sha16": sha16(&ssid),
             "bssid_sha16": sha16(&bssid),
             "ssid_longitud": ssid.chars().count(),
+            "contrasena_guardada": !psk.is_empty(),
         }));
     }
     json!({
         "redes_guardadas": nets,
         "total": nets.len(),
-        "nota": "SSID/BSSID en claro sólo en la copia privada de Drive; aquí van hasheados (sha16).",
+        "con_contrasena": nets
+            .iter()
+            .filter(|n| n["contrasena_guardada"] == json!(true))
+            .count(),
+        "nota": "SSID/BSSID en claro sólo en la copia privada de Drive; aquí van hasheados (sha16). La contraseña NO se extrae.",
     })
+}
+
+/// Extrae el valor de `<string name="CLAVE">valor</string>` (con escapes XML).
+fn xml_value(chunk: &str, key: &str) -> Option<String> {
+    let needle = format!("name=\"{key}\"");
+    let i = chunk.find(&needle)?;
+    let rest = &chunk[i + needle.len()..];
+    let gt = rest.find('>')?;
+    let after = &rest[gt + 1..];
+    let end = after.find('<')?;
+    Some(
+        after[..end]
+            .trim()
+            .replace("&quot;", "\"")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">"),
+    )
 }
 
 /// Claves ADB autorizadas: nombres + digest (las claves públicas no son secreto).
@@ -845,6 +864,17 @@ pub fn collect(src: &dyn Source, opts: &Options) -> Value {
             "vbmeta_digest": boot_map.get("ro.boot.vbmeta.digest").cloned().unwrap_or(Value::Null),
             "verity_mode": boot_map.get("ro.boot.veritymode").cloned().unwrap_or(Value::Null),
             "bootimage": boot_map.get("ro.bootimage.build.date").cloned().unwrap_or(Value::Null),
+            "vbmeta_device_state": boot_map.get("ro.boot.vbmeta.device_state").cloned().unwrap_or(Value::Null),
+            "flash_locked": boot_map.get("ro.boot.flash.locked").cloned().unwrap_or(Value::Null),
+            "vbmeta_avb_version": boot_map.get("ro.boot.vbmeta.avb_version").cloned().unwrap_or(Value::Null),
+            "vbmeta_hash_alg": boot_map.get("ro.boot.vbmeta.hash_alg").cloned().unwrap_or(Value::Null),
+            "apk_verity_mode": boot_map.get("ro.apk_verity.mode").cloned().unwrap_or(Value::Null),
+            "dmverity": boot_map.get("ro.config.dmverity").cloned().unwrap_or(Value::Null),
+            "bootloader_cerrado": boot_map
+                .get("ro.boot.flash.locked")
+                .and_then(|v| v.as_str())
+                .map(|v| v == "1")
+                .unwrap_or(false),
         },
         "secure_boot": {
             "secure": boot_map.get("ro.boot.verifiedbootstate").cloned().unwrap_or(Value::Null),
@@ -914,6 +944,7 @@ pub fn collect(src: &dyn Source, opts: &Options) -> Value {
     let n_total = apps.len();
     let n_system = apps.iter().filter(|a| a["es_sistema"] == json!(true)).count();
     let n_disabled = apps.iter().filter(|a| a["habilitada"] == json!(false)).count();
+    let n_disabled_pm = disabled.len();
     let n_risk = apps.iter().filter(|a| {
         a["permisos_riesgo"].as_array().map(|v| !v.is_empty()).unwrap_or(false)
     }).count();
@@ -922,6 +953,8 @@ pub fn collect(src: &dyn Source, opts: &Options) -> Value {
         "de_sistema": n_system,
         "de_usuario": n_total - n_system,
         "de_usuario_segun_pm3": third_pkgs.len(),
+        "deshabilitadas_pm": n_disabled_pm,
+        "deshabilitadas_total": n_disabled,
         "deshabilitadas": n_disabled,
         "con_permisos_de_riesgo": n_risk,
         "paquetes": apps,
@@ -952,7 +985,7 @@ pub fn collect(src: &dyn Source, opts: &Options) -> Value {
     let du_media = parse_du(&src.file("du_media").unwrap_or_default());
     let du_data = parse_du(&src.file("du_data").unwrap_or_default());
     let space = json!({
-        "filesystems": df,
+        "filesystems": df["filesystems"].clone(),
         "uso_por_directorio_media": du_media,
         "uso_por_directorio_data": du_data,
     });
@@ -963,7 +996,12 @@ pub fn collect(src: &dyn Source, opts: &Options) -> Value {
         if let Some(d) = src.digest(c.id) {
             references.push(json!({
                 "id": c.id,
-                "origen": c.cmd,
+                "origen": if c.private {
+                    format!("privado:{}", sha16(c.cmd))
+                } else {
+                    c.cmd.to_string()
+                },
+                "ruta_absoluta_publicable": !c.private,
                 "sha256": d.sha256,
                 "bytes": d.bytes,
                 "visibilidad": if c.private { "privada" } else { "publica" },
@@ -972,9 +1010,18 @@ pub fn collect(src: &dyn Source, opts: &Options) -> Value {
     }
     for c in copy_plan() {
         if let Some(d) = src.digest(c.id) {
+            // Las rutas absolutas de ficheros privados (SSID, claves ADB) son
+            // metadato identificable: en la copia pública va el hash de la
+            // ruta, y el mapa real sólo en la copia privada de Drive.
+            let origen = if c.private {
+                format!("privado:{}", sha16(c.path))
+            } else {
+                c.path.to_string()
+            };
             references.push(json!({
                 "id": c.id,
-                "origen": c.path,
+                "origen": origen,
+                "ruta_absoluta_publicable": !c.private,
                 "sha256": d.sha256,
                 "bytes": d.bytes,
                 "visibilidad": if c.private { "privada" } else { "publica" },

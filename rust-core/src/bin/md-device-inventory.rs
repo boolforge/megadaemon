@@ -264,6 +264,57 @@ fn build_capture_cmd(dir: &str, batch: &[&str]) -> String {
     cmd
 }
 
+/// Reensambla el inventario desde un directorio de referencias ya capturado.
+/// No contacta con el móvil: sólo lee ficheros locales y recalcula digests.
+fn assemble_from_refs(dir: &str, out_dir: &str) -> Result<(), String> {
+    let refs_dir = format!("{dir}/refs");
+    let mut files: Vec<(String, String)> = Vec::new();
+    let mut digests: Vec<(String, FileDigest)> = Vec::new();
+    for id in device_inventory::capture_plan().iter().map(|c| c.id).chain(
+        device_inventory::copy_plan().iter().map(|c| c.id),
+    ) {
+        let path = format!("{refs_dir}/{id}");
+        let content = match fs::read(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let sha = sha256_hex(&content);
+        digests.push((
+            id.to_string(),
+            FileDigest {
+                sha256: sha,
+                bytes: content.len() as u64,
+            },
+        ));
+        files.push((id.to_string(), String::from_utf8_lossy(&content).to_string()));
+    }
+    let src = DeviceSource { files, digests };
+    let inv = device_inventory::collect(&src, &Options::default());
+    let manifest = manifest_ndjson(&src);
+    fs::create_dir_all(out_dir).map_err(|e| format!("mkdir {out_dir}: {e}"))?;
+    let inv_path = format!("{out_dir}/inventory.json");
+    let man_path = format!("{out_dir}/MANIFEST.ndjson");
+    fs::write(
+        &inv_path,
+        serde_json::to_string_pretty(&inv).map_err(|e| format!("serializar: {e}"))?,
+    )
+    .map_err(|e| format!("escribir {inv_path}: {e}"))?;
+    fs::write(&man_path, manifest.as_bytes())
+        .map_err(|e| format!("escribir {man_path}: {e}"))?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "inventory": inv_path,
+            "manifest": man_path,
+            "referencias": inv["referencias"].as_array().map(|v| v.len()).unwrap_or(0),
+            "apps_total": inv["apps"]["total"],
+            "sha256_inventory": sha256_hex(fs::read(&inv_path).unwrap_or_default().as_slice()),
+        }))
+        .map_err(|e| format!("serializar resumen: {e}"))?
+    );
+    Ok(())
+}
+
 fn main() {
     if let Err(e) = run() {
         eprintln!("md-device-inventory: {e}");
@@ -290,6 +341,24 @@ fn run() -> Result<(), String> {
             _ => {}
         }
         i += 1;
+    }
+
+    // Modo "--from-refs <dir>": reensambla el inventario desde los ficheros de
+    // referencia YA capturados, SIN volver a tocar el móvil (el bus puede
+    // estar instalando el binario y el móvil va justo de RAM).
+    let mut from_refs: Option<String> = None;
+    {
+        let mut i = 1;
+        while i < args.len() {
+            if args[i] == "--from-refs" {
+                i += 1;
+                from_refs = args.get(i).cloned();
+            }
+            i += 1;
+        }
+    }
+    if let Some(dir) = from_refs {
+        return assemble_from_refs(&dir, &out_dir);
     }
 
     let mut mcp = Mcp::from_env(secrets.as_deref())?;
