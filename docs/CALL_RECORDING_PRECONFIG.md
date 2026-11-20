@@ -9,7 +9,7 @@ One UI 6 · Magisk Kitsune v27.2 · SELinux Enforcing), no copiado de manuals.
 |---|---|---|
 | **A. UID de sistema (1000)** | root (`su 1000`) | **Sí, es la vía buena**: el UID `system` está firmado con la clave de plataforma ⇒ tiene `CAPTURE_AUDIO_OUTPUT` ⇒ puede abrir `VOICE_CALL` |
 | B. Parche de política de audio | Magisk systemless + `audio_policy_configuration.xml` | **No aquí**: la voz del módem se mezcla en el HAL, no hay mixport de voz que capturar |
-| C. Parche binario de `libaudioflinger.so` |器和 Rizin +arling | Innecesario: A da lo mismo sin tocar binarios |
+| C. Parche binario de `libaudioflinger.so` | Rizin + parche de bytes | Innecesario: A da lo mismo sin tocar binarios |
 | D. Grabador nativo de Samsung | **CSC THL/INS** | Sí: es lo que hace el botón de grabar del sistema |
 
 ### A · El permiso y por qué el UID de sistema lo resuelve
