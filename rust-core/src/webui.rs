@@ -892,7 +892,8 @@ pub fn node_message(node_id: &str, message: &str, data_b64: &str) -> Value {
         "ts": now_iso(),
         "from": crate::mesh::instance_id(),
         "to": node_id,
-        "message": message,
+        // AUDIT-VOICE-03b (P0): el buzon del peer se escribia EN CLARO.
+        "message": crate::voice_runtime::redact(message),
         "data_b64": data_b64,
     });
     let mut line = record.to_string();
