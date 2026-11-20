@@ -1889,38 +1889,51 @@ fn handle_client(mut stream: TcpStream) {
             // Un mutex envenenado (un panic dentro del guard) no puede dejar el
             // servidor muerto: se recupera el estado y se sigue.  Con `.unwrap()`
             // un solo panic convertia TODOS los request posteriores en 502.
-            let mut st = mutex.lock().unwrap_or_else(|e| e.into_inner());
-            let valid_target = if st.runners.contains_key(&target) {
-                target.clone()
-            } else {
-                st.active_target.clone()
+            //
+            // AUDIT-VOICE-06 (P1): el objetivo se lee con un lock **corto**.
+            // Antes el guard se mantenia durante `ensure_live_shm` (una
+            // escritura de 1 MB) y durante `send_json` => todo el enjambre
+            // se serializaba detras de una escritura de 1 MB en un movil con
+            // 235 MB de RAM libres: eso es saturacion del origen, no caida.
+            let valid_target = {
+                let st = mutex.lock().unwrap_or_else(|e| e.into_inner());
+                if st.runners.contains_key(&target) {
+                    target.clone()
+                } else {
+                    st.active_target.clone()
+                }
             };
 
             match action {
                 "select" => {
-                    st.active_target = valid_target.clone();
-                    send_json(
-                        &mut stream,
-                        &json!({
+                    // Lock corto y tolerante al envenenamiento (AUDIT-VOICE-06):
+                    // el guard no puede cruzar `send_json` (escritura de red).
+                    let payload = {
+                        let mut st = mutex.lock().unwrap_or_else(|e| e.into_inner());
+                        st.active_target = valid_target.clone();
+                        json!({
                             "status": "SELECTED",
                             "target": valid_target,
                             "active_target": st.active_target,
                             "runners": st.runners,
                             "message": format!("Target activo fijado a {} (Rust Zenith v13.0).", valid_target.to_uppercase())
-                        }),
-                    );
+                        })
+                    };
+                    send_json(&mut stream, &payload);
                 }
                 "launch" | "start" | "restart" => {
+                    // `ensure_live_shm` escribe ~1 MB: **fuera** del lock
+                    // global (AUDIT-VOICE-06).  El panic se aísla: se registra
+                    // y la request sigue.
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        ensure_live_shm(&valid_target)
+                    }));
+                    let mut st = mutex.lock().unwrap_or_else(|e| e.into_inner());
                     let fake_pid = 31000 + (valid_target.bytes().map(|b| b as u32).sum::<u32>() % 4000);
                     if let Some(r) = st.runners.get_mut(&valid_target) {
                         r.status = "ACTIVE".to_string();
                         r.pid = Some(fake_pid);
                     }
-                    // Un panic aqui envenenaria el mutex global => 502 en
-                    // cadena.  Se aísla: el panic se registra y la request sigue.
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        ensure_live_shm(&valid_target)
-                    }));
                     send_json(
                         &mut stream,
                         &json!({
