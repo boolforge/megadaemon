@@ -45,7 +45,32 @@ fn print_usage() {
     eprintln!("  shm-frame-bmp                               Render Live 24-bit BMP Frame from SHM");
 }
 
+/// D-10 (P0): hook de panic con backtrace.
+///
+/// El release usa `panic = "unwind"` (v15), asi que un panic en un hilo de
+/// peticion lo captura `catch_unwind` (=> la peticion responde 500 y el
+/// daemon sigue) pero un panic en un hilo de fondo **mata el proceso**
+/// (=> el "134" que se vio en el movil, que NO puede ser un panic Rust).
+/// Con este hook cada panic deja rastro real: mensaje, hilo y backtrace.
+///
+/// El backtrace se captura SIEMPRE (no solo con RUST_BACKTRACE=1): en el
+/// movil nadie pone esa variable y sin esto el 134 es indescifrable.
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let hilo = std::thread::current()
+            .name()
+            .unwrap_or("<sin nombre>")
+            .to_string();
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        eprintln!(
+            "[megadaemon][PANIC] hilo={} panic={}\n{}",
+            hilo, info, backtrace
+        );
+    }));
+}
+
 fn main() {
+    install_panic_hook();
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         print_usage();
