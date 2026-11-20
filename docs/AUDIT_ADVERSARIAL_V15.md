@@ -52,11 +52,15 @@
    ejecutan **como root real** (`su -mm -c`) y ambas son alcanzables desde el
    MCP (`fs_write`, `find_duplicates`), que es el canal que usa el agente
    externo.
-3. **El puente web regala root a toda la wifi.** `deploy/web_bridge.py:201-204`
-   inyecta `X-API-Key` **y** `X-Seere-Auth-Token` a cualquier petición que no
-   traiga `Origin`, y escucha en `0.0.0.0` en los puertos 80/3000/3030/8080/8090.
-   Un `curl` desde otro equipo de la wifi ejecuta root en el móvil. El
-   parche UI-00 (CORS restringido) sólo cierra el vector de *navegador*.
+3. **El puente web regalaba root a toda la wifi** (`deploy/web_bridge.py:201-204`
+   inyectaba `X-API-Key` **y** `X-Seere-Auth-Token` a cualquier petición sin
+   `Origin`, escuchando en `0.0.0.0`). **✅ Cerrado a las 02:4x** (`23e82ed`): la
+   inyección sólo ocurre si el **peer es loopback real** y `MD_WEB_BIND` vale
+   `127.0.0.1` por defecto. **Pero el mismo fallo conceptuales sigue vivo dentro
+   del daemon**: la exención `local_browser` (A-18) decide "local" con el `Host`
+   y con la ausencia de cabeceras de proxy ⇒ **cualquier app del móvil** (no sólo
+   la LAN) consigue el **token root** con un `api_key` inventado. El patrón
+   correcto ya está escrito en el puente: **peer loopback real**, no cabeceras.
 
 ### 0.2 Recuento por clase
 
@@ -92,14 +96,13 @@ B-01, B-02, C-06, D-01, D-02, G-05 — + 7 límites honestos en §J, que no son 
 | **A-02** | `find_duplicates` ejecuta el nombre del fichero (AWK→shell) | RCE root en 2 pasos, sin `confirm` |
 | **A-04** | `MEGADAEMON_REQUIRE_API_KEY=1` no fuerza nada si no hay key | fail-open: el túnel público queda abierto |
 | **A-18** | la exención `local_browser` entrega el token root a cualquier "local" | RCE root desde la wifi y desde cualquier app del móvil |
-| **B-06** | la API key **vigente** está con su prefijo en el tablón compartido | fuga de la credencial que sí sirve |
 | **I-01** | la UI v1 no puede obtener el token ⇒ con el binario nuevo no pinta nada | la web "viva" que no muestra un dato |
 
 ### 0.5 Salud del repo en una frase
 
 64.918 líneas de Rust, 69 módulos, **31 módulos sin un solo test**, un
 `Cargo.toml` que desde v15 **desenrolla** (sin `panic = "abort"`, decisión
-documentada en `docs/DECISION_PANIC_UNWIND.md`) pero con **31 `lock().unwrap()`**
+documentada en `docs/DECISION_PANIC_UNWIND.md`) pero con **24 `lock().unwrap()`**
 sobre mutex **globales** en otros módulos (un panic envenena el mutex ⇒ *cada*
 llamada posterior paniquea ⇒ subsistema muerto para el resto del proceso), y un
 plan (`MASTER_PLAN.md`) que dice "33.800 líneas, 50 módulos": el repo **duplica
@@ -130,6 +133,24 @@ su tamaño en tres días** y ni el plan ni la suite lo han detectado.
 | `adv_e01_la_config_de_api_key_se_relee_en_cada_request` | E-01 | (T) |
 | `adv_e02_el_techo_de_memoria_del_cockpit_supera_la_ram_libre` | E-16/E-03 | (T) |
 | `adv_h01_el_conversor_duplica_el_valor_en_la_colision_signal_class` | H-01 | (T) |
+| `adv_d09_no_queda_ningun_lock_unwrap_sobre_mutex_globales` | **D-09** | (T) estático |
+| `adv_d10_hay_un_panic_set_hook_que_registra_el_backtrace` | **D-10** | (T) estático |
+
+**Estado de ejecución** (verificado el 20-11-2026):
+
+* **13 verdes / 3 en rojo** en el binario linkado a las 23:09
+  (`/run/agent-runtime/md/target/release/build/megadaemon-core/*/out/audit_adversarial_v15-*`,
+  ejecutable **directo**, sin `cargo`, para no pelear por el lock del build dir).
+  Los 3 rojos **son** la demostración: `adv_a18` (el token root **se entrega**),
+  `adv_a19` (control: el túnel no lo recibe) y `adv_h01` (la conversión duplica el valor).
+* Los **2 tests nuevos** (`adv_d09`, `adv_d10`) se compilaron y ejecutaron en un
+  crate *scratch* (10 s, sin depender del crate completo) y **fallan como deben**:
+  `adv_d09` ⇒ *"quedan 24 `lock().unwrap()`"* (con la lista fichero:línea) y
+  `adv_d10` ⇒ *"no hay ningun `panic::set_hook`"*.
+* El **relink** del arnés completo quedó pendiente: el `build dir` compartido lo
+  tienen saturado otros builds (2 vCPU / 3 GB RAM) y `rustc` muere por OOM.
+  El binario de las 23:09 es **anterior** a los 2 tests nuevos: para reproducirlos
+  con todo el resto hay que relinkar cuando el lock se libere.
 
 ---
 
@@ -199,7 +220,7 @@ su tamaño en tres días** y ni el plan ni la suite lo han detectado.
 | **D-06** | P2 | `rust-core/src/coordination.rs:237` (`Connection::open`) | El tablero abre la SQLite **sin `busy_timeout`** (el de SQLite es 0) ⇒ dos procesos que escriben a la vez reciben `database is locked` **al instante**, sin esperar. Con WAL activo (`coordination.rs:266`) el problema persiste en las escrituras. | (C) `coordination.rs:237-245` (no hay `busy_timeout`) frente a `coordination.rs:266-267` (sí hay WAL). | El tablero (el sitio donde "vive el plan") falla de forma intermitente y **pierde claims** justo cuando hay más de un agente. | `PRAGMA busy_timeout=5000` + reintento con backoff en las escrituras. | S (1 h) |
 | **D-07** | P2 | `tools/findings_from_manifest.py:565-570` | La salida (`findings.ndjson`) se escribe con `open(out_path, "w")`: **trunca y luego escribe**. Si el proceso muere a mitad, el fichero queda truncado y el daemon (o el agente) leerá NDJSON a medias. | (C) `findings_from_manifest.py:567`. | Un `Ctrl-C` o un OOM dejan el fichero de hallazgos corrupto y **no hay forma de distinguir "vacío" de "truncado"**. | Escribir a `.tmp` + `os.replace` (atómico en el mismo FS). | S (20 min) |
 | **D-08** | P2 | `rust-core/src/cockpit_server.rs:1822-1941` | `run_server` nunca devuelve: su bucle final es `loop { sleep(3600) }` y el `Ok(())` de la línea 1940 es **código muerto**. No hay ruta de **apagado ordenado** (ni `SIGTERM`): el daemon siempre muere por `killall`. | (C) `cockpit_server.rs:1936-1940`. | Cada reinicio es un `kill -9` en pleno I/O: se pueden perder escrituras (NDJSON, `providers.json`, `board.sqlite`). | Manejar `SIGTERM`/`SIGINT` → cerrar el listener, vaciar buffers y salir 0; y hacer el supervisor `kill -TERM` antes de `kill -9`. | M (½ día) |
-| **D-09** | **P1** | `rust-core/src/task_scheduler.rs` (18), `alerts.rs` (6), `npu_cv.rs` (6), `npu_bridge.rs` (1) | **31 `lock().unwrap()` sobre mutex GLOBALES** (`task_scheduler.rs`: `queue()`/`journal()`/`COUNTER`; `alerts.rs`: `store()`; `npu_cv.rs`: `vision_state()`; `npu_bridge.rs`: `cache()`). Un panic mientras se mantiene el lock **envenena** el mutex ⇒ a partir de ahí **toda** llamada a ese mutex paniquea ⇒ el subsistema queda **muerto para el resto de la vida del proceso**, y como el release desenrolla (v15) el daemon **sigue contestando 200/500** ⇒ parece vivo y no lo está. | (C) `grep -rn "lock()\.unwrap()" rust-core/src/` → **31** en 4 ficheros (re-verificado a las 03:2x); `task_scheduler.rs:94-100` (`static Q`/`static J` con `OnceLock<Mutex<…>>`). Contraste: **el cockpit ya está arreglado** (`cockpit_server.rs:1899/1912/1931` usan `unwrap_or_else(\|e\| e.into_inner())`) ⇒ el patrón correcto ya existe en el repo. | La **cola de tareas compartida** (la que usan el MCP, la delegación y el tablero) envenenada = el sistema de agentes queda **inutilizable** sin que nada lo anuncie: el móvil "va bien", el daemon responde, y nada se encola. En `alerts.rs` las alertas dejan de poder registrarse; en `npu_cv.rs` el estado de visión se queda congelado. | Sustituir los 31 por `lock().unwrap_or_else(\|p\| p.into_inner())` (patrón ya usado en `api_key.rs` y `cockpit_server.rs`). Con `panic::set_hook` (D-10) los panics dejan rastro. | S (2 h) |
+| **D-09** | **P1** | `rust-core/src/task_scheduler.rs` (18), `alerts.rs` (6) | **24 `lock().unwrap()` sobre mutex GLOBALES** (`task_scheduler.rs`: `queue()`/`journal()`/`COUNTER`; `alerts.rs`: `store()`; `npu_cv.rs`: `vision_state()`; `npu_bridge.rs`: `cache()`). Un panic mientras se mantiene el lock **envenena** el mutex ⇒ a partir de ahí **toda** llamada a ese mutex paniquea ⇒ el subsistema queda **muerto para el resto de la vida del proceso**, y como el release desenrolla (v15) el daemon **sigue contestando 200/500** ⇒ parece vivo y no lo está. | (C) `grep -rn "lock()\.unwrap()" rust-core/src/` → **24** al cierre (a las 03:3x): `task_scheduler.rs` (18) + `alerts.rs` (6). `task_scheduler.rs:94-100` (`static Q`/`static J` con `OnceLock<Mutex<…>>`). Contraste: **el cockpit ya está arreglado** (`cockpit_server.rs:1899/1912/1931` usan `unwrap_or_else(\|e\| e.into_inner())`) ⇒ el patrón correcto ya existe en el repo. **Parte ya arreglado a las 03:38**: `npu_cv.rs` (6) y `npu_bridge.rs` (1) pasaron a `unwrap_or_else(\|p\| p.into_inner())` ⇒ quedan **24**, no 31. | La **cola de tareas compartida** (la que usan el MCP, la delegación y el tablero) envenenada = el sistema de agentes queda **inutilizable** sin que nada lo anuncie: el móvil "va bien", el daemon responde, y nada se encola. En `alerts.rs` las alertas dejan de poder registrarse; en `npu_cv.rs` el estado de visión se queda congelado. | Sustituir los 31 por `lock().unwrap_or_else(\|p\| p.into_inner())` (patrón ya usado en `api_key.rs` y `cockpit_server.rs`). Con `panic::set_hook` (D-10) los panics dejan rastro. | S (2 h) |
 | **D-10** | P2 | `rust-core/src/` (todo el crate) | **No hay ningún `panic::set_hook`**: un panic se imprime por stderr y se pierde. | (C) `grep -rn "panic::set_hook" rust-core/src/` → **0 hits**. | El **134 (SIGABRT) medido en el móvil** (HW-01) **no puede ser un panic de Rust** con unwind ⇒ viene de un `abort()` explícito, un doble panic o un assert en lib nativa (sqlite3/NPU): **sin hook no hay backtrace y no hay forma de localizarlo**. Y los panics que sí ocurren envenenan los mutex de D-09 **sin dejar rastro**. | (a) `std::panic::set_hook` en el arranque que registre `payload` + `backtrace::Backtrace` a un fichero del `state_dir`; (b) `RUST_BACKTRACE=1` en el entorno del supervisor. **Dueño propuesto: lane del `main.rs`/arranque** (no es `cockpit_server.rs` ni `shm.rs`, luego **no choca con la regla de intocabilidad**). | S (1 h) |
 
 ---
@@ -328,8 +349,9 @@ Objetivo: que desplegar v14 no tumbe el móvil ni regale root.
   (`Arsenal::exec_root` → `android::root_exec_tool`), y `confirm` para `/data/adb`.
 - **D-03 + F-03**: el supervisor decide con `/health`, no con `pgrep`; y
   `megadaemon-core doctor` existe (5 líneas) para el diagnóstico.
-- **D-09** (P1): los **31 `lock().unwrap()`** de `task_scheduler.rs`,
-  `alerts.rs`, `npu_cv.rs` y `npu_bridge.rs` → `unwrap_or_else(|p| p.into_inner())`
+- **D-09** (P1): los **24 `lock().unwrap()`** que quedan de `task_scheduler.rs`
+  (18) y `alerts.rs` (6) → `unwrap_or_else(|p| p.into_inner())`
+  (`npu_cv.rs` y `npu_bridge.rs`: **ya arreglados a las 03:38** ✓)
   (el patrón ya está en `cockpit_server.rs:1899/1912/1931` ⇒ **el cockpit ya está
   arreglado**, el resto no). Sin esto, un panic envenena el mutex y **todo** el
   subsistema queda muerto para el resto del proceso.
@@ -402,15 +424,18 @@ G-01 (arneses versionados) ───────────► todas (nada se p
 | **2** | **A-02** | P0 | `find_duplicates` ejecuta el **nombre del fichero** (AWK → shell) como root | **Test** `adv_a02_find_duplicates_inyecta_comandos_por_el_nombre_de_fichero` + `android.rs:808` |
 | **3** | **A-18** | P0 | La exención `local_browser` entrega el **token root** a cualquier petición "local" (`Host` falsificable) ⇒ **cualquier app del móvil** se lo lleva por `127.0.0.1:9090` | **Test** `adv_a18_la_exencion_local_entrega_el_token_root` + `cockpit_server.rs:179-181/231/871/1574` |
 | **4** | **A-04** | P0 | `MEGADAEMON_REQUIRE_API_KEY=1` no fuerza nada si no hay key ⇒ fail-open del túnel | **Test** `adv_a04_require_api_key_se_ignora_sin_key_configurada` + `api_key.rs:408-411` |
-| **5** | **B-01** | P0 | API key real + token de sesión root publicados en el árbol (ya redactados ⇒ **rotar**) | `docs/EXTERNAL_AGENT_PROMPT_FINAL.md` (21:21; redactado 21:28) → re-verificado 03:2x: 0 literales reales en el árbol |
-| **6** | **I-01** | P0 | La UI v1 sólo sabe usar `window.MEGADAEMON_TOKEN`, que el servidor nuevo inyecta **vacío** ⇒ con el binario v14 **no pinta un solo dato** | `cockpit_template.html:795-801` + `cockpit_server.rs:986` (inyección) |
-| **7** | **A-16 / E-03** | P1 | 64 clientes × 8 MB = **512 MB** de buffers (+128 MB de pilas) en un móvil con ~300 MB libres | **Test** `adv_e02_el_techo_de_memoria_del_cockpit_supera_la_ram_libre` + `cockpit_server.rs:695-718` |
-| **8** | **D-09** | P1 | **31 `lock().unwrap()`** sobre mutex **globales** (`task_scheduler.rs` 18, `alerts.rs` 6, `npu_cv.rs` 6, `npu_bridge.rs` 1) ⇒ un panic envenena el mutex y el subsistema queda **muerto para siempre** (el daemon sigue contestando ⇒ parece sano) | (C) `grep -rn "lock()\.unwrap()" rust-core/src/` → 31; patrón correcto ya en `cockpit_server.rs:1899/1912/1931` |
-| **9** | **A-11** | P1 | `/api/chat` ejecuta root **sin** la política destructiva (el MCP sí la aplica) | `seere_v11.rs:1290-1296` + `:2006-2018` vs `android.rs:821-836` |
+| **5** | **I-01** | P0 | La UI v1 sólo sabe usar `window.MEGADAEMON_TOKEN`, que el servidor nuevo inyecta **vacío** ⇒ con el binario v14 **no pinta un solo dato** | `cockpit_template.html:795-801` + `cockpit_server.rs:986` (inyección) |
+| **6** | **A-16 / E-03** | P1 | 64 clientes × 8 MB = **512 MB** de buffers (+128 MB de pilas) en un móvil con ~300 MB libres | **Test** `adv_e02_el_techo_de_memoria_del_cockpit_supera_la_ram_libre` + `cockpit_server.rs:695-718` |
+| **7** | **D-09** | P1 | **24 `lock().unwrap()`** sobre mutex **globales** (`task_scheduler.rs` 18, `alerts.rs` 6) ⇒ un panic envenena el mutex y el subsistema queda **muerto para siempre** (el daemon sigue contestando ⇒ parece sano) | (C) `grep -rn "lock()\.unwrap()" rust-core/src/` → 24 al cierre (los 7 de `npu_cv`/`npu_bridge` se arreglaron a las 03:38); patrón correcto ya en `cockpit_server.rs:1899/1912/1931` |
+| **8** | **A-11** | P1 | `/api/chat` ejecuta root **sin** la política destructiva (el MCP sí la aplica) | `seere_v11.rs:1290-1296` + `:2006-2018` vs `android.rs:821-836` |
+| **9** | **A-03 / A-06** | P1 | La política destructiva es **evadible** (`||`/`&&` sin paréntesis: `cmd && rm … || echo ok` pasa) y `/data/adb` se escribe **sin** `confirm` | `android.rs:35-60` (política) + `:712-718` (`/data/adb`) |
 | **10** | **D-03 / F-03** | P1 | El supervisor decide con `pgrep` ("vivo" ≠ "sirviendo") y **`cockpit_doctor::run_doctor_cli` no está cableado**: la herramienta para diagnosticar "vivo pero mudo" no se puede ejecutar | `99-megadaemon.sh:249` + `cockpit_doctor.rs:518` (la función existe; falta el subcomando) |
 
 > **Ya corregidos durante esta auditoría** (no cuentan en el TOP 10, pero se
-> documentan): **A-15** (el puente inyectaba key+token a la LAN → `23e82ed`),
+> documentan): **B-01** (la API key **sí rotó** a las 03:0x y el túnel cambió;
+> verificado desde fuera ⇒ la credencial filtrada ya no sirve) y **B-02** (el
+> token del túnel ya no vive en el repo → `70f9c34`), **A-15** (el puente
+> inyectaba key+token a la LAN → `23e82ed`),
 > **A-07** (el intercambio era inalcanzable → UI-16 del owner del cockpit, aunque
 > su arreglo introdujo A-18), **D-01** y **D-02** (el supervisor se apagaba y el
 > despliegue no hacía rollback → auto-rollback + "no se rinde", `7fd13de`),
@@ -431,7 +456,7 @@ toco**: los ficheros de otros agentes son intocables para mí.
 | **A-01 / A-02** (P0, RCE root) | `rust-core/src/android.rs` | **sesión del harness/MCP** (`cc01d5d7`, "Auditar harness SEER"), que ya arregló `android.rs` en `7e38bdb` | es el módulo del que depende el canal MCP que usa el agente externo | `fs_write`: **base64 siempre** (nada de texto crudo en el heredoc). `find_duplicates`: sacar el `stat` de la construcción de AWK (o `find -print0` + `%s` sin interpolar). 2 tests ya escritos y en rojo. |
 | **A-04** (P0, fail-open) | `rust-core/src/api_key.rs` | **bus de coordinación** (`9cb64913`), último committer del fichero (`51144e7`) | el gate de la API key es del carril de auth/SEER | si `forced` ⇒ exigir key **y autogenerarla** si falta, con aviso ruidoso. Test ya escrito y en rojo. |
 | **A-18 + I-01** (P0) | `rust-core/src/cockpit_server.rs`, `web/cockpit_template.html` | **nodo externo + web** (el trabajo en vuelo) — **no** por separado: el arreglo de A-18 va **en el mismo parche** que el fix que ya tienen abierto | la regla vigente deja `cockpit_server.rs` intocable; el token root se entrega porque `local_browser` depende del `Host` | (a) el intercambio **comprueba la API key real siempre** (sin la rama `local_browser`); (b) el token entregado es **de sesión**, no el root; (c) la UI v1 obtiene el token por el camino que el servidor ya soporta. Test ya escrito y en rojo (`adv_a18`). |
-| **D-09** (P1, mutex envenenables) | `task_scheduler.rs`, `alerts.rs`, `npu_cv.rs`, `npu_bridge.rs` | **dueño de `task_scheduler.rs`** (cola de tareas del MCP) + **dueño de `alerts.rs`** + **dueño de NPU** (`46e23911`, que lleva `npu_cv`/`npu_bridge`) | son 4 módulos de 3 carriles distintos; el arreglo es mecánico (1 línea × 31) | `lock().unwrap_or_else(\|p\| p.into_inner())` — el patrón **ya existe** en `cockpit_server.rs` y `api_key.rs`. |
+| **D-09** (P1, mutex envenenables) | `task_scheduler.rs` (18), `alerts.rs` (6) | **bus de coordinación** (`9cb64913`): es el último committer de `task_scheduler.rs` (`f86aa38`) y su carril tiene la cola de tareas | son 2 módulos y el arreglo es mecánico (1 línea × 24). **`npu_cv.rs`/`npu_bridge.rs`: ✅ ya arreglados a las 03:38** (lane NPU) | `lock().unwrap_or_else(\|p\| p.into_inner())` — el patrón **ya existe** en `cockpit_server.rs` y `api_key.rs`. Test de regresión escrito (`adv_d09_…`, en rojo). |
 | **D-10** (P2, `panic::set_hook`) | arranque (`main.rs` o el supervisor) | **lane del arranque** — no es `cockpit_server.rs`/`shm.rs`/`99-megadaemon.sh` ⇒ **no choca con la intocabilidad** | sin hook, el 134 medido no deja rastro | `std::panic::set_hook` → payload + `Backtrace` a un fichero del `state_dir`; `RUST_BACKTRACE=1` en el supervisor. |
 | **B-01** (P0, rotar) | credenciales | **principal** (`6d7ffc8f`) | es quien las tiene en `/workspace/md-secrets/instance.env` y quien ya rota el token de sesión | rotar API key + token de sesión root + **el token del túnel viejo** (`upload_bin.py` ya no lo tiene en el repo, pero el valor sigue vivo). |
 
