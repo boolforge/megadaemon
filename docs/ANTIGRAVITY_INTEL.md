@@ -281,6 +281,20 @@ Barrido de cadenas por streaming (sin extraerlo a disco: el móvil está al 98 %
 | `gemini` | 3.009 | cliente Gemini |
 | `anthropic` | 119 | cliente Anthropic |
 
+**Prueba definitiva (segundo barrido, focalizado)**: el binario embuelve el **SDK oficial de MCP
+en Go de Google**:
+
+```
+google3/third_party/golang/github_com/modelcontextprotocol/go_sdk/v/v0/mcp/mcp
+  · CallToolParams, CallToolParamsRaw, CompleteParams, ElicitParams, CancelledParams
+  · CreateMessageParams, CreateMessageWithToolsParams, ListPromptsParams, GetPromptParams
+  · ClientCapabilities, Implementation{clientInfo, protocolVersion}, PingParams
+  · methodInfo, isResult(), isNil()  ·  json:"name" · json:"arguments" · json:"_meta"
+```
+
+⇒ el language server de Antigravity es **un cliente MCP completo** (no una imitación): llama
+`tools/call`, `initialize`, `complete`, `elicitation`, etc. con el SDK oficial.
+
 Complemento con la evidencia del SDK (plugin `google-antigravity-sdk`, instalado en el propio
 dispositivo): `skills/google-antigravity-sdk/examples/getting_started/mcp_tools.md` documenta
 `types.McpStdioServer(name, command, args)` **y** `types.McpStreamableHttpServer(name, url,
