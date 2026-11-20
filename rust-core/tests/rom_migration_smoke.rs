@@ -14,35 +14,7 @@
 #[path = "../src/rom_migration.rs"]
 mod rom_migration;
 
-use rom_migration::{
-    compare_inventories,
-    dry_run_report,
-    efs_backup_plan,
-    flash_plan,
-    mark_efs_verified,
-    plan_json,
-    preflight,
-    select_rom,
-    AvbState,
-    DeviceFacts,
-    EfsBackupPlan,
-    EFS_SAFE_WORLD,
-    FlashStage,
-    RomPackage,
-    SelectionCriteria,
-    UnlockState,
-    omc_decode,
-    omc_encode,
-    omc_decode_gzip,
-    omc_encode_gzip,
-    csc_feature_get,
-    csc_features,
-    csc_feature_set,
-    omc_feature_patch_plan,
-    RECORDING_FEATURE,
-    RECORDING_VALUE_ALLOWED,
-    csc_recording_module_files,
-};
+use rom_migration::{compare_inventories, dry_run_report, efs_backup_plan, flash_plan, mark_efs_verified, plan_json, preflight, select_rom, AvbState, DeviceFacts, EfsBackupPlan, EFS_SAFE_WORLD, FlashStage, RomPackage, SelectionCriteria, UnlockState, omc_decode, omc_encode, omc_decode_gzip, omc_encode_gzip, csc_feature_get, csc_features, csc_feature_set, omc_feature_patch_plan, RECORDING_FEATURE, RECORDING_VALUE_ALLOWED, csc_recording_module_files, recording_value_recommended, recording_value_has_disclaimer, RECORDING_VALUE_ALLOWED_WITH_DISCLAIMER, RECORDING_VALUE_ALLOWED_WITH_DISCLAIMER_INDIA};
 use std::collections::BTreeMap;
 
 fn device_ready() -> DeviceFacts {
@@ -341,4 +313,27 @@ fn el_modulo_magisk_hace_bind_mount_del_cscfeature_parcheado() {
     assert!(script.content.contains("/prism/etc/carriers/single/AMO/contents.db"));
     assert!(script.content.contains("mount --bind"));
     assert_eq!(script.mode, 0o755);
+}
+
+#[test]
+fn el_valor_de_grabacion_recomendado_avisa_a_la_otra_parte() {
+    // En Espana grabar en silencio a un tercero es delito (art. 197 CP):
+    // el valor por defecto tiene que llevar el disclaimer.
+    assert_eq!(
+        recording_value_recommended(),
+        "RecordingAllowedByMenu,disclaimer_latin"
+    );
+    assert!(recording_value_has_disclaimer(recording_value_recommended()));
+    assert!(recording_value_has_disclaimer(
+        RECORDING_VALUE_ALLOWED_WITH_DISCLAIMER_INDIA
+    ));
+    assert!(!recording_value_has_disclaimer(RECORDING_VALUE_ALLOWED));
+    // el modulo Magisk generado usa el valor con aviso
+    let files = csc_recording_module_files("AMO");
+    let desc = files
+        .iter()
+        .find(|f| f.path == "module.prop")
+        .expect("module.prop");
+    assert!(desc.content.contains("disclaimer_latin"), "{}", desc.content);
+    assert!(!desc.content.contains("=RecordingAllowed."), "{}", desc.content);
 }
