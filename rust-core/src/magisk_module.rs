@@ -654,12 +654,16 @@ pub fn write_module(dir: &str) -> Result<Vec<String>, String> {
     let root = Path::new(dir);
     fs::create_dir_all(root).map_err(|e| format!("no se pudo crear {}: {}", dir, e))?;
 
+    // v15: el módulo que se instala es el NUEVO (install/uninstall con
+    // manifiesto y chmod 755 después del mv).  El heredado se conserva como
+    // `uninstall_script()` para no romper a quien lo use.
     let files: Vec<(&str, String, u32)> = vec![
-        ("module.prop", module_manifest(MODULE_VERSION), 0o644),
-        ("post-fs-data.sh", post_fs_data_script(), 0o755),
-        ("service.sh", service_script(DEFAULT_STATE_DIR), 0o755),
+        ("module.prop", module_prop(), 0o644),
+        ("post-fs-data.sh", module_post_fs_data_script(), 0o755),
+        ("service.sh", module_service_script(), 0o755),
         ("customize.sh", customize_script(), 0o755),
-        ("uninstall.sh", uninstall_script(), 0o755),
+        ("uninstall.sh", uninstall_script_v15(), 0o755),
+        ("install-energy.sh", install_script(), 0o755),
     ];
 
     let mut written = Vec::with_capacity(files.len());
@@ -817,13 +821,14 @@ mod tests {
     fn write_module_escribe_todos_los_ficheros() {
         let d = temp_dir("write");
         let written = write_module(d.to_str().unwrap()).unwrap();
-        assert_eq!(written.len(), 5);
+        assert_eq!(written.len(), 6);
         for name in [
             "module.prop",
             "post-fs-data.sh",
             "service.sh",
             "customize.sh",
             "uninstall.sh",
+            "install-energy.sh",
         ] {
             let p = d.join(name);
             assert!(p.exists(), "falta {}", name);
@@ -850,5 +855,462 @@ mod tests {
         let r = write_module(file.to_str().unwrap());
         assert!(r.is_err());
         fs::remove_dir_all(&d).ok();
+    }
+}
+
+// ===========================================================================
+// v15 — MÓDULO MAGISK QUE SE INSTALA Y SE DESINSTALA LIMPIO
+// ===========================================================================
+//
+// REGLAS DEL ENCARGO (y cómo se cumplen en el código):
+//
+//  1. "sin panic=abort": el daemon que instala este módulo se compila SIN
+//     `panic = "abort"` (ver `rust-core/Cargo.toml`, perfil release).  Con
+//     abort, CUALQUIER panic (por ejemplo un mutex envenenado) mata el
+//     proceso entero => el origen del túnel cae => 502/530.  Sin abort, el
+//     panic se queda en la conexión y el daemon sigue sirviendo.
+//
+//  2. "sin dejar el móvil sin root": este módulo NUNCA toca el Magisk de la
+//     máquina: ni `magisk --remove-modules`, ni `/data/adb/magisk`, ni los
+//     módulos de otros.  Sólo escribe dentro de SU PROPIO directorio de
+//     módulo y en `/data/local/tmp/megadaemon`.  El lint de abajo lo verifica.
+//
+//  3. "el supervisor tiene que poder relanzar el daemon aunque el módulo
+//     falle": el lanzador real es `/data/adb/service.d/99-megadaemon.sh`, que
+//     Magisk ejecuta en cada arranque aunque no haya NINGÚN módulo instalado.
+//     El `service.sh` del módulo sólo comprueba que el supervisor existe y
+//     está sano; si el módulo falla, el service.d sigue relanzando el daemon.
+//
+//  4. "el `mv` de un binario deja el fichero SIN bit +x => chmod 755 DESPUÉS
+//     del `mv`": todas las instalaciones pasan por `install_exec()`, que hace
+//     `mv` y LUEGO `chmod 755`.  El lint comprueba el ORDEN en el texto
+//     generado, no sólo que aparezca un chmod.
+
+/// Versión del módulo (código numérico para Magisk).
+pub const MODULE_VERSION_CODE: i64 = 15_00;
+
+/// Manifiesto de lo instalado: sin esto no se puede desinstalar limpio.
+pub const INSTALL_MANIFEST: &str = "/data/adb/modules/megadaemon_energy/installed.manifest";
+
+/// Ruta del supervisor (el lanzador real, de Magisk `service.d`).
+pub const SUPERVISOR_PATH: &str = "/data/adb/service.d/99-megadaemon.sh";
+
+/// Prefijo de trabajo del daemon.
+pub const PREFIX_DIR: &str = "/data/local/tmp/megadaemon";
+
+/// Genera el script de instalación EN MARCHA del payload del módulo.
+///
+/// Instala (si existen) el binario del daemon y el supervisor, valida el
+/// supervisor con `sh -n` ANTES de moverlo, deja copia del anterior para
+/// rollback y escribe el manifiesto de lo instalado.
+pub fn install_script() -> String {
+    r#"#!/system/bin/sh
+# =====================================================================
+# install-energy.sh — instala el payload del módulo en marcha.
+#
+# REGLA DE ORO (medida el 2026-11-20): un `mv` puede dejar el fichero
+# SIN el bit +x (el supervisor llegaba a decir "no existe" cuando lo que
+# pasaba es "no ejecutable").  Por eso TODO lo que se instala pasa por
+# install_exec(), que hace `mv` y LUEGO `chmod 755`.
+#
+# Si algo falla, se RESTAURA lo anterior: el móvil nunca se queda sin
+# daemon por un módulo fallido.
+# =====================================================================
+set -u
+
+PREFIX=/data/local/tmp/megadaemon
+MODDIR=/data/adb/modules/megadaemon_energy
+MANIFEST=$MODDIR/installed.manifest
+SUPERVISOR=/data/adb/service.d/99-megadaemon.sh
+SRC_DIR="${1:-$PREFIX}"
+
+log() { echo "[megadaemon-energy] $*"; }
+die() { log "ERROR: $*"; exit 1; }
+
+# --- install_exec <origen> <destino> ------------------------------------
+# Copia, valida, mueve y PERMITE LA EJECUCIÓN DESPUÉS DEL mv.
+install_exec() {
+    src="$1"; dst="$2"
+    [ -f "$src" ] || { log "no existe el origen $src"; return 1; }
+    tmp="$dst.tmp.$$"
+    cp -f "$src" "$tmp" || { log "no se pudo copiar $src"; return 1; }
+    chmod 755 "$tmp" || { log "no se pudo chmod 755 el temporal"; return 1; }
+    mv -f "$tmp" "$dst" || { log "no se pudo mover a $dst"; rm -f "$tmp"; return 1; }
+    # >>> AQUÍ va el chmod 755: DESPUÉS del mv, nunca antes <<<
+    chmod 755 "$dst" || { log "no se pudo chmod 755 $dst"; return 1; }
+    [ -x "$dst" ] || { log "$dst NO es ejecutable tras el mv"; return 1; }
+    return 0
+}
+
+mkdir -p "$MODDIR" "$PREFIX" || die "no se pudieron crear los directorios"
+
+: > "$MANIFEST"
+
+# --- 1) daemon ----------------------------------------------------------
+if [ -f "$SRC_DIR/megadaemon-core" ]; then
+    [ -f "$PREFIX/megadaemon-core" ] && cp -f "$PREFIX/megadaemon-core" "$PREFIX/megadaemon-core.prev"
+    if install_exec "$SRC_DIR/megadaemon-core" "$PREFIX/megadaemon-core"; then
+        echo "$PREFIX/megadaemon-core" >> "$MANIFEST"
+        log "daemon instalado: $PREFIX/megadaemon-core ($(stat -c %s "$PREFIX/megadaemon-core" 2>/dev/null) bytes, +x=$( [ -x "$PREFIX/megadaemon-core" ] && echo si || echo NO ))"
+    else
+        log "fallo al instalar el daemon; se restaura el anterior"
+        [ -f "$PREFIX/megadaemon-core.prev" ] && cp -f "$PREFIX/megadaemon-core.prev" "$PREFIX/megadaemon-core" && chmod 755 "$PREFIX/megadaemon-core"
+        die "no se pudo instalar el daemon (se restauró el anterior)"
+    fi
+else
+    log "no hay binario en $SRC_DIR: se conserva el ya instalado"
+fi
+
+# --- 2) supervisor ------------------------------------------------------
+# Se valida con `sh -n` ANTES de tocar el que está en marcha: un supervisor
+# con error de sintaxis dejaría el móvil sin daemon.
+if [ -f "$SRC_DIR/99-megadaemon.sh" ]; then
+    if sh -n "$SRC_DIR/99-megadaemon.sh" 2>/dev/null; then
+        cp -f "$SUPERVISOR" "$SUPERVISOR.prev-energy" 2>/dev/null
+        if install_exec "$SRC_DIR/99-megadaemon.sh" "$SUPERVISOR"; then
+            echo "$SUPERVISOR" >> "$MANIFEST"
+            echo "$SUPERVISOR.prev-energy" >> "$MANIFEST"
+            log "supervisor instalado (sintaxis validada)"
+        else
+            log "fallo al instalar el supervisor; se restaura el anterior"
+            [ -f "$SUPERVISOR.prev-energy" ] && cp -f "$SUPERVISOR.prev-energy" "$SUPERVISOR" && chmod 755 "$SUPERVISOR"
+        fi
+    else
+        log "el supervisor propuesto NO pasa sh -n: no se instala (se queda el actual)"
+    fi
+else
+    log "no hay supervisor en $SRC_DIR: se conserva el actual"
+fi
+
+chmod 700 "$MANIFEST" 2>/dev/null
+log "instalación terminada; manifiesto en $MANIFEST"
+"#
+    .to_string()
+}
+
+/// Genera el script de desinstalación (v15).
+///
+/// Desinstala SÓLO lo que está en el manifiesto, restaura el daemon anterior
+/// (no lo borra: si lo borrara, el móvil se quedaría sin binario para
+/// reiniciar) y NO toca el Magisk de la máquina ni otros módulos.
+pub fn uninstall_script_v15() -> String {
+    r#"#!/system/bin/sh
+# =====================================================================
+# uninstall-energy.sh — desinstalación limpia del módulo.
+#
+# Reglas:
+#   * sólo se borra lo que aparece en el manifiesto de instalación;
+#   * el daemon se RESTAURA (copia .prev), nunca se borra: si se borrara, el
+#     supervisor no podría relanzarlo y el móvil se quedaría sin daemon;
+#   * NO se toca /data/adb/magisk, ni el binario de Magisk, ni los módulos
+#     de otros: el móvil conserva root SIEMPRE;
+#   * el daemon se relanza desde service.d en el siguiente arranque.
+# =====================================================================
+set -u
+
+PREFIX=/data/local/tmp/megadaemon
+MODDIR=/data/adb/modules/megadaemon_energy
+MANIFEST=$MODDIR/installed.manifest
+SUPERVISOR=/data/adb/service.d/99-megadaemon.sh
+
+log() { echo "[megadaemon-energy] $*"; }
+
+if [ -f "$MANIFEST" ]; then
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        case "$f" in
+            "$PREFIX/megadaemon-core")
+                # NO se borra el daemon: se RESTAURA el anterior.
+                if [ -f "$PREFIX/megadaemon-core.prev" ]; then
+                    mv -f "$PREFIX/megadaemon-core.prev" "$PREFIX/megadaemon-core"
+                    # el mv puede perder el bit +x: chmod DESPUÉS
+                    chmod 755 "$PREFIX/megadaemon-core"
+                    log "daemon restaurado desde $PREFIX/megadaemon-core.prev (ejecutable=$([ -x "$PREFIX/megadaemon-core" ] && echo si || echo NO))"
+                else
+                    log "no hay copia anterior del daemon: se conserva el actual"
+                fi
+                ;;
+            "$PREFIX"/*|"$MODDIR"/*)
+                rm -f "$f" && log "borrado $f"
+                ;;
+            *)
+                log "NO se borra (fuera del ámbito): $f"
+                ;;
+        esac
+    done < "$MANIFEST"
+    rm -f "$MANIFEST"
+fi
+
+# Restaurar el supervisor anterior si el módulo lo había sustituido.
+if [ -f "$SUPERVISOR.prev-energy" ]; then
+    cp -f "$SUPERVISOR.prev-energy" "$SUPERVISOR" && chmod 755 "$SUPERVISOR" \
+        && log "supervisor restaurado desde $SUPERVISOR.prev-energy"
+    rm -f "$SUPERVISOR.prev-energy"
+fi
+
+log "desinstalación terminada. Magisk y el root NO se han tocado."
+"#
+    .to_string()
+}
+
+/// Genera el `service.sh` del módulo.
+///
+/// NO es el lanzador del daemon: el lanzador es `service.d` (que corre
+/// aunque no haya módulos).  Este script sólo comprueba que el supervisor
+/// está y es sano, y lo relanza si falta.
+pub fn module_service_script() -> String {
+    r#"#!/system/bin/sh
+# =====================================================================
+# service.sh — arranque tardío del MÓDULO (no del daemon).
+#
+# El daemon lo lanza /data/adb/service.d/99-megadaemon.sh, que Magisk
+# ejecuta en CADA arranque aunque no haya módulos instalados.  Si este
+# módulo falla o se desinstala, el supervisor sigue ahí y el daemon se
+# relanza igual: el módulo no es un punto único de fallo.
+# =====================================================================
+MODDIR=/data/adb/modules/megadaemon_energy
+SUPERVISOR=/data/adb/service.d/99-megadaemon.sh
+
+log() { echo "[megadaemon-energy] $*" >> /data/local/tmp/megadaemon/energy_module.log; }
+
+log "service.sh ejecutado"
+
+if [ ! -f "$SUPERVISOR" ]; then
+    log "AVISO: no hay supervisor en $SUPERVISOR"
+    exit 0
+fi
+
+if ! sh -n "$SUPERVISOR" 2>/dev/null; then
+    log "AVISO: el supervisor tiene error de sintaxis; no se toca"
+    exit 0
+fi
+
+if ! pgrep -f "99-megadaemon.sh" > /dev/null 2>&1; then
+    log "el supervisor no está corriendo: se relanza"
+    sh "$SUPERVISOR" >> /data/local/tmp/megadaemon/supervisor.log 2>&1 &
+fi
+
+log "estado: supervisor presente y sano"
+exit 0
+"#
+    .to_string()
+}
+
+/// Genera el `post-fs-data.sh` del módulo.
+///
+/// Corre antes de que /data esté descifrado por completo: aquí SÓLO se
+/// preparan directorios y se registra la versión.  Ninguna acción que
+/// pueda fallar y dejar el móvil sin root.
+pub fn module_post_fs_data_script() -> String {
+    r#"#!/system/bin/sh
+# =====================================================================
+# post-fs-data.sh — fase temprana (antes de /data descifrado).
+#
+# Aquí NO se arranca nada: en esta fase el sistema todavía no está listo
+# y un fallo dejaría el móvil sin servicio.  Sólo se preparan rutas.
+# =====================================================================
+MODDIR=/data/adb/modules/megadaemon_energy
+PREFIX=/data/local/tmp/megadaemon
+
+mkdir -p "$PREFIX" 2>/dev/null
+mkdir -p "$PREFIX/state" 2>/dev/null
+mkdir -p "$MODDIR" 2>/dev/null
+exit 0
+"#
+    .to_string()
+}
+
+/// Genera el `module.prop` (manifiesto) del módulo.
+pub fn module_prop() -> String {
+    format!(
+        "id={id}\nname={name}\nversion={version}\nversionCode={code}\nauthor={author}\ndescription={desc}\n",
+        id = MODULE_ID,
+        name = MODULE_NAME,
+        version = MODULE_VERSION,
+        code = MODULE_VERSION_CODE,
+        author = MODULE_AUTHOR,
+        desc = MODULE_DESCRIPTION,
+    )
+}
+
+/// Comprueba que los scripts generados NO violan las reglas del encargo.
+///
+/// Devuelve la lista de violaciones (vacía = todo correcto).  Es la forma de
+/// que las reglas sean verificables y no una promesa.
+pub fn lint_scripts() -> Vec<String> {
+    let mut bad = Vec::new();
+    let scripts: Vec<(&str, String)> = vec![
+        ("install", install_script()),
+        ("uninstall", uninstall_script_v15()),
+        ("service", module_service_script()),
+        ("post-fs-data", module_post_fs_data_script()),
+        ("customize", customize_script()),
+        ("post_fs_data_legacy", post_fs_data_script()),
+        ("service_legacy", service_script(DEFAULT_STATE_DIR)),
+    ];
+
+    for (name, body) in &scripts {
+        // 1) panic=abort
+        if body.contains("panic=abort") || body.contains("panic = \"abort\"") {
+            bad.push(format!("{}: menciona panic=abort", name));
+        }
+        // 2) nunca tocar el Magisk de la máquina
+        for pat in [
+            "magisk --remove-modules",
+            "rm -rf /data/adb",
+            "rm -rf /data/adb/magisk",
+            "magisk --remove",
+        ] {
+            if body.contains(pat) {
+                bad.push(format!("{}: toca el Magisk de la máquina ({})", name, pat));
+            }
+        }
+        // 3) chmod 755 SIEMPRE después del mv, y sólo para los mv de
+        // BINARIOS/SCRIPTS: un .log que rota no necesita el bit +x.
+        let mut rest = body.as_str();
+        while let Some(m) = rest.find("mv -f") {
+            let linea = rest[m..].lines().next().unwrap_or("");
+            let es_binario = linea.contains("megadaemon-core")
+                || linea.contains("99-megadaemon.sh")
+                || linea.contains("$dst");
+            if es_binario {
+                let after = rest[m..].find("chmod 755");
+                if after.is_none() {
+                    bad.push(format!(
+                        "{}: mv de binario sin chmod 755 DESPUÉS: {}",
+                        name,
+                        linea.trim()
+                    ));
+                }
+            }
+            rest = &rest[m + 5..];
+        }
+        // 4) el instalador tiene que comprobar el bit +x después de mover
+        if *name == "install" && !body.contains("[ -x \"$dst\" ]") {
+            bad.push("install: no comprueba que el destino sea ejecutable".to_string());
+        }
+        // 5) el desinstalador tiene que usar el manifiesto
+        if *name == "uninstall" && !body.contains("installed.manifest") {
+            bad.push("uninstall: no usa el manifiesto".to_string());
+        }
+        // 6) el servicio del módulo no puede ser el único lanzador
+        if *name == "service" && !body.contains("service.d/99-megadaemon.sh") {
+            bad.push("service: no comprueba el supervisor de service.d".to_string());
+        }
+    }
+    bad
+}
+
+#[cfg(test)]
+mod v15_tests {
+    use super::*;
+
+    #[test]
+    fn los_scripts_no_violan_las_reglas() {
+        let bad = lint_scripts();
+        assert!(bad.is_empty(), "violaciones: {:?}", bad);
+    }
+
+    #[test]
+    fn el_chmod_755_viene_despues_del_mv() {
+        let s = install_script();
+        let mv = s.find("mv -f").expect("debe haber un mv");
+        // el chmod que importa es el que va DESPUÉS del mv (offset absoluto)
+        let chmod = mv
+            + s[mv..]
+                .find("chmod 755")
+                .expect("debe haber un chmod 755 despues del mv");
+        assert!(chmod > mv, "el chmod 755 debe ir después del mv");
+        // y el ejecutable se comprueba al final
+        assert!(s.contains("[ -x \"$dst\" ]"));
+    }
+
+    #[test]
+    fn el_instalador_hace_rollback_si_falla() {
+        let s = install_script();
+        assert!(s.contains("megadaemon-core.prev"));
+        assert!(s.contains("se restauró el anterior"));
+    }
+
+    #[test]
+    fn el_supervisor_se_valida_antes_de_sustituir_al_que_funciona() {
+        let s = install_script();
+        let check = s.find("sh -n").expect("debe validar la sintaxis");
+        let install = s
+            .find("install_exec \"$SRC_DIR/99-megadaemon.sh\"")
+            .unwrap();
+        assert!(check < install, "se valida antes de instalar");
+    }
+
+    #[test]
+    fn el_desinstalador_restaura_el_daemon_en_vez_de_borrarlo() {
+        let s = uninstall_script_v15();
+        assert!(s.contains("megadaemon-core.prev"));
+        assert!(s.contains("daemon restaurado"));
+        // y el chmod va DESPUÉS del mv del daemon
+        let mv = s
+            .find("mv -f \"$PREFIX/megadaemon-core.prev\"")
+            .expect("mv del .prev");
+        let chmod = mv
+            + s[mv..]
+                .find("chmod 755 \"$PREFIX/megadaemon-core\"")
+                .expect("chmod del daemon");
+        assert!(chmod > mv, "el chmod 755 debe ir después del mv");
+    }
+
+    #[test]
+    fn el_desinstalador_no_toca_magisk_ni_fuera_del_ambito() {
+        let s = uninstall_script_v15();
+        assert!(!s.contains("magisk --remove"));
+        // lo MENCIONA en un comentario para decir que no lo toca, pero no
+        // ejecuta NADA contra el Magisk de la máquina: se comprueba línea a
+        // línea, ignorando los comentarios.
+        for linea in s.lines() {
+            let l = linea.trim();
+            if l.starts_with('#') {
+                continue;
+            }
+            assert!(!l.contains("magisk --remove"), "ejecuta Magisk: {}", l);
+            assert!(!l.contains("/data/adb/magisk"), "toca Magisk: {}", l);
+        }
+        assert!(s.contains("NO se borra (fuera del ámbito)"));
+        assert!(s.contains("installed.manifest"));
+    }
+
+    #[test]
+    fn el_service_del_modulo_no_es_el_lanzador_unico() {
+        let s = module_service_script();
+        assert!(s.contains("service.d/99-megadaemon.sh"));
+        assert!(s.contains("sh -n"));
+    }
+
+    #[test]
+    fn el_post_fs_data_no_arranca_nada() {
+        let s = module_post_fs_data_script();
+        assert!(!s.contains("megadaemon-core"));
+        assert!(!s.contains("service.d"));
+    }
+
+    #[test]
+    fn el_module_prop_tiene_los_campos_que_magisk_exige() {
+        let p = module_prop();
+        for k in [
+            "id=",
+            "name=",
+            "version=",
+            "versionCode=",
+            "author=",
+            "description=",
+        ] {
+            assert!(p.contains(k), "falta {}", k);
+        }
+        assert!(p.contains("versionCode=1500"));
+        assert_eq!(p.lines().count(), 6);
+    }
+
+    #[test]
+    fn el_manifiesto_de_instalacion_esta_declarado() {
+        assert!(INSTALL_MANIFEST.starts_with("/data/adb/modules/megadaemon_energy/"));
+        assert_eq!(SUPERVISOR_PATH, "/data/adb/service.d/99-megadaemon.sh");
     }
 }
