@@ -17,7 +17,7 @@
       "repo": "https://github.com/boolforge/megadaemon",
       "branch": "fix/megadaemon-stability-20261119",
       "pr": "https://github.com/boolforge/megadaemon/pull/6",
-      "last_seen": "2026-11-19T23:44:32Z",
+      "last_seen": "2026-11-20T00:26:22Z",
       "external_url": "https://rom-performing-usd-stan.trycloudflare.com",
       "master_url": "https://webpage-ultram-please-communicate.trycloudflare.com",
       "status": "P1-P3 done",
@@ -26,7 +26,8 @@
       "p2_findings": 9,
       "p3_findings": 4,
       "p1_p3_summary": "EDEN v1.6.20 + ioctls VS4L de vertex10 (P1); mundo seguro TEEGris + keystore por dispositivo + AVB/FMM Lock en el SBL (P2-P3)",
-      "p1_ioctl_correction": "tabla de ioctls del driver vertex10 recalculada: 9 codigos (antes 38 falsos); 4 nombres confirmados"
+      "p1_ioctl_correction": "tabla de ioctls del driver vertex10 recalculada: 9 codigos (antes 38 falsos); 4 nombres confirmados",
+      "p1_device_verified": "EDEN v1.6.23 en el movil; 9 ioctls VS4L verificados en el binario del dispositivo (sha 7c0041ab)"
     }
   },
   "messages": [
