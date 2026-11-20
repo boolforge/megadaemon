@@ -102,10 +102,15 @@ fn el_nivel_de_rom_pide_las_siete_particiones_y_no_inventa_las_otras() {
     for p in EFS_SAFE_WORLD.iter() {
         assert!(txt.contains(p), "falta la partición {}", p);
     }
+    // Las particiones que NO existen tienen que estar **excluidas** (no
+    // listadas como particiones a respaldar). El plan L1 sí puede mencionar
+    // la *imagen* init_boot de fábrica del pack del nodo: eso es material
+    // real, no la partición inexistente.
+    let exc = l1.excludes.join(" ");
     for p in EFS_NON_EXISTENT.iter() {
         assert!(
-            !txt.contains(p),
-            "{} no existe en este firmware: no debe aparecer en el plan",
+            exc.contains(p),
+            "{} no existe en este firmware: tiene que estar excluido",
             p
         );
     }

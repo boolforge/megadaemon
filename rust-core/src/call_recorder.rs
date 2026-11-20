@@ -264,6 +264,22 @@ pub fn detect_source(package: &str, service: &str) -> CallSource {
 // Configuración y plan de captura
 // ---------------------------------------------------------------------------
 
+/// Códigos de CSC que habilitan la **grabación nativa** de llamadas.
+///
+/// Con un CSC de América (el de este móvil es AMO) la grabación nativa está
+/// desactivada por el flag `CscFeature_VoiceCall_ConfigRecording` del
+/// `cscfeature.xml`. Con un CSC de Asia (THL, INS) el sistema graba solo,
+/// sin hook ni AudioFlinger parcheado: es la vía preferente.
+///
+/// Ver `rom_migration::csc_allows_native_recording`.
+pub const NATIVE_RECORDING_CSC_CODES: [&str; 4] = ["THL", "INS", "ILO", "XXV"];
+
+/// ¿El CSC actual permite la grabación nativa?
+pub fn native_recording_allowed(csc: &str) -> bool {
+    let c = csc.trim().to_ascii_uppercase();
+    NATIVE_RECORDING_CSC_CODES.iter().any(|k| *k == c)
+}
+
 /// Configuración del grabador.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecorderConfig {
@@ -1074,7 +1090,7 @@ MODE:
         assert_eq!(list.len(), 1, "sólo los ficheros de audio");
         let sha = sha256_hex(b"OggS-fake-audio");
         assert_eq!(list[0]["sha256"].as_str().unwrap(), sha);
-        assert_eq!(list[0]["bytes"].as_u64().unwrap(), 14);
+        assert_eq!(list[0]["bytes"].as_u64().unwrap(), b"OggS-fake-audio".len() as u64);
         let _ = fs::remove_dir_all(&dir);
     }
 
