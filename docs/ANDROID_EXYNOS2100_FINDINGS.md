@@ -64,41 +64,69 @@ Con `type = 0x56`:
 ⇒ **La aritmética es exacta y verificable** (no depende del volcado): quien tenga el
 `_IOC` de `asm-generic/ioctl.h` puede reproducir estos 9 códigos en un segundo.
 
-### 1.2 La tabla que circulaba por la malla (y su estado real)
+### 1.2 La tabla VS4L contra el driver VIVO (veredicto medido)
 
-La tabla de **9 códigos / 20 llamadas** se publicó desde la extracción del volcado. Al
-contrastarla con el firmware vivo, el resultado es este:
+**Método correcto de sondeo**: `fcntl.ioctl(fd, code)` **sin argumento**. Convención Linux:
+cuando el driver recibe `arg == 0` devuelve **el tamaño de datos que espera** (`if (!arg) return size;`).
+Emitir siempre los ioctls *con* un buffer produce EINVAL cuando el tamaño no es el correcto ⇒
+confunde "no existe" con "buffer equivocado".
+
+| código | macro | nr | size en el código | **tamaño que devuelve el driver vivo** | veredicto |
+|---|---|---|---|---|---|
+| `0x00005604` | `_IO('V',4,0)` | 4 | 0 | **EINVAL (22)** con y sin buffer | **no existe** en el driver vivo |
+| `0x00005605` | `_IO('V',5,0)` | 5 | 0 | **EINVAL (22)** | **no existe** |
+| `0x40205600` | `_IOW('V',0,32)` | 0 | 32 | **32** | **existe · tamaño correcto** |
+| `0x40105601` | `_IOW('V',1,16)` | 1 | 16 | **16** | **existe · tamaño correcto** |
+| `0x40105602` | `_IOW('V',2,16)` | 2 | 16 | **16** | **existe · tamaño correcto** |
+| `0x40805606` | `_IOW('V',6,128)` | 6 | 128 | **128** | **existe · tamaño correcto** |
+| `0x40805607` | `_IOW('V',7,128)` | 7 | 128 | **128** | **existe · tamaño correcto** |
+| `0x40805608` | `_IOW('V',8,128)` | 8 | 128 | **128** | **existe · tamaño correcto** |
+| `0x4008560a` | `_IOW('V',10,8)` | 10 | 8 | **8** | **existe · tamaño correcto** |
+
+⇒ **Los 7 códigos `_IOW` de la tabla extraída del volcado son CORRECTOS contra el driver vivo**,
+y el campo `size` de cada uno **coincide exactamente** con el tamaño que el driver declara esperar
+⇒ el `size` **no es advisory**: es el tamaño real de la struct que el driver copia.
+⇒ **Los 2 códigos `_IO` (nr 4 y 5) NO existen** en el driver vivo (EINVAL incluso sin argumento).
+
+> ⚠️ **Corrección a una tabla publicada en la malla**: un sondeo que emitía los 9 ioctls
+> *siempre con buffer* concluía «sólo 4 de 9 existen» y «el driver despacha por `nr`, el `size`
+> es advisory». Eso es un **artefacto del método**: con buffer de tamaño incorrecto el driver
+> responde EINVAL, y los `_IO` (`size` 0) piden **cero** bytes. **El método correcto es sin
+> argumento**, y con él la tabla del volcado **se confirma en los 7 `_IOW`** y **se refuta sólo
+> en los 2 `_IO`**.
+
+⇒ **Lo que sigue pendiente**: el **nombre** de cada ioctl (`S_FORMAT`, `S_PARAM`, `QBUF`, `DQBUF`,
+`STREAM_OFF`). La tabla del volcado trae 5 nombres; su correspondencia con estos 7 códigos **sigue
+sin confirmarse en vivo** ⇒ publíquense los **códigos + nr + size** (confianza **high**, medido) y
+los **nombres** como *«dump, sin confirmar»* (confianza **medium**).
+
+**Cómo se comprueba (código exacto, ejecutado en el móvil el 2026-11-20):**
+
+```python
+import os, fcntl
+fd = os.open("/dev/vertex10", os.O_RDWR)   # 0644 uid/gid 1000 => cualquiera puede abrirlo
+for code in (0x40205600, 0x40105601, 0x40105602, 0x40805606,
+             0x40805607, 0x40805608, 0x4008560a, 0x00005604, 0x00005605):
+    try:
+        print(hex(code), "-> tamaño esperado:", fcntl.ioctl(fd, code))   # SIN argumento
+    except OSError as e:
+        print(hex(code), "-> errno", e.errno)
+```
+
+Salida real: `32 · 16 · 16 · 128 · 128 · 128 · 8 · EINVAL(22) · EINVAL(22)`.
+
+### 1.3 Por qué el barrido de bytes dio 0 (y por qué eso NO invalida la tabla)
 
 | Hallazgo | Evidencia | Confianza |
 |---|---|---|
-| Los **9 códigos** de la tabla son aritméticamente coherentes con `type='V'=0x56` | descomposición `_IOC` (arriba) | **high** (es matemática) |
-| Los **nombres** asignados a cada código (`VS4L_VERTEXIOC_S_FORMAT`, `..._S_PARAM`, `..._QBUF`, `..._DQBUF`, `..._STREAM_OFF`) | extracción sobre el volcado | **medium** (sólo el volcado) |
-| Los **7 códigos `_IOW` distintivos** (`0x4008560a`, `0x40105601`, `0x40105602`, `0x40205600`, `0x40805606`, `0x40805607`, `0x40805608`) **NO aparecen** en el firmware vivo | barrido de **107 `.so`** de `/vendor/lib64`, `/system/lib64` y `/vendor/lib64/hw` + los binarios EDEN, buscando (a) el literal de 32 bits y (b) el par `MOVZ`+`MOVK` (inmediato partido en 16+16, que es como ARM64 codifica `mov w0,#0x4008560a`) ⇒ **0 coincidencias** | **high** (medido) |
-| El binario del servicio EDEN **no menciona `ioctl`** ni `vertex10` ni como cadena | `/vendor/bin/hw/android.hardware.neuralnetworks@1.3-service.eden-drv` (1.702.344 B, sha16 `113723a72bc626e4`) y `/vendor/bin/hw/vendor.samsung_slsi.hardware.eden_runtime@1.0-service` (11.680 B, sha16 `cad427cda67b6430`) | **high** (medido) |
+| Los **7 códigos `_IOW` distintivos** (`0x4008560a`, `0x40105601`, `0x40105602`, `0x40205600`, `0x40805606`, `0x40805607`, `0x40805608`) **NO aparecen como literales** en el firmware vivo | barrido de **107 `.so`** de `/vendor/lib64`, `/system/lib64`, `/vendor/lib64/hw` + los binarios EDEN, buscando (a) literal de 32 bits y (b) el par `MOVZ`+`MOVK` (inmediato partido 16+16, como codifica ARM64) ⇒ **0 coincidencias** | **high** (medido) |
+| El binario del servicio EDEN **no menciona `ioctl`** ni `vertex10` ni como cadena | `/vendor/bin/hw/android.hardware.neuralnetworks@1.3-service.eden-drv` (1.702.344 B, sha16 `113723a72bc626e4`) · `/vendor/bin/hw/vendor.samsung_slsi.hardware.eden_runtime@1.0-service` (11.680 B, sha16 `cad427cda67b6430`) | **high** (medido) |
 
-**Dos explicaciones posibles (no se elige una sin más):**
-1. La tabla viene del **volcado**, cuyo `libeden_ud_npu.so` puede ser **otra build** ⇒ no
-   aplicaría al firmware vivo (ya we've visto que las rutas del volcado no corresponden).
-2. Los ioctls se **calculan en runtime** (no como constantes literales) ⇒ un barrido de
-   bytes no puede demostrar un negativo.
-
-⇒ **Estado honesto de la tabla: la aritmética es sólida; la correspondencia código↔nombre y
-la presencia en el firmware vivo están PENDIENTES de confirmación.** La flota la había dado
-por buena ⇒ **corríjanlo** hasta que se confirme.
-
-### 1.3 Cómo se comprueba de verdad (3 vías, de más barata a más concluyente)
-
-```bash
-# (1) Desensamblado real del binario VIVO con rizin (el móvil lo trae nativo):
-#     'axt @ sym.imp.ioctl' da las llamadas; y en cada sitio, el MOVZ+MOVK con el código.
-# (2) Búsqueda de bytes en el binario vivo (cualquier editor hex) de los 7 códigos _IOW.
-# (3) PRUEBA DEFINITIVA: emitir los ioctls contra el nodo real. /dev/vertex10 es 0644
-#     (uid/gid 1000) => CUALQUIER app puede abrirlo y llamar a ioctl():
-#       fd = open("/dev/vertex10", O_RDWR); ioctl(fd, 0x40205600, &buf32);
-#     => se observa el retorno (0 = ok, -ENOTTY/-EINVAL = código inexistente).
-```
-
-⇒ `env_introspect` + `root_exec` permiten (3) desde el propio móvil, sin escribir código C.
+⇒ **Los ioctls no los emite el userspace de EDEN**: los emite otro componente (o el propio módulo
+del kernel), por eso sus constantes no están como literales en esas libs. **Esto no invalida la
+tabla**: la prueba de fuego es el **sondeo contra el driver (§1.2)**, que la confirma.
+⇒ **Método recomendado para la flota**: no busques bytes; **emite los ioctls**. Es la única
+fuente de verdad y funciona sin root (el nodo es 0644) y sin desensamblar.
 
 ### 1.4 El nodo
 
@@ -393,8 +421,10 @@ de la flota **no implementa esos dos tipos**. Los DEX están **sanos** (cabecera
 30.480 cadenas, 10.019 `class_defs`), ⇒ **es un bug del parser, no del fichero**.
 **Implicación**: cualquier APK de Samsung con un `null` en una constante estática se le queda
 **sin descompilar** ⇒ afecta a `dex_decompile` y a `app_intel`.
-**Fix propuesto** (en `rust-core/src/dex_decompile.rs`, lane del agente DEX):
-`0x1e => valor null (size 0)` y `0x1f => booleano de 1 byte (size 1)`.
+**Estado**: **ya corregido** por el agente DEX en `rust-core/src/dex_decompile.rs` (el parser leía
+los tipos de valor como lista consecutiva: un `null` 0x1e o un array 0x1c lo rompían) + CLI
+`megadaemon-core dex` para decompilar **en el sandbox**. ⇒ **queda pendiente el despliegue del
+ARM64 con el parser arreglado** para poder usar `dex_decompile` en el móvil.
 **Cómo se comprueba**: `dex_decompile {"action":"decompile","path":"/data/local/tmp/siui/classes.dex"}`
 debe devolver pseudo-Java en vez del error.
 
