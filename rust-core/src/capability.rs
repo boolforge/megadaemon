@@ -390,6 +390,21 @@ pub fn capabilities_for_module(module: &str) -> Vec<&'static str> {
         .collect()
 }
 
+/// Índice inverso por **familia** de capacidad.
+///
+/// v14: `capabilities_for_module("sync")` devuelve las capacidades cuyo
+/// `modules` contiene "sync", pero hay capacidades de la familia Sync que
+/// viven en el módulo `sync_web` (p.ej. `sync.web`).  El índice inverso
+/// completo tiene que incluir la familia, no sólo el módulo: es lo que
+/// permite al planificador preguntarse "¿qué puedo hacer de sincronización?"
+/// y obtener la respuesta completa.
+pub fn capabilities_for_kind(kind: Kind) -> Vec<&'static str> {
+    CAPS.iter()
+        .filter(|c| c.kind == kind)
+        .map(|c| c.id)
+        .collect()
+}
+
 /// Resumen por familia (para la UI y las alertas).
 pub fn summary_by_kind() -> Value {
     let mut map: BTreeMap<&'static str, Vec<&'static str>> = BTreeMap::new();
@@ -432,10 +447,17 @@ mod tests {
 
     #[test]
     fn el_indice_inverso_encuentra_las_capacidades() {
-        let caps = capabilities_for_module("sync");
-        assert!(caps.contains(&"sync.local"));
-        assert!(caps.contains(&"sync.web"));
-        assert!(!caps.contains(&"remote.ssh"));
+        // Por módulo: `sync.local` vive en el módulo `sync`.
+        let por_modulo = capabilities_for_module("sync");
+        assert!(por_modulo.contains(&"sync.local"));
+        assert!(!por_modulo.contains(&"sync.web")); // vive en `sync_web`
+
+        // Por familia: la respuesta completa, incluidos los módulos hermanos.
+        let por_familia = capabilities_for_kind(Kind::Sync);
+        assert!(por_familia.contains(&"sync.local"));
+        assert!(por_familia.contains(&"sync.web"));
+        assert!(por_familia.contains(&"sync.extractor"));
+        assert!(!por_familia.contains(&"remote.ssh"));
     }
 
     #[test]

@@ -92,6 +92,9 @@ pub fn api_v2_routes() -> Vec<(&'static str, &'static str)> {
         ("GET", "/api/v2/market/rules"),
         ("POST", "/api/v2/market/rules"),
         ("POST", "/api/v2/market/route"),
+        ("GET", "/api/v2/mesh_findings"),
+        ("GET", "/api/v2/prompt_external"),
+        ("POST", "/api/v2/prompt_external"),
         ("GET", "/api/v2/routes"),
     ]
 }
@@ -122,6 +125,9 @@ fn route_descriptions() -> Vec<(&'static str, &'static str, &'static str)> {
         ("GET", "/api/v2/market/rules", "Reglas locales de compartición de un nodo (batería mínima, temperatura, dedicated, capacidades ofrecidas)."),
         ("POST", "/api/v2/market/rules", "Guarda las reglas locales de compartición de un nodo (validadas)."),
         ("POST", "/api/v2/market/route", "Elige el nodo que debe tomar una demanda según las reglas locales y (opcionalmente) la publica en el bus."),
+        ("GET", "/api/v2/mesh_findings", "Hallazgos de RE que el enjambre ha publicado (sync/re_*.ndjson + journal del bus), paginados y sin credenciales. Alias: /api/mesh_findings."),
+        ("GET", "/api/v2/prompt_external", "Prompt Markdown para un agente externo, generado en el servidor con el estado real (URLs, tools MCP, dispositivo, enjambre, hallazgos). Sin credenciales."),
+        ("POST", "/api/v2/prompt_external", "Igual que el GET, pero puede incluir la API key y el token de sesión ({\"include_secrets\":true,\"api_key\":\"…\"}) — con aviso en el propio Markdown."),
         ("GET", "/api/v2/routes", "Tabla de rutas v2 autogenerada + política de auth (la UI se valida contra esto)."),
     ]
 }
@@ -2809,6 +2815,603 @@ pub fn work_route(demand: &Value) -> Value {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 11) Hallazgos del enjambre (material de RE compartido por los nodos)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Prefijos de credenciales que **no** deben salir por la API.
+const SECRET_PREFIXES: &[&str] = &["sk-", "mdaemon_sk_", "ghp_", "ya29.", "gho_"];
+
+/// Raíces de estado donde puede estar el material del enjambre.
+///
+/// Se prueban varias porque el daemon usa dos convenciones (`<state>` y
+/// `<state>/state`) según el despliegue.  **Nunca** se lee fuera de estas
+/// raíces: cada ruta se valida contra su raíz antes de abrirse.
+fn swarm_state_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = vec![];
+    let mut push = |p: PathBuf, roots: &mut Vec<PathBuf>| {
+        if !p.as_os_str().is_empty() && !roots.iter().any(|r| r == &p) {
+            roots.push(p);
+        }
+    };
+    if let Ok(d) = std::env::var("MEGADAEMON_STATE_DIR") {
+        let d = d.trim();
+        if !d.is_empty() {
+            let p = PathBuf::from(d);
+            push(p.clone(), &mut roots);
+            push(p.join("state"), &mut roots);
+        }
+    }
+    // El bus (mesh) usa /data/local/tmp/megadaemon en Android.
+    let mesh_dir = PathBuf::from(bus_state_dir());
+    push(mesh_dir.join("state"), &mut roots);
+    push(mesh_dir.clone(), &mut roots);
+    // Y el cockpit usa /data/user/0/com.agy/files/megadaemon/state.
+    let cockpit = PathBuf::from(cockpit_state_dir());
+    push(cockpit.join("state"), &mut roots);
+    push(cockpit, &mut roots);
+    roots
+}
+
+/// ¿La ruta está dentro de la raíz? (evita escapes con `..` o symlinks)
+fn path_inside(root: &Path, path: &Path) -> bool {
+    let r = root.to_string_lossy().trim_end_matches('/').to_string();
+    let p = path.to_string_lossy().to_string();
+    p == r || p.starts_with(&format!("{}/", r))
+}
+
+/// Borra credenciales de un texto.
+///
+/// No basta con mirar el principio: un hallazgo puede llevar la key en medio
+/// de una frase ("la clave es mdaemon_sk_…").  Se busca el prefijo y se
+/// enmascara todo el token.
+fn scrub_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let bytes: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < bytes.len() {
+        let rest: String = bytes[i..].iter().collect();
+        let mut matched = false;
+        for p in SECRET_PREFIXES {
+            if rest.starts_with(p) {
+                let mut j = i + p.chars().count();
+                while j < bytes.len()
+                    && (bytes[j].is_ascii_alphanumeric() || bytes[j] == '_' || bytes[j] == '-')
+                {
+                    j += 1;
+                }
+                out.push_str("[REDACTED]");
+                i = j;
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Elimina credenciales de cualquier JSON (recursivo).
+fn scrub_value(v: &mut Value) -> bool {
+    let mut redacted = false;
+    match v {
+        Value::String(s) => {
+            let clean = scrub_text(s);
+            if clean != *s {
+                *s = clean;
+                redacted = true;
+            }
+        }
+        Value::Array(a) => {
+            for x in a.iter_mut() {
+                redacted |= scrub_value(x);
+            }
+        }
+        Value::Object(o) => {
+            for (_, x) in o.iter_mut() {
+                redacted |= scrub_value(x);
+            }
+        }
+        _ => {}
+    }
+    redacted
+}
+
+/// Ordena una lista de hallazgos por `ts` descendente.
+fn sort_findings(findings: &mut Vec<Value>) {
+    findings.sort_by(|a, b| {
+        let ta = a.get("ts").map(ts_key).unwrap_or(0);
+        let tb = b.get("ts").map(ts_key).unwrap_or(0);
+        tb.cmp(&ta).then_with(|| {
+            a.get("sha256")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .cmp(b.get("sha256").and_then(|v| v.as_str()).unwrap_or(""))
+        })
+    });
+}
+
+/// Convierte un `ts` (epoch o ISO-8601) a epoch para ordenar.
+fn ts_key(v: &Value) -> i64 {
+    if let Some(n) = v.as_i64() {
+        return n;
+    }
+    if let Some(n) = v.as_u64() {
+        return n as i64;
+    }
+    if let Some(s) = v.as_str() {
+        if let Some(secs) = crate::mesh::iso_to_epoch(s) {
+            return secs;
+        }
+        if let Ok(n) = s.parse::<i64>() {
+            return n;
+        }
+    }
+    0
+}
+
+/// Campos que se conservan de cada hallazgo (el resto se descarta).
+const FINDING_FIELDS: &[&str] = &[
+    "agent", "kind", "title", "finding", "target", "sha256", "size", "confidence", "ts",
+];
+
+/// Normaliza una línea de hallazgo al contrato de la API.
+fn normalize_finding(line: &Value) -> Option<Value> {
+    let obj = line.as_object()?;
+    let mut out = serde_json::Map::new();
+    for f in FINDING_FIELDS {
+        if let Some(v) = obj.get(*f) {
+            out.insert((*f).to_string(), v.clone());
+        }
+    }
+    if out.is_empty() {
+        return None;
+    }
+    // Sin agente no se sabe de qué nodo es: no vale como hallazgo.
+    if !out.contains_key("agent") {
+        return None;
+    }
+    Some(Value::Object(out))
+}
+
+/// Lee los hallazgos del enjambre en las raíces dadas (interno, testeable).
+fn mesh_findings_in(roots: &[PathBuf], limit: usize, offset: usize) -> Value {
+    let mut findings: Vec<Value> = vec![];
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut journal_lines = 0usize;
+    let mut board_agents: Vec<Value> = vec![];
+    let mut board_tasks: Vec<Value> = vec![];
+    let mut board_peers: Vec<Value> = vec![];
+    let mut identities: Vec<Value> = vec![];
+    let mut root_report: Vec<Value> = vec![];
+    let mut redactions = 0usize;
+
+    for root in roots {
+        if !root.is_dir() {
+            continue;
+        }
+        let mut files: Vec<String> = vec![];
+        let mut root_journal = 0usize;
+        let mut root_findings = 0usize;
+
+        // 1) sync/re_*.ndjson  → hallazgos
+        let sync_dir = root.join("sync");
+        if let Ok(entries) = fs::read_dir(&sync_dir) {
+            let mut paths: Vec<PathBuf> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    let name = p.file_name().unwrap_or_default().to_string_lossy();
+                    name.starts_with("re_") && name.ends_with(".ndjson")
+                })
+                .collect();
+            paths.sort();
+            for p in paths {
+                if !path_inside(root, &p) {
+                    continue;
+                }
+                let Ok(raw) = fs::read_to_string(&p) else {
+                    continue;
+                };
+                files.push(
+                    p.strip_prefix(root)
+                        .unwrap_or(&p)
+                        .to_string_lossy()
+                        .to_string(),
+                );
+                for line in raw.lines() {
+                    let l = line.trim();
+                    if l.is_empty() {
+                        continue;
+                    }
+                    // Una línea rota NO revienta la vista: se salta.
+                    let Ok(v) = serde_json::from_str::<Value>(l) else {
+                        continue;
+                    };
+                    let Some(n) = normalize_finding(&v) else {
+                        continue;
+                    };
+                    let mut n = n;
+                    if scrub_value(&mut n) {
+                        redactions += 1;
+                    }
+                    let key = n.to_string();
+                    if seen.insert(key) {
+                        findings.push(n);
+                        root_findings += 1;
+                    }
+                }
+            }
+        }
+
+        // 2) mesh_journal.ndjson → nº de líneas (auditoría del enjambre)
+        let journal = root.join("mesh_journal.ndjson");
+        if journal.is_file() && path_inside(root, &journal) {
+            if let Ok(raw) = fs::read_to_string(&journal) {
+                root_journal = raw.lines().filter(|l| !l.trim().is_empty()).count();
+            }
+        }
+        journal_lines += root_journal;
+
+        // 3) mesh_board.json → agentes, tareas y peers
+        let board = root.join("mesh_board.json");
+        let mut has_board = false;
+        if board.is_file() && path_inside(root, &board) {
+            if let Ok(raw) = fs::read_to_string(&board) {
+                if let Ok(b) = serde_json::from_str::<Value>(&raw) {
+                    has_board = true;
+                    if let Some(a) = b.get("agents").and_then(|v| v.as_array()) {
+                        for x in a {
+                            let mut x = x.clone();
+                            if scrub_value(&mut x) {
+                                redactions += 1;
+                            }
+                            board_agents.push(x);
+                        }
+                    }
+                    if let Some(t) = b.get("tasks").and_then(|v| v.as_array()) {
+                        for x in t {
+                            let mut x = x.clone();
+                            if scrub_value(&mut x) {
+                                redactions += 1;
+                            }
+                            board_tasks.push(x);
+                        }
+                    }
+                    if let Some(p) = b.get("peers").and_then(|v| v.as_array()) {
+                        for x in p {
+                            let mut x = x.clone();
+                            if scrub_value(&mut x) {
+                                redactions += 1;
+                            }
+                            board_peers.push(x);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4) agents/*.json → identidad de cada nodo
+        let agents_dir = root.join("agents");
+        if let Ok(entries) = fs::read_dir(&agents_dir) {
+            let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+            paths.sort();
+            for p in paths {
+                if !p.is_file() || !path_inside(root, &p) {
+                    continue;
+                }
+                if p.extension().unwrap_or_default() != "json" {
+                    continue;
+                }
+                let Ok(raw) = fs::read_to_string(&p) else {
+                    continue;
+                };
+                let Ok(mut v) = serde_json::from_str::<Value>(&raw) else {
+                    continue;
+                };
+                if scrub_value(&mut v) {
+                    redactions += 1;
+                }
+                let mut entry = v.as_object().cloned().unwrap_or_default();
+                entry.insert(
+                    "file".to_string(),
+                    json!(p.file_name().unwrap_or_default().to_string_lossy()),
+                );
+                identities.push(Value::Object(entry));
+            }
+        }
+
+        root_report.push(json!({
+            "path": root.to_string_lossy(),
+            "exists": true,
+            "findings_files": files,
+            "findings_here": root_findings,
+            "journal_lines": root_journal,
+            "board": has_board,
+        }));
+    }
+
+    sort_findings(&mut findings);
+    let total = findings.len();
+
+    // Filtros opcionales por agente y tipo.
+    let mut kinds: Vec<String> = vec![];
+    let mut agent_names: Vec<String> = vec![];
+    for f in &findings {
+        let k = f.get("kind").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if !k.is_empty() && !kinds.contains(&k) {
+            kinds.push(k);
+        }
+        let a = f.get("agent").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if !a.is_empty() && !agent_names.contains(&a) {
+            agent_names.push(a);
+        }
+    }
+    kinds.sort();
+    agent_names.sort();
+
+    let limit = limit.clamp(1, 200);
+    let offset = offset.min(total.saturating_sub(1).max(0));
+    let page: Vec<Value> = findings
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .cloned()
+        .collect();
+
+    json!({
+        "ok": true,
+        "generated_at": now_iso(),
+        "findings": page,
+        "returned": page.len(),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "kinds": kinds,
+        "agents": agent_names,
+        "board_agents": board_agents,
+        "node_identities": identities,
+        "tasks": board_tasks,
+        "peers": board_peers,
+        "journal": journal_lines,
+        "roots": root_report,
+        "redactions": redactions,
+        "note": "material de RE del enjambre: sólo lectura, con credenciales enmascaradas; requiere API key y token de sesión",
+    })
+}
+
+/// `GET /api/mesh_findings` (alias) y `GET /api/v2/mesh_findings`.
+///
+/// Lee `<state>/sync/re_*.ndjson` + `<state>/mesh_journal.ndjson` + el tablón
+/// del bus.  Máx. 200 hallazgos por página, ordenados por `ts` descendente.
+pub fn mesh_findings(query: &str) -> Value {
+    let limit = query_get(query, "limit")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(50);
+    let offset = query_get(query, "offset")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+    mesh_findings_in(&swarm_state_roots(), limit, offset)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 12) Prompt para agentes externos (generado en el SERVIDOR)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Lee la URL pública vigente del túnel (es efímera: vive en un fichero).
+///
+/// Fuentes, por orden: `<state>/tunnel.url`, `/sdcard/megadaemon.url` y el
+/// log del túnel (`<state>/tunnel.log`), del que se extrae la URL con un
+/// `grep` ligero.  Si no hay ninguna, se dice: **nunca** se inventa una URL.
+fn tunnel_url(kind: &str) -> String {
+    let dir = PathBuf::from(bus_state_dir());
+    let candidates: Vec<PathBuf> = if kind == "mcp" {
+        vec![
+            dir.join("mcp_tunnel.url"),
+            PathBuf::from("/sdcard/megadaemon_mcp.url"),
+        ]
+    } else {
+        vec![
+            dir.join("tunnel.url"),
+            PathBuf::from("/sdcard/megadaemon.url"),
+        ]
+    };
+    for p in &candidates {
+        if let Ok(raw) = fs::read_to_string(p) {
+            let u = raw.trim().to_string();
+            if u.starts_with("http") {
+                return u.trim_end_matches('/').to_string();
+            }
+        }
+    }
+    // Último recurso: el log del túnel.
+    let log = dir.join(if kind == "mcp" { "mcp_tunnel.log" } else { "tunnel.log" });
+    if let Ok(raw) = fs::read_to_string(&log) {
+        let mut found = String::new();
+        for line in raw.lines() {
+            if let Some(idx) = line.find("https://") {
+                let tail = &line[idx..];
+                let end = tail
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '-'))
+                    .unwrap_or(tail.len());
+                let cand = &tail[..end];
+                if cand.contains("trycloudflare") || cand.contains("cloudflare") {
+                    found = cand.to_string();
+                }
+            }
+        }
+        if !found.is_empty() {
+            return found;
+        }
+    }
+    String::new()
+}
+
+/// Genera el prompt Markdown para un agente externo, **desde el estado real**.
+///
+/// `include_secrets` es explícito: por defecto el prompt NO lleva la API key
+/// ni el token de sesión.  Si se piden, el Markdown lleva un aviso en la
+/// primera línea y la respuesta incluye `contains_secrets: true`.
+pub fn prompt_external(include_secrets: bool, api_key: &str) -> Value {
+    let dev = device_state();
+    let web_url = tunnel_url("web");
+    let mcp_url = tunnel_url("mcp");
+    let local_web = format!("http://127.0.0.1:{}", 3000);
+    let local_mcp = format!("http://127.0.0.1:{}/mcp", 9090);
+
+    let tools = crate::mcp_ext::tool_definitions();
+    let tool_list = tools.as_array().cloned().unwrap_or_default();
+    let swarm = mesh_findings_in(&swarm_state_roots(), 40, 0);
+    let findings = swarm["findings"].as_array().cloned().unwrap_or_default();
+
+    let mut md = String::new();
+    if include_secrets {
+        md.push_str("> ⚠️ **Este documento contiene credenciales** (API key y token de sesión). No lo compartas ni lo subas a ningún repositorio.\n\n");
+    }
+    md.push_str("# MegaDaemon v14 — contexto para un agente externo\n\n");
+    md.push_str(&format!(
+        "- Generado: {}\n- Instancia: `{}` · {} · {} · v{}\n- Uptime: {}\n\n",
+        now_iso(),
+        crate::mesh::instance_id(),
+        crate::mesh::hostname(),
+        crate::mesh::platform_string(),
+        env!("CARGO_PKG_VERSION"),
+        human_duration(process_uptime_secs())
+    ));
+
+    md.push_str("## Cómo hablar con el daemon\n\n");
+    md.push_str(&format!(
+        "- Cockpit (web): {}\n",
+        if web_url.is_empty() {
+            format!("{} (sin túnel público vigente)", local_web)
+        } else {
+            web_url.clone()
+        }
+    ));
+    md.push_str(&format!(
+        "- MCP (JSON-RPC 2.0): {}\n",
+        if mcp_url.is_empty() {
+            format!("{} (sin túnel MCP vigente)", local_mcp)
+        } else {
+            mcp_url.clone()
+        }
+    ));
+    md.push_str(&format!("- Health (público, sin credenciales): {}/health\n", local_web));
+    md.push_str("- Cabeceras:\n");
+    if include_secrets {
+        let key = if api_key.trim().is_empty() {
+            "<API key no facilitada>"
+        } else {
+            api_key.trim()
+        };
+        md.push_str(&format!("  - `X-API-Key: {}`\n", key));
+        md.push_str(&format!(
+            "  - `X-Seere-Auth-Token: {}`\n",
+            crate::cockpit_server::auth_token()
+        ));
+    } else {
+        md.push_str("  - `X-API-Key: <ponla aquí>`\n");
+        md.push_str("  - `X-Seere-Auth-Token: <cánjela con POST /api/session/exchange>`\n");
+    }
+    md.push_str("- El canje de la API key por token de sesión: `POST /api/session/exchange` con `{\"api_key\":\"…\"}` → `{\"ok\":true,\"token\":\"…\"}`.\n\n");
+
+    md.push_str(&format!("## Herramientas MCP ({} disponibles)\n\n", tool_list.len()));
+    for t in &tool_list {
+        let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let desc = t.get("description").and_then(|v| v.as_str()).unwrap_or("");
+        let short: String = desc.chars().take(150).collect();
+        md.push_str(&format!("- `{}` — {}\n", name, short));
+    }
+
+    md.push_str("\n## Estado del dispositivo\n\n");
+    md.push_str(&format!(
+        "- Batería: {}{}\n- Temperatura CPU: {} °C{}\n- Carga: {}\n- Política de energía: {}\n- NPU: {} (offload implementado: {})\n",
+        dev["capacity_pct"].as_u64().map(|v| format!("{} %", v)).unwrap_or_else(|| "—".into()),
+        if dev["charging"] == json!(true) { " (cargando)" } else { "" },
+        dev["cpu_temp_c"].as_f64().map(|v| format!("{:.1}", v)).unwrap_or_else(|| "—".into()),
+        if dev["thermal_hot"] == json!(true) { " ⚠️ térmico" } else { "" },
+        dev["load"].as_f64().map(|v| format!("{:.2}", v)).unwrap_or_else(|| "—".into()),
+        dev["policy"].as_str().unwrap_or("—"),
+        dev["is_mobile"].as_bool().unwrap_or(false),
+        "ver /api/v2/dashboard"
+    ));
+
+    // Nodos del enjambre.
+    let nodes = market_nodes();
+    md.push_str(&format!("\n## Nodos del enjambre ({})\n\n", nodes.len()));
+    for n in &nodes {
+        let id = n.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let role = n.get("role").and_then(|v| v.as_str()).unwrap_or("");
+        let caps: Vec<String> = n
+            .get("capabilities")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+        md.push_str(&format!(
+            "- `{}` ({}) — capacidades: {}\n",
+            id,
+            role,
+            if caps.is_empty() { "—".to_string() } else { caps.join(", ") }
+        ));
+    }
+
+    // Hallazgos del enjambre.
+    md.push_str(&format!(
+        "\n## Hallazgos del enjambre ({} de {}; journal: {} líneas)\n\n",
+        findings.len(),
+        swarm["total"].as_u64().unwrap_or(0),
+        swarm["journal"].as_u64().unwrap_or(0)
+    ));
+    if findings.is_empty() {
+        md.push_str("_No hay hallazgos publicados todavía._\n");
+    }
+    for f in &findings {
+        let kind = f.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        let title = f.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        let agent = f.get("agent").and_then(|v| v.as_str()).unwrap_or("");
+        let conf = f.get("confidence").and_then(|v| v.as_str()).unwrap_or("");
+        let target = f.get("target").and_then(|v| v.as_str()).unwrap_or("");
+        let sha = f.get("sha256").and_then(|v| v.as_str()).unwrap_or("");
+        let size = f.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+        let text = f.get("finding").and_then(|v| v.as_str()).unwrap_or("");
+        let short: String = text.chars().take(600).collect();
+        md.push_str(&format!(
+            "### [{}] {} — {}\n",
+            kind,
+            title,
+            if conf.is_empty() { String::new() } else { format!("confianza {}", conf) }
+        ));
+        md.push_str(&format!(
+            "- agente: {} · target: {} · sha256: {} · {} B\n- {}\n\n",
+            agent, target, sha, size, short
+        ));
+    }
+
+    md.push_str("\n---\nGenerado por el cockpit v2 de MegaDaemon (`/api/v2/prompt_external`). Los datos son reales: si algo no aparece, es que el daemon no lo tiene.\n");
+
+    json!({
+        "ok": true,
+        "generated_at": now_iso(),
+        "markdown": md,
+        "bytes": md.len(),
+        "contains_secrets": include_secrets,
+        "tools": tool_list.len(),
+        "findings": findings.len(),
+        "findings_total": swarm["total"].clone(),
+        "journal": swarm["journal"].clone(),
+        "web_url": web_url,
+        "mcp_url": mcp_url,
+        "warnings": if include_secrets {
+            vec!["el Markdown contiene la API key y el token de sesión: no lo compartas ni lo subas al repo".to_string()]
+        } else {
+            vec![]
+        },
+    })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Router
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -2821,10 +3424,15 @@ pub fn work_route(demand: &Value) -> Value {
 /// servidor HTTP decide el status (401/403 los pone la capa de auth).
 pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
     let (route, query) = split_query(path);
+    let m = method.to_ascii_uppercase();
+    // Alias pedido por el enjambre: /api/mesh_findings ≡ /api/v2/mesh_findings.
+    // No es público: lo protegen el gate de API key y `requires_auth()`.
+    if route == "/api/mesh_findings" {
+        return Some(mesh_findings(query));
+    }
     if !route.starts_with(API_V2_PREFIX) {
         return None;
     }
-    let m = method.to_ascii_uppercase();
     let b = if body.is_object() { body.clone() } else { json!({}) };
     let s = |k: &str| b.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
     let n = |k: &str| b.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
@@ -2841,6 +3449,12 @@ pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
         ("GET", "/api/v2/share") => shared_files(),
         ("GET", "/api/v2/routes") => routes_doc(),
         ("GET", "/api/v2/market") => work_market(),
+        ("GET", "/api/v2/mesh_findings") => mesh_findings(query),
+        ("GET", "/api/v2/prompt_external") => prompt_external(false, ""),
+        ("POST", "/api/v2/prompt_external") => {
+            let inc = b.get("include_secrets").and_then(|v| v.as_bool()).unwrap_or(false);
+            prompt_external(inc, &s("api_key"))
+        }
         ("GET", "/api/v2/market/rules") => {
             let node = query_get(query, "node").unwrap_or_default();
             work_rules(&node)
@@ -3393,6 +4007,167 @@ mod tests {
             assert!(s.get("offer").is_some());
             assert!(s.get("rules").is_some());
         }
+    }
+
+    // ── Hallazgos del enjambre ─────────────────────────────────────────────
+
+    /// Prepara un directorio de estado del enjambre de mentira.
+    fn fake_swarm_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("md-webui-swarm-{}-{}", tag, std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("sync")).unwrap();
+        fs::create_dir_all(dir.join("agents")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn los_hallazgos_del_enjambre_se_leen_se_ordenan_y_se_paginan() {
+        let dir = fake_swarm_dir("orden");
+        let findings = [
+            json!({ "agent": "cloud-sandbox", "kind": "bootloader", "title": "FMM Lock",
+                    "finding": "el SBL bloquea el unlock", "target": "BL/sboot.bin",
+                    "sha256": "a2cf9853", "size": 4194304, "confidence": "high", "ts": 1732000100 }),
+            json!({ "agent": "cloud-sandbox", "kind": "reverse", "title": "DexClassLoader",
+                    "finding": "carga dex dinámico", "target": "classes.dex",
+                    "sha256": "bb11", "size": 100, "confidence": "medium", "ts": 1732000300 }),
+            json!({ "agent": "otro-nodo", "kind": "npu", "title": "NNAPI",
+                    "finding": "usa delegate", "target": "libfoo.so",
+                    "sha256": "cc22", "size": 200, "confidence": "low", "ts": 1732000200 }),
+        ];
+        let body = findings
+            .iter()
+            .map(|f| f.to_string())
+            .collect::<Vec<String>>()
+            .join("\n");
+        fs::write(dir.join("sync").join("re_cloud-sandbox.ndjson"), body).unwrap();
+        fs::write(dir.join("mesh_journal.ndjson"), "a\nb\nc\nd\ne\n").unwrap();
+        fs::write(
+            dir.join("mesh_board.json"),
+            json!({
+                "agents": [{ "agent": "cloud-sandbox", "task": "re-exynos2100", "kind": "reverse", "status": "done" }],
+                "tasks": [{ "task_id": "re-exynos2100-cloud-sandbox", "title": "RE Exynos 2100", "state": "done" }],
+                "peers": [{ "id": "cloud-sandbox", "role": "worker" }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("agents").join("cloud-sandbox.json"),
+            json!({ "id": "cloud-sandbox", "role": "worker", "platform": "linux-x86_64" }).to_string(),
+        )
+        .unwrap();
+
+        let roots = vec![dir.clone()];
+        let r = mesh_findings_in(&roots, 50, 0);
+        assert_eq!(r["ok"], json!(true));
+        assert_eq!(r["total"], json!(3));
+        assert_eq!(r["returned"], json!(3));
+        // Orden por ts descendente.
+        assert_eq!(r["findings"][0]["kind"], json!("reverse"));
+        assert_eq!(r["findings"][2]["kind"], json!("bootloader"));
+        // Journal = nº de líneas.
+        assert_eq!(r["journal"], json!(5));
+        // Tablón: agentes y tareas.
+        assert_eq!(r["board_agents"].as_array().unwrap().len(), 1);
+        assert_eq!(r["tasks"].as_array().unwrap().len(), 1);
+        assert_eq!(r["node_identities"].as_array().unwrap().len(), 1);
+        // Filtros derivados de los datos reales.
+        assert!(r["kinds"].as_array().unwrap().len() >= 3);
+        assert!(r["agents"].as_array().unwrap().len() >= 2);
+
+        // Paginación.
+        let p1 = mesh_findings_in(&roots, 2, 0);
+        assert_eq!(p1["returned"], json!(2));
+        assert_eq!(p1["total"], json!(3));
+        let p2 = mesh_findings_in(&roots, 2, 2);
+        assert_eq!(p2["returned"], json!(1));
+        assert_eq!(p2["offset"], json!(2));
+        // El tope de 200 se respeta.
+        let huge = mesh_findings_in(&roots, 100000, 0);
+        assert_eq!(huge["limit"], json!(200));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn una_linea_rota_del_enjambre_no_rompe_la_vista() {
+        let dir = fake_swarm_dir("roto");
+        let mut body = String::new();
+        body.push_str("esto no es json\n");
+        body.push_str(&json!({ "agent": "n1", "kind": "reverse", "finding": "ok", "ts": 5 }).to_string());
+        body.push('\n');
+        body.push_str("{\"agent\":\"n2\",\"kind\":\"npu\"}\n"); // sin ts: se acepta
+        body.push_str("\n"); // línea vacía: se salta
+        body.push_str("{\"sin\":\"agente\"}\n"); // sin agente: no es hallazgo
+        fs::write(dir.join("sync").join("re_x.ndjson"), body).unwrap();
+        let r = mesh_findings_in(&vec![dir.clone()], 50, 0);
+        assert_eq!(r["total"], json!(2));
+        assert_eq!(r["returned"], json!(2));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn los_secretos_del_enjambre_no_se_exponen() {
+        let dir = fake_swarm_dir("secret");
+        let body = json!({
+            "agent": "n1", "kind": "reverse",
+            "finding": "la clave del repo es mdaemon_sk_live_ABCDEF0123456789 y el token sk-zzzzzzzzzzzz",
+            "sha256": "aa11", "ts": 7
+        })
+        .to_string();
+        fs::write(dir.join("sync").join("re_s.ndjson"), body).unwrap();
+        let r = mesh_findings_in(&vec![dir.clone()], 50, 0);
+        let text = r.to_string();
+        assert!(!text.contains("mdaemon_sk_live_ABCDEF0123456789"), "la key se filtró: {}", text);
+        assert!(!text.contains("sk-zzzzzzzzzzzz"), "el token se filtró: {}", text);
+        assert!(text.contains("[REDACTED]"));
+        assert!(r["redactions"].as_u64().unwrap_or(0) >= 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn el_endpoint_de_hallazgos_esta_en_la_tabla_y_en_la_ui() {
+        let routes = api_v2_routes();
+        assert!(
+            routes.iter().any(|(_, p)| *p == "/api/v2/mesh_findings"),
+            "la ruta de hallazgos debe estar en la tabla"
+        );
+        // Y el alias que pidió el enjambre responde.
+        let r = dispatch("GET", "/api/mesh_findings?limit=10", &json!({})).unwrap();
+        assert_eq!(r["ok"], json!(true));
+        assert!(r["findings"].is_array());
+        assert!(r.get("journal").is_some());
+    }
+
+    #[test]
+    fn el_prompt_externo_se_genera_en_el_servidor() {
+        let p = prompt_external(false, "");
+        assert_eq!(p["ok"], json!(true));
+        assert_eq!(p["contains_secrets"], json!(false));
+        let md = p["markdown"].as_str().unwrap_or("");
+        assert!(md.contains("Cómo hablar con el daemon"), "falta la sección de acceso");
+        assert!(md.contains("Herramientas MCP"));
+        assert!(md.contains("Estado del dispositivo"));
+        assert!(md.contains("Hallazgos del enjambre"));
+        // El catálogo de tools es real, no un texto de relleno.
+        assert!(p["tools"].as_u64().unwrap_or(0) > 10, "el catálogo de tools debe ser real");
+        // SIN credenciales: el token de sesión no puede aparecer.
+        assert!(
+            !md.contains(crate::cockpit_server::auth_token()),
+            "el prompt sin secretos no puede llevar el token de sesión"
+        );
+    }
+
+    #[test]
+    fn el_prompt_externo_con_credenciales_avisa_y_las_incluye() {
+        let p = prompt_external(true, "mdaemon_sk_test_1234567890");
+        assert_eq!(p["contains_secrets"], json!(true));
+        let md = p["markdown"].as_str().unwrap_or("");
+        assert!(md.contains("contiene credenciales"), "debe avisar en la primera línea");
+        assert!(md.contains("mdaemon_sk_test_1234567890"));
+        assert!(md.contains(crate::cockpit_server::auth_token()));
+        let w = p["warnings"].as_array().cloned().unwrap_or_default();
+        assert!(!w.is_empty(), "debe devolver avisos");
     }
 
     #[test]
