@@ -43,13 +43,24 @@ say "=== phone_finalize: inicio (log en $LOG) ==="
 
 # --- 0) credencial -----------------------------------------------------------
 say "0) credencial"
-KEYFILE="$PREFIX/state/megadaemon_api.key"
+KEYFILE=""
 KEY=""
-if [ -f "$KEYFILE" ]; then
-  KEY=$(tr -d '\r\n' < "$KEYFILE")
-  say "   key en el estado: sha16 $(printf '%s' "$KEY" | sha256sum | cut -c1-16)"
+# La credencial puede estar en uno de estos sitios (no se sabe cual es el
+# "bueno": por eso el daemon recibe 403 con la key correcta en la mano).
+for cand in "$PREFIX/state/megadaemon_api.key" "$PREFIX/megadaemon_api.key" "$DEF/megadaemon_api.key"; do
+  if [ -f "$cand" ]; then
+    K2=$(tr -d '\r\n' < "$cand")
+    [ -n "$K2" ] && { KEYFILE="$cand"; KEY="$K2"; break; }
+  fi
+done
+if [ -n "$KEYFILE" ]; then
+  say "   key encontrada en $KEYFILE"
+  say "   sha16 $(printf '%s' "$KEY" | sha256sum | cut -c1-16)  (no se imprime el secreto)"
 else
-  say "   no hay $KEYFILE"
+  say "   NO hay key en ninguno de los sitios conocidos:"
+  say "     $PREFIX/state/megadaemon_api.key"
+  say "     $PREFIX/megadaemon_api.key"
+  say "     $DEF/megadaemon_api.key"
 fi
 mkdir -p "$DEF" "$PREFIX/state"
 [ -f "$KEYFILE" ] && { cp -f "$KEYFILE" "$DEF/megadaemon_api.key"; chmod 600 "$DEF/megadaemon_api.key"; say "   copiada a $DEF"; }
@@ -157,6 +168,18 @@ PYX
 say "   mount del cscfeature:"; mount | grep cscfeature | sed 's/^/     /'
 say "   logcat (CSC):"; logcat -d -t 600 2>/dev/null | grep -iE "SemCscFeature|cscfeature" | tail -5 | sed 's/^/     /'
 say "   binario sha256: $(sha256sum $PREFIX/megadaemon-core 2>/dev/null | cut -d' ' -f1)  (oficial: $SHA256)"
+DPID=$(pidof megadaemon-core 2>/dev/null | awk '{print $1}')
+if [ -n "$DPID" ]; then
+  say "   env del daemon en ejecucion (PID $DPID):"
+  tr '\0' '\n' < "/proc/$DPID/environ" 2>/dev/null \
+    | grep -E '^MEGADAEMON_(API_KEY|STATE_DIR|REQUIRE_API_KEY)=' \
+    | sed -e 's/^\(.*API_KEY=\).*/\1<oculto>/' | sed 's/^/     /'
+  DKEY=$(tr '\0' '\n' < "/proc/$DPID/environ" 2>/dev/null | grep '^MEGADAEMON_API_KEY=' | cut -d= -f2-)
+  [ -n "$DKEY" ] && say "     sha16 de la key en su env: $(printf '%s' "$DKEY" | sha256sum | cut -c1-16)"
+  [ -z "$DKEY" ] && say "     el daemon NO tiene MEGADAEMON_API_KEY en su env => hereda la del fichero de estado"
+  DSD=$(tr '\0' '\n' < "/proc/$DPID/environ" 2>/dev/null | grep '^MEGADAEMON_STATE_DIR=' | cut -d= -f2-)
+  say "     state_dir efectivo: ${DSD:-$DEF (por defecto)}"
+fi
 say "   disco: $(df -h /data | tail -1)"
 say "   RAM  : $(free -m | sed -n 2p)"
 say "   carga: $(cat /proc/loadavg)"
