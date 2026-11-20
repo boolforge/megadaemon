@@ -356,22 +356,109 @@ const VETOED: &[&str] = &[
     "adb_shell",
 ];
 
+/// Tools que la voz **sí** puede ejecutar.
+///
+/// AUDIT-VOICE-01 (P0): la voz es un agente, no un deployer.  La lista es
+/// una **allow-list**, no una deny-list: una deny-list sobre los nombres de
+/// las tools siempre se queda corta (basta con que aparezca una tool nueva
+/// para que la voz pueda escribir ficheros, hacer push o firmar).  Con la
+/// allow-list, lo que no está aquí está fuera por defecto.
+///
+/// Sólo lectura y coordinación: nada que escriba en el dispositivo, nada
+/// que toque el repo y nada que consuma presupuesto de proveedor salvo
+/// `swarm_chat`.
+const ALLOWED: &[&str] = &[
+    // Deliberadas por la voz.
+    "mesh_claim",
+    "mesh_ask",
+    "swarm_chat",
+    // Inspección de sólo lectura.
+    "system_overview",
+    "capabilities",
+    "task_queue",
+    "alerts",
+    "agent",
+    "apk_inventory",
+    "dex_decompile",
+    "mesh_snapshot",
+];
+
 /// ¿La tool está vetada para la voz?
 pub fn is_vetoed(tool: &str) -> bool {
     let t = tool.trim().to_ascii_lowercase();
     VETOED.iter().any(|v| t == *v || t.contains(v))
 }
 
+/// ¿La voz tiene permiso para ejecutar esta tool?
+///
+/// AUDIT-VOICE-01 (P0): allow-list.  Todo lo que no esté en `ALLOWED` queda
+/// fuera,Included la lista de veto (que pasa a ser sólo informative).
+pub fn is_allowed(tool: &str) -> bool {
+    let t = tool.trim().to_ascii_lowercase();
+    if t.is_empty() {
+        return false;
+    }
+    ALLOWED.iter().any(|a| t == *a)
+}
+
+/// Prefijos de credencial que se redactan SIEMPRE, en cualquier posición.
+///
+/// AUDIT-VOICE-02 (P0): el redactor anterior sólo miraba "mdaemon_sk_live",
+/// "seere_auth_token" y "hex de 32+".  Eso dejaba pasar los tokens de GitHub
+/// (`ghp_`, `gho_`, `github_pat_`), los de OpenAI/Anthropic (`sk-`), los de
+/// Google (`AIza`) y cualquier JWT; y además se comía los sha256, que son
+/// justo el formato de broadcast del enjambre ("ruta + sha256").
+const SECRET_PREFIXES: &[&str] = &[
+    "mdaemon_sk_live",
+    "ghp_",
+    "gho_",
+    "ghu_",
+    "ghs_",
+    "ghr_",
+    "github_pat_",
+    "sk-",
+    "sk_",
+    "xoxb-",
+    "xoxp-",
+    "aiza",
+    "ya29.",
+    "akia",
+    "asia",
+    "eyj",  // cabecera JWT (base64 de {"")
+];
+
+/// Campos cuyo valor es un hash y **no** debe redactarse.
+const HASH_FIELDS: &[&str] = &["sha256", "sha-256", "hash", "digest", "checksum", "md5"];
+
+/// ¿Este token parece una credencial?
+fn looks_like_secret(token: &str) -> bool {
+    let low = token.to_ascii_lowercase();
+    // 1) prefijo conocido de credencial
+    if SECRET_PREFIXES.iter().any(|p| low.starts_with(p)) {
+        return true;
+    }
+    // 2) "bearer"/"authorization" pegado al valor (el token puede venir con
+    //    el esquema dentro de la misma cadena)
+    if low.contains("bearer ") || low.contains("authorization:") {
+        return true;
+    }
+    // 3) JWT: tres grupos separados por puntos, con cabecera "eyJ"
+    if low.starts_with("eyj") && token.matches('.').count() >= 2 {
+        return true;
+    }
+    // 4) token de sesión de la instancia: 64 hex.  Un sha256 tiene la misma
+    //    forma, así que sólo se redacta en texto libre (en JSON, el campo
+    //    `sha256` se preserva por nombre: ver `redact_value`).
+    token.len() >= 64 && token.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 /// Quita cualquier cosa que parezca un secreto de un texto de modelo.
+///
+/// AUDIT-VOICE-02 (P0): por prefijo de credencial, no por "hex largo".
 pub fn redact(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for token in text.split_whitespace() {
-        let low = token.to_ascii_lowercase();
-        let looks_secret = low.contains("mdaemon_sk_live")
-            || low.contains("seere_auth_token")
-            || (token.len() >= 32 && token.chars().all(|c| c.is_ascii_hexdigit()))
-            || low.starts_with("bearer ");
-        if looks_secret {
+        if looks_like_secret(token) {
             out.push_str("[redactado]");
             out.push(' ');
         } else {
@@ -380,6 +467,28 @@ pub fn redact(text: &str) -> String {
         }
     }
     out.trim().to_string()
+}
+
+/// Redacta un valor JSON recursivamente, **preservando** los campos de hash
+/// (`sha256`, `hash`, `digest`...): el broadcast del enjambre los necesita.
+pub fn redact_value(v: &Value) -> Value {
+    match v {
+        Value::String(s) => Value::String(redact(s)),
+        Value::Array(a) => Value::Array(a.iter().map(redact_value).collect()),
+        Value::Object(o) => {
+            let mut out = serde_json::Map::new();
+            for (k, val) in o {
+                let low = k.to_ascii_lowercase();
+                if HASH_FIELDS.iter().any(|h| low == *h || low.ends_with(h)) {
+                    out.insert(k.clone(), val.clone());
+                } else {
+                    out.insert(k.clone(), redact_value(val));
+                }
+            }
+            Value::Object(out)
+        }
+        other => other.clone(),
+    }
 }
 
 /// Ejecutor real: la registry del daemon (`/api/tool/<n>`).
@@ -470,8 +579,14 @@ impl Executor for DaemonExecutor {
                 }))
             }
             other => {
-                if is_vetoed(other) {
-                    return Err(format!("la tool {} está vetada para la voz", other));
+                // AUDIT-VOICE-01 (P0): allow-list, no deny-list.  Antes, una
+                // deny-list sobre el NOMBRE de la tool dejaba pasar
+                // `fs_write`, `git_ops` (push) y `battery_saver` (apply).
+                if !is_allowed(other) {
+                    return Err(format!(
+                        "la tool {} no está en la allow-list de la voz",
+                        other
+                    ));
                 }
                 match crate::mcp_ext::dispatch(other, args) {
                     Some(v) => Ok(v),
@@ -485,6 +600,40 @@ impl Executor for DaemonExecutor {
 // ------------------------------------------------------------------------ //
 // Difusión (4 canales)
 // ------------------------------------------------------------------------ //
+
+/// Escribe una línea NDJSON en un fichero compartido **bajo `flock`**.
+///
+/// AUDIT-VOICE-04 (P0): el contrato del enjambre es "bajo lock, no editor".
+/// Con tres o más nodos escribiendo a la vez, sin lock las líneas se
+/// entrelazan y el NDJSON deja de ser parseable.
+///
+/// `flock` no tiene envoltorio seguro en la std, de ahí el `unsafe`
+/// acotado a la llamada al sistema.
+fn append_locked(path: &str, line: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::io::AsRawFd;
+    let f = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("open {}: {}", path, e))?;
+    // SAFETY: `flock` sólo muta el estado del lock del descriptor; el
+    // descriptor sigue vivo y es único durante toda la llamada.
+    let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
+    if rc != 0 {
+        return Err(format!("flock {}: {}", path, std::io::Error::last_os_error()));
+    }
+    let mut f = f;
+    let r = f
+        .write_all(line.as_bytes())
+        .and_then(|_| f.write_all(b"\n"))
+        .map_err(|e| format!("write {}: {}", path, e));
+    // SAFETY: se suelta el lock del mismo descriptor.
+    unsafe {
+        libc::flock(f.as_raw_fd(), libc::LOCK_UN);
+    }
+    r
+}
 
 /// Difunde líneas NDJSON por los 4 canales: journal, sync, tablón y swarm_chat.
 ///
@@ -500,41 +649,32 @@ pub fn broadcast(lines: &[String]) -> Value {
     let sync_file = format!("{}/re_{}.ndjson", sync_dir(), sanitize(&owner_id()));
 
     for line in lines {
+        // AUDIT-VOICE-03 (P0): la línea se redacta ANTES de tocar los tres
+        // canales compartidos.  Antes, `detail` (texto del modelo o mensaje
+        // de error) viajaba al journal, al sync y al tablón sin pasar por el
+        // redactor: un token en la respuesta de un provider acababa en el
+        // estado compartido.
+        let safe_line = match serde_json::from_str::<Value>(line) {
+            Ok(v) => redact_value(&v).to_string(),
+            Err(_) => redact(line),
+        };
         if let Some(parent) = Path::new(&journal).parent() {
             let _ = fs::create_dir_all(parent);
         }
-        match fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&journal)
-            .and_then(|mut f| {
-                use std::io::Write;
-                f.write_all(line.as_bytes())?;
-                f.write_all(b"\n")?;
-                Ok(())
-            }) {
-            Ok(_) => journal_ok += 1,
+        match append_locked(&journal, &safe_line) {
+            Ok(()) => journal_ok += 1,
             Err(e) => errors.push(format!("journal: {}", e)),
         }
 
         if let Some(parent) = Path::new(&sync_file).parent() {
             let _ = fs::create_dir_all(parent);
         }
-        match fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&sync_file)
-            .and_then(|mut f| {
-                use std::io::Write;
-                f.write_all(line.as_bytes())?;
-                f.write_all(b"\n")?;
-                Ok(())
-            }) {
-            Ok(_) => sync_ok += 1,
+        match append_locked(&sync_file, &safe_line) {
+            Ok(()) => sync_ok += 1,
             Err(e) => errors.push(format!("sync: {}", e)),
         }
 
-        if let Ok(v) = serde_json::from_str::<Value>(line) {
+        if let Ok(v) = serde_json::from_str::<Value>(&safe_line) {
             if let Ok(board) = coordination::TaskBoard::open(&board_path()) {
                 if board
                     .publish_event("voice_action", &owner_id(), &v)
@@ -843,6 +983,19 @@ pub fn handle(action: &str, args: &Value) -> Value {
             })
         }
         "act" => {
+            // AUDIT-VOICE-05 (P0): `do` es una puerta trasera a la política
+            // destructiva del daemon (todo lo destructivo exige
+            // `confirm: true`).  Si la voz puede llamar tools sin confirmar,
+            // la política no existe.  => `do` exige confirmación explícita.
+            let wants_tool = args.get("action").and_then(|v| v.as_str()) == Some("do");
+            if wants_tool && !args.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false) {
+                return json!({
+                    "ok": false,
+                    "error": "confirmation_required",
+                    "hint": "la voz ejecuta tools con confirm=true (mismo contrato que el resto del daemon)",
+                    "tool": args.get("tool").and_then(|v| v.as_str()).unwrap_or(""),
+                });
+            }
             // Acción explícita o, si no viene, la que decide el cerebro.
             let action = match args.get("action").and_then(|v| v.as_str()) {
                 Some("claim") => Action::Claim {

@@ -1125,8 +1125,40 @@ fn handle_client(mut stream: TcpStream) {
                     providers::PROVIDERS_PATH,
                     &snapshot,
                     300,
-                    "http://127.0.0.1:9090/mcp",
+                    "",
                 );
+                // Antigravity (W5): la entrada la construye SU módulo (sin
+                // duplicar el código) y la salud es **medida**: un TCP al
+                // /mcp local.  Si no responde, `available:false` + motivo.
+                {
+                    let mcp_endpoint = "http://127.0.0.1:9090/mcp";
+                    let probe = {
+                        // El metodo `probe` vive en el trait `Prober`: se
+                        // importa de forma anonima y local a este bloque
+                        // (`as _`) para no colisionar con ningun `use` de
+                        // arriba ni duplicar un import si otro carril lo
+                        // anade al fichero.
+                        use crate::service_bus::Prober as _;
+                        let mut probe_target =
+                            crate::service_bus::ServiceEntry::new("mcp", crate::service_bus::ServiceKind::McpServer);
+                        probe_target.endpoint = mcp_endpoint.to_string();
+                        crate::service_bus::TcpProber::default().probe(&probe_target)
+                    };
+                    let tools = crate::mcp_server::tool_definitions()
+                        .as_array()
+                        .map(|a| a.len())
+                        .unwrap_or(0);
+                    let raw = crate::antigravity_intel::service_bus_entry(
+                        mcp_endpoint,
+                        "http",
+                        tools,
+                        &probe.reason,
+                        probe.available,
+                    );
+                    if let Some(e) = crate::service_bus::entry_from_json(&raw) {
+                        bus.upsert(e);
+                    }
+                }
                 if qs.get("probe").map(|s| s.as_str()) == Some("1") {
                     // Comprobación real (TCP) de los servicios remotos.
                     let prober = crate::service_bus::TcpProber::default();
