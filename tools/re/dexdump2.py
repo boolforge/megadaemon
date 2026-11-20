@@ -335,24 +335,25 @@ def main(path, cls_want, meth_filter=None):
                     op = d[base + 2 * pos]; w = W.get(op, 1)
                     p2 = base + 2 * pos
                     desc = ""
-                    if op == 0x1a:  # const-string
-                        sidx = u16(d, p2 + 2); desc = f'"{strings[sidx]}"'
-                    elif op == 0x1b:  # const-string/jumbo
-                        sidx = u32(d, p2 + 2); desc = f'"{strings[sidx]}"'
-                    elif op == 0x12:  # const/4
-                        desc = str(((d[p2+1] >> 4) & 0xf) - (16 if (d[p2+1] >> 4) & 0x8 else 0))
-                    elif op == 0x13:  # const/16
-                        v = u16(d, p2 + 2); desc = str(v - 0x10000 if v > 0x7fff else v)
-                    elif op == 0x14:  # const
-                        desc = str(u32(d, p2 + 2))
-                    elif op == 0x15:  # const/high16
-                        desc = str(u16(d, p2 + 2) << 16)
-                    elif 0x6e <= op <= 0x72:  # invoke-*
-                        midx2 = u16(d, p2 + 2); desc = method_name(midx2)
-                    elif 0x74 <= op <= 0x78:  # invoke-*/range
-                        midx2 = u16(d, p2 + 2); desc = method_name(midx2)
-                    elif op in (0x1c, 0x1f, 0x22, 0x23, 0x1e):  # class/type refs
-                        tidx = u16(d, p2 + 2); desc = types[tidx]
+                    try:
+                        if op == 0x1a:  # const-string
+                            sidx = u16(d, p2 + 2); desc = f'"{strings[sidx]}"'
+                        elif op == 0x1b:  # const-string/jumbo
+                            sidx = u32(d, p2 + 2); desc = f'"{strings[sidx]}"'
+                        elif op == 0x12:  # const/4
+                            desc = str(((d[p2+1] >> 4) & 0xf) - (16 if (d[p2+1] >> 4) & 0x8 else 0))
+                        elif op == 0x13:  # const/16
+                            v = u16(d, p2 + 2); desc = str(v - 0x10000 if v > 0x7fff else v)
+                        elif op == 0x14:  # const
+                            desc = str(u32(d, p2 + 2))
+                        elif op == 0x15:  # const/high16
+                            desc = str(u16(d, p2 + 2) << 16)
+                        elif 0x6e <= op <= 0x72 or 0x74 <= op <= 0x78:  # invoke-*
+                            midx2 = u16(d, p2 + 2); desc = method_name(midx2)
+                        elif op in (0x1c, 0x1f, 0x22, 0x23):  # class/type refs
+                            tidx = u16(d, p2 + 2); desc = types[tidx]
+                    except Exception:
+                        desc = ""
                     if desc:
                         print(f"   {pos:5d}: op 0x{op:02x}  {desc}")
                     pos += w

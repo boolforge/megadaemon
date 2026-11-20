@@ -164,7 +164,56 @@ máximo de índice                         (1048576 = 0x100000)
 "Trailing bytes after SBA index records: "
 ```
 
-### 4.3 Interoperabilidad con lo que ya tiene la flota
+### 4.3 La cabecera es una **"SBA info page" de 128 bytes**
+
+Medido en el lector `Lt97;.u`:
+
+```
+readSbaInfoPage(fd, offset=0, size=128)   # "Lsf4;->readSbaInfoPage"
+```
+
+* `Lsf4;.readSbaInfoPage` está **declarado en Java pero sin cuerpo** ⇒ la
+  implementación está en `libsba_archive.so` ⇒ **los offsets byte a byte de la
+  página están en el binario nativo (stripped: 0 símbolos)**, no en el DEX.
+* El escritor (`Lib7;.B`) fija las cadenas de formato: **`"SBA1"`** (id de
+  formato) y **`"Swift Backup Archive"`** (título), y formatea flags/ids con
+  `"0x%08x"`.
+* El lector lee **dos** páginas de 128 B (la del archivo raíz y la de cada
+  entrada) ⇒ el contenedor es un **archivo de archivos**: raíz con índice de
+  entradas, y cada entrada es a su vez un archivo con su propia info page.
+  Errores medidos: `"SBA root archive info entry count mismatch: expected="`.
+* El **objeto KDF** (`Laa7;`) se construye con `(Integer, Integer, Long, byte[])`
+  ⇒ ⇒ **la sal es ese `byte[]` y vive en la cabecera**, dentro del campo
+  `kdf` ⇒ ⇒ **el lector no necesita conocer ningún valor por defecto**: todo
+  (método, iteraciones, sal) está en el propio archivo.
+
+### 4.4 Ids numéricos (los que van en la cabecera)
+
+| Enum | ids |
+|---|---|
+| Método de cifrado (`Lsc7;`) | 0=None, 1=SevenZipAes, 2=Aes256Gcm, 3=Aes256GcmSiv, **4=Aegis256**, 5=Aegis128X2 |
+| Método de KDF (`Lba7;`, en `classes2.dex`) | 0=None, **1=Argon2id** |
+
+⇒ `encryptionMethodId=4` ⇒ AEGIS-256; `kdfMethodId=1` ⇒ Argon2id.
+
+### 4.5 Qué es nativo (y por qué importa para el lector)
+
+| Parte | Dónde vive |
+|---|---|
+| KDF Argon2id | nativo (`SbaNativeCrypto.deriveArgon2id`) |
+| AEGIS-256/128X2 | nativo (`SbaLibaegisCryptoNative`) |
+| **Layout byte a byte de la info page** | **nativo** (`readSbaInfoPage`) |
+| Derivación de nonce/AAD por chunk | **nativo** |
+| Índice (entradas, offsets, tamaños) | Java (`Lib7;.A`) |
+| Modelo de la cabecera (12 campos) | Java (`Lk87;`/`Lmb7;`) |
+| KDF: validación + llamada | Java (`Ly87;.a`) |
+
+⇒ ⇒ **Un lector escrito "a ciegas" se inventaría el layout de la página y la
+derivación de nonce/AAD.** Lo que sí es escribible sin suposiciones: el
+**Argon2id** (medido), el **modelo de cabecera** y los **ids**, y el interior
+**tar+zstd**. El resto necesita **un `.dat` real** (o RE del parser nativo).
+
+### 4.6 Interoperabilidad con lo que ya tiene la flota
 
 * El interior es un **tar** (rutas `extractTarFromFdRaw`, `listTarEntries…`),
   comprimido con **zstd** ⇒ encaja con `backup_formats.rs` (TAR + zstd) y con
