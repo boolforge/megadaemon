@@ -1568,11 +1568,18 @@ fn handle_client(mut stream: TcpStream) {
                 .unwrap_or("")
                 .trim()
                 .to_string();
-            // El navegador local del dispositivo canjea sin API key: ya está
-            // autenticado por ser local (Host loopback, sin cabeceras de
-            // proxy).  El túnel público sigue necesitando la key.
-            let ok = (local_browser && !provided.is_empty())
-                || (!provided.is_empty() && cfg.enabled && cfg.accepts(&provided));
+            // v15 (A-18 · FAIL-CLOSED): el canje SIEMPRE valida la API key.
+            //
+            // Antes: `(local_browser && !provided.is_empty())` entregaba el
+            // TOKEN ROOT a cualquiera que mandase CUALQUIER cadena no vacía
+            // con un `Host` loopback falsificable (y el puente del móvil
+            // reescribe el Host a 127.0.0.1) ⇒ cualquier app del móvil se
+            // llevaba la sesión root del daemon.  El navegador local del
+            // dispositivo NO necesita el canje (su token va incrustado en la
+            // página que sirve el propio daemon) y el túnel público ya
+            // mandaba la API key de verdad ⇒ la cláusula sobraba y era el
+            // agujero.
+            let ok = !provided.is_empty() && cfg.enabled && cfg.accepts(&provided);
             if ok {
                 send_json(
                     &mut stream,
@@ -1946,7 +1953,7 @@ fn handle_client(mut stream: TcpStream) {
                     );
                 }
                 "stop" => {
-                    // Lock corto por rama: el guard NO cruza `send_json`.
+                    // Lock corto por rama: el guard no cruza `send_json`.
                     let payload = {
                         let mut st = mutex.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(r) = st.runners.get_mut(&valid_target) {
@@ -1963,7 +1970,7 @@ fn handle_client(mut stream: TcpStream) {
                     send_json(&mut stream, &payload);
                 }
                 _ => {
-                    // Lock corto por rama: el guard NO cruza `send_json`.
+                    // Lock corto por rama: el guard no cruza `send_json`.
                     let payload = {
                         let st = mutex.lock().unwrap_or_else(|e| e.into_inner());
                         let cur = st.runners.get(&valid_target).cloned().unwrap_or(RunnerState {
