@@ -1886,7 +1886,10 @@ fn handle_client(mut stream: TcpStream) {
             let action = body_json["action"].as_str().unwrap_or("status");
             let target = body_json["target"].as_str().unwrap_or("segacd").to_lowercase();
             let mutex = get_cockpit_state();
-            let mut st = mutex.lock().unwrap();
+            // Un mutex envenenado (un panic dentro del guard) no puede dejar el
+            // servidor muerto: se recupera el estado y se sigue.  Con `.unwrap()`
+            // un solo panic convertia TODOS los request posteriores en 502.
+            let mut st = mutex.lock().unwrap_or_else(|e| e.into_inner());
             let valid_target = if st.runners.contains_key(&target) {
                 target.clone()
             } else {
@@ -1913,7 +1916,11 @@ fn handle_client(mut stream: TcpStream) {
                         r.status = "ACTIVE".to_string();
                         r.pid = Some(fake_pid);
                     }
-                    ensure_live_shm(&valid_target);
+                    // Un panic aqui envenenaria el mutex global => 502 en
+                    // cadena.  Se aísla: el panic se registra y la request sigue.
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        ensure_live_shm(&valid_target)
+                    }));
                     send_json(
                         &mut stream,
                         &json!({
@@ -2245,7 +2252,17 @@ pub fn run_server(port: u16) -> Result<(), String> {
                     continue;
                 }
                 thread::spawn(move || {
-                    handle_client(stream);
+                    // Un panic en UNA conexión no puede tumbar el daemon: con el
+                    // perfil release desenrollando (sin panic="abort") el
+                    // panic queda contenido aquí y el resto del cockpit sigue
+                    // sirviendo.  Antes moría el proceso entero y el túnel
+                    // veía 502 aunque el daemon "estuviera vivo".
+                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        handle_client(stream);
+                    }));
+                    if r.is_err() {
+                        eprintln!("cockpit: panic capturado en una conexión (aislado; el servicio sigue)");
+                    }
                     ACTIVE_CLIENTS.fetch_sub(1, Ordering::Relaxed);
                 });
             }
