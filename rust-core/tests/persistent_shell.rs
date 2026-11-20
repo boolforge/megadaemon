@@ -55,7 +55,7 @@ fn el_ejecutor_del_bucle_no_crea_procesos() {
         ShellToolExecutor::command_of(&action),
         "echo hola-bucle".to_string()
     );
-    let mut guard = sh.lock().unwrap_or_else(|e| e.into_inner());
+    let guard = sh.lock().unwrap_or_else(|e| e.into_inner());
     guard.stop();
 }
 
