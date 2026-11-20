@@ -473,9 +473,16 @@ fn gcm_encrypt(
         }
         off += 16;
     }
+    // T = GCTR(K, J0, S) con |S| = 16 → T = E(K, J0) ⊕ S
+    // (NIST SP 800-38D, §7.1). El GHASH `s` **sí** forma parte del tag: sin
+    // ese XOR el tag no dependería del texto cifrado ni del AAD y un chunk
+    // alterado, reordenado o renombrado pasaría la verificación.
     let s = ghash(&h, aad, &ct);
-    // GCTR(K, J0, S) con |S| = 16 → T = E(K, J0)
-    let tag = key.encrypt_block(&j0);
+    let ek = key.encrypt_block(&j0);
+    let mut tag = [0u8; TAG_LEN];
+    for i in 0..TAG_LEN {
+        tag[i] = s[i] ^ ek[i];
+    }
     (ct, tag)
 }
 
@@ -505,14 +512,17 @@ fn gcm_decrypt(
         off += 16;
     }
     let s = ghash(&h, aad, ciphertext);
-    let expected = key.encrypt_block(&j0);
+    let ek = key.encrypt_block(&j0);
+    let mut expected = [0u8; TAG_LEN];
+    for i in 0..TAG_LEN {
+        expected[i] = s[i] ^ ek[i];
+    }
     if !ct_eq(&expected, tag) {
         return Err(
             "fallo de autenticación GCM: el chunk ha sido alterado, reordenado o renombrado"
                 .to_string(),
         );
     }
-    let _ = s;
     Ok(pt)
 }
 

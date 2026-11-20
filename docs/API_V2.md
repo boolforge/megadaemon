@@ -4,7 +4,7 @@
 > endpoints que consume la UI nueva `web/cockpit_v2.html`.
 >
 > **Estado**: implementada y testada en `rust-core/src/webui.rs`
-> (16 tests).  **Pendiente de cableado**: el dueño de `cockpit_server.rs` tiene
+> (23 tests).  **Pendiente de cableado**: el dueño de `cockpit_server.rs` tiene
 > que exponer las rutas (3 líneas, ver §2) y registrar `pub mod webui;` en
 > `lib.rs` (1 línea).  Hasta entonces la UI v2 talking con la v1 sigue
 > funcionando: la v2 es **aditiva**.
@@ -646,7 +646,7 @@ pub fn share_root() -> std::path::PathBuf;
 
 ## 8. Tests
 
-`rust-core/src/webui.rs` lleva **16 tests** (`cargo test --lib webui`):
+`rust-core/src/webui.rs` lleva **23 tests** (`cargo test --release webui` → *23 passed, 0 failed*):
 
 | Test | Qué garantiza |
 |---|---|
@@ -668,6 +668,11 @@ pub fn share_root() -> std::path::PathBuf;
 | `la_documentacion_de_rutas_coincide_con_la_tabla` | la doc se autogenera de la tabla |
 | `el_bucle_agentico_declara_las_cinco_fases` | las 5 fases del bucle |
 | `la_vista_de_alertas_muestra_el_canal_real` | canal webhook sin filtrar la URL |
+| `cada_tipo_de_tarea_cae_en_un_tipo_de_trabajo_conocido` | el mapeo tipo de tarea → tipo de trabajo es exhaustivo |
+| `las_reglas_locales_deciden_si_la_instancia_comparte` | batería/temperatura/dedicada bloquean la oferta, y el motivo se explica |
+| `las_reglas_se_validan_antes_de_guardarse` | valores imposibles (batería 900 %, reservado 2.0, tipo desconocido) se rechazan |
+| `el_mercado_expone_oferta_demanda_y_contribucion` | el mercado devuelve oferta, demanda, plan y ledger |
+| `el_reparto_ignora_los_nodos_que_no_cumplen_las_reglas` | un nodo bloqueado o que no ofrece el tipo de trabajo queda descartado |
 
 ---
 

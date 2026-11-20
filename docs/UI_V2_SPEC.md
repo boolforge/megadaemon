@@ -18,7 +18,7 @@ cosa**: el chat con el agente y un puñado de herramientas RE.  Todo lo demás
 | # | Queja del usuario | Diagnóstico | Cambio en la v2 |
 |---|---|---|---|
 | 1 | "es una mierda" / "muy feo y muy penoso" | HTML de 88 KB con `<style>` en línea, valores sueltos, sin modo claro, sin tokens | `web/webui_v2.css`: sistema de diseño con tokens (paleta, tipografía fluida, espaciado 4/8, radios, sombras), **modo claro/oscuro** (`prefers-color-scheme` + toggle manual), componentes (cards, chips, tablas, badges, tabs, toasts, modales, formularios), foco visible, AA, `prefers-reduced-motion` |
-| 2 | "le faltan muchísimas cosas" | 5 vistas (chat, RE, NPU, bidders, cámara) | **9 vistas**: Resumen, Nodos, Tablero, Agente, Delegación, Alertas, RE/Apps, Archivos, Sistema |
+| 2 | "le faltan muchísimas cosas" | 5 vistas (chat, RE, NPU, bidders, cámara) | **10 vistas**: Resumen, Nodos, Tablero, Agente, Delegación, Alertas, RE/Apps, Archivos, Reparto, Sistema |
 | 3 | "no muestra nodos conectados" | no existía endpoint de nodos | vista **Nodos** con `GET /api/v2/nodes` + 3 acciones reales (asignar / mensaje / migrar) |
 | 4 | "no busca los LLM de forma agéntica" | el chat mandaba un prompt y pintaba la respuesta | vista **Agente**: objetivo → plan (con **origen**: LLM local o heurística, y por qué) → ejecución; catálogo real de proveedores con **ping** y **consumo por proveedor** |
 | 5 | "falla muchisimo" | ~20 fetch por vista, cada uno una fuente de fallo | **1 fetch por vista** (agregadores `/api/v2/*`); los errores se muestran como estado, no como pantalla rota; auth tolerante (401 → prompt de API key → reintento) |
@@ -352,8 +352,9 @@ o a los POST de la v2 (`nodes/*`, `share/*`, `delegation/apply`,
 **Hecho**
 
 * Sistema de diseño completo con modo claro/oscuro y a11y.
-* 9 vistas con datos reales (0 mocks).
-* API v2 agregadora (20 rutas) con `dispatch` listo para cablear.
+* 10 vistas con datos reales (0 mocks).
+* API v2 agregadora (24 rutas) con `dispatch` listo para cablear.
+* Reparto de trabajo entre nodos con reglas locales y equidad (todo nodo debe contribuir).
 * Verificación de hash real en los ficheros compartidos (ida y vuelta).
 * Tests de Rust que atan la UI a la tabla de rutas en las dos direcciones.
 

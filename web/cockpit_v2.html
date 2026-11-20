@@ -460,7 +460,75 @@
       </div>
     </section>
 
-    <!-- ─────────── 10. SISTEMA ─────────── -->
+    <!-- ─────────── 10. ENJAMBRE ─────────── -->
+    <section class="view" id="view-enjambre" role="tabpanel" aria-labelledby="tab-enjambre" tabindex="-1">
+      <div class="view__head">
+        <h1 class="view__title">Enjambre</h1>
+        <span class="view__subtitle" id="enjambre-sub">hallazgos de RE que publican los nodos</span>
+      </div>
+
+      <div class="grid grid--stats" id="enjambre-stats"></div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Filtros</h2>
+          <button class="btn btn--sm btn--ghost" id="btn-enjambre-refresh">Recargar</button>
+        </div>
+        <div class="row">
+          <label class="sr-only" for="filtro-agente">Agente</label>
+          <select class="node-select" id="filtro-agente"><option value="">todos los agentes</option></select>
+          <label class="sr-only" for="filtro-kind">Tipo de hallazgo</label>
+          <select class="node-select" id="filtro-kind"><option value="">todos los tipos</option></select>
+        </div>
+        <div class="small muted mt-2" id="enjambre-roots"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Hallazgos</h2>
+          <span class="badge" id="enjambre-contador">—</span>
+        </div>
+        <div id="enjambre-lista"></div>
+      </div>
+
+      <div class="grid grid--wide">
+        <div class="card">
+          <div class="card__head"><h2 class="card__title">Nodos y agentes</h2></div>
+          <div id="enjambre-agentes"></div>
+        </div>
+        <div class="card">
+          <div class="card__head"><h2 class="card__title">Tareas del bus</h2></div>
+          <div id="enjambre-tareas"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Prompt para un agente externo</h2>
+          <button class="btn btn--sm" id="btn-prompt-gen">Generar</button>
+        </div>
+        <p class="small muted">Se genera en el <strong>servidor</strong> con el estado real (URLs del túnel, catálogo de tools MCP, dispositivo, nodos y hallazgos). No depende de la plantilla ni del CORS del cliente.</p>
+        <div class="row mt-2">
+          <label class="switch small"><input type="checkbox" id="prompt-secrets"> incluir API key y token de sesión</label>
+        </div>
+        <div class="field mt-2 hidden" id="prompt-key-field">
+          <label class="field__label" for="prompt-key">API key de la instancia</label>
+          <input class="input mono" id="prompt-key" type="password" autocomplete="off" placeholder="mdaemon_sk_…">
+          <span class="field__hint" id="prompt-key-hint">Se envía sólo al daemon y vuelve dentro del Markdown. Nunca se guarda en el estado compartido ni en el repo.</span>
+        </div>
+        <div class="notice notice--warn hidden mt-3" id="prompt-warn">
+          <div><div class="notice__title">El documento contiene tus credenciales</div>
+          <div>El Markdown que vas a copiar o descargar lleva la API key y el token de sesión. No lo subas al repo ni lo compartas.</div></div>
+        </div>
+        <div class="btn-row mt-3">
+          <button class="btn" id="btn-prompt-copy">Copiar</button>
+          <button class="btn" id="btn-prompt-download">Descargar .md</button>
+        </div>
+        <pre class="mt-3" id="prompt-out">(pulsa «Generar»)</pre>
+      </div>
+    </section>
+
+    <!-- ─────────── 11. SISTEMA ─────────── -->
     <section class="view" id="view-sistema" role="tabpanel" aria-labelledby="tab-sistema" tabindex="-1">
       <div class="view__head">
         <h1 class="view__title">Sistema</h1>
@@ -527,6 +595,9 @@
     </button>
     <button class="tabbar__btn" role="tab" id="tab-reparto" data-view="reparto" aria-selected="false" aria-controls="view-reparto">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="12" r="2.5"/><circle cx="9" cy="18" r="2.5"/><path d="M8.5 6h4a3 3 0 0 1 3 3v1M8 17.5h6.5"/></svg><span>Reparto</span>
+    </button>
+    <button class="tabbar__btn" role="tab" id="tab-enjambre" data-view="enjambre" aria-selected="false" aria-controls="view-enjambre">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="4" cy="6" r="2"/><circle cx="20" cy="6" r="2"/><circle cx="12" cy="20" r="2"/><path d="M5.5 7.5 9.5 10M18.5 7.5 14.5 10M12 15v2"/></svg><span>Enjambre</span>
     </button>
     <button class="tabbar__btn" role="tab" id="tab-sistema" data-view="sistema" aria-selected="false" aria-controls="view-sistema">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></svg><span>Sistema</span>
@@ -619,7 +690,9 @@ const state = {
   timer: null,
   busy: false,
   authMode: "desconocido",
-  authDetail: ""
+  authDetail: "",
+  keyAsked: false,
+  keyFailed: false
 };
 
 const VIEW_LOADERS = {
@@ -632,6 +705,7 @@ const VIEW_LOADERS = {
   re: loadRe,
   archivos: loadArchivos,
   reparto: loadReparto,
+  enjambre: loadEnjambre,
   sistema: loadSistema
 };
 
@@ -729,9 +803,8 @@ async function probeRead() {
  */
 async function diagnoseAuth() {
   const chip = $("#chip-auth");
-  let exchanged = false;
-  if (state.apiKey) exchanged = await exchangeToken(state.apiKey);
-  else if (state.token) exchanged = true;
+  let exchanged = hasSession();
+  if (!exchanged && state.apiKey) exchanged = await exchangeToken(state.apiKey);
 
   const probe = await probeRead();
   let mode, text, cls, title;
@@ -762,14 +835,21 @@ async function diagnoseAuth() {
   return mode;
 }
 
-/** Garantiza que hay credenciales; devuelve true si se pudo. */
+/** Garantiza que hay credenciales; devuelve true si se pudo.
+ *
+ *  Si ya hay sesión, no se pregunta nada.  Si el usuario ya pegó una key y
+ *  el canje falló, no se insiste (guarda `state.keyFailed`).
+ */
 async function ensureSession() {
+  if (hasSession()) return true;
+  if (state.keyFailed) return false;
   if (!state.apiKey) {
     const key = await askApiKey();
     if (!key) return false;
   }
-  await exchangeToken(state.apiKey);
-  return true;
+  const ok = await exchangeToken(state.apiKey);
+  if (!ok) state.keyFailed = true;
+  return ok;
 }
 
 /**
@@ -777,20 +857,44 @@ async function ensureSession() {
  * El `fetch` va LITERAL en el call-site: así la UI se puede validar contra
  * la tabla de rutas del daemon.
  */
-async function apiCall(fn) {
+/**
+ * Ejecuta una llamada y reintenta una vez si el daemon pide credenciales.
+ * El `fetch` va LITERAL en el call-site: así la UI se puede validar contra
+ * la tabla de rutas del daemon.
+ *
+ * Reglas (medidas en el dispositivo, UI-16 / UI-08):
+ *  · sólo un **401** abre el prompt de API key (un 403 = token de sesión
+ *    que falta o es inválido; un 404 = endpoint inexistente: nada que ver con
+ *    credenciales);
+ *  · si ya hay sesión (token embebido o guardado) NO se pregunta;
+ *  · como mucho se pregunta **una vez**: si el canje falló, no se insiste.
+ *  · el error nombra el endpoint y el código: el usuario tiene que saber QUÉ
+ *    falló, no ver un "HTTP 403" genérico.
+ */
+async function apiCall(path, fn) {
   let res = await fn();
-  if (res.status === 401 || res.status === 403) {
-    const ok = await ensureSession();
-    if (!ok) throw new Error("Sin credenciales: el daemon devolvió " + res.status);
-    res = await fn();
+  if (res.status === 401 && !state.keyAsked && !hasSession()) {
+    state.keyAsked = true;
+    const key = await askApiKey();
+    if (key) {
+      await exchangeToken(key);
+      res = await fn();
+    } else {
+      state.keyFailed = true;
+    }
   }
   let body = null;
   try { body = await res.json(); } catch (e) { body = null; }
   if (!res.ok) {
     const hint = (body && (body.hint || body.detail || body.error)) || "";
-    throw new Error("HTTP " + res.status + (hint ? " · " + hint : ""));
+    throw new Error(path + " → HTTP " + res.status + (hint ? " · " + hint : ""));
   }
   return body;
+}
+
+/** ¿Hay ya una sesión (token embebido o canjeado)? */
+function hasSession() {
+  return !!(state.token || (window.MEGADAEMON_TOKEN && window.MEGADAEMON_TOKEN.length >= 16));
 }
 
 /* ── Toasts ─────────────────────────────────────────────────────────────── */
@@ -922,7 +1026,7 @@ function paintHeader(data) {
    VISTA 1 · RESUMEN
    ═══════════════════════════════════════════════════════════════════════════ */
 async function loadResumen() {
-  const d = await apiCall(() => fetch("/api/v2/dashboard", { cache: "no-store", headers: authHeaders() }));
+  const d = await apiCall("/api/v2/dashboard", () => fetch("/api/v2/dashboard", { cache: "no-store", headers: authHeaders() }));
   state.data.resumen = d;
   paintHeader(d);
 
@@ -998,7 +1102,7 @@ async function loadResumen() {
    VISTA 2 · NODOS
    ═══════════════════════════════════════════════════════════════════════════ */
 async function loadNodos() {
-  const d = await apiCall(() => fetch("/api/v2/nodes", { cache: "no-store", headers: authHeaders() }));
+  const d = await apiCall("/api/v2/nodes", () => fetch("/api/v2/nodes", { cache: "no-store", headers: authHeaders() }));
   state.data.nodos = d;
   paintHeader({ bus: d.bus, nodes: d.nodes });
 
@@ -1064,7 +1168,7 @@ async function loadNodos() {
    VISTA 3 · TABLERO DE TAREAS
    ═══════════════════════════════════════════════════════════════════════════ */
 async function loadTablero() {
-  const d = await apiCall(() => fetch("/api/v2/tasks", { cache: "no-store", headers: authHeaders() }));
+  const d = await apiCall("/api/v2/tasks", () => fetch("/api/v2/tasks", { cache: "no-store", headers: authHeaders() }));
   state.data.tablero = d;
 
   const st = d.stats || {};
@@ -1129,7 +1233,7 @@ async function loadTablero() {
    VISTA 4 · AGENTE
    ═══════════════════════════════════════════════════════════════════════════ */
 async function loadAgente() {
-  const d = await apiCall(() => fetch("/api/v2/llm", { cache: "no-store", headers: authHeaders() }));
+  const d = await apiCall("/api/v2/llm", () => fetch("/api/v2/llm", { cache: "no-store", headers: authHeaders() }));
   state.data.llm = d;
 
   const routing = d.routing || {};
@@ -1181,7 +1285,7 @@ async function planGoal(execute) {
   const prefer = $("#agente-prefer-llm").checked;
   const body = { goal: goal, prefer_llm: prefer };
   if (execute) body.action = "run"; else body.action = "plan";
-  const data = await apiCall(() => fetch("/api/tool/agent", {
+  const data = await apiCall("/api/tool/agent", () => fetch("/api/tool/agent", {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body)
@@ -1219,7 +1323,7 @@ async function planGoal(execute) {
    VISTA 5 · DELEGACIÓN
    ═══════════════════════════════════════════════════════════════════════════ */
 async function loadDelegacion() {
-  const d = await apiCall(() => fetch("/api/v2/delegation", { cache: "no-store", headers: authHeaders() }));
+  const d = await apiCall("/api/v2/delegation", () => fetch("/api/v2/delegation", { cache: "no-store", headers: authHeaders() }));
   state.data.delegacion = d;
 
   const alertBox = $('#delegacion-alert');
@@ -1288,7 +1392,7 @@ async function loadDelegacion() {
    VISTA 6 · ALERTAS
    ═══════════════════════════════════════════════════════════════════════════ */
 async function loadAlertas() {
-  const d = await apiCall(() => fetch("/api/v2/alerts", { cache: "no-store", headers: authHeaders() }));
+  const d = await apiCall("/api/v2/alerts", () => fetch("/api/v2/alerts", { cache: "no-store", headers: authHeaders() }));
   state.data.alertas = d;
 
   const st = d.status || {};
@@ -1335,7 +1439,7 @@ async function loadAlertas() {
    VISTA 7 · RE / APPS
    ═══════════════════════════════════════════════════════════════════════════ */
 async function loadRe() {
-  const d = await apiCall(() => fetch("/api/v2/re", { cache: "no-store", headers: authHeaders() }));
+  const d = await apiCall("/api/v2/re", () => fetch("/api/v2/re", { cache: "no-store", headers: authHeaders() }));
   state.data.re = d;
 
   const apps = d.apps || {};
@@ -1384,7 +1488,7 @@ async function loadRe() {
    VISTA 8 · ARCHIVOS COMPARTIDOS
    ═══════════════════════════════════════════════════════════════════════════ */
 async function loadArchivos() {
-  const d = await apiCall(() => fetch("/api/v2/share", { cache: "no-store", headers: authHeaders() }));
+  const d = await apiCall("/api/v2/share", () => fetch("/api/v2/share", { cache: "no-store", headers: authHeaders() }));
   state.data.share = d;
 
   $('#archivos-stats').innerHTML = [
@@ -1425,7 +1529,7 @@ async function loadArchivos() {
    VISTA 9 · REPARTO DE TRABAJO (mercado de capacidades)
    ═══════════════════════════════════════════════════════════════════════════ */
 async function loadReparto() {
-  const m = await apiCall(() => fetch("/api/v2/market", { cache: "no-store", headers: authHeaders() }));
+  const m = await apiCall("/api/v2/market", () => fetch("/api/v2/market", { cache: "no-store", headers: authHeaders() }));
   state.data.market = m;
 
   if (!$("#rules-node").value.trim()) $("#rules-node").value = state.node || "";
@@ -1540,7 +1644,7 @@ async function loadReparto() {
 async function loadRules(node) {
   const n = node || $("#rules-node").value.trim() || state.node;
   if (!n) { toast("warn", "Indica el nodo", ""); return; }
-  const data = await apiCall(() => fetch("/api/v2/market/rules?node=" + encodeURIComponent(n), { cache: "no-store", headers: authHeaders() }));
+  const data = await apiCall("/api/v2/market/rules?node=", () => fetch("/api/v2/market/rules?node=" + encodeURIComponent(n), { cache: "no-store", headers: authHeaders() }));
   state.data.rules = data;
   $("#rules-node").value = n;
   const r = (data.rules) || {};
@@ -1578,7 +1682,7 @@ async function saveRules() {
       offers: offers
     }
   };
-  const data = await apiCall(() => fetch("/api/v2/market/rules", {
+  const data = await apiCall("/api/v2/market/rules", () => fetch("/api/v2/market/rules", {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload)
@@ -1588,7 +1692,7 @@ async function saveRules() {
 }
 
 async function routeDemand(demandId) {
-  const data = await apiCall(() => fetch("/api/v2/market/route", {
+  const data = await apiCall("/api/v2/market/route", () => fetch("/api/v2/market/route", {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ demand_id: demandId })
@@ -1602,12 +1706,262 @@ async function routeDemand(demandId) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   VISTA 10 · SISTEMA
+   VISTA 10 · ENJAMBRE (hallazgos de RE publicados por los nodos)
+   ---------------------------------------------------------------------------
+   SEGURIDAD: aquí NUNCA se interpola HTML con datos del servidor.  Todo el
+   texto va por `textContent` (el repo ya Suffrió un XSS por interpolar ids
+   en atributos).  Los botones se crean con `addEventListener`, no con
+   `onclick="…"` en la cadena de HTML.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/** Crea un elemento con clase y texto (texto SIEMPRE por textContent). */
+function mk(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined && text !== null) e.textContent = String(text);
+  return e;
+}
+
+/** Copia texto al portapapeles (con respaldo para http sin clipboard API). */
+function copyText(text, btn) {
+  const done = function () {
+    if (btn) btn.textContent = "Copiado";
+    setTimeout(function () { if (btn) btn.textContent = "Copiar"; }, 1600);
+  };
+  const fallback = function () {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "readonly");
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    ta.remove();
+    if (ok) done(); else toast("warn", "No se pudo copiar", "usa el botón Descargar");
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(fallback);
+  } else {
+    fallback();
+  }
+}
+
+async function loadEnjambre() {
+  const d = await apiCall("/api/v2/mesh_findings?limit=200", () => fetch("/api/v2/mesh_findings?limit=200", { cache: "no-store", headers: authHeaders() }));
+  state.data.enjambre = d;
+
+  const findings = d.findings || [];
+  $('#enjambre-sub').textContent = (d.total || 0) + " hallazgo(s) · journal " + (d.journal || 0) + " línea(s)";
+
+  $('#enjambre-stats').innerHTML = [
+    { l: "Hallazgos", v: d.total || 0 },
+    { l: "Mostrados", v: d.returned || 0 },
+    { l: "Journal", v: d.journal || 0 },
+    { l: "Agentes", v: (d.agents || []).length },
+    { l: "Tareas", v: (d.tasks || []).length },
+    { l: "Redactados", v: d.redactions || 0, cls: (d.redactions ? "stat--warn" : "") }
+  ].map(function (s) {
+    return '<div class="stat ' + (s.cls || "") + '"><div class="stat__label">' + esc(s.l) + '</div><div class="stat__value stat__value--sm">' + esc(s.v) + "</div></div>";
+  }).join("");
+
+  // Filtros (se rellenan con lo que el daemon ha dicho, no con supuestos).
+  const selAg = $("#filtro-agente");
+  const selKi = $("#filtro-kind");
+  const curA = selAg.value, curK = selKi.value;
+  selAg.innerHTML = "";
+  selAg.appendChild(mk("option", "", "todos los agentes"));
+  selAg.firstChild.value = "";
+  (d.agents || []).forEach(function (a) {
+    const o = mk("option", "", a);
+    o.value = a;
+    selAg.appendChild(o);
+  });
+  selKi.innerHTML = "";
+  selKi.appendChild(mk("option", "", "todos los tipos"));
+  selKi.firstChild.value = "";
+  (d.kinds || []).forEach(function (k) {
+    const o = mk("option", "", k);
+    o.value = k;
+    selKi.appendChild(o);
+  });
+  selAg.value = curA; selKi.value = curK;
+
+  // Raíces leídas (honestidad: dónde se buscó el material).
+  const roots = d.roots || [];
+  $('#enjambre-roots').textContent = roots.length
+    ? ("material leído en: " + roots.map(function (r) { return r.path; }).join(" · "))
+    : "no se encontró ningún directorio de estado del enjambre";
+
+  renderEnjambre();
+
+  // Agentes y tareas del bus.
+  const boxA = $('#enjambre-agentes');
+  boxA.innerHTML = "";
+  const ags = (d.board_agents || []).slice(0, 40);
+  if (!ags.length) {
+    boxA.appendChild(mk("div", "empty", "Sin agentes registrados en el tablón del bus"));
+  } else {
+    const tb = document.createElement("table");
+    tb.className = "table";
+    const thead = document.createElement("thead");
+    const hr = document.createElement("tr");
+    ["Agente", "Tarea", "Tipo", "Estado", "Feedback"].forEach(function (h) {
+      const th = mk("th", "", h);
+      hr.appendChild(th);
+    });
+    thead.appendChild(hr);
+    tb.appendChild(thead);
+    const tbody = document.createElement("tbody");
+    ags.forEach(function (a) {
+      const tr = document.createElement("tr");
+      [a.agent, a.task, a.kind, a.status, a.feedback].forEach(function (v) {
+        const td = mk("td", "small", v === undefined || v === null || v === "" ? "—" : v);
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    tb.appendChild(tbody);
+    const wrap = mk("div", "table-wrap");
+    wrap.appendChild(tb);
+    boxA.appendChild(wrap);
+  }
+
+  const boxT = $('#enjambre-tareas');
+  boxT.innerHTML = "";
+  const tasks = (d.tasks || []).slice(0, 40);
+  if (!tasks.length) {
+    boxT.appendChild(mk("div", "empty", "Sin tareas en el tablón del bus"));
+  } else {
+    const tb = document.createElement("table");
+    tb.className = "table";
+    const tbody = document.createElement("tbody");
+    tasks.forEach(function (t) {
+      const tr = document.createElement("tr");
+      const td1 = mk("td", "mono small", t.task_id || t.id || "—");
+      const td2 = mk("td", "small", t.title || t.kind || "—");
+      const td3 = mk("td", "small", t.state || "—");
+      tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3);
+      tbody.appendChild(tr);
+    });
+    tb.appendChild(tbody);
+    const wrap = mk("div", "table-wrap");
+    wrap.appendChild(tb);
+    boxT.appendChild(wrap);
+  }
+}
+
+/** Pinta la lista de hallazgos aplicando los filtros (todo por textContent). */
+function renderEnjambre() {
+  const d = state.data.enjambre || { findings: [] };
+  const ag = $("#filtro-agente").value;
+  const ki = $("#filtro-kind").value;
+  const all = d.findings || [];
+  const list = all.filter(function (f) {
+    if (ag && f.agent !== ag) return false;
+    if (ki && f.kind !== ki) return false;
+    return true;
+  });
+
+  $('#enjambre-contador').textContent = list.length + " de " + (d.total || all.length);
+
+  const box = $('#enjambre-lista');
+  box.innerHTML = "";
+  if (!list.length) {
+    const e = mk("div", "empty");
+    e.appendChild(mk("div", "empty__title", all.length ? "Ningún hallazgo con ese filtro" : "Sin hallazgos publicados"));
+    e.appendChild(mk("div", "empty__reason", all.length
+      ? "prueba con otro agente o con otro tipo de hallazgo"
+      : "el enjambre aún no ha publicado material en sync/re_*.ndjson"));
+    box.appendChild(e);
+    return;
+  }
+
+  list.forEach(function (f) {
+    const card = mk("div", "card card--inset");
+    const head = mk("div", "row row--between");
+    const chips = mk("div", "row");
+    chips.appendChild(mk("span", "chip chip--info", f.agent || "—"));
+    chips.appendChild(mk("span", "chip chip--violet", f.kind || "—"));
+    if (f.confidence) {
+      chips.appendChild(mk("span", "chip " +
+        (f.confidence === "high" ? "chip--danger" : f.confidence === "medium" ? "chip--warn" : ""),
+        "confianza: " + f.confidence));
+    }
+    const copy = mk("button", "btn btn--sm btn--ghost", "Copiar");
+    copy.setAttribute("type", "button");
+    copy.addEventListener("click", function () {
+      copyText(String(f.finding || f.title || ""), copy);
+    });
+    head.appendChild(chips);
+    head.appendChild(copy);
+    card.appendChild(head);
+
+    card.appendChild(mk("div", "strong mt-2", f.title || "(sin título)"));
+    if (f.target) card.appendChild(mk("div", "small muted", "target: " + f.target));
+    const meta = mk("div", "small dim");
+    meta.textContent = "sha256 " + (f.sha256 || "—") +
+      (f.size ? " · " + fmtBytes(f.size) : "") +
+      (f.ts ? " · " + (typeof f.ts === "number" ? fmtAgo(f.ts) : String(f.ts)) : "");
+    card.appendChild(meta);
+    if (f.finding) {
+      const txt = mk("div", "small mt-2", f.finding);
+      txt.style.whiteSpace = "pre-wrap";
+      txt.style.overflowWrap = "anywhere";
+      card.appendChild(txt);
+    }
+    box.appendChild(card);
+  });
+}
+
+/** Genera el prompt para un agente externo (lo genera el servidor). */
+async function generatePrompt() {
+  const withSecrets = $("#prompt-secrets").checked;
+  const key = $("#prompt-key").value.trim();
+  if (withSecrets && !key) {
+    toast("warn", "Falta la API key", "marca la casilla pero no has pegado la key");
+  }
+  const body = { include_secrets: withSecrets, api_key: key };
+  const d = await apiCall("/api/v2/prompt_external", () => fetch("/api/v2/prompt_external", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body)
+  }));
+  state.data.prompt = d;
+  $("#prompt-out").textContent = d.markdown || "(vacío)";
+  $("#prompt-warn").classList.toggle("hidden", !withSecrets);
+  toast("ok", "Prompt generado", (d.tools || 0) + " tools · " + (d.findings || 0) + " hallazgos");
+}
+
+async function copyPrompt() {
+  const d = state.data.prompt;
+  if (!d || !d.markdown) { toast("warn", "Genera el prompt primero", ""); return; }
+  copyText(d.markdown, $("#btn-prompt-copy"));
+}
+
+function downloadPrompt() {
+  const d = state.data.prompt;
+  if (!d || !d.markdown) { toast("warn", "Genera el prompt primero", ""); return; }
+  const blob = new Blob([d.markdown], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "megadaemon-contexto-" + Date.now() + ".md";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+  toast("ok", "Descargado", d.contains_secrets ? "⚠️ el fichero contiene credenciales" : "sin credenciales");
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   VISTA 11 · SISTEMA
    ═══════════════════════════════════════════════════════════════════════════ */
 async function loadSistema() {
   const [loop, routes] = await Promise.all([
-    apiCall(() => fetch("/api/v2/agentic", { cache: "no-store", headers: authHeaders() })),
-    apiCall(() => fetch("/api/v2/routes", { cache: "no-store", headers: authHeaders() }))
+    apiCall("/api/v2/agentic", () => fetch("/api/v2/agentic", { cache: "no-store", headers: authHeaders() })),
+    apiCall("/api/v2/routes", () => fetch("/api/v2/routes", { cache: "no-store", headers: authHeaders() }))
   ]);
   state.data.agentic = loop;
   state.data.routes = routes;
@@ -1661,7 +2015,7 @@ async function loadSistema() {
    ACCIONES (escritura)
    ═══════════════════════════════════════════════════════════════════════════ */
 async function doAssign(node, kind, capability, payload) {
-  const data = await apiCall(() => fetch("/api/v2/nodes/assign", {
+  const data = await apiCall("/api/v2/nodes/assign", () => fetch("/api/v2/nodes/assign", {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ node: node, kind: kind, capability: capability, payload: payload })
@@ -1672,7 +2026,7 @@ async function doAssign(node, kind, capability, payload) {
 }
 
 async function doMessage(node, message, dataB64) {
-  const data = await apiCall(() => fetch("/api/v2/nodes/message", {
+  const data = await apiCall("/api/v2/nodes/message", () => fetch("/api/v2/nodes/message", {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ node: node, message: message, data_b64: dataB64 })
@@ -1683,7 +2037,7 @@ async function doMessage(node, message, dataB64) {
 }
 
 async function doMigrate(version) {
-  const data = await apiCall(() => fetch("/api/v2/nodes/migrate", {
+  const data = await apiCall("/api/v2/nodes/migrate", () => fetch("/api/v2/nodes/migrate", {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ target_version: version })
@@ -1695,7 +2049,7 @@ async function doMigrate(version) {
 async function taskAction(action, taskId, extra) {
   const body = Object.assign({ action: action }, extra || {});
   if (taskId) body.task_id = taskId;
-  const data = await apiCall(() => fetch("/api/tool/task_queue", {
+  const data = await apiCall("/api/tool/task_queue", () => fetch("/api/tool/task_queue", {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body)
@@ -1707,7 +2061,7 @@ async function taskAction(action, taskId, extra) {
 async function alertAction(action, id) {
   const body = { action: action };
   if (id) body.id = id;
-  const data = await apiCall(() => fetch("/api/tool/alerts", {
+  const data = await apiCall("/api/tool/alerts", () => fetch("/api/tool/alerts", {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body)
@@ -1718,7 +2072,7 @@ async function alertAction(action, id) {
 
 async function pingProvider(id) {
   toast("info", "Probando " + id, "petición en curso…");
-  const data = await apiCall(() => fetch("/api/providers/test", {
+  const data = await apiCall("/api/providers/test", () => fetch("/api/providers/test", {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ id: id })
@@ -1735,7 +2089,7 @@ async function applyAdjustments() {
     "<p>Se aplicarán " + adj.length + " ajuste(s) del motor de delegación. Es todo o nada: si uno falla no se aplica ninguno.</p>",
     "Aplicar");
   if (!ok) return;
-  const data = await apiCall(() => fetch("/api/v2/delegation/apply", {
+  const data = await apiCall("/api/v2/delegation/apply", () => fetch("/api/v2/delegation/apply", {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ adjustments: adj })
@@ -1746,7 +2100,7 @@ async function applyAdjustments() {
 }
 
 async function exportTasks() {
-  const data = await apiCall(() => fetch("/api/v2/tasks/export", {
+  const data = await apiCall("/api/v2/tasks/export", () => fetch("/api/v2/tasks/export", {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ node: state.node || "" })
@@ -1771,7 +2125,7 @@ async function importTasks(file) {
     toast("error", "El fichero no es JSON válido", String(e.message || e));
     return;
   }
-  const data = await apiCall(() => fetch("/api/v2/tasks/import", {
+  const data = await apiCall("/api/v2/tasks/import", () => fetch("/api/v2/tasks/import", {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(parsed)
@@ -1782,7 +2136,7 @@ async function importTasks(file) {
 }
 
 async function downloadShare(path) {
-  const data = await apiCall(() => fetch("/api/v2/share/get?path=" + encodeURIComponent(path) + "&offset=0&len=0", { cache: "no-store", headers: authHeaders() }));
+  const data = await apiCall("/api/v2/share/get?path=", () => fetch("/api/v2/share/get?path=" + encodeURIComponent(path) + "&offset=0&len=0", { cache: "no-store", headers: authHeaders() }));
   if (!data.ok) { toast("error", "No se pudo descargar", data.hint || data.error || ""); return; }
   const bin = atob(data.data_b64 || "");
   const bytes = new Uint8Array(bin.length);
@@ -1810,7 +2164,7 @@ async function uploadShare(chunked) {
   const hash = sha256Hex(buf);
 
   if (!chunked) {
-    const data = await apiCall(() => fetch("/api/v2/share/put", {
+    const data = await apiCall("/api/v2/share/put", () => fetch("/api/v2/share/put", {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ path: rel, data_b64: b64encode(buf), sha256: hash })
@@ -1826,7 +2180,7 @@ async function uploadShare(chunked) {
   $("#share-progress").innerHTML = "<div class='small'>Subiendo " + total + " trozo(s)…</div>";
   for (let i = 0; i < total; i++) {
     const slice = buf.subarray(i * CHUNK, Math.min(buf.length, (i + 1) * CHUNK));
-    const data = await apiCall(() => fetch("/api/v2/share/chunk", {
+    const data = await apiCall("/api/v2/share/chunk", () => fetch("/api/v2/share/chunk", {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ path: rel, index: i, data_b64: b64encode(slice), sha256: sha256Hex(slice) })
@@ -1838,7 +2192,7 @@ async function uploadShare(chunked) {
     }
     $("#share-progress").innerHTML = "<div class='small'>Trozo " + (i + 1) + " de " + total + " subido…</div>";
   }
-  const commit = await apiCall(() => fetch("/api/v2/share/commit", {
+  const commit = await apiCall("/api/v2/share/commit", () => fetch("/api/v2/share/commit", {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ path: rel, sha256: hash })
@@ -1920,6 +2274,8 @@ const PALETTE_ACTIONS = [
   { group: "Ir a", label: "RE / Apps", hint: "inventario y firma", run: function () { go("re"); } },
   { group: "Ir a", label: "Archivos compartidos", hint: "vault + manifest", run: function () { go("archivos"); } },
   { group: "Ir a", label: "Reparto de trabajo", hint: "mercado de capacidades", run: function () { go("reparto"); } },
+  { group: "Ir a", label: "Enjambre", hint: "hallazgos de los nodos", run: function () { go("enjambre"); } },
+  { group: "Acciones", label: "Generar prompt para agente externo", hint: "servidor", run: function () { go("enjambre"); generatePrompt(); } },
   { group: "Ir a", label: "Sistema", hint: "bucle agéntico y API", run: function () { go("sistema"); } },
   { group: "Acciones", label: "Refrescar la vista", hint: "Ctrl+R", run: function () { refresh(true); } },
   { group: "Acciones", label: "Evaluar reglas de alerta", hint: "alerts.check", run: function () { alertAction("check"); } },
@@ -2068,7 +2424,7 @@ function bindEvents() {
   $("#btn-re-analyze").addEventListener("click", async function () {
     const path = $("#re-apk-path").value.trim();
     if (!path) { toast("warn", "Indica la ruta de la APK", ""); return; }
-    const data = await apiCall(() => fetch("/api/tool/apk_inventory", {
+    const data = await apiCall("/api/tool/apk_inventory", () => fetch("/api/tool/apk_inventory", {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ action: "analyze", path: path })
@@ -2076,7 +2432,7 @@ function bindEvents() {
     $("#re-out").innerHTML = "<pre>" + esc(JSON.stringify(data, null, 2).slice(0, 4000)) + "</pre>";
   });
   $("#btn-re-rootstatus").addEventListener("click", async function () {
-    const data = await apiCall(() => fetch("/api/tool/root_stealth", {
+    const data = await apiCall("/api/tool/root_stealth", () => fetch("/api/tool/root_stealth", {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ action: "status" })
@@ -2085,6 +2441,15 @@ function bindEvents() {
   });
   $("#btn-share-refresh").addEventListener("click", loadArchivos);
   $("#btn-market-refresh").addEventListener("click", loadReparto);
+  $("#btn-enjambre-refresh").addEventListener("click", loadEnjambre);
+  $("#filtro-agente").addEventListener("change", renderEnjambre);
+  $("#filtro-kind").addEventListener("change", renderEnjambre);
+  $("#btn-prompt-gen").addEventListener("click", function () { generatePrompt(); });
+  $("#btn-prompt-copy").addEventListener("click", copyPrompt);
+  $("#btn-prompt-download").addEventListener("click", downloadPrompt);
+  $("#prompt-secrets").addEventListener("change", function (e) {
+    $("#prompt-key-field").classList.toggle("hidden", !e.target.checked);
+  });
   $("#btn-save-rules").addEventListener("click", saveRules);
   $("#btn-load-rules").addEventListener("click", function () { loadRules(); });
   $("#btn-share-upload").addEventListener("click", function () { uploadShare(true); });
