@@ -633,7 +633,6 @@ va por una imagen de sistema (o `remount`), no escribiendo en vivo.
   están en el móvil (`/data/local/tmp/swift/classes.dex` 9.273.900 B / 50.772 cadenas).
   El agente DEX ya arregló el parser DEX (`VALUE_NULL`/`VALUE_BOOLEAN`) ⇒ su CLI
   `megadaemon-core dex` sirve de punto de partida.
-<<<<<<< HEAD
 
 ### 10.4 El consumidor en runtime (RESUELTO): `com.samsung.android.feature.SemCscFeature`
 
@@ -673,5 +672,3 @@ python3 tools/omc_codec.py decode /optics/configs/carriers/single/AMO/conf/syste
 unzip -p /system/framework/framework.jar classes5.dex > /data/local/tmp/classes5.dex
 strings /data/local/tmp/classes5.dex | grep -E "SemCscFeature|cscfeature.xml"
 ```
-=======
->>>>>>> main
