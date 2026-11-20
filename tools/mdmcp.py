@@ -111,19 +111,23 @@ def _resolve() -> tuple[str, str, str, list[str]]:
     if not token:
         token = os.environ.get("MEGADAEMON_TOKEN", "").strip()
 
-    for name, shell, mine in (
-        ("MEGADAEMON_API_KEY", os.environ.get("MEGADAEMON_API_KEY", ""), key),
-        ("MEGADAEMON_TOKEN", os.environ.get("MEGADAEMON_TOKEN", ""), token),
-    ):
-        if shell and mine and _sha16(shell) != _sha16(mine):
-            avisos.append(
-                "%s exportada en tu shell (sha16 %s) NO coincide con el fichero "
-                "(sha16 %s): uso el fichero. Si creías que el móvil está caído, "
-                "no lo está: es tu credencial." % (name, _sha16(shell), _sha16(mine)))
-    return endpoint, key, token, avisos
+    # Estado explícito del entorno: "avisa y sigue" no basta si el usuario
+    # sólo lee la última línea ⇒ se dice QUÉ se mandó y QUÉ se ignoró.
+    shell_key = os.environ.get("MEGADAEMON_API_KEY", "")
+    shell_tok = os.environ.get("MEGADAEMON_TOKEN", "")
+    conflict = []
+    if shell_key and key and _sha16(shell_key) != _sha16(key):
+        conflict.append("key %s(revocada?)" % _sha16(shell_key))
+    if shell_tok and token and _sha16(shell_tok) != _sha16(token):
+        conflict.append("token %s" % _sha16(shell_tok))
+    estado = "credenciales: fichero (key sha16 %s · token sha16 %s)" % (_sha16(key), _sha16(token))
+    if conflict:
+        estado += " | entorno IGNORADO (%s)" % ", ".join(conflict)
+        avisos.append(estado + " — el móvil puede estar PERFECTO y ser tu credencial")
+    return endpoint, key, token, avisos, estado
 
 
-ENDPOINT, KEY, TOKEN, AVISOS = _resolve()
+ENDPOINT, KEY, TOKEN, AVISOS, ESTADO = _resolve()
 for _a in AVISOS:
     print("[mdmcp] " + _a, file=sys.stderr)
 
@@ -146,8 +150,7 @@ def rpc(method: str, params: dict, _id: int = 1, timeout: int = 900) -> dict:
         if e.code in (401, 403):
             # El móvil puede estar PERFECTO y ser la credencial: diagnóstico.
             print("[mdmcp] HTTP %s en %s" % (e.code, ENDPOINT), file=sys.stderr)
-            print("[mdmcp]   key sha16=%s · token sha16=%s" % (_sha16(KEY), _sha16(TOKEN)),
-                  file=sys.stderr)
+            print("[mdmcp]   %s" % ESTADO, file=sys.stderr)
             print("[mdmcp]   re-sincroniza con: python3 tools/phone_url.py --export", file=sys.stderr)
         raise urllib.error.HTTPError(e.url, e.code, e.reason, e.headers, io_bytes(blob))
     except urllib.error.URLError as e:
