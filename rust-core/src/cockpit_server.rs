@@ -228,9 +228,19 @@ fn requires_auth(path: &str, method: &str, local_browser: bool) -> bool {
     // sesión: el token se lo inyectamos en la página.  Las ESCRITURAS
     // (POST/PUT/DELETE) siguen exigiendo token ⇒ una web maliciosa que
     //借 el puerto del móvil sigue sin poder ejecutar comandos.
-    if local_browser && method == "GET" {
-        return false;
-    }
+    // v15 (A-18 · resto, P1): la exención de "local" se queda **SÓLO en la
+    // PÁGINA** (ya exenta más arriba) y en las sondas de sólo lectura.
+    //
+    // Antes: `local_browser && method == "GET"` eximía de token a **TODOS**
+    // los GET de un cliente "local" ⇒ cualquier app instalada en el móvil
+    // (que conecta desde 127.0.0.1) leía `/api/providers`, `/api/status`,
+    // `/api/live_frame`… **sin credencial**: fuga de datos (el root ya lo
+    // cerró `9f30665`).
+    //
+    // El navegador local no pierde nada: su token va **incrustado en la
+    // página** que sirve el propio daemon (y el puente lo inyecta); "local"
+    // se decide además por el **peer loopback real**, no sólo por el `Host`.
+    let _ = local_browser;
     true
 }
 
@@ -840,6 +850,10 @@ fn handle_client(mut stream: TcpStream) {
         .peer_addr()
         .map(|a| a.ip())
         .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+    // v15: una vez por proceso, el log dice **la ruta que usa el daemon** y
+    // la huella de su key (nunca el secreto) ⇒ un "403" futuro se lee en el
+    // log sin adivinar (la ruta por defecto ya nos costó un incidente).
+    api_key::log_startup_state(&state_dir());
     let cfg = api_key::ApiKeyConfig::load(&state_dir());
     // BUG v13.4 (AUDIT-WEB-02): la página pública (`/`) se servía DESPUÉS del
     // gate de API key, así que el navegador recibía 401 y la UI "no
@@ -960,11 +974,14 @@ fn handle_client(mut stream: TcpStream) {
     // token.  Sin esto, cualquiera (página web con CORS abierto, o alguien en
     // la LAN) podía hacer POST /api/chat con "$ comando" y obtener RCE root.
     if requires_auth(path, method, local_browser) && !auth_ok(&header_str) {
+        // v15 (A-18): el 403 nombra el `state_dir` efectivo y, si el daemon no
+        // tiene ninguna key configurada, lo dice con la ruta exacta.
+        let body_s = api_key::token_required_body(&state_dir());
         send_http_response(
             &mut stream,
             403,
             "application/json",
-            b"{\"error\":\"unauthorized\",\"hint\":\"falta la cabecera X-Seere-Auth-Token\"}",
+            body_s.as_bytes(),
         );
         return;
     }
@@ -1591,11 +1608,16 @@ fn handle_client(mut stream: TcpStream) {
                 );
             } else {
                 REQ_REJECTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // v15 (A-18): el 403 del canje dice la verdad: si el daemon
+                // no tiene NINGUNA key configurada, lo dice (con la ruta),
+                // y no un "API key invalida" que no distingue nada.
+                let presented = api_key::extract_key(&header_str);
+                let body_s = api_key::forbidden_body(&state_dir(), presented.as_deref());
                 send_http_response(
                     &mut stream,
                     403,
                     "application/json",
-                    b"{\"ok\":false,\"error\":\"invalid_api_key\",\"hint\":\"la API key no coincide con la configurada en la instancia\"}",
+                    body_s.as_bytes(),
                 );
             }
         }
