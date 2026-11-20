@@ -66,6 +66,7 @@ pub mod profile_analysis;
 pub mod provider_catalog;
 pub mod providers;
 pub mod rea_assistant;
+pub mod recording_vault;
 pub mod repo_updates;
 pub mod rom_locator;
 pub mod root_hide;
