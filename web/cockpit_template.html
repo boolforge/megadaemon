@@ -865,7 +865,7 @@ function authHeaders(extra) {
 // Reintenta una vez pidiendo la API key si el daemon responde 401.
 async function mdFetch(url, opts) {
   let res = await fetch(url, Object.assign({ cache: "no-store" }, opts || {}));
-  if (res.status === 401 && !window.__mdKeyAsked) {
+  if (res.status === 401 && !window.__mdKeyAsked && !storedToken()) {
     window.__mdKeyAsked = true;
     const k = askApiKey();
     if (k && await exchangeSession(k)) {
