@@ -362,3 +362,86 @@ pub fn safe_relative_path(name: &str) -> Result<PathBuf, String> {
     }
     Ok(out)
 }
+
+// ---------------------------------------------------------------------------
+// Swift Backup: recorrido del arbol de un backup
+// ---------------------------------------------------------------------------
+
+/// Un fichero dentro de un backup de Swift Backup.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SwiftBackupItem {
+    /// Ruta relativa dentro del backup.
+    pub path: String,
+    /// Parte a la que pertenece (`APP`, `DATA`, `EXTDATA`, `EXPANSION`,
+    /// `MEDIA`), si se deduce de la ruta.
+    pub part: Option<String>,
+    /// Extensión del fichero (sin punto, en minúsculas).
+    pub extension: String,
+    /// Tamaño en bytes.
+    pub size: u64,
+}
+
+/// Extensión ⇒ parte probable de Swift Backup (medido en la app instalada).
+pub fn swift_extension_part(ext: &str) -> Option<&'static str> {
+    match ext {
+        "app" | "apk" | "splits" => Some("APP"),
+        "dat" => Some("DATA"),
+        "extdat" => Some("EXTDATA"),
+        "med" | "media" => Some("MEDIA"),
+        "extra" => Some("EXTRA"),
+        _ => None,
+    }
+}
+
+/// Recorre un directorio de backup de Swift Backup y lista sus ficheros.
+///
+/// **Sólo-lectura**: no abre ni modifica ningún fichero de datos (los `.dat`
+/// van cifrados con AEGIS-256 y comprimidos con zstd).
+pub fn scan_swift_backup(root: &str) -> Result<Vec<SwiftBackupItem>, String> {
+    let mut out = Vec::new();
+    walk_swift(root, root, &mut out, 0)?;
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(out)
+}
+
+fn walk_swift(root: &str, dir: &str, out: &mut Vec<SwiftBackupItem>, depth: usize) -> Result<(), String> {
+    if depth > 12 {
+        return Err("árbol demasiado profundo".to_string());
+    }
+    let rd = std::fs::read_dir(dir).map_err(|e| format!("no se puede leer {dir}: {e}"))?;
+    for entry in rd {
+        let entry = entry.map_err(|e| format!("no se puede leer {dir}: {e}"))?;
+        let path = entry.path();
+        let p = path.to_string_lossy().to_string();
+        if path.is_dir() {
+            walk_swift(root, &p, out, depth + 1)?;
+            continue;
+        }
+        let meta = entry
+            .metadata()
+            .map_err(|e| format!("no se puede ver {p}: {e}"))?;
+        let rel = p
+            .strip_prefix(root)
+            .unwrap_or(&p)
+            .trim_start_matches('/')
+            .to_string();
+        let extension = path
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        // la parte deducida del directorio contenedor (si es una de las 5)
+        let part = path
+            .parent()
+            .and_then(|d| d.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .filter(|n| is_swift_part(n))
+            .or_else(|| swift_extension_part(&extension).map(|s| s.to_string()));
+        out.push(SwiftBackupItem {
+            path: rel,
+            part,
+            extension,
+            size: meta.len(),
+        });
+    }
+    Ok(())
+}
