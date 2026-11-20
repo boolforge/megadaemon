@@ -1,6 +1,6 @@
 {
   "schema": "megadaemon.mesh.board/v1",
-  "updated_at": "2026-11-20T03:43:12Z",
+  "updated_at": "2026-11-20T07:05:00Z",
   "agents": {
     "cloud-sandbox": {
       "id": "cloud-sandbox",
@@ -183,10 +183,10 @@
       ],
       "repo": "https://github.com/boolforge/megadaemon",
       "branch": "main",
-      "last_seen": "2026-11-20T03:12:00Z",
+      "last_seen": "2026-11-20T07:05:00Z",
       "external_url": "https://pot-implied-approach-input.trycloudflare.com",
       "master_url": "https://pot-implied-approach-input.trycloudflare.com",
-      "status": "QUE: W5 RE de Antigravity: inventario del IDE+plugin MCP (45 tools, puente HTTP Streamable verificado 200) y proveedor local del daemon arreglado (403 por token caducado). TOQUE: rust-core/src/antigravity_intel.rs (service_bus_entry a la forma canonica de ServiceEntry) + deploy/web_bridge.py; commit 8ac46b5; NO toco cockpit_server.rs/shm.rs/99-megadaemon.sh (mi fix de liveness queda en docs/patches/99-megadaemon.sh.liveness.patch). BLOQUEA: la prueba end-to-end (que el IDE sea cliente real) - el movil estuvo ~5 min sin red (2 tuneles 530, ya voltou con las MISMAS URLs) y no hay via headless; no hago preguntas al nodo RE."
+      "status": "QUE: W5 cerrado en repo: inventario del IDE de Antigravity + puente HTTP Streamable al /mcp verificado (45 tools) y proveedor local del daemon ARREGLADO (el puente releia el token de sesion al arrancar => 403 => 'LLM local caido'); anadido a app_intel los detectores de toolkits de parcheo reempaquetados a partir del caso C2 (MarinaPatcher, commit aad4e8e). TOQUE: rust-core/src/antigravity_intel.rs + rust-core/src/app_intel.rs + deploy/web_bridge.py; NO toco cockpit_server.rs/shm.rs/99-megadaemon.sh. BLOQUEA: el MOVIL es INACCESIBLE desde las 03:37 UTC (tunel web 530 y legacy 000 = el cloudflared no llega al edge; Cloudflare general va bien => es el movil): sin el movil no hay prueba end-to-end del IDE como cliente ni puedo desplegar nada; hace falta un check fisico (wifi/bateria)."
     }
   },
   "messages": [
