@@ -68,18 +68,28 @@ const STOPWORDS_ES: &[&str] = &[
 
 /// Palabras vacías en inglés: artículos, preposiciones, pronombres, auxiliares
 /// y verbos muy frecuentes.
+///
+/// La lista es deliberadamente amplia: en un corpus técnico real hay mucho
+/// texto en inglés (código, logs, documentación pegada) y, si se colaran
+/// "to", "is", "of", "in"… el ranking de intereses sería basura.
 const STOPWORDS_EN: &[&str] = &[
-    "about", "above", "after", "again", "against", "all", "also", "am", "and", "any", "are",
-    "because", "been", "before", "being", "below", "between", "both", "but", "can", "cannot",
-    "could", "did", "does", "doing", "down", "during", "each", "few", "for", "from", "further",
-    "had", "has", "have", "having", "he", "her", "here", "hers", "him", "his", "how", "into", "its",
-    "itself", "just", "more", "most", "myself", "not", "now", "off", "once", "only", "other",
-    "our", "ours", "out", "over", "own", "same", "she", "should", "some", "such", "than",
-    "that", "the", "their", "theirs", "them", "then", "there", "these", "they", "this", "those",
-    "through", "too", "under", "until", "very", "was", "were", "what", "when", "where", "which",
-    "while", "who", "whom", "why", "will", "with", "would", "you", "your", "yours", "here",
-    "get", "got", "like", "really", "need", "want", "know", "think", "make", "made", "use",
-    "using", "used", "one", "two", "way", "well", "let", "go", "going", "gonna", "okay",
+    "a", "about", "above", "after", "again", "against", "all", "also", "am", "an", "and", "any",
+    "are", "as", "at", "be", "because", "been", "before", "being", "below", "between", "both",
+    "but", "by", "can", "cannot", "could", "did", "do", "does", "doing", "done", "down", "during",
+    "each", "either", "else", "enough", "even", "ever", "every", "few", "for", "from", "further",
+    "get", "gets", "getting", "give", "given", "go", "goes", "going", "gonna", "got", "had", "has",
+    "have", "having", "he", "her", "here", "hers", "herself", "him", "himself", "his", "how",
+    "however", "i", "if", "in", "into", "is", "it", "its", "itself", "just", "know", "like", "made",
+    "make", "makes", "making", "many", "may", "me", "might", "mine", "more", "most", "much", "must",
+    "my", "myself", "need", "needs", "neither", "never", "new", "no", "nor", "not", "now", "of",
+    "off", "on", "once", "one", "only", "or", "other", "others", "ought", "our", "ours", "out",
+    "over", "own", "perhaps", "quite", "really", "same", "say", "says", "see", "seen", "several",
+    "shall", "she", "should", "so", "some", "such", "than", "that", "the", "their", "theirs",
+    "them", "themselves", "then", "there", "these", "they", "thing", "things", "this", "those",
+    "though", "through", "thus", "to", "too", "under", "until", "up", "upon", "us", "use", "used",
+    "using", "very", "want", "was", "way", "we", "well", "were", "what", "when", "where", "whether",
+    "which", "while", "who", "whom", "whose", "why", "will", "with", "within", "without", "would",
+    "yes", "yet", "you", "your", "yours", "yourself",
 ];
 
 /// Términos de interfaz y cortesía: ruido habitual del chat (saludos, roles,
@@ -198,12 +208,29 @@ fn topic_stopwords() -> &'static HashSet<&'static str> {
     })
 }
 
+/// Fragmentos de URL que no son temas: en un corpus técnico hay muchísimos
+/// enlaces pegados y, sin filtrarlos, "https" o "com" dominan el ranking.
+const URL_FRAGMENTS: &[&str] = &[
+    "http", "https", "www", "com", "org", "net", "html", "htm", "php", "aspx", "ftp", "cdn",
+    "href", "src", "index",
+];
+
+/// Longitud máxima (en caracteres) de un mensaje que se considera para la
+/// extracción de temas.
+///
+/// Motivo: el usuario pega código, logs y documentos enteros.  Esos bloques
+/// (a menudo decenas de KB) no describen sus intereses y, contados tal cual,
+/// dominan el ranking.  Se corta por el principio del mensaje, que es donde
+/// está la petición propia del usuario.
+const TOPIC_UNIT_MAX_CHARS: usize = 600;
+
 /// Tokens significativos de un texto (sin palabras vacías ni números).
 fn content_tokens(text: &str) -> Vec<String> {
     let sw = topic_stopwords();
     normalize_text(text)
         .split_whitespace()
-        .filter(|t| t.len() >= 2 && !sw.contains(*t) && !is_numberish(t))
+        .filter(|t| t.len() >= 2 && t.len() <= 20)
+        .filter(|t| !sw.contains(*t) && !is_numberish(t) && !URL_FRAGMENTS.contains(t))
         .map(|t| t.to_string())
         .collect()
 }
@@ -770,8 +797,11 @@ fn topic_units(flat: &[FlatMsg]) -> Vec<(String, String)> {
             if use_users && !m.is_user() {
                 continue;
             }
-            if !m.content.trim().is_empty() {
-                units.push((cid.clone(), m.content.clone()));
+            // Se corta por el principio: lo que el usuario pega (código, logs)
+            // no es su interés, y sus mensajes llegan a medir decenas de KB.
+            let head: String = m.content.chars().take(TOPIC_UNIT_MAX_CHARS).collect();
+            if !head.trim().is_empty() {
+                units.push((cid.clone(), head));
             }
         }
     }
