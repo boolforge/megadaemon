@@ -663,7 +663,32 @@ mod tests {
         vault2.put("a.txt", Zone::Public, b"a", "", "").unwrap();
         vault2.put("b.txt", Zone::Public, b"b", "", "").unwrap();
         let second = fs::read(vault2.manifest_path()).unwrap();
-        assert_eq!(first, second, "el manifiesto debe ser determinista");
+        // El manifiesto es NDJSON de las entradas ORDENADAS, y cada entrada
+        // lleva su `ts` (epoch SEGUNDOS): dos bovedas creadas en segundos
+        // distintos NO pueden ser byte-a-byte iguales (el test era flaky
+        // por reloj: en la suite completa las dos creaciones caian en
+        // segundos distintos y el test era rojo; en solitario pasaba).
+        // Lo que se quiere comprobar es que el CONTENIDO y el ORDEN son
+        // deterministas => se comparan las entradas sin `ts`.
+        let sin_ts = |bytes: &[u8]| -> Vec<serde_json::Value> {
+            String::from_utf8_lossy(bytes)
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| {
+                    let mut v: serde_json::Value =
+                        serde_json::from_str(l).expect("cada linea del manifiesto es JSON");
+                    if let Some(o) = v.as_object_mut() {
+                        o.remove("ts");
+                    }
+                    v
+                })
+                .collect()
+        };
+        assert_eq!(
+            sin_ts(&first),
+            sin_ts(&second),
+            "el manifiesto debe ser determinista (mismo contenido y mismo orden)"
+        );
 
         // Re-put del mismo nombre -> una sola entrada (idempotente).
         vault.put("a.txt", Zone::Public, b"a2", "", "").unwrap();
