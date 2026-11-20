@@ -25,6 +25,20 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "env_introspect",
+            "description": "Pregunta al ENTORNO REAL del dispositivo (particiones, /dev, binarios, apps, RAM, rutas, props, procesos) y responde con la verdad: source + ts + device. Si algo no existe devuelve available:false + reason. Nunca inventa.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "question": { "type": "string", "description": "pregunta en lenguaje natural (\"¿existe NPU.bin?\")" },
+                    "action": { "type": "string", "enum": ["partitions", "dev", "binaries", "app", "ram", "path", "prop", "processes", "help"] },
+                    "filter": { "type": "string", "description": "filtro para action=binaries (nombre del binario)" },
+                    "package": { "type": "string", "description": "paquete para action=app" }
+                },
+                "required": ["question"]
+            }
+        },
+        {
             "name": "task_queue",
             "description": "Planificador multitarea: lista la cola, encola trabajo o ejecuta el lote pendiente respetando prioridad, dependencias y la política de energía del dispositivo.",
             "inputSchema": {
@@ -228,6 +242,48 @@ pub fn tool_definitions() -> Value {
                 "properties": {
                     "action": { "type": "string", "enum": ["status", "install_host_key", "authorized_keys", "dispatch"] },
                     "command": { "type": "string" }
+                }
+            }
+        },
+        {
+            "name": "service_bus",
+            "description": "Bus de servicios: catálogo unificado de MODELOS (los proveedores de providers.rs) y AGENTES/SERVICIOS (otros nodos MegaDaemon, clientes MCP como Antigravity, servidores MCP de terceros, herramientas locales). Selección automática por tipo de tarea (inference/build/analysis/writing) con fallback real y presupuesto por tick/día. La salud NUNCA se inventa: si no se puede comprobar, available=false con el motivo. Sin secretos: sólo auth_kind y la ruta del fichero de credenciales.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["catalog", "select", "probe"], "default": "catalog" },
+                    "task": { "type": "string", "enum": ["inference", "build", "analysis", "writing"] },
+                    "id": { "type": "string", "description": "servicio concreto (para probe)" }
+                }
+            }
+        },
+        {
+            "name": "github",
+            "description": "Conector de GitHub: lista los repos del usuario, lee issues y PRs, y publica el estado del enjambre como issue o PR. Publicar exige confirm=true. El token se lee de un fichero local en el momento de enviar: nunca viaja en las peticiones, en el catálogo ni en el estado compartido.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["repos", "issues", "prs", "publish", "bridge"] },
+                    "repo": { "type": "string", "description": "owner/name" },
+                    "state": { "type": "string", "default": "open", "enum": ["open", "closed", "all"] },
+                    "title": { "type": "string" },
+                    "head": { "type": "string", "description": "rama con el commit (para publicar como PR)" },
+                    "base": { "type": "string", "default": "main" },
+                    "confirm": { "type": "boolean", "default": false }
+                }
+            }
+        },
+        {
+            "name": "api_keys",
+            "description": "Gestiona el registro de API keys por agente: acuña una clave nueva y revocable sin tocar la clave principal, revoca una existente o lista el registro. La revocacion es destructiva y exige confirm=true.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["mint", "revoke", "list"] },
+                    "label": { "type": "string", "description": "etiqueta del agente (cloud-sandbox, agente-externo, ...)" },
+                    "target": { "type": "string", "description": "clave completa, prefijo de 8+ caracteres o etiqueta a revocar" },
+                    "reveal": { "type": "boolean", "default": false, "description": "listar las claves en claro (queda auditado)" },
+                    "confirm": { "type": "boolean", "default": false }
                 }
             }
         }
@@ -505,6 +561,173 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             }),
             _ => crate::sshd::status(),
         },
+        "env_introspect" => crate::env_introspect::ask(&s("question"), args),
+        "api_keys" => {
+            let dir = crate::cockpit_server::state_dir();
+            match s("action").as_str() {
+                "mint" => {
+                    let label = s("label");
+                    match crate::api_key::generate_extra_key(&dir, &label) {
+                        Ok(key) => json!({
+                            "ok": true,
+                            "action": "mint",
+                            "label": label,
+                            "api_key": key,
+                            "note": "esta clave es unica para el agente y se revoca sin tocar la principal; no la persistas en ningun estado compartido",
+                        }),
+                        Err(e) => json!({ "ok": false, "error": e }),
+                    }
+                }
+                "revoke" => {
+                    let target = s("target");
+                    if target.is_empty() {
+                        json!({ "ok": false, "error": "missing_target" })
+                    } else if !b("confirm") {
+                        json!({
+                            "ok": false,
+                            "error": "confirmation_required",
+                            "hint": "revocar deja al agente sin acceso: repite con confirm=true",
+                        })
+                    } else {
+                        match crate::api_key::revoke_extra_key(&dir, &target) {
+                            Ok(true) => json!({ "ok": true, "action": "revoke", "revoked": true }),
+                            Ok(false) => json!({
+                                "ok": false,
+                                "error": "not_found",
+                                "hint": "ninguna clave del registro coincide con ese target",
+                            }),
+                            Err(e) => json!({ "ok": false, "error": e }),
+                        }
+                    }
+                }
+                _ => {
+                    let reveal = b("reveal");
+                    let rows = crate::api_key::list_extra_keys(&dir, reveal);
+                    json!({
+                        "ok": true,
+                        "action": "list",
+                        "revealed": reveal,
+                        "count": rows.len(),
+                        "keys": rows
+                            .into_iter()
+                            .map(|(label, key)| json!({ "label": label, "key": key }))
+                            .collect::<Vec<_>>(),
+                    })
+                }
+            }
+        }
+        // v15 (W6): bus de servicios — catálogo unificado + selección.
+        "service_bus" => {
+            let dir = crate::mesh::default_state_dir();
+            let snapshot = match crate::mesh::Mesh::open(&dir) {
+                Ok(m) => m.snapshot(),
+                Err(e) => json!({ "peers": [], "error": e.to_string() }),
+            };
+            let mut bus = crate::service_bus::bus_from_runtime(
+                &crate::providers::list_providers_redacted(),
+                crate::providers::PROVIDERS_PATH,
+                &snapshot,
+                300,
+                "http://127.0.0.1:9090/mcp",
+            );
+            match s("action").as_str() {
+                "probe" => {
+                    let prober = crate::service_bus::TcpProber::default();
+                    let id = s("id");
+                    if id.is_empty() {
+                        let res = bus.probe_all(&prober);
+                        json!({ "ok": true, "probed": res.len(), "health": res.into_iter().map(|(id, h)| json!({"id": id, "available": h.available, "reason": h.reason})).collect::<Vec<_>>() })
+                    } else {
+                        match bus.probe_one(&id, &prober) {
+                            Ok(h) => json!({ "ok": true, "id": id, "available": h.available, "reason": h.reason, "detail": h.detail, "checked_at": h.checked_at }),
+                            Err(e) => json!({ "ok": false, "error": e }),
+                        }
+                    }
+                }
+                "select" => {
+                    let task = crate::service_bus::TaskType::parse(&s("task"))
+                        .unwrap_or(crate::service_bus::TaskType::Inference);
+                    let sel = bus.select(task);
+                    json!({
+                        "ok": true,
+                        "task": task.as_str(),
+                        "chosen": sel.chosen,
+                        "chain": sel.chain,
+                        "reason": sel.reason,
+                        "estimated_cost_usd": sel.estimated_cost_usd,
+                        "rejected": sel.rejected.into_iter().map(|(id, why)| json!({"id": id, "why": why})).collect::<Vec<_>>(),
+                    })
+                }
+                _ => bus.catalog_json(),
+            }
+        }
+        // v15 (W6): conector de GitHub (repos, issues/PRs, publicar estado).
+        "github" => {
+            let cfg = crate::github_connector::GitHubConfig::with_token_ref(
+                crate::github_connector::DEFAULT_TOKEN_PATH,
+            );
+            let client = crate::github_connector::UreqClient::new(cfg.token_ref.as_str());
+            let repo = if s("repo").is_empty() {
+                cfg.default_repo.clone()
+            } else {
+                s("repo")
+            };
+            match s("action").as_str() {
+                "repos" => match crate::github_connector::list_repos(&cfg, 1, 50, &client) {
+                    Ok(repos) => json!({ "ok": true, "count": repos.len(), "repos": repos }),
+                    Err(e) => json!({ "ok": false, "error": e }),
+                },
+                "issues" | "prs" => {
+                    let only_prs = s("action") == "prs";
+                    match crate::github_connector::list_issues(&cfg, &repo, &s("state"), only_prs, &client) {
+                        Ok(items) => json!({ "ok": true, "repo": repo, "count": items.len(), "items": items }),
+                        Err(e) => json!({ "ok": false, "error": e }),
+                    }
+                }
+                "publish" => {
+                    let dir = crate::mesh::default_state_dir();
+                    let snapshot = match crate::mesh::Mesh::open(&dir) {
+                        Ok(m) => m.snapshot(),
+                        Err(e) => json!({ "peers": [], "error": e.to_string() }),
+                    };
+                    let title = if s("title").is_empty() {
+                        format!("Estado del enjambre · {}", crate::mesh::now_iso())
+                    } else {
+                        s("title")
+                    };
+                    let kind = if s("head").is_empty() {
+                        crate::github_connector::PublishKind::Issue
+                    } else {
+                        crate::github_connector::PublishKind::PullRequest {
+                            head: s("head"),
+                            base: if s("base").is_empty() { "main".into() } else { s("base") },
+                        }
+                    };
+                    match crate::github_connector::publish_swarm_state(
+                        &cfg,
+                        &repo,
+                        &snapshot,
+                        &kind,
+                        &title,
+                        b("confirm"),
+                        &client,
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => json!({ "ok": false, "error": e }),
+                    }
+                }
+                "bridge" => json!({
+                    "ok": true,
+                    "config": crate::service_bus::antigravity_bridge_config(
+                        "http://127.0.0.1:9090/mcp",
+                        "md-secrets/instance.env",
+                        &["minimax_chat", "swarm_chat"],
+                    ),
+                    "note": "la clave se inyecta al escribir la config; no se publica en el estado compartido",
+                }),
+                _ => json!({ "ok": false, "error": "unknown_action", "hint": "repos|issues|prs|publish|bridge" }),
+            }
+        }
         _ => return None,
     };
     let _ = i("unused");

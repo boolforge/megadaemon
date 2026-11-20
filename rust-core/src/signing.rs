@@ -5654,8 +5654,8 @@ mod tests {
         // El CMS lleva la firma ECDSA en DER, con (r, s) dentro de rango.
         let signature = EcdsaSignature::from_der(&info.signature).unwrap();
         let params = p256();
-        assert!(!signature.r.is_zero() && signature.r.cmp_big(&params.n) != Ordering::Less);
-        assert!(!signature.s.is_zero() && signature.s.cmp_big(&params.n) != Ordering::Less);
+        assert!(!signature.r.is_zero() && signature.r.cmp_big(&params.n) == Ordering::Less);
+        assert!(!signature.s.is_zero() && signature.s.cmp_big(&params.n) == Ordering::Less);
     }
 
     #[test]
@@ -5671,7 +5671,9 @@ mod tests {
         assert_eq!(info.content_digest, sha256(data).to_vec());
         assert!(info.certificate.is_some());
         // Se recorren los atributos firmados.
-        let mut reader = DerReader::new(&info.signed_attrs);
+        let mut outer = DerReader::new(&info.signed_attrs);
+        let attrs_tlv = outer.read().unwrap();
+        let mut reader = DerReader::new(attrs_tlv.content);
         let mut oids: Vec<Vec<u64>> = Vec::new();
         while !reader.is_empty() {
             let attr = reader.read().unwrap();

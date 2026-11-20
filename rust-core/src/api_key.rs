@@ -189,6 +189,97 @@ pub fn generate_extra_key(state_dir: &str, label: &str) -> Result<String, String
     Ok(key)
 }
 
+/// Revoca una clave del registro de claves adicionales **sin tocar la clave
+/// principal**: los demás agentes siguen funcionando.
+///
+/// `target` admite la clave completa, un prefijo de 8 caracteres o más, o la
+/// etiqueta que se puso al acuñarla.  Quita también el comentario de
+/// etiqueta que la acompaña, para que el registro no guarde metadatos de
+/// claves que ya no existen.
+///
+/// Devuelve `true` si se revocó algo.
+pub fn revoke_extra_key(state_dir: &str, target: &str) -> Result<bool, String> {
+    let target = target.trim();
+    if target.len() < 8 {
+        return Err("target demasiado corto: se necesitan al menos 8 caracteres".into());
+    }
+    let path = extra_keys_path(state_dir);
+    let existing = fs::read_to_string(&path).unwrap_or_default();
+    if existing.trim().is_empty() {
+        return Ok(false);
+    }
+    let mut kept: Vec<String> = Vec::new();
+    let mut revoked: Option<String> = None;
+    let mut pending_label: Option<String> = None;
+    for line in existing.lines() {
+        let t = line.trim();
+        if t.starts_with('#') {
+            // Comentario de etiqueta: se conserva sólo si su clave sigue viva.
+            pending_label = Some(t.to_string());
+            continue;
+        }
+        if t.is_empty() {
+            continue;
+        }
+        if t.starts_with(target) || t == target {
+            revoked = Some(t.to_string());
+            pending_label = None;
+            continue;
+        }
+        if let Some(lbl) = pending_label.take() {
+            kept.push(lbl);
+        }
+        kept.push(t.to_string());
+    }
+    if let Some(lbl) = pending_label.take() {
+        kept.push(lbl);
+    }
+    let mut out = kept.join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    fs::write(&path, out).map_err(|e| format!("write {}: {}", path, e))?;
+    set_mode_600(&path);
+    Ok(revoked.is_some())
+}
+
+/// Lista el registro de claves adicionales: `(etiqueta, clave)`, con la clave
+/// enmascarada salvo que se pida `reveal` (queda en la auditoría).
+pub fn list_extra_keys(state_dir: &str, reveal: bool) -> Vec<(String, String)> {
+    let path = extra_keys_path(state_dir);
+    let Ok(txt) = fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut label = String::new();
+    for line in txt.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if let Some(rest) = t.strip_prefix('#') {
+            label = rest.trim().to_string();
+            continue;
+        }
+        let shown = if reveal {
+            t.to_string()
+        } else {
+            mask_key(t)
+        };
+        out.push((label.clone(), shown));
+        label.clear();
+    }
+    out
+}
+
+/// Enmascara una clave dejando sólo el prefijo y los 4 últimos caracteres.
+fn mask_key(k: &str) -> String {
+    if k.len() <= 16 {
+        return "*".repeat(k.len());
+    }
+    format!("{}...{}", &k[..12], &k[k.len() - 4..])
+}
+
 /// Octetos aleatorios de /dev/urandom (fallback: reloj + pid).
 fn random_hex(nbytes: usize) -> String {
     let mut buf = vec![0u8; nbytes];
@@ -483,5 +574,71 @@ mod tests {
         assert_eq!(extract_key("authorization: Bearer xyz\r\n").as_deref(), Some("xyz"));
         assert_eq!(extract_key("x-api-key:  \r\n"), None);
         assert_eq!(extract_key("Host: x\r\n"), None);
+    }
+
+    /// Directorio temporal propio de cada test (sin dependencias externas).
+    fn tmp_dir(tag: &str) -> String {
+        let d = format!(
+            "/tmp/md_apikey_test_{}_{}_{}",
+            tag,
+            std::process::id(),
+            random_hex(4)
+        );
+        let _ = fs::create_dir_all(&d);
+        d
+    }
+
+    #[test]
+    fn acuñar_y_revocar_una_clave_no_toca_la_principal() {
+        let dir = tmp_dir("mint");
+        fs::write(format!("{}/megadaemon_api.key", dir), "mdaemon_sk_live_principal").unwrap();
+        let key = generate_extra_key(&dir, "cloud-sandbox").unwrap();
+        assert!(key.starts_with("mdaemon_sk_live_"));
+        assert_eq!(key.len(), "mdaemon_sk_live_".len() + 64);
+
+        let cfg = ApiKeyConfig::load(&dir);
+        assert!(cfg.accepts(&key), "la clave acuñada debe autorizarse");
+        assert!(cfg.accepts("mdaemon_sk_live_principal"), "la principal sigue viva");
+
+        // Revocar por prefijo (8+ caracteres).
+        let target = &key[13..25];
+        assert!(revoke_extra_key(&dir, target).unwrap());
+        let cfg2 = ApiKeyConfig::load(&dir);
+        assert!(!cfg2.accepts(&key), "la clave revocada ya no autoriza");
+        assert!(
+            cfg2.accepts("mdaemon_sk_live_principal"),
+            "la principal no se toca al revocar"
+        );
+
+        // Revocar dos veces no revoca nada nuevo.
+        assert!(!revoke_extra_key(&dir, target).unwrap());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn el_registro_se_enmascara_sin_reveal() {
+        let dir = tmp_dir("mask");
+        let key = generate_extra_key(&dir, "agente-externo").unwrap();
+        let rows = list_extra_keys(&dir, false);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "agente-externo");
+        assert!(rows[0].1.contains("..."), "la clave debe ir enmascarada");
+        assert!(!rows[0].1.contains(&key), "la clave completa no debe aparecer");
+
+        let rows = list_extra_keys(&dir, true);
+        assert_eq!(rows[0].1, key);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn revocar_una_clave_inexistente_no_altera_el_registro() {
+        let dir = tmp_dir("noop");
+        let key = generate_extra_key(&dir, "a").unwrap();
+        let before = fs::read_to_string(extra_keys_path(&dir)).unwrap();
+        assert!(!revoke_extra_key(&dir, "mdaemon_sk_live_99999999").unwrap());
+        let after = fs::read_to_string(extra_keys_path(&dir)).unwrap();
+        assert_eq!(before, after);
+        assert!(ApiKeyConfig::load(&dir).accepts(&key));
+        let _ = fs::remove_dir_all(&dir);
     }
 }

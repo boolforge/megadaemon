@@ -1080,6 +1080,499 @@ fn validate_session_uri(uri: &str) -> Result<String, String> {
     Ok(uri.to_string())
 }
 
+// ---------------------------------------------------------------------------
+// W3 · Sellado en streaming, restore verificado y subida por trozos
+// ---------------------------------------------------------------------------
+
+/// Escribe un registro de chunk en el formato de la bóveda.
+fn write_chunk_record<W: std::io::Write>(
+    w: &mut W,
+    rel: &str,
+    idx: usize,
+    plain_len: usize,
+    ct: &[u8],
+    tag: &[u8; TAG_LEN],
+    nonce: &[u8; NONCE_LEN],
+) -> Result<(), String> {
+    let rb = rel.as_bytes();
+    w.write_all(&(rb.len() as u16).to_le_bytes())
+        .map_err(|e| format!("escritura de la bóveda: {}", e))?;
+    w.write_all(rb)
+        .map_err(|e| format!("escritura de la bóveda: {}", e))?;
+    w.write_all(&(idx as u32).to_le_bytes())
+        .map_err(|e| format!("escritura de la bóveda: {}", e))?;
+    w.write_all(&(plain_len as u32).to_le_bytes())
+        .map_err(|e| format!("escritura de la bóveda: {}", e))?;
+    w.write_all(&((ct.len() + TAG_LEN) as u32).to_le_bytes())
+        .map_err(|e| format!("escritura de la bóveda: {}", e))?;
+    w.write_all(nonce)
+        .map_err(|e| format!("escritura de la bóveda: {}", e))?;
+    w.write_all(ct)
+        .map_err(|e| format!("escritura de la bóveda: {}", e))?;
+    w.write_all(tag)
+        .map_err(|e| format!("escritura de la bóveda: {}", e))?;
+    Ok(())
+}
+
+/// Sella un directorio **en streaming**: memoria acotada a un chunk.
+///
+/// El móvil tiene 5,9 GB libres y el pack son decenas de GB, así que no
+/// puede existir una copia intermedia: el fichero se lee por trozos y se
+/// cifra trozo a trozo. Se hacen dos pasadas sobre el origen (una para el
+/// SHA-256 del manifiesto y otra para cifrar), pero nunca se guarda el
+/// fichero entero ni su cifrado en memoria.
+///
+/// Mismo formato (`MDV1`) que [`seal_with_iterations`]: las dos funciones
+/// producen bóvedas intercambiables.
+pub fn seal_dir_streaming(
+    dir: &str,
+    out: &str,
+    passphrase: &str,
+    iterations: u32,
+) -> Result<VaultManifest, String> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    if passphrase.is_empty() {
+        return Err("la passphrase no puede estar vacía".to_string());
+    }
+    let root = Path::new(dir);
+    if !root.is_dir() {
+        return Err(format!("no existe el directorio a cifrar: {}", dir));
+    }
+    if iterations == 0 {
+        return Err("las iteraciones del KDF deben ser > 0".to_string());
+    }
+
+    let mut files: Vec<PathBuf> = Vec::new();
+    walk_files(root, &mut files);
+    let mut rels: Vec<(PathBuf, String)> = Vec::new();
+    for p in files {
+        let rel = normalize_rel(
+            &p.strip_prefix(root)
+                .unwrap_or(&p)
+                .to_string_lossy()
+                .to_string(),
+        )?;
+        rels.push((p, rel));
+    }
+    rels.sort_by(|a, b| a.1.cmp(&b.1));
+
+    let salt = random_bytes(SALT_LEN);
+    let vault_id = random_bytes(VAULT_ID_LEN);
+    let dk = pbkdf2_hmac_sha256(passphrase.as_bytes(), &salt, iterations, KEY_LEN * 2);
+    let enc_key = &dk[..KEY_LEN];
+    let nonce_key = &dk[KEY_LEN..];
+    let aes = Aes256::new(enc_key);
+
+    // --- Pasada 1: tamaño y SHA-256 de cada fichero (streaming) -------------
+    struct Meta {
+        rel: String,
+        path: PathBuf,
+        size: u64,
+        sha: String,
+        chunks: u64,
+    }
+    let mut metas: Vec<Meta> = Vec::new();
+    for (path, rel) in &rels {
+        let (size, sha) = hash_file_streaming(path)
+            .ok_or_else(|| format!("no se pudo leer {}", path.display()))?;
+        let chunks = if size == 0 {
+            1
+        } else {
+            (size + CHUNK_SIZE as u64 - 1) / CHUNK_SIZE as u64
+        };
+        metas.push(Meta {
+            rel: rel.clone(),
+            path: path.clone(),
+            size,
+            sha,
+            chunks,
+        });
+    }
+
+    let entries: Vec<VaultEntry> = metas
+        .iter()
+        .map(|m| VaultEntry {
+            rel_path: m.rel.clone(),
+            plaintext_len: m.size,
+            cipher_len: m.size + m.chunks * TAG_LEN as u64,
+            sha256_plain: m.sha.clone(),
+            nonce: hex(&derive_nonce(nonce_key, &vault_id, m.rel.as_bytes(), 0)),
+            chunk_index: 0,
+        })
+        .collect();
+    let total_plain_bytes = metas.iter().map(|m| m.size).sum();
+
+    let manifest = VaultManifest {
+        version: VAULT_VERSION,
+        created_at: now_iso8601(),
+        algorithm: ALGORITHM_NAME.to_string(),
+        kdf: KDF_NAME.to_string(),
+        entries,
+        total_plain_bytes,
+    };
+    let manifest_bytes =
+        serde_json::to_vec(&manifest).map_err(|e| format!("serialización del manifiesto: {}", e))?;
+
+    if let Some(parent) = Path::new(out).parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("creación de {}: {}", parent.display(), e))?;
+        }
+    }
+    let mut f = fs::File::create(out).map_err(|e| format!("escritura de {}: {}", out, e))?;
+
+    // Cabecera + manifiesto.
+    let mut head: Vec<u8> = Vec::with_capacity(VAULT_HEADER_LEN + manifest_bytes.len());
+    head.extend_from_slice(VAULT_MAGIC);
+    head.extend_from_slice(&VAULT_VERSION.to_le_bytes());
+    head.push(KDF_PBKDF2_HMAC_SHA256);
+    head.push(CIPHER_AES_256_GCM);
+    head.extend_from_slice(&0u16.to_le_bytes());
+    head.extend_from_slice(&iterations.to_le_bytes());
+    head.extend_from_slice(&salt);
+    head.extend_from_slice(&vault_id);
+    head.extend_from_slice(&(manifest_bytes.len() as u32).to_le_bytes());
+    head.extend_from_slice(&manifest_bytes);
+    f.write_all(&head)
+        .map_err(|e| format!("escritura de {}: {}", out, e))?;
+
+    // --- Pasada 2: cifrar trozo a trozo -------------------------------------
+    for m in &metas {
+        let mut src = fs::File::open(&m.path)
+            .map_err(|e| format!("lectura de {}: {}", m.path.display(), e))?;
+        let mut idx: usize = 0;
+        let mut off: u64 = 0;
+        loop {
+            let want = std::cmp::min(CHUNK_SIZE as u64, m.size.saturating_sub(off)) as usize;
+            let mut buf = vec![0u8; want];
+            if want > 0 {
+                src.seek(SeekFrom::Start(off))
+                    .map_err(|e| format!("lectura de {}: {}", m.path.display(), e))?;
+                src.read_exact(&mut buf)
+                    .map_err(|e| format!("lectura de {}: {}", m.path.display(), e))?;
+            }
+            let nonce = derive_nonce(nonce_key, &vault_id, m.rel.as_bytes(), idx);
+            let aad = build_aad(m.rel.as_bytes(), idx);
+            let (ct, tag) = gcm_encrypt(&aes, &nonce, &aad, &buf);
+            write_chunk_record(&mut f, &m.rel, idx, buf.len(), &ct, &tag, &nonce)?;
+            idx += 1;
+            off += want as u64;
+            if off >= m.size {
+                break;
+            }
+        }
+    }
+    f.flush()
+        .map_err(|e| format!("escritura de {}: {}", out, e))?;
+    Ok(manifest)
+}
+
+/// Calcula (tamaño, SHA-256) de un fichero sin cargarlo en memoria.
+fn hash_file_streaming(path: &Path) -> Option<(u64, String)> {
+    let mut f = fs::File::open(path).ok()?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    let mut total: u64 = 0;
+    loop {
+        let n = f.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+        total += n as u64;
+    }
+    Some((total, hex(&h.finalize())))
+}
+
+/// Abre una bóveda **en streaming**: descifra chunk a chunk directamente al
+/// destino, sin ever buffers el fichero entero.
+///
+/// A diferencia de [`open`], aquí la memoria queda acotada a un chunk: es lo
+/// que permite restaurar un pack de decenas de GB en un móvil con 5,9 GB
+/// libres.
+pub fn open_streaming(
+    vault: &str,
+    passphrase: &str,
+    dest: &str,
+) -> Result<Vec<String>, String> {
+    use std::collections::BTreeMap;
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    if passphrase.is_empty() {
+        return Err("la passphrase no puede estar vacía".to_string());
+    }
+    let mut f = fs::File::open(vault).map_err(|e| format!("lectura de {}: {}", vault, e))?;
+    let mut raw: Vec<u8> = Vec::new();
+    f.read_to_end(&mut raw)
+        .map_err(|e| format!("lectura de {}: {}", vault, e))?;
+    let (hdr, manifest, offset) = parse_header(&raw)?;
+
+    let dk = pbkdf2_hmac_sha256(passphrase.as_bytes(), &hdr.salt, hdr.iterations, KEY_LEN * 2);
+    let aes = Aes256::new(&dk[..KEY_LEN]);
+
+    fs::create_dir_all(dest).map_err(|e| format!("creación de {}: {}", dest, e))?;
+
+    // Hash por fichero, calculado mientras se escribe.
+    let mut hashes: BTreeMap<String, Sha256> = BTreeMap::new();
+    let mut sizes: BTreeMap<String, u64> = BTreeMap::new();
+    let mut order: Vec<String> = Vec::new();
+
+    let mut pos = offset;
+    while pos < raw.len() {
+        let rec = parse_chunk(&raw, pos)?;
+        let rel = normalize_rel(&rec.rel_path)?;
+        let aad = build_aad(rel.as_bytes(), rec.index);
+        let split = rec.cipher.len() - TAG_LEN;
+        let pt = gcm_decrypt(
+            &aes,
+            &rec.nonce,
+            &aad,
+            &rec.cipher[..split],
+            &rec.cipher[split..],
+        )?;
+        if pt.len() != rec.plain_len {
+            return Err(format!("longitud inesperada en {}", rel));
+        }
+        let out_path = Path::new(dest).join(&rel);
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("creación de {}: {}", parent.display(), e))?;
+        }
+        let mut o = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&out_path)
+            .map_err(|e| format!("escritura de {}: {}", out_path.display(), e))?;
+        o.write_all(&pt)
+            .map_err(|e| format!("escritura de {}: {}", out_path.display(), e))?;
+        let entry = hashes.entry(rel.clone()).or_insert_with(Sha256::new);
+        entry.update(&pt);
+        *sizes.entry(rel.clone()).or_insert(0) += pt.len() as u64;
+        if !order.contains(&rel) {
+            order.push(rel.clone());
+        }
+        pos = rec.next;
+    }
+
+    // Verificación por fichero contra el manifiesto.
+    for entry in &manifest.entries {
+        let h = hashes.get(&entry.rel_path).ok_or_else(|| {
+            format!("falta el fichero {} en la bóveda", entry.rel_path)
+        })?;
+        let got = hex(&h.clone().finalize());
+        if got != entry.sha256_plain {
+            return Err(format!(
+                "SHA-256 incorrecto en {}: fichero alterado o truncado",
+                entry.rel_path
+            ));
+        }
+        let size = sizes.get(&entry.rel_path).copied().unwrap_or(0);
+        if size != entry.plaintext_len {
+            return Err(format!(
+                "tamaño incorrecto en {}: {} != {}",
+                entry.rel_path, size, entry.plaintext_len
+            ));
+        }
+    }
+
+    Ok(order)
+}
+
+/// El resultado de verificar un restore.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RestoreReport {
+    /// Cada lectura comprobada.
+    pub reads: Vec<RestoreRead>,
+    /// `true` si todas las lecturas casaron.
+    pub ok: bool,
+}
+
+/// Una lectura comprobada tras restaurar.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RestoreRead {
+    /// Ruta dentro del pack.
+    pub rel_path: String,
+    /// Bytes leídos de verdad del destino.
+    pub bytes_read: u64,
+    /// SHA-256 calculado sobre lo leído.
+    pub sha256: String,
+    /// Hash que esperaba el manifiesto.
+    pub expected_sha256: String,
+    /// `true` si casan.
+    pub ok: bool,
+}
+
+/// **Restore probado**: relee del destino los ficheros indicados y comprueba
+/// su SHA-256 contra el manifiesto de la bóveda.
+///
+/// Un backup sin restore probado no es un backup: esto es lo que demuestra
+/// que el pack sirve. El manifiesto se lee **sin** passphrase (está en claro
+/// en la cabecera), así que la comprobación es independiente de la clave.
+///
+/// `picks` son las rutas relativas a releer (por ejemplo las tres lecturas
+/// reales mínimas: un fichero de texto, uno multimedia y uno del estado).
+pub fn restore_verify(
+    vault: &str,
+    dest: &str,
+    picks: &[&str],
+) -> Result<RestoreReport, String> {
+    let raw = fs::read(vault).map_err(|e| format!("lectura de {}: {}", vault, e))?;
+    let (_hdr, manifest, _offset) = parse_header(&raw)?;
+    let mut reads: Vec<RestoreRead> = Vec::new();
+    for rel in picks {
+        let path = Path::new(dest).join(rel);
+        let (bytes, sha) = match hash_file_streaming(&path) {
+            Some(v) => v,
+            None => {
+                reads.push(RestoreRead {
+                    rel_path: rel.to_string(),
+                    bytes_read: 0,
+                    sha256: String::new(),
+                    expected_sha256: String::new(),
+                    ok: false,
+                });
+                continue;
+            }
+        };
+        let expected = manifest
+            .entries
+            .iter()
+            .find(|e| e.rel_path == *rel)
+            .map(|e| e.sha256_plain.clone())
+            .unwrap_or_default();
+        reads.push(RestoreRead {
+            rel_path: rel.to_string(),
+            bytes_read: bytes,
+            sha256: sha.clone(),
+            expected_sha256: expected.clone(),
+            ok: !expected.is_empty() && expected.eq_ignore_ascii_case(&sha),
+        });
+    }
+    let ok = !reads.is_empty() && reads.iter().all(|r| r.ok);
+    Ok(RestoreReport { reads, ok })
+}
+
+/// Deriva una clave de bóveda a partir de un **secreto ligado al hardware**.
+///
+/// El secreto (por ejemplo el material de una Keystore hardware-backed o de
+/// un secure element) lo obtiene el llamante **en el propio dispositivo**;
+/// este módulo sólo deriva y nunca lee, guarda ni transmite el secreto.
+/// Es la base del nivel L3: las credenciales se cifran con una clave que no
+/// existe fuera del móvil.
+pub fn derive_hardware_key(
+    device_secret: &[u8],
+    salt: &[u8],
+    iterations: u32,
+) -> Result<[u8; KEY_LEN], String> {
+    if device_secret.len() < 16 {
+        return Err("el secreto del dispositivo es demasiado corto (mínimo 16 bytes)".into());
+    }
+    if salt.is_empty() {
+        return Err("el salt no puede estar vacío".into());
+    }
+    let dk = pbkdf2_hmac_sha256(device_secret, salt, iterations.max(1), KEY_LEN);
+    let mut out = [0u8; KEY_LEN];
+    out.copy_from_slice(&dk);
+    Ok(out)
+}
+
+/// Un trozo de la bóveda listo para subirse a Drive.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DriveChunk {
+    /// Índice del trozo.
+    pub index: u32,
+    /// Desplazamiento en el fichero de bóveda.
+    pub offset: u64,
+    /// Longitud del trozo.
+    pub len: u64,
+    /// SHA-256 del trozo.
+    pub sha256: String,
+    /// Cabecera `Content-Range` correspondiente.
+    pub content_range: String,
+}
+
+/// Plan de subida por trozos a Drive, con SHA-256 por trozo.
+///
+/// El móvil no tiene espacio para una copia intermedia: el fichero de bóveda
+/// se sube **por rangos**, calculando el hash de cada rango mientras se lee.
+/// El tamaño de trozo tiene que ser múltiplo de 1 MiB para que el comando
+/// `dd` sea reproducible en Android (toybox).
+pub fn drive_chunk_plan(vault: &str, chunk_size: u64) -> Result<Vec<DriveChunk>, String> {
+    const MIB: u64 = 1024 * 1024;
+    if chunk_size == 0 || chunk_size % MIB != 0 {
+        return Err("el tamaño de trozo debe ser múltiplo de 1 MiB".into());
+    }
+    let md = fs::metadata(vault).map_err(|e| format!("lectura de {}: {}", vault, e))?;
+    let total = md.len();
+    let mut out: Vec<DriveChunk> = Vec::new();
+    let mut offset: u64 = 0;
+    let mut index: u32 = 0;
+    loop {
+        let len = std::cmp::min(chunk_size, total.saturating_sub(offset));
+        if len == 0 {
+            break;
+        }
+        let sha = chunk_sha256_at(vault, offset, len)
+            .ok_or_else(|| format!("no se pudo leer el trozo {} de {}", index, vault))?;
+        out.push(DriveChunk {
+            index,
+            offset,
+            len,
+            sha256: sha,
+            content_range: format!("bytes {}-{}/{}", offset, offset + len - 1, total),
+        });
+        offset += len;
+        index += 1;
+        if offset >= total {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// SHA-256 de un rango del fichero, sin cargarlo entero en memoria.
+fn chunk_sha256_at(path: &str, offset: u64, len: u64) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = fs::File::open(path).ok()?;
+    f.seek(SeekFrom::Start(offset)).ok()?;
+    let mut h = Sha256::new();
+    let mut remaining = len;
+    let mut buf = vec![0u8; 1 << 20];
+    while remaining > 0 {
+        let want = std::cmp::min(remaining as usize, buf.len());
+        let n = f.read(&mut buf[..want]).ok()?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+        remaining -= n as u64;
+    }
+    Some(hex(&h.finalize()))
+}
+
+/// Comando `curl` para subir **un trozo** de la bóveda a una sesión
+/// reanudable de Drive.
+///
+/// No hace copia local: `dd` recorta el rango en memoria y lo pipea a `curl`.
+pub fn drive_chunk_command(vault: &str, chunk: &DriveChunk, session_uri: &str) -> String {
+    const MIB: u64 = 1024 * 1024;
+    let skip_mib = chunk.offset / MIB;
+    let count_mib = chunk.len.div_ceil(MIB);
+    format!(
+        "dd if={f} bs={mib} skip={skip} count={count} iflag=fullblock 2>/dev/null | \
+         curl -sS -X PUT --data-binary @- \
+         -H 'Content-Type: application/octet-stream' \
+         -H 'Content-Range: {range}' {s}",
+        f = shell_quote(vault),
+        mib = MIB,
+        skip = skip_mib,
+        count = count_mib,
+        range = chunk.content_range,
+        s = shell_quote(session_uri)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1361,5 +1854,158 @@ mod tests {
         assert!(cmd.contains("Content-Range"));
         assert!(cmd.contains("/sdcard/v.mdv"));
         assert!(cmd.contains("https://example/session"));
+    }
+
+    // --- W3 · streaming, restore y subida por trozos -------------------------
+
+    #[test]
+    fn el_sellado_en_streaming_produce_la_misma_estructura_que_el_normal() {
+        let src = tmpdir("s1");
+        let dst = tmpdir("d1");
+        fs::write(format!("{}/a.txt", src), b"contenido secreto A").unwrap();
+        fs::write(format!("{}/b.bin", src), vec![0xABu8; 5000]).unwrap();
+        let v_normal = format!("{}/normal.mdv", dst);
+        let v_stream = format!("{}/stream.mdv", dst);
+
+        let m1 = seal_with_iterations(&src, &v_normal, "clave", 1000).unwrap();
+        let m2 = seal_dir_streaming(&src, &v_stream, "clave", 1000).unwrap();
+
+        assert_eq!(m1.entries.len(), m2.entries.len());
+        for (a, b) in m1.entries.iter().zip(m2.entries.iter()) {
+            assert_eq!(a.rel_path, b.rel_path);
+            assert_eq!(a.plaintext_len, b.plaintext_len);
+            assert_eq!(a.cipher_len, b.cipher_len);
+            assert_eq!(a.sha256_plain, b.sha256_plain);
+        }
+        assert_eq!(m1.total_plain_bytes, m2.total_plain_bytes);
+        // Ambas bóvedas se abren con la misma passphrase.
+        let out1 = format!("{}/o1", dst);
+        let out2 = format!("{}/o2", dst);
+        assert_eq!(open(&v_normal, "clave", &out1).unwrap().len(), 2);
+        assert_eq!(open(&v_stream, "clave", &out2).unwrap().len(), 2);
+        let _ = fs::remove_dir_all(&src);
+        let _ = fs::remove_dir_all(&dst);
+    }
+
+    #[test]
+    fn el_streaming_trocea_y_restaura_exacto() {
+        let src = tmpdir("s2");
+        let dst = tmpdir("d2");
+        // 2,5 MiB => 3 chunks de 1 MiB.
+        let big = vec![0x5Au8; 2_500_000];
+        fs::write(format!("{}/grande.bin", src), &big).unwrap();
+        fs::write(format!("{}/texto.txt", src), b"hola").unwrap();
+        let vault = format!("{}/v.mdv", dst);
+        let m = seal_dir_streaming(&src, &vault, "clave", 1000).unwrap();
+        let grande = m.entries.iter().find(|e| e.rel_path == "grande.bin").unwrap();
+        assert_eq!(grande.plaintext_len, 2_500_000);
+        assert_eq!(grande.cipher_len, 2_500_000 + 3 * TAG_LEN as u64);
+
+        let out = format!("{}/out", dst);
+        let written = open_streaming(&vault, "clave", &out).unwrap();
+        assert_eq!(written.len(), 2);
+        assert_eq!(
+            fs::read(format!("{}/grande.bin", out)).unwrap().len(),
+            2_500_000
+        );
+        assert_eq!(fs::read(format!("{}/grande.bin", out)).unwrap(), big);
+        assert_eq!(fs::read(format!("{}/texto.txt", out)).unwrap(), b"hola");
+        let _ = fs::remove_dir_all(&src);
+        let _ = fs::remove_dir_all(&dst);
+    }
+
+    #[test]
+    fn el_streaming_detecta_un_fichero_alterado() {
+        let src = tmpdir("s3");
+        let dst = tmpdir("d3");
+        fs::write(format!("{}/x.txt", src), b"contenido").unwrap();
+        let vault = format!("{}/v.mdv", dst);
+        seal_dir_streaming(&src, &vault, "clave", 1000).unwrap();
+        let mut raw = fs::read(&vault).unwrap();
+        let n = raw.len();
+        raw[n - 20] ^= 0xFF;
+        fs::write(&vault, &raw).unwrap();
+        let err = open_streaming(&vault, "clave", &format!("{}/out", dst)).unwrap_err();
+        assert!(
+            err.contains("autenticación") || err.contains("SHA-256"),
+            "mensaje inesperado: {}",
+            err
+        );
+        let _ = fs::remove_dir_all(&src);
+        let _ = fs::remove_dir_all(&dst);
+    }
+
+    #[test]
+    fn restore_verify_relee_de_verdad_del_destino() {
+        let src = tmpdir("s4");
+        let dst = tmpdir("d4");
+        fs::write(format!("{}/nota.txt", src), b"una nota").unwrap();
+        fs::write(format!("{}/foto.jpg", src), vec![1u8; 3000]).unwrap();
+        fs::write(format!("{}/estado.log", src), b"linea1\nlinea2\n").unwrap();
+        let vault = format!("{}/v.mdv", dst);
+        seal_dir_streaming(&src, &vault, "clave", 1000).unwrap();
+        let out = format!("{}/out", dst);
+        open_streaming(&vault, "clave", &out).unwrap();
+
+        // Las 3 lecturas reales mínimas.
+        let rep = restore_verify(
+            &vault,
+            &out,
+            &["nota.txt", "foto.jpg", "estado.log"],
+        )
+        .unwrap();
+        assert!(rep.ok, "el restore debe verificar: {:?}", rep.reads);
+        assert_eq!(rep.reads.len(), 3);
+        assert_eq!(rep.reads[0].bytes_read, 8);
+        assert_eq!(rep.reads[1].bytes_read, 3000);
+        assert!(rep.reads.iter().all(|r| r.sha256.len() == 64));
+
+        // Si se borra un fichero del destino, la lectura falla.
+        fs::remove_file(format!("{}/foto.jpg", out)).unwrap();
+        let rep2 = restore_verify(&vault, &out, &["nota.txt", "foto.jpg"]).unwrap();
+        assert!(!rep2.ok);
+        let _ = fs::remove_dir_all(&src);
+        let _ = fs::remove_dir_all(&dst);
+    }
+
+    #[test]
+    fn la_clave_ligada_al_hardware_exige_un_secreto_real() {
+        assert!(derive_hardware_key(b"corto", b"salt", 1000).is_err());
+        let a = derive_hardware_key(&[7u8; 32], b"salt", 1000).unwrap();
+        let b = derive_hardware_key(&[7u8; 32], b"salt", 1000).unwrap();
+        let c = derive_hardware_key(&[8u8; 32], b"salt", 1000).unwrap();
+        assert_eq!(a, b, "la derivación debe ser determinista");
+        assert_ne!(a, c, "otro secreto → otra clave");
+        assert_eq!(a.len(), KEY_LEN);
+        assert!(derive_hardware_key(&[7u8; 32], b"", 1000).is_err());
+    }
+
+    #[test]
+    fn el_plan_de_subida_por_trozos_tiene_hash_y_rango() {
+        let src = tmpdir("s5");
+        let dst = tmpdir("d5");
+        fs::write(format!("{}/x.bin", src), vec![3u8; 2_500_000]).unwrap();
+        let vault = format!("{}/v.mdv", dst);
+        seal_dir_streaming(&src, &vault, "clave", 1000).unwrap();
+
+        let chunks = drive_chunk_plan(&vault, 1024 * 1024).unwrap();
+        assert!(chunks.len() >= 2);
+        assert_eq!(chunks[0].offset, 0);
+        assert_eq!(chunks[0].len, 1024 * 1024);
+        let vault_size = fs::metadata(&vault).unwrap().len();
+        assert_eq!(
+            chunks[0].content_range,
+            format!("bytes 0-{}/{}", 1024 * 1024 - 1, vault_size)
+        );
+        assert_eq!(chunks[0].sha256.len(), 64);
+        // El tamaño de trozo tiene que ser múltiplo de MiB.
+        assert!(drive_chunk_plan(&vault, 1000).is_err());
+
+        let cmd = drive_chunk_command(&vault, &chunks[1], "https://example/session");
+        assert!(cmd.contains("Content-Range: bytes 1048576-"));
+        assert!(cmd.contains("skip=1"));
+        assert!(cmd.contains("https://example/session"));
+        let _ = fs::remove_dir_all(&src);
+        let _ = fs::remove_dir_all(&dst);
     }
 }

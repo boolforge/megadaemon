@@ -198,6 +198,23 @@ sha256 ⇒ hay que RE siempre contra lo que se ejecuta en el dispositivo.
   `POST /api/tool`, `POST /api/api_keys` → los tres 200 "executed"). Debería ser
   `404 unknown_tool`: hoy un cliente cree que ha hecho algo que no ha hecho.
 
+### Consecuencias de P2-bis (medidas por el nodo, ya incorporadas)
+
+- **El material de claves por dispositivo está en `/mnt/vendor/efs/DAK/`** (GAK/SAK EC+RSA
+  `private` + `.val` + certificados) y el almacén seguro de la TEE en
+  `/tee/srt/<uuid>/<id>/` (`obj_info` + `data_chunk`).
+  ⇒ **W3**: un backup de EFS **sin `keystore2`** es incompleto (el motor de claves está en
+  `/system/bin`, no en el EFS) ⇒ el backup incluye el binario `keystore2` y su base de datos.
+- **`/root/FLL.bin` es la protección anti-rollback** ⇒ **W4** tiene que respaldarlo y
+  **verificar su hash antes de tocar la ROM** (si baja de versión el bootloader, FLL lo bloquea).
+- Las **7 particiones del mundo seguro** con sha256 calculado **on-device** (el contenido no
+  sale del móvil): `keystorage`(sda6,512 KiB) · `keyrefuge`(sda21,52 MiB) · `sec_efs`(sda2,20 MiB) ·
+  `uh`(sda9,2 MiB) · `uhcfg`(sda10,4 MiB) · `spu`(sda33,50 MiB) · `prism`(sda29,256 MiB).
+- **Tool de introspección del entorno** (`src/env_introspect.rs`, 5 tests verdes): preguntas al
+  móvil real (`partitions`, `dev`, `binaries`, `app`, `ram`, `path`, `prop`, `processes`) con
+  contrato obligatorio `source` + `ts` + `device`, y `available:false` + `reason` cuando algo no
+  existe. **Cableada en `mcp_ext`** ⇒ es lo que evita volver a suponer (`NPU.bin`, `hw_keymaster`).
+
 ---
 
 ## 2. Orden de las próximas 72 h (lo que desbloquea qué)
