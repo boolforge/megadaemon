@@ -213,7 +213,60 @@ derivación de nonce/AAD.** Lo que sí es escribible sin suposiciones: el
 **Argon2id** (medido), el **modelo de cabecera** y los **ids**, y el interior
 **tar+zstd**. El resto necesita **un `.dat` real** (o RE del parser nativo).
 
-### 4.6 Interoperabilidad con lo que ya tiene la flota
+### 4.7 Layout en cable de la info page — **medido en el escritor nativo**
+
+El escritor (`libsba_archive.so`, `x86_64`) serializa la página con un
+*builder* de append. Helpers identificados por desensamblado:
+
+| Helper | Qué hace |
+|---|---|
+| `0x6e270` | `append_u16_le` |
+| `0x6e410` | `append_u32_le` |
+| `0x6e740` | `append_bytes(ptr, len, label)` |
+| `0x6ebe0` | `append_bytes_range(ptr, start, end)` |
+| `0x6f080` | `append_block(ptr, flag*, len)` (longitud + bytes) |
+
+Orden de escritura **medido** (x86_64, función que referencia el magic):
+
+```
+ 1  4 B   "SBA1"                      (ASCII, verificado en .rodata)
+ 2  u16   flags
+ 3  u16   headerSize                 0x60 (96)  ó  0x90 (144)   ← dos variantes
+ 4  u32   id de método               0, 2 ó 3 (según flags)
+ 5  u64   createdAtEpochMs           time(NULL) * 1000
+ 6  u16   (campo A)
+ 7  u16   (campo B)
+ 8  u16   struct[0x04]
+ 9  u16   struct[0x08]
+10  u16   struct[0x0c]
+11  u16   len1  +  len1 B   bloque 1   (8 B observados)
+12  u16   len2  +  len2 B   bloque 2   (8 B observados)
+13  u16   len3  +  len3 B   bloque 3   (8 B observados)
+14  u16   0
+15  u16   0
+16  u32   struct[0x18]
+17  u32   struct[0x10]    (sólo si struct[0x00] == 2)
+18  u16   struct[0x14]    (sólo si struct[0x00] == 2)
+19  u16   struct[0x1c]
+20  u16   struct[0x20]
+21  u16   (kdfMethodId != 0 ? 1 : 0)
+22  blk   bloque de 32 B  + byte 0
+23  blk   bloque de  8 B  + byte 0
+     ó   bloque de  4 B  + byte 0   (rama alternativa)
+```
+
+* El tamaño declarado es **96 B** (`0x60`) o **144 B** (`0x90`): 96 para la
+  página de una entrada, 144 para la del archivo raíz (dos ramas del código:
+  `cmpl $0x2,(%rcx)` elige `0x60`/`0x90`).
+* Los **bloques de 32/8/4 B** con longitud delante son, por posición, los
+  candidatos a **material de clave** (32 B = SHA-256), **sal/identificador**
+  (8 B) y **checksum** (4 B) ⇒ ⇒ su asignación exacta a los nombres del
+  modelo Kotlin **no está confirmada** (saldrá al contrastar con un `.dat`).
+* ⚠️ Este layout viene del **escritor x86_64**; el ARM64 puede tener otro
+  orden de campos aunque el *stream* sea idéntico ⇒ contrastar siempre con
+  un fichero real antes de fiarse.
+
+### 4.8 Interoperabilidad con lo que ya tiene la flota
 
 * El interior es un **tar** (rutas `extractTarFromFdRaw`, `listTarEntries…`),
   comprimido con **zstd** ⇒ encaja con `backup_formats.rs` (TAR + zstd) y con
