@@ -303,3 +303,59 @@ headers)`, más el filtrado `enabled_tools` / `disabled_tools` por servidor.
 Nota operativa: el barrido se hizo **en el móvil** y en streaming; las primeras versiones se
 lanzaron por duplicado (3 procesos a la vez) y se.cancelaron dos de ellos para no machacar la RAM
 del dispositivo.
+
+---
+
+## 9. El puente MCP: APLICADO y VERIFICADO en el dispositivo (2026-11-20)
+
+**Fichero real** (medido): `/data/user/0/com.agy/files/.gemini/config/mcp_config.json` (432 B),
+claves raíz `mcpServers` **y** `providers` (con `providers.minimax`, el BYOK del usuario).
+
+**Antes (ROTO)** — `command` apuntaba a una copia de nuestro binario que **no existe** en el
+dispositivo ⇒ el servidor no arrancaba y sólo quedaban cacheados los schemas de 7 tools:
+
+```json
+"megadaemon-minimax": { "command": "/data/user/0/com.agy/files/megadaemon/rust-core/target/release/megadaemon-core",
+                        "args": ["mcp-server"], "env": { "MEGADAEMON_MCP": "…" } }
+```
+
+**Ahora (operativo)** — se conserva el **nombre** y se cambia el **transporte**:
+
+```json
+"megadaemon-minimax": { "url": "http://127.0.0.1:9090/mcp",
+                        "headers": { "X-API-Key": "<clave de la instancia>",
+                                     "X-Seere-Auth-Token": "<token de sesión>" } }
+```
+
+### Tres reglas que NO son opcionales (medidas, no supuestas)
+
+1. **El nombre del servidor se conserva: `megadaemon-minimax`.** La skill `minimax-megadaemon` y
+   el `config.json` de Antigravity referencian el servidor **por nombre**
+   (`mcp(megadaemon-minimax/minimax_chat)`, `mcp(megadaemon-minimax/megadaemon_npu_cv)`).
+   Añadir un servidor nuevo con otro nombre deja esas allow-lists apuntando a la nada.
+2. **El `/mcp` exige DOS cabeceras**, incluso desde loopback:
+   `sin clave → 403`, `X-API-Key → 403 {"error":"unauthorized","hint":"falta la cabecera
+   X-Seere-Auth-Token"}`, `X-API-Key + X-Seere-Auth-Token → 200` con **45 tools**.
+3. **El escritor debe FUSIONAR**, no sobrescribir: el fichero tiene `providers` al mismo nivel ⇒
+   sobrescribirlo deja a Antigravity sin modelo BYOK.
+
+### El token no sale del dispositivo
+
+Se obtiene **en el móvil** con `POST http://127.0.0.1:9090/api/session/exchange` y la API key **en
+el cuerpo** → `{"token": <64 chars>, "ok": true}`. Así el secreto no viaja por chat, Drive ni
+catálogo (sólo su `sha16`).
+
+### Aplicación: idempotente, con backup y escritura atómica
+
+`/data/local/tmp/megadaemon/apply_bridge.py` (3 KB): exchange → merge del JSON → verificación
+funcional con las cabeceras exactas del config → backup `mcp_config.json.bak-<ts>` → escritura a
+`.tmp` + `mv` atómico. Reejecutable; imprime **sólo** `sha16` y longitudes.
+
+Verificación: `tools/list = 45` con las cabeceras del config · `providers.minimal` intacto ·
+backup `mcp_config.json.bak-20261120-021556`.
+
+**`bootstrap_core.sh` NO toca `mcp_config.json`** (63 líneas, leído en el dispositivo: no menciona
+ni `mcp_config` ni `mcpServers`) ⇒ la config es estable frente al bootstrap.
+
+**Pendiente**: reiniciar el language server de Antigravity para que relea la config (implica
+tocar la app en uso ⇒ no se hace de forma automática).
