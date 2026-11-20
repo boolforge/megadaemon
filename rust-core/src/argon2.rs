@@ -262,7 +262,7 @@ pub fn argon2_hash_inner(
     secret: &[u8],
     ad: &[u8],
     params: &Argon2Params,
-    trace: Option<&mut Vec<(u64, u64)>>,
+    mut trace: Option<&mut Vec<(u64, u64)>>,
 ) -> Result<Vec<u8>, String> {
     let p = params.parallelism.max(1);
     let t = params.t_cost.max(1);
@@ -281,9 +281,11 @@ pub fn argon2_hash_inner(
 
     // m' = 4p * floor(m / 4p)   (m en KiB = bloques de 1 KiB)
     let m_prime = 4 * p * (params.m_cost / (4 * p));
-    let q = m_prime / p; // bloques por carril
-    let segment = q / 4;
+    let lane_length = m_prime / p; // bloques por carril
+    let segment_length = lane_length / 4; // bloques por segmento (4 rebanadas)
+    let zero = [0u64; WORDS];
 
+    // Memoria: indexada por carril (lane * lane_length + índice).
     let mut mem: Vec<[u64; WORDS]> = vec![[0u64; WORDS]; m_prime as usize];
     for lane in 0..p {
         for j in 0..2u32 {
@@ -292,131 +294,131 @@ pub fn argon2_hash_inner(
             m.extend_from_slice(&j.to_le_bytes());
             m.extend_from_slice(&lane.to_le_bytes());
             let block = h_prime(BLOCK, &m);
-            let lane_base = (lane * q) as usize;
+            let at = (lane * lane_length + j as u32) as usize;
             for (k, w) in block.chunks(8).enumerate() {
-                mem[lane_base + j as usize][k] = u64::from_le_bytes(w.try_into().unwrap());
+                mem[at][k] = u64::from_le_bytes(w.try_into().unwrap());
             }
         }
     }
-
-    let zero = [0u64; WORDS];
 
     for pass in 0..t {
         for slice in 0..4u32 {
-            // Estado de la cadena de direcciones (Argon2i / Argon2id).
-            let mut addr_input = [0u64; WORDS];
-            let mut addr_block = [0u64; WORDS];
-            let mut addr_counter: u64 = 0;
-
             for lane in 0..p {
-                let start_index = if pass == 0 && slice == 0 { 2 } else { 0 };
-                for idx in start_index..q {
-                    let cur = (lane * q + idx) as usize;
-                    let pos_in_seg = idx % segment; // índice DENTRO del segmento
+                // Direcciones independientes de datos: Argon2i siempre; en
+                // Argon2id sólo el pase 0 y las rebanadas 0 y 1.
+                let data_ind = ty == Argon2Type::I
+                    || (ty == Argon2Type::Id && pass == 0 && slice < 2);
 
-                    // ---- X (bloque previo) y valores pseudoaleatorios ----
-                    // pase 0: el bloque recién calculado en idx-1.
-                    // pase >0: el valor ANTIGUO de este mismo bloque.
-                    // El bloque previo: en la primera posicion de una rebanada
-                    // (idx == 0) es el ULTIMO bloque de la rebanada anterior
-                    // del mismo carril (referencia de Argon2: prev_offset =
-                    // curr_offset - 1 sobre la memoria contigua del carril).
-                    let prev_idx = if idx == 0 {
-                        (lane * q + q - 1) as usize
-                    } else {
-                        cur - 1
-                    };
-                    let (x_block, prand): ([u64; WORDS], [u64; WORDS]) = if pass == 0 {
-                        let prev = mem[prev_idx];
-                        (prev, prev)
-                    } else {
-                        let old = mem[cur];
-                        (old, old)
-                    };
-                    let prand_u64 = prand[0];
-                    let (j1, j2) = match ty {
-                        Argon2Type::D => ((prand_u64 as u32), (prand_u64 >> 32) as u32),
-                        Argon2Type::I => {
-                            let (a, b) = address_at(
-                                &mut addr_input,
-                                &mut addr_block,
-                                &mut addr_counter,
-                                pass,
-                                lane,
-                                slice,
-                                m_prime,
-                                t,
-                                ty,
-                                pos_in_seg,
-                                segment,
-                                &zero,
-                            );
-                            (a, b)
+                // Cadena de direcciones (RFC 9106 3.4.1.2).
+                let mut input_block = [0u64; WORDS];
+                let mut address_block = [0u64; WORDS];
+                if data_ind {
+                    input_block[0] = pass as u64;
+                    input_block[1] = lane as u64;
+                    input_block[2] = slice as u64;
+                    input_block[3] = m_prime as u64;
+                    input_block[4] = t as u64;
+                    input_block[5] = ty as u64 as u64;
+                }
+
+                let starting_index = if pass == 0 && slice == 0 { 2 } else { 0 };
+                if pass == 0 && slice == 0 && data_ind {
+                    next_addresses(&mut address_block, &mut input_block, &zero);
+                }
+
+                let mut curr_offset = lane * lane_length + slice * segment_length + starting_index;
+                // El bloque previo: si el actual es el primero del carril, se
+                // toma el ULTIMO del carril (envuelve dentro del carril).
+                let mut prev_offset = if curr_offset % lane_length == 0 {
+                    curr_offset + lane_length - 1
+                } else {
+                    curr_offset - 1
+                };
+
+                for i in starting_index..segment_length {
+                    // 1.1 Rotar el previo si el actual es el segundo del carril.
+                    if curr_offset % lane_length == 1 {
+                        prev_offset = curr_offset - 1;
+                    }
+                    let cur = curr_offset as usize;
+
+                    // 1.2 Valor pseudoaleatorio.
+                    let pseudo_rand = if data_ind {
+                        if i % ADDRESSES_IN_BLOCK == 0 {
+                            next_addresses(&mut address_block, &mut input_block, &zero);
                         }
-                        Argon2Type::Id => {
-                            if pass == 0 && slice <= 1 {
-                                let (a, b) = address_at(
-                                    &mut addr_input,
-                                    &mut addr_block,
-                                    &mut addr_counter,
-                                    pass,
-                                    lane,
-                                    slice,
-                                    m_prime,
-                                    t,
-                                    ty,
-                                    pos_in_seg,
-                                    segment,
-                                    &zero,
-                                );
-                                (a, b)
-                            } else {
-                                ((prand_u64 as u32), (prand_u64 >> 32) as u32)
-                            }
-                        }
+                        address_block[(i % ADDRESSES_IN_BLOCK) as usize]
+                    } else {
+                        mem[prev_offset as usize][0]
                     };
 
-                    // ---- bloque de referencia ----
-                    // El carril de referencia sale del u64 pseudoaleatorio
-                    // completo (implementacion de referencia de Argon2).
-                    let ref_lane = ((prand_u64.wrapping_mul(p as u64) >> 32) % p as u64) as usize;
-                    let x = (j1 as u64) * (j1 as u64) >> 32;
-                    let area = ref_area_size(pass, slice, pos_in_seg, segment, ref_lane, lane);
-                    if area <= 0 {
-                        // caso degenerado (indice 0 sin area previa)
-                        let gx = compress_g(&x_block, &x_block);
+                    // 1.2.2 Carril de referencia.
+                    let mut ref_lane = ((pseudo_rand >> 32) % p as u64) as usize;
+                    if pass == 0 && slice == 0 {
+                        // En el primer pase y la primera rebanada no se puede
+                        // referenciar a otros carriles.
+                        ref_lane = lane as usize;
+                    }
+                    let same_lane = ref_lane == lane as usize;
+
+                    // 1.2.3-1.2.6 Índice del bloque de referencia.
+                    let area: u32 = if pass == 0 {
+                        if slice == 0 {
+                            i - 1
+                        } else if same_lane {
+                            slice * segment_length + i - 1
+                        } else {
+                            // El -1 se hace con aritmética de u32 (envuelve).
+                            (slice * segment_length)
+                                .wrapping_add(if i == 0 { u32::MAX } else { 0 })
+                        }
+                    } else if same_lane {
+                        lane_length - segment_length + i - 1
+                    } else {
+                        (lane_length - segment_length)
+                            .wrapping_add(if i == 0 { u32::MAX } else { 0 })
+                    };
+                    let mut rel = (pseudo_rand & 0xFFFF_FFFF) as u64;
+                    rel = rel * rel >> 32;
+                    // `area - 1` envuelve en u32 (como en el C de referencia) y
+                    // la resta final también (aritmética de u64).
+                    rel = ((area.wrapping_sub(1)) as u64)
+                        .wrapping_sub((area as u64).wrapping_mul(rel) >> 32);
+                    let start_position = if pass != 0 {
+                        if slice == 3 {
+                            0
+                        } else {
+                            (slice + 1) * segment_length
+                        }
+                    } else {
+                        0
+                    };
+                    let abs_pos = (start_position as u64 + rel) % lane_length as u64;
+                    let ref_index = (ref_lane * lane_length as usize + abs_pos as usize) as usize;
+
+                    // 2. Nuevo bloque: G(prev, ref); en los pases > 0 se XOR.
+                    let gx = compress_g(&mem[prev_offset as usize], &mem[ref_index]);
+                    if pass == 0 {
+                        mem[cur] = gx;
+                    } else {
                         for k in 0..WORDS {
-                            mem[cur][k] = if pass == 0 { gx[k] } else { gx[k] ^ mem[cur][k] };
+                            mem[cur][k] ^= gx[k];
                         }
-                        continue;
                     }
-                    let rel = area as u64 - 1 - ((area as u64 * x) >> 32);
-                    let start_position = if pass == 0 {
-                        0u64
-                    } else if slice == 3 {
-                        0u64
-                    } else {
-                        ((slice + 1) * segment) as u64
-                    };
-                    let abs_position = (start_position + rel) % q as u64;
-                    let ref_index = (ref_lane * q as usize + abs_position as usize) as usize;
-
-                    // ---- G(X, Y) ----
-                    let gx = compress_g(&x_block, &mem[ref_index]);
-                    for k in 0..WORDS {
-                        mem[cur][k] = if pass == 0 { gx[k] } else { gx[k] ^ mem[cur][k] };
-                    }
+                    curr_offset += 1;
+                    prev_offset += 1;
                 }
             }
         }
+        if let Some(tr) = trace.as_deref_mut() {
+            tr.push((mem[0][0], mem[(m_prime as usize) - 1][127]));
+        }
     }
-
-    if let Some(tr) = trace { tr.push((mem[0][0], mem[(m_prime as usize) - 1][127])); }
 
     // ---- bloque final: XOR de la última columna ----
     let mut c = [0u64; WORDS];
     for lane in 0..p as usize {
-        let last = lane * q as usize + q as usize - 1;
+        let last = lane * lane_length as usize + lane_length as usize - 1;
         for k in 0..WORDS {
             c[k] ^= mem[last][k];
         }
@@ -430,79 +432,17 @@ pub fn argon2_hash_inner(
     Ok(tag)
 }
 
-/// Tamaño del área de referencia (formulación de la implementación de
-/// referencia de Argon2; `idx` es el índice **dentro del segmento**).
-fn ref_area_size(
-    pass: u32,
-    slice: u32,
-    idx: u32,
-    segment: u32,
-    ref_lane: usize,
-    lane: u32,
-) -> i64 {
-    let same = ref_lane == lane as usize;
-    if pass == 0 {
-        if slice == 0 {
-            return idx as i64 - 1;
-        }
-        if same {
-            return (slice * segment + idx) as i64 - 1;
-        }
-        return (slice * segment) as i64 + if idx == 0 { -1 } else { 0 };
-    }
-    if same {
-        return (idx + segment * if slice == 3 { 1 } else { 0 }) as i64 - 1;
-    }
-    (idx + segment * if slice == 3 { 1 } else { 0 }) as i64 + if idx == 0 { -1 } else { 0 }
-}
-
-/// Direcciones de Argon2i (RFC 9106 §3.4.1.2): por segmento se genera una
-/// cadena de bloques; cada bloque da 128 direcciones (64 pares J1/J2).
-#[allow(clippy::too_many_arguments)]
-fn address_at(
-    addr_input: &mut [u64; WORDS],
-    addr_block: &mut [u64; WORDS],
-    counter: &mut u64,
-    pass: u32,
-    lane: u32,
-    slice: u32,
-    m_prime: u32,
-    t: u32,
-    ty: Argon2Type,
-    pos_in_seg: u32,
-    segment: u32,
+/// Genera el siguiente bloque de direcciones (RFC 9106 3.4.1.2).
+fn next_addresses(
+    address_block: &mut [u64; WORDS],
+    input_block: &mut [u64; WORDS],
     zero: &[u64; WORDS],
-) -> (u32, u32) {
-    // Z = LE64(r)||LE64(l)||LE64(sl)||LE64(m')||LE64(t)||LE64(y)   (48 bytes)
-    let z: [u64; 6] = [
-        pass as u64,
-        lane as u64,
-        slice as u64,
-        m_prime as u64,
-        t as u64,
-        ty as u64 as u64,
-    ];
-    // Cada bloque de direcciones cubre 128 posiciones del segmento.
-    let block_in_seg = (pos_in_seg / ADDRESSES_IN_BLOCK) as u64;
-    let slot = pos_in_seg % ADDRESSES_IN_BLOCK;
-    // (re)genera el bloque de direcciones que toca
-    if *counter != block_in_seg + 1 {
-        *addr_input = [0u64; WORDS];
-        for (i, v) in z.iter().enumerate() {
-            addr_input[i] = *v;
-        }
-        *counter = block_in_seg + 1;
-        addr_input[6] = *counter;
-        let inner = compress_g(zero, addr_input);
-        *addr_block = compress_g(zero, &inner);
-    }
-    let _ = segment;
-    let w = addr_block[slot as usize];
-    ((w as u32), (w >> 32) as u32)
+) {
+    input_block[6] += 1;
+    let a = compress_g(zero, input_block);
+    *address_block = compress_g(zero, &a);
 }
 
-/// `G(X, Y)` de la RFC 9106 §3.5: `R = X⊕Y`, `P` por filas, `P` por columnas,
-/// salida `Z⊕R`.
 fn compress_g(x: &[u64; WORDS], y: &[u64; WORDS]) -> [u64; WORDS] {
     let mut r = [0u64; WORDS];
     for i in 0..WORDS {

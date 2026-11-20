@@ -50,7 +50,6 @@ fn el_h0_coincide_con_el_pre_hash_de_la_rfc() {
 }
 
 #[test]
-#[ignore = "el llenado de Argon2 no coincide todavia con los vectores de la RFC (BLAKE2b/H'/H0 si)"]
 fn argon2d_coincide_con_el_vector_de_la_rfc() {
     let pwd = vec![0x01u8; 32];
     let salt = vec![0x02u8; 16];
@@ -64,7 +63,6 @@ fn argon2d_coincide_con_el_vector_de_la_rfc() {
 }
 
 #[test]
-#[ignore = "el llenado de Argon2 no coincide todavia con los vectores de la RFC (BLAKE2b/H'/H0 si)"]
 fn argon2i_coincide_con_el_vector_de_la_rfc() {
     let pwd = vec![0x01u8; 32];
     let salt = vec![0x02u8; 16];
@@ -78,7 +76,6 @@ fn argon2i_coincide_con_el_vector_de_la_rfc() {
 }
 
 #[test]
-#[ignore = "el llenado de Argon2 no coincide todavia con los vectores de la RFC (BLAKE2b/H'/H0 si)"]
 fn argon2id_coincide_con_el_vector_de_la_rfc() {
     let pwd = vec![0x01u8; 32];
     let salt = vec![0x02u8; 16];
