@@ -15,9 +15,33 @@
 mod rom_migration;
 
 use rom_migration::{
-    compare_inventories, dry_run_report, efs_backup_plan, flash_plan, mark_efs_verified,
-    plan_json, preflight, select_rom, AvbState, DeviceFacts, EfsBackupPlan, EFS_SAFE_WORLD,
-    FlashStage, RomPackage, SelectionCriteria, UnlockState,
+    compare_inventories,
+    dry_run_report,
+    efs_backup_plan,
+    flash_plan,
+    mark_efs_verified,
+    plan_json,
+    preflight,
+    select_rom,
+    AvbState,
+    DeviceFacts,
+    EfsBackupPlan,
+    EFS_SAFE_WORLD,
+    FlashStage,
+    RomPackage,
+    SelectionCriteria,
+    UnlockState,
+    omc_decode,
+    omc_encode,
+    omc_decode_gzip,
+    omc_encode_gzip,
+    csc_feature_get,
+    csc_features,
+    csc_feature_set,
+    omc_feature_patch_plan,
+    RECORDING_FEATURE,
+    RECORDING_VALUE_ALLOWED,
+    csc_recording_module_files,
 };
 use std::collections::BTreeMap;
 
@@ -222,4 +246,99 @@ fn el_reinventario_compara_antes_y_despues() {
     after.insert("root".to_string(), "magisk-27.0".to_string());
     let diffs = compare_inventories(&before, &after);
     assert_eq!(diffs.len(), 2);
+}
+
+/// **Fichero real** de `cscfeature.xml` del CSC AMO de este móvil
+/// (1.109 B, sha16 `ef110140f7bb95e1`), en base64, para probar el codec
+/// contra el fichero de verdad y no contra un fixture inventado.
+const AMO_OMC_B64: &str = "Lycpt9rBrDfkIgVFW77n6BY4XukjC85XuCpZ17dgpR0JGNN3zHAo/t00YJ6/kbdSU51r1DvsEj3ZEiGrQZztRMFe1dDEtSkMnBVjnkArCLp+XxAVyxSL4CgrR6EJqU1mcAGYiw4his+/z8p5X7hLrK48rnh/FbpwEUpA0oS7NhQoWarm4QXKM9BxSSJYlLeMMgiYyA2qMqmZwPBXFWZTROt2TgEvUOI8rf8sYxLC3+z4OMhaPLekZ4BSjGJcvVn8C4z4VIVWUr+LOCn+1dYBaB3RkdXvlKqmmj1Ux/fBHpXU/8PKLKxWorvCLfg8Ugbf4OYoUs06awlUBtszgckL0+DZ/7qj5yHQwOSKcL9gnyxY3kIG8jEmfy/AhMdt61sO4V/8wfnB/T+zExmvW7l5tYiQJPzBiQH+MQxD696nrm+xpAs2eBgia0+9Clin5aRLARpNsgTc2zPWGROml50L/JxuCOnI9pPELEad5LXZ64eVMJ0xnVa6xkWj6iDQ7QpjLZs6LCbedy/7EgCkd1C/fW7UbHmjBkhK30nFCfyrWG3mBMmQAhHz6NNAPqy4oVtp6FStkbzk3d4Ljfc9qYjArG1DlXaK66s+J3AZde/z03XyAB7XynHAvMFBD7Fc5hqdQDLZ6ymXPvSmhpHrcBE7xlu+zRSObamvmE9TNkLVFNFDUjTaqMdukemFmYrTh+wZyjj+IvMWVH7ilYj0xfTxPAHZeYUBb6DwHYvPjG9xXtbu990Duj3zsinC/XApsVCd4bfmvxe5kVYg0f6yYLQ+78X4l/h7w7y5NHlH1Dwj+rAlkEqEKKaPyyDHH7ZBhzsD9VTjZXCnokjw+L1YqUXFO3UdB+EuuqBqDK7InNWqvjU8SAw0NRci+LIIqwABoTv+sSZk6+mblbWbv+QyIuE+to6E765Kk/K+xi3Ol5Z2PJgebVrXmM6yxm9/1w6HGBhTTHbMzI3TuYO4jh9R0XSMZcXQE+xuh4fwG7So56y4yun1deyFIZlbF69OMcajxXjDU7yRTV4XSEzm9oi8UkDLVmy08m2fbvA/9PF8Wt3bi+b59c2HPI+W0iE+jkTiMR2+iPw2VZDz0/JHVVSn4IqQQRqN019KQSUm67rwi75xFwncj63dxUkTIrXeUQAMHtF5yT3O2eiCoa/YaFgbdQqTfZrtBblbkeG7EnAiU9LzPyclEpIr8sCqE/hWOkKBIKG1VyPV7gT/rmZJiJQfajM+PTrBnVbpHihG7mDwMUVyEkrlCMtXWtiHD+BBT8zR1ZTPrPg097yNGfACp2Vq8XJo1LXH1cmoI2h4eb1Y4Nyok6xdwPBD37lqve7gEr/9lBIkeslRGs3ro/h+pnCXfYFceM2pwTTKordEsQoet8gqIRcCbRVguO0SxpzY9Q1BkKkjnZ7VtA3rBcp5+rUExb+F7X+8QWHQMs/2BHp7B2XCrreXqxCWtSoCvYm3G9Ygfken+1yLZjA=";
+
+fn omc_amo_bytes() -> Vec<u8> {
+    // decodificador de base64 mínimo (sin dependencias)
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut acc: u32 = 0;
+    let mut bits = 0;
+    let mut out = Vec::new();
+    for ch in AMO_OMC_B64.bytes() {
+        if ch == b'=' || ch == b'\n' { continue; }
+        let v = T.iter().position(|&c| c == ch).expect("base64 valido") as u32;
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((acc >> bits) & 0xFF) as u8);
+        }
+    }
+    out
+}
+
+#[test]
+fn el_codec_omc_descifra_el_fichero_real_de_amo() {
+    let bytes = omc_amo_bytes();
+    assert_eq!(bytes.len(), 1109);
+    let xml = omc_decode_gzip(&bytes).expect("decodifica");
+    assert!(xml.contains("<SalesCode>AMO</SalesCode>"), "{}", xml);
+    assert!(xml.contains("<Country>SPAIN</Country>"));
+    assert!(xml.contains("<CountryISO>ES</CountryISO>"));
+    // AMO NO tiene la bandera de grabacion (medido en el fichero real)
+    assert_eq!(csc_feature_get(&xml, RECORDING_FEATURE), None);
+}
+
+#[test]
+fn el_codec_omc_es_inversible_byte_a_byte() {
+    let bytes = omc_amo_bytes();
+    let gz = omc_decode(&bytes);
+    assert_eq!(omc_encode(&gz), bytes, "encode(decode(x)) == x");
+    let xml = omc_decode_gzip(&bytes).unwrap();
+    let re = omc_encode_gzip(xml.as_bytes()).unwrap();
+    let xml2 = omc_decode_gzip(&re).unwrap();
+    assert_eq!(xml, xml2, "el XML sobrevive al viaje de ida y vuelta");
+}
+
+#[test]
+fn insertar_la_bandera_de_grabacion_en_amo_y_verificarlo() {
+    let bytes = omc_amo_bytes();
+    let xml = omc_decode_gzip(&bytes).unwrap();
+    let nuevo = csc_feature_set(&xml, RECORDING_FEATURE, RECORDING_VALUE_ALLOWED).unwrap();
+    assert!(nuevo.contains(&format!(
+        "<{f}>{v}</{f}>",
+        f = RECORDING_FEATURE,
+        v = RECORDING_VALUE_ALLOWED
+    )));
+    let re = omc_encode_gzip(nuevo.as_bytes()).unwrap();
+    let leido = omc_decode_gzip(&re).unwrap();
+    assert_eq!(
+        csc_feature_get(&leido, RECORDING_FEATURE),
+        Some(RECORDING_VALUE_ALLOWED.to_string())
+    );
+    // y el resto del XML intacto
+    assert!(leido.contains("<SalesCode>AMO</SalesCode>"));
+    assert!(leido.contains("<Country>SPAIN</Country>"));
+}
+
+#[test]
+fn el_plan_de_parche_avisa_del_cambio_de_tamano() {
+    let bytes = omc_amo_bytes();
+    let plan = omc_feature_patch_plan("AMO", &bytes, RECORDING_FEATURE, RECORDING_VALUE_ALLOWED)
+        .unwrap();
+    assert_eq!(plan.csc, "AMO");
+    assert!(plan.path.ends_with("/conf/system/cscfeature.xml"));
+    assert_ne!(plan.omc_before, plan.omc_after, "el tamano cambia => hay que actualizar contents.db");
+    assert!(plan.steps.iter().any(|s| s.contains("contents.db")));
+    assert!(plan.revert.iter().any(|s| s.contains("Restaurar")));
+}
+
+#[test]
+fn el_modulo_magisk_hace_bind_mount_del_cscfeature_parcheado() {
+    let files = csc_recording_module_files("AMO");
+    let prop = files.iter().find(|f| f.path == "module.prop").unwrap();
+    assert!(prop.content.contains("megadaemon_csc_recording"));
+    assert!(prop.content.contains(RECORDING_FEATURE));
+    assert!(prop.content.contains(RECORDING_VALUE_ALLOWED));
+    assert_eq!(prop.mode, 0o644);
+    let script = files.iter().find(|f| f.path == "post-fs-data.sh").unwrap();
+    assert!(script.content.contains("/optics/configs/carriers/single/AMO/conf/system/cscfeature.xml"));
+    assert!(script.content.contains("/prism/etc/carriers/single/AMO/contents.db"));
+    assert!(script.content.contains("mount --bind"));
+    assert_eq!(script.mode, 0o755);
 }

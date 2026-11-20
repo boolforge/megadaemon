@@ -246,6 +246,18 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "meta_route",
+            "description": "Meta-agente: convierte una petición en lenguaje natural en un plan ejecutable (tipo de tarea, servicio del bus con su salud REAL, tool MCP a la que llamar y tarea del tablón). No ejecuta salvo que se pida execute=true. Sin secretos.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "request": { "type": "string", "description": "la petición del usuario en texto libre" },
+                    "execute": { "type": "boolean", "default": false, "description": "si es true, ejecuta el primer paso del plan y devuelve la respuesta real" }
+                },
+                "required": ["request"]
+            }
+        },
+        {
             "name": "service_bus",
             "description": "Bus de servicios: catálogo unificado de MODELOS (los proveedores de providers.rs) y AGENTES/SERVICIOS (otros nodos MegaDaemon, clientes MCP como Antigravity, servidores MCP de terceros, herramientas locales). Selección automática por tipo de tarea (inference/build/analysis/writing) con fallback real y presupuesto por tick/día. La salud NUNCA se inventa: si no se puede comprobar, available=false con el motivo. Sin secretos: sólo auth_kind y la ruta del fichero de credenciales.",
             "inputSchema": {
@@ -620,6 +632,11 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             }
         }
         // v15 (W6): bus de servicios — catálogo unificado + selección.
+        "meta_route" => {
+            // `s()` ya devuelve &str (no Option) -> no hay que desempaquetar.
+            let request = s("request").to_string();
+            crate::meta_agent::handle(&request, b("execute"))
+        }
         "service_bus" => {
             let dir = crate::mesh::default_state_dir();
             let snapshot = match crate::mesh::Mesh::open(&dir) {

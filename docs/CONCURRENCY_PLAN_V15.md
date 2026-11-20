@@ -22,6 +22,16 @@
 > implementación, **capa 2** de §10.2) y `docs/AUDIT_ADVERSARIAL_V15.md`
 > (capa 3: objeciones, **no decide**).
 >
+> **División del trabajo con `docs/MASTER_PLAN_V16.md` (2026-11-20)**: el plan
+> maestro v16 es **la referencia única de fases** (F0…F9, una por agente, con
+> criterios de aceptación) y este contrato **no escribe otro plan**: define el
+> **sustrato** sobre el que esas fases se apoyan (API v2, tablón y `coordlog`,
+> bus de servicios, `node cert`, reparto entre nodos, unificación de
+> documentos). Donde el plan dice *qué* y *quién*, este contrato dice *con
+> qué contrato* (rutas, ids, proprietarios, zona de ficheros, forma de
+> verificar). El plan maestro ya cita el umbral medido en §10.8
+> (`fsync` 21,37 ms/commit, 74×) ⇒ la medición vive aquí y el plan la usa.
+>
 > **Alcance de cambios de este documento**: nuevo fichero, 2026-11-19.
 > No se edita ningún otro fichero del repo.
 
