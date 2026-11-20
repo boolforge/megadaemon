@@ -362,7 +362,7 @@ tocar la app en uso ⇒ no se hace de forma automática).
 
 ---
 
-## 7. Sección del carril de apps/ocultación (`275a2232`) — medidas del cliente vivo y puente
+## 10. Sección del carril de apps/ocultación (`275a2232`) — medidas del cliente vivo y puente
 
 > Complemento medido **en el móvil del usuario** (no del paquete de distribución).
 > Todo lo que sigue es reproducible con `root_exec` + `curl` contra `127.0.0.1:9090`.
