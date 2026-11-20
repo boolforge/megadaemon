@@ -23,6 +23,45 @@
 
 ---
 
+## PRIMER ENCARGO CONCRETO (lo primero que debe hacer el nodo externo)
+
+> No le digas "lee el backlog y ayuda": se aburre. Dale estos tres encargos,
+> en este orden, con entregable concreto en cada uno. Son del área del maestro
+> (Samsung) y son justos los que el enjambre no puede resolver desde dentro.
+
+**ENCARGO 1 — Validar el fix del 502 del maestro (tú estás fuera: vantage point ideal)**
+El maestro，返回 502 de forma intermitente. Causa raíz ya diagnosticada:
+`ensure_live_shm()` entra en pánico mientras se mantiene el `Mutex<GlobalCockpitState>`
+global del cockpit → ese panic **envenena el mutex para siempre** → los `lock().unwrap()`
+muerden otra vez → sin `catch_unwind` la conexión se corta a medias → Cloudflare ve
+respuesta incompleta → 502. El watchdog sólo miraba `pgrep` (proceso vivo) → nunca reiniciaba.
+Entregable: **20 peticiones seguidas** al endpoint del maestro con las cabeceras de
+conexión, mediendo código y latencia, y un veredicto: ¿502稳定, intermitente o cero?
+Si aparece un 502, captura el cuerpo exacto y el `logcat` del móvil (`logcat -d -t 200 | grep -i adbd`)
+en el mismo instante. Sin ese par de datos no se arregla nada.
+
+**ENCARGO 2 — Cerrar el handshake ADB contra el Samsung**
+En el Samsung, `adbd` escucha en TCP 5555 (`192.168.1.124:5555`) y el socket **acepta**
+la conexión, pero `adbd` responde **RST** en cuanto recibe el CNXN
+(logcat: `host-16: connection terminated: read failed`). Pistas ya reunidas:
+`ro.adb.secure=0`; la clave de host **ya está registrada** en
+`/data/misc/adb/adb_keys` como `mavis@fleet`; el cliente es
+`rust-core/src/adb_client.rs` (Rust puro, sin binario `adb`) y hay un binario ARM64
+precompilado en `dist/adbonly-arm64` (con su `.sha256`).
+Entregable: el handshake completo hasta obtener el **banner** de `adbd`, o el
+informe exacto de en qué paso se rompe (con los bytes que se enviaron y los que
+se recibieron) y el parche propuesto en `adb_client.rs`.
+
+**ENCARGO 3 — RE del Exynos 2100 (tu especialidad)**
+Volcado RE completo del SoC: `sysfs`, `/proc`, registros del bootloader,
+tablas de firmware, y **por qué `ensure_live_shm()` entra en pánico** (`src/shm.rs`):
+qué es ese shm, quién lo crea, por qué se envenena y cuál es el diseño correcto
+(crear el shm antes de tomar el lock; nuncaargestar bajo el mutex global).
+Entregable: informe con el diff propuesto para `shm.rs` + `cockpit_server.rs`,
+con el test que demuestra que un panic en `ensure_live_shm()` ya no tumba el servidor.
+
+---
+
 ## PROMPT (copiar desde aquí)
 
 ```text
