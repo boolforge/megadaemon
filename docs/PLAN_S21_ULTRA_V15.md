@@ -160,6 +160,46 @@ pregunta a los demás**; y las preguntas al "entorno real" se hacen a mano, no c
 
 ---
 
+## 1.b · MEDIDAS DEL MÓVIL VIVO (2026-11-20, nodo `cloud-sandbox` con `root_exec`)
+
+Esto **cambia el plan**: son 24 artefactos con sha256 real del dispositivo (no del
+volcado de ROM), y corrigen supuestos que teníamos por buenos.
+
+| Corrección | Medida | Impacto |
+|---|---|---|
+| La TEE de Samsung es **`fkeymaster-service`** | **no existe** `/vendor/bin/hw_keymaster` | W5: buscar la firma de claves en `fkeymaster-service`, no en `hw_keymaster` |
+| `keystore2` y `gatekeeperd` están en **`/system/bin`** | no en `/vendor/bin` | W5: las rutas del volcado de ROM **no** corresponden a este firmware |
+| La cadena AVB son **2 niveles**, no 3 | **no existen** `init_boot`, `vbmeta_vendor` ni `sec` | W4: el pre-flight debe validar 2 niveles, no 3 |
+| Particiones reales del mundo seguro | `sec_efs`, `keystorage`, `keyrefuge`, `uh`, `uhcfg`, `spu`, `prism` | W3: el backup de EFS son esas 7, y hay que hashear cada una |
+| **AVB `green` con `flash.locked=1` ⇒ bootloader CERRADO con Magisk** | medido en el móvil | **W4: el flash es supervisado sí o sí**; no hay escenario "bootloader abierto". El plan de ROM empieza por *saber si se puede desbloquear* (FMM Lock + manid) |
+| `/dev/vertex10` = `0644`, **uid/gid 1000** | `crw-r--r-- 1 system system 82,10` | **W5: el nodo del NPU lo lee cualquier app** ⇒ finding de seguridad de primer nivel (y por eso el P4 del nodo usa la `.so` del **dispositivo**, sha `7c0041ab…`, no la del ROM) |
+| `NPU.bin` y `eden_kernel_64.bin` **no están** en el firmware vivo | ausentes en `/vendor/bin` y `/vendor/etc` | **W5: la tabla de ioctls del ROM no vale**; hay que extraerla de `libeden_ud_npu.so` del dispositivo |
+| No existen `/dev/vertex10_test` ni `/sys/class/misc/vertex10` | medido | P4: el plan de ioctls no puede apoyarse en esas rutas |
+
+**Lección de método (la que más nos ha costado)**: *la tabla de ioctls del ROM
+reconstruido no es la del móvil*. Dos binarios con el mismo nombre y distinto
+sha256 ⇒ hay que RE siempre contra lo que se ejecuta en el dispositivo.
+
+### Estado real de las claves de API (medido, y corrige el diagnóstico)
+
+- El tool `api_keys` (mint/revoke/list) **existe en el código** (`rust-core/src/mcp_ext.rs`)
+  y `mcp_server.rs` **ya lo enruta** (`mcp_ext::dispatch`), pero **el binario desplegado
+  (v13.4.0) es anterior**: `POST /api/tool/api_keys` → **404 `unknown_tool`** y por MCP
+  → `Unknown tool: api_keys` (además no está en su `tools/list`).
+- El **registro no se sobrescribe**: `generate_extra_key` **añade** (lee + anexa + 0600) y
+  `ApiKeyConfig::load()` se ejecuta **en cada petición** ⇒ **no hace falta reiniciar** el daemon.
+- El 403 que vio un nodo fue porque su key **nunca estuvo registrada** en
+  `state/megadaemon_api.keys` (el registro real tiene 2 claves: la del agente externo y otra).
+- **Regla para acuñar una clave (la que falta en el tool)**: (1) escribir en
+  `state/megadaemon_api.keys` (0600), (2) **no** hace falta recargar (se relee por petición),
+  (3) **verificar** con un `tools/list` real usando la key nueva, y (4) informar **sólo del sha16**.
+- **Bug de la misma familia que UI-08 (silencioso)**: el dispatcher genérico responde
+  `200 {"status":"executed"}` a **cualquier** ruta desconocida (`POST /api/tools`,
+  `POST /api/tool`, `POST /api/api_keys` → los tres 200 "executed"). Debería ser
+  `404 unknown_tool`: hoy un cliente cree que ha hecho algo que no ha hecho.
+
+---
+
 ## 2. Orden de las próximas 72 h (lo que desbloquea qué)
 
 ```
