@@ -93,7 +93,7 @@ fn request(port: u16, path: &str) -> Option<(u16, String)> {
 
 #[test]
 fn lock_ok_tolera_un_mutex_envenenado() {
-    let m = Mutex::new(0u32);
+    let m = Arc::new(Mutex::new(0u32));
     let cloned = Arc::clone(&m);
     let _ = std::thread::spawn(move || {
         let _g = cloned.lock().unwrap();
@@ -102,7 +102,7 @@ fn lock_ok_tolera_un_mutex_envenenado() {
     .join();
     assert!(m.lock().is_err(), "el mutex deberia estar envenenado");
     // lock_ok debe devolver el guard y permitir seguir operando.
-    let mut g = lock_ok(&m);
+    let mut g = lock_ok(&*m);
     *g += 1;
     assert_eq!(*g, 1);
 }
