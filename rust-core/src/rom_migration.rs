@@ -2479,3 +2479,71 @@ pub const RECORDING_FEATURE: &str = "CscFeature_VoiceCall_ConfigRecording";
 
 /// Valor que usan los CSC con grabación nativa sin diálogo de aviso.
 pub const RECORDING_VALUE_ALLOWED: &str = "RecordingAllowed";
+
+/// Un fichero del módulo Magisk (systemless) que activa la grabación nativa.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CscModuleFile {
+    /// Ruta dentro del directorio del módulo.
+    pub path: String,
+    /// Contenido (texto).
+    pub content: String,
+    /// Permisos (0o755 para scripts, 0o644 para datos).
+    pub mode: u32,
+}
+
+/// Los ficheros del **módulo Magisk systemless** que activan la grabación
+/// nativa en el CSC actual, sin cambiar de CSC.
+///
+/// El módulo hace bind-mount del `cscfeature.xml` parcheado sobre el original
+/// (`/optics` es de sólo lectura ⇒ tocar la partición sería peor) y del
+/// `contents.db` parcheado (su `fileSize` tiene que_quadrar con el fichero).
+/// Magisk ejecuta `post-fs-data.sh` antes de zygote ⇒ el framework
+/// (`com.samsung.android.feature.SemCscFeature`) lee el fichero ya parcheado.
+///
+/// **Revertir**: desactivar el módulo (fichero `disable`) y reiniciar.
+pub fn csc_recording_module_files(csc: &str) -> Vec<CscModuleFile> {
+    let target = format!(
+        "/optics/configs/carriers/single/{csc}/conf/system/cscfeature.xml",
+        csc = csc
+    );
+    let db_target = format!("/prism/etc/carriers/single/{csc}/contents.db", csc = csc);
+    let prop = format!(
+        "id=megadaemon_csc_recording\n\
+         name=MegaDaemon - grabacion nativa de llamadas (CSC patch)\n\
+         version=v1.0\n\
+         versionCode=1\n\
+         author=MegaDaemon W3W4\n\
+         description=Bind-mount systemless del cscfeature.xml de {csc} parcheado con \
+         {f}={v}. Desactivar el modulo = volver al estado original.\n",
+        csc = csc,
+        f = RECORDING_FEATURE,
+        v = RECORDING_VALUE_ALLOWED
+    );
+    let script = format!(
+        "#!/system/bin/sh\n\
+         MOD=/data/adb/modules/megadaemon_csc_recording\n\
+         LOG=/data/local/tmp/megadaemon/csc_patch.log\n\
+         TARGET={target}\n\
+         DB_TARGET={db}\n\
+         echo \"--- $(date) inicio\" >> $LOG\n\
+         [ -f \"$TARGET\" ] || {{ echo \"no existe $TARGET\" >> $LOG; exit 0; }}\n\
+         mount --bind \"$MOD/cscfeature.xml\" \"$TARGET\" 2>>$LOG && \
+         echo \"OK bind cscfeature\" >> $LOG\n\
+         [ -f \"$MOD/contents.db\" ] && mount --bind \"$MOD/contents.db\" \"$DB_TARGET\" 2>>$LOG && \
+         echo \"OK bind contents.db\" >> $LOG\n",
+        target = target,
+        db = db_target
+    );
+    vec![
+        CscModuleFile {
+            path: "module.prop".to_string(),
+            content: prop,
+            mode: 0o644,
+        },
+        CscModuleFile {
+            path: "post-fs-data.sh".to_string(),
+            content: script,
+            mode: 0o755,
+        },
+    ]
+}

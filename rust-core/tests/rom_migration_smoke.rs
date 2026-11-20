@@ -41,6 +41,7 @@ use rom_migration::{
     omc_feature_patch_plan,
     RECORDING_FEATURE,
     RECORDING_VALUE_ALLOWED,
+    csc_recording_module_files,
 };
 use std::collections::BTreeMap;
 
@@ -325,4 +326,19 @@ fn el_plan_de_parche_avisa_del_cambio_de_tamano() {
     assert_ne!(plan.omc_before, plan.omc_after, "el tamano cambia => hay que actualizar contents.db");
     assert!(plan.steps.iter().any(|s| s.contains("contents.db")));
     assert!(plan.revert.iter().any(|s| s.contains("Restaurar")));
+}
+
+#[test]
+fn el_modulo_magisk_hace_bind_mount_del_cscfeature_parcheado() {
+    let files = csc_recording_module_files("AMO");
+    let prop = files.iter().find(|f| f.path == "module.prop").unwrap();
+    assert!(prop.content.contains("megadaemon_csc_recording"));
+    assert!(prop.content.contains(RECORDING_FEATURE));
+    assert!(prop.content.contains(RECORDING_VALUE_ALLOWED));
+    assert_eq!(prop.mode, 0o644);
+    let script = files.iter().find(|f| f.path == "post-fs-data.sh").unwrap();
+    assert!(script.content.contains("/optics/configs/carriers/single/AMO/conf/system/cscfeature.xml"));
+    assert!(script.content.contains("/prism/etc/carriers/single/AMO/contents.db"));
+    assert!(script.content.contains("mount --bind"));
+    assert_eq!(script.mode, 0o755);
 }
