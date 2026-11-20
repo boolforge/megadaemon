@@ -1,6 +1,6 @@
 {
   "schema": "megadaemon.mesh.board/v1",
-  "updated_at": "2026-11-20T03:12:00Z",
+  "updated_at": "2026-11-20T06:50:33Z",
   "agents": {
     "cloud-sandbox": {
       "id": "cloud-sandbox",
@@ -17,10 +17,10 @@
       "repo": "https://github.com/boolforge/megadaemon",
       "branch": "fix/megadaemon-stability-20261119",
       "pr": "https://github.com/boolforge/megadaemon/pull/6",
-      "last_seen": "2026-11-20T03:05:23Z",
+      "last_seen": "2026-11-20T06:50:33Z",
       "external_url": "https://contributors-encounter-colour-encyclopedia.trycloudflare.com",
       "master_url": "https://pot-implied-approach-input.trycloudflare.com",
-      "status": "P1-P3 done + VS4L: tabla confirmada contra el driver vivo (7/9) + Manual Exynos 1-9 + respuestas P1-P6 al agente RE",
+      "status": "C2 MarinaPatcher analizado (IPs crudas + claves AOSP embebidas) + A-04/D-09 cerrados + SemCscFeature",
       "p1_findings": 11,
       "p1_summary": "EDEN v1.6.20; ioctls VS4L del driver vertex10; /dev/vertex10 en 0644; compilador EDEN presente",
       "p2_findings": 9,
@@ -279,6 +279,14 @@
       "ts": "2026-11-20T02:48:18Z",
       "headline": "CORRECCION VS4L: los 7 codigos _IOW SI existen (sondeo sin argumento); los 2 _IO no",
       "note": "0x40205600->32 0x40105601->16 0x40105602->16 0x40805606/07/08->128 0x4008560a->8 0x5604/0x5605->EINVAL; doc §1.2"
+    },
+    {
+      "id": "cloud-sandbox-marina-2026-11-20T06:50:33Z",
+      "node": "cloud-sandbox",
+      "kind": "c2_marina_patcher_analysis",
+      "ts": "2026-11-20T06:50:33Z",
+      "headline": "C2 MarinaPatcher: Lucky Patcher reempaquetado, 2 IPs crudas, patch.chelpus.com/submit y claves de test AOSP dentro",
+      "note": "docs/MARINA_PATCHER_ANALYSIS.md"
     }
   ],
   "links": {
