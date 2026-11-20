@@ -1661,3 +1661,724 @@ Alarm Stats:
         assert!(a.bg_restricted);
     }
 }
+
+// ===========================================================================
+// v15 — POLÍTICA REAL DEL DISPOSITIVO (SM-G998B) + WATCHDOG DE RESPUESTA
+// ===========================================================================
+//
+// MEDIDAS de este SM-G998B (2026-11-20, 03:29 CET, phone real):
+//   RAM total 10.829.476 kB / libres 336.380 kB / disponibles 3.649.892 kB
+//   swap total 4.194.300 kB / libres 535.348 kB   <- 87 % del swap ocupado
+//   disco /storage/emulated: 225 G totales, 5.1 G libres (98 %)
+//   our footprint: /data/local/tmp/megadaemon = 178.340 kB  (sync_snap 59.860,
+//   state/sync 15.479, state/inventory 11.170 con instantáneas de 9.104 kB)
+//   térmica: NPU 55, ISP 56, CP 58, MID 58, BIG 59, LITTLE 60  (°C)
+//   batería: 47 %, cargando, 38.1 °C, 3955 mV
+//   brillo: 68 (manual)   governor: energy_step
+//   Doze: mEnabled=true mDeepEnabled=true pero mState=ACTIVE (pantalla ON)
+//
+// El móvil NO expone `charge_control_end_threshold`: este kernel no permite
+// forzar el límite de carga por sysfs, así que el plan lo INTENTA, lo VERIFICA
+// y si no existe lo DICE (número, no adjetivo).
+
+use std::collections::BTreeMap;
+
+/// Umbrales de la política del dispositivo.
+///
+/// Todos son configurables por entorno (para no tener que recompilar el
+/// daemon en el móvil).  Los valores por defecto son los MEDIDOS en este
+/// SM-G998B, no los de otro móvil.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Thresholds {
+    /// Límite de carga de la celda en % (el "carga a 80" del encargo).
+    pub charge_limit_pct: u8,
+    /// Temperatura (°C) a partir de la cual se recorta el brillo y el trabajo.
+    pub thermal_warn_c: f32,
+    /// Temperatura (°C) a partir de la cual se limita el trabajo pesado.
+    pub thermal_crit_c: f32,
+    /// Temperatura (°C) techo absoluto: por encima se sella el dispositivo.
+    pub thermal_hard_c: f32,
+    /// Batería (%) por debajo de la cual se "sella" el dispositivo.
+    pub seal_below_pct: u8,
+    /// Brillo máximo que se impone en modo conservación.
+    pub brightness_max: i32,
+    /// RAM disponible (kB) por debajo de la cual se deja de hacer trabajo extra.
+    pub ram_floor_kb: u64,
+    /// Disco libre (kB) por debajo del cual se poda el estado.
+    pub disk_floor_kb: u64,
+}
+
+impl Default for Thresholds {
+    fn default() -> Self {
+        Thresholds {
+            charge_limit_pct: 80,
+            thermal_warn_c: 45.0,
+            thermal_crit_c: 55.0,
+            thermal_hard_c: 80.0,
+            seal_below_pct: 20,
+            brightness_max: 60,
+            ram_floor_kb: 512 * 1024,
+            disk_floor_kb: 1024 * 1024,
+        }
+    }
+}
+
+fn env_u8(key: &str, default: u8) -> u8 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.trim().parse::<u8>().ok())
+        .unwrap_or(default)
+}
+
+fn env_f32(key: &str, default: f32) -> f32 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .filter(|v| v.is_finite())
+        .unwrap_or(default)
+}
+
+fn env_i32(key: &str, default: i32) -> i32 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.trim().parse::<i32>().ok())
+        .unwrap_or(default)
+}
+
+fn env_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(default)
+}
+
+impl Thresholds {
+    /// Umbrales con los overrides de entorno aplicados.
+    pub fn from_env() -> Self {
+        let d = Thresholds::default();
+        Thresholds {
+            charge_limit_pct: env_u8("MEGADAEMON_CHARGE_LIMIT_PCT", d.charge_limit_pct),
+            thermal_warn_c: env_f32("MEGADAEMON_THERMAL_WARN_C", d.thermal_warn_c),
+            thermal_crit_c: env_f32("MEGADAEMON_THERMAL_CRIT_C", d.thermal_crit_c),
+            thermal_hard_c: env_f32("MEGADAEMON_THERMAL_HARD_C", d.thermal_hard_c),
+            seal_below_pct: env_u8("MEGADAEMON_SEAL_BELOW_PCT", d.seal_below_pct),
+            brightness_max: env_i32("MEGADAEMON_BRIGHTNESS_MAX", d.brightness_max),
+            ram_floor_kb: env_u64("MEGADAEMON_RAM_FLOOR_KB", d.ram_floor_kb),
+            disk_floor_kb: env_u64("MEGADAEMON_DISK_FLOOR_KB", d.disk_floor_kb),
+        }
+    }
+}
+
+/// Estado real del dispositivo tal y como lo ve el daemon.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DeviceState {
+    /// % de batería.
+    pub battery_pct: Option<u8>,
+    /// ¿Está cargando?
+    pub charging: bool,
+    /// Temperatura de la batería (°C).
+    pub battery_temp_c: Option<f32>,
+    /// Temperatura más alta del sistema (°C).
+    pub max_temp_c: Option<f32>,
+    /// ¿La pantalla está encendida?
+    pub screen_on: bool,
+    /// RAM disponible (kB).
+    pub ram_available_kb: u64,
+    /// Disco libre (kB).
+    pub disk_free_kb: u64,
+}
+
+/// Clase de política según el estado medido.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyClass {
+    /// Todo normal: se deja el dispositivo como está.
+    Normal,
+    /// Ahorro: se recorta el consumo discrecional.
+    Conserve,
+    /// Térmico: se limita el trabajo pesado.
+    Thermal,
+    /// Sellado: sólo sobrevivencia (watchdog, túnel y nada más).
+    Seal,
+}
+
+impl PolicyClass {
+    /// Nombre estable (para logs y para el bus).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PolicyClass::Normal => "normal",
+            PolicyClass::Conserve => "conserve",
+            PolicyClass::Thermal => "thermal",
+            PolicyClass::Seal => "seal",
+        }
+    }
+}
+
+/// Clasifica el estado con los umbrales dados.
+///
+/// Orden de decisión (y por qué):
+/// 1. `Seal` si la batería está por debajo del umbral (20 % por defecto) o la
+///    temperatura pasa del techo duro (80 °C): el encargo pide "batería < 20 %
+///    ⇒ sellar" y un sellado nunca daña nada (sólo quita trabajo discrecional).
+/// 2. `Thermal` si la temperatura pasa del umbral de aviso (45 °C) o del
+///    crítico (55 °C).
+/// 3. `Conserve` si la batería baja del 35 % sin cargador, o si la RAM
+///    disponible cae por debajo del suelo.
+/// 4. `Normal` en caso contrario.
+pub fn classify(st: &DeviceState, th: &Thresholds) -> PolicyClass {
+    let pct = st.battery_pct.unwrap_or(100);
+    let temp = st.max_temp_c.unwrap_or(0.0).max(st.battery_temp_c.unwrap_or(0.0));
+
+    if pct < th.seal_below_pct {
+        return PolicyClass::Seal;
+    }
+    if temp >= th.thermal_hard_c {
+        return PolicyClass::Seal;
+    }
+    if temp >= th.thermal_crit_c {
+        return PolicyClass::Thermal;
+    }
+    if temp >= th.thermal_warn_c {
+        return PolicyClass::Thermal;
+    }
+    if !st.charging && pct < 35 {
+        return PolicyClass::Conserve;
+    }
+    if st.ram_available_kb > 0 && st.ram_available_kb < th.ram_floor_kb {
+        return PolicyClass::Conserve;
+    }
+    PolicyClass::Normal
+}
+
+/// Una acción de política con su COMPROBACIÓN: cada acción dice cómo se
+/// verifica que surtió efecto.  Sin verificación, una política es una promesa.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeviceAction {
+    /// Etiqueta corta (para logs).
+    pub label: String,
+    /// Comando a ejecutar (sh).
+    pub cmd: String,
+    /// Comando de verificación (se ejecuta después; su salida es el número).
+    pub verify: String,
+    /// ¿Se puede deshacer con un comando conocido?
+    pub reversible: bool,
+}
+
+impl DeviceAction {
+    fn new(label: &str, cmd: &str, verify: &str, reversible: bool) -> Self {
+        DeviceAction {
+            label: label.to_string(),
+            cmd: cmd.to_string(),
+            verify: verify.to_string(),
+            reversible,
+        }
+    }
+}
+
+/// Paquetes que se pueden restringir en segundo plano (los que se comen la
+/// RAM del móvil).  Medido el 2026-11-20: Chrome 557 MB RSS, YouTube 412 MB.
+const HEAVY_PACKAGES: [&str; 2] = ["com.google.android.youtube", "com.android.chrome"];
+
+/// Paquetes que NUNCA hay que tocar: los nuestros.
+const PROTECTED_PACKAGES: [&str; 3] = ["com.termux", "com.termux.api", "com.agy"];
+
+/// Construye el plan de acciones para el estado dado.
+///
+/// Todas las acciones son REVERSIBLES y llevan su verificación.  Ninguna toca
+/// los paquetes protegidos (Termux = nuestro canal) ni borra datos del
+/// usuario: `appops` sólo recorta ejecución en segundo plano.
+pub fn device_plan(st: &DeviceState, th: &Thresholds) -> Vec<DeviceAction> {
+    let mut out = Vec::new();
+    let class = classify(st, th);
+
+    // 1) Límite de carga: sólo si el kernel lo expone.
+    out.push(DeviceAction::new(
+        "charge_limit",
+        &format!(
+            "set_threshold {} {}",
+            "/sys/class/power_supply/battery/charge_control_end_threshold",
+            th.charge_limit_pct
+        ),
+        "cat /sys/class/power_supply/battery/charge_control_end_threshold 2>/dev/null || echo UNSUPPORTED",
+        true,
+    ));
+
+    // 2) Fondo de las apps que se comen la RAM (sólo en conserve/thermal/seal).
+    if class != PolicyClass::Normal {
+        for pkg in HEAVY_PACKAGES {
+            if PROTECTED_PACKAGES.contains(&pkg) {
+                continue;
+            }
+            out.push(DeviceAction::new(
+                "appops_bg",
+                &format!("cmd appops set {} RUN_ANY_IN_BACKGROUND ignore", pkg),
+                &format!("cmd appops get {} RUN_ANY_IN_BACKGROUND 2>/dev/null | tail -1", pkg),
+                true,
+            ));
+        }
+    }
+
+    // 3) Brillo: techo en conserve/thermal/seal.
+    if class != PolicyClass::Normal {
+        let max = match class {
+            PolicyClass::Seal => th.brightness_max - 20,
+            _ => th.brightness_max,
+        };
+        out.push(DeviceAction::new(
+            "brightness",
+            &format!("settings put system screen_brightness {}", max.max(1)),
+            "settings get system screen_brightness",
+            true,
+        ));
+    }
+
+    // 4) Governor: sólo cuando aprieta (thermal/seal).
+    if class == PolicyClass::Thermal || class == PolicyClass::Seal {
+        out.push(DeviceAction::new(
+            "governor",
+            "set_governor powersave",
+            "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor",
+            true,
+        ));
+    }
+
+    // 5) Ahorro de energía del sistema: thermal/seal.
+    if class == PolicyClass::Thermal || class == PolicyClass::Seal {
+        out.push(DeviceAction::new(
+            "low_power",
+            "settings put global low_power 1",
+            "settings get global low_power",
+            true,
+        ));
+    }
+
+    // 6) Doze profundo: sólo si la pantalla está apagada (si no, se deja al
+    //    usuario: no se le apaga la pantalla bajo los pies).
+    if (class == PolicyClass::Thermal || class == PolicyClass::Seal) && !st.screen_on {
+        out.push(DeviceAction::new(
+            "doze_deep",
+            "cmd deviceidle force-idle",
+            "dumpsys deviceidle | grep -m1 'mState='",
+            true,
+        ));
+    }
+
+    // 7) Disco: si el disco está por debajo del suelo, podar el estado.
+    if st.disk_free_kb > 0 && st.disk_free_kb < th.disk_floor_kb {
+        out.push(DeviceAction::new(
+            "prune_state",
+            "prune_state_keep 2",
+            "du -sk /data/local/tmp/megadaemon/state 2>/dev/null",
+            true,
+        ));
+    }
+
+    out
+}
+
+/// Lee el estado del dispositivo desde sysfs (`root` permite pruebas con un
+/// árbol falso).  Devuelve lo que pudo leer y `None` en lo que no.
+pub fn read_device_state(root: &str) -> DeviceState {
+    let mut st = DeviceState::default();
+    let bat = format!("{}/sys/class/power_supply/battery", root);
+
+    if let Some(v) =
+        read_trim_file(&format!("{}/capacity", bat)).and_then(|s| s.parse::<u8>().ok())
+    {
+        st.battery_pct = Some(v);
+    }
+    if let Some(s) = read_trim_file(&format!("{}/status", bat)) {
+        st.charging = s.eq_ignore_ascii_case("charging")
+            || s.eq_ignore_ascii_case("full")
+            || s.eq_ignore_ascii_case("unknown");
+    }
+    if let Some(v) =
+        read_trim_file(&format!("{}/temp", bat)).and_then(|s| s.trim().parse::<f64>().ok())
+    {
+        // Unidades de /sys/class/power_supply/*/temp en Android:
+        //   * >= 10000 -> milikelvin  (38100 = 38.1 C)
+        //   * >= 100   -> decigrados  (381   = 38.1 C)  <-- el de este S21
+        //   * <  100   -> centigrados (38    = 38 C)
+        // MEDIDO en este SM-G998B: battery/temp = 381 con la bateria a 38.1 C.
+        st.battery_temp_c = Some(if v >= 10_000.0 {
+            (v / 1000.0) as f32
+        } else if v >= 100.0 {
+            (v / 10.0) as f32
+        } else {
+            v as f32
+        });
+    }
+    st.max_temp_c = read_hottest_thermal_c(root);
+
+    // RAM disponible.
+    if let Ok(mem) = std::fs::read_to_string("/proc/meminfo") {
+        for line in mem.lines() {
+            if let Some(rest) = line.strip_prefix("MemAvailable:") {
+                st.ram_available_kb = rest
+                    .trim()
+                    .split_whitespace()
+                    .next()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(0);
+                break;
+            }
+        }
+    }
+    st
+}
+
+fn read_trim_file(path: &str) -> Option<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+// ---------------------------------------------------------------------------
+// WATCHDOG DE RESPUESTA (no de pgrep)
+// ---------------------------------------------------------------------------
+
+/// Resultado de una sonda de vida real (una petición HTTP de verdad).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeOutcome {
+    /// Código HTTP devuelto.
+    pub code: u16,
+    /// Milisegundos que tardó.
+    pub elapsed_ms: u64,
+    /// ¿El daemon se considera sano?
+    pub healthy: bool,
+    /// Motivo (para el log).
+    pub reason: &'static str,
+}
+
+/// Parsea la salida de `curl -w '%{http_code} %{time_total}'`.
+///
+/// Devuelve `None` si la salida no tiene ese formato (curl falló, timeout o
+/// la respuesta no llegó): que es EXACTAMENTE el caso que `pgrep` no detecta.
+pub fn parse_curl_probe(out: &str) -> Option<(u16, u64)> {
+    let line = out.trim().lines().last()?.trim();
+    let mut parts = line.split_whitespace();
+    let code = parts.next()?.parse::<u16>().ok()?;
+    let secs = parts.next().unwrap_or("0").parse::<f64>().ok()?;
+    Some((code, (secs * 1000.0).round() as u64))
+}
+
+/// Evalúa una sonda: sólo es sana si contesta 200 Y rápido Y con cuerpo.
+pub fn evaluate_probe(code: u16, elapsed_ms: u64, timeout_ms: u64, body_len: usize) -> ProbeOutcome {
+    if code == 0 {
+        return ProbeOutcome {
+            code,
+            elapsed_ms,
+            healthy: false,
+            reason: "sin respuesta (conexion rechazada o timeout)",
+        };
+    }
+    if code >= 500 {
+        return ProbeOutcome {
+            code,
+            elapsed_ms,
+            healthy: false,
+            reason: "error del servidor (>=500): el proceso vive pero no responde",
+        };
+    }
+    if code != 200 {
+        return ProbeOutcome {
+            code,
+            elapsed_ms,
+            healthy: false,
+            reason: "codigo HTTP no sano",
+        };
+    }
+    if timeout_ms > 0 && elapsed_ms > timeout_ms {
+        return ProbeOutcome {
+            code,
+            elapsed_ms,
+            healthy: false,
+            reason: "respuesta demasiado lenta",
+        };
+    }
+    if body_len == 0 {
+        return ProbeOutcome {
+            code,
+            elapsed_ms,
+            healthy: false,
+            reason: "respuesta vacia",
+        };
+    }
+    ProbeOutcome {
+        code,
+        elapsed_ms,
+        healthy: true,
+        reason: "ok",
+    }
+}
+
+/// Decisión del watchdog: cuenta fallos CONSECUTIVOS y decide cuándo hay que
+/// reiniciar el daemon.
+///
+/// Un fallo suelto no reinicia nada (los móviles dan tirones: un 502 puntual
+/// mientras el sistema está ocupado no significa nada).  Tres seguidos sí.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Watchdog {
+    /// Fallos consecutivos actuales.
+    pub consecutive_failures: u32,
+    /// Fallos necesarios para reiniciar.
+    pub threshold: u32,
+    /// Reinicios hechos por este watchdog.
+    pub restarts: u32,
+}
+
+impl Default for Watchdog {
+    fn default() -> Self {
+        Watchdog {
+            consecutive_failures: 0,
+            threshold: 3,
+            restarts: 0,
+        }
+    }
+}
+
+impl Watchdog {
+    /// Registra una sonda y devuelve `true` si toca REINICIAR el daemon.
+    pub fn observe(&mut self, healthy: bool) -> bool {
+        if healthy {
+            self.consecutive_failures = 0;
+            return false;
+        }
+        self.consecutive_failures += 1;
+        if self.consecutive_failures >= self.threshold {
+            self.consecutive_failures = 0;
+            self.restarts += 1;
+            return true;
+        }
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GUARDA DE DISCO: el daemon no puede crecer sin límite
+// ---------------------------------------------------------------------------
+
+/// Decide qué entradas de un directorio se pueden borrar.
+///
+/// `names` son los nombres de fichero (por convención, marcas de tiempo en el
+/// nombre).  Se ordenan y se conservan los `keep` más recientes; el resto se
+/// devuelve para borrar.  Los nombres que NO parecen marcas de tiempo (no son
+/// dígitos) se conservan siempre: no se borra nada que no entendamos.
+pub fn prune_candidates(names: &[String], keep: usize) -> Vec<String> {
+    let mut stamped: Vec<(&String, i64)> = names
+        .iter()
+        .filter_map(|n| {
+            let digits: String = n.chars().filter(|c| c.is_ascii_digit()).collect();
+            if digits.is_empty() {
+                None
+            } else {
+                digits.parse::<i64>().ok().map(|v| (n, v))
+            }
+        })
+        .collect();
+    stamped.sort_by(|a, b| a.1.cmp(&b.1));
+    let excess = stamped.len().saturating_sub(keep);
+    stamped.into_iter().take(excess).map(|(n, _)| n.clone()).collect()
+}
+
+/// Suma los tamaños (kB) de las entradas que se van a borrar: el número que
+/// se publica en el bus.
+pub fn prune_reclaim_kb(sizes_kb: &BTreeMap<String, u64>, victims: &[String]) -> u64 {
+    victims
+        .iter()
+        .filter_map(|v| sizes_kb.get(v))
+        .copied()
+        .sum()
+}
+
+#[cfg(test)]
+mod device_tests {
+    use super::*;
+    use std::fs;
+
+    fn st(pct: u8, charging: bool, temp: f32, ram: u64) -> DeviceState {
+        DeviceState {
+            battery_pct: Some(pct),
+            charging,
+            battery_temp_c: Some(temp),
+            max_temp_c: Some(temp),
+            screen_on: false,
+            ram_available_kb: ram,
+            disk_free_kb: 5_000_000,
+        }
+    }
+
+    #[test]
+    fn umbrales_por_defecto_son_los_del_s21() {
+        let t = Thresholds::default();
+        assert_eq!(t.charge_limit_pct, 80);
+        assert_eq!(t.seal_below_pct, 20);
+        assert_eq!(t.thermal_hard_c, 80.0);
+        assert_eq!(t.brightness_max, 60);
+    }
+
+    #[test]
+    fn bateria_baja_sella_el_dispositivo() {
+        let t = Thresholds::default();
+        assert_eq!(classify(&st(19, false, 30.0, 3_000_000), &t), PolicyClass::Seal);
+        assert_eq!(classify(&st(19, true, 30.0, 3_000_000), &t), PolicyClass::Seal);
+        // al 20 % exacto ya NO se sella; sin cargador es "conserve"
+        assert_eq!(
+            classify(&st(20, false, 30.0, 3_000_000), &t),
+            PolicyClass::Conserve
+        );
+        assert_eq!(
+            classify(&st(20, true, 30.0, 3_000_000), &t),
+            PolicyClass::Normal
+        );
+    }
+
+    #[test]
+    fn temperatura_alta_es_termica_y_extrema_sella() {
+        let t = Thresholds::default();
+        assert_eq!(
+            classify(&st(80, true, 46.0, 3_000_000), &t),
+            PolicyClass::Thermal
+        );
+        assert_eq!(
+            classify(&st(80, true, 81.0, 3_000_000), &t),
+            PolicyClass::Seal
+        );
+    }
+
+    #[test]
+    fn ram_baja_fuerza_conservacion() {
+        let t = Thresholds::default();
+        assert_eq!(
+            classify(&st(90, true, 25.0, 100_000), &t),
+            PolicyClass::Conserve
+        );
+    }
+
+    #[test]
+    fn plan_normal_solo_intenta_el_limite_de_carga() {
+        let t = Thresholds::default();
+        let plan = device_plan(&st(90, true, 25.0, 3_000_000), &t);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].label, "charge_limit");
+        assert!(plan[0].cmd.contains("80"));
+    }
+
+    #[test]
+    fn plan_conservacion_recorta_fondo_brillo_y_no_toca_termux() {
+        let t = Thresholds::default();
+        let plan = device_plan(&st(30, false, 25.0, 3_000_000), &t);
+        let cmds: Vec<&str> = plan.iter().map(|a| a.cmd.as_str()).collect();
+        assert!(cmds.iter().any(|c| c.contains("RUN_ANY_IN_BACKGROUND ignore")));
+        assert!(cmds.iter().any(|c| c.contains("screen_brightness")));
+        assert!(!cmds.iter().any(|c| c.contains("com.termux")));
+        assert!(!cmds.iter().any(|c| c.contains("com.agy")));
+        assert!(plan.iter().all(|a| a.reversible));
+    }
+
+    #[test]
+    fn plan_terminal_pone_governor_y_low_power() {
+        let t = Thresholds::default();
+        let plan = device_plan(&st(80, true, 56.0, 3_000_000), &t);
+        let cmds: Vec<&str> = plan.iter().map(|a| a.cmd.as_str()).collect();
+        assert!(cmds.iter().any(|c| c.contains("powersave")));
+        assert!(cmds.iter().any(|c| c.contains("low_power 1")));
+    }
+
+    #[test]
+    fn cada_accion_lleva_su_verificacion() {
+        let t = Thresholds::default();
+        for a in device_plan(&st(19, false, 30.0, 3_000_000), &t) {
+            assert!(
+                !a.verify.trim().is_empty(),
+                "acción sin verificar: {}",
+                a.label
+            );
+        }
+    }
+
+    #[test]
+    fn sonda_curl_se_parsea() {
+        assert_eq!(parse_curl_probe("200 0.012"), Some((200, 12)));
+        assert_eq!(parse_curl_probe("503 1.500"), Some((503, 1500)));
+        // curl falló: NO hay código -> el daemon no responde (pgrep no lo ve).
+        assert_eq!(parse_curl_probe(""), None);
+        assert_eq!(parse_curl_probe("curl: (7) Failed to connect"), None);
+    }
+
+    #[test]
+    fn sonda_200_lenta_o_vacia_no_es_sana() {
+        assert!(evaluate_probe(200, 10, 5000, 120).healthy);
+        assert!(!evaluate_probe(200, 9000, 5000, 120).healthy);
+        assert!(!evaluate_probe(200, 10, 5000, 0).healthy);
+        assert!(!evaluate_probe(502, 10, 5000, 120).healthy);
+        assert!(!evaluate_probe(0, 0, 5000, 0).healthy);
+    }
+
+    #[test]
+    fn watchdog_reinicia_tras_tres_fallos_consecutivos() {
+        let mut w = Watchdog::default();
+        assert!(!w.observe(false));
+        assert!(!w.observe(false));
+        assert!(w.observe(false));
+        assert_eq!(w.restarts, 1);
+        // un acierto resetea la cuenta
+        assert!(!w.observe(true));
+        assert_eq!(w.consecutive_failures, 0);
+        assert!(!w.observe(false));
+        assert!(!w.observe(false));
+        assert!(w.observe(false));
+        assert_eq!(w.restarts, 2);
+    }
+
+    #[test]
+    fn watchdog_no_reinicia_por_un_fallo_suelto() {
+        let mut w = Watchdog::default();
+        assert!(!w.observe(false));
+        assert!(!w.observe(true)); // un acierto resetea la cuenta
+        assert!(!w.observe(false));
+        assert!(!w.observe(true)); // y otro: sigue sin reiniciar
+        assert_eq!(w.restarts, 0);
+        // pero TRES SEGUIDOS sí: el umbral es de fallos consecutivos
+        assert!(!w.observe(false));
+        assert!(!w.observe(false));
+        assert!(w.observe(false));
+        assert_eq!(w.restarts, 1);
+    }
+
+    #[test]
+    fn poda_conserva_los_mas_recientes_y_no_toca_nombres_raros() {
+        let names = vec![
+            "1795136951".to_string(),
+            "1795137099".to_string(),
+            "1795137346".to_string(),
+            "1795137714".to_string(),
+            "estado_actual.json".to_string(),
+        ];
+        let victims = prune_candidates(&names, 2);
+        assert_eq!(
+            victims,
+            vec!["1795136951".to_string(), "1795137099".to_string()]
+        );
+        assert!(!victims.iter().any(|v| v.contains("estado_actual")));
+    }
+
+    #[test]
+    fn lectura_de_estado_desde_arbol_falso() {
+        let dir = std::env::temp_dir().join("md_batt_fake_root");
+        let bat = dir.join("sys/class/power_supply/battery");
+        fs::create_dir_all(&bat).unwrap();
+        fs::write(bat.join("capacity"), "37\n").unwrap();
+        fs::write(bat.join("status"), "Discharging\n").unwrap();
+        fs::write(bat.join("temp"), "38500\n").unwrap(); // milikelvin -> 38.5 C
+        let st = read_device_state(dir.to_str().unwrap());
+        assert_eq!(st.battery_pct, Some(37));
+        assert!(!st.charging);
+        assert_eq!(st.battery_temp_c, Some(38.5));
+        // y en decigrados, como lo da este kernel (381 = 38.1 C)
+        fs::write(bat.join("temp"), "381\n").unwrap();
+        let st2 = read_device_state(dir.to_str().unwrap());
+        assert_eq!(st2.battery_temp_c, Some(38.1));
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

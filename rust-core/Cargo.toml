@@ -50,5 +50,14 @@ features = ["ring", "std", "tls12"]
 opt-level = 3
 lto = true
 codegen-units = 1
-panic = "abort"
+# v15: SIN panic="abort" a propósito.
+#
+# Con panic="abort", CUALQUIER panic (por ejemplo un `lock().unwrap()` sobre
+# un mutex envenenado por otro panic) mata el PROCESO ENTERO.  El daemon es
+# el origen del túnel de Cloudflare: si muere, el túnel devuelve 502/530 y el
+# móvil parece "caído" sin estarlo (medido el 2026-11-20: el OOM killer se
+# llevó cloudflared dos veces y el daemon una).
+# Sin abort, el panic se queda en la conexión que lo provocó y el daemon
+# sigue sirviendo.  Además es lo que hace que `catch_unwind` (usado en las
+# herramientas de análisis) pueda cumplir su papel.
 strip = true

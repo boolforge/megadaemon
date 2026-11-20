@@ -379,14 +379,21 @@ G-01 (arneses versionados) ───────────► todas (nada se p
 |---|---|---|---|---|
 | **1** | **A-01** | P0 | `fs_write` ejecuta el contenido del usuario como shell root (heredoc `__MD_EOF__`) | **Test** `adv_a01_fs_write_inyecta_comandos_por_el_heredoc` (el marcador aparece) + `android.rs:779` |
 | **2** | **A-02** | P0 | `find_duplicates` ejecuta el **nombre del fichero** (AWK → shell) como root | **Test** `adv_a02_find_duplicates_inyecta_comandos_por_el_nombre_de_fichero` + `android.rs:808` |
-| **3** | **A-15** | P0 | El puente web (0.0.0.0:80/3000/…) inyecta API key **y** token de sesión a cualquier cliente de la LAN | `deploy/web_bridge.py:201-204` + `:265-270` |
+| **3** | **A-18** | P0 | La exención `local_browser` entrega el **token root** a cualquier petición "local" (`Host` falsificable) ⇒ **cualquier app del móvil** se lo lleva por `127.0.0.1:9090` | **Test** `adv_a18_la_exencion_local_entrega_el_token_root` + `cockpit_server.rs:846/855/921/959/1390` |
 | **4** | **A-04** | P0 | `MEGADAEMON_REQUIRE_API_KEY=1` no fuerza nada si no hay key ⇒ fail-open del túnel | **Test** `adv_a04_require_api_key_se_ignora_sin_key_configurada` + `api_key.rs:311-318` |
-| **5** | **A-18** | P0 | La exención `local_browser` entrega el **token root** a cualquier petición "local" (el puente falsea el `Host`) ⇒ RCE root desde la LAN | **Test** `adv_a18_la_exencion_local_entrega_el_token_root` + `cockpit_server.rs:846/855/921/959/1390` |
-| **6** | **B-01** | P0 | API key real (`mdaemon_sk_live_<prefijo redactado>`) y token de sesión root (`c17398e1…`) publicados en el árbol de trabajo | `docs/EXTERNAL_AGENT_PROMPT_FINAL.md` (líneas 37/63/64 a las 21:21; redactado a las 21:28) → **rotar** |
-| **7** | **B-02** | P0 | Token de un túnel Cloudflare en claro en un fichero **versionado** | `tools/upload_bin.py:10-11` |
+| **5** | **B-01** | P0 | API key real (`mdaemon_sk_live_<prefijo redactado>`) y token de sesión root (`c17398e1…`) publicados en el árbol de trabajo | `docs/EXTERNAL_AGENT_PROMPT_FINAL.md` (líneas 37/63/64 a las 21:21; redactado a las 21:28) → **rotar** |
+| **6** | **B-02** | P0 | Token de un túnel Cloudflare en claro en un fichero **versionado** | `tools/upload_bin.py:10-11` |
+| **7** | **I-01** | P0 | La UI v1 sólo sabe usar `window.MEGADAEMON_TOKEN`, que el servidor nuevo inyecta **vacío** ⇒ con el binario v14 **no pinta un solo dato** (403 en cada `/api/*`) | `cockpit_template.html:795-801` + `cockpit_server.rs:959-966` + **Test** `adv_a18` (el token no llega) |
 | **8** | **A-16 / E-03** | P1 | 64 clientes × 8 MB = **512 MB** de buffers (+128 MB de pilas) en un móvil con ~300 MB libres | **Test** `adv_e02_el_techo_de_memoria_del_cockpit_supera_la_ram_libre` + `cockpit_server.rs:695-718` |
 | **9** | **A-11** | P1 | `/api/chat` ejecuta root **sin** la política destructiva (el MCP sí la aplica) | `seere_v11.rs:1290-1296` + `:2006-2018` vs `android.rs:821-836` |
-| **10** | **D-01 / D-02** | P1 | El supervisor se apaga tras 3 fallos de arranque y el despliegue nunca hace rollback (ni falla) | `99-megadaemon.sh:198-212` + `install-phone.sh:110` (`verify \|\| true`) |
+| **10** | **D-03 / F-03** | P1 | El supervisor decide con `pgrep` ("vivo" ≠ "sirviendo") y **`cockpit_doctor::run_doctor_cli` no está cableado**: la herramienta para diagnosticar "vivo pero mudo" no se puede ejecutar | `99-megadaemon.sh:249` + `cockpit_server.rs` (sin subcomando `doctor`; la función sí existe en `cockpit_doctor.rs:518`) |
+
+> **Ya corregidos durante esta auditoría** (no cuentan en el TOP 10, pero se
+> documentan): **A-15** (el puente inyectaba key+token a la LAN → commit
+> `23e82ed`), **A-07** (el intercambio era inalcanzable → UI-16 del owner del
+> cockpit, aunque su arreglo introdujo A-18), **D-01** y **D-02** (el supervisor se
+> apagaba y el despliegue no hacía rollback → auto-rollback + "no se rinde",
+> `7fd13de`).
 
 ---
 
@@ -401,8 +408,8 @@ cargo test --release --test audit_adversarial_v15 -- --nocapture --test-threads=
 
 * Los tests `adv_a01`, `adv_a02` y `adv_a06` necesitan `su` (los ejecuta como
   root **en el sandbox**, no en el móvil) y **limpian** lo que crean.
-* `adv_a07`, `adv_a08` y `adv_a09` arrancan el cockpit real en un puerto libre
-  y hablan HTTP con él.
+* `adv_a18`, `adv_a19`, `adv_a08` y `adv_a09` arrancan el cockpit real en un
+  puerto libre y hablan HTTP con él.
 * `adv_h01` requiere `python3`; si no está, el test se marca como *skip*.
 
 **Lo que este arnés NO puede comprobar** (y por eso está marcado como

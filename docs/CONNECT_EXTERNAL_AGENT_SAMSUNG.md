@@ -7,16 +7,27 @@
 
 ## 0. TL;DR para el agente externo
 
+> **Prioridad de canal**: si estás en la **LAN del usuario**, usa la **LAN**
+> (`http://192.168.1.124:3000`) — es estable. El túnel de Cloudflare es un
+> *quick tunnel*: **cambia de hostname cada vez que cloudflared se relanza**
+> (y el móvil tiene dos: el web→9090 y el legacy→8765), así que la URL de
+> `instance.env` puede caducar en minutos. La URL viva se lee en
+> `<state_dir>/tunnel.url` **en runtime**, nunca hardcodeada.
+
 ```
-Túnel      : https://webpage-ultram-please-communicate.trycloudflare.com
-MCP        : POST https://webpage-ultram-please-communicate.trycloudflare.com/mcp
+LAN (si estás en la wifi del usuario): http://192.168.1.124:3000  →  MCP: POST http://192.168.1.124:3000/mcp
+Túnel (cualquier sitio)             : https://<host>.trycloudflare.com → MCP: POST https://<host>.trycloudflare.com/mcp
              (JSON-RPC 2.0 — NO /sse, NO GET)
 Cabeceras  : X-API-Key: <MEGADAEMON_API_KEY>
              X-Seere-Auth-Token: <MEGADAEMON_COCKPIT_TOKEN>
-Web (LAN)  : http://192.168.1.124:3000  (y :3030, :8090, :9090)
 Credenciales: /workspace/md-secrets/instance.env  (0600) — cópialas a tu entorno,
               no las pegues en ningún sitio que se guarde.
 ```
+
+> **El "503/530/401" del túnel no es siempre lo que parece**: si el móvil
+> reinicia cloudflared, el hostname antiguo queda *muerto* (530) mientras el
+> nuevo aún no está listo. Reintenta y, si persiste, lee la URL viva del
+> dispositivo.
 
 Si prefieres MCP por HTTP directo al móvil (sin pasar por el túnel), usa
 `http://192.168.1.124:9090/mcp` con las mismas dos cabeceras.

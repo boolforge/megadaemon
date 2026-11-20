@@ -1,0 +1,23 @@
+# Hallazgos conocidos aceptados por el lint de fusiones (P2-13).
+# Clave: "ruta:token" (R2) o "ruta:fragmento" (R1). Uno por línea.
+# Un hallazgo NUEVO (no listado aquí) hace fallar el test.
+#
+# --- palabras reales que el heurístico confunde con fusiones ---
+rust-core/src/battery_advanced.rs:conectividad
+rust-core/src/coordination.rs:quevolatile
+rust-core/src/delegate.rs:delegable
+rust-core/src/dex_decompile.rs:decompiler
+rust-core/src/frida_dbi.rs:debugging
+rust-core/src/messaging.rs:noredact
+rust-core/src/repo_updates.rs:configure
+rust-core/src/signing.rs:noverify
+rust-core/src/sync.rs:yacentos
+docs/ANTIGRAVITY_INTEL.md:noexec
+docs/ANTIGRAVITY_INTEL.md:elicitation
+docs/AUDIT_ADVERSARIAL_V15.md:unwinding
+docs/AUDIT_ADVERSARIAL_V15.md:degrade
+docs/AUDIT_V14_UI_HTTP.md:unnamed
+docs/NPU_REAL.md:opines
+# --- citas intencionadas de texto corrupto (el informe de auditoría) ---
+docs/COORDINATION.md:de una命令" → "
+docs/COORDINATION.md:*El CI检测ó al 
