@@ -83,6 +83,22 @@ confunde "no existe" con "buffer equivocado".
 | `0x40805608` | `_IOW('V',8,128)` | 8 | 128 | **128** | **existe · tamaño correcto** |
 | `0x4008560a` | `_IOW('V',10,8)` | 10 | 8 | **8** | **existe · tamaño correcto** |
 
+**Tabla machine-readable para el módulo DEX** (`live` = existe en el driver vivo; `driver_size` = tamaño que el driver declara al sondear sin argumento):
+
+```json
+[
+ {"code":"0x00005604","macro":"_IO('V',4,0)","nr":4,"size":0,  "live":false,"live_errno":"EINVAL(22)"},
+ {"code":"0x00005605","macro":"_IO('V',5,0)","nr":5,"size":0,  "live":false,"live_errno":"EINVAL(22)"},
+ {"code":"0x40205600","macro":"_IOW('V',0,32)", "nr":0, "size":32, "live":true, "driver_size":32},
+ {"code":"0x40105601","macro":"_IOW('V',1,16)", "nr":1, "size":16, "live":true, "driver_size":16},
+ {"code":"0x40105602","macro":"_IOW('V',2,16)", "nr":2, "size":16, "live":true, "driver_size":16},
+ {"code":"0x40805606","macro":"_IOW('V',6,128)","nr":6, "size":128,"live":true, "driver_size":128},
+ {"code":"0x40805607","macro":"_IOW('V',7,128)","nr":7, "size":128,"live":true, "driver_size":128},
+ {"code":"0x40805608","macro":"_IOW('V',8,128)","nr":8, "size":128,"live":true, "driver_size":128},
+ {"code":"0x4008560a","macro":"_IOW('V',10,8)", "nr":10,"size":8,  "live":true, "driver_size":8}
+]
+```
+
 ⇒ **Los 7 códigos `_IOW` de la tabla extraída del volcado son CORRECTOS contra el driver vivo**,
 y el campo `size` de cada uno **coincide exactamente** con el tamaño que el driver declara esperar
 ⇒ el `size` **no es advisory**: es el tamaño real de la struct que el driver copia.
