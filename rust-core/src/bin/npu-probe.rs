@@ -97,13 +97,13 @@ fn open_device(path: &str) -> Option<std::fs::File> {
 
 /// ioctl **sin argumento**: el driver devuelve el tamaño que espera.
 fn ioctl_no_arg(fd: i32, code: u32) -> i32 {
-    unsafe { libc::ioctl(fd, ioctl_req!(code as libc::c_ulong), 0usize) }
+    unsafe { libc::ioctl(fd, ioctl_req!(code), 0usize) }
 }
 
 /// ioctl **con buffer** del tamaño declarado (sólo con `--deep`).
 fn ioctl_with_buf(fd: i32, code: u32, size: usize) -> (i32, i32) {
     let mut buf = vec![0u8; size.max(1)];
-    let ret = unsafe { libc::ioctl(fd, code as libc::c_ulong, buf.as_mut_ptr()) };
+    let ret = unsafe { libc::ioctl(fd, ioctl_req!(code), buf.as_mut_ptr()) };
     let errno = if ret < 0 {
         std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
     } else {
