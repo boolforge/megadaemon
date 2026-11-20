@@ -197,3 +197,140 @@ cadenas, 10.019 clases).
 2. **UID de sistema (1000) + `VOICE_CALL`** ⇒ tiene el permiso, pero con el HAL
    medido hay que **comprobar que el PCM no sale en silencio**.
 3. **Microsoft Your Phone / Link to Windows** ya declaran el permiso.
+
+---
+
+## 6. La vía que SÍ funciona: **capturar la voz del modem por tinyalsa** (sin parche, sin permisos)
+
+**Medido en el S21 Ultra:**
+
+- `libtinyalsa.so` está en `/system/lib64/` (45.024 B) y **no** exporta los
+  wrappers `tinyalsa_*`: exporta la API baja (`pcm_open`, `pcm_read`,
+  `pcm_start`, `pcm_close`, `pcm_is_ready`, `mixer_*`). El capturador lo carga
+  con `dlopen` ⇒ binario sin cabeceras y sin enlazar.
+- `/proc/asound/pcm` lista **`00-12: WDMA0` … `00-19: WDMA7` como `capture`**
+  (card 0, devices 12-19). En el Exynos 2100 los WDMA son la **interfaz de voz
+  AP↔CP (SIFM)**: lo confirma `/vendor/etc/mixer_paths.xml`, donde
+  `ABOX SIFM0..7 = WDMA` y se fijan `ABOX WDMA0 Width/Channel/Rate`.
+- **`pcm_open(card=0, dev=12..19, CAPTURE)` FUNCIONA con root** (puntero válido,
+  `errno=0`, medido en los devices 0, 1, 4, 12, 13, 14 y 15). Los nodos
+  `/dev/snd/*` son `system:audio 0660` ⇒ hace falta root o el grupo `audio`.
+- `pcm_read` **se queda bloqueado** cuando no hay llamada: es lo esperado (no
+  hay audio fluyendo). ⇒ **la confirmación final necesita una llamada en
+  curso**.
+
+⇒ **Por qué esto explica la P6 del nodo RE**: el HAL de usuario no tiene
+ninguna cadena de voz porque **la voz no pasa por el HAL**; pasa por el WDMA.
+Por eso `libaudiohal.so` no la menciona y por eso el `VOICE_CALL` estándar
+puede devolver silencio.
+
+**Capturador** (`md_pcm`, ARM64, NDK, `dlopen` de tinyalsa):
+```bash
+md_pcm --card 0 --dev 12 --sec 75 --out /data/local/tmp/voice/wdma12.raw
+```
+Devuelve 0 si el PCM **no** es silencio y 2 si lo es ⇒ la comprobación de
+"¿hay voz?" es automática.
+
+**Lo que falta**: (1) saber cuál de los 8 WDMA es el *uplink* y cuál el
+*downlink* (⇒ hay que capturar durante una llamada); (2) el formato nativo de
+cada PCM (ancho de muestra, canales, frecuencia).
+
+## 7. Lo que encontró el agente DEX (y encaja con lo anterior)
+
+En el DEX de SamsungInCallUI (`classes.dex`, 30.480 cadenas):
+
+- El grabador **no** es un `MediaRecorder` estándar: es
+  **`com.samsung.android.ims.SemCmcMediaRecorder`** (clase *package-private*)
+  con la fuente de audio **`PT_AS_VOICE_CALL`** (uplink de la llamada).
+- Hay **doble implementación** (`MediaRecorder` estándar **y** `SemCmc`) y el
+  flag del CSC elige entre las dos: `Record - MediaRecorder is null.`,
+  `Record - SemCmcMediaRecorder is null.`.
+- La tubería de audio es el framework **"Phoebus"**:
+  `AudioSessionImpl` + `UtteranceRecorderInput` (**con `LocalBinder`**) +
+  `RecordingRepository`/`RecordingStorage` + `AutoRecordingIndicator`.
+- `isAecRecording` ⇒ el sistema graba **con AEC** (audio ya procesado).
+- Hay un **diálogo de aviso** antes de grabar
+  (`RecordingDisclaimerDialogView`, `KEY_CALL_RECORDING_DISCLAIMER`) ⇒ el CSC
+  gobierna también el consentimiento.
+
+⇒ **Vía nativa = el propio Samsung**, no un hook: con el CSC correcto, el
+framework Phoebus se encarga. Eso encaja con que **12 apps tengan
+`CAPTURE_AUDIO_OUTPUT` concedido en ejecución** (entre ellas
+`com.samsung.android.incallui` y `com.samsung.android.callassistant`), y con
+que el permiso **esté concedido a `uid=1000`**.
+
+## 8. El formato OMC: ataque fallido (y por qué da igual)
+
+- Prefijo común de los 126 `cscfeature.xml`: **10 bytes** (`2f2729b7 dac1ac37 e4`);
+  a partir del byte 11 divergen.
+- **No es XOR de 1 byte** (probados los 256 contra gzip/zstd/zlib/xz/zip/bzip2
+  en 24 offsets: ningún magic). Índice de coincidencia **0,0038** (aleatorio) y
+  **sin periodicidad** para claves de 2/4/8/16 bytes ⇒ cifrado de flujo, no
+  XOR con clave repetida. Las longitudes de payload (1100 / 621 / 413 B) **no**
+  son múltiplos de 16 ⇒ no es AES-CBC.
+- **Pero no hace falta descifrarlo**: el móvil ya tiene los 126 CSC en su forma
+  final ⇒ para cambiar de CSC se copia el directorio (o se cambia
+  `mps_code.dat`), sin tocar el OMC.
+
+## 9. Cambio de CSC: datos reales y riesgo
+
+- SIM: **JAZZTEL, MCC/MNC 21403** (España). CSC actual **AMO**.
+- `mps_code.dat` = 3 bytes `AMO`, en `/mnt/vendor/efs` (**rw**) ⇒ escribible
+  con root. `/prism` (sda29) y `/optics` (sda30) están **ro** ⇒ la vía de
+  copiar el directorio necesita remount.
+- CSC de grabación presentes: **THL (630 B), ILO (422 B), XXV**; `INS` **no**
+  está en este firmware.
+- El CSC **no** cambia la SIM ni el MCC/MNC: el módem sigue registrando en la
+  red de la SIM. Lo que cambia es el juego de configuración (APN, IMS/VoLTE,
+  MMS y las banderas `CscFeature_*`) ⇒ riesgo real de perder VoLTE o datos,
+  **reversible** restaurando los 3 bytes y reiniciando.
+- Después del cambio hay que comprobar: `ro.csc.sales_code`, coherencia del
+  baseband y si el InCallUI habilita `CscFeature_VoiceCall_ConfigRecording`.
+
+---
+
+## 10. Estado final de la vía ALSA (y por qué no se sigue por ahí)
+
+Secuencia medida con el capturador (`md_pcm`, `dlopen` de
+`/system/lib64/libtinyalsa.so`):
+
+| Paso | Resultado medido |
+|---|---|
+| `pcm_open(card=0, dev=12..19, CAPTURE)` | **OK** (puntero válido, `errno=0`) en los devices probados (12-15, 0, 1, 4) |
+| `pcm_state(pcm)` | **SIGSEGV** dentro de la librería |
+| `pcm_start(pcm)` (sin `pcm_state`) | **SIGSEGV** ⇒ el crash está en `pcm_start` |
+| `pcm_read` | no llega a ejecutarse |
+
+**El móvil sigue sano**: en `dmesg` no hay oops ni panic; sólo mensajes
+normales del driver **`abox 18c50000.abox`** (`channels_put`, `width_put`,
+`abox_disable`) ⇒ el driver ABOX (Audio Block) es la interfaz de voz CP↔AP y
+se está cerrando con orden. El crash es **en espacio de usuario** (la librería
+tinyalsa), no un oops del kernel.
+
+**Decisión: no seguir pinchando el driver de voz.** Razones:
+1. `pcm_start` requiere la ruta de voz **configurada** (controles de mixer
+   `ABOX SIFM0..7` de `/vendor/etc/mixer_paths.xml`) y **una llamada en
+   curso**; sin las dos cosas el ioctl revienta.
+2. Un ioctl equivocado sobre el ABOX **sí** puede tumbar el kernel en otros
+   firmwares ⇒ no vale la pena arriesgar el móvil del enjambre para una
+   prueba que además necesita una llamada que nadie puede hacer desde aquí.
+3. La vía **real y soportada** es la del framework (§7): con el CSC
+   correcto, `Phoebus`/`SemCmcMediaRecorder` graban solos, con AEC, y el
+   sistema pone su indicador. No hay que tocar drivers.
+
+⇒ **El camino que queda, y es el bueno**: **cambiar el CSC** (`mps_code.dat`
+⇒ `ILO`/`THL`/`XXV`) para que el propio Samsung habilite
+`CscFeature_VoiceCall_ConfigRecording`, o **descifrar el OMC** para editar el
+flag sin cambiar de CSC. La primera está implementada y es reversible; la
+segunda es un ataque de criptografía con 126 muestras y una pista nueva
+(el prefijo común de 10 bytes).
+
+## 11. Resumen de las tres rutas y su estado
+
+| Ruta | Estado | Qué falta |
+|---|---|---|
+| **A · Grabador nativo de Samsung** (CSC `THL`/`ILO`/`XXV`) | Implementada y reversible (`mps_code.dat`, 3 B) | Un reinicio (afecta a la flota) y confirmar que el CSC destino no rompe APN/VoLTE |
+| **B · Editar el flag OMC directamente** | Algoritmo OMC pendiente (ni XOR ni bloque; cifrado de flujo) | El decodificador; dataset de 126 muestras ya entregado al nodo RE |
+| **C · Capturar la voz del modem por ALSA** | `pcm_open` funciona; `pcm_start` revienta sin llamada | Ruta de voz configurada + llamada en curso ⇒ **no se sigue** (riesgo de kernel) |
+| **D · Grabador propio con `CAPTURE_AUDIO_OUTPUT`** | Permiso concedido a `uid=1000` (medido) | El HAL **no expone voz** ⇒ devolvería silencio; el que funciona es el de Samsung |
+| **E · Preconfig** | **No existe en este firmware**; su función ya está cubierta por `AT+PRECONFG` y `mps_code.dat` | — |
