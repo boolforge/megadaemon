@@ -297,6 +297,24 @@ fn xtime(x: u8) -> u8 {
     (x << 1) ^ if x & 0x80 != 0 { 0x1b } else { 0x00 }
 }
 
+/// Ronda AES tal y como la usa AEGIS (RFC 10032, seccion 3.2):
+/// `MixColumns(ShiftRows(SubBytes(in))) XOR rk`.
+///
+/// Se expone aqui porque AEGIS necesita **la ronda**, no el cifrado
+/// completo (AEGIS es "inverse-free": no existe AEGIS con la ronda final).
+pub fn aes_round(input: &[u8; 16], round_key: &[u8; 16]) -> [u8; 16] {
+    let mut s = *input;
+    for b in s.iter_mut() {
+        *b = SBOX[*b as usize];
+    }
+    shift_rows(&mut s);
+    mix_columns(&mut s);
+    for i in 0..16 {
+        s[i] ^= round_key[i];
+    }
+    s
+}
+
 /// Cifrador de bloque AES-256.
 struct Aes256 {
     round_keys: [u8; 240], // 15 rondas × 16 bytes
