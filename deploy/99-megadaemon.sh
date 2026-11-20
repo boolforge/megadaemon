@@ -26,6 +26,16 @@ KEEP=5
 # Puerto del cockpit.  Configurable por MEGADAEMON_COCKPIT_PORT (se lee del
 # fichero de entorno); el valor por defecto es el que usa el despliegue actual.
 PORT=9090
+
+# Intérprete python3 del sistema (Termux o el sandbox de Antigravity): lo
+# usan el puente web y la sincronización del puente MCP de Antigravity.
+# Se resuelve UNA vez: el móvil va justo de RAM.
+PY_BIN=""
+for cand in /data/data/com.termux/files/usr/bin/python3 \
+            /data/data/com.agy/files/usr/bin/python3 \
+            /system/bin/python3; do
+    [ -x "$cand" ] && { PY_BIN="$cand"; break; }
+done
 URL_FILE=/sdcard/megadaemon.url
 STATE_FILE=/sdcard/megadaemon.state
 # Fallos de arranque seguidos => se considera fallo de código y el supervisor
@@ -179,12 +189,14 @@ ensure_web_bridge() {
         export MEGADAEMON_BRIDGE_PORTS="$free"
         log "el daemon ya escucha los puertos alias: el puente solo cogera $MEGADAEMON_BRIDGE_PORTS"
     fi
-    py=""
-    for cand in /data/data/com.termux/files/usr/bin/python3 \
-                /data/data/com.agy/files/usr/bin/python3 \
-                /system/bin/python3; do
-        [ -x "$cand" ] && { py="$cand"; break; }
-    done
+    py="$PY_BIN"
+    if [ -z "$py" ]; then
+        for cand in /data/data/com.termux/files/usr/bin/python3 \
+                    /data/data/com.agy/files/usr/bin/python3 \
+                    /system/bin/python3; do
+            [ -x "$cand" ] && { py="$cand"; break; }
+        done
+    fi
     if [ -z "$py" ]; then
         log "AVISO: sin python3 no se puede arrancar el puente web ($BRIDGE)"
         return 1
