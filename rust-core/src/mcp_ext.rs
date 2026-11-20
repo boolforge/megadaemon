@@ -251,9 +251,12 @@ pub fn tool_definitions() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["catalog", "select", "probe"], "default": "catalog" },
+                    "action": { "type": "string", "enum": ["catalog", "select", "probe", "bridge"], "default": "catalog" },
                     "task": { "type": "string", "enum": ["inference", "build", "analysis", "writing"] },
-                    "id": { "type": "string", "description": "servicio concreto (para probe)" }
+                    "id": { "type": "string", "description": "servicio concreto (para probe)" },
+                    "path": { "type": "string", "description": "fichero de config MCP de Antigravity (para bridge)" },
+                    "enabled_tools": { "type": "array", "items": { "type": "string" }, "description": "subconjunto de tools a exponer (bridge); vacío = todas" },
+                    "confirm": { "type": "boolean", "default": false }
                 }
             }
         },
@@ -657,6 +660,36 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         "estimated_cost_usd": sel.estimated_cost_usd,
                         "rejected": sel.rejected.into_iter().map(|(id, why)| json!({"id": id, "why": why})).collect::<Vec<_>>(),
                     })
+                }
+                // Puente MCP de Antigravity: genera la config y, con
+                // confirm=true, la **fusiona** en el fichero real (merge +
+                // backup + rename atómico, idempotente).  Conserva las claves
+                // raíz que ya había (`providers`) y las cabeceras reales.
+                "bridge" => {
+                    let path = if s("path").is_empty() {
+                        "/data/user/0/com.agy/files/.gemini/config/mcp_config.json".to_string()
+                    } else {
+                        s("path")
+                    };
+                    let bridge = crate::service_bus::antigravity_bridge_config(
+                        "http://127.0.0.1:9090/mcp",
+                        "md-secrets/instance.env",
+                        &sa("enabled_tools"),
+                    );
+                    if !b("confirm") {
+                        return Some(json!({
+                            "ok": true,
+                            "dry_run": true,
+                            "path": path,
+                            "server": crate::service_bus::ANTIGRAVITY_SERVER_NAME,
+                            "config": bridge,
+                            "hint": "repite con confirm=true para fusionarlo en el fichero (merge + backup + rename)",
+                        }));
+                    }
+                    match crate::service_bus::apply_bridge_file(&path, &bridge) {
+                        Ok(v) => Some(v),
+                        Err(e) => Some(json!({ "ok": false, "error": e })),
+                    }
                 }
                 _ => bus.catalog_json(),
             }
