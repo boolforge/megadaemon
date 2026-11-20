@@ -653,6 +653,47 @@ pub fn known_profiles() -> Vec<AppProfile> {
                 .to_string(),
         },
         AppProfile {
+            id: "lucky-patcher".to_string(),
+            platform: "android".to_string(),
+            package: "ru.drjmwdme.cgwbfzijr".to_string(),
+            // Sin rutas de datos medidas: no se inventan.
+            data_paths: vec![],
+            storage_formats: vec![],
+            auth_storage: vec![],
+            endpoints: vec![
+                "http://patch.chelpus.com/submit".to_string(),
+                "http://109.95.209.70:8008/".to_string(),
+                "https://149.56.155.246/luckypatcher/".to_string(),
+                "http://www.appnext.com/myid.html".to_string(),
+                "ws.tapjoyads.com".to_string(),
+                "pagead2.googlesyndication.com".to_string(),
+                "https://t.me/lucky_patcher_chelpus".to_string(),
+                "https://app.transifex.com/chelpus/lucky-patcher-1".to_string(),
+            ],
+            features: vec![
+                "packaging:repackaged-lucky-patcher".to_string(),
+                "same_classes_dex:5b0d376ddc79d4ff409f3158b382a335da1b7157a53815211c1d77c4f1200a79".to_string(),
+                "obfuscation:package-and-label-only".to_string(),
+                "signing:aosp-testkey".to_string(),
+                "embeds:aosp-signing-keys".to_string(),
+                "embeds:apksigner".to_string(),
+                "play-license-bypass:ITestServiceInterface".to_string(),
+                "xposed-module:com.xposed.XSupport".to_string(),
+                "uploads-target-apk:patch.chelpus.com".to_string(),
+                "network:plaintext-and-raw-ip".to_string(),
+                "tracking:appnext-affiliate".to_string(),
+                "native-libs:none".to_string(),
+            ],
+            verified: true,
+            notes: "Lucky Patcher reempaquetado como 'Marina Patcher' (paquete \
+                    ofuscado ru.drjmwdme.cgwbfzijr, fuera de Play Store): el \
+                    classes.dex (sha256 5b0d376d...) coincide byte a byte con el \
+                    de la app instalada en el movil, asi que el DEX es el mismo y \
+                    el ocultamiento esta en el PAQUETE y el NOMBRE, no en los \
+                    identificadores. Medido en docs/MARINA_PATCHER_ANALYSIS.md."
+                .to_string(),
+        },
+        AppProfile {
             id: "manus-android".to_string(),
             platform: "android".to_string(),
             package: String::new(),
@@ -1759,6 +1800,101 @@ pub fn interop_notes(profile_id: &str) -> Vec<String> {
 }
 
 // ========================================================================= //
+// Toolkits de parcheo reempaquetados (familia Lucky Patcher)
+// ========================================================================= //
+
+/// Marcadores que delatan un **toolkit de parcheo reempaquetado** dentro de un
+/// APK (DEX o AXML del manifiesto).
+///
+/// Hechos medidos en el caso C2 (MarinaPatcher, `ru.drjmwdme.cgwbfzijr`, que
+/// es Lucky Patcher reempaquetado; su `classes.dex` coincide byte a byte con
+/// el de la app instalada en el movil - ver `docs/MARINA_PATCHER_ANALYSIS.md`):
+///
+/// * el **paquete** y el **nombre** son el ocultamiento; dentro del DEX los
+///   identificadores **no** estan ofuscados (sin ProGuard/R8);
+/// * el APK lleva las **claves de firma de AOSP** (`testkey.*`, `media.*`,
+///   `platform.*`, `shared.*`, `keystore.ks`), el **apksigner** embebido y el
+///   servicio de **licencias de Play** (`ITestServiceInterface`) => puede
+///   re-firmar APKs y saltarse la verificacion de licencia;
+/// * es un **modulo Xposed/LSPosed** (`com.xposed.XSupport`);
+/// * **sube el APK que parchea** a un tercero (`patch.chelpus.com/submit`) y
+///   usa endpoints **sin TLS** y **IPs crudas**.
+///
+/// Formato de cada entrada: `(id, clase, severidad, marcador literal)`.
+pub const PATCHER_TOOLKIT_MARKERS: &[(&str, &str, &str, &str)] = &[
+    ("aosp-testkey-material", "signing", "critical", "testkey.pk8"),
+    ("aosp-testkey-material", "signing", "critical", "testkey.x509.pem"),
+    ("aosp-testkey-material", "signing", "critical", "media.pk8"),
+    ("aosp-testkey-material", "signing", "critical", "platform.pk8"),
+    ("aosp-testkey-material", "signing", "critical", "shared.pk8"),
+    ("keystore-p12-embedded", "signing", "critical", "keystore.ks"),
+    ("apksigner-embedded", "signing", "high", "com/android/apksigner"),
+    ("apksigner-embedded", "signing", "high", "com.android.apksigner"),
+    ("play-license-bypass", "license-bypass", "critical", "ITestServiceInterface"),
+    ("play-vending-embedded", "license-bypass", "high", "com/android/vending"),
+    ("play-vending-embedded", "license-bypass", "high", "com.android.vending"),
+    // En el DEX la clase va con barras ("Lcom/xposed/XSupport;"); con puntos
+    // aparece en el manifiesto y en `assets/xposed_init`.
+    ("xposed-module", "hook", "critical", "com.xposed.XSupport"),
+    ("xposed-module", "hook", "critical", "com/xposed/XSupport"),
+    ("xposed-metadata", "hook", "high", "xposedminversion"),
+    ("xposed-scope-metadata", "hook", "medium", "xposedscope"),
+    ("uploads-target-apk", "exfiltration", "critical", "patch.chelpus.com/submit"),
+    ("plaintext-patch-endpoint", "network", "high", "http://patch.chelpus.com"),
+    ("raw-ip-endpoint", "network", "high", "109.95.209.70"),
+    ("raw-ip-endpoint-tls", "network", "high", "149.56.155.246"),
+    ("affiliate-tracking-id", "tracking", "medium", "appnext.com/myid.html"),
+    ("ad-sdk-tapjoy", "tracking", "low", "tapjoyads.com"),
+    ("ad-sdk-adsense", "tracking", "low", "googlesyndication.com"),
+    ("promo-supersu", "promo", "low", "eu.chainfire.supersu"),
+    ("promo-busybox", "promo", "low", "stericson.busybox"),
+];
+
+/// Que marcadores de toolkit de parcheo aparecen en un texto (DEX, AXML o
+/// smali).  Devuelve los **ids** unicos, en el orden del catalogo.
+pub fn detect_patcher_toolkit(text: &str) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for (id, _class, _sev, marker) in PATCHER_TOOLKIT_MARKERS {
+        if text.contains(marker) && !ids.iter().any(|x| x == id) {
+            ids.push((*id).to_string());
+        }
+    }
+    ids
+}
+
+/// Lo mismo, pero con el detalle (clase, severidad y el marcador que caso).
+pub fn detect_patcher_toolkit_detail(text: &str) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for (id, class, severity, marker) in PATCHER_TOOLKIT_MARKERS {
+        if text.contains(marker) {
+            out.push(json!({
+                "id": id,
+                "class": class,
+                "severity": severity,
+                "marker": marker,
+            }));
+        }
+    }
+    out
+}
+
+/// Impacto real de un toolkit de parcheo en un movil con el bootloader
+/// **cerrado**: las claves de test de AOSP **no** pasan la verificacion de AVB
+/// (particiones firmadas por Samsung) => no puede parchear apps de sistema.
+/// Lo que si queda es pedir root, hookear con Xposed, subir el APK objetivo a
+/// un tercero y hablar por HTTP sin cifrar.
+pub fn patcher_toolkit_impact_notes() -> Vec<&'static str> {
+    vec![
+        "bootloader-cerrado: una APK firmada con testkey NO pasa AVB (flash.locked=1, avb green) => no puede parchear apps de sistema",
+        "pide-root: ACCESS_SUPERUSER",
+        "hook: modulo Xposed/LSPosed (hook de cualquier app si hay LSPosed)",
+        "exfiltracion: sube el APK que parchea a un servidor de terceros (patch.chelpus.com/submit)",
+        "red: endpoints sin TLS y IPs crudas => interceptacion trivial",
+        "tracking: id de afiliado (appnext) y SDKs de anuncios",
+    ]
+}
+
+// ========================================================================= //
 // Tests
 // ========================================================================= //
 
@@ -2138,4 +2274,44 @@ mod tests {
         let corto = redact_secret("abc");
         assert!(corto.contains("3 chars"));
     }
+
+    #[test]
+    fn detecta_toolkit_de_parcheo_reampaquetado() {
+        // Marcadores medidos en el caso C2 (MarinaPatcher / Lucky Patcher).
+        let dex = "Lcom/android/apksigner/ApkSignerTool;Lcom/android/vending/ITestServiceInterface;\
+                   Lcom/xposed/XSupport;testkey.pk8;keystore.ks;http://patch.chelpus.com/submit;\
+                   109.95.209.70;149.56.155.246;appnext.com/myid.html";
+        let ids = detect_patcher_toolkit(dex);
+        assert!(ids.contains(&"apksigner-embedded".to_string()));
+        assert!(ids.contains(&"play-license-bypass".to_string()));
+        assert!(ids.contains(&"xposed-module".to_string()));
+        assert!(ids.contains(&"aosp-testkey-material".to_string()));
+        assert!(ids.contains(&"keystore-p12-embedded".to_string()));
+        assert!(ids.contains(&"uploads-target-apk".to_string()));
+        assert!(ids.contains(&"raw-ip-endpoint".to_string()));
+        // Sin duplicados aunque el marcador case mas de una vez.
+        assert_eq!(ids.len(), ids.iter().collect::<std::collections::HashSet<_>>().len());
+
+        let det = detect_patcher_toolkit_detail(dex);
+        assert!(!det.is_empty());
+        assert_eq!(det[0]["class"], json!("signing"));
+        assert!(det.iter().all(|d| d.get("severity").is_some()));
+    }
+
+    #[test]
+    fn un_app_normal_no_dispara_el_detector() {
+        let texto = "Landroid/os/Build;Lcom/google/android/gms/ads/AdRequest;https://api.ejemplo.com/v1";
+        assert!(detect_patcher_toolkit(texto).is_empty());
+    }
+
+    #[test]
+    fn perfil_lucky_patcher_documenta_el_ocultamiento() {
+        let p = profile_by_id("lucky-patcher").expect("perfil");
+        assert_eq!(p.platform, "android");
+        assert!(p.endpoints.iter().any(|e| e.contains("patch.chelpus.com/submit")));
+        assert!(p.features.iter().any(|f| f.starts_with("obfuscation:package-and-label-only")));
+        assert!(p.verified);
+        assert!(patcher_toolkit_impact_notes().len() >= 4);
+    }
+
 }
