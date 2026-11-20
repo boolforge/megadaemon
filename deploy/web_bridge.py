@@ -31,6 +31,7 @@ Variables de entorno opcionales:
 import errno
 import http.client
 import http.server
+import ipaddress
 import os
 import re
 import socket
@@ -193,6 +194,25 @@ def allowed_origin(headers):
         return origin
     return ""
 
+def _is_loopback(addr):
+    """¿La direccion del cliente es local (127.0.0.0/8 o ::1)?"""
+    try:
+        return ipaddress.ip_address(str(addr)).is_loopback
+    except ValueError:
+        return False
+
+
+def should_inject(client_addr):
+    """Solo el propio dispositivo puede recibir la API key y el token root.
+
+    ANTES (P0 A-15): se inyectaba cuando la peticion NO traia cabecera
+    `Origin`, y el puente escuchaba en 0.0.0.0 => cualquiera de la wifi se
+    llevaba la API key y el token de escritura (root) del movil.  `Origin` y
+    `Host` son falsificables; la direccion del peer no.
+    """
+    return _is_loopback(client_addr)
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "md-web-bridge/2"
@@ -205,11 +225,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if k.lower() in HOP_BY_HOP:
                 continue
             fwd[k] = v
-        # cabeceras que el navegador no puede enviar
-        if KEY and not self.headers.get("X-API-Key"):
-            fwd["X-API-Key"] = KEY
-        if COCKPIT_TOKEN and not self.headers.get("X-Seere-Auth-Token") and not self.headers.get("Origin"):
-            fwd["X-Seere-Auth-Token"] = COCKPIT_TOKEN
+        # Cabeceras que el navegador no puede enviar.  SOLO se inyectan si el
+        # cliente es el propio dispositivo (peer loopback): con la red del movil
+        # el puente no debe regalar la API key ni el token root (A-15).
+        if should_inject(self.client_address[0]):
+            if KEY and not self.headers.get("X-API-Key"):
+                fwd["X-API-Key"] = KEY
+            if COCKPIT_TOKEN and not self.headers.get("X-Seere-Auth-Token"):
+                fwd["X-Seere-Auth-Token"] = COCKPIT_TOKEN
         try:
             code, ct, data = _forward(self.command, self.path, fwd, body)
         except Exception as e:
@@ -282,7 +305,10 @@ def _serve(bind, port):
 
 
 def main():
-    binds = [os.environ.get("MD_WEB_BIND", "0.0.0.0")]
+    # Por defecto SOLO loopback: el puente regala la API key y el token root,
+    # asi que no puede quedar exposed a la red.  Para exponerlo (solo con
+    # firewall propio) hay que pedirlo explicitamente con MD_WEB_BIND.
+    binds = [os.environ.get("MD_WEB_BIND", "127.0.0.1")]
     # Ademas del IPv4 se escucha en ::1: Chrome en Android resuelve
     # "localhost" a ::1 y responde ERR_CONNECTION_REFUSED si el servidor es
     # solo IPv4 (el usuario lo veia como "la web no funciona").
