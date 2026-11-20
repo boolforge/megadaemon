@@ -4162,6 +4162,120 @@ pub fn findings_ndjson_file(path: &str) -> Result<String, String> {
     }
 }
 
+
+// ========================================================================= //
+// VS4L (driver NPU del movil): tabla de ioctls medida en vivo
+// ========================================================================= //
+
+/// Tabla de ioctls del driver VS4L/NPU (`/dev/vertex10`) del movil.
+///
+/// **Fuente de verdad: medicion en vivo**, no el volcado estatico del
+/// driver. Cada codigo seLanzo contra `/dev/vertex10` (0644, uid/gid 1000):
+///
+/// | ioctl          | nr | resultado vivo | lectura                                |
+/// |----------------|----|----------------|----------------------------------------|
+/// | 0x40205600     | 0  | OK (0)         | el driver acepta el codigo              |
+/// | 0x40105601     | 1  | EFAULT (14)    | **reconocido** (puntero invalido)       |
+/// | 0x40105602     | 2  | EFAULT (14)    | **reconocido** (puntero invalido)       |
+/// | 0x4008560a     | 10 | OK (0)         | el driver acepta el codigo              |
+/// | resto (4,5,6,7,8) | - | ENOTTY/EINVAL | **no existen** en el driver vivo        |
+///
+/// Conclusiones medidas:
+/// * el driver **despacha por `nr`**, no por `size` (el mismo nr con
+///   sizes distintos responde igual);
+/// * `ENOTTY` = codigo inexistente; `EFAULT` = codigo reconocido con
+///   argumento invalido (no se puede pasar un buffer NULL para probar).
+///
+/// Medido el 2026-11-20 contra `/dev/vertex10` en el Samsung S21 Ultra:
+/// **4 de los 9 codigos existen** (nr 0, 1, 2 y 10).
+pub const VS4L_IOCTLS: &[(&str, u32, u8, &str, &str)] = &[
+    ("VSL_QUERY_CAP", 0x4020_5600, 0, "ok", "consulta de capacidades (acepta el codigo)"),
+    ("VSL_SET_CONFIG_1", 0x4010_5601, 1, "efault", "reconocido: devuelve EFAULT con buffer invalido"),
+    ("VSL_SET_CONFIG_2", 0x4010_5602, 2, "efault", "reconocido: devuelve EFAULT con buffer invalido"),
+    ("VSL_NO_1", 0x0000_5604, 4, "enotty", "no existe en el driver vivo"),
+    ("VSL_NO_2", 0x0000_5605, 5, "enotty", "no existe en el driver vivo"),
+    ("VSL_NO_3", 0x4080_5606, 6, "enotty", "no existe en el driver vivo"),
+    ("VSL_NO_4", 0x4080_5607, 7, "enotty", "no existe en el driver vivo"),
+    ("VSL_NO_5", 0x4080_5608, 8, "enotty", "no existe en el driver vivo"),
+    ("VSL_CONTROL_10", 0x4008_560a, 10, "ok", "el driver acepta el codigo"),
+];
+
+/// Codigos de ioctl VS4L que el driver vivo despacha (nr 0, 1, 2 y 10).
+pub const VS4L_LIVE_CODES: u32 = 4;
+
+/// Nombre de un ioctl VS4L a partir de su codigo.
+pub fn vs4l_name(code: u32) -> Option<&'static str> {
+    VS4L_IOCTLS
+        .iter()
+        .find(|(_, c, _, _, _)| *c == code)
+        .map(|(name, _, _, _, _)| *name)
+}
+
+/// Resultado medido en vivo de un ioctl VS4L: `Some(("ok"|"efault"|"enotty", descripcion))`.
+pub fn vs4l_ioctl(code: u32) -> Option<(&'static str, &'static str)> {
+    VS4L_IOCTLS
+        .iter()
+        .find(|(_, c, _, _, _)| *c == code)
+        .map(|(_, _, _, verdict, desc)| (*verdict, *desc))
+}
+
+/// Hallazgos: cadenas del DEX que contienen un ioctl VS4L conocido.
+pub fn vs4l_findings(dex: &DexFile) -> Vec<Finding> {
+    let ts = now_ts();
+    let mut out: Vec<Finding> = Vec::new();
+    for (index, text) in dex.strings.iter().enumerate() {
+        if text.len() < 6 || text.len() > 256 {
+            continue;
+        }
+        let lower = text.to_ascii_lowercase();
+        if !lower.contains("ioctl") && !lower.contains("/dev/vertex") {
+            continue;
+        }
+        let hit = VS4L_IOCTLS
+            .iter()
+            .find(|(_, code, _, _, _)| lower.contains(&format!("{:x}", code)))
+            .or_else(|| {
+                VS4L_IOCTLS.iter().find(|(_, code, _, _, _)| {
+                    text.contains(&format!("0x{:08x}", code)) || text.contains(&format!("{:08x}", code))
+                })
+            });
+        let (name, code, nr, verdict, desc) = match hit {
+            Some((name, code, nr, verdict, desc)) => {
+                (*name, *code, *nr, *verdict, *desc)
+            }
+            None => (
+                "VS4L_DESCONOCIDO",
+                0u32,
+                0u8,
+                "desconocido",
+                "ioctl VS4L no catalogado",
+            ),
+        };
+        out.push(Finding {
+            ts,
+            detector: String::from("vs4l_ioctl"),
+            evidence_class: String::from("pool_string"),
+            method: String::from("dex_pool_scan"),
+            signal: text.clone(),
+            java_class: String::from("<string-pool>"),
+            java_method: String::new(),
+            original: text.clone(),
+            kind: String::from("native_ioctl"),
+            severity: String::from("info"),
+            confidence: 80,
+            bypassable: false,
+            offset: index as i64,
+            evidence_offset: -1,
+            notes: format!(
+                "{} nr={} code=0x{:08x} veredicto_vivo={} ({})",
+                name, nr, code, verdict, desc
+            ),
+            ..Default::default()
+        });
+    }
+    out
+}
+
 // ========================================================================= //
 // Lucky Patcher / Marina Patcher
 // ========================================================================= //
@@ -4186,7 +4300,7 @@ pub const AOSP_SIGNING_KEYS: &[(&str, &str)] = &[
     ),
     (
         "aosp_shared",
-        "28BBFE4A7B97E74681DC55C2FBB6CCB8D6C74963733F6AF674D8C3A6E879FD",
+        "28BBFE4A7B97E74681DC55C2FBB6CCB8D6C74963733F6AF6AE74D8C3A6E879FD",
     ),
 ];
 
@@ -4295,10 +4409,26 @@ mod tests {
     // Lucky Patcher: detector de firma AOSP y de módulo embebido
     // ------------------------------------------------------------------ //
 
+
+    #[test]
+    fn test_vs4l_resuelve_el_nombre_del_ioctl() {
+        // La tabla es la medicion en vivo contra /dev/vertex10.
+        assert_eq!(vs4l_name(0x4020_5600), Some("VSL_QUERY_CAP"));
+        assert_eq!(vs4l_name(0x4008_560a), Some("VSL_CONTROL_10"));
+        // nr 1 y 2 existen pero con EFAULT; 4..8 no existen.
+        assert_eq!(vs4l_ioctl(0x4010_5601).map(|v| v.0), Some("efault"));
+        assert_eq!(vs4l_ioctl(0x0000_5604).map(|v| v.0), Some("enotty"));
+        // Codigo fuera de la tabla.
+        assert_eq!(vs4l_name(0x1234_5678), None);
+        // La tabla tiene 9 entradas y solo 4 las despacha el driver vivo.
+        assert_eq!(VS4L_IOCTLS.len(), 9);
+        assert_eq!(VS4L_LIVE_CODES, 4);
+    }
     #[test]
     fn test_aosp_signing_key_reconoce_las_cuatro_claves() {
-        // Huella real de `assets/testkey.x509.pem` (AOSP pública, dentro de
-        // Marina Patcher) y de `keys/platform.x509.pem`.
+        // Huellas reales de las claves AOSP publicas que empaqueta Marina
+        // Patcher (`assets/testkey.x509.pem`, `keys/platform.x509.pem`,
+        // `keys/media.x509.pem`, `keys/shared.x509.pem`).
         assert_eq!(
             aosp_signing_key(
                 "A4:0D:A8:0A:59:D1:70:CA:A9:50:CF:15:C1:8C:45:4D:47:A3:9B:26:98:9D:8B:64:0E:CD:74:5B:A7:1B:F5:DC"
@@ -4312,16 +4442,22 @@ mod tests {
             Some("aosp_platform")
         );
         assert_eq!(
-            aosp_signing_key("465983F7791F2ABEB43EA2CBDC7F21A8260B72BC08A55C839FC1A43BC741A81E"),
+            aosp_signing_key(
+                "465983F7791F2ABEB43EA2CBDC7F21A8260B72BC08A55C839FC1A43BC741A81E"
+            ),
             Some("aosp_media")
         );
         assert_eq!(
-            aosp_signing_key("28BBFE4A7B97E74681DC55C2FBB6CCB8D6C74963733F6AF674D8C3A6E879FD"),
+            aosp_signing_key(
+                "28BBFE4A7B97E74681DC55C2FBB6CCB8D6C74963733F6AF6AE74D8C3A6E879FD"
+            ),
             Some("aosp_shared")
         );
         // Una firma cualquiera NO es una clave AOSP.
         assert_eq!(
-            aosp_signing_key("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"),
+            aosp_signing_key(
+                "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+            ),
             None
         );
         // Ni una cadena corrupta.
