@@ -212,10 +212,12 @@ fn adv_a04_require_api_key_se_ignora_sin_key_configurada() {
     let lim = RateLimiter::new();
     let ext = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9));
     let d = api_key::decide(&cfg, &lim, &ext, "", std::time::Instant::now());
+    // A-04 CORREGIDO (cloud-sandbox, 2026-11-20): `forced` sin key es
+    // fail-closed: la petición externa se RECHAZA, no entra sin credencial.
     assert_eq!(
         d,
-        Decision::Allow,
-        "con `forced=true` y sin key, la petición externa entra sin credencial"
+        Decision::Unauthorized,
+        "con `forced=true` y sin key, la petición externa debe RECHAZARSE"
     );
 }
 

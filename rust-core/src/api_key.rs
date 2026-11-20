@@ -103,6 +103,12 @@ impl ApiKeyConfig {
             std::env::var("MEGADAEMON_REQUIRE_API_KEY").unwrap_or_default().trim(),
             "1" | "true" | "yes" | "on"
         );
+        Self::load_with(state_dir, forced)
+    }
+
+    /// Igual que [`load`], pero con el flag `forced` explícito (testeable
+    /// sin tocar el entorno).
+    pub fn load_with(state_dir: &str, forced: bool) -> Self {
         let extra_keys = load_extra_keys(state_dir);
         if let Ok(k) = std::env::var("MEGADAEMON_API_KEY") {
             let k = k.trim().to_string();
@@ -120,6 +126,31 @@ impl ApiKeyConfig {
             let k = existing.trim().to_string();
             if k.len() >= 16 {
                 return Self { key: k, extra_keys, enabled: true, forced };
+            }
+        }
+        if forced {
+            // A-04 (P0): `forced` sin key NO puede significar "sirve sin
+            // credencial".  Se acuña una key y se avisa (ruidoso, pero sin
+            // imprimir el secreto: sólo ruta y huella).
+            match Self::generate_and_store(state_dir) {
+                Ok(k) => {
+                    eprintln!(
+                        "[api_key] ATENCION: MEGADAEMON_REQUIRE_API_KEY=1 pero no habia ninguna key \
+                         configurada; se ha acuñado una nueva en {}/megadaemon_api.key (0600), \
+                         huella fnv1a64={}.  Léela del fichero: no la pegues en el chat ni en logs.",
+                        state_dir,
+                        fingerprint(&k)
+                    );
+                    return Self { key: k, extra_keys, enabled: true, forced };
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[api_key] CRITICO: MEGADAEMON_REQUIRE_API_KEY=1, no hay key y no se pudo acuñar \
+                         una ({}).  El daemon responde 401 a todo (fail-closed).",
+                        e
+                    );
+                    return Self { key: String::new(), extra_keys, enabled: false, forced };
+                }
             }
         }
         Self { key: String::new(), extra_keys, enabled: false, forced }
@@ -405,6 +436,13 @@ pub fn decide(
     now: Instant,
 ) -> Decision {
     if !cfg.enabled {
+        // A-04 (P0) fail-closed: con `forced` (= MEGADAEMON_REQUIRE_API_KEY=1)
+        // la ausencia de key NO puede dejar el servicio abierto: el túnel
+        // público serviría el daemon sin credencial (con root_exec detrás).
+        if cfg.forced {
+            warn_once_no_key();
+            return Decision::Unauthorized;
+        }
         return Decision::Allow;
     }
     // Loopback exento, EXCEPTO si se fuerza (cockpit detrás de un proxy
@@ -447,6 +485,29 @@ pub fn audit_line(
         "{{\"ts\":{},\"ip\":\"{}\",\"path\":\"{}\",\"ua\":\"{}\",\"reason\":\"{}\"}}",
         ts, peer, path, user_agent, reason
     )
+}
+
+/// Huella no criptográfica de una key, para poder correlacionar en logs
+/// **sin revelar el secreto** (no es sha16: es FNV-1a 64, sin dependencias).
+pub fn fingerprint(key: &str) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in key.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{:016x}", h)
+}
+
+/// Aviso una sola vez por proceso: "key no configurada" con `forced`.
+fn warn_once_no_key() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if !WARNED.swap(true, Ordering::Relaxed) {
+        eprintln!(
+            "[api_key] CRITICO: MEGADAEMON_REQUIRE_API_KEY=1 pero no hay key configurada => \
+             peticion RECHAZADA (fail-closed).  Key no configurada: no se sirve nada."
+        );
+    }
 }
 
 /// Extrae el `User-Agent` de las cabeceras.
@@ -600,8 +661,11 @@ mod tests {
         assert!(cfg.accepts(&key), "la clave acuñada debe autorizarse");
         assert!(cfg.accepts("mdaemon_sk_live_principal"), "la principal sigue viva");
 
-        // Revocar por prefijo (8+ caracteres).
-        let target = &key[13..25];
+        // Revocar por prefijo (8+ caracteres): el target tiene que ser un
+        // PREFIJO real de la key (la funcion hace `t.starts_with(target)`).
+        // Antes se cortaba por la mitad ("ve_...") y el revoke no encajaba:
+        // test rojo desde antes de A-04 (verificado contra HEAD sin mis cambios).
+        let target = &key[..20];
         assert!(revoke_extra_key(&dir, target).unwrap());
         let cfg2 = ApiKeyConfig::load(&dir);
         assert!(!cfg2.accepts(&key), "la clave revocada ya no autoriza");
@@ -640,5 +704,61 @@ mod tests {
         assert_eq!(before, after);
         assert!(ApiKeyConfig::load(&dir).accepts(&key));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A-04: con `forced` y sin key configurada, `decide()` NO puede devolver
+    /// `Allow` (fail-closed).
+    #[test]
+    fn a04_forced_sin_key_rechaza_en_vez_de_autorizar() {
+        let cfg = ApiKeyConfig {
+            key: String::new(),
+            extra_keys: Vec::new(),
+            enabled: false,
+            forced: true,
+        };
+        let lim = RateLimiter::new();
+        let ext = IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 9));
+        assert_eq!(
+            decide(&cfg, &lim, &ext, "", std::time::Instant::now()),
+            Decision::Unauthorized,
+            "con forced=true y sin key no se sirve nada"
+        );
+        // Y tampoco por loopback.
+        let loopback = IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+        assert_eq!(
+            decide(&cfg, &lim, &loopback, "", std::time::Instant::now()),
+            Decision::Unauthorized
+        );
+    }
+
+    /// A-04: `forced` sin key ⇒ `load_with` acuña una key, la persiste (0600)
+    /// y deja el middleware activo.
+    #[test]
+    fn a04_forced_sin_key_autogenera_key() {
+        let dir = std::env::temp_dir()
+            .join(format!("md_a04_{}", random_hex(6)))
+            .to_string_lossy()
+            .to_string();
+        let cfg = ApiKeyConfig::load_with(&dir, true);
+        assert!(cfg.enabled, "con forced la key autogenerada debe activar el middleware");
+        assert!(cfg.forced);
+        assert!(cfg.key.len() >= 16);
+        let stored = std::fs::read_to_string(format!("{}/megadaemon_api.key", &dir)).unwrap();
+        assert_eq!(stored.trim(), cfg.key);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Sin `forced` y sin key, el comportamiento histórico se mantiene
+    /// (middleware inactivo) — pero `decide` con `forced` nunca autoriza.
+    #[test]
+    fn a04_sin_forced_sin_key_sigue_inactivo() {
+        let dir = std::env::temp_dir()
+            .join(format!("md_a04b_{}", random_hex(6)))
+            .to_string_lossy()
+            .to_string();
+        let cfg = ApiKeyConfig::load_with(&dir, false);
+        assert!(!cfg.enabled);
+        assert!(cfg.key.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

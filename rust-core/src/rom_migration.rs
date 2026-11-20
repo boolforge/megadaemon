@@ -2232,3 +2232,318 @@ mod tests {
         assert!(out.contains("no se ha escrito nada"));
     }
 }
+
+/// ===========================================================================
+// Codec OMC (ficheros de CSC de Samsung: `cscfeature.xml`)
+// ===========================================================================
+//
+// Formato **medido y descifrado**: el fichero es
+// `gzip(XML) -> OMC` y el OMC es **rotación a la izquierda de SHIFTS[i % 256]
+// bits + XOR con SALTS[i % 256]** (la clave gira cada 256 bytes). Referencia:
+// `soulr344/OMCDecoder` (`include.h`); verificado con `encode(decode(x)) == x`
+// en los **126/126** CSC del móvil.
+//
+// El `gzip` va debajo: para descomprimir hace falta `flate2` (ya dependencia
+// del crate), no hace falta ninguna dependencia nueva.
+
+/// Rotaciones por byte del envoltorio OMC (la clave gira cada 256 bytes).
+pub const OMC_SHIFTS: [u8; 256] = [
+    1, 1, 0, 2, 2, 4, 5, 0, 4, 7, 1, 6, 5, 3, 3, 1,
+    2, 5, 0, 6, 2, 2, 4, 2, 2, 3, 0, 2, 1, 2, 4, 3,
+    4, 0, 0, 0, 3, 5, 3, 1, 6, 5, 6, 1, 1, 1, 0, 0,
+    3, 2, 7, 7, 5, 6, 7, 3, 5, 1, 0, 7, 6, 3, 6, 5,
+    4, 5, 3, 5, 1, 3, 3, 1, 5, 4, 1, 0, 0, 2, 6, 6,
+    6, 6, 4, 0, 1, 1, 0, 5, 5, 4, 2, 4, 6, 1, 7, 1,
+    2, 1, 1, 6, 5, 4, 7, 6, 5, 1, 6, 7, 0, 2, 6, 3,
+    1, 7, 1, 1, 7, 4, 0, 4, 2, 5, 3, 1, 1, 5, 6, 0,
+    3, 5, 3, 6, 5, 7, 2, 5, 6, 6, 2, 2, 3, 6, 0, 4,
+    3, 2, 0, 2, 2, 3, 5, 3, 3, 2, 5, 5, 5, 1, 3, 1,
+    1, 1, 4, 5, 1, 6, 2, 4, 7, 1, 4, 6, 0, 6, 4, 3,
+    2, 6, 1, 6, 3, 2, 1, 6, 7, 3, 2, 1, 1, 5, 6, 7,
+    2, 2, 2, 7, 4, 6, 7, 5, 3, 1, 4, 2, 7, 1, 6, 2,
+    4, 1, 5, 6, 5, 4, 5, 0, 1, 1, 6, 3, 7, 2, 0, 2,
+    5, 0, 1, 3, 3, 2, 6, 7, 7, 2, 5, 6, 0, 4, 1, 2,
+    5, 3, 7, 6, 5, 2, 5, 2, 0, 1, 3, 1, 4, 3, 4, 2,
+];
+
+/// Sales por byte del envoltorio OMC (con signo en el original; aquí u8).
+pub const OMC_SALTS: [u8; 256] = [
+    65, 197, 33, 222, 107, 28, 149, 55, 78, 17, 175, 6, 176, 135, 221, 233,
+    72, 122, 193, 213, 68, 119, 178, 145, 196, 31, 60, 57, 92, 168, 156, 187,
+    150, 91, 69, 93, 110, 23, 93, 53, 212, 205, 64, 176, 46, 2, 252, 12,
+    211, 80, 212, 221, 145, 228, 190, 140, 39, 2, 229, 211, 204, 125, 39, 66,
+    166, 63, 151, 189, 84, 199, 252, 252, 101, 166, 81, 10, 223, 1, 67, 199,
+    185, 18, 182, 102, 96, 167, 64, 239, 54, 162, 172, 190, 14, 119, 121, 2,
+    178, 177, 89, 63, 93, 109, 178, 205, 66, 220, 32, 86, 3, 198, 241, 92,
+    58, 2, 167, 176, 243, 255, 122, 252, 48, 63, 212, 59, 100, 214, 211, 59,
+    249, 239, 202, 34, 202, 71, 192, 230, 169, 176, 239, 212, 218, 144, 70, 10,
+    150, 95, 232, 252, 138, 45, 171, 243, 85, 25, 154, 137, 13, 219, 116, 46,
+    187, 59, 42, 166, 218, 151, 101, 137, 220, 97, 253, 194, 165, 159, 131, 17,
+    14, 106, 184, 137, 99, 111, 20, 18, 229, 113, 64, 232, 74, 196, 156, 26,
+    56, 212, 186, 12, 205, 156, 224, 245, 26, 48, 139, 98, 163, 51, 231, 177,
+    225, 97, 87, 151, 192, 7, 243, 155, 33, 134, 5, 152, 89, 212, 139, 63,
+    176, 250, 185, 146, 227, 151, 116, 107, 163, 91, 215, 243, 20, 141, 178, 43,
+    79, 134, 6, 102, 224, 52, 138, 205, 72, 152, 41, 218, 124, 72, 130, 221,
+];
+
+/// Quita el envoltorio OMC (rotación + XOR) ⇒ devuelve el `gzip` interior.
+pub fn omc_decode(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    for (i, &b) in data.iter().enumerate() {
+        let s = OMC_SHIFTS[i % 256];
+        let rot = if s == 0 { b } else { ((b << s) | (b >> (8 - s))) & 0xFF };
+        out.push(rot ^ OMC_SALTS[i % 256]);
+    }
+    out
+}
+
+/// Vuelve a poner el envoltorio OMC (XOR + rotación a la derecha).
+pub fn omc_encode(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    for (i, &b) in data.iter().enumerate() {
+        let a = b ^ OMC_SALTS[i % 256];
+        let s = OMC_SHIFTS[i % 256];
+        out.push(if s == 0 { a } else { (a >> s) | (a << (8 - s)) });
+    }
+    out
+}
+
+/// Descomprime el fichero OMC completo: OMC → gzip → XML plano.
+pub fn omc_decode_gzip(data: &[u8]) -> Result<String, String> {
+    use flate2::read::GzDecoder;
+    use std::io::Read;
+    let raw = omc_decode(data);
+    let mut d = GzDecoder::new(&raw[..]);
+    let mut out = String::new();
+    d.read_to_string(&mut out)
+        .map_err(|e| format!("gunzip: {e}"))?;
+    Ok(out)
+}
+
+/// Re-codifica un XML plano al formato OMC: XML → gzip → OMC.
+pub fn omc_encode_gzip(xml: &[u8]) -> Result<Vec<u8>, String> {
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    use std::io::Write;
+    let mut enc = GzEncoder::new(Vec::new(), Compression::default());
+    enc.write_all(xml).map_err(|e| format!("gzip: {e}"))?;
+    let gz = enc.finish().map_err(|e| format!("gzip: {e}"))?;
+    Ok(omc_encode(&gz))
+}
+
+/// Valor de una bandera de CSC dentro del XML plano.
+pub fn csc_feature_get(xml: &str, feature: &str) -> Option<String> {
+    let open = format!("<{feature}>");
+    let close = format!("</{feature}>");
+    let start = xml.find(&open)? + open.len();
+    let end = xml[start..].find(&close)? + start;
+    Some(xml[start..end].trim().to_string())
+}
+
+/// Todas las banderas de CSC del XML (pares nombre → valor).
+pub fn csc_features(xml: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut rest = xml;
+    while let Some(i) = rest.find("<CscFeature_") {
+        let after = &rest[i..];
+        let name_end = match after.find('>') { Some(e) => e, None => break };
+        let name = after[13..name_end].to_string();
+        let close = format!("</CscFeature_{name}>");
+        let value_start = name_end + 1;
+        let end = match after[value_start..].find(&close) {
+            Some(e) => value_start + e,
+            None => break,
+        };
+        out.push((name, after[value_start..end].trim().to_string()));
+        rest = &after[end..];
+    }
+    out
+}
+
+/// Inserta (o sustituye) una bandera de CSC dentro de `<FeatureSet>`.
+///
+/// Devuelve `Err` si el XML no tiene `<FeatureSet>`, porque sin él no se sabe
+/// dónde va la bandera.
+pub fn csc_feature_set(xml: &str, feature: &str, value: &str) -> Result<String, String> {
+    let open = format!("<{feature}>");
+    let close = format!("</{feature}>");
+    if let Some(start) = xml.find(&open) {
+        let end = start + xml[start..].find(&close).unwrap_or(0);
+        let mut out = String::with_capacity(xml.len() + value.len());
+        out.push_str(&xml[..start]);
+        out.push_str(&open);
+        out.push_str(value);
+        out.push_str(&close);
+        out.push_str(&xml[end + close.len()..]);
+        return Ok(out);
+    }
+    let marker = "<FeatureSet>";
+    let at = xml
+        .find(marker)
+        .ok_or_else(|| "el XML no tiene <FeatureSet>".to_string())?
+        + marker.len();
+    let mut out = String::with_capacity(xml.len() + feature.len() + value.len() + 40);
+    out.push_str(&xml[..at]);
+    out.push_str(&format!("\n    <{feature}>{value}</{feature}>"));
+    out.push_str(&xml[at..]);
+    Ok(out)
+}
+
+/// Plan de parche del `cscfeature.xml` para habilitar la grabación nativa.
+///
+/// **El parche mínimo**: añadir al CSC **actual** el flag que le falta, en vez
+/// de cambiar el CSC entero (lo que cambiaría el perfil de operador: OOBE,
+/// APN, VoLTE, apps del carrier).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OmcFeaturePatch {
+    /// CSC al que se parchea (el actual del móvil).
+    pub csc: String,
+    /// Bandera a escribir.
+    pub feature: String,
+    /// Valor a escribir.
+    pub value: String,
+    /// Ruta del fichero OMC.
+    pub path: String,
+    /// Tamaño del OMC antes del parche.
+    pub omc_before: usize,
+    /// Tamaño del OMC después del parche (cambia ⇒ hay que actualizar `contents.db`).
+    pub omc_after: usize,
+    /// Tamaño del XML plano después del parche.
+    pub xml_after: usize,
+    /// Pasos exactos, en orden.
+    pub steps: Vec<String>,
+    /// Cómo revertir.
+    pub revert: Vec<String>,
+}
+
+/// Construye el plan de parche del `cscfeature.xml`.
+pub fn omc_feature_patch_plan(
+    csc: &str,
+    omc_bytes: &[u8],
+    feature: &str,
+    value: &str,
+) -> Result<OmcFeaturePatch, String> {
+    let xml = omc_decode_gzip(omc_bytes)?;
+    let already = csc_feature_get(&xml, feature);
+    let xml_new = csc_feature_set(&xml, feature, value)?;
+    let omc_new = omc_encode_gzip(xml_new.as_bytes())?;
+    let path = format!(
+        "/optics/configs/carriers/single/{csc}/conf/system/cscfeature.xml",
+        csc = csc
+    );
+    let mut steps = vec![
+        format!(
+            "Copia de seguridad: `cp -a {path} /data/local/tmp/cscfeature.{csc}.bak`",
+            path = path,
+            csc = csc
+        ),
+        "Decodificar (OMC → gzip → XML), insertar el flag y re-codificar          (gzip → OMC) con `omc_decode_gzip`/`csc_feature_set`/`omc_encode_gzip`."
+            .to_string(),
+        format!(
+            "`/optics` está montado en solo-lectura: `mount -o remount,rw /optics`              (root) o un modulo Magisk systemless que haga bind-mount de {path}",
+            path = path
+        ),
+        format!("Escribir el fichero parcheado ({n} B) en {path}", n = omc_new.len()),
+        format!(
+            "ACTUALIZAR `contents.db` (tabla `contents`, columna `fileSize` de la              fila `{path}`): el nuevo tamaño es {n} B; si no se actualiza, el              inventario del CSC no cuadra.",
+            path = path,
+            n = omc_new.len()
+        ),
+        "Reiniciar y comprobar `ro.csc.sales_code` y el InCallUI.".to_string(),
+    ];
+    if let Some(prev) = already {
+        steps.insert(
+            1,
+            format!("OJO: la bandera ya existe con el valor '{prev}' (se sustituye)."),
+        );
+    }
+    Ok(OmcFeaturePatch {
+        csc: csc.to_string(),
+        feature: feature.to_string(),
+        value: value.to_string(),
+        path,
+        omc_before: omc_bytes.len(),
+        omc_after: omc_new.len(),
+        xml_after: xml_new.len(),
+        steps,
+        revert: vec![
+            "Restaurar el fichero original: `cp -a /data/local/tmp/cscfeature.<CSC>.bak <ruta>`".to_string(),
+            "Restaurar el `fileSize` original en `contents.db`.".to_string(),
+            "Reiniciar.".to_string(),
+        ],
+    })
+}
+
+/// La bandera que habilita la grabación nativa de llamadas.
+pub const RECORDING_FEATURE: &str = "CscFeature_VoiceCall_ConfigRecording";
+
+/// Valor que usan los CSC con grabación nativa sin diálogo de aviso.
+pub const RECORDING_VALUE_ALLOWED: &str = "RecordingAllowed";
+
+/// Un fichero del módulo Magisk (systemless) que activa la grabación nativa.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CscModuleFile {
+    /// Ruta dentro del directorio del módulo.
+    pub path: String,
+    /// Contenido (texto).
+    pub content: String,
+    /// Permisos (0o755 para scripts, 0o644 para datos).
+    pub mode: u32,
+}
+
+/// Los ficheros del **módulo Magisk systemless** que activan la grabación
+/// nativa en el CSC actual, sin cambiar de CSC.
+///
+/// El módulo hace bind-mount del `cscfeature.xml` parcheado sobre el original
+/// (`/optics` es de sólo lectura ⇒ tocar la partición sería peor) y del
+/// `contents.db` parcheado (su `fileSize` tiene que_quadrar con el fichero).
+/// Magisk ejecuta `post-fs-data.sh` antes de zygote ⇒ el framework
+/// (`com.samsung.android.feature.SemCscFeature`) lee el fichero ya parcheado.
+///
+/// **Revertir**: desactivar el módulo (fichero `disable`) y reiniciar.
+pub fn csc_recording_module_files(csc: &str) -> Vec<CscModuleFile> {
+    let target = format!(
+        "/optics/configs/carriers/single/{csc}/conf/system/cscfeature.xml",
+        csc = csc
+    );
+    let db_target = format!("/prism/etc/carriers/single/{csc}/contents.db", csc = csc);
+    let prop = format!(
+        "id=megadaemon_csc_recording\n\
+         name=MegaDaemon - grabacion nativa de llamadas (CSC patch)\n\
+         version=v1.0\n\
+         versionCode=1\n\
+         author=MegaDaemon W3W4\n\
+         description=Bind-mount systemless del cscfeature.xml de {csc} parcheado con \
+         {f}={v}. Desactivar el modulo = volver al estado original.\n",
+        csc = csc,
+        f = RECORDING_FEATURE,
+        v = RECORDING_VALUE_ALLOWED
+    );
+    let script = format!(
+        "#!/system/bin/sh\n\
+         MOD=/data/adb/modules/megadaemon_csc_recording\n\
+         LOG=/data/local/tmp/megadaemon/csc_patch.log\n\
+         TARGET={target}\n\
+         DB_TARGET={db}\n\
+         echo \"--- $(date) inicio\" >> $LOG\n\
+         [ -f \"$TARGET\" ] || {{ echo \"no existe $TARGET\" >> $LOG; exit 0; }}\n\
+         mount --bind \"$MOD/cscfeature.xml\" \"$TARGET\" 2>>$LOG && \
+         echo \"OK bind cscfeature\" >> $LOG\n\
+         [ -f \"$MOD/contents.db\" ] && mount --bind \"$MOD/contents.db\" \"$DB_TARGET\" 2>>$LOG && \
+         echo \"OK bind contents.db\" >> $LOG\n",
+        target = target,
+        db = db_target
+    );
+    vec![
+        CscModuleFile {
+            path: "module.prop".to_string(),
+            content: prop,
+            mode: 0o644,
+        },
+        CscModuleFile {
+            path: "post-fs-data.sh".to_string(),
+            content: script,
+            mode: 0o755,
+        },
+    ]
+}
