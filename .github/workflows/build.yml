@@ -49,14 +49,36 @@ jobs:
       - name: Clippy (advertencias como aviso, no bloquea)
         working-directory: rust-core
         run: cargo clippy --release --all-targets -- -D warnings || echo "::warning::clippy reportó avisos"
-      - name: Tests
+      - name: Tests (entorno limpio)
         working-directory: rust-core
         # NO bloquea el pipeline: hay tests rojos de varios dueños (modulos de
         # otros agentes) y mientras tanto el binario ARM64 de la instancia
         # maestra no puede dejar de publicarse. Los errores siguen visibles en
         # el log y como anotacion del run.
+        #
+        # ENTORNO LIMPIO (obligatorio): una API key o un token exportados en el
+        # runner hacen fallar tests de autenticacion por el ENTORNO, no por el
+        # codigo. Caso real medido: con una key obsoleta exportada,
+        # `api_key::acunar_y_revocar_una_clave_no_toca_la_principal` falla; con
+        # el entorno limpio pasa. Sin este `env -u`, un rojo de entorno se
+        # confunde con un rojo de codigo.
         continue-on-error: true
-        run: cargo test --release --all-targets || echo "::warning::hay tests rojos (no bloquea la release)"
+        run: |
+          env -u MEGADAEMON_API_KEY -u MEGADAEMON_TOKEN -u SEERE_AUTH_TOKEN \
+            cargo test --release --all-targets
+      - name: Gate (BLOQUEA): autenticacion y politica del harness
+        working-directory: rust-core
+        # Este gate SI bloquea el job `quality`: protege el dispositivo.
+        # - `api_key::`  = el gate de acceso (401/403/429) del cockpit.
+        # - `harness_policy` = que exige `confirm` una escritura peligrosa.
+        # Los tests de la auditoria adversarial (audit_adversarial_v15) NO
+        # bloquean a proposito: fallan mientras el defecto exista, y su red
+        # es la que manda el orden de trabajo.
+        run: |
+          env -u MEGADAEMON_API_KEY -u MEGADAEMON_TOKEN -u SEERE_AUTH_TOKEN \
+            cargo test --release --lib api_key::
+          env -u MEGADAEMON_API_KEY -u MEGADAEMON_TOKEN -u SEERE_AUTH_TOKEN \
+            cargo test --release --test harness_policy
 
   build-android:
     name: build ARM64 (Android / NDK)

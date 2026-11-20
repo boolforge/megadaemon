@@ -218,6 +218,18 @@ además `X-Seere-Auth-Token` (escritura). Definición exacta del gate:
 | R-42 | GET | `/api/v2/offers` | api-key | `class,node,limit,cursor` | `{items:[Offer],next_cursor}` | `v2.offers.list` | **nueva** | `node_cert.rs` (dist) |
 | R-43 | GET | `/api/v2/contributions` | api-key | `window_s,node,limit,cursor` | `{items:[Contribution],fleet_ratio}` | `v2.contributions.list` | **nueva** | `node_cert.rs` (dist) |
 | R-44 | POST | `/api/v2/placement` | api-key+token | body `{class,kind,cost,priority}` | `{node,reason,alternatives[]}` | `v2.placement.decide` | **nueva** | `node_cert.rs` (dist) |
+| R-45 | GET | `/api/voice` (+ alias `/api/v2/voice`) | api-key | — | `{estado,canales,cooldown,presupuesto,vetadas}` | `v2.voice.state` | **existente** (`434554c`) | `agent_voice.rs` (voice) |
+| R-46 | POST | `/api/voice` (+ alias `/api/v2/voice`) | api-key+token | body `{action,args}` (`plan`/`act`/`speak`/`whoami`/`status`) | `{ok,resultado,request_id}` | `v2.voice.act` | **existente** (`434554c`) | `voice_runtime.rs` (voice) |
+| R-47 | GET | `/api/catalog` (+ alias `/api/v2/catalog`) | api-key | — | `{modelos:[…],agentes:[{id,kind,endpoint,auth_kind,health,latency,cost_estimate,capabilities,enabled}]}` | `v2.catalog.get` | **existente** (`434554c`) | `service_bus.rs` (bus) |
+
+**Excepción registrada (v15.2, 2026-11-20):** la voz (`434554c`) y el
+catálogo se publicaron en `/api/voice` y `/api/catalog`, **fuera** de
+`/api/v2/`, contra AP-1 ("todo lo nuevo bajo `/api/v2/`"). No se renombran
+ahora (código ya escrito, testado y con 18/18 verde) pero **tienen alias
+obligatorio** `/api/v2/voice` y `/api/v2/catalog` (R-45..R-47), y
+`GET /api/v2/routes` debe publicarlos (EQ-4). Con el alias, la superficie
+v2 queda completa y el cliente nuevo **sólo** usa `/api/v2/*`.
+
 
 #### 2.1.1 Renombre aplicado: `v15.0` → `v15.1` (decidido el 2026-11-19 22:36)
 
@@ -481,6 +493,8 @@ de v2 salvo en la lista explícita de "lectura con efecto" (ninguna por ahora).
 | `v2_offers_list` | R-42 | |
 | `v2_contributions_list` | R-43 | ledger de contribución |
 | `v2_placement_decide` | R-44 | "¿dónde va esta tarea?" |
+| `megadaemon_voice` | R-45/R-46 | `plan \| act \| speak \| whoami \| status` (tool MCP propia, no `v2_*`) |
+| `megadaemon_catalog` | R-47 | catálogo unificado; delega en `service_bus` |
 
 ### 2.7 Formato canónico de intercambio entre nodos (NDJSON + MANIFEST)
 
@@ -2217,6 +2231,8 @@ cambios reales, no cosméticos):
 | 2026-11-19 | Decisión del usuario (*"sí a todo; renombra si compensa"*) | **Renombre v15.0 → v15.1**: el contrato adopta el vocabulario existente (`tasks`, `nodes`, `share`, `events`) en vez de crear familias paralelas (`board`, `bus`, `files`). **El código ajeno no se toca.** `route_id` estables. | §2.1, §2.1.1 |
 | 2026-11-19 | Decisión del usuario | `POST /api/v2/mcp` **eliminado**: el endpoint MCP sigue siendo `POST /mcp` | §2.1, §2.6 |
 | 2026-11-19 | Decisión del usuario | El contrato **se commitea** y **se apunta en el tablón** (`docs/COORDINATION.md`), una línea | §10.6 (Ola 0) |
+| 2026-11-20 | W0+W6 (voz y catálogo, `434554c`) | Rutas R-45..R-47 registradas (`/api/voice`, `/api/catalog` + alias `/api/v2/*`); tools MCP `megadaemon_voice` y `megadaemon_catalog` | §2.1, §2.6 |
+| 2026-11-20 | Petición del carril de voz | El CI corre los tests **con entorno limpio** (`env -u MEGADAEMON_API_KEY/MEGADAEMON_TOKEN/SEERE_AUTH_TOKEN`) y añade un **gate que bloquea** (`api_key::` + `harness_policy`); la suite completa sigue siendo informativa | §10.8 / CI |
 | 2026-11-19 | Crítica adversaria | **81 hallazgos** (74 defectos + 7 límites) registrados por área, **pendientes de veredicto**; se adopta su convención de ids `<área>-<n>` (se abandona el prefijo `ADV-`) | §10.3, §10.4 |
 
 ### 10.6 Cómo pasa este contrato de "especificación" a "contrato"
