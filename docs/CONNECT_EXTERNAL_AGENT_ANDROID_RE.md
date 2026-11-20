@@ -63,7 +63,7 @@ PCs Linux. Es un único binario: `megadaemon-core`.
 ═══════════════════════════════════════════════════════════════════
 Endpoint MCP (JSON-RPC 2.0 sobre HTTP POST):
 
-    POST https://webpage-ultram-please-communicate.trycloudflare.com/mcp
+    POST https://TUNEL.trycloudflare.com/mcp
 
 Cabeceras obligatorias:
     X-API-Key: <META_LA_API_KEY_AQUI>          # SIEMPRE
@@ -86,7 +86,7 @@ key o el token. Si devuelve 429 → estás disparando demasiado (ver §4).
 CLIENTE LISTO (recomendado): `tools/mdmcp.py` del repo
 `https://github.com/boolforge/megadaemon`. Cópialo y úsalo así:
 
-    export MEGADAEMON_MCP="https://webpage-ultram-please-communicate.trycloudflare.com/mcp"
+    export MEGADAEMON_MCP="https://TUNEL.trycloudflare.com/mcp"
     export MEGADAEMON_API_KEY="<KEY>"
     export MEGADAEMON_TOKEN="<TOKEN>"      # OJO: el nombre es MEGADAEMON_TOKEN
 
@@ -96,9 +96,9 @@ CLIENTE LISTO (recomendado): `tools/mdmcp.py` del repo
 (Opcionalmente: si el cliente no está disponible, `curl` + JSON a mano.)
 
 RUTAS ALTERNATIVAS si el túnel no te responde:
-  * Desde la red local del usuario: http://192.168.1.124:3000 (cockpit) y el
+  * Desde la red local del usuario: http://<IP_DEL_MOVIL>:3000 (cockpit) y el
     daemon real en 127.0.0.1:9090 (exige API key).
-  * `adb connect 192.168.1.124:5555` (el `adbd` del Samsung ya acepta la clave
+  * `adb connect <IP_DEL_MOVIL>:5555` (el `adbd` del Samsung ya acepta la clave
     de host registrada). NO te han dado la clave privada ADB y no la necesitas:
     el cliente ADB en Rust puro ya está en el repo (`rust-core/src/adb_client.rs`).
   * Prioriza SIEMPRE el túnel: es inmune a bloqueos de IP (por eso lo usa la
@@ -401,7 +401,7 @@ FASE 3 — APORTE AL ENJAMBRE (si te queda margen)
 |---|---|
 | Núcleo | Un binario Rust (`megadaemon-core`, 26 módulos) que corre en el Samsung y en PCs Linux. Sin Python en los hot paths, sin JVM. |
 | Instancia maestra | El propio Samsung: `primary`. Decide, reparte trabajo y sincroniza. Es el que guarda las claves. |
-| Cockpit | Servidor HTTP en Rust puro con la UI (mobile-first). En el móvil: `http://localhost:3000`. Desde la LAN: `http://192.168.1.124:3000`. |
+| Cockpit | Servidor HTTP en Rust puro con la UI (mobile-first). En el móvil: `http://localhost:3000`. Desde la LAN: `http://<IP_DEL_MOVIL>:3000`. |
 | MCP | JSON-RPC 2.0 sobre HTTP (`POST /mcp`). Es la vía por la que los agentes externos (y tú) hablan con la instancia sin tocar su código. |
 | ADB | Cliente ADB escrito en Rust puro (`rust-core/src/adb_client.rs`), porque el móvil no tiene binario `adb`. `adbd` escucha en TCP 5555 en la LAN. |
 | RE | DiE + Binwalk + Scalpel + Bulk Extractor, Rizin 0.9.1, Kaitai/ImHex, Tile Molester/YY-CHR, desofuscador MBA, LTO-Decomp CIRX (Micro-RTL/SSA), Exynos 2100 NPU + CV. |
