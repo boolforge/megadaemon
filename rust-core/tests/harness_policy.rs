@@ -215,19 +215,36 @@ fn el_catalogo_mcp_no_tiene_nombres_duplicados() {
 }
 
 #[test]
-fn el_catalogo_mcp_es_la_union_de_los_tres_subcatalogos() {
-    // 7 de RE (núcleo) + 11 de dispositivo + 8 de sincronización.
+fn el_catalogo_mcp_es_la_union_de_los_subcatalogos() {
+    // El MCP fusiona CINCO grupos (`mcp_server::tool_definitions`):
+    //   core (10) + android + sync + adb_tool + mcp_ext.
+    // Este test enumera los cinco: la invariante que protege es que el
+    // catálogo publicado es EXACTAMENTE la unión de sus grupos (una tool
+    // que se pierde al fusionar, o una tool inventada fuera de un grupo,
+    // hacen fallar el test).  Antes sólo se enumeraban tres grupos
+    // (core parcial + android + sync) y el conteo fijo "26": al añadir
+    // la voz (megadaemon_voice/catalog), el catálogo unificado (R-47) y
+    // los módulos de v14 (adb_tool, mcp_ext) el test quedó obsoleto y
+    // bloqueaba el gate del CI con un fallo que no era de ningún defecto.
     let nucleo = [
         "minimax_chat",
+        "megadaemon_voice",
+        "megadaemon_catalog",
         "swarm_chat",
         "megadaemon_die_binwalk",
         "megadaemon_rizin",
         "megadaemon_cirx_analyze",
         "megadaemon_mba_simplify",
         "megadaemon_npu_cv",
+        "signing_vault",
     ];
     let mut esperado: Vec<String> = nucleo.iter().map(|s| s.to_string()).collect();
-    for sub in [android::tool_definitions(), megadaemon_core::sync::tool_definitions()] {
+    for sub in [
+        android::tool_definitions(),
+        megadaemon_core::sync::tool_definitions(),
+        megadaemon_core::adb_tool::tool_definitions(),
+        megadaemon_core::mcp_ext::tool_definitions(),
+    ] {
         for d in sub.as_array().unwrap() {
             esperado.push(d["name"].as_str().unwrap().to_string());
         }
@@ -244,7 +261,14 @@ fn el_catalogo_mcp_es_la_union_de_los_tres_subcatalogos() {
         real, esperado,
         "el catálogo fusionado debe ser exactamente la unión de sus subcatálogos"
     );
-    assert_eq!(real.len(), 26, "el catálogo MCP debe seguir teniendo 26 herramientas");
+    // Suelo (no un número exacto): el conteo exacto se rompía con cada
+    // tool nueva; lo que no puede pasar es que el catálogo pierda
+    // herramientas por el camino.
+    assert!(
+        real.len() >= 45,
+        "el catálogo MCP ha perdido herramientas: {} (esperado >= 45)",
+        real.len()
+    );
 }
 
 #[test]
