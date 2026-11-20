@@ -113,6 +113,9 @@ jobs:
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
           CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          # El NDK r26c NO trae 'aarch64-linux-android-ar' ni su ranlib =>
+          # cc-rs aborta si no se le pasan llvm-ar/llvm-ranlib.
+          RANLIB_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
           # El perfil release por defecto (lto=true, codegen-units=1) MATA al
           # rustc por OOM (SIGKILL) en el runner: el crate es grande.  Con
           # estos overrides entra (mismo perfil que usan los agentes en local).
@@ -172,6 +175,7 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
           AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+          RANLIB_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ranlib
           # Perfil release sin LTO: con lto=true, codegen-units=1 el rustc
           # muere por OOM en el runner (SIGKILL) y el build aarch64 cae.
           CARGO_PROFILE_RELEASE_LTO: "false"
