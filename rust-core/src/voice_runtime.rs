@@ -593,177 +593,124 @@ fn sanitize(id: &str) -> String {
 
 /// Catálogo unificado: MODELOS + AGENTES/SERVICIOS.
 ///
+/// **Delega en `service_bus` (W6)**: el módulo del bus de servicios es la
+/// fuente canónica del catálogo; aquí sólo se serializa al esquema que la UI
+/// v2 pinta y que la voz consume para elegir proveedor.
+///
 /// Campos por entrada: `id, kind, endpoint, auth_kind, health, latency,
 /// cost_estimate, capabilities, enabled`.  Lo que no se puede medir va
 /// `null` + motivo: **nada inventado**.
-pub fn catalog() -> Value {
-    let mut items: Vec<Value> = Vec::new();
+pub fn catalog_entries() -> Vec<crate::service_bus::ServiceEntry> {
+    let mut entries: Vec<crate::service_bus::ServiceEntry> = Vec::new();
 
-    // --- MODELOS (providers.rs: catálogo redacted + `ready` real) ---
-    {
-        let red = providers::list_providers_redacted();
-        if let Some(list) = red.get("providers").and_then(|v| v.as_array()) {
-            for p in list {
-                let ready = p.get("ready").and_then(|v| v.as_bool()).unwrap_or(false);
-                let auth = p.get("auth_type").and_then(|v| v.as_str()).unwrap_or("");
-                let tier = p.get("tier").and_then(|v| v.as_str()).unwrap_or("");
-                let mut caps = vec!["chat".to_string()];
-                if p.get("supports_reasoning")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-                {
-                    caps.push("reasoning".into());
-                }
-                if auth == "local" {
-                    caps.push("offline".into());
-                }
-                items.push(json!({
-                    "id": p.get("id").cloned().unwrap_or(Value::Null),
-                    "kind": "model",
-                    "name": p.get("name").cloned().unwrap_or(Value::Null),
-                    "vendor": p.get("vendor").cloned().unwrap_or(Value::Null),
-                    "endpoint": p.get("endpoint").cloned().unwrap_or(Value::Null),
-                    "auth_kind": auth,
-                    "health": {
-                        "available": ready,
-                        "reason": if ready {
-                            "configurado".to_string()
-                        } else if auth == "gh_cli" {
-                            "sin token de GitHub CLI".to_string()
-                        } else {
-                            "sin credencial configurada".to_string()
-                        },
-                    },
-                    "latency": Value::Null,
-                    "latency_measured": false,
-                    "cost_estimate": if tier == "free" || tier == "keyless" {
-                        json!("free")
-                    } else if tier.is_empty() {
-                        Value::Null
-                    } else {
-                        json!(tier)
-                    },
-                    "capabilities": caps,
-                    "enabled": p.get("enabled").cloned().unwrap_or(Value::Null),
-                }));
-            }
-        }
+    // MODELOS: del catálogo redacted de providers (con `ready` real).
+    entries.extend(crate::service_bus::catalog_from_providers_json(
+        &providers::list_providers_redacted(),
+        "md-secrets/instance.env",
+    ));
+
+    // AGENTES: los peers vivos del bus (snapshot del mesh).
+    if let Some(snap) = mesh_snapshot() {
+        entries.extend(crate::service_bus::catalog_from_mesh_snapshot(
+            &snap,
+            voice_peer_ttl_secs(),
+        ));
     }
 
-    // --- AGENTES (la voz + los peers vivos del tablón) ---
+    // SERVICIOS: este daemon (MCP), el bus y la propia voz.
     let prof = profile();
-    items.push(json!({
-        "id": prof.node_id,
-        "kind": "agent",
-        "name": format!("voz de {}", prof.instance),
-        "endpoint": prof.endpoint,
-        "auth_kind": "api_key",
-        "health": {
-            "available": true,
-            "reason": if prof.is_master { "primary".to_string() } else { "worker".to_string() },
+    entries.push(crate::service_bus::seed_mcp_server(
+        "megadaemon-mcp",
+        if prof.endpoint.is_empty() {
+            "local://cockpit"
+        } else {
+            &prof.endpoint
         },
-        "latency": Value::Null,
-        "latency_measured": false,
-        "cost_estimate": "local",
-        "capabilities": prof.capabilities,
-        "enabled": true,
-    }));
-    if let Ok(board) = coordination::TaskBoard::open(&board_path()) {
-        if let Ok(peers) = board.live_instances(voice_peer_ttl_secs()) {
-            for p in peers {
-                if p.id == prof.node_id {
-                    continue;
-                }
-                items.push(json!({
-                    "id": p.id,
-                    "kind": "agent",
-                    "name": format!("nodo {} en {}", p.id, p.device),
-                    "endpoint": Value::Null,
-                    "auth_kind": "api_key",
-                    "health": {
-                        "available": true,
-                        "reason": format!("visto hace {}s", now_epoch() - p.last_seen),
-                    },
-                    "latency": Value::Null,
-                    "latency_measured": false,
-                    "cost_estimate": "local",
-                    "capabilities": p.capabilities,
-                    "enabled": true,
-                }));
-            }
-        }
-    }
+        "api_key+session_token",
+        "md-secrets/instance.env",
+        &["tools", "voice", "catalog"],
+    ));
+    entries.push(crate::service_bus::seed_local_tool(
+        "megadaemon-voice",
+        "local://voice_runtime",
+        &["voice", "plan", "act", "whoami"],
+    ));
+    entries
+}
 
-    // --- SERVICIOS (lo que este daemon expone) ---
-    items.push(json!({
-        "id": "megadaemon-mcp",
-        "kind": "service",
-        "name": "MCP HTTP del daemon (tools + voz)",
-        "endpoint": prof.endpoint,
-        "auth_kind": "api_key+token",
-        "health": {"available": true, "reason": "escuchando en el cockpit".to_string()},
-        "latency": Value::Null,
-        "latency_measured": false,
-        "cost_estimate": "local",
-        "capabilities": vec!["tools", "voice", "catalog"],
-        "enabled": true,
-    }));
-    items.push(json!({
-        "id": "mesh-bus",
-        "kind": "service",
-        "name": "bus del enjambre (buzón + tablón)",
-        "endpoint": format!("local://{}", journal_path()),
-        "auth_kind": "none",
-        "health": {"available": true, "reason": "local".to_string()},
-        "latency": Value::Null,
-        "latency_measured": false,
-        "cost_estimate": "local",
-        "capabilities": vec!["messages", "tasks", "journal"],
-        "enabled": true,
-    }));
+/// Snapshot del mesh (para el catálogo de agentes).
+pub fn mesh_snapshot() -> Option<Value> {
+    let dir = state_dir();
+    crate::mesh::Mesh::open(&dir).ok().map(|m| m.snapshot())
+}
 
-    let models = items.iter().filter(|i| i["kind"] == "model").count();
-    let agents = items.iter().filter(|i| i["kind"] == "agent").count();
-    let services = items.iter().filter(|i| i["kind"] == "service").count();
+/// Entrada del bus serializada al esquema unificado.
+fn entry_json(e: &crate::service_bus::ServiceEntry) -> Value {
     json!({
-        "items": items,
-        "counts": {"model": models, "agent": agents, "service": services},
-        "generated_at": now_iso(),
-        "note": "latency y coste sin medir => null; health real o 'available:false' con motivo",
+        "id": e.id,
+        "kind": e.kind.as_str(),
+        "label": e.label,
+        "endpoint": e.endpoint,
+        "auth_kind": e.auth_kind,
+        // `auth_ref` es la RUTA del fichero de secretos; nunca la credencial.
+        "auth_ref": e.auth_ref,
+        "health": {
+            "available": e.health.available,
+            "reason": e.health.reason,
+            "detail": e.health.detail,
+            "checked_at": e.health.checked_at,
+        },
+        "latency": e.latency_ms,
+        "latency_measured": e.latency_ms.is_some(),
+        "cost_estimate": {
+            "usd_per_1k_input": e.cost_estimate.usd_per_1k_input,
+            "usd_per_1k_output": e.cost_estimate.usd_per_1k_output,
+            "usd_per_call": e.cost_estimate.usd_per_call,
+            "free": e.cost_estimate.free,
+        },
+        "capabilities": e.capabilities,
+        "enabled": e.enabled,
+        "model": e.model,
+        "tier": e.tier,
+        "notes": e.notes,
     })
 }
 
-/// Elige proveedor por tarea (usado por la voz): primero el que esté
-/// `available` y encaje con la tarea, con **fallback** al criterio fijo.
+/// Catálogo unificado (MODELOS + AGENTES/SERVICIOS).
+pub fn catalog() -> Value {
+    let entries = catalog_entries();
+    let items: Vec<Value> = entries.iter().map(entry_json).collect();
+    let count = |k: &str| items.iter().filter(|i| i["kind"] == k).count();
+    json!({
+        "schema": crate::service_bus::SERVICE_BUS_SCHEMA,
+        "items": items,
+        "counts": {
+            "model": count("model"),
+            "agent": count("agent"),
+            "agent_client": count("agent_client"),
+            "mcp_server": count("mcp_server"),
+            "local_tool": count("local_tool"),
+        },
+        "generated_at": now_iso(),
+        "note": "latency sin medir => null; health real o 'available:false' con motivo; sin credenciales",
+    })
+}
+
+/// Elige proveedor por tarea (lo usa la voz): el `service_bus` decide con
+/// su política (y fallback), no inventamos reglas duplicadas.
 pub fn pick_provider(task_hint: &str) -> Option<String> {
     let hint = task_hint.to_ascii_lowercase();
-    let cat = catalog();
-    let items = cat.get("items").and_then(|v| v.as_array()).cloned()?;
-    let wants_offline = hint.contains("offline") || hint.contains("local") || hint.contains("privado");
-    let wants_reasoning = hint.contains("razon") || hint.contains("reason") || hint.contains("analisis");
-    let mut fallback: Option<String> = None;
-    for it in items {
-        if it["kind"] != "model" {
-            continue;
-        }
-        let available = it["health"]["available"].as_bool().unwrap_or(false);
-        if !available || it["enabled"].as_bool().unwrap_or(false) == false {
-            continue;
-        }
-        let id = it["id"].as_str().unwrap_or("").to_string();
-        let caps = it["capabilities"].as_array().cloned().unwrap_or_default();
-        let has = |c: &str| caps.iter().any(|x| x.as_str() == Some(c));
-        if fallback.is_none() {
-            fallback = Some(id.clone());
-        }
-        if wants_offline && has("offline") {
-            return Some(id);
-        }
-        if wants_reasoning && has("reasoning") {
-            return Some(id);
-        }
-    }
-    fallback
+    let task = if hint.contains("build") || hint.contains("compil") {
+        crate::service_bus::TaskType::Build
+    } else if hint.contains("anal") || hint.contains("razon") || hint.contains("reason") {
+        crate::service_bus::TaskType::Analysis
+    } else if hint.contains("redac") || hint.contains("escrib") || hint.contains("writing") {
+        crate::service_bus::TaskType::Writing
+    } else {
+        crate::service_bus::TaskType::Inference
+    };
+    let bus = crate::service_bus::ServiceBus::new(catalog_entries());
+    bus.select(task).chosen
 }
 
 // ------------------------------------------------------------------------ //

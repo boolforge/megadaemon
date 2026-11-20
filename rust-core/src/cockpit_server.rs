@@ -1098,6 +1098,30 @@ fn handle_client(mut stream: TcpStream) {
                 );
             }
             "/api/providers" => send_json(&mut stream, &providers::list_providers_redacted()),
+            // v15 (W6): catálogo unificado de MODELOS y AGENTES/SERVICIOS.
+            // La UI (vista "Reparto"/"Sistema") lo pinta tal cual.  La salud
+            // sale **medida**, nunca inventada: sin `?probe=1` las entradas
+            // vienen "sin comprobar" (available:false + motivo).
+            "/api/service_bus" => {
+                let dir = crate::mesh::default_state_dir();
+                let snapshot = match crate::mesh::Mesh::open(&dir) {
+                    Ok(m) => m.snapshot(),
+                    Err(e) => json!({ "peers": [], "error": e.to_string() }),
+                };
+                let mut bus = crate::service_bus::bus_from_runtime(
+                    &providers::list_providers_redacted(),
+                    providers::PROVIDERS_PATH,
+                    &snapshot,
+                    300,
+                    "http://127.0.0.1:9090/mcp",
+                );
+                if qs.get("probe").map(|s| s.as_str()) == Some("1") {
+                    // Comprobación real (TCP) de los servicios remotos.
+                    let prober = crate::service_bus::TcpProber::default();
+                    bus.probe_all(&prober);
+                }
+                send_json(&mut stream, &bus.catalog_json());
+            }
             "/api/power" => {
                 let (st, pol) = power_policy::current_policy();
                 send_json(&mut stream, &json!({
