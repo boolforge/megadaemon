@@ -141,7 +141,7 @@ Cuatro causas, cada una con su hecho:
 | P-3 | Coste real (µs y bytes) de `sha256` por MB en el Exynos 2100 | benchmark con el crate `sha2` | §8 verificación de manifiestos |
 | P-4 | Throughput real de `POST /api/v2/share/put` por la red del móvil | pushing de un artefacto de 50 MB | §8 idempotencia y coste |
 | P-5 | Deriva de calidad por proveedor (EWMA de `delegate.rs`) con ventana de 24 h | `delegate::adjustments()` + ledger de precios | §4.6 |
-| P-6 | Coste real de `fsync` y de commit en el **flash** del Samsung (el sandbox es NFS, no es representativo) | 1.000 commits sobre `state_dir` + `sync()` vía `root_exec` | §10.8: elegir el almacén del primary |
+| P-6 | Coste real de `fsync` y de commit en el **flash** del Samsung (el sandbox es NFS, no es representativo) | ✅ **CERRADO 2026-11-20**: 21,37 ms/commit (1 `fsync`/commit) vs **0,287 ms/registro** (group commit de 500) ⇒ **74×**, medido vía `root_exec` en el Exynos 2100 | §10.8.1b, §10.8.1c |
 
 > Regla: un número que no viene de una medición entra en el documento
 > marcado `pendiente` y con su método de medición. **Nunca** con "≈" ni con
@@ -2234,6 +2234,8 @@ cambios reales, no cosméticos):
 | 2026-11-20 | W0+W6 (voz y catálogo, `434554c`) | Rutas R-45..R-47 registradas (`/api/voice`, `/api/catalog` + alias `/api/v2/*`); tools MCP `megadaemon_voice` y `megadaemon_catalog` | §2.1, §2.6 |
 | 2026-11-20 | Petición del carril de voz | El CI corre los tests **con entorno limpio** (`env -u MEGADAEMON_API_KEY/MEGADAEMON_TOKEN/SEERE_AUTH_TOKEN`) y añade un **gate que bloquea** (`api_key::` + `harness_policy`); la suite completa sigue siendo informativa | §10.8 / CI |
 | 2026-11-19 | Crítica adversaria | **81 hallazgos** (74 defectos + 7 límites) registrados por área, **pendientes de veredicto**; se adopta su convención de ids `<área>-<n>` (se abandona el prefijo `ADV-`) | §10.3, §10.4 |
+| 2026-11-20 | **P-6 cerrado** (medición en el Samsung vía `root_exec` sobre el túnel) | `fsync` real del flash del Exynos 2100: **21,37 ms/commit** vs **0,287 ms/registro** con group commit ⇒ **74×**; el umbral "cuándo tirar SQLite → `coordlog`" queda fijado con números (SLA < 5 ms por escritura ⇒ `coordlog`) | §10.8.1b, §10.8.1c |
+| 2026-11-20 | Desbloqueo del enjambre | `cargo check --all-targets` **EXIT=0** sobre HEAD limpio (el job `quality` caía entero por `tests/service_bus_smoke.rs` y por un doc Markdown disfrazado de `.rs`); `src/rom_migration.rs` recuperado tras un merge que lo borró | §10.8 / CI |
 
 ### 10.6 Cómo pasa este contrato de "especificación" a "contrato"
 
@@ -2298,13 +2300,58 @@ prueba: el test que falla sigue en el repo hasta que el defecto se corrija.
 > M-5…M-10 están medidos en el **sandbox (NFS)**, no en el flash del
 > Samsung: la cifra del móvil será distinta (probablemente 5-20 ms por
 > `fsync`), pero **el orden de magnitud y la conclusión no cambian**.
-> Pendiente de medir en el dispositivo: **P-6** (añadido a §1.4).
+> **P-6 cerrado**: ver §10.8.1b (medido en el dispositivo).
+
+#### 10.8.1b Medido en el Samsung (2026-11-20 — **P-6 cerrado**)
+
+Método: `root_exec` (root real vía MCP sobre el túnel) sobre el
+**Samsung S21 Ultra / Exynos 2100 (SM-G998B)**, `/data` = **f2fs**
+(`background_gc=on`, `fsync_mode=nobarrier`, `inline_data`, `extent_cache`),
+disco al **98 %** (4,9 GB libres de 225 GB). Reloj del propio dispositivo
+(`date +%s%N`). No hay binario `sqlite3` en el móvil ⇒ se mide el **`fsync`
+real**, que es el término dominante (justificación en §10.8.2).
+
+| # | Medida | Resultado | Cómo |
+|---|---|---|---|
+| M-11 | **1 `fsync` por commit** (200 × (4 KiB + `fsync`)) | **21,37 ms/commit** (4.274 s total) | `dd conv=fsync` |
+| M-12 | El mismo, 100 commits | **33,29 ms/commit** (3,329 s total) | ídem (la dispersión 21→33 ms es la **presión de GC** de f2fs con el disco al 98 %) |
+| M-13 | **Group commit**: 500 registros con **un** `fsync` (fd abierto, sin fork en el bucle) | **144 ms total ⇒ 0,287 ms/registro** | `echo >&3` × 500 + `sync` |
+| M-14 | `fsync` sin escritura (`sync` global) | 58,1 ms | `sync` |
+| M-15 | Escritura secuencial 512 KiB + `fsync` | 37,2 ms ⇒ **13,8 MB/s** | `dd` |
+| M-16 | Log con **open/close por registro** (100 registros + `sync`) | 12,08 ms/registro | `echo >>` (el `open`/`close` por registro se paga: ~12 ms) |
+
+**Conclusión P-6 (numérica, no opinada):** en el flash del móvil, un commit
+con `fsync` cuesta **21-33 ms** y un log con group commit **0,287 ms/registro**
+⇒ **74× de diferencia** en el mismo dispositivo y en el mismo minuto. El
+factor del sandbox (44×) y el del móvil (74×) son del mismo orden ⇒ **la
+decisión de §10.8 no cambia al cambiar de hardware, y ahora está medida en
+el hardware que la ejecuta**.
+
+> ⚠️ Los números absolutos empeorarán al liberar disco: con `/data` al 98 %
+> el GC de f2fs se come el `fsync`. **El ratio (74×) es el número estable**;
+> los absolutos son el techo, no el centro.
+
+#### 10.8.1c Umbral fijado: **cuándo tirar SQLite → `coordlog`**
+
+Con P-6 cerrado, el criterio deja de ser "depende" y pasa a ser medible:
+
+| Carga del primary (escrituras sostenidas) | Techo real medido | Almacén |
+|---|---|---|
+| < 30 escrituras/min | `synchronous=NORMAL`: 0,024 ms/commit ⇒ margen de sobra | **SQLite, Fase 0** (10.8.4) |
+| 30-45 escrituras/min | `FULL`: 21-33 ms/commit ⇒ **techo absoluto**, sin margen para picos | SQLite WAL+FULL, **con** F-1 (`NORMAL`) |
+| > 50 escrituras/min **o** latencia por commit < 5 ms exigida | `FULL` no cumple (21-33 ms ≫ 5 ms) | **`coordlog` v16** (10.8.5): 0,287 ms/registro a 500/lote |
+| Ráfaga de 100 escrituras | `FULL`: 2,1-3,3 s de latencia acumulada | `coordlog`: 29 ms |
+
+Regla de decisión en una línea: **si el SLA de latencia del primary es
+< 5 ms por escritura, SQLite con `fsync` no cumple y hace falta `coordlog`;
+si es ≥ 50 ms, SQLite aguanta y no se toca nada.**
 
 #### 10.8.2 El diagnóstico
 
 | Observación | Consecuencia |
 |---|---|
 | De 8,66 ms (SQLite FULL) a 0,196 ms (log con group commit) hay un factor **44×**, y **el motor es el mismo SQLite** en la primera mitad de la comparación | **El fsync por commit es el cuello**, no el B-tree, ni el WAL, ni el parser SQL. |
+| **En el móvil (P-6) el factor es 74×** (21,37 ms/commit → 0,287 ms/registro), con `fsync` real medido en el Exynos | El diagnóstico **se confirma en el hardware objetivo**, no sólo en el sandbox: la topología multi-escritor y el `fsync` siguen mandando. |
 | SQLite ya sabe agrupar: `synchronous=NORMAL` da **0,024 ms** sin escribir una línea | El 99% del beneficio se consigue **cambiando una pragma**, sin reescribir nada. |
 | `cache_size = -2000` ⇒ ~2 MB de caché **por conexión**, y el `-shm` son 32 KB | En un móvil con ~300 MB libres, el motor se lleva una parte no despreciable por abrir la segunda conexión. |
 | `libsqlite3.a` = **3,06 MB de C** dentro del binario | El requisito "**Rust puro**" **no se cumple hoy**: hay FFI a C en el crate. |
