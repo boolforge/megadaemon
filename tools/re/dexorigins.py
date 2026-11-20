@@ -62,14 +62,24 @@ class Dex:
             return []
         units = struct.unpack_from("<%dH" % ins, b, code_off + 16)
         out = []
-        # OJO: en DEX el opcode va en el BYTE ALTO del primer halfword
-        # (formato "AA|op BBBB"), no en el bajo. Tomar u & 0xFF escanea basura.
-        for i, u in enumerate(units):
-            op = u >> 8
-            if op == 0x1a:                    # const-string
-                out.append(u & 0xFFFF)
-            elif op == 0x1b and i + 1 < len(units):   # const-string/jumbo
-                out.append(((units[i + 1] << 16) | (u & 0xFFFF)) & 0xFFFFFFFF)
+        nstr = len(self.strs)
+        # OJO 1: en DEX el opcode va en el BYTE ALTO del primer halfword
+        #        (formato "AA|op BBBB"), no en el bajo. Tomar u & 0xFF escanea basura.
+        # OJO 2: el INDICE de la cadena NO esta en la unidad del opcode: en
+        #        const-string (21c) esta en la UNIDAD SIGUIENTE; en
+        #        const-string/jumbo (31c) en las DOS siguientes.
+        #        (Antes se leia el propio halfword del opcode => indices basura
+        #         => 0 coincidencias en TODO el DEX.)
+        for i in range(len(units) - 1):
+            op = units[i] >> 8
+            if op == 0x1a:                            # const-string
+                idx = units[i + 1]
+                if idx < nstr:
+                    out.append(idx)
+            elif op == 0x1b and i + 2 < len(units):   # const-string/jumbo
+                idx = ((units[i + 2] << 16) | units[i + 1]) & 0xFFFFFFFF
+                if idx < nstr:
+                    out.append(idx)
         return out
 
     def static_value_strings(self, off):
@@ -194,15 +204,27 @@ def main():
             print("  (%s no es un DEX)" % name); continue
         d = Dex(blob)
         hits = {}
+        referenced = set()
         for cls, mname, idxs in d.walk():
+            # (a) el NOMBRE del metodo o de la clase casa con el filtro
+            #     (p.ej. getMasterKey, SbaZstdNative): no son const-string.
+            if filt in mname.lower() or filt in cls.lower():
+                hits.setdefault(cls, {}).setdefault(mname, set()).add("<por NOMBRE>")
             for i in idxs:
                 if i >= len(d.strs):
                     continue
+                referenced.add(i)
                 s = d.strs[i]
                 if filt in s.lower():
                     hits.setdefault(cls, {}).setdefault(mname, set()).add(s)
-        print("== %s (%d bytes, %d cadenas) :: %d clases con '%s'" % (
-            name, len(blob), len(d.strs), len(hits), filt))
+        # (b) cadenas que estan en la tabla pero NO referenciadas por ningun
+        #     metodo: utiles para saber "de donde sale" un literal estatico.
+        pool_only = [x for i, x in enumerate(d.strs)
+                     if filt in x.lower() and i not in referenced]
+        print("== %s (%d bytes, %d cadenas) :: %d clases con '%s' | %d en la tabla sin ref. en codigo" % (
+            name, len(blob), len(d.strs), len(hits), filt, len(pool_only)))
+        for x in pool_only[:6]:
+            print("   [tabla, sin ref.] %r" % x[:90])
         n = 0
         for cls, meths in hits.items():
             if classes_only:

@@ -10,6 +10,8 @@
 //! sin `confirm: true`**.
 
 use serde_json::{json, Value};
+use crate::csc_verify;
+use crate::npu_vs4l;
 
 /// Definiciones de las herramientas nuevas.
 pub fn tool_definitions() -> Value {
