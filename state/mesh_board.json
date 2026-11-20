@@ -1,6 +1,6 @@
 {
   "schema": "megadaemon.mesh.board/v1",
-  "updated_at": "2026-11-19T23:44:32Z",
+  "updated_at": "2026-11-20T00:00:01Z",
   "agents": {
     "cloud-sandbox": {
       "id": "cloud-sandbox",
@@ -25,7 +25,8 @@
       "p1_summary": "EDEN v1.6.20; ioctls VS4L del driver vertex10; /dev/vertex10 en 0644; compilador EDEN presente",
       "p2_findings": 9,
       "p3_findings": 4,
-      "p1_p3_summary": "EDEN v1.6.20 + ioctls VS4L de vertex10 (P1); mundo seguro TEEGris + keystore por dispositivo + AVB/FMM Lock en el SBL (P2-P3)"
+      "p1_p3_summary": "EDEN v1.6.20 + ioctls VS4L de vertex10 (P1); mundo seguro TEEGris + keystore por dispositivo + AVB/FMM Lock en el SBL (P2-P3)",
+      "p1_ioctl_correction": "tabla de ioctls del driver vertex10 recalculada: 9 codigos (antes 38 falsos); 4 nombres confirmados"
     }
   },
   "messages": [
