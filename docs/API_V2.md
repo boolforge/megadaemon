@@ -163,7 +163,7 @@ proveedor), `POST /api/sync/harvest` (forzar sync) y `POST /api/session/exchange
     "name": "megadaemon-zenith", "version": "13.4.0", "pid": 4711,
     "uptime_sec": 51234, "uptime_human": "14h 13m",
     "host": "samsung-s21", "platform": "android-arm64",
-    "instance_id": "9f2c8b1d…", "state_dir": "/data/user/0/com.agy/files/megadaemon/state"
+    "instance_id": "9f2c8b1d…", "state_dir": "<STATE_DIR>"
   },
   "system": {
     "cpu_pct": 13.5,
@@ -780,7 +780,7 @@ pub fn share_root() -> std::path::PathBuf;
 
 | Qué | Dónde | Variable de entorno |
 |---|---|---|
-| Estado del cockpit | `/data/user/0/com.agy/files/megadaemon/state` | `MEGADAEMON_STATE_DIR` |
+| Estado del cockpit | `<STATE_DIR>` | `MEGADAEMON_STATE_DIR` |
 | Bus / tablón de coordinación | `/data/local/tmp/megadaemon` (Android) o `~/.megadaemon` | `MEGADAEMON_STATE_DIR` |
 | Tablero SQLite de tareas | `<bus>/board.sqlite` | — |
 | Vault de ficheros compartidos | `<cockpit_state>/share` | `MEGADAEMON_SHARE_DIR` |

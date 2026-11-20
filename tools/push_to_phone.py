@@ -124,7 +124,7 @@ def main() -> int:
     # El fichero canonico manda sobre el entorno (rotaciones de secretos).
     _canonical()
     if not URL:
-        URL = "https://webpage-ultram-please-communicate.trycloudflare.com"
+        URL = os.environ.get("MEGADAEMON_URL", "https://TUNEL.trycloudflare.com")
     load_env_file("/workspace/md-secrets/instance.env")
     if not KEY:
         print("falta MEGADAEMON_API_KEY", file=sys.stderr)

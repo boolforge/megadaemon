@@ -4,7 +4,7 @@
 #
 # POR QUÉ
 #   El usuario quiere que varios equipos (PC, otro móvil) se conecten al
-#   Samsung a la vez por ADB:  `adb connect 192.168.1.124:5555`.
+#   Samsung a la vez por ADB:  `adb connect <IP_DEL_MOVIL>:5555`.
 #
 #   El truco de `setprop service.adb.tcp.port 5555` + `stop adbd; start adbd`
 #   funciona, pero NO es estable: cada vez que algo reinicia `adbd` (un
