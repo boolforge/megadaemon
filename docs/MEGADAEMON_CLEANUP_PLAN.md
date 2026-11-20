@@ -143,4 +143,5 @@ dependencias nuevas **no crece**: el cliente de Drive cabe en `backup_vault.rs` 
 - [ ] unificar el parser DEX Rust con `tools/dex_deobf.py` (arregla el bug 0x17)
 - [ ] registry declarativa de tools (de 53 cableados a 1 tabla)
 - [ ] cliente de Drive nativo ampliado a "carpeta + 100 % + stream" (ver `BACKUP_100_STREAM.md`)
-- [ ] borrar las ramas fusionadas y dejar una sola rama de trabajo
+- [x] **borrar las ramas fusionadas y dejar una sola rama de trabajo** — ejecutado: `publish/drive-handoff-20261119` (0 commits únicos) y `publish/state-sync` (commit ya presente en `fix/robustness` como `9358f4e`) **borradas**. De 4 ramas → 3 (`main` + 2 PRs vivos).
+- [x] **`fix/megadaemon-stability-20261119` rebaseada sobre `main`**: de *ahead 10 / behind 253* → **ahead 2 / behind 0** (los 9 commits de estado ya estaban en `main`; sólo quedan los 2 commits de código de `peers.rs`). PR #6 actualizada con force-push.

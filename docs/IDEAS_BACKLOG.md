@@ -16,13 +16,13 @@
 | A6 | Verificación doble: **MD5 de Drive + SHA-256 propio** + manifiesto `SHA256SUMS.txt` | 🟡 | `sha2` ya está en el crate |
 | A7 | Reanudable ante cortes (red móvil) | 🟡 | el cliente nativo ya usa `uploadType=resumable` (8 MiB) |
 | A8 | Cliente de Drive **nativo Rust** (no rclone) | ✅ | ya existe en `backup_vault.rs`; **rclone = opcional** |
-| A9 | ⛔ **Token de Google**: hace falta el `client_secret` de la app web, o OAuth de `rclone` en el navegador | ⛔ | pendiente del usuario (o `rclone config` + pegar el código) |
+| A9 | ⛔ **Token de Google** | 🟡 | `rclone authorize` **esperando el código** en mi sandbox (URL de Google lista); el móvil ya tiene rclone ARM64 y `tools/nh_backup_phone.sh` listo para las 5 fases |
 
 ## B. Kali NetHunter + kernel
 
 | # | idea | estado | detalle |
 |---|---|---|---|
-| B1 | **Kali NetHunter rootfs minimal** en Termux (120 MB, medido) | ⛔ | instalado en `/data/local/tmp/nh_chroot_install.sh`; **parado por el DNS roto**; listo para relanzar |
+| B1 | **Kali NetHunter rootfs minimal** en Termux (120 MB, medido) | ⛔ | instalador **apagado por orden del usuario**; **bloqueo de DNS resuelto**: `tools/http_by_ip.py` descarga por IP (rclone ARM64 ya instalado en el móvil por esa vía) |
 | B2 | NetHunter **Lite** (Magisk, sin kernel custom) | ⏳ | el móvil ya tiene Magisk 27.2-kitsune-4 |
 | B3 | NetHunter **Full** (kernel propio) | ⏳ | **no existe** para el 2100; exigiría portar con el kernel-builder + desbloquear bootloader (KVB) |
 | B4 | "Kernel más moderno": **GKI 5.15/6.1** con `init_boot` parcheado (Magisk + `vbmeta` parcheado) ⇒ **sin desbloquear, KVB intacto** | ⏳ | cuello de botella: `vendor_boot` con módulos compatibles |
@@ -53,7 +53,7 @@
 | D2 | **Ligero**: sin SDK de Google, sin rclone, sin binario externo; índices en JSON cacheado | ✅ | diseño |
 | D3 | API estable `/api/stores*` para que la GUI no toque el disco | ⏳ | prerequisite de la GUI |
 | D4 | Registry **declarativa** de tools (53 cableados a mano hoy) | ⏳ | reduce el coste de "hacer más cosas" |
-| D5 | Limpiar ramas: borrar `publish/*` (fusionadas) y `fix/megadaemon-stability` (obsoleta) | ⏳ | 4 ramas → 1 |
+| D5 | Limpiar ramas | ✅ | `publish/*` borradas (fusionadas) y `fix/megadaemon-stability` rebaseada (ahead 2 / behind 0) ⇒ **4 ramas → 3** |
 | D6 | Absorber los **12 duplicados exactos** en `util_text.rs`/`util_fs.rs` | ⏳ | medido: `walk_files`×3, `hex`×3, `now_iso`×2, `format_iso8601`×2, `parse_apk_paths`×2 |
 | D7 | Trocear `signing.rs` (5.887 líneas) y `webui.rs` (4.767) | ⏳ | top-10 = 45 % del crate |
 | D8 | Unificar el parser DEX Rust con `tools/dex_deobf.py` | ⏳ | arregla de una vez el bug `encoded_value 0x17` |
