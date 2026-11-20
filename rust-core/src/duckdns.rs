@@ -127,12 +127,31 @@ pub fn public_ip() -> Option<String> {
 
 /// Una actualización de DuckDNS. Devuelve un JSON con el resultado; nunca
 /// panica ni deja el proceso colgado.
+///
+/// **Si la IP no ha cambiado NO se llama a la API**: DuckDNS tolera las
+/// actualizaciones repetidas, pero son ruido. Así el estado refleja el
+/// último update *real*.
 pub fn update_once(
     domain: &str,
     token: &str,
     ip: &str,
     state_file: Option<&str>,
 ) -> Value {
+    // ¿La IP ya es la misma que la del último update correcto?
+    if let Some(prev) = read_state(state_file) {
+        let misma_ip = prev.get("ip").and_then(|v| v.as_str()) == Some(ip);
+        let ok_previo = prev.get("ok").and_then(|v| v.as_bool()) == Some(true);
+        if misma_ip && ok_previo {
+            let mut estado = prev.clone();
+            if let Some(o) = estado.as_object_mut() {
+                o.insert("skipped".to_string(), json!("ip_unchanged"));
+                o.insert("checked_at".to_string(), json!(now_iso()));
+            }
+            let _ = write_state(state_file, &estado);
+            return estado;
+        }
+    }
+
     let url = update_url(domain, token, ip);
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(HTTP_TIMEOUT)))
@@ -190,6 +209,31 @@ pub fn read_state(state_file: Option<&str>) -> Option<Value> {
     let path = state_path(state_file);
     let raw = fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()
+}
+
+/// Escribe la **URL viva del canal estable** en `<state_dir>/channel.url`
+/// (y en `duckdns.url` como alias), para que **ningún agente hardcodee una
+/// URL**: la leen del fichero.
+///
+/// ⚠️ **No** se escribe en `tunnel.url`: ese fichero es del *quick tunnel* de
+/// Cloudflare y lo lee `deploy/tunnel-watchdog.sh`; mezclar los dos canales
+/// haría que el watchdog sondeara la URL equivocada.
+pub fn write_channel_url(state_dir: Option<&str>, url: &str) -> std::io::Result<()> {
+    let dir = match state_dir {
+        Some(d) if !d.is_empty() => PathBuf::from(d),
+        _ => PathBuf::from("/data/local/tmp/megadaemon"),
+    };
+    fs::create_dir_all(&dir).ok();
+    for nombre in ["channel.url", "duckdns.url"] {
+        let p = dir.join(nombre);
+        fs::write(&p, format!("{url}\n"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&p, fs::Permissions::from_mode(0o644)).ok();
+        }
+    }
+    Ok(())
 }
 
 /// Estado completo de DuckDNS para el dashboard: `{ok, domain, token_present,
