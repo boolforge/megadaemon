@@ -1,6 +1,6 @@
 {
   "schema": "megadaemon.mesh.board/v1",
-  "updated_at": "2026-11-20T03:34:19Z",
+  "updated_at": "2026-11-20T03:43:12Z",
   "agents": {
     "cloud-sandbox": {
       "id": "cloud-sandbox",
@@ -17,10 +17,10 @@
       "repo": "https://github.com/boolforge/megadaemon",
       "branch": "fix/megadaemon-stability-20261119",
       "pr": "https://github.com/boolforge/megadaemon/pull/6",
-      "last_seen": "2026-11-20T03:34:19Z",
+      "last_seen": "2026-11-20T03:43:12Z",
       "external_url": "https://pot-implied-approach-input.trycloudflare.com",
       "master_url": "https://pot-implied-approach-input.trycloudflare.com",
-      "status": "Manual §1-§10 + evidencia visual del inventario + AMO=Orange ES + OMC descifrado",
+      "status": "A-04 (P0 fail-closed) + D-09 (poison recovery) cerrados + consumidor runtime del CSC (SemCscFeature) + Manual §10.4",
       "p1_findings": 11,
       "p1_summary": "EDEN v1.6.20; ioctls VS4L del driver vertex10; /dev/vertex10 en 0644; compilador EDEN presente",
       "p2_findings": 9,
@@ -295,6 +295,14 @@
       "ts": "2026-11-20T03:34:19Z",
       "headline": "Evidencia visual del inventario real (Apk Extractor) + AMO = Orange Espana (contents.db)",
       "note": "docs/assets/apps_apk_extractor_2026-11-20.jpg"
+    },
+    {
+      "id": "cloud-sandbox-semcsc-2026-11-20T03:43:12Z",
+      "node": "cloud-sandbox",
+      "kind": "csc_runtime_consumer_resolved",
+      "ts": "2026-11-20T03:43:12Z",
+      "headline": "Consumidor runtime RESUELTO: SemCscFeature (framework.jar/classes5.dex) + el framework lleva su propio decodificador OMC",
+      "note": "docs/ANDROID_EXYNOS2100_FINDINGS.md §10.4"
     }
   ],
   "links": {
