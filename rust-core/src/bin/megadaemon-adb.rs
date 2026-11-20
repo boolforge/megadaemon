@@ -128,15 +128,15 @@ pub fn parse_devices(out: &str) -> Vec<Device> {
 /// Devuelve `None` si la salida no es un código (p. ej. "000" cuando no hay
 /// red, o un mensaje de error de curl).
 pub fn parse_health_code(out: &str) -> Option<u16> {
-    let digits: String = out
-        .chars()
-        .filter(|c| c.is_ascii_digit())
-        .collect::<String>();
-    if digits.is_empty() {
+    // Sólo se acepta una salida que sea EXACTAMENTE el código: si `curl`
+    // escribió un error ("curl: (7) Failed to connect"), sus dígitos no
+    // significan nada y extraerlos daría un código falso.
+    let t = out.trim();
+    if t.is_empty() || !t.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
     // `curl` devuelve "000" si no hay conexión: no es un 200, es un fallo.
-    digits.parse::<u16>().ok().filter(|c| *c != 0)
+    t.parse::<u16>().ok().filter(|c| *c != 0)
 }
 
 /// Rutas candidatas del binario ARM64, en orden de preferencia.
