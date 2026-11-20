@@ -91,3 +91,21 @@ fn el_hash_se_verifica_y_falla_si_no_cuadra() {
     assert!(err.contains("no cuadra"), "{}", err);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn la_descarga_escribe_y_verifica_el_hash_en_la_misma_pasada() {
+    let dir = std::env::temp_dir().join(format!("md-dl-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("descarga.bin");
+    let datos = vec![7u8; 300_000];
+    let r = download_to_file(&datos[..], &path).unwrap();
+    assert_eq!(r.bytes, 300_000);
+    assert_eq!(r.sha256, sha256_chunk(&datos));
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), 300_000);
+    let (n, h2) = sha256_reader(&datos[..]).unwrap();
+    assert_eq!(n, 300_000);
+    assert_eq!(h2, r.sha256);
+    // el hash calculado coincide con el del fichero ya escrito
+    assert_eq!(verify_file_sha256(&path.to_string_lossy(), &r.sha256).is_ok(), true);
+    let _ = std::fs::remove_dir_all(&dir);
+}

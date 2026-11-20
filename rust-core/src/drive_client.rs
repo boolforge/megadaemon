@@ -291,3 +291,63 @@ fn hex(bytes: &[u8]) -> String {
     }
     s
 }
+
+/// Resultado de una descarga en streaming.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DownloadResult {
+    /// Bytes escritos en disco.
+    pub bytes: u64,
+    /// SHA-256 calculado **durante** la descarga.
+    pub sha256: String,
+}
+
+/// Descarga en streaming: escribe a disco **y** calcula el SHA-256 en la
+/// misma pasada.
+///
+/// No se guarda el contenido en memoria (se va en bloques de 1 MiB) ⇒ sirve
+/// para ficheros de cualquier tamaño con la RAM justa del móvil.
+pub fn download_to_file<R: std::io::Read>(
+    mut reader: R,
+    dest: &std::path::Path,
+) -> Result<DownloadResult, String> {
+    let mut f = std::fs::File::create(dest).map_err(|e| format!("no se puede crear {}: {e}", dest.display()))?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 1024 * 1024];
+    let mut total = 0u64;
+    loop {
+        let n = reader
+            .read(&mut buf)
+            .map_err(|e| format!("error de lectura: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+        std::io::Write::write_all(&mut f, &buf[..n])
+            .map_err(|e| format!("error de escritura en {}: {e}", dest.display()))?;
+        total += n as u64;
+    }
+    std::io::Write::flush(&mut f).map_err(|e| format!("no se pudo volcar: {e}"))?;
+    Ok(DownloadResult {
+        bytes: total,
+        sha256: hex(&h.finalize()),
+    })
+}
+
+/// Calcula el SHA-256 de un flujo sin escribir nada (para verificar sobre
+/// la marcha lo que baja de Drive).
+pub fn sha256_reader<R: std::io::Read>(mut reader: R) -> Result<(u64, String), String> {
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 1024 * 1024];
+    let mut total = 0u64;
+    loop {
+        let n = reader
+            .read(&mut buf)
+            .map_err(|e| format!("error de lectura: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+        total += n as u64;
+    }
+    Ok((total, hex(&h.finalize())))
+}
