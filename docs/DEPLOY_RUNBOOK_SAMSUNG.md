@@ -53,7 +53,7 @@
 
 ---
 
-## 3. Las tres trampas que costaron el despliegue
+## 3. Las cuatro trampas que costaron el despliegue
 
 ### 3.1 El banner MIENTE sobre el bind
 
@@ -98,6 +98,52 @@ hilos: no es el culpable. Para confirmarlo en el futuro:
 `dmesg | tail` y `logcat -b crash` (buscar "lowmemorykiller" / "oom").
 
 ---
+
+### 3.4 "ERROR: no existe megadaemon-core" NO significaba que no existiera (2026-07-20)
+
+Incidente del 20-07-20: el bus instaló el binario nuevo (`a4290bd9…`) con `mv` y
+reinició sólo el daemon. A las 02:54 el supervisor escribió, **cuatro veces**:
+
+```
+[02:54:39] megadaemon no está corriendo: relanzando (intento 0)
+[02:54:39] ERROR: no existe /data/local/tmp/megadaemon/megadaemon-core
+… (intentos 1, 2, 3) …
+```
+
+⇒ el móvil quedó **sin daemon y sin supervisor** y el enjambre perdió el canal
+(el túnel daba 502 = origen caído, no túnel caído).
+
+**La causa real NO era un binario ausente**: el `mv` había dejado el fichero
+**sin permiso de ejecución** (644) y el check antiguo era
+`[ -x "$BIN" ] || { log "ERROR: no existe $BIN"; return 1; }` ⇒ un fichero que
+**existía pero no era ejecutable** se diagnosticaba como "no existe" ⇒ el
+diagnóstico mandaba al sitio equivocado y el arreglo (buscar un binario que
+volver a subir) era inútil: el binario nuevo **funcionaba perfectamente**
+(era el que estaba corriendo al final, PID 21505).
+
+**Y el supervisor tampoco era el culpable**: tras `MAX_FAST_FAILS=3` hacía
+`exit 0` y se rendía para siempre ⇒ nadie volvía a lanzarlo.
+
+**Reglas que quedan (ya en el supervisor v15, desplegado y vivo)**:
+1. El binario debe llegar **con `chmod 755`** y el supervisor lo **auto-repara**
+   (`AVISO: … no era ejecutable (permisos); chmod 755 aplicado`).
+2. Tras 3 fallos de arranque, si hay `.prev`, **auto-rollback** a `megadaemon-core.prev`.
+3. El supervisor **nunca se rinde**: espera 5 min y reintenta.
+
+**Cómo lanzar el supervisor (crítico)**: un supervisor arrancado desde un
+`root_exec` **muere con la shell** que lo lanzó (daemon fuera de servicio y
+"escribiendo" el estado pero sin proceso). Hay que lanzarlo **desligado**:
+
+```sh
+am broadcast -a com.termux.RUN_COMMAND \
+  --es com.termux.RUN_COMMAND_PATH /data/adb/service.d/99-megadaemon.sh \
+  --ez com.termux.RUN_COMMAND_BACKGROUND true
+```
+
+⇒ queda con **PPID 1** (`ps -A -o PID,PPID,USER,ARGS | grep 99-megadaemon`).
+Ojo: `ps -A` **sin** `-o ARGS` **no muestra la línea de comandos** ⇒ un
+`grep 99-megadaemon` sobre la salida por defecto no encuentra nada y parece
+que el proceso no existe (me costó dos rondas de diagnóstico).
 
 ## 4. Verificación (las 9 rutas + el túnel)
 
