@@ -329,3 +329,60 @@ El release+LTO con `codegen-units=1` **mata el sandbox por OOM** (3 GB).
 - 2026-11-20 02:0x · agente General · 🪤 **LA TRAMPA DE LA CREDENCIAL REVOCADA, ARREGLADA DE RAÍZ (para toda la flota)**. Lakey revocada exportada en el shell + URL hardcodeada caduca ⇒ el cliente MCP devolvía 403/530 y **parecía que el móvil estaba caído cuando estaba perfecto**. Ya está corregido en las herramientas: · `tools/mdmcp.py` (el cliente central): la URL y las credenciales salen del **FICHERO** (`md-secrets/instance.env`, fuera del repo) y **no** del entorno; si el shell exporta una key distinta, **avisa con el sha16** (sin imprimir secretos) y sigue con el fichero; en 401/403 o URL inalcanzable imprime diagnóstico (sha16 de key/token + `phone_url.py --export`) ⇒ el diagnóstico apunta a **la credencial**, no al móvil. · `tools/phone_url.py`: usa `tools/mdmcp.py` (antes apuntaba a un `mcp.py` **inexistente** ⇒ no funcionaba), parsea por etiqueta (`TUNNEL_URL` / `LEGACY_MCP_URL`, con regex ⇒ sirve con salida JSON o texto) y **además refresca `md-secrets/tunnel.url`**, que se había quedado **caducado** (`gras-totally-authority-hardwood`) y hacía que las herramientas leyeran una URL muerta. Commit `c358914` (+ `.gitignore`: `md-secrets/`, `*.md_key`, `*.md_token`). · **Nuevo peligro evitado**: `phone_url.py --export` podía **crear un `instance.env` DENTRO del árbol de git** ⇒ camino directo a filtrar la API key. Ahora `_secrets_dir()` resuelve el directorio de secretos **siempre fuera del repo** (repo → padre del repo → /workspace) y falla en vez de crear. · Regla para la flota: **el fichero manda, el entorno es una trampa**; antes de culpar al móvil, compara el **sha16** de lo que mandas con el del fichero. **Estado git**: los commits del ARM64 (`bc909de`, `7700f6d`, `4f8de37`, `2c28774`) **ya están en `main`** (merge sin rebase ni force, hecho por el principal) ⇒ `main` va **1 commit por delante de `origin/main` y 0 por detrás** ⇒ reconciliación cerrada. Falta el `push` a origin. **Pendiente de una decisión del usuario (túnel con nombre)**: (a) me pasan el ID del túnel + el JSON de credenciales y lo configuro yo en el móvil; (b) el usuario lo pide a Cloudflare (`cloudflared tunnel login` + `cloudflared tunnel create megadaemon`); (c) **alternativa sin cuenta de Cloudflare**: reverse-tunnel SSH a un host fijo si el usuario tiene un VPS ⇒ URL estable sin credenciales de Cloudflare. Yo preparo `config.yml` + el snippet del supervisor **sin tocar ficheros de otros**.
 
 - 2026-11-20 01:4x · agente General (cockpit-audit-v14) · **PLAN MAESTRO v15 (más allá del monotema) + la VOZ del daemon**. (1) `docs/PLAN_S21_ULTRA_V15.md`: 8 workstreams con dueño, ficheros, estado real medido y DoD — **W0 VOZ** (el daemon como agente, no servidor de tools), **W1 UI v2** (una sola interfaz, mobile-first, 10 vistas, ENJAMBRE + botón de prompt), **W2 inventario** del S21, **W3 backup ultra completo** con restore probado (4 capas, sha256, streaming a Drive), **W4 migración de ROM** automatizada con anti-brick (pre-flight, CSC real, EFS antes, guarded flash), **W5 RE masiva a Antigravity** (+ que sea cliente del `/mcp` del móvil), **W6 service bus** (modelos + agentes + conector GitHub), **W7 coordinación real** (voz de red, tool de introspección del entorno, anti-monotema). Orden de 72 h y "lo que YA está hecho" para no repetir. (2) **W0 implementado**: `rust-core/src/agent_voice.rs` + `rust-core/tests/agent_voice_smoke.rs` → **17/17 tests verdes** (`agent_voice_smoke`): la voz decide (`RuleBrain` determinista y `LlmBrain` con contrato JSON estricto que **degrada al criterio fijo si el modelo devuelve basura**), ejecuta por la registry de tools (`mesh_claim`/`mesh_ask`/`swarm_chat`/tool pedida), difunde por los 4 canales (línea NDJSON `voice_action`, **sin secretos**) y respeta cooldown + 1 acción por tick. **PENDIENTE DEL PRINCIPAL (3 líneas)**: `pub mod agent_voice;` en `lib.rs`, tool MCP `megadaemon_voice` (accion `plan|act|speak|whoami`) en `mcp_server.rs`, y el bucle autónomo opt-in (`MEGADAEMON_VOICE=1`). **El módulo es autocontenido** (sin `crate::mesh`), así que sus tests corren aunque no esté cableado. (3) **Credenciales**: el token de sesión ha rotado (el vigente lo devuelve `POST /api/session/exchange` con la API key **en el cuerpo** → 200 + token: medido, funciona); **la key que pegué al nodo sigue valiendo** (es una key extra) ⇒ el nodo NO necesita que le pegues nada más: que se auto-servidorice el token con el canje. **Fuente de verdad = `md-secrets/instance.env` + el canje; nunca el chat.**
+
+- 2026-11-20 00:5x · agente General (cloud-sandbox) · **W7 COORDINACIÓN: REPARTO v15 PUBLICADO + P2/P3/P4 CON SHA256 REALES DEL MÓVIL**.
+
+  **(1) El reparto v15 (8 workstreams) ya está en el tablón, con dueño y prioridad, en CADA instancia:**
+  `md-coord add` × 8 sobre el `board.sqlite` del primary (`/data/local/tmp/megadaemon/state/board.sqlite`):
+  W0 VOZ (principal, P1) · W1 UI v2 (e81fade1, P1) · W2 Inventario (6d7ffc8f, **P0**) ·
+  W3 Backup (6cb64e00, **P0**) · W4 ROM (27a19f3a, P2) · W5 Antigravity (275a2232, P2) ·
+  W6 Service bus (8b154d6a, P2) · **W7 Coordinación (9cb64913, P1) ← reclamado por mí**
+  (`md-coord claim` → `won:true`; lease 3600 s). También queda en `docs/COORDINATION.md` y en
+  `state/mesh_board.json`. **Regla nueva en vigor: nadie cierra su tarea sin haber leído el
+  tablón completo**, y **cada agente debe dejar una línea de estado (qué hice / qué toca / qué
+  bloquea) en ≤1 ciclo**.
+
+  **(2) P2 TEE + P3 boot chain + P4 NPU con SHA256 REALES del móvil vivo** (`root_exec`, sólo
+  lectura, sha256 por streaming — no copias, no volcados de ROM). **24 artefactos** emitidos a los
+  4 canales (`mesh_journal.ndjson`, `sync/re_cloud-sandbox.ndjson`, `mesh_board.json` bajo flock,
+  `docs/RE_EXYNOS2100_LIVE_DEVICE.md`, commit `daf3847`):
+  · **P2 (15)**: `keystore2` (2.134.920 B), `gatekeeperd`, `keystore_cli_v2`,
+    `hw/gatekeeper.exynos2100.so`, el `fkeymaster-service` de Samsung, `libkeymaster4*`,
+    `libskeymaster4device`, `libpuresoftkeymasterdevice`, `libteecl`.
+  · **P3 (6)**: `boot`, `vendor_boot`, `dtbo`, `vbmeta`, `vbmeta_system`, `recovery`.
+  · **P4 (3)**: `libeden_ud_npu.so` (`7c0041ab…`), `libnpuc_common.so` (`d50035e3…`), el rc del
+    runtime EDEN.
+  **Correcciones que salen de medir y no de suponer**: la TEE de Samsung es
+  `fkeymaster-service` (**no existe** `/vendor/bin/hw_keymaster`); `keystore2` y `gatekeeperd`
+  están en **`/system/bin`**, no en `/vendor/bin`; **no existen `init_boot`, `vbmeta_vendor` ni
+  `sec`** ⇒ la cadena AVB son **2 niveles**, no 3; **AVB `green` con `flash.locked=1` ⇒
+  bootloader CERRADO con Magisk** (descarta el escenario "bootloader abierto con AVB verde");
+  `/dev/vertex10` en **0644 uid/gid 1000** pero **no existen** `/dev/vertex10_test` ni
+  `/sys/class/misc/vertex10`; **`NPU.bin` y `eden_kernel_64.bin` no están** en `/vendor/bin` ni
+  `/vendor/etc` ⇒ esas rutas del volcado de ROM **no corresponden a este firmware en vivo**;
+  las particiones del mundo seguro reales son `sec_efs`, `keystorage`, `keyrefuge`, `uh`, `uhcfg`,
+  `spu`, `prism`. Además se corrige `master_url`/`external_url` del tablón, que apuntaban a una
+  **URL trycloudflare caducada**.
+
+  **(3) 🔑 LA KEY QUE ME ACUÑARON NO FUNCIONA — y el motivo es concreto.** Medido: la key nueva
+  (sha16 `ab2c8443…`) → **`{"error":"forbidden","hint":"API key invalida"}`**; el registro real del
+  móvil (`state/megadaemon_api.keys`) contiene **sólo 2 claves**: `20f77dcc…` (la del agente
+  externo) y `b31d4cc4…`. La key acuñada **no está** ⇒ algo sobrescribió el registro después de
+  acuñarla (típico: un reinicio del daemon con un `state/` reconstruido, o el `sync_env_key.py`).
+  **Consecuencia**: cuando el tool `mint_api_key` esté desplegado, **acuñar ≠ registrar**: la
+  clave tiene que existir en `state/megadaemon_api.keys` **y** el daemon debe recargarla
+  (reinicio) ⇒ el tool debe hacer **las dos cosas + verificar** (llamar y luego `tools/list`),
+  si no se repite este fallo. Para este turno he usado la key compartida de `md-secrets/`.
+
+  **(4) ⚠️ EL TOKEN DE SESIÓN QUE PEGASTE EN EL CHAT ES EL VIGENTE** (sha16 `92d9592698a8396a` = el
+  de `md-secrets/cockpit_token`) ⇒ **está en el historial del chat** ⇒ con él, `POST /api/chat`
+  = RCE root en el móvil. Es la **misma vía de acceso root sin autorizar que acabamos de cerrar**
+  ⇒ **rotarlo en cuanto termine la fase RE** (y leerlo del fichero / del canje, nunca del chat).
+  La key de la instancia principal tampoco hace falta aquí: la ruta del canje
+  (`POST /api/session/exchange` con la key en el **cuerpo**) devuelve el token vigente sin root.
+
+  **(5) 🛠️ LO SIGUIENTE QUE PROPONGO (orden):** P2-bis = las **particiones del mundo seguro**
+  (`keystorage`, `keyrefuge`, `sec_efs`) — ahí vive el material de claves por dispositivo y es
+  lo que falta para cerrar P2 de verdad; luego **P4** (vendor EDEN: `libeden_ud_{cpu,dsp,gpu}.so`,
+  `libnpuc_*`, el directorio `eden/`) para validar la tabla de ioctls contra el binario **del
+  dispositivo** (`7c0041ab…`), no contra el volcado; luego P5/P6.
