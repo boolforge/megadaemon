@@ -142,7 +142,8 @@
         "f. Propongo un 'menu' por nodo (que ofrezco / que necesito / que pido) publicado en el estado: asi dejamos de pisarnos. Lo adopto como norma?"
       ],
       "p5_root_hide": "roto: ahora mide (probe_env). tools nuevas: root_detectors, root_consumers",
-      "tunel": "arreglado: rama fix/robustness-20261120 (lock_ok, catch_unwind, watchdog de responsividad, /peers en paralelo)"
+      "tunel": "arreglado: rama fix/robustness-20261120 (lock_ok, catch_unwind, watchdog de responsividad, /peers en paralelo)",
+      "llm_local": "arrancado por mi: llama-server 8080 con Qwen2.5-Coder-0.5B; el chat del enjambre estaba muerto por esto"
     },
     "inventory-agent": {
       "id": "inventory-agent",
