@@ -24,6 +24,7 @@
 //! * Signal: la base local está cifrada con clave del keystore; el `.backup`
 //!   usa la contraseña de backup del usuario (que sí se puede usar).
 
+use crate::util_fs::walk_files;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -300,29 +301,6 @@ pub fn sha256_file(path: &Path) -> Option<String> {
 }
 
 /// Recorre un directorio recogiendo ficheros regulares (sin seguir symlinks).
-fn walk_files(root: &Path, out: &mut Vec<PathBuf>) {
-    let rd = match fs::read_dir(root) {
-        Ok(r) => r,
-        Err(_) => return,
-    };
-    let mut entries: Vec<fs::DirEntry> = rd.filter_map(|e| e.ok()).collect();
-    entries.sort_by_key(|e| e.file_name());
-    for e in entries {
-        let p = e.path();
-        let md = match fs::symlink_metadata(&p) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        if md.file_type().is_symlink() {
-            continue;
-        }
-        if md.is_dir() {
-            walk_files(&p, out);
-        } else if md.is_file() {
-            out.push(p);
-        }
-    }
-}
 
 /// Construye el inventario completo de backup del `state_dir`.
 ///

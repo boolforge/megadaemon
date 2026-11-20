@@ -61,6 +61,7 @@
 //! Además, `MEGADAEMON_OBTAINIUM_INDEX_URL` apunta al índice Obtainium local
 //! sin necesidad de tocar ningún fichero.
 
+use crate::util_text::civil_from_days;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -394,34 +395,8 @@ fn epoch_ms_to_date(ms: i64) -> String {
 }
 
 /// Epoch (segundos) → ISO-8601 `YYYY-MM-DDTHH:MM:SSZ`.
-fn epoch_to_iso(secs: u64) -> String {
-    let days = (secs / 86_400) as i64;
-    let rem = secs % 86_400;
-    let (y, m, d) = civil_from_days(days);
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        y,
-        m,
-        d,
-        rem / 3600,
-        (rem % 3600) / 60,
-        rem % 60
-    )
-}
 
 /// Días desde 1970-01-01 → fecha civil (algoritmo de Howard Hinnant).
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097; // [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // [0, 399]
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
-    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32; // [1, 12]
-    (if m <= 2 { y + 1 } else { y }, m, d)
-}
 
 /// Base URL a partir de la URL del índice (`…/repo/index-v1.json` → `…/repo/`).
 fn base_url_from_index(index_url: &str) -> String {
@@ -1120,7 +1095,7 @@ pub fn fetch_index(repo_id: &str) -> Value {
                         "repo": spec.id,
                         "source_url": url,
                         "fetched_at": now,
-                        "timestamp": epoch_to_iso(now),
+                        "timestamp": crate::util_text::format_iso8601(now),
                         "count": packages.len(),
                         "packages": packages,
                     });
@@ -1132,7 +1107,7 @@ pub fn fetch_index(repo_id: &str) -> Value {
                         "packages": packages,
                         "stale": false,
                         "fetched_at": now,
-                        "timestamp": epoch_to_iso(now),
+                        "timestamp": crate::util_text::format_iso8601(now),
                         "source_url": url,
                         "cache_path": cache_path(&spec.id).to_string_lossy(),
                         "error": Value::Null,
@@ -1252,7 +1227,7 @@ pub fn plan(sources: Option<Vec<String>>) -> Value {
         obj.insert("sources".into(), json!(used));
         obj.insert("errors".into(), json!(errors));
         obj.insert("generated_at".into(), json!(now_secs()));
-        obj.insert("timestamp".into(), json!(epoch_to_iso(now_secs())));
+        obj.insert("timestamp".into(), json!(crate::util_text::format_iso8601(now_secs())));
     }
     save_last_plan(&plan);
     plan
@@ -1572,7 +1547,7 @@ pub fn status() -> Value {
         "blocked_updates": blocked,
         "last_plan": last_plan,
         "generated_at": now_secs(),
-        "timestamp": epoch_to_iso(now_secs()),
+        "timestamp": crate::util_text::format_iso8601(now_secs()),
     })
 }
 
@@ -1613,7 +1588,7 @@ pub fn watch_once() -> Value {
         obj.insert("sources".into(), json!(fetched));
         obj.insert("errors".into(), json!(errors));
         obj.insert("generated_at".into(), json!(now_secs()));
-        obj.insert("timestamp".into(), json!(epoch_to_iso(now_secs())));
+        obj.insert("timestamp".into(), json!(crate::util_text::format_iso8601(now_secs())));
     }
     save_last_plan(&plan);
 
@@ -2291,7 +2266,7 @@ mod tests {
     fn las_fechas_en_epoch_se_convierten_bien() {
         assert_eq!(epoch_ms_to_date(0), "1970-01-01 00:00:00Z");
         assert_eq!(epoch_ms_to_date(1_714_644_000_000), "2024-05-02 10:00:00Z");
-        assert!(epoch_to_iso(1_714_644_000).starts_with("2024-05-02T10:00:00"));
+        assert!(crate::util_text::format_iso8601(1_714_644_000).starts_with("2024-05-02T10:00:00"));
     }
 
     // ── Despliegue y ADB remoto ───────────────────────────────────────
