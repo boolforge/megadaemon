@@ -351,3 +351,47 @@ pub fn sha256_reader<R: std::io::Read>(mut reader: R) -> Result<(u64, String), S
     }
     Ok((total, hex(&h.finalize())))
 }
+
+/// Petición que **consulta el estado** de una sesión de subida.
+///
+/// Es la llamada oficial para reanudar: `PUT <session-uri>` con
+/// `Content-Range: bytes */<total>` ⇒ Drive responde con el rango que ya
+/// tiene guardado (`206` + `Range: bytes=0-<n>`).
+///
+/// **Regla**: la URL de sesión (`Location:`) hay que **persistirla** (junto
+/// al MANIFEST) en cuanto se abre; sin ella no se puede reanudar y hay que
+/// volver a subir el fichero entero.
+pub fn query_session_status(
+    creds: &DriveCredentials,
+    session_uri: &str,
+    total: u64,
+) -> DriveRequest {
+    let (ak, av) = creds.auth_header();
+    DriveRequest {
+        method: "PUT".to_string(),
+        url: session_uri.to_string(),
+        headers: vec![
+            (ak, av),
+            ("Content-Range".to_string(), format!("bytes */{total}")),
+            ("Content-Length".to_string(), "0".to_string()),
+        ],
+        body: None,
+    }
+}
+
+/// Rango ya almacenado en Drive a partir de la respuesta a
+/// `query_session_status()`.
+///
+/// La cabecera `Range: bytes=0-<n>` ⇒ ya están `<n>+1` bytes ⇒ el siguiente
+/// bloque empieza en `<n>+1`.
+pub fn resume_offset_from_range(range_header: &str) -> u64 {
+    // "bytes=0-1048575" => 1048576
+    if let Some(rest) = range_header.trim().strip_prefix("bytes=") {
+        if let Some((_, end)) = rest.split_once('-') {
+            if let Ok(e) = end.trim().parse::<u64>() {
+                return e + 1;
+            }
+        }
+    }
+    0
+}

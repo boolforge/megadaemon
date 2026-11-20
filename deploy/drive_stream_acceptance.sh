@@ -51,12 +51,15 @@ echo "== carpeta creada: $NEW_FOLDER"
 
 # 3) abrir la sesion de subida resumible
 META_FILE="{\"name\":\"acceptance-$(basename "$SOURCE"),\"mimeType\":\"application/octet-stream\",\"parents\":[\"$NEW_FOLDER\"]}"
+SESSION_FILE="${SESSION_FILE:-/data/local/tmp/megadaemon/.drive-session.uri}"
 LOC="$(curl -sS -D - -o /dev/null -X POST -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json; charset=UTF-8' -H "X-Upload-Content-Length: $SIZE" \
   --data-binary "$META_FILE" "$UPLOAD_API?uploadType=resumable&supportsAllDrives=true" | tr -d '\r' \
   | sed -n 's/^[Ll]ocation: *//p' | head -1)"
 [ -n "$LOC" ] || { echo "FALLO: la API no devolvio Location"; exit 5; }
-echo "== sesion de subida abierta"
+echo "$LOC" > "$SESSION_FILE"
+chmod 600 "$SESSION_FILE"
+echo "== sesion de subida abierta (URL persistida en $SESSION_FILE para poder reanudar)"
 
 # 4) subir por trozos (dd | curl: el bloque NUNCA toca el disco)
 OFFSET=0
