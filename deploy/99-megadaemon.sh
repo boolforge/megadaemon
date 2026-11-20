@@ -392,11 +392,15 @@ sync_antigravity_bridge() {
     [ -x "$PY_BIN" ] || return 0
     tok=$(cat "$PREFIX/state/cockpit_token" 2>/dev/null)
     [ -n "$tok" ] || return 0
-    # Solo se toca (y solo se lanza python) si el token ha cambiado: en el
-    # movil va justo de RAM y no queremos procesos extra por minuto.
+    # Solo se lanza python cuando puede hacer falta: si el token cambio O si
+    # el fichero de config se modifico por fuera (otra herramienta, el IDE,
+    # un despliegue).  Asi el movil no arrastra un python por minuto y el
+    # puente se autorepara igualmente.
     cur=$(printf "%s" "$tok" | sha256sum 2>/dev/null | cut -c1-16)
     prev=$(cat "$PREFIX/state/agy_bridge.sha16" 2>/dev/null)
-    if [ -n "$cur" ] && [ "$cur" = "$prev" ]; then
+    cfg_mtime=$(stat -c %Y "$ANTIGRAVITY_CFG" 2>/dev/null)
+    prev_mtime=$(cat "$PREFIX/state/agy_bridge.mtime" 2>/dev/null)
+    if [ -n "$cur" ] && [ "$cur" = "$prev" ] && [ -n "$cfg_mtime" ] && [ "$cfg_mtime" = "$prev_mtime" ]; then
         return 0
     fi
     "$PY_BIN" - "$ANTIGRAVITY_CFG" "$tok" <<'PYEOF' 2>/dev/null
@@ -448,6 +452,7 @@ except Exception:
 os.chmod(cfg, 0o600)
 PYEOF
     [ -n "$cur" ] && printf "%s" "$cur" > "$PREFIX/state/agy_bridge.sha16" 2>/dev/null
+    stat -c %Y "$ANTIGRAVITY_CFG" 2>/dev/null > "$PREFIX/state/agy_bridge.mtime" 2>/dev/null
     return 0
 }
 
