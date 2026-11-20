@@ -71,13 +71,13 @@ fn la_seleccion_es_parasita_y_tiene_fallback() {
     caro.cost_estimate = CostEstimate::per_token(0.01, 0.02);
     let mut gratis = model("gratis", &["inference"], true);
     gratis.health = Health::ok(12);
-    let bus = ServiceBus::new(vec![caro, gratis]);
+    let bus = ServiceBus::new(vec![caro.clone(), gratis.clone()]);
     let sel = bus.select(TaskType::Inference);
     assert_eq!(sel.chosen.as_deref(), Some("gratis"));
     assert_eq!(sel.chain.len(), 2);
 
     // Con el gratis caído (comprobado), entra el de pago como último recurso.
-    let mut bus2 = ServiceBus::new(vec![caro, gratis.clone()]);
+    let mut bus2 = ServiceBus::new(vec![caro.clone(), gratis.clone()]);
     bus2.set_health("gratis", Health::down("caído", "500")).unwrap();
     let sel2 = bus2.select(TaskType::Inference);
     assert_eq!(sel2.chosen.as_deref(), Some("caro"));
