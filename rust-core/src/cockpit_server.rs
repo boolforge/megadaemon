@@ -224,13 +224,21 @@ fn requires_auth(path: &str, method: &str, local_browser: bool) -> bool {
     if path == "/api/session/exchange" {
         return false;
     }
-    // v14: el navegador LOCAL (ver `local_browser_request`) lee sin token de
-    // sesión: el token se lo inyectamos en la página.  Las ESCRITURAS
-    // (POST/PUT/DELETE) siguen exigiendo token ⇒ una web maliciosa que
-    //借 el puerto del móvil sigue sin poder ejecutar comandos.
-    if local_browser && method == "GET" {
-        return false;
-    }
+    // v15 (A-18 · resto, P1): la exención de "local" se queda **SÓLO en la
+    // PÁGINA** (ya exenta más arriba: "/", "/index.html", "/v2", "/ui",
+    // "/webui_v2.css") y en las sondas de sólo lectura.
+    //
+    // Antes: `local_browser && method == "GET"` eximía de token a **TODOS**
+    // los GET de un cliente "local" ⇒ cualquier app instalada en el móvil
+    // (que conecta desde 127.0.0.1) leía `/api/providers`, `/api/status`,
+    // `/api/live_frame`… **sin credencial**: fuga de datos (ya no de root,
+    // que cerró `9f30665`).
+    //
+    // El navegador local del móvil no pierde nada: su token va **incrustado
+    // en la página** que sirve el propio daemon (y el puente lo inyecta).
+    // "Local" se decide además por el **peer loopback real**
+    // (`api_key::is_loopback(peer)`), no sólo por la cabecera `Host`.
+    let _ = local_browser;
     true
 }
 
@@ -927,11 +935,16 @@ fn handle_client(mut stream: TcpStream) {
                     "invalid_api_key"
                 )
             );
+            // v15 (A-18 · W2): el 403 dice la verdad (key caducada vs sin
+            // key configurada) sin filtrar el secreto: sólo la huella de la
+            // key que el cliente ya conoce y la fecha de rotación.
+            let presented = api_key::extract_key(&header_str);
+            let body_s = api_key::forbidden_body(&state_dir(), presented.as_deref());
             send_http_response(
                 &mut stream,
                 403,
                 "application/json",
-                b"{\"error\":\"forbidden\",\"hint\":\"API key invalida\"}",
+                body_s.as_bytes(),
             );
             return;
         }
