@@ -170,8 +170,15 @@
       <div class="card">
         <div class="card__head"><h2 class="card__title">Tareas publicadas y claims</h2></div>
         <div id="nodos-tasks"></div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Pares registrados</h2>
+          <span class="small muted">mismo registro que <code>GET /peers</code></span>
+        </div>
+        <div id="nodos-pares"></div>
       </div>
-    </section>
+    </section></section>
 
     <!-- ─────────── 3. TABLERO DE TAREAS ─────────── -->
     <section class="view" id="view-tablero" role="tabpanel" aria-labelledby="tab-tablero" tabindex="-1">
@@ -660,6 +667,18 @@
               <button class="btn btn--sm" id="btn-sync-force">Forzar sincronización</button>
               <button class="btn btn--sm btn--ghost" id="btn-sync-status">Estado del sync</button>
             </div>
+            <div class="field mt-3">
+              <label class="field__label" for="apk-install-path">Instalar APK (ruta en el dispositivo)</label>
+              <input class="input mono" id="apk-install-path" placeholder="/sdcard/Download/app.apk">
+              <span class="field__hint">Ejecuta <code>pm install -r</code> con root. Te pide confirmación.</span>
+            </div>
+            <button class="btn btn--sm btn--danger" id="btn-apk-install">Instalar APK…</button>
+            <div class="field mt-3">
+              <label class="field__label" for="shell-cmd">Shell root</label>
+              <textarea class="textarea mono" id="shell-cmd" placeholder="id&#10;ls -la /data/local/tmp/megadaemon"></textarea>
+              <span class="field__hint">Se ejecuta con <code>su</code>/root en el móvil. Queda auditada en <code>audit.ndjson</code>. Te pide confirmación.</span>
+            </div>
+            <button class="btn btn--sm btn--danger" id="btn-shell-run">Ejecutar con root…</button>
             <div id="admin-out" class="mt-3"></div>
           </div>
         </div>
@@ -1215,6 +1234,22 @@ async function loadNodos() {
     : '<div class="notice notice--warn"><div><div class="notice__title">Tablero no desplegado</div><div>' + esc(bus.reason || "") +
       '</div><div class="small muted mt-2">tablón esperado en <code>' + esc(bus.board_path || "") + '</code></div></div></div>';
 
+  // Pares registrados (id, url, alias, capacidades, último latido).
+  const peers = d.peers || [];
+  $('#nodos-pares').innerHTML = peers.length
+    ? '<div class="table-wrap"><table class="table"><thead><tr>' +
+      "<th>Par</th><th>URL</th><th>Alias de clave</th><th>Capacidades</th><th>Último latido</th>" +
+      "</tr></thead><tbody>" +
+      peers.map(function (pr) {
+        const caps = Array.isArray(pr.capabilities) ? pr.capabilities : [];
+        return "<tr><td class='mono small'>" + esc(pr.id || "—") + "</td>" +
+          "<td class='small mono'>" + esc(pr.url || "—") + "</td>" +
+          "<td class='small mono muted'>" + esc(pr.api_key_alias || "—") + "</td>" +
+          "<td class='small'>" + (caps.length ? esc(caps.join(", ")) : "—") + "</td>" +
+          "<td class='small muted'>" + esc(pr.last_seen || "—") + "</td></tr>";
+      }).join("") + "</tbody></table></div>"
+    : '<div class="empty"><div class="empty__title">Sin pares registrados</div><div class="empty__reason">No hay entradas en <code>peers.json</code> ni en <code>MEGADAEMON_PEERS</code>: esta instancia todavía no ha registrado a nadie.</div></div>';
+
   const nodes = d.nodes || [];
   if (!nodes.length) {
     $('#nodos-lista').innerHTML =
@@ -1386,34 +1421,76 @@ function renderBoard(d) {
     (mine === "observer" ? " · un observer sólo lee: no puede reclamar tareas." : "") + "</p>";
 }
 
-/** Reclama una tarea del bus (el servidor usa BEGIN IMMEDIATE + lease). */
-async function boardAction(kind, taskId) {
+/** Cuerpo de las acciones del tablero (rol y lease de la UI). */
+function boardBody(taskId) {
   const role = $("#board-role").value.trim();
   const lease = Number($("#board-lease").value || 300);
   const body = { task_id: taskId, lease_secs: lease };
   if (role) body.role = role;
-  // Rutas literales (no concatenadas): el test de coherencia ata la UI a la
-  // tabla de rutas del servidor.
-  const url = kind === "claim" ? "/api/v2/tasks/claim"
-    : kind === "release" ? "/api/v2/tasks/release"
-    : "/api/v2/tasks/report";
+  return body;
+}
+
+/** Muestra el resultado de una acción del tablero y recarga la vista. */
+async function boardDone(kind, r) {
+  if (kind === "claim") {
+    if (r.won) toast("ok", "Tarea reclamada", r.task_id + " · lease " + r.lease_secs + " s");
+    else toast("warn", "No se pudo reclamar", r.task_id + " · " + (r.note || "otro agente se adelantó"));
+  } else {
+    toast(r.ok ? "ok" : "warn", kind === "release" ? "Tarea liberada" : "Resultado reportado", r.note || r.task_id);
+  }
+  await loadTablero();
+}
+
+/** Reclama una tarea del bus (el servidor usa BEGIN IMMEDIATE + lease). */
+async function boardClaim(taskId) {
+  const body = boardBody(taskId);
   try {
-    const r = await apiCall(url, function () {
-      return fetch(url, {
+    const r = await apiCall("/api/v2/tasks/claim", function () {
+      return fetch("/api/v2/tasks/claim", {
         method: "POST",
         headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(body)
       });
     });
-    if (kind === "claim") {
-      if (r.won) toast("ok", "Tarea reclamada", taskId + " · lease " + r.lease_secs + " s");
-      else toast("warn", "No se pudo reclamar", taskId + " · " + (r.note || "otro agente se adelantó"));
-    } else {
-      toast(r.ok ? "ok" : "warn", kind === "release" ? "Tarea liberada" : "Resultado reportado", r.note || taskId);
-    }
-    await loadTablero();
+    await boardDone("claim", r);
   } catch (e) {
-    toast("error", "Acción del tablero fallida", String(e.message || e));
+    toast("error", "No se pudo reclamar", String(e.message || e));
+  }
+}
+
+/** Devuelve la tarea al estado `queued` (sólo si eres el dueño). */
+async function boardRelease(taskId) {
+  const body = boardBody(taskId);
+  try {
+    const r = await apiCall("/api/v2/tasks/release", function () {
+      return fetch("/api/v2/tasks/release", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(body)
+      });
+    });
+    await boardDone("release", r);
+  } catch (e) {
+    toast("error", "No se pudo liberar", String(e.message || e));
+  }
+}
+
+/** Reporta el resultado de una tarea (hecha). */
+async function boardReport(taskId) {
+  const body = boardBody(taskId);
+  body.ok = true;
+  body.report = "hecha desde la UI del cockpit";
+  try {
+    const r = await apiCall("/api/v2/tasks/report", function () {
+      return fetch("/api/v2/tasks/report", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(body)
+      });
+    });
+    await boardDone("report", r);
+  } catch (e) {
+    toast("error", "No se pudo reportar", String(e.message || e));
   }
 }
 
@@ -1542,6 +1619,63 @@ async function vozAction(action) {
     toast("ok", "Voz: " + action, "respuesta real del daemon");
   } catch (e) {
     out.innerHTML = '<div class="notice notice--danger"><div><div class="notice__title">La acción de voz falló</div><div>' + esc(String(e.message || e)) + "</div></div></div>";
+  }
+}
+
+/** Instala un APK en el dispositivo (destructivo ⇒ confirmación). */
+async function adminInstallApk() {
+  const path = $("#apk-install-path").value.trim();
+  if (!path) { toast("warn", "Falta la ruta", "escribe la ruta del APK en el móvil"); return; }
+  const ok = await confirmModal(
+    "Instalar el APK",
+    "<p>Se va a ejecutar <code>pm install -r " + esc(path) + "</code> <strong>con root</strong> en el dispositivo.</p><p>La app se instala o se actualiza; si el APK está manipulado, puede romper el sistema.</p>",
+    "Instalar"
+  );
+  if (!ok) return;
+  const out = $("#admin-out");
+  out.innerHTML = '<div class="small muted">Instalando…</div>';
+  try {
+    const r = await apiCall("/api/v2/admin/install_apk", function () {
+      return fetch("/api/v2/admin/install_apk", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ path: path, confirm: true })
+      });
+    });
+    out.innerHTML = '<pre class="mt-2">' + esc(JSON.stringify(r, null, 2).slice(0, 2500)) + "</pre>";
+    toast(r && r.ok ? "ok" : "warn", r && r.ok ? "APK instalado" : "La instalación falló", (r && (r.stderr || r.note)) || path);
+  } catch (e) {
+    out.innerHTML = '<div class="notice notice--danger"><div><div class="notice__title">No se pudo instalar</div><div>' + esc(String(e.message || e)) + "</div></div></div>";
+  }
+}
+
+/** Ejecuta una orden con root (destructivo ⇒ confirmación). */
+async function adminShell() {
+  const command = $("#shell-cmd").value.trim();
+  if (!command) { toast("warn", "Falta la orden", "escribe lo que quieres ejecutar"); return; }
+  const ok = await confirmModal(
+    "Ejecutar con root",
+    "<p>Vas a ejecutar con <strong>root</strong> en el dispositivo:</p><pre class='mono small'>" + esc(command) + "</pre><p>La orden queda auditada en el móvil. No hay vuelta atrás.</p>",
+    "Ejecutar"
+  );
+  if (!ok) return;
+  const out = $("#admin-out");
+  out.innerHTML = '<div class="small muted">Ejecutando…</div>';
+  try {
+    const r = await apiCall("/api/v2/admin/shell", function () {
+      return fetch("/api/v2/admin/shell", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ command: command, confirm: true })
+      });
+    });
+    out.innerHTML =
+      '<div class="small mono">' + esc(r && r.stdout ? r.stdout : "") + "</div>" +
+      (r && r.stderr ? '<pre class="mt-2">' + esc(r.stderr) + "</pre>" : "") +
+      '<div class="small muted mt-1">código de salida: ' + esc(r && r.exit_code !== undefined ? r.exit_code : "—") + "</div>";
+    toast(r && r.ok ? "ok" : "warn", "Orden ejecutada", "código " + (r && r.exit_code !== undefined ? r.exit_code : "—"));
+  } catch (e) {
+    out.innerHTML = '<div class="notice notice--danger"><div><div class="notice__title">Falló la orden</div><div>' + esc(String(e.message || e)) + "</div></div></div>";
   }
 }
 
@@ -2896,11 +3030,11 @@ function bindEvents() {
     if (route) { routeDemand(route.getAttribute("data-route")); return; }
 
     const claim = e.target.closest("[data-board-claim]");
-    if (claim) { boardAction("claim", claim.getAttribute("data-board-claim")); return; }
+    if (claim) { boardClaim(claim.getAttribute("data-board-claim")); return; }
     const release = e.target.closest("[data-board-release]");
-    if (release) { boardAction("release", release.getAttribute("data-board-release")); return; }
+    if (release) { boardRelease(release.getAttribute("data-board-release")); return; }
     const report = e.target.closest("[data-board-report]");
-    if (report) { boardAction("report", report.getAttribute("data-board-report")); return; }
+    if (report) { boardReport(report.getAttribute("data-board-report")); return; }
   });
 
   // Sub-tabs del bus
@@ -3019,6 +3153,8 @@ function bindEvents() {
   $("#btn-restart").addEventListener("click", adminRestart);
   $("#btn-sync-force").addEventListener("click", adminSync);
   $("#btn-sync-status").addEventListener("click", adminSyncStatus);
+  $("#btn-apk-install").addEventListener("click", adminInstallApk);
+  $("#btn-shell-run").addEventListener("click", adminShell);
 
   // Selector de nodo
   $("#node-select").addEventListener("change", function (e) {

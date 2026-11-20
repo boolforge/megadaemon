@@ -101,6 +101,8 @@ pub fn api_v2_routes() -> Vec<(&'static str, &'static str)> {
         ("GET", "/api/v2/voice"),
         ("POST", "/api/v2/voice"),
         ("POST", "/api/v2/admin/restart"),
+        ("POST", "/api/v2/admin/install_apk"),
+        ("POST", "/api/v2/admin/shell"),
         ("GET", "/api/v2/routes"),
     ]
 }
@@ -140,6 +142,8 @@ fn route_descriptions() -> Vec<(&'static str, &'static str, &'static str)> {
         ("GET", "/api/v2/voice", "Estado real de la voz del daemon (identidad, cooldown, presupuesto, bucle autónomo) + rol e id de la instancia."),
         ("POST", "/api/v2/voice", "Acción de la voz: status | whoami | plan | act | speak."),
         ("POST", "/api/v2/admin/restart", "Reinicia la instancia (confirm:true): el daemon sale y el supervisor lo relanza."),
+        ("POST", "/api/v2/admin/install_apk", "Instala un APK en el dispositivo con root (pm install -r). Exige confirm:true."),
+        ("POST", "/api/v2/admin/shell", "Ejecuta una orden con root en el dispositivo. Exige confirm:true; queda auditada."),
         ("GET", "/api/v2/routes", "Tabla de rutas v2 autogenerada + política de auth (la UI se valida contra esto)."),
         ("POST", "/api/v2/tasks/claim", "Reclama una tarea del tablero del bus bajo lock (BEGIN IMMEDIATE) con lease y rol; won=false si otro se adelantó."),
         ("POST", "/api/v2/tasks/release", "Devuelve una tarea a `queued`; sólo quien la tiene puede soltarla."),
@@ -770,6 +774,7 @@ pub fn nodes() -> Value {
         },
         "nodes": list,
         "node_count": list.len(),
+        "peers": peer_registry(),
         "board_instances": board_instances,
         "tasks": tasks,
         "claims": claims,
@@ -782,6 +787,62 @@ pub fn nodes() -> Value {
             {"id": "migrate", "label": "Pedir migración", "method": "POST", "path": "/api/v2/nodes/migrate"},
         ],
     })
+}
+
+/// Registro de pares interconectados (`<state>/peers.json` o `MEGADAEMON_PEERS`).
+///
+/// Mismo formato que el módulo `peers` del daemon:
+/// `{id, url, api_key_alias, capabilities, last_seen}`.  Las claves **no**
+/// están aquí (sólo el alias) ⇒ la respuesta de la v2 no puede filtrar
+/// credenciales.
+fn peer_registry() -> Vec<Value> {
+    let mut out: Vec<Value> = vec![];
+    let mut raw = String::new();
+    if let Ok(v) = std::env::var("MEGADAEMON_PEERS") {
+        let v = v.trim().to_string();
+        if !v.is_empty() {
+            if v.starts_with('[') {
+                raw = v;
+            } else {
+                let p = Path::new(v.trim());
+                if let Ok(text) = fs::read_to_string(p) {
+                    raw = text;
+                }
+            }
+        }
+    }
+    if raw.is_empty() {
+        let f = Path::new(&cockpit_state_dir()).join("peers.json");
+        if let Ok(text) = fs::read_to_string(&f) {
+            raw = text;
+        }
+    }
+    if raw.is_empty() {
+        return out;
+    }
+    let parsed: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+    let arr = match &parsed {
+        Value::Array(a) => a.clone(),
+        Value::Object(o) => o
+            .get("peers")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default(),
+        _ => vec![],
+    };
+    for pr in arr {
+        if let Some(o) = pr.as_object() {
+            // Sólo campos conocidos: si el fichero trajera una clave, no se copia.
+            out.push(json!({
+                "id": o.get("id").cloned().unwrap_or(Value::Null),
+                "url": o.get("url").cloned().unwrap_or(Value::Null),
+                "api_key_alias": o.get("api_key_alias").cloned().unwrap_or(Value::Null),
+                "capabilities": o.get("capabilities").cloned().unwrap_or(json!([])),
+                "last_seen": o.get("last_seen").cloned().unwrap_or(Value::Null),
+            }));
+        }
+    }
+    out
 }
 
 /// Asigna una tarea a un nodo.
@@ -3738,6 +3799,112 @@ fn board_report_at(path: &str, body: &Value) -> Value {
     })
 }
 
+/// Instala un APK en el dispositivo (`pm install -r`), con root.
+///
+/// Es una acción **destructiva**: exige `confirm: true`.  La ruta se valida
+/// (sin comillas ni metacarácteres de shell) y el resultado que se devuelve es
+/// el de `pm` de verdad, no un "hecho" inventado.
+pub fn admin_install_apk(body: &Value) -> Value {
+    if !body.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return json!({
+            "ok": false,
+            "error": "confirmation_required",
+            "hint": "instalar un APK cambia el dispositivo: repite con confirm=true",
+        });
+    }
+    let path = body
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if path.is_empty() {
+        return json!({ "ok": false, "error": "missing_path" });
+    }
+    // Ruta segura: sin espacios, comillas, `;|&$()<>` ni saltos de línea.
+    let safe = path
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/._-+@=%".contains(c));
+    if !safe {
+        return json!({
+            "ok": false,
+            "error": "invalid_path",
+            "reason": "la ruta sólo puede llevar letras, dígitos y / . _ - + @ = %",
+        });
+    }
+    let cmd = format!("pm install -r {}", path);
+    let r = crate::android::root_exec(&cmd, 120_000, 4096);
+    let ok = r.code == Some(0) && !r.timed_out && r.stdout.contains("Success");
+    crate::android::audit(
+        "admin",
+        &json!({ "action": "install_apk", "path": path, "ok": ok }),
+    );
+    json!({
+        "ok": ok,
+        "action": "install_apk",
+        "path": path,
+        "command": cmd,
+        "exit_code": r.code,
+        "timed_out": r.timed_out,
+        "stdout": r.stdout,
+        "stderr": r.stderr,
+        "note": if ok {
+            "pm install devolvió Success"
+        } else {
+            "pm install no devolvió Success: mira stderr"
+        },
+    })
+}
+
+/// Ejecuta una orden con **root** en el dispositivo.
+///
+/// Acción destructiva ⇒ `confirm: true` obligatorio.  La orden se limita en
+/// longitud, la salida se recorta y queda auditada (`crate::android::audit`).
+/// Esto es exactamente lo que pidió el usuario ("abrir una shell y hacer
+/// root"), pero con una doble barrera: API key + token de sesión + confirm.
+pub fn admin_shell(body: &Value) -> Value {
+    if !body.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return json!({
+            "ok": false,
+            "error": "confirmation_required",
+            "hint": "una shell root ejecuta lo que le pidas: repite con confirm=true",
+        });
+    }
+    let cmd = body
+        .get("command")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if cmd.is_empty() {
+        return json!({ "ok": false, "error": "missing_command" });
+    }
+    if cmd.chars().count() > 2000 {
+        return json!({ "ok": false, "error": "command_too_long" });
+    }
+    let timeout = body
+        .get("timeout_ms")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(30_000)
+        .clamp(1000, 120_000);
+    let r = crate::android::root_exec(&cmd, timeout, 8192);
+    let ok = r.code == Some(0) && !r.timed_out;
+    crate::android::audit(
+        "admin",
+        &json!({ "action": "shell", "command": cmd, "ok": ok }),
+    );
+    json!({
+        "ok": ok,
+        "action": "shell",
+        "command": cmd,
+        "exit_code": r.code,
+        "timed_out": r.timed_out,
+        "stdout": r.stdout,
+        "stderr": r.stderr,
+        "note": "orden ejecutada con root; la salida está recortada",
+    })
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 13) Voz del daemon (W0) por la API v2
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3848,10 +4015,10 @@ pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
     let n = |k: &str| b.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
 
     // Una ruta v2 que entre en pánico NO debe tumbar el daemon: el `catch`
-    // la convierte en un error legible.  OJO: con `panic = "abort"` en el
-    // perfil release el catch NO salva (el proceso aborta igual), por eso
-    // además las rutas de la v2 no usan `expect()`/`unwrap()` sobre datos
-    // que vienen del exterior.
+    // la convierte en un error legible.  v15 ya desenrolla (el perfil release
+    // NO usa `panic="abort"`), así que el catch es efectivo; además las rutas
+    // de la v2 no usan `expect()`/`unwrap()` sobre datos que vienen del
+    // exterior, para que el caso normal no llegue ni a panic.
     let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
     match (m.as_str(), route) {
         ("GET", "/api/v2/dashboard") => dashboard(),
@@ -3904,6 +4071,8 @@ pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
             voice_action(&action, &b)
         }
         ("POST", "/api/v2/admin/restart") => admin_restart(&b),
+        ("POST", "/api/v2/admin/install_apk") => admin_install_apk(&b),
+        ("POST", "/api/v2/admin/shell") => admin_shell(&b),
         ("POST", "/api/v2/delegation/apply") => {
             let adj = b.get("adjustments").cloned().unwrap_or(json!([]));
             delegation_apply(&adj)

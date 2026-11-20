@@ -70,7 +70,7 @@ jobs:
           env -u MEGADAEMON_API_KEY -u MEGADAEMON_TOKEN -u SEERE_AUTH_TOKEN \
             cargo test --release --all-targets \
             || echo "::warning::hay tests rojos (no bloquea la release)"
-      - name: Gate (BLOQUEA): autenticacion y politica del harness
+      - name: "Gate (BLOQUEA): autenticacion y politica del harness"
         working-directory: rust-core
         # Este gate SI bloquea el job `quality`: protege el dispositivo.
         # - `api_key::`  = el gate de acceso (401/403/429) del cockpit.

@@ -16,6 +16,7 @@ pub mod agent_voice;
 pub mod alerts;
 pub mod android;
 pub mod antigravity_intel;
+pub mod meta_agent;
 pub mod api_key;
 pub mod apk_inventory;
 pub mod app_intel;

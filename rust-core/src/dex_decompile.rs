@@ -4169,39 +4169,50 @@ pub fn findings_ndjson_file(path: &str) -> Result<String, String> {
 
 /// Tabla de ioctls del driver VS4L/NPU (`/dev/vertex10`) del movil.
 ///
-/// **Fuente de verdad: medicion en vivo**, no el volcado estatico del
-/// driver. Cada codigo seLanzo contra `/dev/vertex10` (0644, uid/gid 1000):
+/// **Fuente de verdad: medicion en vivo** (2026-11-20, Samsung S21 Ultra,
+/// `/dev/vertex10` con modo 0644, uid/gid 1000), con las DOS formas de
+/// sondeo:
 ///
-/// | ioctl          | nr | resultado vivo | lectura                                |
-/// |----------------|----|----------------|----------------------------------------|
-/// | 0x40205600     | 0  | OK (0)         | el driver acepta el codigo              |
-/// | 0x40105601     | 1  | EFAULT (14)    | **reconocido** (puntero invalido)       |
-/// | 0x40105602     | 2  | EFAULT (14)    | **reconocido** (puntero invalido)       |
-/// | 0x4008560a     | 10 | OK (0)         | el driver acepta el codigo              |
-/// | resto (4,5,6,7,8) | - | ENOTTY/EINVAL | **no existen** en el driver vivo        |
+/// | ioctl      | nr | size | sin argumento      | con buffer del size |
+/// |------------|----|------|--------------------|---------------------|
+/// | 0x40205600 | 0  | 32   | **OK, 32**        | OK                  |
+/// | 0x40105601 | 1  | 16   | **OK, 16**        | EINVAL(22)          |
+/// | 0x40105602 | 2  | 16   | **OK, 16**        | OK                  |
+/// | 0x40805606 | 6  | 128  | **OK, 128**       | EINVAL(22)          |
+/// | 0x40805607 | 7  | 128  | **OK, 128**       | EINVAL(22)          |
+/// | 0x40805608 | 8  | 128  | **OK, 128**       | EINVAL(22)          |
+/// | 0x4008560a | 10 | 8    | **OK, 8**         | OK                  |
+/// | 0x00005604 | 4  | 0    | EINVAL(22)        | EINVAL(22)          |
+/// | 0x00005605 | 5  | 0    | EINVAL(22)        | EINVAL(22)          |
 ///
-/// Conclusiones medidas:
-/// * el driver **despacha por `nr`**, no por `size` (el mismo nr con
-///   sizes distintos responde igual);
-/// * `ENOTTY` = codigo inexistente; `EFAULT` = codigo reconocido con
-///   argumento invalido (no se puede pasar un buffer NULL para probar).
-///
-/// Medido el 2026-11-20 contra `/dev/vertex10` en el Samsung S21 Ultra:
-/// **4 de los 9 codigos existen** (nr 0, 1, 2 y 10).
-pub const VS4L_IOCTLS: &[(&str, u32, u8, &str, &str)] = &[
-    ("VSL_QUERY_CAP", 0x4020_5600, 0, "ok", "consulta de capacidades (acepta el codigo)"),
-    ("VSL_SET_CONFIG_1", 0x4010_5601, 1, "efault", "reconocido: devuelve EFAULT con buffer invalido"),
-    ("VSL_SET_CONFIG_2", 0x4010_5602, 2, "efault", "reconocido: devuelve EFAULT con buffer invalido"),
-    ("VSL_NO_1", 0x0000_5604, 4, "enotty", "no existe en el driver vivo"),
-    ("VSL_NO_2", 0x0000_5605, 5, "enotty", "no existe en el driver vivo"),
-    ("VSL_NO_3", 0x4080_5606, 6, "enotty", "no existe en el driver vivo"),
-    ("VSL_NO_4", 0x4080_5607, 7, "enotty", "no existe en el driver vivo"),
-    ("VSL_NO_5", 0x4080_5608, 8, "enotty", "no existe en el driver vivo"),
-    ("VSL_CONTROL_10", 0x4008_560a, 10, "ok", "el driver acepta el codigo"),
+/// Conclusiones medidas (concordantes con `docs/ANDROID_EXYNOS2100_FINDINGS.md`
+/// §1.2 del principal):
+/// * **7 de los 9 codigos existen** en el driver vivo (los dos `_IO` de nr 4 y
+///   5 son los unicos que no).
+/// * El **test de existencia es el sondeo SIN argumento**: el driver devuelve
+///   el tamano que espera (32/16/16/128/128/128/8), y ese valor **coincide
+///   exacto con el campo `size` de `_IOC`** => el `size` **no es advisory**,
+///   es parte del contrato.
+/// * `EINVAL` (22) **NO significa "no existe"**: significa "reconocido pero
+///   argumento invalido" (los nr 1, 6, 7 y 8 responden EINVAL con buffer).
+///   Confundir EINVAL con ENOTTY hacia parecer que solo existian 4 codigos.
+/// * El driver **despacha por `nr`**: el mismo nr con `size` distinto
+///   responde igual.
+pub const VS4L_IOCTLS: &[(&str, u32, u8, u16, &str)] = &[
+    ("VSL_QUERY_CAP", 0x4020_5600, 0, 32, "existe: sin argumento devuelve 32"),
+    ("VSL_CONFIG_1", 0x4010_5601, 1, 16, "existe: sin argumento devuelve 16"),
+    ("VSL_CONFIG_2", 0x4010_5602, 2, 16, "existe: sin argumento devuelve 16"),
+    ("VSL_NO_4", 0x0000_5604, 4, 0, "NO existe: EINVAL en las dos formas"),
+    ("VSL_NO_5", 0x0000_5605, 5, 0, "NO existe: EINVAL en las dos formas"),
+    ("VSL_SET_6", 0x4080_5606, 6, 128, "existe: sin argumento devuelve 128"),
+    ("VSL_SET_7", 0x4080_5607, 7, 128, "existe: sin argumento devuelve 128"),
+    ("VSL_SET_8", 0x4080_5608, 8, 128, "existe: sin argumento devuelve 128"),
+    ("VSL_CONTROL_10", 0x4008_560a, 10, 8, "existe: sin argumento devuelve 8"),
 ];
 
-/// Codigos de ioctl VS4L que el driver vivo despacha (nr 0, 1, 2 y 10).
-pub const VS4L_LIVE_CODES: u32 = 4;
+/// Codigos de ioctl VS4L que el driver vivo despacha: **7 de 9**
+/// (los dos `_IO` de nr 4 y 5 no existen).
+pub const VS4L_LIVE_CODES: u32 = 7;
 
 /// Nombre de un ioctl VS4L a partir de su codigo.
 pub fn vs4l_name(code: u32) -> Option<&'static str> {
@@ -4216,7 +4227,13 @@ pub fn vs4l_ioctl(code: u32) -> Option<(&'static str, &'static str)> {
     VS4L_IOCTLS
         .iter()
         .find(|(_, c, _, _, _)| *c == code)
-        .map(|(_, _, _, verdict, desc)| (*verdict, *desc))
+        .map(|(_, _, _, _, desc)| {
+            if desc.starts_with("existe") {
+                ("existe", *desc)
+            } else {
+                ("no_existe", *desc)
+            }
+        })
 }
 
 /// Hallazgos: cadenas del DEX que contienen un ioctl VS4L conocido.
@@ -4231,26 +4248,21 @@ pub fn vs4l_findings(dex: &DexFile) -> Vec<Finding> {
         if !lower.contains("ioctl") && !lower.contains("/dev/vertex") {
             continue;
         }
-        let hit = VS4L_IOCTLS
-            .iter()
-            .find(|(_, code, _, _, _)| lower.contains(&format!("{:x}", code)))
-            .or_else(|| {
-                VS4L_IOCTLS.iter().find(|(_, code, _, _, _)| {
-                    text.contains(&format!("0x{:08x}", code)) || text.contains(&format!("{:08x}", code))
-                })
-            });
-        let (name, code, nr, verdict, desc) = match hit {
-            Some((name, code, nr, verdict, desc)) => {
-                (*name, *code, *nr, *verdict, *desc)
-            }
+        let hit = VS4L_IOCTLS.iter().find(|(_, code, _, _, _)| {
+            let hex = format!("{:08x}", code);
+            lower.contains(&hex) || lower.contains(&hex.trim_start_matches('0'))
+        });
+        let (name, code, nr, size, desc) = match hit {
+            Some((name, code, nr, size, desc)) => (*name, *code, *nr, *size, *desc),
             None => (
                 "VS4L_DESCONOCIDO",
                 0u32,
                 0u8,
-                "desconocido",
+                0u16,
                 "ioctl VS4L no catalogado",
             ),
         };
+        let verdict = if desc.starts_with("existe") { "existe" } else { "no_existe" };
         out.push(Finding {
             ts,
             detector: String::from("vs4l_ioctl"),
@@ -4267,8 +4279,8 @@ pub fn vs4l_findings(dex: &DexFile) -> Vec<Finding> {
             offset: index as i64,
             evidence_offset: -1,
             notes: format!(
-                "{} nr={} code=0x{:08x} veredicto_vivo={} ({})",
-                name, nr, code, verdict, desc
+                "{} nr={} code=0x{:08x} size={} veredicto_vivo={} ({})",
+                name, nr, code, size, verdict, desc
             ),
             ..Default::default()
         });
@@ -4415,14 +4427,16 @@ mod tests {
         // La tabla es la medicion en vivo contra /dev/vertex10.
         assert_eq!(vs4l_name(0x4020_5600), Some("VSL_QUERY_CAP"));
         assert_eq!(vs4l_name(0x4008_560a), Some("VSL_CONTROL_10"));
-        // nr 1 y 2 existen pero con EFAULT; 4..8 no existen.
-        assert_eq!(vs4l_ioctl(0x4010_5601).map(|v| v.0), Some("efault"));
-        assert_eq!(vs4l_ioctl(0x0000_5604).map(|v| v.0), Some("enotty"));
+        // nr 1, 2, 6, 7, 8 existen; solo los dos _IO (nr 4 y 5) no.
+        assert_eq!(vs4l_ioctl(0x4010_5601).map(|v| v.0), Some("existe"));
+        assert_eq!(vs4l_ioctl(0x4080_5606).map(|v| v.0), Some("existe"));
+        assert_eq!(vs4l_ioctl(0x0000_5604).map(|v| v.0), Some("no_existe"));
+        assert_eq!(vs4l_ioctl(0x0000_5605).map(|v| v.0), Some("no_existe"));
         // Codigo fuera de la tabla.
         assert_eq!(vs4l_name(0x1234_5678), None);
-        // La tabla tiene 9 entradas y solo 4 las despacha el driver vivo.
+        // La tabla tiene 9 entradas y el driver vivo despacha 7.
         assert_eq!(VS4L_IOCTLS.len(), 9);
-        assert_eq!(VS4L_LIVE_CODES, 4);
+        assert_eq!(VS4L_LIVE_CODES, 7);
     }
     #[test]
     fn test_aosp_signing_key_reconoce_las_cuatro_claves() {
