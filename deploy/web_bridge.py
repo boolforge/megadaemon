@@ -229,10 +229,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # cliente es el propio dispositivo (peer loopback): con la red del movil
         # el puente no debe regalar la API key ni el token root (A-15).
         if should_inject(self.client_address[0]):
-            if KEY and not self.headers.get("X-API-Key"):
-                fwd["X-API-Key"] = KEY
-            if COCKPIT_TOKEN and not self.headers.get("X-Seere-Auth-Token"):
-                fwd["X-Seere-Auth-Token"] = COCKPIT_TOKEN
+            # El token de sesion ROTA en cada reinicio del daemon => el valor
+            # leido al arrancar el puente queda CADUCADO.  Medido el
+            # 2026-11-20: el proveedor local del daemon entra por este mismo
+            # puente (127.0.0.1:8080 -> 9090) y moria con 403 "falta la
+            # cabecera X-Seere-Auth-Token".  Se releen en cada peticion
+            # (ficheros de 64 bytes: coste nulo) para que el puente no
+            # cargue con una credencial que caduca sola.
+            key = read_key()
+            tok = read_cockpit_token()
+            if key and not self.headers.get("X-API-Key"):
+                fwd["X-API-Key"] = key
+            if tok and not self.headers.get("X-Seere-Auth-Token"):
+                fwd["X-Seere-Auth-Token"] = tok
         try:
             code, ct, data = _forward(self.command, self.path, fwd, body)
         except Exception as e:
