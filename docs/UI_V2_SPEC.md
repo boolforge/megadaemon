@@ -261,7 +261,31 @@ SHA-256 del cliente está implementado en JS puro (≈60 líneas) para que
   explica por qué; con `publish` también se publica en el bus).
 * **Sin nodos**: la vista lo dice y no inventa oferta.
 
-### 4.10 Sistema — `view-sistema` `view-sistema`
+### 4.10 Enjambre — `view-enjambre`
+
+* **Endpoints**: `GET /api/v2/mesh_findings?limit=200` (alias
+  `/api/mesh_findings`), `GET|POST /api/v2/prompt_external`.
+* **Muestra**: los **hallazgos de RE que publica el enjambre** (P1/P2/P3 del
+  nodo `cloud-sandbox` y los que vengan detrás): tipo (reverse/npu/tee/
+  bootloader), título, agente, confianza, target, sha256, tamaño, marca de
+  tiempo y el texto del hallazgo; filtros por **agente** y por **tipo**,
+  contador "N de M", y botón **Copiar** por hallazgo.
+* También: los agentes y las tareas del tablón del bus, el nº de líneas del
+  journal y **dónde** se ha leído el material (ruta real, no supuesta).
+* **Bloque "Prompt para un agente externo"**: el Markdown se genera **en el
+  servidor** (`/api/v2/prompt_external`) con URLs del túnel vigentes, catálogo
+  real de tools MCP, estado del dispositivo, nodos y hallazgos.  Casilla
+  "incluir API key y token de sesión" **desmarcada por defecto**: al
+  marcarla, el Markdown lleva un aviso en la primera línea y la UI avisa de
+  que el fichero contiene credenciales.  Nada se escribe en el estado
+  compartido ni en el repo.
+* **Seguridad**: todo el texto de los hallazgos se pinta con `textContent`
+  (nada de HTML interpolado) y los botones se enlazan con
+  `addEventListener` (nada de `onclick` en cadena).  El daemon enmascara
+  cualquier credencial (`sk-`, `mdaemon_sk_`, `ghp_`, `ya29.`, `gho_`) antes
+  de devolver el JSON.
+
+### 4.11 Sistema — `view-sistema`
 
 * **Endpoints**: `GET /api/v2/agentic` y `GET /api/v2/routes`.
 * **Muestra**: el **bucle agéntico local** en sus 5 fases (observar →
@@ -281,6 +305,7 @@ SHA-256 del cliente está implementado en JS puro (≈60 líneas) para que
 | Chip "bus" | `bus.deployed`, `bus.peers_alive` | "bus: 2 vivo(s)" / "bus: no desplegado" |
 | Chip de rol | `bus.master` | "maestra" / "rol: worker" |
 | Reloj | `state.lastSync` | hora local + marca de la última sincronización |
+| **Voz del agente** | MCP `tools/call megadaemon_voice` | `voz: <estado>`; si la tool no está registrada: `voz: n/d` con el motivo |
 | Tema | `state.theme` | auto → claro → oscuro |
 | Refrescar | — | recarga la vista activa |
 | Command palette | `Ctrl/Cmd+K` | navegación + acciones |
@@ -353,7 +378,8 @@ o a los POST de la v2 (`nodes/*`, `share/*`, `delegation/apply`,
 
 * Sistema de diseño completo con modo claro/oscuro y a11y.
 * 10 vistas con datos reales (0 mocks).
-* API v2 agregadora (24 rutas) con `dispatch` listo para cablear.
+* API v2 agregadora (27 rutas) con `dispatch` listo para cablear.
+* Hallazgos del enjambre visibles en la UI (pestaña ENJAMBRE) y prompt de agente externo generado en el servidor.
 * Reparto de trabajo entre nodos con reglas locales y equidad (todo nodo debe contribuir).
 * Verificación de hash real en los ficheros compartidos (ida y vuelta).
 * Tests de Rust que atan la UI a la tabla de rutas en las dos direcciones.

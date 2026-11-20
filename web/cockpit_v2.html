@@ -30,6 +30,7 @@
       <span class="chip chip--ghost" id="chip-bus" title="Estado del bus de coordinación">bus: —</span>
       <span class="chip chip--ghost" id="chip-master" title="Rol de esta instancia">rol: —</span>
       <span class="chip chip--ghost" id="chip-auth" title="Estado de la autenticación">sesión: —</span>
+      <span class="chip chip--ghost" id="chip-voz" title="Voz del agente (estado y última acción)">voz: —</span>
     </div>
 
     <div class="appbar__spacer"></div>
@@ -557,6 +558,14 @@
           <button class="btn btn--sm btn--ghost" id="btn-routes-refresh">Recargar</button>
         </div>
         <div class="table-wrap" id="sistema-rutas"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Voz del agente</h2>
+          <button class="btn btn--sm btn--ghost" id="btn-voice-refresh">Consultar /mcp</button>
+        </div>
+        <div id="sistema-voz"></div>
       </div>
 
       <div class="card">
@@ -1956,6 +1965,91 @@ function downloadPrompt() {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   VOZ DEL AGENTE (W0) — se consulta por el MCP, no por un endpoint propio
+   ---------------------------------------------------------------------------
+   La tool `megadaemon_voice` la registra el dueño del MCP.  Si todavía no
+   existe, el chip lo dice (con el motivo) en vez de fingir una voz.
+   ═══════════════════════════════════════════════════════════════════════════ */
+async function refreshVoice() {
+  const chip = $("#chip-voz");
+  try {
+    const res = await fetch("/mcp", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "tools/call",
+        params: { name: "megadaemon_voice", arguments: { action: "status" } }
+      })
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    const sc = (data.result && data.result.structuredContent) || null;
+    if (!sc || sc.ok !== true) {
+      const why = (sc && (sc.error || sc.hint)) || "la tool megadaemon_voice no está registrada en el MCP";
+      if (chip) {
+        chip.className = "chip chip--warn";
+        chip.textContent = "voz: n/d";
+        chip.title = String(why);
+      }
+      state.voice = { available: false, reason: String(why) };
+      paintVoice();
+      return;
+    }
+    const status = sc.status || sc.state || sc.voice || (sc.ok ? "activa" : "");
+    const last = sc.last_action || sc.last || sc.action || "";
+    if (chip) {
+      chip.className = "chip chip--accent";
+      chip.textContent = "voz: " + (status || "ok");
+      chip.title = last ? String(last) : "estado del agente";
+    }
+    state.voice = { available: true, data: sc };
+    paintVoice();
+  } catch (e) {
+    const why = "no se pudo consultar /mcp: " + String(e && e.message || e);
+    if (chip) {
+      chip.className = "chip chip--warn";
+      chip.textContent = "voz: n/d";
+      chip.title = why;
+    }
+    state.voice = { available: false, reason: why };
+    paintVoice();
+  }
+}
+
+/** Pinta el detalle de la voz en la vista Sistema (todo por textContent). */
+function paintVoice() {
+  const box = $("#sistema-voz");
+  if (!box) return;
+  box.innerHTML = "";
+  const v = state.voice;
+  if (!v) { box.appendChild(mk("div", "muted small", "sin datos de voz")); return; }
+  if (!v.available) {
+    const e = mk("div", "notice notice--warn");
+    const inner = mk("div");
+    inner.appendChild(mk("div", "notice__title", "Voz del agente no disponible"));
+    inner.appendChild(mk("div", "", v.reason || "sin motivo"));
+    e.appendChild(inner);
+    box.appendChild(e);
+    return;
+  }
+  const d = v.data || {};
+  const dl = mk("dl", "kv");
+  const keys = ["status", "state", "voice", "identity", "node", "last_action", "last", "action", "plan", "next"];
+  let any = false;
+  keys.forEach(function (k) {
+    if (d[k] === undefined || d[k] === null || d[k] === "") return;
+    any = true;
+    dl.appendChild(mk("dt", "", k));
+    dl.appendChild(mk("dd", "", typeof d[k] === "object" ? JSON.stringify(d[k]) : d[k]));
+  });
+  if (!any) {
+    dl.appendChild(mk("dt", "", "respuesta"));
+    dl.appendChild(mk("dd", "mono small", JSON.stringify(d).slice(0, 600)));
+  }
+  box.appendChild(dl);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    VISTA 11 · SISTEMA
    ═══════════════════════════════════════════════════════════════════════════ */
 async function loadSistema() {
@@ -1999,6 +2093,8 @@ async function loadSistema() {
         "<td class='mono small'>" + esc(r.path) + "</td>" +
         "<td class='small muted'>" + esc(r.description) + "</td></tr>";
     }).join("") + "</tbody></table>";
+
+  paintVoice();
 
   const auth = routes.auth || {};
   $('#sistema-auth').innerHTML =
@@ -2455,6 +2551,7 @@ function bindEvents() {
   $("#btn-share-upload").addEventListener("click", function () { uploadShare(true); });
   $("#btn-share-upload-one").addEventListener("click", function () { uploadShare(false); });
   $("#btn-routes-refresh").addEventListener("click", loadSistema);
+  $("#btn-voice-refresh").addEventListener("click", function () { refreshVoice(); });
 
   // Selector de nodo
   $("#node-select").addEventListener("change", function (e) {
@@ -2518,7 +2615,10 @@ function boot() {
   setInterval(updateClock, 1000);
   // Auto-refresco de la vista activa.
   state.timer = setInterval(function () {
-    if (document.visibilityState === "visible") refresh(false);
+    if (document.visibilityState === "visible") {
+      refresh(false);
+      refreshVoice().catch(function () { /* best-effort */ });
+    }
   }, 30000);
 
   const hash = (location.hash || "").replace("#", "");
@@ -2526,6 +2626,9 @@ function boot() {
 
   // Diagnóstico de autenticación: sólo lectura, incompatible o sesión OK.
   diagnoseAuth().catch(function () { /* el diagnóstico es best-effort */ });
+
+  // Voz del agente (W0): se consulta por el MCP y degrada honestamente.
+  refreshVoice().catch(function () { /* best-effort */ });
 }
 
 if (document.readyState === "loading") {

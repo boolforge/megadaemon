@@ -117,6 +117,9 @@ Un test de Rust comprueba que **la UI llama exactamente a estas rutas** y que
 | GET | `/api/v2/market/rules` | reglas locales de compartición de un nodo (`?node=…`) |
 | POST | `/api/v2/market/rules` | guarda las reglas locales de un nodo (validadas) |
 | POST | `/api/v2/market/route` | elige el nodo que debe tomar una demanda y opcionalmente la publica en el bus |
+| GET | `/api/v2/mesh_findings` | hallazgos de RE que publica el enjambre (paginado, sin credenciales). Alias: `/api/mesh_findings` |
+| GET | `/api/v2/prompt_external` | prompt Markdown para un agente externo, generado en el servidor (sin credenciales) |
+| POST | `/api/v2/prompt_external` | igual, pero puede incluir API key y token de sesión (con aviso en el Markdown) |
 | GET | `/api/v2/routes` | esta tabla en JSON + política de auth |
 
 Rutas de la v1 que la v2 **reutiliza** (no se duplican): `POST /api/tool/agent`
@@ -588,6 +591,91 @@ la otra instancia la reclame con un lease.
 
 ---
 
+## 5.13 Hallazgos del enjambre (`/api/v2/mesh_findings`)
+
+El enjambre publica sus hallazgos de RE en `<state>/sync/re_<nodo>.ndjson`
+(un objeto JSON por línea) y deja la traza en `<state>/mesh_journal.ndjson`.
+
+```jsonc
+// GET /api/v2/mesh_findings?limit=50&offset=0
+{
+  "ok": true,
+  "generated_at": "2026-11-20T00:20:00Z",
+  "findings": [ { "agent": "cloud-sandbox", "kind": "bootloader",
+                  "title": "FMM Lock y unlock por manid",
+                  "finding": "El SBL distingue: 'FMM Lock On…'",
+                  "target": "BL_G998BXXU5CVEB/sboot.bin",
+                  "sha256": "a2cf9853…", "size": 4194304,
+                  "confidence": "high", "ts": 1732000300 } ],
+  "returned": 41, "total": 41, "limit": 50, "offset": 0,
+  "kinds": ["bootloader", "npu", "reverse", "tee"],
+  "agents": ["cloud-sandbox"],
+  "board_agents": [ { "agent": "cloud-sandbox", "task": "re-exynos2100-cloud-sandbox",
+                      "kind": "reverse", "status": "done" } ],
+  "node_identities": [ { "id": "cloud-sandbox", "role": "worker", "file": "cloud-sandbox.json" } ],
+  "tasks": [ { "task_id": "re-exynos2100-cloud-sandbox", "title": "…", "state": "done" } ],
+  "peers": [ … ],
+  "journal": 43,
+  "roots": [ { "path": "/data/local/tmp/megadaemon/state", "exists": true,
+               "findings_files": ["sync/re_cloud-sandbox.ndjson"],
+               "findings_here": 41, "journal_lines": 43, "board": true } ],
+  "redactions": 0
+}
+```
+
+Garantías:
+
+* **Sólo lectura** y **sólo dentro de las raíces de estado** (`MEGADAEMON_STATE_DIR`,
+  `<bus_state>/state`, `<bus_state>`, `<cockpit_state>/state`): cada ruta se
+  valida contra su raíz antes de abrirse.
+* **Tope de 200 hallazgos** por página, ordenados por `ts` descendente, con
+  `?limit=` y `?offset=`.
+* **Una línea rota no rompe la vista**: se salta.
+* **Las credenciales se enmascaran**: cualquier texto que contenga `sk-`,
+  `mdaemon_sk_`, `ghp_`, `ya29.` o `gho_` se sustituye por `[REDACTED]`
+  (contador en `redactions`).
+* **No es público**: lo protegen el gate de API key y `requires_auth()` (que
+  exige token de sesión en `/api/*`).
+* Alias `GET /api/mesh_findings` para quien lo pida por ese nombre.
+
+---
+
+## 5.14 Prompt para agentes externos (`/api/v2/prompt_external`)
+
+El prompt se genera **en el servidor** con el estado real (no en el cliente):
+así sobrevive a cualquier cambio de plantilla y no depende del CORS.
+
+```jsonc
+// GET  /api/v2/prompt_external            → sin credenciales
+// POST /api/v2/prompt_external { "include_secrets": true, "api_key": "…" }
+{
+  "ok": true,
+  "generated_at": "2026-11-20T00:22:00Z",
+  "markdown": "# MegaDaemon v14 — contexto para un agente externo\n…",
+  "bytes": 18422,
+  "contains_secrets": false,
+  "tools": 45,          // catálogo real de mcp_ext::tool_definitions()
+  "findings": 40,       // hallazgos del enjambre incluidos
+  "findings_total": 41,
+  "journal": 43,
+  "web_url": "https://…trycloudflare.com",
+  "mcp_url": "https://…trycloudflare.com",
+  "warnings": []
+}
+```
+
+El Markdown contiene: URLs vigentes (leídas de `tunnel.url` / `mcp_tunnel.url`
+o del log del túnel — **nunca inventadas**), cabeceras, catálogo de tools MCP
+con descripción, estado del dispositivo, nodos del enjambre y los hallazgos
+(agent, tipo, título, target, sha256, tamaño, texto y confianza).
+
+Si se piden credenciales (`include_secrets`), el Markdown **empieza** con un
+aviso ("⚠️ Este documento contiene credenciales") y la respuesta trae
+`warnings: [...]`.  Nada se escribe en el estado compartido ni en el repo: el
+Markdown se genera en memoria y se devuelve.
+
+---
+
 ## 6. Firmas públicas de `rust-core/src/webui.rs`
 
 ```rust
@@ -620,6 +708,8 @@ pub fn work_route(demand: &Value) -> Value;
 pub fn rules_for(node: &str) -> ShareRules;
 pub fn default_rules(node: &str) -> ShareRules;
 pub fn work_kind_for(kind: &str) -> &'static str;
+pub fn mesh_findings(query: &str) -> Value;
+pub fn prompt_external(include_secrets: bool, api_key: &str) -> Value;
 pub fn sha256_hex(data: &[u8]) -> String;
 pub fn base64_encode(data: &[u8]) -> String;
 pub fn base64_decode(text: &str) -> Result<Vec<u8>, String>;

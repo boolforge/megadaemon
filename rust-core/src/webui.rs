@@ -2267,7 +2267,7 @@ pub fn work_kind_for(kind: &str) -> &'static str {
 /// Tipos de trabajo que ofrece un nodo según sus capacidades declaradas.
 fn kinds_from_capabilities(caps: &[String]) -> Vec<String> {
     let mut out: Vec<String> = vec![];
-    let mut push = |k: &str, out: &mut Vec<String>| {
+    let push = |k: &str, out: &mut Vec<String>| {
         if !out.iter().any(|x| x == k) {
             out.push(k.to_string());
         }
@@ -2828,7 +2828,7 @@ const SECRET_PREFIXES: &[&str] = &["sk-", "mdaemon_sk_", "ghp_", "ya29.", "gho_"
 /// raíces: cada ruta se valida contra su raíz antes de abrirse.
 fn swarm_state_roots() -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = vec![];
-    let mut push = |p: PathBuf, roots: &mut Vec<PathBuf>| {
+    let push = |p: PathBuf, roots: &mut Vec<PathBuf>| {
         if !p.as_os_str().is_empty() && !roots.iter().any(|r| r == &p) {
             roots.push(p);
         }

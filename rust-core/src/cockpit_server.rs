@@ -977,7 +977,7 @@ fn handle_client(mut stream: TcpStream) {
                 // el navegador no dependa del canje (el token de la pagina
                 // publica SOLO se entrega al navegador local; el resto usa el
                 // canje API key -> token).
-                let html = String::from_utf8_lossy(EMBEDDED_V2_HTML).into_owned();
+                let html = EMBEDDED_V2_HTML.to_string();
                 let inject = "<script>window.MEGADAEMON_TOKEN=\"\";window.MEGADAEMON_TOKEN_ISSUED=false;</script>";
                 let html = match html.find("<script>") {
                     Some(i) => format!("{}{}{}", &html[..i], inject, &html[i..]),
