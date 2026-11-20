@@ -1079,3 +1079,19 @@ pre {
   .card { break-inside: avoid; box-shadow: none; }
   body { background: #fff; color: #000; }
 }
+
+/* ── F6 · objetivo táctil ≥44 px en dispositivos táctiles ──────────────── */
+@media (pointer: coarse) {
+  .btn,
+  .btn--sm,
+  .btn--icon,
+  .tabbar__btn,
+  .node-select,
+  .input,
+  .select {
+    min-height: var(--tap);
+  }
+  .btn--icon {
+    width: var(--tap);
+  }
+}
