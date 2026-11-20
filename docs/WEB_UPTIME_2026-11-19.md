@@ -44,7 +44,7 @@ LISTEN 127.0.0.1:9090        (el cockpit real)
 ```
 
 → `http://localhost`, `http://localhost:3000`, `:3030`, `:8080`, `:8090` y
-`http://192.168.1.124:3000` responden **200**; IPv4 e IPv6.
+`http://<IP_DEL_MOVIL>:3000` responden **200**; IPv4 e IPv6.
 
 ---
 
@@ -108,7 +108,7 @@ Desde fuera (túnel):
 
 ```sh
 curl -s -H "X-API-Key: $MEGADAEMON_API_KEY" \
-  https://webpage-ultram-please-communicate.trycloudflare.com/health
+  https://TUNEL.trycloudflare.com/health
 ```
 
 ---

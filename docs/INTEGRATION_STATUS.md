@@ -20,7 +20,7 @@
 | Mapa de 126 CSC + 19 con grabacion | `docs/ANDROID_EXYNOS2100_FINDINGS.md §10.2` | **INTEGRADO** | `60e53a3` | tabla + sha16 por CSC |
 | Particiones mundo seguro + EFS (7 sha256) | `-- solo doc: §3.2` | **PENDIENTE** | `-` | integrar en backup_vault (W3/W4): que el backup cubra FLL.bin + keystore2 + /DAK + /tee/srt |
 | P5 Swift Backup: lector DER | `-- no existe` | **PENDIENTE (avanzado)** | `-` | **DEX analizado (agente DEX `659db26c`)**: KDF = **Argon2id** (NATIVO `SbaNativeCrypto.deriveArgon2id`: salt 16 B, iter 1..100, mem 16384..65536 KiB, par 1..8, salida 32 B, contrasena UTF-8 borrada tras usarla; key-check SHA-256 con `MessageDigest.isEqual`) ⇒ el contenedor es **propio** (no `.ab`): **tar+zstd** dentro y **AEGIS-256 por chunks** (nonce+AAD por chunk) con cabecera de 12 campos (`kdfMethodId`, `kdfIterations`, `payloadChunkSize`...) => las iteraciones se leen del propio archivo. **FALSO AMIGO descartado**: `libconceal.so` (Facebook Conceal: PBKDF2 + AES-256-GCM) esta en el APK pero **NO es el KDF del backup local**. Falta un `.dat`/`.med` real (canal caido) para el round-trip |
-| Resiliencia del canal (tunel 530) | `tools/phone_url.py + state/tunnel.url` | **PARCIAL** | `-` | el MCP sigue hardcodeando URL en md-secrets/instance.env => leerla en RUNTIME y preferir la LAN http://192.168.1.124:3000/mcp |
+| Resiliencia del canal (tunel 530) | `tools/phone_url.py + state/tunnel.url` | **PARCIAL** | `-` | el MCP sigue hardcodeando URL en md-secrets/instance.env => leerla en RUNTIME y preferir la LAN http://<IP_DEL_MOVIL>:3000/mcp |
 
 ## Los 4 que quedan abiertos (con dueño y condición de cierre)
 

@@ -12,14 +12,14 @@
 | Dato | Valor |
 |---|---|
 | Rol de la instancia | `primary` (maestra) — decide, reparte y sincroniza |
-| Dispositivo | Samsung S21 Ultra (Exynos 2100), root + Magisk — IP LAN **192.168.1.124** |
-| Cockpit (web) | `http://localhost:3000` en el móvil · **`http://192.168.1.124:3000` en la LAN** (RUTA CANÓNICA: es estable) |
+| Dispositivo | Samsung S21 Ultra (Exynos 2100), root + Magisk — IP LAN **<IP_DEL_MOVIL>** |
+| Cockpit (web) | `http://localhost:3000` en el móvil · **`http://<IP_DEL_MOVIL>:3000` en la LAN** (RUTA CANÓNICA: es estable) |
 | Alias de puertos | 3000, 3030, 8090, 8080 (puente local) + 9090 (cockpit nativo) |
-| MCP por LAN | **`POST http://192.168.1.124:3000/mcp`** (mismo daemon, mismo JSON-RPC 2.0; **no** `/sse`) |
-| Túnel externo | **EFÍMERO**: la URL vigente está en `<state_dir>/tunnel.url` en el móvil (`/data/local/tmp/megadaemon/tunnel.url`) y cambia cada vez que cloudflared se relanza (⇒ 530). Última conocida: `https://pot-implied-approach-input.trycloudflare.com` — **úsala sólo si la LAN falla**, y entonces léela del fichero, no la copies de aquí. |
+| MCP por LAN | **`POST http://<IP_DEL_MOVIL>:3000/mcp`** (mismo daemon, mismo JSON-RPC 2.0; **no** `/sse`) |
+| Túnel externo | **EFÍMERO**: la URL vigente está en `<state_dir>/tunnel.url` en el móvil (`/data/local/tmp/megadaemon/tunnel.url`) y cambia cada vez que cloudflared se relanza (⇒ 530). Última conocida: `https://TUNEL.trycloudflare.com` — **úsala sólo si la LAN falla**, y entonces léela del fichero, no la copies de aquí. |
 | MCP (JSON-RPC 2.0) | `POST <URL del túnel>/mcp` (**no** `/sse`) · cabeceras: `X-API-Key` siempre · `X-Seere-Auth-Token` sólo al escribir |
 | Credenciales | `/workspace/md-secrets/instance.env` (0600) — **nunca al chat**. `tools/phone_url.py --export` refresca las URLs (las del túnel caducan en minutos) |
-| ADB | `adbd` en TCP **5555**: `adb connect 192.168.1.124:5555` (varios equipos a la vez) |
+| ADB | `adbd` en TCP **5555**: `adb connect <IP_DEL_MOVIL>:5555` (varios equipos a la vez) |
 | ADB nativo Rust | `rust-core/src/adb_client.rs` (protocolo ADB v1 a mano, sin binario `adb`) |
 
 ---
@@ -42,7 +42,7 @@ Si aparece un 502, captura el cuerpo exacto y el `logcat` del móvil (`logcat -d
 en el mismo instante. Sin ese par de datos no se arregla nada.
 
 **ENCARGO 2 — Cerrar el handshake ADB contra el Samsung**
-En el Samsung, `adbd` escucha en TCP 5555 (`192.168.1.124:5555`) y el socket **acepta**
+En el Samsung, `adbd` escucha en TCP 5555 (`<IP_DEL_MOVIL>:5555`) y el socket **acepta**
 la conexión, pero `adbd` responde **RST** en cuanto recibe el CNXN
 (logcat: `host-16: connection terminated: read failed`). Pistas ya reunidas:
 `ro.adb.secure=0`; la clave de host **ya está registrada** en
@@ -76,7 +76,7 @@ músculo. No eres el maestro y no se toca su configuración sin acuerdo.
 
 ## 1. CONECIÓN (primero, sin preguntar nada)
 Endpoint MCP (JSON-RPC 2.0 puro, POST) — **por la LAN primero (es estable)**:
-    http://192.168.1.124:3000/mcp
+    http://<IP_DEL_MOVIL>:3000/mcp
 Si la LAN no responde, usa el túnel (URL EFÍMERA: léela del móvil en
 /data/local/tmp/megadaemon/tunnel.url; no la copies de un prompt viejo):
     POST https://<hostname-vivo>.trycloudflare.com/mcp
@@ -145,7 +145,7 @@ exacta de lo que queda pendiente y de qué necesita el maestro.
   No están en el repo a propósito: el repo es público.
 - **ADB**: el móvil tiene `adbd` en TCP 5555 y un cliente ADB en Rust puro
   (`rust-core/src/adb_client.rs`), sin depender del binario `adb`.
-  `adb connect 192.168.1.124:5555` desde cualquier PC de la red.
+  `adb connect <IP_DEL_MOVIL>:5555` desde cualquier PC de la red.
 - **Persistencia**: `deploy/91-adb-tcp.sh` (Magisk `service.d`) deja ADB por
   TCP activo en cada arranque y lo levanta si `adbd` se cae.
   Para apagarlo: `sh /data/adb/service.d/91-adb-tcp.sh off`.
