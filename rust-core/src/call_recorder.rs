@@ -1553,3 +1553,124 @@ impl CallAudioFacts {
     }
 }
 
+
+// ===========================================================================
+// Captura de la voz del modem por ALSA (la vía que SÍ funciona)
+// ===========================================================================
+
+/// Los PCM de captura **WDMA0..7** del Exynos 2100
+/// (`/dev/snd/pcmC0D12..19`) son la **ruta de voz AP<->CP**: el audio de la
+/// llamada pasa por ahí, no por el HAL de audio de usuario.
+///
+/// **Medido**: `/proc/asound/pcm` lista `00-12: WDMA0 ... 00-19: WDMA7` como
+/// `capture`. Por eso el HAL no tiene cadenas de voz (la voz no pasa por él) y
+/// sin embargo **la voz es capturable, sin `CAPTURE_AUDIO_OUTPUT`**.
+pub const ALSA_WDMA_DEVICES: [&str; 8] = [
+    "hw:0,12", "hw:0,13", "hw:0,14", "hw:0,15", "hw:0,16", "hw:0,17", "hw:0,18",
+    "hw:0,19",
+];
+
+/// Dispositivos ALSA donde el audio de la llamada **no** está.
+pub const ALSA_NOT_VOICE_HINT: &str =
+    "Los PCM WDMA son la ruta de voz del modem; los demas (RDMA/WDMA de audio \
+     multimedia) no la llevan.";
+
+/// Plan de captura por ALSA.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AlsaCapturePlan {
+    /// Dispositivo ALSA (p. ej. `hw:0,12`).
+    pub device: String,
+    /// Frecuencia de muestreo.
+    pub sample_rate: u32,
+    /// Canales.
+    pub channels: u16,
+    /// Formato.
+    pub format: String,
+    /// Comando exacto del capturador.
+    pub command: String,
+    /// Salida.
+    pub out: String,
+    /// Notas honestas.
+    pub notes: Vec<String>,
+}
+
+/// Plan de captura de la voz del modem por ALSA.
+///
+/// **La ventaja**: no necesita `CAPTURE_AUDIO_OUTPUT`, ni parche de
+/// AudioFlinger, ni cambio de CSC: lee el PCM del hardware directamente.
+/// **Lo que hay que comprobar**: que el PCM correcta sea la de la llamada
+/// (hace falta una llamada en curso) y en qué sentido va cada una (el
+/// uplink y el downlink suelen ir en WDMA distintos).
+pub fn alsa_voice_capture_plan(device: &str, seconds: u32) -> AlsaCapturePlan {
+    AlsaCapturePlan {
+        device: device.to_string(),
+        sample_rate: 48000,
+        channels: 1,
+        format: "S16_LE".to_string(),
+        command: format!(
+            "su -mm -c \"md_alsa --dev {} --sec {} --out /data/local/tmp/megadaemon-wdma.raw\"",
+            device, seconds
+        ),
+        out: "/data/local/tmp/megadaemon-wdma.raw".to_string(),
+        notes: vec![
+            "Los nodos /dev/snd/* son system:audio 0660 => hace falta root (o grupo audio).".to_string(),
+            ALSA_NOT_VOICE_HINT.to_string(),
+            "Sin llamada en curso el PCM devuelve silencio: hay que comprobarlo DURANTE una llamada.".to_string(),
+            "El binario se compila con el NDK y se enlaza con -lasound (libasound del propio Android).".to_string(),
+        ],
+    }
+}
+
+// ===========================================================================
+// Cambio de CSC: lo que hay en el móvil y el riesgo real
+// ===========================================================================
+
+/// Operador de la SIM **medido** en este móvil.
+pub const SIM_OPERATOR_ALPHA: &str = "JAZZTEL";
+/// MCC/MNC de la SIM **medido**: 214 = España, 03 = Jazztel.
+pub const SIM_OPERATOR_NUMERIC: &str = "21403";
+
+/// CSC presentes en el móvil que **habilitan la grabación nativa**.
+///
+/// `INS` (India) **no está** en este firmware; sí están `THL`, `ILO` y `XXV`.
+pub const RECORDING_CSC_AVAILABLE: [&str; 3] = ["THL", "ILO", "XXV"];
+
+/// Riesgo de cambiar el CSC, en texto honesto.
+///
+/// El CSC **no** cambia la SIM ni su MCC/MNC: el módem sigue registrando en
+/// la red de la SIM (aquí Jazztel 21403, que ya no coincide con el CSC
+/// `AMO`). El CSC elige el **juego de configuración** (operador, MMS, APN,
+///VoLTE, y las banderas `CscFeature_*`). Cambiarlo puede, por tanto, tocar
+/// el APN/VoLTE y **perder alguna función del operador**, aunque la llamada
+/// y los datos siguen funcionan en la red de la SIM.
+pub fn csc_switch_risk(sim_numeric: &str, target_csc: &str) -> String {
+    format!(
+        "Cambiar el CSC a {t} no cambia la SIM ({s}) ni su MCC/MNC: el modem sigue \
+         registrando en la red de la SIM. Lo que cambia es el juego de configuracion \
+         (APN, VoLTE/IMS, MMS y las banderas CscFeature_*). Riesgos reales: (1) el \
+         APN/IMS pueden no encajar con la SIM y perder VoLTE o datos; (2) con AVB \
+         verde y /prism montado en solo-lectura, el cambio no es permanente, solo \
+         dura hasta que el sistema reescriba el CSC; (3) es reversible: se \
+         restauran los 3 bytes de mps_code.dat y se reinicia.",
+        t = target_csc,
+        s = sim_numeric
+    )
+}
+
+/// Comprobaciones **después** de cambiar el CSC.
+pub fn csc_switch_verify_plan(target_csc: &str) -> Vec<String> {
+    vec![
+        format!(
+            "`getprop ro.csc.sales_code` debe mostrar {}",
+            target_csc
+        ),
+        "`getprop gsm.version.baseband` debe ser coherente con el CSC destino".to_string(),
+        "Comprobar que la app de llamadas de Samsung (`com.samsung.android.incallui`) \
+         tiene el flag `CscFeature_VoiceCall_ConfigRecording` a 1: con el CSC de \
+         America (AMO) esta apagado y el boton de grabar no aparece."
+            .to_string(),
+        "Si la llamada saliente pierde IMS/VoLTE: revertir (restaurar mps_code.dat y reiniciar)."
+            .to_string(),
+    ]
+}
+
