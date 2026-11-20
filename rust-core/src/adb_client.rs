@@ -257,13 +257,29 @@ fn crc32_table() -> &'static [u32; 256] {
 }
 
 /// CRC-32 del payload de un mensaje ADB.
+///
+/// OJO: **no** es el `zlib.crc32`.  AOSP usa `adb_crc32()`, que empieza con
+/// `crc = 0` y **no hace el XOR final**: es el CRC-32 "JAMCRC".
+/// Usar el de zlib hace que adbd rechace el mensaje con
+/// `protocolo: crc32 incorrecto` (fue el bug real que rompi�� la tool `adb`).
 pub fn crc32(data: &[u8]) -> u32 {
-    let table = crc32_table();
-    let mut c: u32 = 0xFFFF_FFFF;
+    static TABLE: OnceLock<[u32; 256]> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let mut t = [0u32; 256];
+        for (i, e) in t.iter_mut().enumerate() {
+            let mut c = i as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+            *e = c;
+        }
+        t
+    });
+    let mut crc: u32 = 0;
     for &b in data {
-        c = table[((c ^ b as u32) & 0xFF) as usize] ^ (c >> 8);
+        crc = (crc >> 8) ^ table[((crc ^ b as u32) & 0xFF) as usize];
     }
-    c ^ 0xFFFF_FFFF
+    crc
 }
 
 /// Mensaje ADB: cabecera + payload.
@@ -939,11 +955,11 @@ mod tests {
     // ---- unidad ---------------------------------------------------------
 
     #[test]
-    fn crc32_coincide_con_zlib() {
-        // valores de referencia de zlib.crc32
-        assert_eq!(crc32(b""), 0x0000_0000);
-        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
-        assert_eq!(crc32(b"The quick brown fox jumps over the lazy dog"), 0x414F_A339);
+    fn crc32_usa_la_variante_de_aosp() {
+        // AOSP adb_crc32: init 0 y sin XOR final (JAMCRC), NO zlib.crc32.
+        assert_eq!(crc32(b"123456789"), 0x2DFD2D88);
+        assert_ne!(crc32(b"123456789"), 0xCBF4_3926); // el de zlib
+        assert_eq!(crc32(b""), 0);
     }
 
     #[test]
