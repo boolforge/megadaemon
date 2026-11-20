@@ -500,12 +500,38 @@ export MEGADAEMON_INSTANCE_DEVICE="${MEGADAEMON_INSTANCE_DEVICE:-samsung}"
 # (si no, el propio watchdog se dispara en bucle y tumba el móvil solo).
 daemon_unresponsive_streak=0
 last_resp_check=0
+# Sonda de UNA ruta.  Devuelve 0 si contesta 200.
+# Usa 127.0.0.3 como IP de origen cuando se puede (cubo de rate limit
+# propio: el del túnel es 127.0.0.1).  Si el bind falla, se usa el normal.
+probe_path() {
+    local port="$1" path="$2" out code
+    out=$("$TUNNEL_CURL" -s -m 8 ${PROBE_IFACE:+--interface $PROBE_IFACE} \
+        -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port$path" 2>/dev/null)
+    code=$(echo "$out" | tr -dc '0-9')
+    [ "$code" = "200" ]
+}
+
+# Detecta una sola vez si el interface de sondeo propio está disponible.
+probe_iface_init() {
+    [ -n "$PROBE_IFACE" ] && return 0
+    [ -x "$TUNNEL_CURL" ] || return 0
+    if "$TUNNEL_CURL" -s -m 5 --interface 127.0.0.3 -o /dev/null \
+        "http://127.0.0.1:$PORT/health" 2>/dev/null; then
+        PROBE_IFACE="127.0.0.3"
+    fi
+}
+
 daemon_responsive() {
     local port="${1:-9090}"
-    if [ -x /data/data/com.termux/files/usr/bin/curl ]; then
-        /data/data/com.termux/files/usr/bin/curl -fsS --max-time 8 \
-            -o /dev/null "http://127.0.0.1:$port/health" 2>/dev/null && return 0
-        return 1
+    # DOS sondas, no una:
+    #   /health      -> ¿vive el servidor HTTP?
+    #   /api/power   -> ¿responde el ESTADO compartido (mutex/caché)?
+    # Un daemon con un mutex envenenado puede seguir contestando /health
+    # con 200 mientras /api/power revienta: por eso hay que mirar las dos.
+    if [ -x "$TUNNEL_CURL" ]; then
+        probe_path "$port" "/health" || return 1
+        probe_path "$port" "/api/power" || return 1
+        return 0
     fi
     if [ -x /data/data/com.termux/files/usr/bin/python3 ]; then
         /data/data/com.termux/files/usr/bin/python3 -c \
@@ -538,10 +564,20 @@ check_daemon_responsive() {
     last_resp_check=$now
     if daemon_responsive "$port"; then
         daemon_unresponsive_streak=0
+        # Tope de RAM: el daemon no puede inflarse (el móvil va al 98 % de
+        # RAM y el OOM killer ya se ha carried el túnel dos veces).
+        rss=$(energy_daemon_rss_kb)
+        if [ -n "$rss" ] && [ "$rss" -gt "$ENERGY_DAEMON_RSS_MAX_KB" ]; then
+            log "el daemon usa ${rss}kB (tope ${ENERGY_DAEMON_RSS_MAX_KB}kB): lo reinicio para no empujar al OOM killer"
+            pkill -x megadaemon-core 2>/dev/null
+            sleep 3
+            start_daemon
+            wait_daemon_responsive "$port" || log "el daemon no respondio tras el reinicio por RSS"
+        fi
         return 0
     fi
     daemon_unresponsive_streak=$((daemon_unresponsive_streak + 1))
-    log "el daemon no responde /health (fallo $daemon_unresponsive_streak/3)"
+    log "el daemon no responde /health ni /api/power (fallo $daemon_unresponsive_streak/3)"
     if [ "$daemon_unresponsive_streak" -ge 3 ]; then
         daemon_unreachable=1
         daemon_unresponsive_streak=0
@@ -657,6 +693,168 @@ start_daemon() {
     return 0
 }
 
+
+# --- v15: política de energía + guardas de RAM/disco ------------------------
+#
+# UMBRALES (medidos en este SM-G998B el 2026-11-20; configurables por entorno
+# para no tener que recompilar el daemon en el móvil):
+#   carga 80 % | aviso térmico 45 °C | crítico 55 °C | techo duro 80 °C
+#   batería < 20 % => SELLAR | brillo máx 60 | suelo de RAM 512 MB
+#   suelo de disco 1 GB | RSS máx del daemon 200 MB | se guardan 2 instantáneas
+#
+# NOTA HONESTA: este kernel NO expone `charge_control_end_threshold`
+# (comprobado el 2026-11-20), así que el límite de carga NO se puede forzar
+# por sysfs.  Se registra como NO SOPORTADO en vez de fingir que se aplica.
+ENERGY_CHARGE_LIMIT=${MEGADAEMON_CHARGE_LIMIT_PCT:-80}
+ENERGY_THERMAL_WARN=${MEGADAEMON_THERMAL_WARN_C:-45}
+ENERGY_THERMAL_CRIT=${MEGADAEMON_THERMAL_CRIT_C:-55}
+ENERGY_THERMAL_HARD=${MEGADAEMON_THERMAL_HARD_C:-80}
+ENERGY_SEAL_BELOW=${MEGADAEMON_SEAL_BELOW_PCT:-20}
+ENERGY_BRIGHTNESS_MAX=${MEGADAEMON_BRIGHTNESS_MAX:-60}
+ENERGY_RAM_FLOOR_KB=${MEGADAEMON_RAM_FLOOR_KB:-524288}
+ENERGY_DISK_FLOOR_KB=${MEGADAEMON_DISK_FLOOR_KB:-1048576}
+ENERGY_DAEMON_RSS_MAX_KB=${MEGADAEMON_DAEMON_RSS_MAX_KB:-204800}
+ENERGY_STATE_KEEP=${MEGADAEMON_STATE_KEEP:-2}
+ENERGY_STATE_FILE="$PREFIX/energy_state"
+ENERGY_BRIGHT_SAVED="$PREFIX/brightness_saved"
+
+# Interface de sondeo: 127.0.0.3 para que el watchdog tenga SU PROPIO cubo
+# del rate limit (el del túnel es 127.0.0.1 y el del navegador 127.0.0.2).
+# Antes, el sondeo del watchdog competía con el de los agentes remotos.
+PROBE_IFACE=""
+
+energy_battery_pct() {
+    v=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null | tr -dc '0-9')
+    [ -n "$v" ] && echo "$v" || echo ""
+}
+energy_battery_status() {
+    cat /sys/class/power_supply/battery/status 2>/dev/null | tr -d '\r\n'
+}
+energy_battery_temp_c() {
+    v=$(cat /sys/class/power_supply/battery/temp 2>/dev/null | tr -dc '0-9')
+    [ -n "$v" ] || return 1
+    if [ "$v" -gt 1000 ]; then echo $((v / 1000)); else echo "$v"; fi
+}
+# Temperatura máxima del sistema (°C) entre todas las zonas térmicas.
+energy_max_temp_c() {
+    max=0
+    for z in /sys/class/thermal/thermal_zone*/temp; do
+        [ -r "$z" ] || continue
+        v=$(cat "$z" 2>/dev/null | tr -dc '0-9')
+        [ -n "$v" ] || continue
+        [ "$v" -gt "$max" ] && max=$v
+    done
+    [ "$max" -gt 0 ] && echo $((max / 1000)) || echo ""
+}
+energy_ram_available_kb() {
+    awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null
+}
+energy_disk_free_kb() {
+    df -k /storage/emulated/0 2>/dev/null | awk 'NR==2 {print $4}'
+}
+energy_daemon_rss_kb() {
+    pid=$(pgrep -f "megadaemon-core cockpit" 2>/dev/null | head -1)
+    [ -n "$pid" ] || return 1
+    awk '/^VmRSS:/ {print $2}' "/proc/$pid/status" 2>/dev/null
+}
+
+# Clasifica el estado: normal | conserve | thermal | seal
+energy_classify() {   # $1=pct $2=temp_c $3=ram_kb $4=charging
+    [ -n "$1" ] || return 0
+    if [ "$1" -lt "$ENERGY_SEAL_BELOW" ]; then echo seal; return 0; fi
+    if [ -n "$2" ] && [ "$2" -ge "$ENERGY_THERMAL_HARD" ]; then echo seal; return 0; fi
+    if [ -n "$2" ] && [ "$2" -ge "$ENERGY_THERMAL_CRIT" ]; then echo thermal; return 0; fi
+    if [ -n "$2" ] && [ "$2" -ge "$ENERGY_THERMAL_WARN" ]; then echo thermal; return 0; fi
+    if [ -n "$3" ] && [ "$3" -gt 0 ] && [ "$3" -lt "$ENERGY_RAM_FLOOR_KB" ]; then echo conserve; return 0; fi
+    if [ "$4" != "Charging" ] && [ "$1" -lt 35 ]; then echo conserve; return 0; fi
+    echo normal
+}
+
+# Aplica la política.  Cada acción se VERIFICA y se registra con números.
+apply_energy_policy() {
+    pct=$(energy_battery_pct)
+    [ -n "$pct" ] || pct=100
+    status=$(energy_battery_status)
+    temp=$(energy_max_temp_c)
+    btemp=$(energy_battery_temp_c)
+    ram=$(energy_ram_available_kb)
+    disk=$(energy_disk_free_kb)
+    cls=$(energy_classify "$pct" "$temp" "$ram" "$status")
+    prev=""
+    [ -f "$ENERGY_STATE_FILE" ] && prev=$(cat "$ENERGY_STATE_FILE" 2>/dev/null)
+
+    # --- acciones (sólo si la clase ha cambiado: no se martillea el sistema) ---
+    if [ "$cls" != "$prev" ]; then
+        case "$cls" in
+            seal|thermal)
+                cmd appops set com.google.android.youtube RUN_ANY_IN_BACKGROUND ignore >/dev/null 2>&1
+                cmd appops set com.android.chrome RUN_ANY_IN_BACKGROUND ignore >/dev/null 2>&1
+                settings put global low_power 1 >/dev/null 2>&1
+                for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+                    [ -w "$g" ] && echo powersave > "$g" 2>/dev/null
+                done
+                ;;
+            conserve)
+                cmd appops set com.google.android.youtube RUN_ANY_IN_BACKGROUND ignore >/dev/null 2>&1
+                ;;
+            normal)
+                settings put global low_power 0 >/dev/null 2>&1
+                # restaurar el brillo que tenía el usuario, si lo guardamos
+                if [ -f "$ENERGY_BRIGHT_SAVED" ]; then
+                    settings put system screen_brightness "$(cat "$ENERGY_BRIGHT_SAVED" 2>/dev/null)" >/dev/null 2>&1
+                    rm -f "$ENERGY_BRIGHT_SAVED"
+                fi
+                ;;
+        esac
+        echo "$cls" > "$ENERGY_STATE_FILE" 2>/dev/null
+    fi
+
+    # --- brillo (sólo si el de ahora supera el techo) ---
+    if [ "$cls" != "normal" ]; then
+        cap=$ENERGY_BRIGHTNESS_MAX
+        [ "$cls" = "seal" ] && cap=$((ENERGY_BRIGHTNESS_MAX - 20))
+        cur=$(settings get system screen_brightness 2>/dev/null | tr -dc '0-9')
+        if [ -n "$cur" ] && [ "$cur" -gt "$cap" ]; then
+            [ -f "$ENERGY_BRIGHT_SAVED" ] || echo "$cur" > "$ENERGY_BRIGHT_SAVED" 2>/dev/null
+            settings put system screen_brightness "$cap" >/dev/null 2>&1
+        fi
+    fi
+
+    # --- disco: si estamos por debajo del suelo, podamos nuestro estado ---
+    if [ -n "$disk" ] && [ "$disk" -gt 0 ] && [ "$disk" -lt "$ENERGY_DISK_FLOOR_KB" ]; then
+        prune_state
+    fi
+
+    # --- registro con NÚMEROS (no adjetivos) ---
+    charge_lim="NO_SOPORTADO"
+    [ -r /sys/class/power_supply/battery/charge_control_end_threshold ] && \
+        charge_lim="leido=$(cat /sys/class/power_supply/battery/charge_control_end_threshold 2>/dev/null)"
+    log "energia: clase=$cls (antes=$prev) bateria=${pct}% estado=$status temp_sistema=${temp:-?}C temp_bat=${btemp:-?}C ram_disponible=${ram:-?}kB disco_libre=${disk:-?}kB rss_daemon=$(energy_daemon_rss_kb || echo ?)kB carga80=$charge_lim brillo=$(settings get system screen_brightness 2>/dev/null | tr -dc '0-9')"
+}
+
+# Poda el estado del daemon para que NO crezca sin límite (medido: sync_snap
+# 59.860 kB + state/inventory 11.170 kB con instantáneas de 9.104 kB).
+prune_state() {
+    kept=$ENERGY_STATE_KEEP
+    for d in "$PREFIX/state/inventory" "$PREFIX/sync_snap"; do
+        [ -d "$d" ] || continue
+        tmp="$PREFIX/.prune.$$"
+        ls -1 "$d" 2>/dev/null | sort > "$tmp"
+        total=$(wc -l < "$tmp" 2>/dev/null)
+        total=$(echo "$total" | tr -dc '0-9')
+        [ -n "$total" ] || continue
+        i=0
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            i=$((i + 1))
+            if [ "$i" -le "$((total - kept))" ]; then
+                rm -f "$d/$f" 2>/dev/null
+            fi
+        done < "$tmp"
+        rm -f "$tmp"
+    done
+}
+
 # --- loop del supervisor --------------------------------------------------
 last_update=0
 # El auto-update se comprueba cada 6 h (21600 s).  Se hace FUERA del camino
@@ -714,7 +912,9 @@ while true; do
         i=0
         # v15: vivo != funcional (mutex envenenado => 502 con el proceso
         # vivo).  Dos fallos seguidos de /health => se reinicia.
+        probe_iface_init
         check_daemon_responsive "$PORT" || true
+        apply_energy_policy
         ensure_web_bridge
         sync_antigravity_bridge
         ensure_tunnel "$PORT" "$WEB_TUNNEL_LOG" "$WEB_TUNNEL_URL_FILE" "web" 1
