@@ -64,7 +64,7 @@ la caché de trabajo.
 
 | Tarea | Responsable | Criterio de aceptación |
 |---|---|---|
-| Cliente de Drive nativo en Rust: carpeta + 100 % + **stream** (sin copia local) | backup (W3) | `backup_vault` sube un fichero de >1 GB sin escribirlo entero en el móvil; sha256 del MANIFEST verificado tras la descarga |
+| Cliente de Drive nativo en Rust: carpeta + 100 % + **stream** (sin copia local) | backup (W3) | **hecho**: `rust-core/src/drive_client.rs` (subida resumible por trozos, descarga con SHA-256 en la misma pasada, reanudación con la URL de sesión persistida) **8/8 verde** + `deploy/drive_stream_acceptance.sh` (`dd \| curl`, **0 copias locales**). **Pendiente**: la credencial OAuth de Drive (no está en `md-secrets/`) para la prueba real >1 GB |
 | Zona **privada** (TEE, keystore2, EFS) **nunca** sale del dispositivo | por dueño | El MANIFEST público no contiene ninguna entrada privada (`export_public` filtra) |
 | `keystore2` = metadatos, no claves | ya cerrado | `not_recoverable()` documentado |
 | Rotación del log de auditoría (32 MB → 2 MB) | **hecho** | `audit.ndjson` ≤ 2 MB |
@@ -87,7 +87,7 @@ versión 16.0.2. Derivación **AEGIS-256** (+ Zstandard), formatos `.splits`/`.d
 |---|---|---|
 | Desofuscar Swift Backup: clase que deriva la clave + salt + iteraciones | DEX + nodo RE | Un test que reproduce el derivador contra un `.dat` real |
 | **Catálogo de proyectos de backup** (libres y no libres) con lo que se reimplementa | DEX | Tabla: proyecto → formato → qué reimplementamos → licencia (reimplementar **ideas**, no código) |
-| Reimplementar en Rust dentro de MegaDaemon | backup + DEX | `backup_vault` lee un backup de Swift Backup y lo restaura verificado |
+| Reimplementar en Rust dentro de MegaDaemon | backup + DEX | **parcial**: `rust-core/src/backup_formats.rs` lee **TAR** (ustar/GNU/pax), **ZIP** (stored+deflate), el `metadata.json` de Swift y recorre su árbol (**8/8 verde**, sólo-lectura, rutas seguras) + `recording_vault.rs` (**7/8** verde) como gestor de grabaciones. **Pendiente**: derivación AEGIS-256 (P5, nodo dex) y un `.dat` real para validar el descifrado |
 | El formato OMC ya está resuelto | nodo RE (**hecho**) | `omc_decode/encode` en Rust, round-trip 126/126 CSC |
 
 ---
