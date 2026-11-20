@@ -498,6 +498,34 @@ pub fn fingerprint(key: &str) -> String {
     format!("{:016x}", h)
 }
 
+/// Cuerpo del **403** (I-08) que deja claro que el problema es la credencial
+/// local y **no** el movil.
+///
+/// **Lo que NO hacemos** (y es lo que proponia el informe): publicar una
+/// huella de la key *vigente*.  Un hash de 64 bits de un secreto de alta
+/// entropia, expuesto a cualquiera que llegue al daemon, es un **oraculo de
+/// verificacion**: permite probar candidatos offline contra la huella.
+///
+/// Lo que si es seguro y util:
+///   - `sent_key_fp`: la huella de la key que el cliente **si** presento (su
+///     propio secreto => no filtra nada) => el agente ve "el daemon recibio MI
+///     key", no "la key del movil es X".
+///   - `key_rotated_at`: mtime del fichero de la key vigente => si la copia
+///     local del agente es mas antigua, ve al instante que su key caducó.
+pub fn forbidden_body(state_dir: &str, presented: Option<&str>) -> String {
+    let fp = presented.map(fingerprint).unwrap_or_else(|| "-".to_string());
+    let rotated = std::fs::metadata(format!("{}/megadaemon_api.key", state_dir))
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!(
+        "{{\"error\":\"forbidden\",\"hint\":\"API key invalida o caducada: esta credencial no coincide con la vigente\",\"sent_key_fp\":\"{}\",\"key_rotated_at\":{}}}",
+        fp, rotated
+    )
+}
+
 /// Aviso una sola vez por proceso: "key no configurada" con `forced`.
 fn warn_once_no_key() {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -760,5 +788,20 @@ mod tests {
         assert!(!cfg.enabled);
         assert!(cfg.key.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod forbidden_body_tests {
+    use super::forbidden_body;
+
+    #[test]
+    fn no_filtra_la_key_vigente_ni_la_presentada() {
+        let b = forbidden_body("/no/existe", Some("mdaemon_sk_live_ABCDEF"));
+        assert!(b.contains("\"error\":\"forbidden\""), "{}", b);
+        assert!(b.contains("sent_key_fp"), "{}", b);
+        assert!(!b.contains("mdaemon_sk_live_ABCDEF"), "el secreto no debe aparecer: {}", b);
+        let b2 = forbidden_body("/no/existe", None);
+        assert!(b2.contains("sent_key_fp"), "{}", b2);
     }
 }
