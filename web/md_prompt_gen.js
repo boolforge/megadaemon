@@ -73,11 +73,25 @@
       L.push("    X-Seere-Auth-Token: <el token de sesion>");
     }
     L.push("    Content-Type: application/json");
+    L.push("    OJO (medido): con SOLO X-API-Key el MCP devuelve 403");
+    L.push("    {\"error\":\"unauthorized\",\"hint\":\"falta la cabecera X-Seere-Auth-Token\"}.");
+    L.push("    Las DOS cabeceras son obligatorias en cada POST, tambien tools/list:");
+    L.push("    el gate de API key y el de token de sesion son independientes.");
+    L.push("    El token de sesion ROTA en cada reinicio del daemon => si el MCP");
+    L.push("    empieza a dar 403, canjea otra vez (§1.b), no lo reintentes con la key.");
     L.push("El body es JSON-RPC 2.0 puro:");
     L.push("    {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}");
     L.push("    {\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"system_overview\",\"arguments\":{}}}");
     L.push("Si el tunel cae, la ruta estable dentro del movil es http://127.0.0.1:9090/mcp.");
     L.push("PRIMER MOVIMIENTO OBLIGATORIO: tools/list completo y luego system_overview.");
+    L.push("");
+    L.push("## 1.b. Canje de credenciales (si el MCP da 403)");
+    L.push("    POST <URL>/api/session/exchange");
+    L.push("    Content-Type: application/json");
+    L.push("    {\"api_key\":\"<tu API key>\"}   # la key va EN EL CUERPO, no solo en la cabecera");
+    L.push("    => 200 {\"ok\":true,\"token\":\"<token de sesion>\"}");
+    L.push("Usa ese token como X-Seere-Auth-Token. Si da 403 con la key correcta,");
+    L.push("la key no es la vigente: no la pegues en ningun sitio, pidela por el bus.");
     L.push("");
     L.push("## 2. Tu catalogo de tools (" + tools.length + ")");
     L.push("  " + tools.join(", "));
