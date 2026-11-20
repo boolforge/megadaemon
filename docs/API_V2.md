@@ -120,13 +120,21 @@ Un test de Rust comprueba que **la UI llama exactamente a estas rutas** y que
 | GET | `/api/v2/mesh_findings` | hallazgos de RE que publica el enjambre (paginado, sin credenciales). Alias: `/api/mesh_findings` |
 | GET | `/api/v2/prompt_external` | prompt Markdown para un agente externo, generado en el servidor (sin credenciales) |
 | POST | `/api/v2/prompt_external` | igual, pero puede incluir API key y token de sesión (con aviso en el Markdown) |
+| POST | `/api/v2/tasks/claim` | reclama una tarea del tablero del bus **bajo lock** (`BEGIN IMMEDIATE`) con lease y rol |
+| POST | `/api/v2/tasks/release` | devuelve una tarea a `queued`; sólo quien la tiene puede soltarla |
+| POST | `/api/v2/tasks/report` | reporta el resultado de una tarea (hecha/fallida) con su informe |
+| GET | `/api/v2/voice` | estado real de la voz (identidad, cooldown, presupuesto, bucle) + rol e id de la instancia |
+| POST | `/api/v2/voice` | acción de la voz: `status` \| `whoami` \| `plan` \| `act` \| `speak` |
+| POST | `/api/v2/admin/restart` | reinicia la instancia (`confirm:true`): el daemon sale y el supervisor lo relanza |
 | GET | `/api/v2/routes` | esta tabla en JSON + política de auth |
 
 Rutas de la v1 que la v2 **reutiliza** (no se duplican): `POST /api/tool/agent`
 (planificar/ejecutar), `POST /api/tool/task_queue` (submit/run/cancel/retry),
 `POST /api/tool/alerts` (check/ack/prune), `POST /api/tool/apk_inventory`,
+`POST /api/tool/dex_decompile`, `POST /api/tool/app_intel`,
+`POST /api/tool/api_keys` (mint/revoke/list),
 `POST /api/tool/root_stealth`, `POST /api/providers/test` (ping de
-proveedor) y `POST /api/session/exchange`.
+proveedor), `POST /api/sync/harvest` (forzar sync) y `POST /api/session/exchange`.
 
 ---
 
@@ -676,6 +684,46 @@ Markdown se genera en memoria y se devuelve.
 
 ---
 
+## 5.15 Tablero del bus, voz y administración
+
+### `POST /api/v2/tasks/claim` · `/release` · `/report`
+
+Cuerpo de `claim`:
+
+```json
+{ "task_id": "t-1737-a1b2", "owner": "agente-a", "role": "worker", "lease_secs": 300 }
+```
+
+* `task_id` obligatorio; `owner` por defecto = id de la instancia local;
+  `role` por defecto = rol de la instancia local (`primary` | `worker` |
+  `observer`; un rol desconocido se **rechaza**, no se inventa).
+* El claim usa `BEGIN IMMEDIATE` de SQLite ⇒ **dos agentes que pulsan a la
+  vez no se quedan los dos con la tarea**: el segundo recibe
+  `{"ok":true,"won":false,"current_owner":"…"}`.
+* El lease (`lease_expires_at`) caduca solo: si el agente muere, otra
+  instancia puede reclamarla.
+* `release` sólo suelta la tarea **si eres su dueño** (`WHERE owner=?`): nadie
+  roba la tarea de otro.
+* `report` marca la tarea `done`/`failed` con su informe (mismo criterio:
+  sólo el dueño).
+
+### `GET|POST /api/v2/voice`
+
+`GET` devuelve el estado real de la voz (`voice_runtime::status()`) más el
+`id` y el `role` de esta instancia.  `POST` ejecuta una acción
+(`status`, `whoami`, `plan`, `act`, `speak`) y devuelve la respuesta **real**
+del runtime dentro de `voice`.
+
+### `POST /api/v2/admin/restart`
+
+Reinicia la instancia.  Exige `{"confirm": true}` (si no, responde
+`confirmation_required`) y tiene un enfriamiento de 30 s.  El daemon **sale
+con éxito** (`exit(0)`) después de responder y el supervisor lo vuelve a
+levantar ⇒ la respuesta HTTP llega al cliente y la sesión se corta (la UI lo
+avisa).
+
+---
+
 ## 6. Firmas públicas de `rust-core/src/webui.rs`
 
 ```rust
@@ -710,6 +758,12 @@ pub fn default_rules(node: &str) -> ShareRules;
 pub fn work_kind_for(kind: &str) -> &'static str;
 pub fn mesh_findings(query: &str) -> Value;
 pub fn prompt_external(include_secrets: bool, api_key: &str) -> Value;
+pub fn board_claim(body: &Value) -> Value;
+pub fn board_release(body: &Value) -> Value;
+pub fn board_report(body: &Value) -> Value;
+pub fn voice_status() -> Value;
+pub fn voice_action(action: &str, body: &Value) -> Value;
+pub fn admin_restart(body: &Value) -> Value;
 pub fn sha256_hex(data: &[u8]) -> String;
 pub fn base64_encode(data: &[u8]) -> String;
 pub fn base64_decode(text: &str) -> Result<Vec<u8>, String>;
