@@ -100,7 +100,7 @@ fn los_flags_de_csc_se_parsean_en_los_dos_formatos() {
 #[test]
 fn las_rutas_de_csc_apuntan_a_donde_estan_en_el_samsung() {
     let c = csc_feature_candidates("AMO");
-    assert!(c[0].contains("/prism/etc/carriers/single/AMO/contents.db"));
+    assert!(c.iter().any(|p| p.contains("/prism/etc/carriers/single/AMO/contents.db")));
     assert!(c.iter().any(|p| p.contains("/optics/configs/carriers/single/AMO/conf")));
     assert!(c.iter().all(|p| !p.contains("{csc}")));
 }
@@ -115,4 +115,40 @@ fn el_plan_de_preconfig_es_jerarquico_y_termina_en_la_alternativa_real() {
     let s2 = preconfig_state(false, true);
     let plan2 = preconfig_install_plan(&s2);
     assert!(plan2[0].contains("install-existing"));
+}
+
+
+#[test]
+fn el_envoltorio_omc_se_distingue_del_texto_y_del_gzip() {
+    // Medido: el cscfeature.xml de AMO empieza por 2f2729b7... y no es gzip
+    let bytes = [0x2fu8, 0x27, 0x29, 0xb7, 0xda, 0xc1, 0xac, 0x37, 0x01, 0x02];
+    match omc_state(&bytes) {
+        OmcState::Obfuscated { magic, .. } => assert!(magic.starts_with("2f2729b7")),
+        otro => panic!("esperaba ofuscado, {:?}", otro),
+    }
+    assert_eq!(omc_state(b"<CscFeature name=\"CscFeature_VoiceCall_ConfigRecording\" value=\"1\"/>"), OmcState::Plaintext);
+    assert_eq!(omc_state(&[0x1f, 0x8b, 0x08, 0x00]), OmcState::Gzip);
+}
+
+#[test]
+fn el_veredicto_de_audio_es_honesto_y_prioriza_el_csc() {
+    let f = CallAudioFacts {
+        hal_has_voice_path: false,
+        apps_with_capture_permission: vec![
+            "YourPhone_P1_5".to_string(),
+            "LinkToWindowsService".to_string(),
+        ],
+        csc_allows_native: false,
+        system_uid_available: true,
+    };
+    let c = f.conclusion();
+    assert!(c.contains("cambiarlo"), "{}", c);
+    assert!(c.contains("modem"), "{}", c);
+    assert!(c.contains("YourPhone_P1_5"), "{}", c);
+}
+
+#[test]
+fn las_rutas_de_csc_incluyen_el_cscfeature_xml_ofuscado() {
+    let c = csc_feature_candidates("AMO");
+    assert!(c[0].ends_with("/conf/system/cscfeature.xml"), "{:?}", c);
 }

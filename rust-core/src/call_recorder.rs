@@ -1318,7 +1318,8 @@ pub fn audio_policy_facts(path: &str, xml: &str) -> AudioPolicyFacts {
 // ===========================================================================
 
 /// Dónde puede vivir la configuración de CSC en un Samsung.
-pub const CSC_FEATURE_SOURCES: [&str; 5] = [
+pub const CSC_FEATURE_SOURCES: [&str; 6] = [
+    "/optics/configs/carriers/single/{csc}/conf/system/cscfeature.xml",
     "/prism/etc/carriers/single/{csc}/contents.db",
     "/prism/etc/carriers/single/{csc}/sysconfig",
     "/prism/etc/carriers/single/{csc}/permissions",
@@ -1327,6 +1328,15 @@ pub const CSC_FEATURE_SOURCES: [&str; 5] = [
 ];
 
 /// Rutas candidatas para la configuración del CSC indicado.
+///
+/// Nota: `contents.db` **es** SQLite pero es un **inventario de ficheros**
+/// (tabla `contents(salesCode, _id, filePath, fileSize)`, 2.006 filas): sirve
+/// para auditar qué ficheros forman el CSC y sus tamaños esperados, **no**
+/// guarda los valores de `CscFeature_*`. Los valores están en el
+/// `cscfeature.xml` de cada CSC, que va **ofuscado con OMC**.
+///
+/// Además, para saber qué ficheros componen un CSC conviene tener el
+/// `cscfeature.xml` de otro CSC (p. ej. THL) para comparar
 pub fn csc_feature_candidates(csc: &str) -> Vec<String> {
     let csc = csc.trim().to_ascii_uppercase();
     CSC_FEATURE_SOURCES
@@ -1424,5 +1434,122 @@ pub fn csc_feature<'a>(features: &'a [CscFeature], key: &str) -> Option<&'a CscF
 /// grabar en la pantalla de llamada.
 pub fn voice_call_config_recording(features: &[CscFeature]) -> Option<bool> {
     csc_feature(features, "CscFeature_VoiceCall_ConfigRecording").and_then(|f| f.enabled())
+}
+
+
+// ===========================================================================
+// Estado del envoltorio OMC y veredicto final de la captura
+// ===========================================================================
+
+/// Cómo está codificado un fichero de configuración de Samsung.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum OmcState {
+    /// Texto legible: se puede parsear tal cual.
+    Plaintext,
+    /// Comprimido con gzip (magic `1f 8b`).
+    Gzip,
+    /// Envoltorio OMC propietario: cabecera binaria, no texto.
+    Obfuscated {
+        /// Cabecera en hexadecimal.
+        magic: String,
+        /// Tamaño del fichero.
+        bytes: usize,
+    },
+}
+
+/// Detecta cómo está codificado un fichero de CSC.
+///
+/// **Medido**: el `cscfeature.xml` del CSC AMO de este móvil son **1.109 B** y
+/// empieza por `2f 27 29 b7 da c1 ac 37`: **no** es gzip (`1f 8b`) ni texto ⇒
+/// el envoltorio OMC es un **formato binario propio con cabecera**, no
+/// "gzip + XOR". Por eso buscar el XOR a ciegas no funciona: hay que leer la
+/// cabecera OMC primero.
+pub fn omc_state(bytes: &[u8]) -> OmcState {
+    if bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b {
+        return OmcState::Gzip;
+    }
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        if text.contains("CscFeature_") {
+            return OmcState::Plaintext;
+        }
+    }
+    let n = bytes.len().min(8);
+    let magic = bytes[..n]
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<String>>()
+        .join("");
+    OmcState::Obfuscated {
+        magic,
+        bytes: bytes.len(),
+    }
+}
+
+/// Los hechos que determinan si se puede grabar el audio de una llamada.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CallAudioFacts {
+    /// ¿El HAL de audio expone un camino de captura de voz?
+    ///
+    /// **Medido en este móvil**: `libaudiohal.so` (33.184 B) tiene **cero**
+    /// cadenas `voice|voip|csd|VOICE_CALL|capture|in_call` ⇒ **no lo expone**:
+    /// el audio de la llamada lo genera el **modem** y **ningún parche de
+    /// AudioFlinger lo arregla**.
+    pub hal_has_voice_path: bool,
+    /// Apps que **declaran** `CAPTURE_AUDIO_OUTPUT` en su manifiesto.
+    ///
+    /// **Medido**: sólo dos, y **ninguna de Samsung**: `YourPhone_P1_5` y
+    /// `LinkToWindowsService` (Microsoft). El grabador tampoco está en los
+    /// jars de `/system/framework`.
+    pub apps_with_capture_permission: Vec<String>,
+    /// ¿El CSC actual habilita el grabador nativo de Samsung?
+    pub csc_allows_native: bool,
+    /// ¿Se puede correr como UID de sistema (root)?
+    pub system_uid_available: bool,
+}
+
+impl CallAudioFacts {
+    /// El veredicto honesto, en una frase.
+    ///
+    /// El orden de preferencia real, medido en este móvil:
+    /// 1. **Cambiar el CSC** a uno que habilite la grabación nativa
+    ///    (`THL`/`INS`): el propio sistema graba, sin hacks.
+    /// 2. **UID de sistema + `VOICE_CALL`**: tiene el permiso, pero si el HAL
+    ///    no expone la voz el PCM sale en silencio ⇒ hay que comprobarlo
+    ///    grabando (fichero no vacío y no todo ceros).
+    /// 3. Las apps de **Microsoft** ya tienen el permiso declarado.
+    pub fn conclusion(&self) -> String {
+        let mut v: Vec<String> = Vec::new();
+        if self.csc_allows_native {
+            v.push("el CSC actual ya habilita el grabador nativo de Samsung: se usa ese".to_string());
+        } else {
+            v.push(
+                "el CSC actual NO habilita el grabador nativo: la via fiable es cambiarlo \
+                 (THL/INS) o usar una app con CAPTURE_AUDIO_OUTPUT"
+                    .to_string(),
+            );
+        }
+        if !self.hal_has_voice_path {
+            v.push(
+                "el HAL no expone un camino de captura de voz (medido: cero cadenas de voz \
+                 en libaudiohal.so): el audio lo genera el modem y ningun parche de \
+                 AudioFlinger lo arregla"
+                    .to_string(),
+            );
+        }
+        if self.system_uid_available {
+            v.push(
+                "con root se puede correr el grabador bajo el UID de sistema (1000), que tiene \
+                 CAPTURE_AUDIO_OUTPUT, pero hay que comprobar que el PCM no sale en silencio"
+                    .to_string(),
+            );
+        }
+        if !self.apps_with_capture_permission.is_empty() {
+            v.push(format!(
+                "apps con el permiso ya declarado: {}",
+                self.apps_with_capture_permission.join(", ")
+            ));
+        }
+        v.join(". ")
+    }
 }
 

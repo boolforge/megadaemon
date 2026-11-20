@@ -146,3 +146,54 @@ persistente (`mps_code.dat`).
 - Tests: `tests/call_audio_smoke.rs` (8 tests nuevos) + los tres arneses
   previos. Verde: `call_audio` 41/41 · `rom_migration` 29/29 ·
   `backup_full` 26/26 · `call_recorder` 18/18.
+
+---
+
+## 5. Respuestas del nodo RE externo (medidas, §9 de su Manual)
+
+El nodo RE (`9cb64913`) respondió a las 7 preguntas con mediciones sobre el
+móvil vivo. Incorporadas:
+
+**P1 · Qué app puede grabar llamadas.** Barrido de **398 APKs** (5.580 MB)
+buscando `CAPTURE_AUDIO_OUTPUT` en manifiesto y en DEX:
+| APK | ¿manifiesto? | veredicto |
+|---|---|---|
+| `/system/priv-app/YourPhone_P1_5` (Microsoft Your Phone) | **sí** | declara el permiso |
+| `/system/priv-app/LinkToWindowsService` (Microsoft) | **sí** | declara el permiso |
+| `/system/priv-app/GalaxyApps_OPEN` (Galaxy Store) | no | sólo lo referencia (falso positivo) |
+
+⇒ **Ninguna app de Samsung declara el permiso**, y el grabador no está en los
+jars de `/system/framework` ⇒ **en este firmware (CSC `AMO`) la grabación
+nativa no la implementa ninguna app**.
+
+**P3 · `contents.db` es SQLite** (156.672 B): tabla
+`contents(salesCode TEXT, _id INTEGER, filePath TEXT, fileSize INTEGER)` con
+**2.006 filas** (22 de AMO, 131 apuntan a un `cscfeature.xml`). ⇒ es un
+**inventario de ficheros** del CSC (ruta + tamaño esperado), **no** un almacén
+de valores `CscFeature_*`. Sirve para auditar que un parche no rompa el tamaño.
+
+**P4 · El formato OMC NO es gzip+XOR.**
+`/optics/configs/carriers/single/AMO/conf/system/cscfeature.xml` = **1.109 B**,
+cabecera **`2f 27 29 b7 da c1 ac 37`** ⇒ envoltorio OMC **binario propio**.
+No hay APK decodificador OMC en `/prism/app` (11 APKs medidos).
+Implementado: `call_recorder::omc_state()` distingue texto / gzip / OMC.
+
+**P6 · El HAL no expone captura de voz.** `libaudiohal.so` (33.184 B) tiene
+**cero** cadenas `voice|voip|csd|VOICE_CALL|capture|in_call` ⇒ el audio de la
+llamada lo genera el **modem** ⇒ **ningún parche de AudioFlinger lo arregla**.
+
+**P2 · `dex_decompile` tenía un bug real** (`encoded_value` no soportaba
+`VALUE_NULL` 0x1e / `VALUE_BOOLEAN` 0x1f) ⇒ **ya corregido** por el agente DEX
++ CLI `megadaemon-core dex`; los DEX están sanos (SamsungInCallUI: 30.480
+cadenas, 10.019 clases).
+
+**P7 · Pendiente**: la **P5 de Swift Backup** (derivación AEGIS, `.splits`,
+`Config`/`Blacklist`, cloud, Chrome).
+
+### Veredicto final (implementado en `CallAudioFacts::conclusion()`)
+
+1. **Cambiar el CSC** a `THL`/`INS` ⇒ el propio sistema graba, sin hacks
+   (`csc_swap_via_mps_code`).
+2. **UID de sistema (1000) + `VOICE_CALL`** ⇒ tiene el permiso, pero con el HAL
+   medido hay que **comprobar que el PCM no sale en silencio**.
+3. **Microsoft Your Phone / Link to Windows** ya declaran el permiso.
