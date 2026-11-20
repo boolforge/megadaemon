@@ -32,6 +32,8 @@ fn print_usage() {
     eprintln!("  power                                        Show battery/charging/thermal state and the active policy");
     eprintln!("  seere-selftest                              Run SEERE v12 Assertion Suites & Export Shared GBNF/Prompts");
     eprintln!("  npu-probe                                   Probe Exynos 2100 NPU (/dev/vertex10, EDEN, KleidiAI) & Pin Cores 4-7");
+    eprintln!("  npu-probe --vs4l                            Sondea el driver VS4L/NPU (ioctl SIN argumento => devuelve el tamano que espera)");
+    eprintln!("  csc-verify                                Verifica en el movil si la feature de grabacion nativa (CSC) esta activa");
     eprintln!("  locate-roms [refresh]                       Native Multi-Platform ROM & Binary Auto-Discovery");
     eprintln!("  disasm <plat> <file> [offset] [count]       Native Multi-Arch Disassembler");
     eprintln!("  hex <file> [offset] [length]                Native Hex & ASCII Inspector");
@@ -341,7 +343,21 @@ fn main() {
         },
 
         "npu-probe" => {
-            let rep = npu_bridge::probe_exynos_npu();
+            // v15: `--vs4l` sondea el driver NPU con el metodo correcto
+            // (ioctl SIN argumento => el driver devuelve el tamano que espera).
+            if args.iter().any(|a| a == "--vs4l" || a == "-v") {
+                let rep = npu_vs4l::probe();
+                println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+            } else {
+                let rep = npu_bridge::probe_exynos_npu();
+                println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+            }
+        }
+
+        "csc-verify" => {
+            // Verificador post-parche del CSC: la feature de grabacion nativa
+            // esta realmente activa en el movil? (no "deberia estarlo").
+            let rep = csc_verify::verify();
             println!("{}", serde_json::to_string_pretty(&rep).unwrap());
         }
 
