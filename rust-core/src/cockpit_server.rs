@@ -201,7 +201,14 @@ fn requires_auth(path: &str, method: &str, local_browser: bool) -> bool {
     // token: sólo el navegador LOCAL del dispositivo lo recibe incrustado
     // (Host loopback + sin cabeceras de proxy).  Sin CORS abierto, un origen
     // externo no puede leer la respuesta de la página.
-    if path == "/" || path == "/index.html" {
+    // v15 (W1): la UI v2 (`/v2`) y su hoja de estilos (`/webui_v2.css`) son
+    // PÚBLICAS igual que `/`: son HTML/CSS, no datos.  Sin esta exención, por
+    // el túnel la página pediría un token que todavía no existe (403) y el
+    // navegador pediría el CSS sin cabeceras (401) ⇒ la UI cargaría sin
+    // estilos.  Los DATOS de la v2 (`/api/v2/*`) siguen protegidos.
+    if path == "/" || path == "/index.html" || path == "/v2" || path == "/ui"
+        || path == "/webui_v2.css"
+    {
         return false;
     }
     // Los endpoints de monitorización son de SÓLO LECTURA: no exigen el
@@ -269,6 +276,20 @@ pub fn resolve_template() -> Option<String> {
 /// es autosuficiente en cualquier plataforma; el fichero en disco sigue
 /// teniendo prioridad para poder parchear la UI sin recompilar.
 pub const EMBEDDED_TEMPLATE: &str = include_str!("../../web/cockpit_template.html");
+
+/// v15 (W1): la UI v2 (`web/cockpit_v2.html` + `web/webui_v2.css`) embebida,
+/// para que el binario sea autosuficiente como la v1 (el móvil no tiene assets).
+pub const EMBEDDED_V2_HTML: &str = include_str!("../../web/cockpit_v2.html");
+pub const EMBEDDED_V2_CSS: &str = include_str!("../../web/webui_v2.css");
+
+/// Ruta con query, como la espera `webui::dispatch` (que hace `split_query`).
+fn with_query(path: &str, query: &str) -> String {
+    if query.is_empty() {
+        path.to_string()
+    } else {
+        format!("{}?{}", path, query)
+    }
+}
 
 /// Puertos realmente enlazados (los alias son best-effort).
 static OPEN_PORTS: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
@@ -835,7 +856,11 @@ fn handle_client(mut stream: TcpStream) {
     // diagnóstico era invisible justo cuando hacía falta. Ahora son públicos
     // (no exponen datos de usuario: versión, uptime, puertos y contadores),
     // igual que ya se documentaba en el commit 4771277.
-    let is_public_page = path == "/" || path == "/index.html";
+    // v15 (W1): `/v2` y su CSS son públicos (HTML/CSS); los datos de la v2 no.
+    let is_public_page = path == "/" || path == "/index.html"
+        || path == "/v2"
+        || path == "/ui"
+        || path == "/webui_v2.css";
     let is_public_probe = matches!(
         path,
         "/health" | "/api/health" | "/metrics" | "/api/metrics" | "/api/ping"
@@ -945,6 +970,44 @@ fn handle_client(mut stream: TcpStream) {
     }
 
     if method == "GET" {
+        // v15 (W1): la UI v2 y su hoja de estilos.
+        match path {
+            "/v2" | "/ui" => {
+                // Igual que en "/": el token de sesion va incrustado para que
+                // el navegador no dependa del canje (el token de la pagina
+                // publica SOLO se entrega al navegador local; el resto usa el
+                // canje API key -> token).
+                let html = String::from_utf8_lossy(EMBEDDED_V2_HTML).into_owned();
+                let inject = "<script>window.MEGADAEMON_TOKEN=\"\";window.MEGADAEMON_TOKEN_ISSUED=false;</script>";
+                let html = match html.find("<script>") {
+                    Some(i) => format!("{}{}{}", &html[..i], inject, &html[i..]),
+                    None => format!("{}{}", inject, html),
+                };
+                send_http_response(
+                    &mut stream,
+                    200,
+                    "text/html; charset=utf-8",
+                    html.as_bytes(),
+                );
+                return;
+            }
+            "/webui_v2.css" => {
+                send_http_response(
+                    &mut stream,
+                    200,
+                    "text/css; charset=utf-8",
+                    EMBEDDED_V2_CSS.as_bytes(),
+                );
+                return;
+            }
+            _ => {}
+        }
+        // v15 (W1): API v2 (`webui.rs`).  Va DESPUÉS de los gates de API key y
+        // de token de sesión: estas rutas no son públicas.
+        if let Some(v) = crate::webui::dispatch("GET", &with_query(path, query), &json!({})) {
+            send_json(&mut stream, &v);
+            return;
+        }
         match path {
             "/" | "/index.html" => {
                 let html = resolve_template()
@@ -1368,6 +1431,26 @@ fn handle_client(mut stream: TcpStream) {
                     }),
                 );
             }
+            // v15 (W6): catalogo unificado MODELOS + AGENTES/SERVICIOS.
+            // La UI v2 lo pinta; la voz lo usa para elegir proveedor.
+            "/api/catalog" => {
+                let mut cat = crate::voice_runtime::catalog();
+                if let Some(kind) = parse_query_params(query).get("kind") {
+                    if !kind.is_empty() {
+                        if let Some(items) = cat.get_mut("items").and_then(|v| v.as_array_mut()) {
+                            items.retain(|i| {
+                                i.get("kind").and_then(|v| v.as_str()).unwrap_or("") == kind
+                            });
+                        }
+                    }
+                }
+                send_json(&mut stream, &cat);
+            }
+            // v15 (W0): estado de la voz del daemon (identidad, cooldown,
+            // presupuesto, vetoes).  Lectura pura: sin secretos.
+            "/api/voice" => {
+                send_json(&mut stream, &crate::voice_runtime::status());
+            }
             _ => {
                 send_http_response(&mut stream, 404, "application/json", b"{\"error\":\"not_found\"}");
             }
@@ -1377,6 +1460,13 @@ fn handle_client(mut stream: TcpStream) {
 
     // POST endpoints
     let body_json: Value = serde_json::from_slice(body_slice).unwrap_or_else(|_| json!({}));
+
+    // v15 (W1): API v2 (`webui.rs`) también en POST (asignar nodos, mensajes,
+    // prompt externo con include_secrets, exportar tareas, subir ficheros).
+    if let Some(v) = crate::webui::dispatch("POST", &with_query(path, query), &body_json) {
+        send_json(&mut stream, &v);
+        return;
+    }
 
     let qp = parse_query_params(query);
     match path {
@@ -1393,6 +1483,16 @@ fn handle_client(mut stream: TcpStream) {
         // lo exime.  La credencial que lo protege es la API key, ya validada
         // por el gate de API key.
         // ------------------------------------------------------------------
+        // v15 (W0): la voz actua.  Mismo gate que el resto de /api/*:
+        // exige API key y token de sesion (salvo navegador local en GET).
+        "/api/voice" => {
+            let action = body_json
+                .get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or("status");
+            let r = crate::voice_runtime::handle(action, &body_json);
+            send_json(&mut stream, &r);
+        }
         "/api/session/exchange" => {
             let provided = body_json
                 .get("api_key")

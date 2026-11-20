@@ -64,6 +64,40 @@ fn tool_definitions_core() -> Value {
             }
         },
         {
+            "name": "megadaemon_voice",
+            "description": "La VOZ de MegaDaemon: el daemon como agente del enjambre (identidad, plan, accion y difusion). Acciones: plan | act | speak | whoami | status. Plan decide con criterio fijo o con LLM (degrada al criterio fijo si el modelo no responde). Act ejecuta por la misma registry que /api/tool/<n> (tools de lectura/accion; las destructivas estan vetadas).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["plan", "act", "speak", "whoami", "status"],
+                        "default": "status"
+                    },
+                    "llm": { "type": "boolean", "default": false, "description": "plan: decidir con LLM en vez de con el criterio fijo." },
+                    "broadcast": { "type": "boolean", "default": true, "description": "act: difundir el resultado por los 4 canales." },
+                    "peer": { "type": "string", "description": "speak: nodo destino." },
+                    "text": { "type": "string", "description": "speak: mensaje." },
+                    "tool": { "type": "string", "description": "act/do: tool del daemon." },
+                    "args": { "type": "object", "description": "act/do: argumentos de la tool." },
+                    "task_id": { "type": "string", "description": "act/claim: id de la tarea." },
+                    "capability": { "type": "string" }
+                },
+                "required": ["action"]
+            }
+        },
+        {
+            "name": "megadaemon_catalog",
+            "description": "Catalogo unificado del bus de servicios: MODELOS + AGENTES/SERVICIOS con id, kind, endpoint, auth_kind, health, latency, cost_estimate, capabilities y enabled. Lo que no se puede medir va null con el motivo (nada inventado).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "kind": { "type": "string", "description": "model | agent | service (vacio = todos)" },
+                    "task": { "type": "string", "description": "pista de tarea para elegir proveedor (offline, razonamiento, ...)." }
+                }
+            }
+        },
+        {
             "name": "swarm_chat",
             "description": "Route a prompt to any model in MegaDaemon's Parasitic Swarm (MiniMax M3.1-Flash/M3, Pollinations zero-key, OpenRouter :free, Groq gpt-oss, Google AI Studio Gemini, Cloudflare Workers AI, Z.ai GLM-Flash, local SEERE v13.1).",
             "inputSchema": {
@@ -202,6 +236,37 @@ pub fn dispatch_tool(name: &str, args: &Value) -> Value {
             "content": [{ "type": "text", "text": text }],
             "structuredContent": r,
             "isError": r.get("ok").and_then(|v| v.as_bool()) == Some(false),
+        });
+    }
+    if name == "megadaemon_voice" {
+        let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("status");
+        let r = crate::voice_runtime::handle(action, args);
+        let text = serde_json::to_string_pretty(&r).unwrap_or_default();
+        return json!({
+            "content": [{ "type": "text", "text": text }],
+            "structuredContent": r,
+            "isError": r.get("ok").and_then(|v| v.as_bool()) == Some(false),
+        });
+    }
+    if name == "megadaemon_catalog" {
+        let kind = args.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        let mut r = crate::voice_runtime::catalog();
+        if !kind.is_empty() {
+            if let Some(items) = r.get_mut("items").and_then(|v| v.as_array_mut()) {
+                items.retain(|i| i.get("kind").and_then(|v| v.as_str()).unwrap_or("") == kind);
+            }
+        }
+        if let Some(task) = args.get("task").and_then(|v| v.as_str()) {
+            r["picked_provider"] = match crate::voice_runtime::pick_provider(task) {
+                Some(p) => json!(p),
+                None => json!(null),
+            };
+        }
+        let text = serde_json::to_string_pretty(&r).unwrap_or_default();
+        return json!({
+            "content": [{ "type": "text", "text": text }],
+            "structuredContent": r,
+            "isError": false,
         });
     }
     match name {

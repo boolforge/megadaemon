@@ -59,7 +59,8 @@
           "content_extracted": false,
           "ts": "2026-11-20T01:03:21Z"
         }
-      }
+      },
+      "p4_vendor_ioctls": "134 codigos / 333 sitios en 17 librerias; familias G, g/k (Knox GF), E, M, V; retirada de la cifra v1 (5.955)"
     }
   },
   "messages": [

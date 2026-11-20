@@ -55,6 +55,10 @@ fn main() {
     match args[1].as_str() {
         "cockpit" => {
             let port = args.get(2).and_then(|s| s.parse::<u16>().ok()).unwrap_or(3000);
+            // v15 (W0): bucle autónomo de la voz.  Opt-in explícito
+            // (MEGADAEMON_VOICE=1): 1 acción por tick, cooldown, presupuesto
+            // por hora y NUNCA reinicios ni procesos nuevos.
+            megadaemon_core::voice_runtime::spawn_autonomous_loop();
             if let Err(e) = cockpit_server::run_server(port) {
                 eprintln!("Cockpit server error: {}", e);
                 std::process::exit(1);
@@ -63,6 +67,37 @@ fn main() {
 
         "mcp-server" => {
             mcp_server::run_stdio_mcp_server();
+        }
+
+        // v15 (W0): la voz a mano (status | plan | act | whoami | catalog).
+        // Útil para depurar el bucle autónomo sin esperar al siguiente tick.
+        "voice" => {
+            let action = args.get(2).cloned().unwrap_or_else(|| "status".to_string());
+            let mut payload = serde_json::Map::new();
+            payload.insert("action".into(), serde_json::Value::String(action.clone()));
+            for a in args.iter().skip(3) {
+                if let Some((k, v)) = a.split_once('=') {
+                    let key = k.trim_start_matches("--").to_string();
+                    match key.as_str() {
+                        "llm" | "broadcast" => {
+                            payload.insert(
+                                key,
+                                serde_json::Value::Bool(v.trim() == "1" || v.trim() == "true"),
+                            );
+                        }
+                        "args" => {
+                            let parsed: serde_json::Value =
+                                serde_json::from_str(v).unwrap_or(serde_json::Value::Null);
+                            payload.insert(key, parsed);
+                        }
+                        _ => {
+                            payload.insert(key, serde_json::Value::String(v.to_string()));
+                        }
+                    }
+                }
+            }
+            let r = megadaemon_core::voice_runtime::handle(&action, &serde_json::Value::Object(payload));
+            println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
         }
 
         // v13.3 — Motor de sincronización de conversaciones (CLI).

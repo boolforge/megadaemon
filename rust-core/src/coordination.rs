@@ -646,6 +646,15 @@ impl TaskBoard {
     }
 
     /// Escribe un evento en la auditoría.
+    /// Publica un evento en el tablón (queda en `events` y se sincroniza).
+    ///
+    /// Lo usa la voz (W0) para difundir su acción por el canal del tablón.
+    /// **El payload va sin secretos**: la voz sólo publica textos, ids y
+    /// hashes (`agent_voice::redact` limpia lo que un modelo devolvió).
+    pub fn publish_event(&self, kind: &str, actor: &str, payload: &Value) -> Result<(), String> {
+        self.log_event(kind, actor, payload)
+    }
+
     fn log_event(&self, kind: &str, actor: &str, payload: &Value) -> Result<(), String> {
         self.conn
             .execute(
