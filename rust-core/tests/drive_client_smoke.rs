@@ -109,3 +109,16 @@ fn la_descarga_escribe_y_verifica_el_hash_en_la_misma_pasada() {
     assert_eq!(verify_file_sha256(&path.to_string_lossy(), &r.sha256).is_ok(), true);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn el_estado_de_sesion_permite_calcular_donde_reanudar() {
+    let r = query_session_status(&creds(), "https://session/uri", 10_000_000);
+    assert_eq!(r.method, "PUT");
+    let cr = r.headers.iter().find(|(k, _)| k == "Content-Range").unwrap();
+    assert_eq!(cr.1, "bytes */10000000");
+    assert_eq!(r.headers.iter().find(|(k, _)| k == "Content-Length").unwrap().1, "0");
+    // ya hay 1048576 bytes => se reanuda en 1048576
+    assert_eq!(resume_offset_from_range("bytes=0-1048575"), 1_048_576);
+    assert_eq!(resume_offset_from_range("bytes=0-0"), 1);
+    assert_eq!(resume_offset_from_range("sin cabecera"), 0);
+}
