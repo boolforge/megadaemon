@@ -978,7 +978,19 @@ fn handle_client(mut stream: TcpStream) {
                 // publica SOLO se entrega al navegador local; el resto usa el
                 // canje API key -> token).
                 let html = EMBEDDED_V2_HTML.to_string();
-                let inject = "<script>window.MEGADAEMON_TOKEN=\"\";window.MEGADAEMON_TOKEN_ISSUED=false;</script>";
+                // Igual que en "/": el token de sesion se incrusta SOLO al
+                // navegador LOCAL del dispositivo (su JS lo adjunta a cada
+                // llamada => lecturas y escrituras sin pedir nada).  La pagina
+                // PUBLICA (tunel, LAN) sigue SIN token: ahi el cliente pide la
+                // API key y la canjea por un token de sesion.
+                let inject = if local_browser {
+                    format!(
+                        "<script>window.MEGADAEMON_TOKEN=\"{}\";window.MEGADAEMON_TOKEN_ISSUED=true;</script>",
+                        auth_token()
+                    )
+                } else {
+                    "<script>window.MEGADAEMON_TOKEN=\"\";window.MEGADAEMON_TOKEN_ISSUED=false;</script>".to_string()
+                };
                 let html = match html.find("<script>") {
                     Some(i) => format!("{}{}{}", &html[..i], inject, &html[i..]),
                     None => format!("{}{}", inject, html),
