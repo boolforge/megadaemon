@@ -311,8 +311,16 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "csc_verify",
-            "description": "Verificador post-parche del CSC: lee el CSC activo (mps_code.dat), descifra el cscfeature.xml OMC del movil, comprueba el valor de CscFeature_VoiceCall_ConfigRecording, lo contrasta con el fileSize de contents.db, busca copias en claro del framework y devuelve el mapa vivo de los CSC con la feature.",
-            "inputSchema": { "type": "object", "properties": {} }
+            "description": "Verificador post-parche del CSC: lee el CSC activo (mps_code.dat), descifra el cscfeature.xml OMC del movil, comprueba el valor de CscFeature_VoiceCall_ConfigRecording, lo contrasta con el fileSize de contents.db, busca copias en claro del framework y devuelve el mapa vivo de los CSC con la feature. Con expect_value exige un valor EXACTO (p.ej. 'RecordingAllowed' o 'RecordingAllowedByMenu,disclaimer_latin'): si el valor presente difiere devuelve verdict MISMATCH, y siempre indica la variante (sin-disclaimer / con-disclaimer / apagado).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "expect_value": {
+                        "type": "string",
+                        "description": "Valor exacto que se espera para CscFeature_VoiceCall_ConfigRecording (opcional)."
+                    }
+                }
+            }
         },
 ])
 }
@@ -337,7 +345,14 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             json!({ "content": [{ "type": "text", "text": txt }] })
         }
         "csc_verify" => {
-            let rep = crate::csc_verify::verify();
+            // `expect_value` exige un valor EXACTO de la feature: el verificador
+            // NO presupone cual de las dos variantes del CSC es la legal.
+            let exp = s("expect_value");
+            let rep = crate::csc_verify::verify_expecting(if exp.is_empty() {
+                None
+            } else {
+                Some(exp.as_str())
+            });
             let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
             json!({ "content": [{ "type": "text", "text": txt }] })
         }

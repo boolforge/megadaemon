@@ -38,7 +38,7 @@
 macro_rules! ioctl_req {
     ($code:expr) => {{
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        { $ioctl_req!(code) }
+        { $code as libc::c_ulong }
         #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
         { $code as libc::c_int }
     }};
@@ -97,7 +97,7 @@ fn open_device(path: &str) -> Option<std::fs::File> {
 
 /// ioctl **sin argumento**: el driver devuelve el tamaño que espera.
 fn ioctl_no_arg(fd: i32, code: u32) -> i32 {
-    unsafe { libc::ioctl(fd, ioctl_req!(ioctl_req!(code)), 0usize) }
+    unsafe { libc::ioctl(fd, ioctl_req!(code), 0usize) }
 }
 
 /// ioctl **con buffer** del tamaño declarado (sólo con `--deep`).
