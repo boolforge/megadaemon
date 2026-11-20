@@ -10,6 +10,8 @@
 //! sin `confirm: true`**.
 
 use serde_json::{json, Value};
+use crate::csc_verify;
+use crate::npu_vs4l;
 
 /// Definiciones de las herramientas nuevas.
 pub fn tool_definitions() -> Value {
@@ -301,8 +303,18 @@ pub fn tool_definitions() -> Value {
                     "confirm": { "type": "boolean", "default": false }
                 }
             }
-        }
-    ])
+        },
+        {
+            "name": "npu_vs4l_probe",
+            "description": "Sondea el driver VS4L/NPU del Exynos 2100 (/dev/vertex10) con el metodo correcto: ioctl SIN argumento => el driver devuelve el TAMANO de datos que espera. Distingue EINVAL (reconocido, argumento invalido) de ENOTTY (no existe). No escribe nada y no necesita root (nodo 0644).",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "csc_verify",
+            "description": "Verificador post-parche del CSC: lee el CSC activo (mps_code.dat), descifra el cscfeature.xml OMC del movil, comprueba el valor de CscFeature_VoiceCall_ConfigRecording, lo contrasta con el fileSize de contents.db, busca copias en claro del framework y devuelve el mapa vivo de los CSC con la feature.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+])
 }
 
 /// Despacha las herramientas nuevas. `None` = no es de este grupo.
@@ -319,6 +331,16 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
     };
 
     let r = match name {
+        "npu_vs4l_probe" => {
+            let rep = npu_vs4l::probe();
+            let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
+            json!({ "content": [{ "type": "text", "text": txt }] })
+        }
+        "csc_verify" => {
+            let rep = csc_verify::verify();
+            let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
+            json!({ "content": [{ "type": "text", "text": txt }] })
+        }
         "capabilities" => match s("action").as_str() {
             "manifest" => crate::capability::manifest(),
             "summary" => crate::capability::summary_by_kind(),

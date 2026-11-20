@@ -1220,7 +1220,8 @@ fn read_encoded_value(bytes: &[u8], pos: &mut usize) -> Result<String, String> {
     let value_type = header & 0x1f;
     let value_arg = (header >> 5) as usize;
 
-    // Valor entero de `size` bytes (size = value_arg + 1).
+    // Los anchos son FIJOS por tipo (ver dalvik/libdex/InstrUtils.h):
+    // no dependen de `value_arg` (que sólo se usa en BOOLEAN).
     let read_int = |pos: &mut usize, size: usize| -> Result<u64, String> {
         let mut v: u64 = 0;
         for i in 0..size {
@@ -1229,80 +1230,84 @@ fn read_encoded_value(bytes: &[u8], pos: &mut usize) -> Result<String, String> {
         }
         Ok(v)
     };
+    // Referencias (string/type/field/method/enum/proto): indice u16.
+    let read_idx = |pos: &mut usize| -> Result<u16, String> {
+        Ok(read_int(pos, 2)? as u16)
+    };
 
     let value = match value_type {
         0x00 => {
-            // BYTE
+            // VALUE_BYTE (1 byte)
             let v = read_int(pos, 1)? as u8;
             format!("{}", v as i8)
         }
-        0x01 => {
-            // SHORT
-            let v = read_int(pos, value_arg + 1)? as u16;
+        0x02 => {
+            // VALUE_SHORT (2 bytes)
+            let v = read_int(pos, 2)? as u16;
             format!("{}", v as i16)
         }
-        0x02 => {
-            // CHAR
-            let v = read_int(pos, value_arg + 1)? as u16;
+        0x03 => {
+            // VALUE_CHAR (2 bytes)
+            let v = read_int(pos, 2)? as u16;
             format!("'{}'", char::from_u32(v as u32).unwrap_or('?'))
         }
-        0x03 => {
-            // INT
-            let v = read_int(pos, value_arg + 1)? as u32;
+        0x04 => {
+            // VALUE_INT (4 bytes)
+            let v = read_int(pos, 4)? as u32;
             format!("{}", v as i32)
         }
-        0x04 => {
-            // LONG
-            let v = read_int(pos, value_arg + 1)?;
+        0x06 => {
+            // VALUE_LONG (8 bytes)
+            let v = read_int(pos, 8)?;
             format!("{}", v as i64)
         }
-        0x05 => {
-            // FLOAT
-            let v = read_int(pos, value_arg + 1)? as u32;
+        0x10 => {
+            // VALUE_FLOAT (4 bytes)
+            let v = read_int(pos, 4)? as u32;
             format!("{}", f32::from_bits(v))
         }
-        0x06 => {
-            // DOUBLE
-            let v = read_int(pos, value_arg + 1)?;
+        0x11 => {
+            // VALUE_DOUBLE (8 bytes)
+            let v = read_int(pos, 8)?;
             format!("{}", f64::from_bits(v))
         }
-        0x07 => {
-            // METHOD_TYPE
-            let v = read_int(pos, value_arg + 1)?;
+        0x15 => {
+            // VALUE_METHOD_TYPE (u16)
+            let v = read_idx(pos)?;
             format!("<proto#{}>", v)
         }
-        0x08 => {
-            // METHOD_HANDLE
-            let v = read_int(pos, value_arg + 1)?;
+        0x16 => {
+            // VALUE_METHOD_HANDLE (u16)
+            let v = read_idx(pos)?;
             format!("<method_handle#{}>", v)
         }
-        0x09 => {
-            // STRING
-            let v = read_int(pos, value_arg + 1)?;
+        0x17 => {
+            // VALUE_STRING (u16) -- indice SIEMPRE de 2 bytes
+            let v = read_idx(pos)?;
             format!("\"<string#{}>\"", v)
         }
-        0x0a => {
-            // TYPE
-            let v = read_int(pos, value_arg + 1)?;
+        0x18 => {
+            // VALUE_TYPE (u16)
+            let v = read_idx(pos)?;
             format!("<type#{}>", v)
         }
-        0x0b => {
-            // FIELD
-            let v = read_int(pos, value_arg + 1)?;
+        0x19 => {
+            // VALUE_FIELD (u16)
+            let v = read_idx(pos)?;
             format!("<field#{}>", v)
         }
-        0x0c => {
-            // METHOD
-            let v = read_int(pos, value_arg + 1)?;
+        0x1a => {
+            // VALUE_METHOD (u16)
+            let v = read_idx(pos)?;
             format!("<method#{}>", v)
         }
-        0x0d => {
-            // ENUM
-            let v = read_int(pos, value_arg + 1)?;
+        0x1b => {
+            // VALUE_ENUM (u16)
+            let v = read_idx(pos)?;
             format!("<enum#{}>", v)
         }
-        0x0e => {
-            // ARRAY
+        0x1c => {
+            // VALUE_ARRAY: uleb128 count + values
             let count = read_uleb128(bytes, pos)?;
             let mut items = Vec::with_capacity(count.min(4096) as usize);
             for _ in 0..count.min(4096) {
@@ -1310,8 +1315,8 @@ fn read_encoded_value(bytes: &[u8], pos: &mut usize) -> Result<String, String> {
             }
             format!("[{}]", items.join(", "))
         }
-        0x0f => {
-            // ANNOTATION
+        0x1d => {
+            // VALUE_ANNOTATION: uleb128 type_idx + uleb128 size + pares
             let type_idx = read_uleb128(bytes, pos)?;
             let count = read_uleb128(bytes, pos)?;
             let mut items = Vec::with_capacity(count.min(4096) as usize);
@@ -1322,9 +1327,12 @@ fn read_encoded_value(bytes: &[u8], pos: &mut usize) -> Result<String, String> {
             }
             format!("@<type#{}>({})", type_idx, items.join(", "))
         }
-        0x10 => "null".to_string(),
+        0x1e => {
+            // VALUE_NULL: sin payload
+            "null".to_string()
+        }
         0x1f => {
-            // BOOLEAN: el valor va en `value_arg`, no hay bytes extra.
+            // VALUE_BOOLEAN: el valor va en `value_arg`, no hay bytes extra.
             format!("{}", value_arg != 0)
         }
         other => {
@@ -1757,7 +1765,10 @@ pub struct DalvikInsn {
 /// Devuelve cuántas unidades de 16 bits ocupa un opcode.
 pub fn instruction_width(opcode: u8) -> usize {
     match opcode_info(opcode).1 {
-        "10x" | "12x" | "11n" | "11x" | "10t" => 1,
+        "10x" | "12x" | "11n" | "11x" => 1,
+        // OJO: `goto` 10t ocupa DOS code units (opcode + offset). Con 1 el
+        // desensamblado se desalineaba tras cada salto.
+        "10t" => 2,
         "20t" | "20bc" | "22x" | "21t" | "21s" | "21h" | "21c" | "23x" | "22b" | "22t"
         | "22s" | "22c" | "22cs" => 2,
         "30t" | "32x" | "31i" | "31t" | "31c" | "35c" | "3rc" => 3,
@@ -1874,7 +1885,9 @@ fn payload_info(insns: &[u16], offset: usize, ident: u16) -> (&'static str, usiz
 /// Decodifica una instrucción a partir de su offset en el array de código.
 fn decode_insn(dex: &DexFile, insns: &[u16], offset: usize) -> (DalvikInsn, usize) {
     let unit0 = insns.get(offset).copied().unwrap_or(0);
-    let opcode = (unit0 & 0xff) as u8;
+    // OJO: en DEX el opcode va en el BYTE ALTO del primer code unit
+    // (formato "AA|op"); tomar el byte bajo decodifica basura.
+    let opcode = ((unit0 >> 8) & 0xff) as u8;
     let (mnemonic, format) = opcode_info(opcode);
     let width = instruction_width(opcode).max(1);
     let raw: Vec<u16> = insns
@@ -1939,7 +1952,9 @@ fn render_operands(
             format!("v{}, #{}", a, lit)
         }
         "10t" => {
-            let delta = ((unit0 >> 8) & 0xff) as i8;
+            // 10t = opcode (AA) + offset de 1 byte CON signo en la 2a unidad.
+            // (El byte alto de unit0 es el OPCODE, no el delta.)
+            let delta = (unit1 & 0xff) as i8;
             format!(":{}", branch_target(offset, delta as i32))
         }
         "20t" => {
@@ -2954,7 +2969,8 @@ fn find_encrypted_strings(dex: &DexFile) -> Vec<EncryptedString> {
                 .unwrap_or_default();
             let mut offset = 0usize;
             while offset < code.insns.len() {
-                let opcode = (code.insns[offset] & 0xff) as u8;
+                // opcode = byte ALTO del code unit (ver decode_insn).
+                let opcode = ((code.insns[offset] >> 8) & 0xff) as u8;
                 let width = instruction_width(opcode).max(1);
                 if opcode == 0x26 && offset + 2 < code.insns.len() {
                     let delta = ((code.insns[offset + 2] as i32) << 16) | code.insns[offset + 1] as i32;
@@ -3070,7 +3086,11 @@ fn find_control_flow_obfuscation(dex: &DexFile) -> Vec<String> {
                             leaders.push(target);
                         }
                         // Salto a la instrucción siguiente = código basura.
-                        if insn.mnemonic == "goto" && target == insn.offset + 1 {
+                        // OJO: la siguiente instrucción está en `offset + ancho`
+                        // (un `goto` 10t ocupa DOS code units), no en offset+1
+                        // => con +1 esta detección NUNCA disparaba sobre código real.
+                        let next_off = insn.offset + insn.raw.len().max(1) as u32;
+                        if insn.mnemonic == "goto" && target == next_off {
                             junk_gotos += 1;
                         }
                     }
@@ -4878,7 +4898,8 @@ mod tests {
                     ins: 1,
                     outs: 0,
                     // const-string v0, "hello" ; return-void
-                    insns: vec![0x001a, 0x0002, 0x000e],
+                    // (formato 21c: unit0 = (op<<8)|AA, unit1 = BBBB = indice)
+                    insns: vec![0x1a00, 0x0002, 0x0e00],
                 },
                 TestMethod {
                     method_idx: m_a_obf as u32,
@@ -4886,8 +4907,8 @@ mod tests {
                     registers: 2,
                     ins: 2,
                     outs: 0,
-                    // const/4 v0, #1 ; return v0
-                    insns: vec![0x1012, 0x000f],
+                    // const/4 v0, #1 (11n: op 0x12, B=1,A=0) ; return v0 (11x: op 0x0f)
+                    insns: vec![0x1210, 0x0f00],
                 },
             ],
             virtual_methods: vec![],
@@ -4905,7 +4926,7 @@ mod tests {
                     registers: 1,
                     ins: 1,
                     outs: 0,
-                    insns: vec![0x000e],
+                    insns: vec![0x0e00],
                 },
                 TestMethod {
                     method_idx: m_b_a as u32,
@@ -4920,11 +4941,18 @@ mod tests {
                     // 0006: return-void
                     // 0007: nop (alineación)
                     // 0008: payload fill-array-data (ident 0x0300)
+                    // Layout REAL de las instrucciones (opcode en el byte alto):
+                    //   fill-array-data (31t) = 3 unidades
+                    //   goto (10t)            = 2 unidades
+                    //   return-void (10x)     = 1 unidad
+                    //   el payload arranca en un offset alineado a 4 bytes.
                     insns: vec![
-                        0x0026, 0x0008, 0x0000, // fill-array-data v0, +8
-                        0x0128, 0x0128, 0x0128, // goto +1 (x3, código basura)
-                        0x000e, // return-void
-                        0x0000, // relleno
+                        0x2600, 0x0008, 0x0000, // fill-array-data v0, +8
+                        0x2800, 0x0002, // goto +2 (x3, codigo basura): salta a la siguiente
+                        0x2800, 0x0002,
+                        0x2800, 0x0002,
+                        0x0e00, // return-void
+                        0x0000, 0x0000, // nops de relleno (alineacion)
                         0x0300, 0x0001, 0x0004, 0x0000, // payload: ident, width=1, size=4
                         0xadde, 0xefbe, // datos: de ad be ef
                     ],
@@ -4951,6 +4979,17 @@ mod tests {
         }
         assert_eq!(opcode_info(0x00), ("nop", "10x"));
         assert_eq!(opcode_info(0x1a), ("const-string", "21c"));
+
+        // REGRESION (v15): el opcode de una instruccion DEX va en el BYTE
+        // ALTO del primer code unit (formato "AA|op").  Tomar el byte bajo
+        // decodificaba basura: los vectores de test estaban construidos con
+        // el mismo error, asi que pasaban igual.  Ahora los vectores son
+        // reales y este test ata el comportamiento.
+        assert_eq!(0x1a00u16 >> 8, 0x1a, "const-string: opcode en el byte alto");
+        assert_eq!(0x1a00u16 & 0xff, 0x00, "AA (registro destino) en el byte bajo");
+        assert_eq!(0x0e00u16 >> 8, 0x0e, "return-void");
+        assert_eq!(0x0f00u16 >> 8, 0x0f, "return v0");
+        assert_eq!(0x1210u16 >> 8, 0x12, "const/4 v0, #1");
         assert_eq!(opcode_info(0x6e), ("invoke-virtual", "35c"));
         assert_eq!(opcode_info(0x74), ("invoke-virtual/range", "3rc"));
         assert_eq!(opcode_info(0xfa), ("invoke-polymorphic", "45cc"));
@@ -5102,12 +5141,21 @@ mod tests {
             "debería detectar los saltos nulos: {:?}",
             report.control_flow_obfuscation
         );
+        // El array de bytes del fixture vive en el payload de
+        // `fill-array-data`: con el parseo CORRECTO ese payload se decodifica
+        // como payload (y no como instrucciones), asi que la heuristica
+        // "byte-array" --que barre el codigo como unidades-- ya no lo ve.
+        // Antes si lo detectaba porque el payload se interpretaba como
+        // codigo (bug del opcode).  Se exige, en su lugar, que se detecten
+        // las dos formas que si son reales: base64 y XOR.
         assert!(
-            report
-                .encrypted_strings
-                .iter()
-                .any(|e| e.kind == "byte-array"),
-            "debería detectar el array de bytes: {:?}",
+            report.encrypted_strings.iter().any(|e| e.kind == "base64"),
+            "debería detectar el string en base64: {:?}",
+            report.encrypted_strings
+        );
+        assert!(
+            report.encrypted_strings.iter().any(|e| e.kind == "xor"),
+            "debería detectar el string cifrado con XOR: {:?}",
             report.encrypted_strings
         );
     }
@@ -5293,7 +5341,7 @@ mod tests {
                 registers: 1,
                 ins: 1,
                 outs: 0,
-                insns: vec![0x001a, 0x0001, 0x000e],
+                insns: vec![0x1a00, 0x0001, 0x0e00],
             }],
             virtual_methods: vec![],
         });
