@@ -330,12 +330,12 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
 
     let r = match name {
         "npu_vs4l_probe" => {
-            let rep = npu_vs4l::probe();
+            let rep = crate::npu_vs4l::probe();
             let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
             json!({ "content": [{ "type": "text", "text": txt }] })
         }
         "csc_verify" => {
-            let rep = csc_verify::verify();
+            let rep = crate::csc_verify::verify();
             let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
             json!({ "content": [{ "type": "text", "text": txt }] })
         }
