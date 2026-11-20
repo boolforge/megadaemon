@@ -354,9 +354,12 @@ pub fn probe_env(packages: &[String]) -> crate::root_hide::DeviceEnv {
     env.files_present = out.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
 
     // Props reales.
+    // Cada prop en su propia linea: getprop no imprime salto de linea final,
+    // asi que con `echo -n` los valores se concatenarian y el parser leeria
+    // una sola prop gigante.
     let mut props_cmd = String::new();
     for p in PROBE_PROPS {
-        props_cmd.push_str(&format!("echo -n '{}='; getprop {}; ", p, p));
+        props_cmd.push_str(&format!("echo '{}='$(getprop {}); ", p, p));
     }
     let pout = sh(&props_cmd);
     for line in pout.split(['\n', '\r']) {
@@ -454,7 +457,7 @@ fn magisk_denylist() -> Vec<String> {
             "SELECT package FROM policies WHERE policy IN (1,2) 2>/dev/null"
         );
         let _ = sql;
-        if let Ok(pairs) = crate::sqlite_probe::query_column(db, "package", "SELECT package FROM policies WHERE policy != 0") {
+        if let Ok(pairs) = crate::sqlite_probe::query_column(db, "SELECT package FROM policies WHERE policy != 0") {
             out.extend(pairs);
         }
     }
@@ -513,7 +516,7 @@ pub fn detectors(limit: usize, third_party_only: bool) -> Value {
                 for (cat, lbl, needle) in SIGNATURES {
                     if low.contains(&needle.to_lowercase()) {
                         cats.entry(cat.to_string()).or_insert(0);
-                        *cats.get_mut(cat.to_string()).unwrap() += 1;
+                        *cats.get_mut(*cat).unwrap() += 1;
                         hits.push(json!({
                             "categoria": cat,
                             "senal": lbl,
@@ -594,7 +597,7 @@ fn runtime_evidence() -> Value {
     let ps = sh("ps -A 2>/dev/null");
     let mut pid2pkg: BTreeMap<String, String> = BTreeMap::new();
     for line in ps.lines() {
-        let parts: Vec<&str> = line.split_whitespace();
+        let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() >= 8 {
             let pid = parts[1].to_string();
             let name = parts[parts.len() - 1].to_string();
@@ -716,7 +719,7 @@ fn su_events(pkgs: &[String]) -> Vec<Value> {
     let ps = sh("ps -A 2>/dev/null");
     let mut pid2pkg: BTreeMap<String, String> = BTreeMap::new();
     for line in ps.lines() {
-        let parts: Vec<&str> = line.split_whitespace();
+        let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() >= 8 {
             pid2pkg.insert(parts[1].to_string(), parts[parts.len() - 1].to_string());
         }
