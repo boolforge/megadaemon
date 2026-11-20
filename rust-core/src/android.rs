@@ -33,10 +33,22 @@ pub const MAX_TIMEOUT_MS: u64 = 300_000;
 
 /// Comando que exige confirmación explícita (`confirm_destructive`).
 const DESTRUCTIVE_MARKERS: &[&str] = &[
-    "rm -rf /", "rm -fr /", "mkfs", "fastboot", "dd if=", "dd of=/dev/block",
-    "flash_erase", "wipe_data", "recovery --wipe", "mke2fs", "shred ",
+    // borrado masivo
+    "rm -rf", "rm -fr", "rm -r -f", "rm -f -r", "rm --recursive", "rm --force",
+    "--no-preserve-root", "shred", "wipe", "wipe_data",
+    // particiones / flash
+    "mkfs", "mke2fs", "mkswap", "fdisk", "sfdisk", "parted", "blkdiscard",
+    "dd if=", "dd of=", "flash_erase", "fastboot", "recovery --wipe",
+    "> /dev/block", "> /dev/mmcblk", "/dev/block/sd",
+    // arranque
+    "reboot bootloader", "reboot fastboot", "enter bootloader",
+    // denegación de servicio
+    ":(){", ":|:&",
+    // ejecución de código descargado (un agente no debe correr lo que baja)
+    "curl | sh", "curl | bash", "wget | sh", "wget | bash", "| sh", "| bash",
+    // destruye datos de forma silenciosa
+    "cat /dev/zero", "cat /dev/urandom >", "mv /data", "mv /system", "mv /sdcard",
 ];
-
 /// Escapa un valor para interpolarlo **de forma segura** en un `sh -c`.
 /// Todo lo que venga del modelo pasa por aquí: sin esto, un parámetro con
 /// `;` o `$(...)` es ejecución arbitraria.
@@ -54,9 +66,35 @@ pub fn sh_quote(s: &str) -> String {
     out
 }
 
+/// Normaliza un comando para que la política destructiva no se esquive con
+/// espacios de más, tabuladores ni mayúsculas (`rm  -rf /` ≡ `rm -rf /`).
+fn normalize_cmd(cmd: &str) -> String {
+    let mut out = String::with_capacity(cmd.len());
+    let mut prev_space = false;
+    for c in cmd.chars() {
+        let lower = c.to_ascii_lowercase();
+        if lower.is_whitespace() {
+            if !prev_space {
+                out.push(' ');
+                prev_space = true;
+            }
+        } else {
+            out.push(lower);
+            prev_space = false;
+        }
+    }
+    out
+}
+
 /// ¿El comando toca algo irreversible?
+///
+/// BUG v15 (ADV-A-03): era una lista de subcadenas sobre el comando en
+/// minúsculas ⇒ se esquivaba con un espacio de más (`rm  -rf /`), con una
+/// opción larga (`rm -rf --no-preserve-root /`) o con otra forma de borrar
+/// (`cat /dev/zero > /dev/block/sda`).  Ahora se normalizan los espacios y
+/// la lista cubre las variantes.
 pub fn is_destructive(cmd: &str) -> bool {
-    let c = cmd.to_ascii_lowercase();
+    let c = normalize_cmd(cmd);
     DESTRUCTIVE_MARKERS.iter().any(|m| c.contains(m))
 }
 
@@ -766,23 +804,30 @@ pub fn fs_write(path: &str, content: &str, base64: bool, chmod: &str, confirm: b
     } else {
         format!(" && chmod {} {}", sh_quote(chmod), sh_quote(path))
     };
-    let cmd = if base64 {
-        format!(
-            "mkdir -p $(dirname {p}) && printf %s {c} | base64 -d > {t} && cp {t} {p} && rm -f {t}{ch}",
-            p = sh_quote(path),
-            t = sh_quote(&tmp),
-            c = sh_quote(content),
-            ch = ch
-        )
+    // BUG v15 (ADV-A-01, P0 — RCE root): el contenido CRUDO del usuario
+    // viajaba dentro de un heredoc `<<'__MD_EOF__'`.  Una línea `__MD_EOF__`
+    // en el contenido cerraba el heredoc ANTES de tiempo y todo lo que
+    // venía detrás se ejecutaba como shell ROOT (`su -mm -c`).
+    //
+    // Arreglo: el contenido SIEMPRE viaja en base64 ⇒ el shell nunca ve el
+    // texto del usuario y no hay delimitador que cerrar.  Sin crates nuevas:
+    // se reutiliza `base64ct` (la misma que usa el cliente ADB).
+    //
+    // El modo `base64: true` significa "el contenido YA viene en base64"
+    // (lo decodifica el dispositivo); en ese caso no se codifica dos veces.
+    let payload = if base64 {
+        content.to_string()
     } else {
-        format!(
-            "mkdir -p $(dirname {p}) && cat > {t} <<'__MD_EOF__'\n{c}\n__MD_EOF__\ncp {t} {p} && rm -f {t}{ch}",
-            p = sh_quote(path),
-            t = sh_quote(&tmp),
-            c = content,
-            ch = ch
-        )
+        use base64ct::Encoding;
+        base64ct::Base64::encode_string(content.as_bytes())
     };
+    let cmd = format!(
+        "mkdir -p $(dirname {p}) && printf %s {c} | base64 -d > {t} && cp {t} {p} && rm -f {t}{ch}",
+        p = sh_quote(path),
+        t = sh_quote(&tmp),
+        c = sh_quote(&payload),
+        ch = ch
+    );
     let r = root_exec(&cmd, 60_000, 8192);
     audit("fs.write", &json!({"path": path, "bytes": content.len()}));
     json!({ "ok": r.code == Some(0), "path": path, "output": r.combined() })
@@ -799,13 +844,23 @@ pub fn find_duplicates(path: &str, min_size_kb: u64) -> Value {
         return err("bad_path", "path no puede contener '..'");
     }
     let min = min_size_kb.clamp(1, 1024 * 1024);
+    // BUG v15 (ADV-A-02, P0 — RCE root): el nombre del fichero se
+    // interpolaba DENTRO de un comando de shell construido desde AWK
+    // (`cmd="stat -c %s \"" p "\""`) ⇒ un fichero llamado
+    // `x";touch /tmp/PWNED;echo "` ejecutaba el comando como ROOT (el
+    // `find_duplicates` es alcanzable desde el MCP).
+    //
+    // Arreglo: el nombre se mete en el shell CON comillas simples y sus
+    // comillas simples internas se escapan (`'` -> `'\''`), que es el
+    // escapado POSIX estándar: un `;` o un `$` dentro del nombre ya no
+    // significa nada para el shell.
     let script = format!(
         r#"
 MIN={min}
 find {} -type f -size +${{MIN}}k -print0 2>/dev/null | xargs -0 sha256sum 2>/dev/null | sort | awk '
 {{ h=$1; $1=""; sub(/^ /,""); p=$0;
   if (h==prev) {{ if (!shown) {{ print "DUP " prevsize " " prevpath; shown=1 }} print "    " p; }}
-  else {{ prev=h; prevpath=p; prevsize=0; cmd="stat -c %s \"" p "\" 2>/dev/null"; cmd | getline sz; close(cmd); prevsize=sz; shown=0 }}
+  else {{ prev=h; prevpath=p; prevsize=0; q=p; gsub(/'"'"'/, "'"'"'\\'"'"''"'"'", q); cmd="stat -c %s '"'"'" q "'"'"' 2>/dev/null"; cmd | getline sz; close(cmd); prevsize=sz; shown=0 }}
 }}' 2>/dev/null | head -400
 "#,
         sh_quote(path),
