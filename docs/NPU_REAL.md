@@ -108,7 +108,7 @@ Q4_K_M, 4 hilos, medición física (ameva-runtime v2.7.9, 2026-10-04):
 | **CPU** | 115–119 t/s | **46–47 t/s** |
 | **GPU (Vulkan/Mali)** | 227 t/s | **22,8–23,1 t/s** |
 
-* El **prefill** mejora 2× en GPU, pero el **decode se年半** (46 → 23 t/s).
+* El **prefill** mejora 2× en GPU, pero el **decode se ralentiza a la mitad** (46 → 23 t/s).
   Como el LLM es *decode-bound* (el prompt del SEERE son 187–207 tokens y la
   respuesta 40–64), **la GPU es una pérdida neta**.
 * En la misma familia: **Galaxy A53 (Exynos 1280, Mali-G68)**: CPU 22–24 t/s

@@ -224,7 +224,7 @@ pub fn update_provider(
         }
     }
     // Si el usuario pide un modelo RETIRADO, se avisa en lugar de fallar
-    // en silencio contra la API (M2.7/M2.5已于 el 2026-11-18; GitHub Models
+    // en silencio contra la API (M2.7/M2.5 se retiró el 2026-11-18; GitHub Models
     // se retiró el 2026-07-30).
     if let Some((rid, rmodel, rnote)) = provider_catalog::is_retired(id) {
         return Err(format!(

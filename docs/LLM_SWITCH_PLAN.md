@@ -200,7 +200,7 @@ texto plano en inglés/español, sin sintaxis exótica. **Mide con el tokenizado
 elige mal; genera 64 tokens de mediana en ES/ES (verboso); la tarjeta de modelo avisa que
 *"primarily understand and generate content in English"* ⇒ **no recomendado para español**;
 contexto 8 192 (la mitad que el 0.5B).
-**Veredicto:** el que menos me convence de los tres, contra la intuición que送你 a mirar IFEval.
+**Veredicto:** el que menos me convence de los tres, contra la intuición que te lleva a mirar IFEval.
 
 ### 3.3 Llama-3.2-1B-Instruct — *el equilibrio medido*
 **Ventajas:** **12/12 de enrutado en las cuatro combinaciones de idioma** (el más estable);
@@ -211,7 +211,7 @@ usuarios activos mensuales** (si el megadaemon es comercial y pasa de 700 M MAU,
 Meta); contexto 131 k (desperdiciado para SEERE).
 **Veredicto:** **el mejor candidato si el cambio se justifica.**
 
-### 3.4 Qwen2.5-1.5B-Instruct — *el que más质量和 pero no el más estable*
+### 3.4 Qwen2.5-1.5B-Instruct — *el que más calidad pero no el más estable*
 **Ventajas:** `sens` 10/12 con prompt EN; comandos muy buenos (`free -m | awk '{print $3/$2*100}'`,
 `df -h / | tail -n1 | awk '{print $4}'`, `ps -p 1 -o state,cmd`); español fuerte; Apache-2.0.
 **Inconvenientes:** 1117 MB (×2,8 del 0.5B); **el más lento** (11,5-20,6 s por acción en este sandbox);

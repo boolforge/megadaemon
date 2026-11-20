@@ -194,11 +194,28 @@ pub fn by_id(id: &str) -> Option<&'static Identity> {
     IDENTITIES.iter().find(|i| i.id == id)
 }
 
-/// Perfil por servicio (elige la variante web o app según `mobile`).
-pub fn for_service(service: &str, mobile: bool) -> Option<&'static Identity> {
+/// Perfil por servicio (elige la variante web o app según `app_variant`).
+///
+/// OJO: el campo `mobile` de un perfil dice si su **user-agent** es de móvil,
+/// NO si el perfil es la app nativa o la web: las variantes `.web` de ChatGPT
+/// y Claude usan también UA de móvil (navegador en Android).  La variante se
+/// decide por el **sufijo del id** (`.app` / `.web`).
+///
+/// BUG v14: el filtro usaba `i.mobile == mobile`, así que para
+/// `for_service("chatgpt", false)` no encontraba ninguna variante `mobile:
+/// false` (ambas lo son) y caía al `or_else`, que devolvía la **app** ⇒ la
+/// web y la app mandaban el mismo user-agent.
+pub fn for_service(service: &str, app_variant: bool) -> Option<&'static Identity> {
     IDENTITIES
         .iter()
-        .find(|i| i.service == service && i.mobile == mobile)
+        .find(|i| i.service == service && i.id.ends_with(".app") == app_variant)
+        .or_else(|| {
+            // Sin variante app/web explícita (p.ej. servicio "web"): se
+            // respeta la preferencia de móvil/escritorio del campo `mobile`.
+            IDENTITIES
+                .iter()
+                .find(|i| i.service == service && i.mobile == app_variant)
+        })
         .or_else(|| IDENTITIES.iter().find(|i| i.service == service))
 }
 
@@ -393,6 +410,14 @@ pub fn strip_html(html: &str) -> String {
                 let rest: String = bytes[i..].iter().take(8).collect::<String>().to_lowercase();
                 if rest.starts_with("<script") || rest.starts_with("<style") {
                     skip_depth += 1;
+                } else if rest.starts_with("</script") || rest.starts_with("</style") {
+                    // La etiqueta de CIERRE se consume aquí.  BUG v14: se
+                    // esperaba al '>' para bajar el contador, pero al llegar al
+                    // '>' el `in_tag` ya estaba a true (lo puso el '<'), así
+                    // que el contador NUNCA bajaba ⇒ todo el texto posterior
+                    // a un <script>/<style> desaparecía (y con él, el
+                    // `<h1>Título</h1>` de la prueba).
+                    skip_depth = skip_depth.saturating_sub(1);
                 }
             }
             i += 1;
@@ -453,6 +478,7 @@ pub fn robots_forbids(robots: &str, url: &str) -> bool {
     let path = url.split("://").nth(1).and_then(|r| r.split_once('/')).map(|(_, p)| format!("/{}", p)).unwrap_or_else(|| "/".into());
     let mut applies = false;
     let mut disallow: Vec<String> = vec![];
+    let mut allow: Vec<String> = vec![];
     for line in robots.lines() {
         let line = line.split('#').next().unwrap_or("").trim();
         if line.is_empty() {
@@ -470,12 +496,37 @@ pub fn robots_forbids(robots: &str, url: &str) -> bool {
                 }
             }
             "allow" if applies => {
-                disallow.retain(|d| !path.starts_with(d.as_str()) || d.is_empty());
+                if !v.is_empty() {
+                    allow.push(v);
+                }
             }
             _ => {}
         }
     }
-    disallow.iter().any(|d| path.starts_with(d.as_str()))
+    // Regla de robots.txt (Google): gana la regla MÁS ESPECÍFICA y, a igual
+    // longitud, gana `Allow`.
+    //
+    // BUG v14: el `Allow` se aplicaba con `disallow.retain(...)`, que
+    // BORRABA la regla `Disallow` en cuanto la ruta no empezaba por ella
+    // (invertía la condición) ⇒ `Disallow: /privado` +
+    // `Allow: /privado/publico` acababa permittingiéndolo TODO.
+    let best_dis = disallow
+        .iter()
+        .filter(|d| path.starts_with(d.as_str()))
+        .map(|d| d.len())
+        .max()
+        .unwrap_or(0);
+    let best_allow = allow
+        .iter()
+        .filter(|a| path.starts_with(a.as_str()))
+        .map(|a| a.len())
+        .max()
+        .unwrap_or(0);
+    if best_allow == 0 {
+        best_dis > 0
+    } else {
+        best_allow >= best_dis
+    }
 }
 
 #[cfg(test)]

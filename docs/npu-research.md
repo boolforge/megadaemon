@@ -149,7 +149,7 @@ para cargas de forma fija (visión, siempre-a-on).
 ## 5. Receita reproducible en el dispositivo
 
 ```bash
-# 1) ¿Qué设备和 NNAPI hay?
+# 1) ¿Qué dispositivos y NNAPI hay?
 adb shell getprop ro.soc.model
 adb shell "ls /vendor/lib64/ | grep -i neural"
 adb shell "cat /sys/class/nnapi/nnapi*/devices 2>/dev/null"
