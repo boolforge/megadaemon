@@ -31,6 +31,19 @@
 //! Salida: **JSON por stdout** (para que lo consuma la flota), resumen legible
 //! por stderr.
 
+
+/// `libc::ioctl` pide el *request* como `c_ulong` en x86/x86_64 y como
+/// `c_int` en aarch64-android => sin esto el binario **no compila para
+/// ARM64** (E0308: expected i32, found u64).
+macro_rules! ioctl_req {
+    ($code:expr) => {{
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        { $code as libc::c_ulong }
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        { $code as libc::c_int }
+    }};
+}
+
 use megadaemon_core::dex_decompile::{VS4L_IOCTLS, VS4L_LIVE_CODES};
 use serde_json::{json, Value};
 use std::fs::OpenOptions;
@@ -84,7 +97,7 @@ fn open_device(path: &str) -> Option<std::fs::File> {
 
 /// ioctl **sin argumento**: el driver devuelve el tamaño que espera.
 fn ioctl_no_arg(fd: i32, code: u32) -> i32 {
-    unsafe { libc::ioctl(fd, code as libc::c_ulong, 0usize) }
+    unsafe { libc::ioctl(fd, ioctl_req!(code as libc::c_ulong), 0usize) }
 }
 
 /// ioctl **con buffer** del tamaño declarado (sólo con `--deep`).

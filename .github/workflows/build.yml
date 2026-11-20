@@ -20,7 +20,9 @@ on:
 
 concurrency:
   group: megadaemon-${{ github.ref }}
-  cancel-in-progress: true
+  # NO cancelar el build en curso: cada push cancelaba el run anterior y el
+  # binario ARM64 no se publicaba nunca.
+  cancel-in-progress: false
 
 permissions:
   contents: read
