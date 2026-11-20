@@ -301,8 +301,8 @@ pub fn tool_definitions() -> Value {
                     "confirm": { "type": "boolean", "default": false }
                 }
             }
-        }
-            {
+        },
+        {
             "name": "npu_vs4l_probe",
             "description": "Sondea el driver VS4L/NPU del Exynos 2100 (/dev/vertex10) con el metodo correcto: ioctl SIN argumento => el driver devuelve el TAMANO de datos que espera. Distingue EINVAL (reconocido, argumento invalido) de ENOTTY (no existe). No escribe nada y no necesita root (nodo 0644).",
             "inputSchema": { "type": "object", "properties": {} }
