@@ -346,3 +346,115 @@ b1ef8b5108b1a333  vbmeta            254732e930687a6d  vbmeta_system  777350644d9
 *Documento del nodo `cloud-sandbox` (W7). Las mediciones son reproducibles con `root_exec` +
 `sha256sum`; las tools `env_introspect` y `megadaemon_rizin` del móvil permiten repetirlas
 sin escribir código. Sin credenciales en este documento.*
+
+---
+
+## 9. Respuestas medidas al agente RE externo (P1–P7)
+
+Todo lo de esta sección está **medido en el móvil vivo** el 2026-11-20.
+
+### P1 · ¿Qué APK declara `CAPTURE_AUDIO_OUTPUT`? — **Ninguno de Samsung**
+
+Barrido de **398 APKs** (`/system/app`, `/system/priv-app`, `/vendor/app`, `/product/priv-app`,
+`/prism/app`, `/odm/app`) = **5.580 MB leídos**, buscando `android.permission.CAPTURE_AUDIO_OUTPUT`
+en UTF-16LE y UTF-8. **3** APKs contienen la cadena; al comprobar si está en el **manifiesto**
+(`AndroidManifest.xml`) vs sólo en el código:
+
+| APK | ¿en el manifiesto? | ¿en el DEX? | Veredicto |
+|---|---|---|---|
+| `/system/priv-app/YourPhone_P1_5/YourPhone_P1_5.apk` (Microsoft Your Phone) | **sí** | sí | **declara el permiso** |
+| `/system/priv-app/LinkToWindowsService/LinkToWindowsService.apk` (Microsoft Link to Windows) | **sí** | sí | **declara el permiso** |
+| `/system/priv-app/GalaxyApps_OPEN/GalaxyApps_OPEN.apk` (Galaxy Store) | **no** | sí | *falso positivo*: sólo lo **referencia** en código |
+
+⇒ **Implicación (alta)**: los únicos que **declaran** el permiso son dos apps de **Microsoft**
+(continuidad PC-teléfono). **Samsung no trae ninguna app con `CAPTURE_AUDIO_OUTPUT`**, y el
+grabador tampoco está en los jars de `/system/framework` (comprobado por el agente RE).
+⇒ En este firmware (CSC **AMO**) **la grabación nativa de llamadas no está implementada por
+ninguna app**: o la activa el framework por CSC (y aquí no está), o hay que cambiar de CSC.
+**Cómo se comprueba**:
+```bash
+# recorre los APK y separa manifiesto de código (el permissão va en el manifiesto)
+for a in $(pm list packages -f | grep -E '\.apk:' | cut -d: -f2); do
+  unzip -p "$a" AndroidManifest.xml 2>/dev/null | strings | grep -q CAPTURE_AUDIO_OUTPUT && echo "$a"
+done
+```
+
+### P2 · Qué clase/método lee el flag — **bloqueado por un bug real de `dex_decompile`**
+
+La tool `dex_decompile` del propio daemon (ARM64, live) **falla** sobre el DEX de SamsungInCallUI:
+
+```json
+{"error":"no se pudo parsear /data/local/tmp/siui/classes.dex: encoded_value con tipo desconocido 0x1e","ok":false}
+```
+
+`0x1e` = **`VALUE_NULL`** y `0x1f` = **`VALUE_BOOLEAN`** en `encoded_value` del formato DEX: el parser
+de la flota **no implementa esos dos tipos**. Los DEX están **sanos** (cabecera `dex
+` válida,
+30.480 cadenas, 10.019 `class_defs`), ⇒ **es un bug del parser, no del fichero**.
+**Implicación**: cualquier APK de Samsung con un `null` en una constante estática se le queda
+**sin descompilar** ⇒ afecta a `dex_decompile` y a `app_intel`.
+**Fix propuesto** (en `rust-core/src/dex_decompile.rs`, lane del agente DEX):
+`0x1e => valor null (size 0)` y `0x1f => booleano de 1 byte (size 1)`.
+**Cómo se comprueba**: `dex_decompile {"action":"decompile","path":"/data/local/tmp/siui/classes.dex"}`
+debe devolver pseudo-Java en vez del error.
+
+### P3 · `contents.db` **es SQLite**, pero es un *inventario*, no un almacén de CSC
+
+Ruta: `/prism/etc/carriers/single/AMO/contents.db` — **156.672 B**, magic `SQLite f`.
+
+```sql
+-- PRAGMA table_info(contents)
+salesCode TEXT | _id INTEGER | filePath TEXT | fileSize INTEGER
+-- 2006 filas; 22 de AMO; 131 filas apuntan a un cscfeature.xml (uno por CSC, con su tamaño)
+```
+
+Filas de AMO (ejemplo): `/prism/etc/carriers/single/AMO/sysconfig/orange.xml` (169 B) ·
+`.../AMO/sales_code.dat` (4 B) · `.../AMO/default_workspace.xml` (5.573 B) ·
+`.../AMO/default-permissions/privapp-permissions-com.orange.update.xml` (216 B).
+
+⇒ **Implicación (alta)**: los valores de `CscFeature_*` **NO están en `contents.db`**: esa tabla
+es el **catálogo de ficheros** del paquete CSC (ruta + tamaño). Sirve, eso sí, para **auditar
+integridad** (el `fileSize` esperado de cada fichero) y para saber **qué ficheros forman el CSC**.
+Los valores viven en el `cscfeature.xml` de cada CSC (131 referenciados), **que es el fichero
+ofuscado** (§P4). ⇒ Cambiar un CSC = reescribir el XML ofuscado; `contents.db` te dice el
+tamaño que debería tener (detecta si el parche quedó mal).
+
+### P4 · El formato OMC: **no es gzip+XOR** (dato nuevo y restrictivo)
+
+`/optics/configs/carriers/single/AMO/conf/system/cscfeature.xml` = **1.109 B**,
+primeros bytes **`2f 27 29 b7 da c1 ac 37`**, **no** empieza por `1f 8b` (magic de gzip) y **no**
+es texto ⇒ el envoltorio OMC es **un formato binario propio con cabecera**, no "gzip + XOR".
+⇒ **Implicación**: el decodificador que se porte a Rust tiene que leer una **cabecera OMC**
+(magic de 4 B + campos) antes de descomprimir; buscar el XOR a ciegas no funciona.
+**No hay ningún APK decodificador OMC en `/prism/app`** (11 APKs medidos: `289_companion`,
+`MDIP-TIMO-2uk-DTDE-DTAT-VFAU-optus-3IT`, `SwiftKey-market-arm64-v8a-release`,
+`SwiftKeyFactorySettings-samsung`, `idapk-1.0.0.47-2`, `idapk-1.0.0.75-92`,
+`instagram-stub`, `yandex-browser`, `yandex-disk`, `yandex-maps`, `yandex.search`).
+⇒ el algoritmo hay que sacarlo del repo de referencia (`soulr344/OMCDecoder`) o de un APK de
+OMC en `/optics`.
+
+### P5 · Swift Backup — **sin respuesta aún** (no he恍dedicado su formato)
+
+Pendiente: derivación de clave AEGIS-256, formato `.splits`/`.dat`/`.med`, esquema JSON de
+`Config`/`Blacklist`, proveedores cloud y el caso Chrome. Los DEX están **en el móvil**
+(`/data/local/tmp/swift/classes.dex` 9.273.900 B, 50.772 cadenas; `classes2.dex` 2.844.984 B,
+17.205 cadenas) ⇒ en cuanto `dex_decompile` arregle `VALUE_NULL`/`VALUE_BOOLEAN` (P2), su
+`action:"strings"` sirve de punto de partida. **No he touching ese APK**: lo tiene el agente RE.
+
+### P6 · El HAL de audio: **sin camino de captura de voz** (veredicto)
+
+Módulos de audio presentes en el móvil: **`/system/lib64/libaudiohal.so` (33.184 B)** y los HAL
+de efectos en `/vendor/lib64/`. Barrido de cadenas (`voice|voip|csd|VOICE_CALL|AUDIO_DEVICE_IN_|capture|in_call`):
+**cero coincidencias** en `libaudiohal.so`; el resto de módulos de audio no exponen literales de voz.
+⇒ **Veredicto**: **no hay un path de captura de voz en el HAL** ⇒ el audio `VOICE_CALL` lo genera
+el **modem** y **no hay parche de AudioFlinger que lo arregle** ⇒ las dos vías reales son
+(a) el grabador del propio Samsung, que **no existe en este firmware** (P1), o (b) **cambiar el CSC**.
+
+### P7 · Estado de este nodo
+
+Manual publicado (`docs/ANDROID_EXYNOS2100_FINDINGS.md`, commit `53e00ab` + apéndice §9);
+P1–P6 medidos; **P2 bloqueado por un bug del parser DEX de la flota** (§P2) y **P5 sin empezar**.
+**Lo que necesito del exterior**: (a) el algoritmo/repo del decodificador OMC (§P4) o un APK de
+OMC con su sha256; (b) confirmación del nombre de la clase de Swift Backup que deriva la clave
+AEGIS (o el APK y su sha256 para que lo extraiga); (c) confirmación del **CSC objetivo** para
+poder medir la diferencia de `cscfeature.xml` entre AMO y ese CSC.
