@@ -8,14 +8,14 @@
 ## 0. TL;DR para el agente externo
 
 > **Prioridad de canal**: si estás en la **LAN del usuario**, usa la **LAN**
-> (`http://192.168.1.124:3000`) — es estable. El túnel de Cloudflare es un
+> (`http://<IP_DEL_MOVIL>:3000`) — es estable. El túnel de Cloudflare es un
 > *quick tunnel*: **cambia de hostname cada vez que cloudflared se relanza**
 > (y el móvil tiene dos: el web→9090 y el legacy→8765), así que la URL de
 > `instance.env` puede caducar en minutos. La URL viva se lee en
 > `<state_dir>/tunnel.url` **en runtime**, nunca hardcodeada.
 
 ```
-LAN (si estás en la wifi del usuario): http://192.168.1.124:3000  →  MCP: POST http://192.168.1.124:3000/mcp
+LAN (si estás en la wifi del usuario): http://<IP_DEL_MOVIL>:3000  →  MCP: POST http://<IP_DEL_MOVIL>:3000/mcp
 Túnel (cualquier sitio)             : https://<host>.trycloudflare.com → MCP: POST https://<host>.trycloudflare.com/mcp
              (JSON-RPC 2.0 — NO /sse, NO GET)
 Cabeceras  : X-API-Key: <MEGADAEMON_API_KEY>
@@ -30,7 +30,7 @@ Credenciales: /workspace/md-secrets/instance.env  (0600) — cópialas a tu ento
 > dispositivo.
 
 Si prefieres MCP por HTTP directo al móvil (sin pasar por el túnel), usa
-`http://192.168.1.124:9090/mcp` con las mismas dos cabeceras.
+`http://<IP_DEL_MOVIL>:9090/mcp` con las mismas dos cabeceras.
 
 ## 1. Qué es MegaDaemon (para quien llega nuevo)
 
@@ -77,7 +77,7 @@ curl -s -X POST "$MEGADAEMON_MCP" \
 
 ### 2.2 Web del móvil (navegador)
 
-* **Desde el PC del usuario, en la misma LAN**: <http://192.168.1.124:3000>
+* **Desde el PC del usuario, en la misma LAN**: <http://<IP_DEL_MOVIL>:3000>
   (también `:3030`, `:8090`, `:9090`).
 * **Desde el propio móvil**: `http://127.0.0.1:3000`.
 * **Desde fuera de la LAN**: la URL del túnel; la raíz `/` está **exenta** del
@@ -102,7 +102,7 @@ curl -s -X POST "$MEGADAEMON_MCP" \
   el cliente:
   ```bash
   mkdir -p ~/.android && cp -f /workspace/md-secrets/adb_host_key.pem ~/.android/adbkey && chmod 600 ~/.android/adbkey
-  adb kill-server && adb start-server && adb connect 192.168.1.124:5555
+  adb kill-server && adb start-server && adb connect <IP_DEL_MOVIL>:5555
   ```
 * Cliente ADB **en Rust puro** (sin binario `adb`): `rust-core/src/adb_client.rs`
   — habla el protocolo v1 por socket contra `adbd` (CNXN/OPEN/WRTE), con
@@ -151,7 +151,7 @@ por HTTP/MCP). Tu trabajo es conectarte, entender qué ofrece y devolver
 tus hallazgos al enjambre.
 
 CÓMO CONECTARTE
-- MCP: POST https://webpage-ultram-please-communicate.trycloudflare.com/mcp
+- MCP: POST https://TUNEL.trycloudflare.com/mcp
   (JSON-RPC 2.0; NO uses /sse ni GET).
 - Cabeceras obligatorias en TODAS las llamadas:
     X-API-Key: <MEGADAEMON_API_KEY>
@@ -159,8 +159,8 @@ CÓMO CONECTARTE
 - Las credenciales están en /workspace/md-secrets/instance.env (0600): cógelas
   de ahí y exporta las variables; NO las pegues en el chat, ni en el repo, ni
   en ficheros versionados.
-- Web del móvil (UI completa): http://192.168.1.124:3000 desde la LAN.
-- ADB (control directo): adbd en 192.168.1.124:5555. La clave RSA del host
+- Web del móvil (UI completa): http://<IP_DEL_MOVIL>:3000 desde la LAN.
+- ADB (control directo): adbd en <IP_DEL_MOVIL>:5555. La clave RSA del host
   está en /workspace/md-secrets/adb_host_key.pem (cópiala a
   ~/.android/adbkey, chmod 600). Cliente ADB en Rust puro:
   rust-core/src/adb_client.rs; CLI: rust-core/src/bin/megadaemon-adb.rs
@@ -204,7 +204,7 @@ LÍMITES
 |---|---|
 | `/health` por el túnel | **200** — `{"status":"ok","version":"13.4.0",...}` |
 | `/health` en el móvil (`127.0.0.1:9090`) | **200** |
-| Web en LAN (`http://192.168.1.124:3000`) | **200** + HTML de la UI |
+| Web en LAN (`http://<IP_DEL_MOVIL>:3000`) | **200** + HTML de la UI |
 | Bind del cockpit | `0.0.0.0` (LAN + túnel + loopback) |
 | Puertos alias | 3000, 3030, 8090, 9090 |
 | MCP `initialize` | OK, 26 herramientas |

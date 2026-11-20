@@ -174,7 +174,7 @@ Lo que se entrega: `sha16 = 213c056052c2383d` (125 chars) para `providers.minima
 }
 ```
 
-* Por **LAN**: `http://192.168.1.124:9090/mcp` (el daemon ya sirve 3000/3030/8090/9090 dual-stack).
+* Por **LAN**: `http://<IP_DEL_MOVIL>:9090/mcp` (el daemon ya sirve 3000/3030/8090/9090 dual-stack).
 * Por **túnel**: `https://<url-efímera>/mcp` + la misma cabecera (la URL se resuelve en runtime
   desde `tunnel.url`; **nunca hardcodeada**).
 * Filtro opcional de tools: `enabled_tools: ["minimax_chat","swarm_chat","dex_decompile"]`.
@@ -409,7 +409,7 @@ La entrada correcta en `~/.gemini/config/mcp_config.json` (ya aplicada en el mó
     "headers": { "X-Seere-Auth-Token": "<token de sesión, 0600>" } } } }
 ```
 
-- **LAN**: `http://192.168.1.124:9090/mcp` (mismo daemon, otra interfaz).
+- **LAN**: `http://<IP_DEL_MOVIL>:9090/mcp` (mismo daemon, otra interfaz).
 - **Túnel**: `https://<tunnel-url>/mcp` (la URL efímera vive en `/data/local/tmp/megadaemon/tunnel.url`).
 - El `providers.minimax.api_key` (BYOK del cliente) **se conserva**: el modelo del IDE y el MCP
   son cosas distintas.

@@ -10,13 +10,13 @@
 | Dato | Valor |
 |---|---|
 | Rol | `primary` (maestro) — decide, reparte y sincroniza |
-| Dispositivo | Samsung (`samsung`), IP LAN **192.168.1.124** |
+| Dispositivo | Samsung (`samsung`), IP LAN **<IP_DEL_MOVIL>** |
 | Instancia | `MEGADAEMON_INSTANCE_ROLE=primary`, `MEGADAEMON_INSTANCE_NAME=samsung` |
-| Web (cockpit) | `http://localhost:3000` en el móvil · `http://192.168.1.124:3000` desde la LAN |
+| Web (cockpit) | `http://localhost:3000` en el móvil · `http://<IP_DEL_MOVIL>:3000` desde la LAN |
 | Alias de puertos | 3000, 3030, 8090, 8080 (puente local) + 9090 (cockpit real) |
-| Túnel externo | `https://webpage-ultram-please-communicate.trycloudflare.com` |
-| MCP (JSON-RPC 2.0) | `POST https://webpage-ultram-please-communicate.trycloudflare.com/mcp` (**no** `/sse`) |
-| ADB | `adbd` escucha en **TCP 5555** en la LAN (`adb connect 192.168.1.124:5555`) |
+| Túnel externo | `https://TUNEL.trycloudflare.com` |
+| MCP (JSON-RPC 2.0) | `POST https://TUNEL.trycloudflare.com/mcp` (**no** `/sse`) |
+| ADB | `adbd` escucha en **TCP 5555** en la LAN (`adb connect <IP_DEL_MOVIL>:5555`) |
 
 ## 2. Credenciales (dónde están y cómo usarlas)
 
@@ -70,8 +70,8 @@ No reimplements nada: USA la instancia.
 1. CONEXIÓN
 ═══════════════════════════════════════════════════════════════════
 Instancia MAESTRA (primary) = el móvil Samsung, la que reparte tareas.
-  URL base : https://webpage-ultram-please-communicate.trycloudflare.com
-  MCP      : POST https://webpage-ultram-please-communicate.trycloudflare.com/mcp
+  URL base : https://TUNEL.trycloudflare.com
+  MCP      : POST https://TUNEL.trycloudflare.com/mcp
              (JSON-RPC 2.0; usa /mcp, NO /sse)
   Cabeceras: X-API-Key: <API_KEY>                (siempre)
              X-Seere-Auth-Token: <COCKPIT_TOKEN> (sólo POST/PUT)
@@ -117,7 +117,7 @@ tiene datos tuyos y no puede ver lo que tú sabes.
 
 ## 4. ADB contra el Samsung (sin binario `adb` en el móvil)
 
-`adbd` ya expone **TCP 5555** en `192.168.1.124`, pero exige firma RSA
+`adbd` ya expone **TCP 5555** en `<IP_DEL_MOVIL>`, pero exige firma RSA
 (`ro.adb.secure=1`) y `/data/misc/adb/adb_keys` estaba **vacío**: sin clave de
 host registrada, `adb connect` se queda en `unauthorized`.
 
@@ -134,8 +134,8 @@ Estado y plan:
 Desde el PC del usuario:
 
 ```sh
-adb connect 192.168.1.124:5555
-adb -s 192.168.1.124:5555 shell id     # => root (adbd en modo root)
+adb connect <IP_DEL_MOVIL>:5555
+adb -s <IP_DEL_MOVIL>:5555 shell id     # => root (adbd en modo root)
 ```
 
 Desde la flota (agentes Rust), el cliente puro:
@@ -187,8 +187,8 @@ binario con alias de puertos y `/` exento del gate de API key, se puede borrar.
 | Qué | Valor |
 |---|---|
 | **Instancia** | El **Samsung** es la instancia MAESTRA (`primary`). El PC Linux y los demás son `worker`. |
-| **URL base (cockpit)** | `https://webpage-ultram-please-communicate.trycloudflare.com` |
-| **MCP** | `POST https://webpage-ultram-please-communicate.trycloudflare.com/mcp` (JSON-RPC 2.0, **NO** `/sse`) |
+| **URL base (cockpit)** | `https://TUNEL.trycloudflare.com` |
+| **MCP** | `POST https://TUNEL.trycloudflare.com/mcp` (JSON-RPC 2.0, **NO** `/sse`) |
 | **Cabecera siempre** | `X-API-Key: ${MEGADAEMON_API_KEY}` (valor real cifrado en el almacen de secretos; NUNCA en el repo) |
 | **Cabecera al escribir** | `X-Seere-Auth-Token: ${MEGADAEMON_COCKPIT_TOKEN}` (idem) |
 | **En el propio móvil** | `http://localhost:3000` (alias `3000/3030/8080/8090` → `9090`) |
@@ -232,7 +232,7 @@ mismo dispositivo.
 ## 2. CÓMO CONECTAR Y VERIFICAR (haz esto PRIMERO, antes de cualquier otra cosa)
 
 ```bash
-BASE="https://webpage-ultram-please-communicate.trycloudflare.com"
+BASE="https://TUNEL.trycloudflare.com"
 KEY="${MEGADAEMON_API_KEY}"
 TOK="${MEGADAEMON_COCKPIT_TOKEN}"
 
@@ -355,7 +355,7 @@ que es la instancia MAESTRA (primary). Tu trabajo es USARLO y APORTAR, no
 reimplementarlo ni reinventarlo.
 
 CONEXIÓN
-  BASE  = https://webpage-ultram-please-communicate.trycloudflare.com
+  BASE  = https://TUNEL.trycloudflare.com
   MCP   = POST $BASE/mcp   (JSON-RPC 2.0; NO /sse)
   Headers: X-API-Key: ${MEGADAEMON_API_KEY}
            X-Seere-Auth-Token: ${MEGADAEMON_COCKPIT_TOKEN}  (sólo al escribir)
@@ -434,6 +434,6 @@ su -c 'printf "%s\n" "mdaemon_sk_live_…" >> /data/local/tmp/megadaemon/state/m
 | Ruta | ¿Depende de la IP de la LAN? |
 |---|---|
 | Túnel Cloudflare (cockpit + MCP + tool `adb`) | **No** |
-| `192.168.1.124:3000` / `:5555` | Sí (sólo desde casa) |
+| `<IP_DEL_MOVIL>:3000` / `:5555` | Sí (sólo desde casa) |
 
 Regla: **todo lo que deba funcionar desde fuera va por el túnel.**
