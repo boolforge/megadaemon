@@ -286,3 +286,51 @@ que el permiso **esté concedido a `uid=1000`**.
   **reversible** restaurando los 3 bytes y reiniciando.
 - Después del cambio hay que comprobar: `ro.csc.sales_code`, coherencia del
   baseband y si el InCallUI habilita `CscFeature_VoiceCall_ConfigRecording`.
+
+---
+
+## 10. Estado final de la vía ALSA (y por qué no se sigue por ahí)
+
+Secuencia medida con el capturador (`md_pcm`, `dlopen` de
+`/system/lib64/libtinyalsa.so`):
+
+| Paso | Resultado medido |
+|---|---|
+| `pcm_open(card=0, dev=12..19, CAPTURE)` | **OK** (puntero válido, `errno=0`) en los devices probados (12-15, 0, 1, 4) |
+| `pcm_state(pcm)` | **SIGSEGV** dentro de la librería |
+| `pcm_start(pcm)` (sin `pcm_state`) | **SIGSEGV** ⇒ el crash está en `pcm_start` |
+| `pcm_read` | no llega a ejecutarse |
+
+**El móvil sigue sano**: en `dmesg` no hay oops ni panic; sólo mensajes
+normales del driver **`abox 18c50000.abox`** (`channels_put`, `width_put`,
+`abox_disable`) ⇒ el driver ABOX (Audio Block) es la interfaz de voz CP↔AP y
+se está cerrando con orden. El crash es **en espacio de usuario** (la librería
+tinyalsa), no un oops del kernel.
+
+**Decisión: no seguir pinchando el driver de voz.** Razones:
+1. `pcm_start` requiere la ruta de voz **configurada** (controles de mixer
+   `ABOX SIFM0..7` de `/vendor/etc/mixer_paths.xml`) y **una llamada en
+   curso**; sin las dos cosas el ioctl revienta.
+2. Un ioctl equivocado sobre el ABOX **sí** puede tumbar el kernel en otros
+   firmwares ⇒ no vale la pena arriesgar el móvil del enjambre para una
+   prueba que además necesita una llamada que nadie puede hacer desde aquí.
+3. La vía **real y soportada** es la del framework (§7): con el CSC
+   correcto, `Phoebus`/`SemCmcMediaRecorder` graban solos, con AEC, y el
+   sistema pone su indicador. No hay que tocar drivers.
+
+⇒ **El camino que queda, y es el bueno**: **cambiar el CSC** (`mps_code.dat`
+⇒ `ILO`/`THL`/`XXV`) para que el propio Samsung habilite
+`CscFeature_VoiceCall_ConfigRecording`, o **descifrar el OMC** para editar el
+flag sin cambiar de CSC. La primera está implementada y es reversible; la
+segunda es un ataque de criptografía con 126 muestras y una pista nueva
+(el prefijo común de 10 bytes).
+
+## 11. Resumen de las tres rutas y su estado
+
+| Ruta | Estado | Qué falta |
+|---|---|---|
+| **A · Grabador nativo de Samsung** (CSC `THL`/`ILO`/`XXV`) | Implementada y reversible (`mps_code.dat`, 3 B) | Un reinicio (afecta a la flota) y confirmar que el CSC destino no rompe APN/VoLTE |
+| **B · Editar el flag OMC directamente** | Algoritmo OMC pendiente (ni XOR ni bloque; cifrado de flujo) | El decodificador; dataset de 126 muestras ya entregado al nodo RE |
+| **C · Capturar la voz del modem por ALSA** | `pcm_open` funciona; `pcm_start` revienta sin llamada | Ruta de voz configurada + llamada en curso ⇒ **no se sigue** (riesgo de kernel) |
+| **D · Grabador propio con `CAPTURE_AUDIO_OUTPUT`** | Permiso concedido a `uid=1000` (medido) | El HAL **no expone voz** ⇒ devolvería silencio; el que funciona es el de Samsung |
+| **E · Preconfig** | **No existe en este firmware**; su función ya está cubierta por `AT+PRECONFG` y `mps_code.dat` | — |
