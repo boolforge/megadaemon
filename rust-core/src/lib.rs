@@ -92,6 +92,7 @@ pub mod signing;
 pub mod signing_vault;
 pub mod snapshot;
 pub mod sshd;
+pub mod store_manager;
 pub mod sync;
 pub mod sync_web;
 pub mod task_scheduler;
