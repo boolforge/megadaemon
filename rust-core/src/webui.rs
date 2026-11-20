@@ -3847,10 +3847,10 @@ pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
     let n = |k: &str| b.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
 
     // Una ruta v2 que entre en pánico NO debe tumbar el daemon: el `catch`
-    // la convierte en un error legible.  OJO: con `panic = "abort"` en el
-    // perfil release el catch NO salva (el proceso aborta igual), por eso
-    // además las rutas de la v2 no usan `expect()`/`unwrap()` sobre datos
-    // que vienen del exterior.
+    // la convierte en un error legible.  v15 ya desenrolla (el perfil release
+    // NO usa `panic="abort"`), así que el catch es efectivo; además las rutas
+    // de la v2 no usan `expect()`/`unwrap()` sobre datos que vienen del
+    // exterior, para que el caso normal no llegue ni a panic.
     let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
     match (m.as_str(), route) {
         ("GET", "/api/v2/dashboard") => dashboard(),
