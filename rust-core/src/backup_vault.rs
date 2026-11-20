@@ -1137,6 +1137,39 @@ mod tests {
     }
 
     #[test]
+    fn gcm_ata_el_aad_al_vector_de_nist() {
+        // NIST GCM, Test Case 15/16 (AES-256, IV de 96 bits todo cero, AAD de
+        // 128 bits). Son los casos que demuestran que el AAD entra en el tag:
+        // sin AAD el mismo texto con y sin datos asociados NO puede compartir
+        // etiqueta. En la bóveda el AAD es `rel_path || 0x00 || idx`, así que
+        // renombrar o reordenar un chunk rompe la autenticación.
+        let aes = Aes256::new(&[0u8; 32]);
+        let nonce = [0u8; 12];
+        let aad = [0u8; 16];
+
+        // T15: texto plano vacío.
+        let (ct, tag) = gcm_encrypt(&aes, &nonce, &aad, &[]);
+        assert!(ct.is_empty());
+        assert_eq!(hex(&tag), "2d45552d8575922b3ca3cc538442fa26");
+
+        // T16: un bloque de 16 bytes.
+        let (ct, tag) = gcm_encrypt(&aes, &nonce, &aad, &[0u8; 16]);
+        assert_eq!(hex(&ct), "cea7403d4d606b6e074ec5d3baf39d18");
+        assert_eq!(hex(&tag), "ae9b1771dba9cf62b39be017940330b4");
+
+        // Mismo texto y mismo nonce con OTRO AAD → mismo texto cifrado (el AAD
+        // no toca el CTR) pero etiqueta distinta: el AAD está criptográficamente
+        // atado al chunk.
+        let (ct2, tag2) = gcm_encrypt(&aes, &nonce, &[0u8; 15], &[0u8; 16]);
+        assert_eq!(ct2, ct);
+        assert_ne!(tag2, tag);
+
+        // Y el descifrado con el AAD equivocado debe fallar la autenticación.
+        let err = gcm_decrypt(&aes, &nonce, &[0u8; 15], &ct, &tag).unwrap_err();
+        assert!(err.contains("autenticación") || err.contains("autenticacion"));
+    }
+
+    #[test]
     fn hmac_y_pbkdf2_coinciden_con_los_valores_estandar() {
         // RFC 4231, caso 1: HMAC-SHA-256 con clave de 20 bytes de 0x0b.
         let mac = hmac_sha256(&[0x0b; 20], b"Hi There");
