@@ -88,6 +88,52 @@ run_sync() {
   log "sync: terminada (rc=$?)"
 }
 
+# ---------------------------------------------------------------------------
+# v15: watchdog de RESPONSIVIDAD (no de "vivo").
+#
+# `pgrep` sólo dice que el proceso existe.  Con un mutex envenenado por un
+# panic, el proceso sigue vivo pero CADA petición muere a medias => el
+# túnel de Cloudflare ve 502 y el móvil parece "caído" sin estarlo.
+# Aquí se pregunta de verdad: ¿contesta /health por localhost?  Con DOS
+# fallos seguidos (la red del móvil da falsos positivos) se reinicia.
+# El sondeo es LOCAL (127.0.0.1): salir a internet y volver por el túnel
+# daría falsos positivos y no mide lo que importa.
+daemon_unresponsive_streak=0
+daemon_responsive() {
+    local port="${1:-9090}"
+    if [ -x /data/data/com.termux/files/usr/bin/curl ]; then
+        /data/data/com.termux/files/usr/bin/curl -fsS --max-time 6 \
+            -o /dev/null "http://127.0.0.1:$port/health" 2>/dev/null && return 0
+        return 1
+    fi
+    if [ -x /data/data/com.termux/files/usr/bin/python3 ]; then
+        /data/data/com.termux/files/usr/bin/python3 -c \
+            "import http.client,sys
+try:
+    c=http.client.HTTPConnection('127.0.0.1',$port,timeout=6)
+    c.request('GET','/health')
+    sys.exit(0 if c.getresponse().status==200 else 1)
+except Exception:
+    sys.exit(1)" >/dev/null 2>&1 && return 0
+        return 1
+    fi
+    return 0   # sin sonda: no se puede afirmar nada => no se reinicia
+}
+
+check_daemon_responsive() {
+    local port="${1:-9090}"
+    daemon_unresponsive_streak=$((daemon_unresponsive_streak + 1))
+    if [ "$daemon_unresponsive_streak" -ge 2 ]; then
+        daemon_unresponsive_streak=0
+        log "el daemon esta VIVO pero NO responde /health: lo reinicio (puede ser un mutex envenenado por un panic)"
+        pkill -x megadaemon-core 2>/dev/null
+        sleep 3
+        start_cockpit
+        return 1
+    fi
+    return 0
+}
+
 cd_cockpit=0; cd_tunnel=0; cd_mcp=0
 while true; do
   rotate
@@ -103,6 +149,8 @@ while true; do
     cd_cockpit=$((cd_cockpit+1)); s=$((5*(1<<(cd_cockpit<3?cd_cockpit:3)))); [ "$s" -gt 40 ] && s=40
   else
     cd_cockpit=0; s=30
+    # v15: vivo != funcional.  Se comprueba /health (2 fallos seguidos).
+    check_daemon_responsive "$PORT" || true
   fi
   sleep 5
 
