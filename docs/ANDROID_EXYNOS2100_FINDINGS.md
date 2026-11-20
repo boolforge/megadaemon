@@ -326,7 +326,7 @@ es la app de OOBE del **operador**, y en `contents.db` (§P3) aparecen sus fiche
 (`com.orange.update`).
 ⇒ **Aviso para el cambio de CSC**: cambiar AMO→THL/ILO/XXV **no es sólo un flag**: se cambia
 también el **perfil de operador** (OOBE, permisos por defecto, configuración de APN/VoLTE y apps
-del carrier) ⇒ puede dejar de funcionar la的具体 configuración de Orange (APN, VoLTE, roaming).
+del carrier) ⇒ puede dejar de funcionar la configuración específica de Orange (APN, VoLTE, roaming).
 **El parche mínimo y menos invasivo es editar el `cscfeature.xml` de AMO** (añadir el
 `<CscFeature_VoiceCall_ConfigRecording>` que falta) en vez de cambiar el CSC entero ⇒ eso exige
 actualizar `contents.db` (su `fileSize`) y el CRC/formato que el sistema compruebe.
