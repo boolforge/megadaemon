@@ -11,7 +11,7 @@
 
 use megadaemon_core::agent_loop::{
     parse_decision, Action, AgentLoop, AgentLoopConfig, BreakerState, ChatBackend, ChatOutcome,
-    CircuitBreaker, Cost, FailureEntry, FailureMemory, HourBudget, PriceBook, ProviderRef, Router,
+    CircuitBreaker, Cost, FailureMemory, HourBudget, PriceBook, ProviderRef, Router,
     ToolExecutor,
 };
 use std::path::PathBuf;
