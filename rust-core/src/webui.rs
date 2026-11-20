@@ -95,6 +95,12 @@ pub fn api_v2_routes() -> Vec<(&'static str, &'static str)> {
         ("GET", "/api/v2/mesh_findings"),
         ("GET", "/api/v2/prompt_external"),
         ("POST", "/api/v2/prompt_external"),
+        ("POST", "/api/v2/tasks/claim"),
+        ("POST", "/api/v2/tasks/release"),
+        ("POST", "/api/v2/tasks/report"),
+        ("GET", "/api/v2/voice"),
+        ("POST", "/api/v2/voice"),
+        ("POST", "/api/v2/admin/restart"),
         ("GET", "/api/v2/routes"),
     ]
 }
@@ -128,7 +134,19 @@ fn route_descriptions() -> Vec<(&'static str, &'static str, &'static str)> {
         ("GET", "/api/v2/mesh_findings", "Hallazgos de RE que el enjambre ha publicado (sync/re_*.ndjson + journal del bus), paginados y sin credenciales. Alias: /api/mesh_findings."),
         ("GET", "/api/v2/prompt_external", "Prompt Markdown para un agente externo, generado en el servidor con el estado real (URLs, tools MCP, dispositivo, enjambre, hallazgos). Sin credenciales."),
         ("POST", "/api/v2/prompt_external", "Igual que el GET, pero puede incluir la API key y el token de sesión ({\"include_secrets\":true,\"api_key\":\"…\"}) — con aviso en el propio Markdown."),
+        ("POST", "/api/v2/tasks/claim", "Reclama una tarea del tablero del bus bajo lock (BEGIN IMMEDIATE) con lease y rol; won=false si otro se adelantó."),
+        ("POST", "/api/v2/tasks/release", "Devuelve una tarea a `queued`; sólo quien la tiene puede soltarla."),
+        ("POST", "/api/v2/tasks/report", "Reporta el resultado de una tarea (hecha/fallida) con su informe."),
+        ("GET", "/api/v2/voice", "Estado real de la voz del daemon (identidad, cooldown, presupuesto, bucle autónomo) + rol e id de la instancia."),
+        ("POST", "/api/v2/voice", "Acción de la voz: status | whoami | plan | act | speak."),
+        ("POST", "/api/v2/admin/restart", "Reinicia la instancia (confirm:true): el daemon sale y el supervisor lo relanza."),
         ("GET", "/api/v2/routes", "Tabla de rutas v2 autogenerada + política de auth (la UI se valida contra esto)."),
+        ("POST", "/api/v2/tasks/claim", "Reclama una tarea del tablero del bus bajo lock (BEGIN IMMEDIATE) con lease y rol; won=false si otro se adelantó."),
+        ("POST", "/api/v2/tasks/release", "Devuelve una tarea a `queued`; sólo quien la tiene puede soltarla."),
+        ("POST", "/api/v2/tasks/report", "Reporta el resultado de una tarea (hecha/fallida) con su informe."),
+        ("GET", "/api/v2/voice", "Estado real de la voz del daemon (identidad, cooldown, presupuesto, bucle autónomo) + rol e id de la instancia."),
+        ("POST", "/api/v2/voice", "Acción de la voz: status | whoami | plan | act | speak."),
+        ("POST", "/api/v2/admin/restart", "Reinicia la instancia (confirm:true): el daemon sale y el supervisor lo relanza."),
     ]
 }
 
@@ -968,6 +986,7 @@ pub fn task_board() -> Value {
     let coord = coordination_snapshot();
     let mut board_tasks: Vec<Value> = vec![];
     let mut board_status = json!({ "deployed": false, "reason": "tablero SQLite no desplegado" });
+    let mut board_instances: Vec<Value> = vec![];
     if let Some(c) = &coord {
         board_status = json!({
             "deployed": true,
@@ -978,6 +997,9 @@ pub fn task_board() -> Value {
         if let Some(t) = c.get("tasks").and_then(|v| v.as_array()) {
             board_tasks = t.clone();
         }
+        if let Some(i) = c.get("instances").and_then(|v| v.as_array()) {
+            board_instances = i.clone();
+        }
     }
     json!({
         "ok": true,
@@ -987,6 +1009,9 @@ pub fn task_board() -> Value {
         "known_kinds": crate::agent_core::is_known_kind_list(),
         "board": board_status,
         "board_tasks": board_tasks,
+        "board_instances": board_instances,
+        "my_instance": local_instance().unwrap_or(Value::Null),
+        "my_role": local_role(),
         "journal": crate::task_scheduler::journal_json(50),
         "actions": [
             {"id": "submit", "label": "Encolar", "method": "POST", "path": "/api/tool/task_queue", "body": {"action": "submit"}},
@@ -3412,6 +3437,390 @@ pub fn prompt_external(include_secrets: bool, api_key: &str) -> Value {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 12) Tablero del bus: claim/release con rol y bajo lock
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Ruta del tablero SQLite de coordinación (la que usa `coordination::TaskBoard`).
+fn coord_board_path() -> String {
+    format!("{}/board.sqlite", bus_state_dir())
+}
+
+/// Instancia local (id + rol) registrada en el tablero.
+fn local_instance() -> Option<Value> {
+    let state = crate::coordination::Instance::load(&bus_state_dir())
+        .or_else(|| crate::coordination::Instance::load(&cockpit_state_dir()));
+    state.map(|i| json!({ "id": i.id, "role": i.role.as_str(), "device": i.device }))
+}
+
+/// Rol de la instancia local ("primary" | "worker" | "observer" | "unknown").
+fn local_role() -> String {
+    local_instance()
+        .and_then(|i| i.get("role").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Rol pedido por el cliente, validado contra los tres roles reales.
+///
+/// Si el cliente no manda rol, se usa el de la instancia local.  Un rol
+/// inválido **no** se inventa: se rechaza con el motivo.
+fn requested_role(body: &Value) -> Result<String, String> {
+    let raw = body
+        .get("role")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+    if raw.is_empty() {
+        return Ok(local_role());
+    }
+    let ok = matches!(raw.as_str(), "primary" | "worker" | "observer");
+    if ok {
+        Ok(raw)
+    } else {
+        Err(format!(
+            "rol desconocido '{}': usa primary, worker u observer",
+            raw
+        ))
+    }
+}
+
+/// Dueño de la tarea: el que manda el cliente o, si no, la instancia local.
+fn requested_owner(body: &Value) -> String {
+    let raw = body
+        .get("owner")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if !raw.is_empty() {
+        return raw;
+    }
+    local_instance()
+        .and_then(|i| i.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .unwrap_or_else(|| "web-ui".to_string())
+}
+
+/// Registra un evento en la tabla `events` del tablero (mismo formato que
+/// `coordination::TaskBoard::log_event`, que es privado).
+fn coord_log_event(conn: &rusqlite::Connection, kind: &str, actor: &str, payload: &Value) {
+    let _ = conn.execute(
+        "INSERT INTO events (ts, kind, actor, payload) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![
+            now_epoch(),
+            kind,
+            actor,
+            serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_string())
+        ],
+    );
+}
+
+/// Reclama una tarea del tablero del bus **bajo lock** (transacción
+/// `BEGIN IMMEDIATE` de SQLite: dos agentes que pulsan a la vez no se quedan
+/// los dos con la misma tarea).
+///
+/// El lease caduca solo: si el agente muere, `lease_expires_at` pasa y otra
+/// instancia puede reclamarla. `won=false` significa "otro se te adelantó".
+pub fn board_claim(body: &Value) -> Value {
+    board_claim_at(&coord_board_path(), body)
+}
+
+/// Igual que [`board_claim`] pero sobre un tablero concreto (para las pruebas).
+fn board_claim_at(path: &str, body: &Value) -> Value {
+    let task_id = body
+        .get("task_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if task_id.is_empty() {
+        return json!({ "ok": false, "error": "missing_task_id" });
+    }
+    let role = match requested_role(body) {
+        Ok(r) => r,
+        Err(e) => return json!({ "ok": false, "error": "invalid_role", "reason": e }),
+    };
+    let owner = requested_owner(body);
+    let lease = body
+        .get("lease_secs")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(300)
+        .clamp(30, 86_400);
+    if !std::path::Path::new(path).exists() {
+        return json!({
+            "ok": false,
+            "error": "board_not_deployed",
+            "reason": format!("no existe el tablero SQLite en {}", path),
+        });
+    }
+    let conn = match rusqlite::Connection::open(path) {
+        Ok(c) => c,
+        Err(e) => return json!({ "ok": false, "error": "board_open_failed", "reason": e.to_string() }),
+    };
+    let now = now_epoch();
+    let mut won = false;
+    let now = now_epoch();
+    // `BEGIN IMMEDIATE` toma el lock de escritura YA: por eso dos agentes que
+    // pulsan "reclamar" a la vez no pueden quedarse los dos con la tarea.
+    if let Err(e) = conn.execute_batch("BEGIN IMMEDIATE") {
+        return json!({ "ok": false, "error": "board_lock_failed", "reason": e.to_string() });
+    }
+    let changed = conn.execute(
+        "UPDATE tasks
+            SET owner=?1, status='claimed', lease_expires_at=?2, updated_at=?3
+          WHERE id=?4
+            AND (status='queued' OR (status='claimed' AND lease_expires_at < ?3))",
+        rusqlite::params![owner, now + lease, now, task_id],
+    );
+    match changed {
+        Ok(n) => {
+            won = n == 1;
+            coord_log_event(
+                &conn,
+                if won { "task_claimed" } else { "task_claim_lost" },
+                &owner,
+                &json!({ "id": task_id, "role": role, "lease_secs": lease }),
+            );
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            return json!({ "ok": false, "error": "claim_failed", "reason": e.to_string() });
+        }
+    }
+    let _ = conn.execute_batch("COMMIT");
+    let state = conn
+        .query_row(
+            "SELECT status, owner, lease_expires_at FROM tasks WHERE id=?1",
+            rusqlite::params![task_id],
+            |r| Ok((r.get::<_, String>(0).unwrap_or_default(), r.get::<_, String>(1).unwrap_or_default(), r.get::<_, i64>(2).unwrap_or(0))),
+        )
+        .ok();
+    json!({
+        "ok": true,
+        "won": won,
+        "task_id": task_id,
+        "owner": owner,
+        "role": role,
+        "lease_secs": lease,
+        "lease_expires_at": state.as_ref().map(|s| s.2).unwrap_or(0),
+        "status": state.as_ref().map(|s| s.0.clone()).unwrap_or_default(),
+        "current_owner": state.as_ref().map(|s| s.1.clone()).unwrap_or_default(),
+        "note": if won {
+            "tarea reclamada con lease; renuévala con el heartbeat"
+        } else {
+            "no se pudo reclamar: ya está tomada o el lease sigue vivo"
+        },
+    })
+}
+
+/// Devuelve una tarea al estado `queued`.
+///
+/// **Sólo** la suelta quien la tiene (`owner=?`), así que una UI no puede
+/// robarle la tarea a otro agente.
+pub fn board_release(body: &Value) -> Value {
+    board_release_at(&coord_board_path(), body)
+}
+
+/// Igual que [`board_release`] pero sobre un tablero concreto (para las pruebas).
+fn board_release_at(path: &str, body: &Value) -> Value {
+    let task_id = body
+        .get("task_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if task_id.is_empty() {
+        return json!({ "ok": false, "error": "missing_task_id" });
+    }
+    let owner = requested_owner(body);
+    if !std::path::Path::new(path).exists() {
+        return json!({ "ok": false, "error": "board_not_deployed" });
+    }
+    let conn = match rusqlite::Connection::open(path) {
+        Ok(c) => c,
+        Err(e) => return json!({ "ok": false, "error": "board_open_failed", "reason": e.to_string() }),
+    };
+    let now = now_epoch();
+    if let Err(e) = conn.execute_batch("BEGIN IMMEDIATE") {
+        return json!({ "ok": false, "error": "board_lock_failed", "reason": e.to_string() });
+    }
+    let changed = conn.execute(
+        "UPDATE tasks
+            SET owner=NULL, status='queued', lease_expires_at=0, updated_at=?1
+          WHERE id=?2 AND owner=?3",
+        rusqlite::params![now, task_id, owner],
+    );
+    let n = match changed {
+        Ok(n) => n,
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            return json!({ "ok": false, "error": "release_failed", "reason": e.to_string() });
+        }
+    };
+    if n == 1 {
+        coord_log_event(&conn, "task_released", &owner, &json!({ "id": task_id }));
+    }
+    let _ = conn.execute_batch("COMMIT");
+    json!({
+        "ok": n == 1,
+        "task_id": task_id,
+        "owner": owner,
+        "released": n == 1,
+        "note": if n == 1 {
+            "tarea liberada"
+        } else {
+            "no estaba reclamada por ti: no se toca"
+        },
+    })
+}
+
+/// Reporta el resultado de una tarea (protocolo de 3 líneas del bus).
+pub fn board_report(body: &Value) -> Value {
+    board_report_at(&coord_board_path(), body)
+}
+
+/// Igual que [`board_report`] pero sobre un tablero concreto (para las pruebas).
+fn board_report_at(path: &str, body: &Value) -> Value {
+    let task_id = body
+        .get("task_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if task_id.is_empty() {
+        return json!({ "ok": false, "error": "missing_task_id" });
+    }
+    let owner = requested_owner(body);
+    let ok = body.get("ok").and_then(|v| v.as_bool()).unwrap_or(true);
+    let report = body
+        .get("report")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if !std::path::Path::new(path).exists() {
+        return json!({ "ok": false, "error": "board_not_deployed" });
+    }
+    let conn = match rusqlite::Connection::open(path) {
+        Ok(c) => c,
+        Err(e) => return json!({ "ok": false, "error": "board_open_failed", "reason": e.to_string() }),
+    };
+    let now = now_epoch();
+    if let Err(e) = conn.execute_batch("BEGIN IMMEDIATE") {
+        return json!({ "ok": false, "error": "board_lock_failed", "reason": e.to_string() });
+    }
+    let status = if ok { "done" } else { "failed" };
+    let changed = conn.execute(
+        "UPDATE tasks SET report=?1, status=?2, updated_at=?3, lease_expires_at=0
+          WHERE id=?4 AND owner=?5",
+        rusqlite::params![report, status, now, task_id, owner],
+    );
+    let n = match changed {
+        Ok(n) => n,
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            return json!({ "ok": false, "error": "report_failed", "reason": e.to_string() });
+        }
+    };
+    if n == 1 {
+        coord_log_event(&conn, "task_reported", &owner, &json!({ "id": task_id, "ok": ok }));
+    }
+    let _ = conn.execute_batch("COMMIT");
+    json!({
+        "ok": n == 1,
+        "task_id": task_id,
+        "owner": owner,
+        "status": status,
+        "note": if n == 1 {
+            "resultado reportado"
+        } else {
+            "no estaba reclamada por ti: no se toca"
+        },
+    })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 13) Voz del daemon (W0) por la API v2
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Estado real de la voz (identidad, cooldown, presupuesto, bucle autónomo).
+///
+/// Si el módulo de voz no está compilado en esta build, se responde con
+/// `available:false` y el motivo: nunca un estado inventado.
+pub fn voice_status() -> Value {
+    match crate::voice_runtime::status() {
+        v => json!({
+            "ok": true,
+            "available": true,
+            "voice": v,
+            "instance": local_instance().unwrap_or(Value::Null),
+            "role": local_role(),
+        }),
+    }
+}
+
+/// Acción de la voz: `status` | `whoami` | `plan` | `act` | `speak`.
+pub fn voice_action(action: &str, body: &Value) -> Value {
+    let a = if action.is_empty() { "status" } else { action };
+    let r = crate::voice_runtime::handle(a, body);
+    json!({
+        "ok": r.get("ok").and_then(|v| v.as_bool()).unwrap_or(true),
+        "action": a,
+        "voice": r,
+        "instance": local_instance().unwrap_or(Value::Null),
+    })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 14) Acciones administrativas (con confirmación explícita)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Reinicio de la instancia.
+///
+/// El daemon corre bajo un supervisor que lo relanza: la forma limpia de
+/// "reiniciar" es **salir con éxito** (`exit(0)`) y que el supervisor levante
+/// el binario de nuevo.  Por eso la respuesta se envía **antes** de salir y la
+/// UI avisa de que la conexión se va a cortar.
+///
+/// Exige `confirm: true` y tiene un enfriamiento de 30 s (evita bucles de
+/// reinicio si alguien pulsa el botón en racha).
+pub fn admin_restart(body: &Value) -> Value {
+    if !body.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return json!({
+            "ok": false,
+            "error": "confirmation_required",
+            "hint": "esta acción reinicia el daemon: repite con confirm=true",
+        });
+    }
+    let marker = format!("{}/restart_requested", cockpit_state_dir());
+    let path = std::path::Path::new(&marker);
+    let now = now_epoch();
+    if let Ok(meta) = std::fs::metadata(path) {
+        if let Ok(m) = meta.modified() {
+            if let Ok(d) = m.duration_since(std::time::UNIX_EPOCH) {
+                if now - (d.as_secs() as i64) < 30 {
+                    return json!({
+                        "ok": false,
+                        "error": "cooldown",
+                        "reason": "ya se pidió un reinicio hace menos de 30 s",
+                    });
+                }
+            }
+        }
+    }
+    let _ = std::fs::write(&marker, format!("{}\n", now));
+    // Salimos en un hilo aparte para que la respuesta HTTP llegue al cliente.
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        std::process::exit(0);
+    });
+    json!({
+        "ok": true,
+        "scheduled": true,
+        "eta_ms": 600,
+        "note": "el daemon sale ahora y el supervisor lo vuelve a levantar; esta sesión se cortará",
+    })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Router
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -3437,7 +3846,13 @@ pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
     let s = |k: &str| b.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
     let n = |k: &str| b.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
 
-    let out = match (m.as_str(), route) {
+    // Una ruta v2 que entre en pánico NO debe tumbar el daemon: el `catch`
+    // la convierte en un error legible.  OJO: con `panic = "abort"` en el
+    // perfil release el catch NO salva (el proceso aborta igual), por eso
+    // además las rutas de la v2 no usan `expect()`/`unwrap()` sobre datos
+    // que vienen del exterior.
+    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    match (m.as_str(), route) {
         ("GET", "/api/v2/dashboard") => dashboard(),
         ("GET", "/api/v2/nodes") => nodes(),
         ("GET", "/api/v2/tasks") => task_board(),
@@ -3479,6 +3894,15 @@ pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
         ("POST", "/api/v2/nodes/migrate") => node_migrate(&s("target_version")),
         ("POST", "/api/v2/tasks/export") => task_export(&s("node")),
         ("POST", "/api/v2/tasks/import") => task_import(&b),
+        ("POST", "/api/v2/tasks/claim") => board_claim(&b),
+        ("POST", "/api/v2/tasks/release") => board_release(&b),
+        ("POST", "/api/v2/tasks/report") => board_report(&b),
+        ("GET", "/api/v2/voice") => voice_status(),
+        ("POST", "/api/v2/voice") => {
+            let action = s("action");
+            voice_action(&action, &b)
+        }
+        ("POST", "/api/v2/admin/restart") => admin_restart(&b),
         ("POST", "/api/v2/delegation/apply") => {
             let adj = b.get("adjustments").cloned().unwrap_or(json!([]));
             delegation_apply(&adj)
@@ -3495,16 +3919,24 @@ pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
             work_rules_set(&node, &b)
         }
         ("POST", "/api/v2/market/route") => work_route(&b),
-        _ => {
-            return Some(json!({
-                "ok": false,
-                "error": "unknown_route",
-                "method": m,
-                "path": route,
-                "hint": "consulta GET /api/v2/routes para la tabla completa",
-            }));
-        }
-    };
+        _ => json!({
+            "ok": false,
+            "error": "unknown_route",
+            "method": m,
+            "path": route,
+            "hint": "consulta GET /api/v2/routes para la tabla completa",
+        }),
+    }
+    }))
+    .unwrap_or_else(|_| {
+        json!({
+            "ok": false,
+            "error": "internal_error",
+            "reason": "la ruta ha entrado en pánico; el daemon sigue en pie",
+            "method": m,
+            "path": route,
+        })
+    });
     Some(out)
 }
 
@@ -3569,7 +4001,29 @@ mod tests {
             let after = &rest[pos + 1..];
             if let Some(end) = after.find('"') {
                 let raw = &after[..end];
-                out.push(raw.split('?').next().unwrap_or(raw).to_string());
+                // Los literales que acaban en "/" son prefijos que la UI
+                // concatena en runtime (p.ej. "/api/tool/" + tool): no son
+                // rutas por sí solos.  Las tools que se llaman así se validan
+                // aparte contra el catálogo MCP.
+                if !raw.ends_with('/') {
+                    out.push(raw.split('?').next().unwrap_or(raw).to_string());
+                }
+                rest = &after[end..];
+            } else {
+                break;
+            }
+        }
+        out
+    }
+
+    /// Nombres de tool que la UI pide por `callTool("…")`.
+    fn ui_tool_calls(html: &str) -> Vec<String> {
+        let mut out = vec![];
+        let mut rest = html;
+        while let Some(pos) = rest.find("callTool(\"") {
+            let after = &rest[pos + "callTool(\"".len()..];
+            if let Some(end) = after.find('"') {
+                out.push(after[..end].to_string());
                 rest = &after[end..];
             } else {
                 break;
@@ -3670,6 +4124,29 @@ mod tests {
                 continue;
             }
             panic!("la UI v2 llama a una ruta que no existe: {}", literal);
+        }
+    }
+
+    /// Las tools que la UI llama por `callTool("…")` existen en el catálogo MCP.
+    #[test]
+    fn las_tools_que_llama_la_ui_existen_en_el_catalogo_mcp() {
+        let html = ui_source();
+        let tools: Vec<String> = crate::mcp_ext::tool_definitions()
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|t| t.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let calls = ui_tool_calls(&html);
+        assert!(!calls.is_empty(), "la UI debería llamar a alguna tool MCP");
+        for t in calls {
+            assert!(
+                tools.iter().any(|x| x == &t),
+                "la UI llama a la tool MCP inexistente: {}",
+                t
+            );
         }
     }
 
@@ -4137,6 +4614,102 @@ mod tests {
         assert_eq!(r["ok"], json!(true));
         assert!(r["findings"].is_array());
         assert!(r.get("journal").is_some());
+    }
+
+    // ── Tablero del bus: claim / release / report ───────────────────────────
+
+    /// Crea un tablero SQLite de prueba con una tarea en `queued`.
+    fn tablero_de_prueba(tag: &str) -> (std::path::PathBuf, String, String) {
+        let dir = std::env::temp_dir().join(format!(
+            "md-webui-board-{}-{}",
+            tag,
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("dir de prueba");
+        let path = dir.join("board.sqlite").to_string_lossy().to_string();
+        let board = crate::coordination::TaskBoard::open(&path).expect("tablero");
+        let id = board
+            .add_task("tarea de prueba", 5, Some("worker"))
+            .expect("tarea");
+        // El id lo genera el tablero (t-<epoch>-<hash>): lo devolvemos para
+        // poder reclamarlo con el MISMO id en la prueba.
+        (dir, path, id)
+    }
+
+    #[test]
+    fn el_claim_gana_el_lock_y_el_lease_impide_el_doble_claim() {
+        let (_dir, path, id) = tablero_de_prueba("claim");
+        let a = board_claim_at(&path, &json!({ "task_id": id, "owner": "agente-a", "role": "worker", "lease_secs": 300 }));
+        assert_eq!(a["ok"], json!(true));
+        assert_eq!(a["won"], json!(true), "el primer claim debe ganar");
+        assert_eq!(a["role"], json!("worker"));
+
+        // Otro agente con el lease vivo NO puede reclamarla.
+        let b = board_claim_at(&path, &json!({ "task_id": id, "owner": "agente-b", "role": "worker" }));
+        assert_eq!(b["ok"], json!(true));
+        assert_eq!(b["won"], json!(false), "el segundo claim debe perder");
+        assert_eq!(b["current_owner"], json!("agente-a"));
+    }
+
+    #[test]
+    fn el_release_solo_lo_puede_hacer_el_dueno_y_el_report_marca_el_resultado() {
+        let (_dir, path, id) = tablero_de_prueba("release");
+        board_claim_at(&path, &json!({ "task_id": id, "owner": "agente-a", "role": "worker" }));
+
+        // Un tercero no puede soltar la tarea de otro.
+        let r = board_release_at(&path, &json!({ "task_id": id, "owner": "agente-b" }));
+        assert_eq!(r["ok"], json!(false), "nadie roba la tarea de otro");
+        assert_eq!(r["released"], json!(false));
+
+        // El dueño sí puede.
+        let r2 = board_release_at(&path, &json!({ "task_id": id, "owner": "agente-a" }));
+        assert_eq!(r2["ok"], json!(true));
+        assert_eq!(r2["released"], json!(true));
+
+        // Y ahora se puede volver a reclamar.
+        let c = board_claim_at(&path, &json!({ "task_id": id, "owner": "agente-b", "role": "primary" }));
+        assert_eq!(c["won"], json!(true));
+        let rep = board_report_at(&path, &json!({ "task_id": id, "owner": "agente-b", "ok": true, "report": "hecho" }));
+        assert_eq!(rep["ok"], json!(true));
+        assert_eq!(rep["status"], json!("done"));
+    }
+
+    #[test]
+    fn un_rol_invalido_no_se_inventa() {
+        let (_dir, path, id) = tablero_de_prueba("rol");
+        let r = board_claim_at(&path, &json!({ "task_id": id, "owner": "x", "role": "rey" }));
+        assert_eq!(r["ok"], json!(false));
+        assert_eq!(r["error"], json!("invalid_role"));
+        let sin_tarea = board_claim_at(&path, &json!({ "owner": "x" }));
+        assert_eq!(sin_tarea["error"], json!("missing_task_id"));
+    }
+
+    #[test]
+    fn el_reinicio_exige_confirmacion_y_respeta_el_enfriamiento() {
+        let r = admin_restart(&json!({}));
+        assert_eq!(r["ok"], json!(false));
+        assert_eq!(r["error"], json!("confirmation_required"));
+        // Con confirm=true el proceso se acaba: no lo ejecutamos en un test.
+        // resto del test porque mata el proceso (el hilo sale a los 600 ms).
+    }
+
+    #[test]
+    fn la_voz_y_el_reinicio_estan_en_la_tabla_de_rutas() {
+        let routes = api_v2_routes();
+        for p in [
+            "/api/v2/voice",
+            "/api/v2/tasks/claim",
+            "/api/v2/tasks/release",
+            "/api/v2/tasks/report",
+            "/api/v2/admin/restart",
+        ] {
+            assert!(
+                routes.iter().any(|(_, r)| *r == p),
+                "falta la ruta {} en la tabla",
+                p
+            );
+        }
     }
 
     #[test]

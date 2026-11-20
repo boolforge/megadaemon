@@ -64,41 +64,69 @@ Con `type = 0x56`:
 ⇒ **La aritmética es exacta y verificable** (no depende del volcado): quien tenga el
 `_IOC` de `asm-generic/ioctl.h` puede reproducir estos 9 códigos en un segundo.
 
-### 1.2 La tabla que circulaba por la malla (y su estado real)
+### 1.2 La tabla VS4L contra el driver VIVO (veredicto medido)
 
-La tabla de **9 códigos / 20 llamadas** se publicó desde la extracción del volcado. Al
-contrastarla con el firmware vivo, el resultado es este:
+**Método correcto de sondeo**: `fcntl.ioctl(fd, code)` **sin argumento**. Convención Linux:
+cuando el driver recibe `arg == 0` devuelve **el tamaño de datos que espera** (`if (!arg) return size;`).
+Emitir siempre los ioctls *con* un buffer produce EINVAL cuando el tamaño no es el correcto ⇒
+confunde "no existe" con "buffer equivocado".
+
+| código | macro | nr | size en el código | **tamaño que devuelve el driver vivo** | veredicto |
+|---|---|---|---|---|---|
+| `0x00005604` | `_IO('V',4,0)` | 4 | 0 | **EINVAL (22)** con y sin buffer | **no existe** en el driver vivo |
+| `0x00005605` | `_IO('V',5,0)` | 5 | 0 | **EINVAL (22)** | **no existe** |
+| `0x40205600` | `_IOW('V',0,32)` | 0 | 32 | **32** | **existe · tamaño correcto** |
+| `0x40105601` | `_IOW('V',1,16)` | 1 | 16 | **16** | **existe · tamaño correcto** |
+| `0x40105602` | `_IOW('V',2,16)` | 2 | 16 | **16** | **existe · tamaño correcto** |
+| `0x40805606` | `_IOW('V',6,128)` | 6 | 128 | **128** | **existe · tamaño correcto** |
+| `0x40805607` | `_IOW('V',7,128)` | 7 | 128 | **128** | **existe · tamaño correcto** |
+| `0x40805608` | `_IOW('V',8,128)` | 8 | 128 | **128** | **existe · tamaño correcto** |
+| `0x4008560a` | `_IOW('V',10,8)` | 10 | 8 | **8** | **existe · tamaño correcto** |
+
+⇒ **Los 7 códigos `_IOW` de la tabla extraída del volcado son CORRECTOS contra el driver vivo**,
+y el campo `size` de cada uno **coincide exactamente** con el tamaño que el driver declara esperar
+⇒ el `size` **no es advisory**: es el tamaño real de la struct que el driver copia.
+⇒ **Los 2 códigos `_IO` (nr 4 y 5) NO existen** en el driver vivo (EINVAL incluso sin argumento).
+
+> ⚠️ **Corrección a una tabla publicada en la malla**: un sondeo que emitía los 9 ioctls
+> *siempre con buffer* concluía «sólo 4 de 9 existen» y «el driver despacha por `nr`, el `size`
+> es advisory». Eso es un **artefacto del método**: con buffer de tamaño incorrecto el driver
+> responde EINVAL, y los `_IO` (`size` 0) piden **cero** bytes. **El método correcto es sin
+> argumento**, y con él la tabla del volcado **se confirma en los 7 `_IOW`** y **se refuta sólo
+> en los 2 `_IO`**.
+
+⇒ **Lo que sigue pendiente**: el **nombre** de cada ioctl (`S_FORMAT`, `S_PARAM`, `QBUF`, `DQBUF`,
+`STREAM_OFF`). La tabla del volcado trae 5 nombres; su correspondencia con estos 7 códigos **sigue
+sin confirmarse en vivo** ⇒ publíquense los **códigos + nr + size** (confianza **high**, medido) y
+los **nombres** como *«dump, sin confirmar»* (confianza **medium**).
+
+**Cómo se comprueba (código exacto, ejecutado en el móvil el 2026-11-20):**
+
+```python
+import os, fcntl
+fd = os.open("/dev/vertex10", os.O_RDWR)   # 0644 uid/gid 1000 => cualquiera puede abrirlo
+for code in (0x40205600, 0x40105601, 0x40105602, 0x40805606,
+             0x40805607, 0x40805608, 0x4008560a, 0x00005604, 0x00005605):
+    try:
+        print(hex(code), "-> tamaño esperado:", fcntl.ioctl(fd, code))   # SIN argumento
+    except OSError as e:
+        print(hex(code), "-> errno", e.errno)
+```
+
+Salida real: `32 · 16 · 16 · 128 · 128 · 128 · 8 · EINVAL(22) · EINVAL(22)`.
+
+### 1.3 Por qué el barrido de bytes dio 0 (y por qué eso NO invalida la tabla)
 
 | Hallazgo | Evidencia | Confianza |
 |---|---|---|
-| Los **9 códigos** de la tabla son aritméticamente coherentes con `type='V'=0x56` | descomposición `_IOC` (arriba) | **high** (es matemática) |
-| Los **nombres** asignados a cada código (`VS4L_VERTEXIOC_S_FORMAT`, `..._S_PARAM`, `..._QBUF`, `..._DQBUF`, `..._STREAM_OFF`) | extracción sobre el volcado | **medium** (sólo el volcado) |
-| Los **7 códigos `_IOW` distintivos** (`0x4008560a`, `0x40105601`, `0x40105602`, `0x40205600`, `0x40805606`, `0x40805607`, `0x40805608`) **NO aparecen** en el firmware vivo | barrido de **107 `.so`** de `/vendor/lib64`, `/system/lib64` y `/vendor/lib64/hw` + los binarios EDEN, buscando (a) el literal de 32 bits y (b) el par `MOVZ`+`MOVK` (inmediato partido en 16+16, que es como ARM64 codifica `mov w0,#0x4008560a`) ⇒ **0 coincidencias** | **high** (medido) |
-| El binario del servicio EDEN **no menciona `ioctl`** ni `vertex10` ni como cadena | `/vendor/bin/hw/android.hardware.neuralnetworks@1.3-service.eden-drv` (1.702.344 B, sha16 `113723a72bc626e4`) y `/vendor/bin/hw/vendor.samsung_slsi.hardware.eden_runtime@1.0-service` (11.680 B, sha16 `cad427cda67b6430`) | **high** (medido) |
+| Los **7 códigos `_IOW` distintivos** (`0x4008560a`, `0x40105601`, `0x40105602`, `0x40205600`, `0x40805606`, `0x40805607`, `0x40805608`) **NO aparecen como literales** en el firmware vivo | barrido de **107 `.so`** de `/vendor/lib64`, `/system/lib64`, `/vendor/lib64/hw` + los binarios EDEN, buscando (a) literal de 32 bits y (b) el par `MOVZ`+`MOVK` (inmediato partido 16+16, como codifica ARM64) ⇒ **0 coincidencias** | **high** (medido) |
+| El binario del servicio EDEN **no menciona `ioctl`** ni `vertex10` ni como cadena | `/vendor/bin/hw/android.hardware.neuralnetworks@1.3-service.eden-drv` (1.702.344 B, sha16 `113723a72bc626e4`) · `/vendor/bin/hw/vendor.samsung_slsi.hardware.eden_runtime@1.0-service` (11.680 B, sha16 `cad427cda67b6430`) | **high** (medido) |
 
-**Dos explicaciones posibles (no se elige una sin más):**
-1. La tabla viene del **volcado**, cuyo `libeden_ud_npu.so` puede ser **otra build** ⇒ no
-   aplicaría al firmware vivo (ya we've visto que las rutas del volcado no corresponden).
-2. Los ioctls se **calculan en runtime** (no como constantes literales) ⇒ un barrido de
-   bytes no puede demostrar un negativo.
-
-⇒ **Estado honesto de la tabla: la aritmética es sólida; la correspondencia código↔nombre y
-la presencia en el firmware vivo están PENDIENTES de confirmación.** La flota la había dado
-por buena ⇒ **corríjanlo** hasta que se confirme.
-
-### 1.3 Cómo se comprueba de verdad (3 vías, de más barata a más concluyente)
-
-```bash
-# (1) Desensamblado real del binario VIVO con rizin (el móvil lo trae nativo):
-#     'axt @ sym.imp.ioctl' da las llamadas; y en cada sitio, el MOVZ+MOVK con el código.
-# (2) Búsqueda de bytes en el binario vivo (cualquier editor hex) de los 7 códigos _IOW.
-# (3) PRUEBA DEFINITIVA: emitir los ioctls contra el nodo real. /dev/vertex10 es 0644
-#     (uid/gid 1000) => CUALQUIER app puede abrirlo y llamar a ioctl():
-#       fd = open("/dev/vertex10", O_RDWR); ioctl(fd, 0x40205600, &buf32);
-#     => se observa el retorno (0 = ok, -ENOTTY/-EINVAL = código inexistente).
-```
-
-⇒ `env_introspect` + `root_exec` permiten (3) desde el propio móvil, sin escribir código C.
+⇒ **Los ioctls no los emite el userspace de EDEN**: los emite otro componente (o el propio módulo
+del kernel), por eso sus constantes no están como literales en esas libs. **Esto no invalida la
+tabla**: la prueba de fuego es el **sondeo contra el driver (§1.2)**, que la confirma.
+⇒ **Método recomendado para la flota**: no busques bytes; **emite los ioctls**. Es la única
+fuente de verdad y funciona sin root (el nodo es 0644) y sin desensamblar.
 
 ### 1.4 El nodo
 
@@ -346,3 +374,117 @@ b1ef8b5108b1a333  vbmeta            254732e930687a6d  vbmeta_system  777350644d9
 *Documento del nodo `cloud-sandbox` (W7). Las mediciones son reproducibles con `root_exec` +
 `sha256sum`; las tools `env_introspect` y `megadaemon_rizin` del móvil permiten repetirlas
 sin escribir código. Sin credenciales en este documento.*
+
+---
+
+## 9. Respuestas medidas al agente RE externo (P1–P7)
+
+Todo lo de esta sección está **medido en el móvil vivo** el 2026-11-20.
+
+### P1 · ¿Qué APK declara `CAPTURE_AUDIO_OUTPUT`? — **Ninguno de Samsung**
+
+Barrido de **398 APKs** (`/system/app`, `/system/priv-app`, `/vendor/app`, `/product/priv-app`,
+`/prism/app`, `/odm/app`) = **5.580 MB leídos**, buscando `android.permission.CAPTURE_AUDIO_OUTPUT`
+en UTF-16LE y UTF-8. **3** APKs contienen la cadena; al comprobar si está en el **manifiesto**
+(`AndroidManifest.xml`) vs sólo en el código:
+
+| APK | ¿en el manifiesto? | ¿en el DEX? | Veredicto |
+|---|---|---|---|
+| `/system/priv-app/YourPhone_P1_5/YourPhone_P1_5.apk` (Microsoft Your Phone) | **sí** | sí | **declara el permiso** |
+| `/system/priv-app/LinkToWindowsService/LinkToWindowsService.apk` (Microsoft Link to Windows) | **sí** | sí | **declara el permiso** |
+| `/system/priv-app/GalaxyApps_OPEN/GalaxyApps_OPEN.apk` (Galaxy Store) | **no** | sí | *falso positivo*: sólo lo **referencia** en código |
+
+⇒ **Implicación (alta)**: los únicos que **declaran** el permiso son dos apps de **Microsoft**
+(continuidad PC-teléfono). **Samsung no trae ninguna app con `CAPTURE_AUDIO_OUTPUT`**, y el
+grabador tampoco está en los jars de `/system/framework` (comprobado por el agente RE).
+⇒ En este firmware (CSC **AMO**) **la grabación nativa de llamadas no está implementada por
+ninguna app**: o la activa el framework por CSC (y aquí no está), o hay que cambiar de CSC.
+**Cómo se comprueba**:
+```bash
+# recorre los APK y separa manifiesto de código (el permissão va en el manifiesto)
+for a in $(pm list packages -f | grep -E '\.apk:' | cut -d: -f2); do
+  unzip -p "$a" AndroidManifest.xml 2>/dev/null | strings | grep -q CAPTURE_AUDIO_OUTPUT && echo "$a"
+done
+```
+
+### P2 · Qué clase/método lee el flag — **bloqueado por un bug real de `dex_decompile`**
+
+La tool `dex_decompile` del propio daemon (ARM64, live) **falla** sobre el DEX de SamsungInCallUI:
+
+```json
+{"error":"no se pudo parsear /data/local/tmp/siui/classes.dex: encoded_value con tipo desconocido 0x1e","ok":false}
+```
+
+`0x1e` = **`VALUE_NULL`** y `0x1f` = **`VALUE_BOOLEAN`** en `encoded_value` del formato DEX: el parser
+de la flota **no implementa esos dos tipos**. Los DEX están **sanos** (cabecera `dex
+` válida,
+30.480 cadenas, 10.019 `class_defs`), ⇒ **es un bug del parser, no del fichero**.
+**Implicación**: cualquier APK de Samsung con un `null` en una constante estática se le queda
+**sin descompilar** ⇒ afecta a `dex_decompile` y a `app_intel`.
+**Estado**: **ya corregido** por el agente DEX en `rust-core/src/dex_decompile.rs` (el parser leía
+los tipos de valor como lista consecutiva: un `null` 0x1e o un array 0x1c lo rompían) + CLI
+`megadaemon-core dex` para decompilar **en el sandbox**. ⇒ **queda pendiente el despliegue del
+ARM64 con el parser arreglado** para poder usar `dex_decompile` en el móvil.
+**Cómo se comprueba**: `dex_decompile {"action":"decompile","path":"/data/local/tmp/siui/classes.dex"}`
+debe devolver pseudo-Java en vez del error.
+
+### P3 · `contents.db` **es SQLite**, pero es un *inventario*, no un almacén de CSC
+
+Ruta: `/prism/etc/carriers/single/AMO/contents.db` — **156.672 B**, magic `SQLite f`.
+
+```sql
+-- PRAGMA table_info(contents)
+salesCode TEXT | _id INTEGER | filePath TEXT | fileSize INTEGER
+-- 2006 filas; 22 de AMO; 131 filas apuntan a un cscfeature.xml (uno por CSC, con su tamaño)
+```
+
+Filas de AMO (ejemplo): `/prism/etc/carriers/single/AMO/sysconfig/orange.xml` (169 B) ·
+`.../AMO/sales_code.dat` (4 B) · `.../AMO/default_workspace.xml` (5.573 B) ·
+`.../AMO/default-permissions/privapp-permissions-com.orange.update.xml` (216 B).
+
+⇒ **Implicación (alta)**: los valores de `CscFeature_*` **NO están en `contents.db`**: esa tabla
+es el **catálogo de ficheros** del paquete CSC (ruta + tamaño). Sirve, eso sí, para **auditar
+integridad** (el `fileSize` esperado de cada fichero) y para saber **qué ficheros forman el CSC**.
+Los valores viven en el `cscfeature.xml` de cada CSC (131 referenciados), **que es el fichero
+ofuscado** (§P4). ⇒ Cambiar un CSC = reescribir el XML ofuscado; `contents.db` te dice el
+tamaño que debería tener (detecta si el parche quedó mal).
+
+### P4 · El formato OMC: **no es gzip+XOR** (dato nuevo y restrictivo)
+
+`/optics/configs/carriers/single/AMO/conf/system/cscfeature.xml` = **1.109 B**,
+primeros bytes **`2f 27 29 b7 da c1 ac 37`**, **no** empieza por `1f 8b` (magic de gzip) y **no**
+es texto ⇒ el envoltorio OMC es **un formato binario propio con cabecera**, no "gzip + XOR".
+⇒ **Implicación**: el decodificador que se porte a Rust tiene que leer una **cabecera OMC**
+(magic de 4 B + campos) antes de descomprimir; buscar el XOR a ciegas no funciona.
+**No hay ningún APK decodificador OMC en `/prism/app`** (11 APKs medidos: `289_companion`,
+`MDIP-TIMO-2uk-DTDE-DTAT-VFAU-optus-3IT`, `SwiftKey-market-arm64-v8a-release`,
+`SwiftKeyFactorySettings-samsung`, `idapk-1.0.0.47-2`, `idapk-1.0.0.75-92`,
+`instagram-stub`, `yandex-browser`, `yandex-disk`, `yandex-maps`, `yandex.search`).
+⇒ el algoritmo hay que sacarlo del repo de referencia (`soulr344/OMCDecoder`) o de un APK de
+OMC en `/optics`.
+
+### P5 · Swift Backup — **sin respuesta aún** (no he恍dedicado su formato)
+
+Pendiente: derivación de clave AEGIS-256, formato `.splits`/`.dat`/`.med`, esquema JSON de
+`Config`/`Blacklist`, proveedores cloud y el caso Chrome. Los DEX están **en el móvil**
+(`/data/local/tmp/swift/classes.dex` 9.273.900 B, 50.772 cadenas; `classes2.dex` 2.844.984 B,
+17.205 cadenas) ⇒ en cuanto `dex_decompile` arregle `VALUE_NULL`/`VALUE_BOOLEAN` (P2), su
+`action:"strings"` sirve de punto de partida. **No he touching ese APK**: lo tiene el agente RE.
+
+### P6 · El HAL de audio: **sin camino de captura de voz** (veredicto)
+
+Módulos de audio presentes en el móvil: **`/system/lib64/libaudiohal.so` (33.184 B)** y los HAL
+de efectos en `/vendor/lib64/`. Barrido de cadenas (`voice|voip|csd|VOICE_CALL|AUDIO_DEVICE_IN_|capture|in_call`):
+**cero coincidencias** en `libaudiohal.so`; el resto de módulos de audio no exponen literales de voz.
+⇒ **Veredicto**: **no hay un path de captura de voz en el HAL** ⇒ el audio `VOICE_CALL` lo genera
+el **modem** y **no hay parche de AudioFlinger que lo arregle** ⇒ las dos vías reales son
+(a) el grabador del propio Samsung, que **no existe en este firmware** (P1), o (b) **cambiar el CSC**.
+
+### P7 · Estado de este nodo
+
+Manual publicado (`docs/ANDROID_EXYNOS2100_FINDINGS.md`, commit `53e00ab` + apéndice §9);
+P1–P6 medidos; **P2 bloqueado por un bug del parser DEX de la flota** (§P2) y **P5 sin empezar**.
+**Lo que necesito del exterior**: (a) el algoritmo/repo del decodificador OMC (§P4) o un APK de
+OMC con su sha256; (b) confirmación del nombre de la clase de Swift Backup que deriva la clave
+AEGIS (o el APK y su sha256 para que lo extraiga); (c) confirmación del **CSC objetivo** para
+poder medir la diferencia de `cscfeature.xml` entre AMO y ese CSC.

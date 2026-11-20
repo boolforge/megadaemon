@@ -196,6 +196,27 @@
       </div>
 
       <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Tablero del bus (SQLite)</h2>
+          <div class="btn-row">
+            <label class="sr-only" for="board-role">Rol con el que reclamas</label>
+            <select class="node-select" id="board-role">
+              <option value="">mi rol (el del daemon)</option>
+              <option value="primary">primary</option>
+              <option value="worker">worker</option>
+              <option value="observer">observer</option>
+            </select>
+            <label class="sr-only" for="board-lease">Lease en segundos</label>
+            <input class="input input--sm mono" id="board-lease" type="number" min="30" max="86400" value="300">
+            <button class="btn btn--sm btn--ghost" id="btn-board-refresh">Recargar</button>
+          </div>
+        </div>
+        <div id="board-instances"></div>
+        <div id="board-tasks" class="mt-3"></div>
+        <p class="small muted mt-2">El claim toma el <strong>lock de escritura</strong> del SQLite (<code>BEGIN IMMEDIATE</code>) y deja un <strong>lease</strong>: si dos agentes pulsan a la vez, sólo uno gana y el lease caduca solo si el otro muere.</p>
+      </div>
+
+      <div class="card">
         <div class="card__head"><h2 class="card__title">Encolar tarea</h2></div>
         <div class="field">
           <label class="field__label" for="task-kind">Tipo</label>
@@ -355,6 +376,26 @@
       </div>
 
       <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Inteligencia de apps (en vivo)</h2>
+          <span class="small muted">app_intel · apk_inventory · dex_decompile</span>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn--sm" id="btn-appintel-profiles">Perfiles de app</button>
+          <button class="btn btn--sm" id="btn-appintel-scan">Escanear</button>
+          <button class="btn btn--sm" id="btn-apk-analyze2">Analizar APK</button>
+          <button class="btn btn--sm" id="btn-dex-decompile">Analizar DEX</button>
+          <button class="btn btn--sm btn--ghost" id="btn-appintel-clear">Limpiar</button>
+        </div>
+        <div class="field mt-3">
+          <label class="field__label" for="appintel-path">Ruta (APK, DEX o binario)</label>
+          <input class="input mono" id="appintel-path" placeholder="/data/app/.../base.apk">
+          <span class="field__hint">Si lo dejas vacío, la herramienta usa su detección por defecto en el dispositivo.</span>
+        </div>
+        <div id="app-intel-out" class="mt-3"></div>
+      </div>
+
+      <div class="card">
         <div class="card__head"><h2 class="card__title">Exportación / importación</h2></div>
         <div id="re-export"></div>
       </div>
@@ -505,6 +546,20 @@
 
       <div class="card">
         <div class="card__head">
+          <h2 class="card__title">Voz del daemon</h2>
+          <span class="chip" id="voz-chip">voz: —</span>
+          <div class="btn-row">
+            <button class="btn btn--sm" id="btn-voz-whoami">whoami</button>
+            <button class="btn btn--sm" id="btn-voz-status">status</button>
+            <button class="btn btn--sm btn--ghost" id="btn-voz-refresh">Recargar</button>
+          </div>
+        </div>
+        <p class="small muted">La voz es la tool MCP <code>megadaemon_voice</code> (acciones: <code>status</code>, <code>whoami</code>, <code>plan</code>, <code>act</code>, <code>speak</code>). Si no está registrada, el chip dice <em>n/d</em> con el motivo: no hay voz fantasma.</p>
+        <div id="voz-out" class="mt-3"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
           <h2 class="card__title">Prompt para un agente externo</h2>
           <button class="btn btn--sm" id="btn-prompt-gen">Generar</button>
         </div>
@@ -571,6 +626,43 @@
       <div class="card">
         <div class="card__head"><h2 class="card__title">Autenticación</h2></div>
         <div id="sistema-auth"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Administración</h2>
+          <span class="small muted">acciones reales · las destructivas piden confirmación</span>
+        </div>
+        <div class="grid grid--wide">
+          <div>
+            <h3 class="card__title">API keys por agente</h3>
+            <p class="small muted">Cada agente puede tener su propia clave; la principal no se toca. Las claves <strong>nunca</strong> se escriben en el estado compartido ni en el repo.</p>
+            <div class="field mt-2">
+              <label class="field__label" for="ak-label">Etiqueta del agente</label>
+              <input class="input" id="ak-label" placeholder="cloud-sandbox">
+            </div>
+            <div class="btn-row">
+              <button class="btn btn--sm" id="btn-ak-mint">Emitir clave</button>
+              <button class="btn btn--sm btn--ghost" id="btn-ak-list">Listar</button>
+            </div>
+            <div class="field mt-2">
+              <label class="field__label" for="ak-target">Target a revocar (prefijo de la clave)</label>
+              <input class="input mono" id="ak-target" placeholder="mdaemon_sk_live_…">
+            </div>
+            <button class="btn btn--sm btn--danger" id="btn-ak-revoke">Revocar clave…</button>
+            <div id="ak-out" class="mt-3"></div>
+          </div>
+          <div>
+            <h3 class="card__title">Instancia</h3>
+            <p class="small muted">El reinicio sale del daemon con éxito y el supervisor lo vuelve a levantar: la sesión se corta.</p>
+            <div class="btn-row mt-2">
+              <button class="btn btn--sm btn--danger" id="btn-restart">Reiniciar instancia…</button>
+              <button class="btn btn--sm" id="btn-sync-force">Forzar sincronización</button>
+              <button class="btn btn--sm btn--ghost" id="btn-sync-status">Estado del sync</button>
+            </div>
+            <div id="admin-out" class="mt-3"></div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -1236,6 +1328,334 @@ async function loadTablero() {
   $('#tablero-sub').textContent = (d.board && d.board.deployed)
     ? "tablero SQLite desplegado · " + (d.board.instances || 0) + " instancia(s)"
     : "tablero SQLite no desplegado (la cola local sigue viva)";
+
+  renderBoard(d);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TABLERO DEL BUS · claim / release / report (con rol y bajo lock)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/** Pinta las instancias (con su rol) y las tareas del tablero SQLite. */
+function renderBoard(d) {
+  const inst = d.board_instances || [];
+  const box = $("#board-instances");
+  if (!inst.length) {
+    box.innerHTML = '<div class="empty"><div class="empty__title">Sin instancias registradas</div><div class="empty__reason">El tablero SQLite no tiene filas en <code>instances</code>: el bus aún no ha registrado a nadie (todavía no desplegado).</div></div>';
+  } else {
+    box.innerHTML = '<div class="table-wrap"><table class="table"><thead><tr>' +
+      "<th>Instancia</th><th>Rol</th><th>Dispositivo</th><th>Versión</th><th>Visto</th>" +
+      "</tr></thead><tbody>" +
+      inst.map(function (i) {
+        const mine = d.my_instance && i.id === d.my_instance.id;
+        return "<tr" + (mine ? ' class="row--mine"' : "") + ">" +
+          "<td class='mono small'>" + esc(i.id) + (mine ? " <span class='chip chip--accent'>esta</span>" : "") + "</td>" +
+          "<td><span class='chip'>" + esc(i.role || "—") + "</span></td>" +
+          "<td class='small'>" + esc(i.device || "—") + "</td>" +
+          "<td class='small muted'>" + esc(i.version || "—") + "</td>" +
+          "<td class='small muted'>" + esc(i.last_seen || "—") + "</td></tr>";
+      }).join("") + "</tbody></table></div>";
+  }
+
+  const tasks = d.board_tasks || [];
+  const mine = d.my_role || "unknown";
+  if (!tasks.length) {
+    $("#board-tasks").innerHTML = '<div class="empty"><div class="empty__title">Tablero sin tareas</div><div class="empty__reason">No hay filas en <code>tasks</code>. Encola una tarea arriba para que el bus la reparta.</div></div>';
+    return;
+  }
+  $("#board-tasks").innerHTML = '<div class="table-wrap"><table class="table"><thead><tr>' +
+    "<th>Id</th><th>Título</th><th>Estado</th><th>Dueño</th><th>Lease</th><th>Prio.</th><th>Acciones</th>" +
+    "</tr></thead><tbody>" +
+    tasks.map(function (t) {
+      const lease = Number(t.lease_expires_at || 0);
+      const leaseTxt = lease > 0 ? Math.max(0, Math.round((lease - Math.floor(Date.now() / 1000)) / 60)) + " min" : "—";
+      const mineOwn = t.owner && d.my_instance && t.owner === d.my_instance.id;
+      return "<tr><td class='mono small'>" + esc(t.id) + "</td>" +
+        "<td class='small'>" + esc(t.title || "—") + "</td>" +
+        "<td><span class='chip'>" + esc(t.status || "—") + "</span></td>" +
+        "<td class='small mono'>" + esc(t.owner || "—") + "</td>" +
+        "<td class='small muted'>" + esc(leaseTxt) + "</td>" +
+        "<td class='table__num'>" + esc(t.priority || 0) + "</td>" +
+        "<td><div class='table__actions'>" +
+        "<button class='btn btn--sm btn--ghost' data-board-claim='" + esc(t.id) + "'>Reclamar</button>" +
+        (mineOwn ? "<button class='btn btn--sm btn--ghost' data-board-release='" + esc(t.id) + "'>Liberar</button>" : "") +
+        (mineOwn ? "<button class='btn btn--sm btn--ghost' data-board-report='" + esc(t.id) + "'>Marcar hecha</button>" : "") +
+        "</div></td></tr>";
+    }).join("") + "</tbody></table></div>" +
+    "<p class='small muted mt-2'>Tu rol en este tablero: <strong>" + esc(mine) + "</strong>" +
+    (mine === "observer" ? " · un observer sólo lee: no puede reclamar tareas." : "") + "</p>";
+}
+
+/** Reclama una tarea del bus (el servidor usa BEGIN IMMEDIATE + lease). */
+async function boardAction(kind, taskId) {
+  const role = $("#board-role").value.trim();
+  const lease = Number($("#board-lease").value || 300);
+  const body = { task_id: taskId, lease_secs: lease };
+  if (role) body.role = role;
+  // Rutas literales (no concatenadas): el test de coherencia ata la UI a la
+  // tabla de rutas del servidor.
+  const url = kind === "claim" ? "/api/v2/tasks/claim"
+    : kind === "release" ? "/api/v2/tasks/release"
+    : "/api/v2/tasks/report";
+  try {
+    const r = await apiCall(url, function () {
+      return fetch(url, {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(body)
+      });
+    });
+    if (kind === "claim") {
+      if (r.won) toast("ok", "Tarea reclamada", taskId + " · lease " + r.lease_secs + " s");
+      else toast("warn", "No se pudo reclamar", taskId + " · " + (r.note || "otro agente se adelantó"));
+    } else {
+      toast(r.ok ? "ok" : "warn", kind === "release" ? "Tarea liberada" : "Resultado reportado", r.note || taskId);
+    }
+    await loadTablero();
+  } catch (e) {
+    toast("error", "Acción del tablero fallida", String(e.message || e));
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   RE · tools en vivo (app_intel · apk_inventory · dex_decompile)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/** Llama a una tool MCP por el dispatcher genérico `/api/tool/<tool>`. */
+async function callTool(tool, body) {
+  return apiCall("/api/tool/" + tool, function () {
+    return fetch("/api/tool/" + tool, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(body || {})
+    });
+  });
+}
+
+/** Extrae los sha256 que venga en la respuesta (sea cual sea la forma). */
+function shaLines(obj, prefix, out) {
+  out = out || [];
+  prefix = prefix || "";
+  if (obj === null || typeof obj !== "object") return out;
+  if (Array.isArray(obj)) {
+    obj.forEach(function (v, i) { shaLines(v, prefix + "[" + i + "]", out); });
+    return out;
+  }
+  Object.keys(obj).forEach(function (k) {
+    const v = obj[k];
+    if (typeof v === "string" && /^[a-f0-9]{64}$/i.test(v)) out.push(prefix + k + " = " + v);
+    else if (v && typeof v === "object") shaLines(v, prefix + k + ".", out);
+  });
+  return out;
+}
+
+/** Pinta el resultado de una tool: json + los sha256 destacados. */
+function paintToolResult(box, title, r) {
+  const shas = shaLines(r);
+  const err = r && r.ok === false ? (r.error || "la tool devolvió ok=false") : "";
+  box.innerHTML =
+    '<div class="small"><strong>' + esc(title) + "</strong>" + (err ? " · <span class='chip chip--danger'>" + esc(err) + "</span>" : "") + "</div>" +
+    (shas.length
+      ? '<div class="table-wrap mt-2"><table class="table"><thead><tr><th>Artefacto</th><th>SHA-256</th></tr></thead><tbody>' +
+        shas.map(function (s) {
+          const i = s.indexOf(" = ");
+          return "<tr><td class='small mono'>" + esc(s.slice(0, i)) + "</td><td class='small mono muted'>" + esc(s.slice(i + 3)) + "</td></tr>";
+        }).join("") + "</tbody></table></div>"
+      : '<div class="small muted mt-1">Sin sha256 en la respuesta.</div>') +
+    '<pre class="mt-2">' + esc(JSON.stringify(r, null, 2).slice(0, 4000)) + "</pre>";
+}
+
+/** Acción de la vista RE/Apps: llama a la tool y pinta el resultado real. */
+async function reTool(tool, body, title) {
+  const box = $("#app-intel-out");
+  box.innerHTML = '<div class="small muted">Ejecutando ' + esc(title) + "…</div>";
+  try {
+    const r = await callTool(tool, body);
+    paintToolResult(box, title, r);
+  } catch (e) {
+    box.innerHTML = '<div class="notice notice--danger"><div><div class="notice__title">La tool falló</div><div>' + esc(String(e.message || e)) + "</div></div></div>";
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   VOZ · estado real (nodo, identidad, cooldown) + whoami/status
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/** Pinta el estado de la voz; si no está, dice n/d con el motivo. */
+function paintVoz(v) {
+  const chip = $("#voz-chip");
+  const out = $("#voz-out");
+  if (!v || v.available === false) {
+    if (chip) chip.textContent = "voz: n/d";
+    if (out) out.innerHTML = '<div class="empty"><div class="empty__title">Voz no disponible</div><div class="empty__reason">' + esc((v && (v.reason || v.error)) || "esta build no trae el módulo de voz") + "</div></div>";
+    return;
+  }
+  const voice = v.voice || {};
+  const inst = v.instance || {};
+  const name = voice.identity || voice.name || voice.node || inst.id || "desconocida";
+  const state = voice.state || voice.status || (voice.enabled === false ? "deshabilitada" : "activa");
+  if (chip) {
+    chip.textContent = "voz: " + name + " (" + state + ")";
+    chip.className = "chip " + (voice.available === false ? "chip--warn" : "chip--accent");
+  }
+  const rows = Object.keys(voice).filter(function (k) {
+    const val = voice[k];
+    return val === null || ["string", "number", "boolean"].indexOf(typeof val) >= 0;
+  }).slice(0, 16);
+  if (out) {
+    out.innerHTML = '<dl class="kv">' +
+      rows.map(function (k) { return "<dt>" + esc(k) + "</dt><dd class='mono small'>" + esc(voice[k]) + "</dd>"; }).join("") +
+      "</dl>" +
+      '<pre class="mt-2">' + esc(JSON.stringify(voice, null, 2).slice(0, 2500)) + "</pre>";
+  }
+}
+
+/** Carga el estado de la voz desde la API v2 (nunca desde /mcp: la v2 lo trae ya). */
+async function loadVoz() {
+  try {
+    const v = await apiCall("/api/v2/voice", function () {
+      return fetch("/api/v2/voice", { cache: "no-store", headers: authHeaders() });
+    });
+    state.data.voz = v;
+    paintVoz(v);
+  } catch (e) {
+    const chip = $("#voz-chip");
+    if (chip) chip.textContent = "voz: n/d";
+    const out = $("#voz-out");
+    if (out) out.innerHTML = '<div class="notice notice--warn"><div><div class="notice__title">No se pudo leer el estado de la voz</div><div>' + esc(String(e.message || e)) + "</div></div></div>";
+  }
+}
+
+/** Ejecuta una acción de la voz (whoami, status…) y pinta la respuesta real. */
+async function vozAction(action) {
+  const out = $("#voz-out");
+  out.innerHTML = '<div class="small muted">Ejecutando ' + esc(action) + "…</div>";
+  try {
+    const r = await apiCall("/api/v2/voice", function () {
+      return fetch("/api/v2/voice", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ action: action })
+      });
+    });
+    paintVoz({ available: true, voice: r.voice || r });
+    toast("ok", "Voz: " + action, "respuesta real del daemon");
+  } catch (e) {
+    out.innerHTML = '<div class="notice notice--danger"><div><div class="notice__title">La acción de voz falló</div><div>' + esc(String(e.message || e)) + "</div></div></div>";
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ADMINISTRACIÓN · acciones reales con confirmación
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/** Emite una API key para un agente (la tool `api_keys`, acción `mint`). */
+async function akMint() {
+  const label = $("#ak-label").value.trim();
+  if (!label) { toast("warn", "Falta la etiqueta", "pon el nombre del agente"); return; }
+  const out = $("#ak-out");
+  out.innerHTML = '<div class="small muted">Emitiendo…</div>';
+  try {
+    const r = await callTool("api_keys", { action: "mint", label: label });
+    paintToolResult(out, "API key emitida para " + label, r);
+    if (r && r.ok) toast("ok", "Clave emitida", "cópiala ahora: no se guarda en ningún sitio");
+  } catch (e) {
+    out.innerHTML = '<div class="notice notice--danger"><div><div class="notice__title">No se pudo emitir la clave</div><div>' + esc(String(e.message || e)) + "</div></div></div>";
+  }
+}
+
+/** Lista las API keys extra (por defecto sin revelar el valor). */
+async function akList() {
+  const out = $("#ak-out");
+  out.innerHTML = '<div class="small muted">Listando…</div>';
+  try {
+    const r = await callTool("api_keys", { action: "list" });
+    const keys = (r && r.keys) || [];
+    out.innerHTML = keys.length
+      ? '<div class="table-wrap"><table class="table"><thead><tr><th>Etiqueta</th><th>Clave</th></tr></thead><tbody>' +
+        keys.map(function (k) {
+          return "<tr><td class='small'>" + esc(k.label || "") + "</td>" +
+            "<td class='small mono muted'>" + esc(r.revealed ? (k.key || "") : ((k.key || "").slice(0, 12) + "…")) + "</td></tr>";
+        }).join("") + "</tbody></table></div>"
+      : '<div class="empty"><div class="empty__title">Sin claves extra</div><div class="empty__reason">Sólo hay la clave principal de la instancia.</div></div>';
+  } catch (e) {
+    out.innerHTML = '<div class="notice notice--danger"><div><div class="notice__title">No se pudo listar</div><div>' + esc(String(e.message || e)) + "</div></div></div>";
+  }
+}
+
+/** Revoca una clave (destructivo ⇒ confirmación explícita). */
+async function akRevoke() {
+  const target = $("#ak-target").value.trim();
+  if (!target) { toast("warn", "Falta el target", "pega el prefijo de la clave a revocar"); return; }
+  const ok = await confirmModal(
+    "Revocar la clave",
+    "<p>Vas a revocar <code>" + esc(target) + "</code>.</p><p>El agente que la use se queda <strong>sin acceso</strong> a esta instancia. No se puede deshacer.</p>",
+    "Revocar"
+  );
+  if (!ok) return;
+  const out = $("#ak-out");
+  out.innerHTML = '<div class="small muted">Revocando…</div>';
+  try {
+    const r = await callTool("api_keys", { action: "revoke", target: target, confirm: true });
+    paintToolResult(out, "Revocación de " + target, r);
+    toast(r && r.ok ? "ok" : "warn", r && r.ok ? "Clave revocada" : "No revocada", (r && (r.hint || r.error)) || target);
+  } catch (e) {
+    out.innerHTML = '<div class="notice notice--danger"><div><div class="notice__title">No se pudo revocar</div><div>' + esc(String(e.message || e)) + "</div></div></div>";
+  }
+}
+
+/** Reinicia la instancia (destructivo ⇒ confirmación explícita). */
+async function adminRestart() {
+  const ok = await confirmModal(
+    "Reiniciar la instancia",
+    "<p>El daemon <strong>sale ahora</strong> y el supervisor lo vuelve a levantar.</p><p>La sesión web se cortará y esta pestaña perderá la conexión unos segundos.</p>",
+    "Reiniciar"
+  );
+  if (!ok) return;
+  const out = $("#admin-out");
+  out.innerHTML = '<div class="small muted">Reinicio solicitado…</div>';
+  try {
+    const r = await apiCall("/api/v2/admin/restart", function () {
+      return fetch("/api/v2/admin/restart", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ confirm: true })
+      });
+    });
+    out.innerHTML = '<div class="notice notice--warn"><div><div class="notice__title">Reinicio en curso</div><div>' + esc((r && r.note) || "el daemon se va a reiniciar") + "</div></div></div>";
+    toast("warn", "Reinicio solicitado", "esta sesión se va a cortar");
+  } catch (e) {
+    out.innerHTML = '<div class="notice notice--danger"><div><div class="notice__title">No se pudo reiniciar</div><div>' + esc(String(e.message || e)) + "</div></div></div>";
+  }
+}
+
+/** Fuerza una sincronización y pinta el resultado real. */
+async function adminSync() {
+  const out = $("#admin-out");
+  out.innerHTML = '<div class="small muted">Sincronizando…</div>';
+  try {
+    const r = await apiCall("/api/sync/harvest", function () {
+      return fetch("/api/sync/harvest", { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: "{}" });
+    });
+    out.innerHTML = '<pre class="mt-2">' + esc(JSON.stringify(r, null, 2).slice(0, 2000)) + "</pre>";
+    toast("ok", "Sincronización forzada", "respuesta real del daemon");
+  } catch (e) {
+    out.innerHTML = '<div class="notice notice--danger"><div><div class="notice__title">Falló el sync</div><div>' + esc(String(e.message || e)) + "</div></div></div>";
+  }
+}
+
+/** Muestra el estado del sincronizador. */
+async function adminSyncStatus() {
+  const out = $("#admin-out");
+  out.innerHTML = '<div class="small muted">Consultando…</div>';
+  try {
+    const r = await apiCall("/api/sync/status", function () {
+      return fetch("/api/sync/status", { cache: "no-store", headers: authHeaders() });
+    });
+    out.innerHTML = '<pre class="mt-2">' + esc(JSON.stringify(r, null, 2).slice(0, 2000)) + "</pre>";
+  } catch (e) {
+    out.innerHTML = '<div class="notice notice--danger"><div><div class="notice__title">No se pudo leer el estado</div><div>' + esc(String(e.message || e)) + "</div></div></div>";
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1760,6 +2180,8 @@ function copyText(text, btn) {
 async function loadEnjambre() {
   const d = await apiCall("/api/v2/mesh_findings?limit=200", () => fetch("/api/v2/mesh_findings?limit=200", { cache: "no-store", headers: authHeaders() }));
   state.data.enjambre = d;
+  // La voz va en la misma vista: se pide en paralelo y no bloquea los hallazgos.
+  loadVoz();
 
   const findings = d.findings || [];
   $('#enjambre-sub').textContent = (d.total || 0) + " hallazgo(s) · journal " + (d.journal || 0) + " línea(s)";
@@ -2472,6 +2894,13 @@ function bindEvents() {
     if (dl) { downloadShare(dl.getAttribute("data-share-get")); return; }
     const route = e.target.closest("[data-route]");
     if (route) { routeDemand(route.getAttribute("data-route")); return; }
+
+    const claim = e.target.closest("[data-board-claim]");
+    if (claim) { boardAction("claim", claim.getAttribute("data-board-claim")); return; }
+    const release = e.target.closest("[data-board-release]");
+    if (release) { boardAction("release", release.getAttribute("data-board-release")); return; }
+    const report = e.target.closest("[data-board-report]");
+    if (report) { boardAction("report", report.getAttribute("data-board-report")); return; }
   });
 
   // Sub-tabs del bus
@@ -2552,6 +2981,44 @@ function bindEvents() {
   $("#btn-share-upload-one").addEventListener("click", function () { uploadShare(false); });
   $("#btn-routes-refresh").addEventListener("click", loadSistema);
   $("#btn-voice-refresh").addEventListener("click", function () { refreshVoice(); });
+
+  /* Tablero del bus: claim / release / report */
+  $("#btn-board-refresh").addEventListener("click", loadTablero);
+
+  /* RE · tools en vivo */
+  $("#btn-appintel-profiles").addEventListener("click", function () {
+    reTool("app_intel", { action: "profiles" }, "app_intel · perfiles");
+  });
+  $("#btn-appintel-scan").addEventListener("click", function () {
+    const root = $("#appintel-path").value.trim();
+    reTool("app_intel", { action: "scan", root: root }, "app_intel · escaneo local");
+  });
+  $("#btn-apk-analyze2").addEventListener("click", function () {
+    const path = $("#appintel-path").value.trim();
+    if (!path) { toast("warn", "Indica la ruta", "escribe la ruta de la APK"); return; }
+    reTool("apk_inventory", { action: "analyze", path: path }, "apk_inventory · análisis de APK");
+  });
+  $("#btn-dex-decompile").addEventListener("click", function () {
+    const path = $("#appintel-path").value.trim();
+    if (!path) { toast("warn", "Indica la ruta", "escribe la ruta del DEX o APK"); return; }
+    reTool("dex_decompile", { action: "obfuscation", path: path }, "dex_decompile · ofuscación");
+  });
+  $("#btn-appintel-clear").addEventListener("click", function () {
+    $("#app-intel-out").innerHTML = "";
+  });
+
+  /* Voz */
+  $("#btn-voz-refresh").addEventListener("click", loadVoz);
+  $("#btn-voz-whoami").addEventListener("click", function () { vozAction("whoami"); });
+  $("#btn-voz-status").addEventListener("click", function () { vozAction("status"); });
+
+  /* Administración */
+  $("#btn-ak-mint").addEventListener("click", akMint);
+  $("#btn-ak-list").addEventListener("click", akList);
+  $("#btn-ak-revoke").addEventListener("click", akRevoke);
+  $("#btn-restart").addEventListener("click", adminRestart);
+  $("#btn-sync-force").addEventListener("click", adminSync);
+  $("#btn-sync-status").addEventListener("click", adminSyncStatus);
 
   // Selector de nodo
   $("#node-select").addEventListener("change", function (e) {
