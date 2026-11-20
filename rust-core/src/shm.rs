@@ -72,10 +72,12 @@ pub fn read_shm_status() -> Result<ShmHeader, String> {
 /// Generates a valid 24-bit uncompressed Windows BMP file header + pixel data
 ///
 /// v14 (UI-03 · CRÍTICA): con `width=65535, height=65535` el cálculo
-/// `row_size * height` desborda u32 y, en release (`panic = "abort"`), el
-/// panic **mataba el proceso entero del cockpit** ⇒ ERR_CONNECTION_REFUSED
-/// para el usuario.  Un header SHM hostil no puede tumbar el daemon, así que
-/// aquí se satura y se acota la imagen en lugar de desbordar.
+/// `row_size * height` desborda u32 y provocaba un panic en el camino de
+/// render (el movil se quedaba sin pintar y el cockpit respondia 500).
+/// Un header SHM hostil no puede tumbar el daemon, asi que aqui se satura y
+/// se acota la imagen en lugar de desbordar.  (El perfil release usa
+/// `panic = "unwind"` desde v15: un panic aqui es 1 peticion fallida, no la
+/// caida del proceso.)
 pub fn encode_bmp_24(width: u32, height: u32, rgb_data: &[u8]) -> Vec<u8> {
     // Acota las dimensiones para que ningún producto intermedio desborde.
     const MAX_DIM: u32 = 16_384;

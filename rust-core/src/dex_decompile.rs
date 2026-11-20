@@ -4162,6 +4162,241 @@ pub fn findings_ndjson_file(path: &str) -> Result<String, String> {
     }
 }
 
+
+// ========================================================================= //
+// VS4L (driver NPU del movil): tabla de ioctls medida en vivo
+// ========================================================================= //
+
+/// Tabla de ioctls del driver VS4L/NPU (`/dev/vertex10`) del movil.
+///
+/// **Fuente de verdad: medicion en vivo**, no el volcado estatico del
+/// driver. Cada codigo seLanzo contra `/dev/vertex10` (0644, uid/gid 1000):
+///
+/// | ioctl          | nr | resultado vivo | lectura                                |
+/// |----------------|----|----------------|----------------------------------------|
+/// | 0x40205600     | 0  | OK (0)         | el driver acepta el codigo              |
+/// | 0x40105601     | 1  | EFAULT (14)    | **reconocido** (puntero invalido)       |
+/// | 0x40105602     | 2  | EFAULT (14)    | **reconocido** (puntero invalido)       |
+/// | 0x4008560a     | 10 | OK (0)         | el driver acepta el codigo              |
+/// | resto (4,5,6,7,8) | - | ENOTTY/EINVAL | **no existen** en el driver vivo        |
+///
+/// Conclusiones medidas:
+/// * el driver **despacha por `nr`**, no por `size` (el mismo nr con
+///   sizes distintos responde igual);
+/// * `ENOTTY` = codigo inexistente; `EFAULT` = codigo reconocido con
+///   argumento invalido (no se puede pasar un buffer NULL para probar).
+///
+/// Medido el 2026-11-20 contra `/dev/vertex10` en el Samsung S21 Ultra:
+/// **4 de los 9 codigos existen** (nr 0, 1, 2 y 10).
+pub const VS4L_IOCTLS: &[(&str, u32, u8, &str, &str)] = &[
+    ("VSL_QUERY_CAP", 0x4020_5600, 0, "ok", "consulta de capacidades (acepta el codigo)"),
+    ("VSL_SET_CONFIG_1", 0x4010_5601, 1, "efault", "reconocido: devuelve EFAULT con buffer invalido"),
+    ("VSL_SET_CONFIG_2", 0x4010_5602, 2, "efault", "reconocido: devuelve EFAULT con buffer invalido"),
+    ("VSL_NO_1", 0x0000_5604, 4, "enotty", "no existe en el driver vivo"),
+    ("VSL_NO_2", 0x0000_5605, 5, "enotty", "no existe en el driver vivo"),
+    ("VSL_NO_3", 0x4080_5606, 6, "enotty", "no existe en el driver vivo"),
+    ("VSL_NO_4", 0x4080_5607, 7, "enotty", "no existe en el driver vivo"),
+    ("VSL_NO_5", 0x4080_5608, 8, "enotty", "no existe en el driver vivo"),
+    ("VSL_CONTROL_10", 0x4008_560a, 10, "ok", "el driver acepta el codigo"),
+];
+
+/// Codigos de ioctl VS4L que el driver vivo despacha (nr 0, 1, 2 y 10).
+pub const VS4L_LIVE_CODES: u32 = 4;
+
+/// Nombre de un ioctl VS4L a partir de su codigo.
+pub fn vs4l_name(code: u32) -> Option<&'static str> {
+    VS4L_IOCTLS
+        .iter()
+        .find(|(_, c, _, _, _)| *c == code)
+        .map(|(name, _, _, _, _)| *name)
+}
+
+/// Resultado medido en vivo de un ioctl VS4L: `Some(("ok"|"efault"|"enotty", descripcion))`.
+pub fn vs4l_ioctl(code: u32) -> Option<(&'static str, &'static str)> {
+    VS4L_IOCTLS
+        .iter()
+        .find(|(_, c, _, _, _)| *c == code)
+        .map(|(_, _, _, verdict, desc)| (*verdict, *desc))
+}
+
+/// Hallazgos: cadenas del DEX que contienen un ioctl VS4L conocido.
+pub fn vs4l_findings(dex: &DexFile) -> Vec<Finding> {
+    let ts = now_ts();
+    let mut out: Vec<Finding> = Vec::new();
+    for (index, text) in dex.strings.iter().enumerate() {
+        if text.len() < 6 || text.len() > 256 {
+            continue;
+        }
+        let lower = text.to_ascii_lowercase();
+        if !lower.contains("ioctl") && !lower.contains("/dev/vertex") {
+            continue;
+        }
+        let hit = VS4L_IOCTLS
+            .iter()
+            .find(|(_, code, _, _, _)| lower.contains(&format!("{:x}", code)))
+            .or_else(|| {
+                VS4L_IOCTLS.iter().find(|(_, code, _, _, _)| {
+                    text.contains(&format!("0x{:08x}", code)) || text.contains(&format!("{:08x}", code))
+                })
+            });
+        let (name, code, nr, verdict, desc) = match hit {
+            Some((name, code, nr, verdict, desc)) => {
+                (*name, *code, *nr, *verdict, *desc)
+            }
+            None => (
+                "VS4L_DESCONOCIDO",
+                0u32,
+                0u8,
+                "desconocido",
+                "ioctl VS4L no catalogado",
+            ),
+        };
+        out.push(Finding {
+            ts,
+            detector: String::from("vs4l_ioctl"),
+            evidence_class: String::from("pool_string"),
+            method: String::from("dex_pool_scan"),
+            signal: text.clone(),
+            java_class: String::from("<string-pool>"),
+            java_method: String::new(),
+            original: text.clone(),
+            kind: String::from("native_ioctl"),
+            severity: String::from("info"),
+            confidence: 80,
+            bypassable: false,
+            offset: index as i64,
+            evidence_offset: -1,
+            notes: format!(
+                "{} nr={} code=0x{:08x} veredicto_vivo={} ({})",
+                name, nr, code, verdict, desc
+            ),
+            ..Default::default()
+        });
+    }
+    out
+}
+
+// ========================================================================= //
+// Lucky Patcher / Marina Patcher
+// ========================================================================= //
+
+/// Huellas SHA-256 de los certificados **AOSP públicos** que Lucky Patcher
+/// (Marina Patcher) empaqueta en `keys/` y `assets/` para re-firmar las APKs
+/// que parchea. Son claves públicas del AOSP (2008, "O=Android, CN=Android"):
+/// si una APK instalada está firmada con una de ellas, ha pasado por un
+/// parcheador de firmas (o es una app de sistema con firma de plataforma).
+pub const AOSP_SIGNING_KEYS: &[(&str, &str)] = &[
+    (
+        "aosp_testkey",
+        "A40DA80A59D170CAA950CF15C18C454D47A39B26989D8B640ECD745BA71BF5DC",
+    ),
+    (
+        "aosp_platform",
+        "C8A2E9BCCF597C2FB6DC66BEE293FC13F2FC47EC77BC6B2B0D52C11F51192AB8",
+    ),
+    (
+        "aosp_media",
+        "465983F7791F2ABEB43EA2CBDC7F21A8260B72BC08A55C839FC1A43BC741A81E",
+    ),
+    (
+        "aosp_shared",
+        "28BBFE4A7B97E74681DC55C2FBB6CCB8D6C74963733F6AF6AE74D8C3A6E879FD",
+    ),
+];
+
+/// Nombre de la clave AOSP con la que está firmado un APK, si se reconoce.
+///
+/// `cert_sha256` se acepta en hexadecimal con o sin `:` y en cualquier
+/// mayúsculas/minúsculas.
+pub fn aosp_signing_key(cert_sha256: &str) -> Option<&'static str> {
+    let norm: String = cert_sha256
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    if norm.len() != 64 {
+        return None;
+    }
+    AOSP_SIGNING_KEYS
+        .iter()
+        .find(|(_, fp)| *fp == norm)
+        .map(|(name, _)| *name)
+}
+
+/// Marcadores que identifican al módulo Lucky Patcher (Marina Patcher) y a
+/// sus librerías de terceros dentro de un DEX.
+pub const LP_MODULE_MARKERS: &[(&str, &str, &str)] = &[
+    (
+        "lp_module",
+        "com/xposed/XSupport",
+        "clase principal del módulo Xposed de Lucky Patcher",
+    ),
+    (
+        "lp_module",
+        "vnd.luckypatcher.archive",
+        "MIME type del contenedor .lpzip de Lucky Patcher",
+    ),
+    (
+        "lp_module",
+        "cc/binmt/signature/",
+        "hooks de CorePatch sobre la firma del PackageManager",
+    ),
+    (
+        "lp_module",
+        "com/v7878/hooks/pmpatch",
+        "módulo PMPatch (parcheo de ART/OAT en runtime)",
+    ),
+    (
+        "lp_module",
+        "com/v7878/oat/",
+        "librería de parcheo de OAT de vova7878",
+    ),
+    (
+        "lp_module",
+        "ru/drjmwdme/cgwbfzijr",
+        "paquete de Lucky Patcher",
+    ),
+    (
+        "lp_module",
+        "lucky_patcher_package",
+        "recurso de fingerprint de Lucky Patcher",
+    ),
+];
+
+/// Hallazgos de tipo `lp_module`: la APK analizada **es** Lucky Patcher
+/// (o embebe su módulo). Sirve para普查ar el móvil y saber qué otras apps
+/// arrastran el módulo.
+pub fn lp_module_findings(dex: &DexFile) -> Vec<Finding> {
+    let ts = now_ts();
+    let mut out: Vec<Finding> = Vec::new();
+    for (index, text) in dex.strings.iter().enumerate() {
+        for (detector, needle, note) in LP_MODULE_MARKERS {
+            if !text.contains(needle) {
+                continue;
+            }
+            out.push(Finding {
+                ts,
+                detector: (*detector).to_string(),
+                evidence_class: String::from("pool_string"),
+                method: String::from("dex_pool_scan"),
+                signal: text.clone(),
+                java_class: String::from("<string-pool>"),
+                java_method: String::new(),
+                original: text.clone(),
+                kind: String::from("packer_module"),
+                severity: String::from("info"),
+                confidence: 90,
+                bypassable: false,
+                offset: index as i64,
+                evidence_offset: -1,
+                notes: (*note).to_string(),
+                ..Default::default()
+            });
+        }
+    }
+    out
+}
+
 // ========================================================================= //
 // Tests
 // ========================================================================= //
@@ -4169,6 +4404,84 @@ pub fn findings_ndjson_file(path: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ------------------------------------------------------------------ //
+    // Lucky Patcher: detector de firma AOSP y de módulo embebido
+    // ------------------------------------------------------------------ //
+
+
+    #[test]
+    fn test_vs4l_resuelve_el_nombre_del_ioctl() {
+        // La tabla es la medicion en vivo contra /dev/vertex10.
+        assert_eq!(vs4l_name(0x4020_5600), Some("VSL_QUERY_CAP"));
+        assert_eq!(vs4l_name(0x4008_560a), Some("VSL_CONTROL_10"));
+        // nr 1 y 2 existen pero con EFAULT; 4..8 no existen.
+        assert_eq!(vs4l_ioctl(0x4010_5601).map(|v| v.0), Some("efault"));
+        assert_eq!(vs4l_ioctl(0x0000_5604).map(|v| v.0), Some("enotty"));
+        // Codigo fuera de la tabla.
+        assert_eq!(vs4l_name(0x1234_5678), None);
+        // La tabla tiene 9 entradas y solo 4 las despacha el driver vivo.
+        assert_eq!(VS4L_IOCTLS.len(), 9);
+        assert_eq!(VS4L_LIVE_CODES, 4);
+    }
+    #[test]
+    fn test_aosp_signing_key_reconoce_las_cuatro_claves() {
+        // Huellas reales de las claves AOSP publicas que empaqueta Marina
+        // Patcher (`assets/testkey.x509.pem`, `keys/platform.x509.pem`,
+        // `keys/media.x509.pem`, `keys/shared.x509.pem`).
+        assert_eq!(
+            aosp_signing_key(
+                "A4:0D:A8:0A:59:D1:70:CA:A9:50:CF:15:C1:8C:45:4D:47:A3:9B:26:98:9D:8B:64:0E:CD:74:5B:A7:1B:F5:DC"
+            ),
+            Some("aosp_testkey")
+        );
+        assert_eq!(
+            aosp_signing_key(
+                "c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8"
+            ),
+            Some("aosp_platform")
+        );
+        assert_eq!(
+            aosp_signing_key(
+                "465983F7791F2ABEB43EA2CBDC7F21A8260B72BC08A55C839FC1A43BC741A81E"
+            ),
+            Some("aosp_media")
+        );
+        assert_eq!(
+            aosp_signing_key(
+                "28BBFE4A7B97E74681DC55C2FBB6CCB8D6C74963733F6AF6AE74D8C3A6E879FD"
+            ),
+            Some("aosp_shared")
+        );
+        // Una firma cualquiera NO es una clave AOSP.
+        assert_eq!(
+            aosp_signing_key(
+                "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+            ),
+            None
+        );
+        // Ni una cadena corrupta.
+        assert_eq!(aosp_signing_key("no-es-una-huella"), None);
+    }
+
+    #[test]
+    fn test_lp_module_findings_detecta_los_marcadores() {
+        // Se construye un DEX mínimo con los marcadores en el pool de
+        // cadenas.
+        let mut b = TestDexBuilder::new();
+        b.string("com/xposed/XSupport");
+        b.string("application/vnd.luckypatcher.archive");
+        b.string("cc/binmt/signature/PmsHookApplication");
+        b.string("com/v7878/hooks/pmpatch/Main");
+        let bytes = b.build();
+        let dex = DexFile::parse(&bytes).unwrap();
+        let findings = lp_module_findings(&dex);
+        assert!(findings.iter().any(|f| f.signal.contains("XSupport")));
+        assert!(findings.iter().any(|f| f.signal.contains("luckypatcher")));
+        assert!(findings.iter().any(|f| f.signal.contains("binmt/signature")));
+        assert!(findings.iter().any(|f| f.signal.contains("pmpatch")));
+        assert!(findings.iter().all(|f| f.kind == "packer_module"));
+    }
 
     // ------------------------------------------------------------------ //
     // Utilidades para construir DEX sintéticos válidos

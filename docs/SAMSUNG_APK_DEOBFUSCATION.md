@@ -13,7 +13,7 @@
 |---|---|---|
 | **El parser de DEX leía mal los tipos de valor** (`0x00,0x01,0x02…` en vez de `0x00,0x02…0x1f`) | `rust-core/src/dex_decompile.rs` | **Corregido**: ahora parsea **cualquier** DEX real. Antes, un `null` (0x1e) o un array (0x1c) **tumbaban el parseo entero** ⇒ `dex_decompile` no funcionaba con **ninguna app real** (verificado con `easyMover.Agent`, `SamsungInCallUI` y `SwiftBackup`) |
 | **Tabla VS4L**: 4 de 9 códigos existen en el driver vivo | `/dev/vertex10` | Emitidos uno a uno desde el móvil: `0x40205600`, `0x40105601`, `0x40105602`, `0x4008560a` **existen** (los dos primeros con EFAULT ⇒ el driver los reconoce); los 5 restantes dan **ENOTTY** ⇒ la tabla del volcado **no aplica tal cual**. El driver **despacha por `nr`, no por `size`** |
-| **Marina Patcher (= Lucky Patcher) con el paquete ofuscado** | `com.callapp.contacts` | APK **37.978.017 B**, sha256 `9ba7b82e86cbfb33946dafe095aca43efeb0c0b4dd3d204225f84c290e88c145` · **7 DEX** · **20 .so** · el recurso `lucky_patcher_package` lo delata. **La lógica del parche está en el código nativo, no en el DEX** ⇒ el objetivo de RE son los `.so` |
+| **Marina Patcher (= Lucky Patcher)** | **`ru.drjmwdme.cgwbfzijr`** | ❌ **Corrección**: NO es `com.callapp.contacts` (esa app sólo lleva el recurso `lucky_patcher_package`, es otra cosa). El parcheador real es `ru.drjmwdme.cgwbfzijr`: APK 15.029.615 B, sha256 `7496b221…`, **1 solo DEX** (6.054.740 B), **sin `.so`**, **módulo Xposed** (`com.xposed.XSupport`). Análisis completo en **[`MARINA_PATCHER_ANALYSIS.md`](MARINA_PATCHER_ANALYSIS.md)** |
 | `com.samsung.android.carkey` trae **detección de manipulación** propia | strings del DEX | `HiddenToOvercomeSignatureClash`, `TAMPER_FUSE_FAIL`, "store tampered with" ⇒ Samsung blinda esa app; sirve de **referencia** para el módulo anti-tamper del fleet |
 | Ninguna credencial en claro de las apps analizadas | DEX | Las URLs embebidas son de terceros (ExoPlayer, issuetracker de Google); **no hay endpoints ni claves propias** ⇒ nada que(mask)rar en este lote |
 
@@ -62,52 +62,49 @@ nativos**, no en los DEX pequeños.
 
 ---
 
-## 2. Marina Patcher (= Lucky Patcher) — el que pediste
+## 2. Marina Patcher (= Lucky Patcher) — **CORREGIDO**
 
-**Está instalado con el paquete ofuscado**, tal como dijiste:
+> ❌ **Error mío anterior**: atribuí Marina Patcher al paquete `com.callapp.contacts`
+> porque su `resources.arsc` trae el recurso `lucky_patcher_package`. Con el
+> APK real en la mano (y el `classes.dex` instalado en el móvil) la identidad
+> correcta es otra.
 
-| Dato | Valor (medido en el S21) |
+| Dato | Valor (medido) |
 |---|---|
-| Paquete | **`com.callapp.contacts`** (nombre falso) |
-| APK | `/data/app/~~a4lWxsZkLf-1v2FxwbMQUA==/com.callapp.contacts-b9ONmws8KR3RUHnzeM6hPQ==/base.apk` |
-| Tamaño | **37.978.017 B** |
-| sha256 | `9ba7b82e86cbfb33946dafe095aca43efeb0c0b4dd3d204225f84c290e88c145` |
-| DEX | **7** (`classes.dex` 8.977.624 B sha16 `162a651f18210ae5` · `classes2.dex` 9.443.740 B · `classes3..7`) |
-| Código nativo | **20 .so** (`arm64-v8a` + `x86`): `libobjectbox-jni.so`, `libnms.so`, `libccr.so`, `libfile_lock_pg.so`, `libbuffer_pg.so`, … |
-| Fingerprint | recurso **`lucky_patcher_package`** en `resources.arsc` (busca "lucky"/"patcher", no "chelpus") |
-| SDK incrustados | **Facebook Audience Network** (ads) ⇒ build "mod" monetizada |
-| Ofuscación | **446 identificadores de 1-2 caracteres** en `classes.dex` (65.773 strings) |
+| Paquete | **`ru.drjmwdme.cgwbfzijr`** (ofuscado al azar) |
+| Label | `MarinaPatcher` (Lucky Patcher renombrado) |
+| Versión | `12.10.9` (versionCode 1979) |
+| APK instalado | 15.029.615 B · sha256 `7496b221946ff1c5fcaf0de91e57f22d37c730c33e8bfe13a894d24319433232` |
+| `classes.dex` | 6.054.740 B · sha256 `5b0d376ddc79d4ff409f3158b382a335da1b7157a53815211c1d77c4f1200a79` |
+| DEX | **1** (no 7) · 6.312 clases · 37.506 métodos · 38.816 strings |
+| Código nativo | **ninguno** (`lib/` no existe) ⇒ **toda la lógica está en el DEX** |
+| Tipo | **módulo Xposed** (`assets/xposed_init` → `com.xposed.XSupport`) |
 
-### 2.1 Dónde está la lógica (y por qué el DEX no la enseña)
+Lo que sí es cierto de `com.callapp.contacts`: es **otra app** (37.978.017 B,
+7 DEX, 20 `.so`) que **incluye el recurso `lucky_patcher_package`**
+(⇒ trae el SDK/ads de Lucky Patcher), pero **no es el parcheador**.
 
-El grep de palabras clave en el DEX (`lucky`, `chelpus`, `license`, `crack`,
-`hook`, `xposed`, `frida`, `gameguardian`, `magisk`, `root`, `dex2oat`,
-`classloader`, `signature`, `tamper`) **no devuelve nada propio**: todo lo que
-sale es ruido de SDK (AndroidX, ExoPlayer, BouncyCastle, Google Play Services).
-⇒ **El parcheador no está en el DEX** ⇒ vive en:
+Análisis completo (motores CorePatch/PMPatch, parche de DEX + re-firma con
+claves AOSP, emulación de Play Billing, hosts de parches, estado real en este
+móvil) en **[`MARINA_PATCHER_ANALYSIS.md`](MARINA_PATCHER_ANALYSIS.md)**.
 
-* los **.so** (`libnms.so`, `libccr.so`, `libfile_lock_pg.so`, `libbuffer_pg.so`:
-  "pg" = *package guard* ⇒ candado + buffer del APK parcheado),
-* el **ObjectBox** local (`libobjectbox-jni.so`) ⇒ base de datos de parches/licencias.
+### 2.1 Lo que sí se integra en el fleet
 
-### 2.2 Qué haría yo con esto (y qué NO)
+* **Detector de firma AOSP** (`dex_decompile::aosp_signing_key`): las 4 claves
+  públicas que Marina Patcher empaqueta (`testkey`, `platform`, `media`,
+  `shared`) ⇒ cualquier APK instalada firmada con una de ellas está marcada
+  como *firma suplantada*.
+* **Detector de módulo** (`dex_decompile::lp_module_findings`): marca las APKs
+  que embeben el módulo (`com/xposed/XSupport`, `vnd.luckypatcher.archive`,
+  `cc/binmt/signature/`, `com/v7878/hooks/pmpatch`).
+* **Parser de AXML** (`tools/re/axml.py`): manifiesto legible sin `aapt`.
 
-* **Re de los `.so`**: mismo método que el de `com.agy` (strings en streaming
-  sobre el móvil, **sin extraer**: el disco del móvil está al 98 % y tiene
-  230 MB de RAM libres) ⇒ buscar `lucky_patcher_package`, `dex2oat`, `ClassLoader`,
-  `Signature`, `PackageManager` y los ioctls.
-* **Integrarlo en el fleet**: el valor real de Marina Patcher para nosotros es
-  **el mecanismo de "patchear un APK e inyectar código"** ⇒ que es exactamente
-  lo que ya hace **LSPatch** (`org.lsposed.lspatch`, 13.196.420 B, instalado) y
-  **KnoxPatch** (`io.mesalabs.knoxpatch`, 3.364.844 B, instalado) ⇒ **los
-  equivalentes open-source están en el dispositivo**, con licencia y sin
- Tapken ⇒ ésos son los que conviene reimplementar/integar (y los que puedo
-  reimplementar en Rust sin problemas legales).
-* **No** reimplemento la lógica de parche de Marina Patcher: es software
-  propietario; lo que hago es **medir** y **documentar** qué hace y con qué
-  speaks, y usar las alternativas open-source que ya están en el dispositivo.
+### 2.2 Lo que NO se reimplementa
 
----
+El motor de parcheo (PMPatch/CorePatch) es propietario, descarga parches de
+terceros y parchea ART en runtime. Los **equivalentes open-source ya
+instalados** (LSPatch, Magisk, KnoxPatch, EdXposed, MonoPatch) siguen siendo
+la vía legítima para integrar.
 
 ## 3. Herramientas de RE/patching YA instaladas (candidatos a reimplementar)
 
