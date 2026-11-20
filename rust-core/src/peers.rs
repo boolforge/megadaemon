@@ -29,7 +29,6 @@ use std::fs;
 use std::io::Read;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Un par del enjambre. Los cinco campos públicos son el contrato; `role`
@@ -316,67 +315,17 @@ pub fn discover_peers() -> Vec<Peer> {
 
 /// Instantánea pública: los pares con el contrato de cinco campos, el
 /// alcance de cada uno y si contesta ahora mismo.
-/// Cache de la instantanea de pares.
-///
-/// Por que: el enjambre sondea /peers continuamente (descubrimiento). El
-/// sondeo real contra cada par cuesta hasta 1,5 s y se hacia EN SERIE, de
-/// modo que un par caido multiplicaba la latencia de la respuesta y
-/// consumia un hilo del servidor durante segundos. Con la cache de 5 s y
-/// el sondeo en paralelo, la respuesta es la misma pero cuesta lo que
-/// cuesta el par MAS LENTO, no la suma.
-static SNAPSHOT_CACHE: OnceLock<Mutex<(Option<std::time::Instant>, Value)>> = OnceLock::new();
-
-fn snapshot_cache() -> &'static Mutex<(Option<std::time::Instant>, Value)> {
-    SNAPSHOT_CACHE.get_or_init(|| Mutex::new((None, Value::Null)))
-}
-
-/// TTL de la instantanea de pares.
-const SNAPSHOT_TTL: Duration = Duration::from_secs(5);
-
 pub fn peers_snapshot() -> Value {
-    {
-        let cache = crate::lock_ok(snapshot_cache());
-        if let (Some(at), v) = (&cache.0, &cache.1) {
-            if at.elapsed() < SNAPSHOT_TTL {
-                return v.clone();
-            }
-        }
-    }
-    let fresh = build_snapshot();
-    let mut cache = crate::lock_ok(snapshot_cache());
-    *cache = (Some(std::time::Instant::now()), fresh.clone());
-    fresh
-}
-
-/// Construye la instantanea sondeando a los pares EN PARALELO.
-fn build_snapshot() -> Value {
     let peers = discover_peers();
     let mut reachable = serde_json::Map::new();
-    // Sondeo en paralelo: el tiempo total es el del par mas lento, no la
-    // suma de todos. Con 3 pares y 1,5 s de timeout cada uno, la version
-    // en serie tardaba hasta 4,5 s con un par caido.
-    let results: Vec<(Peer, bool)> = std::thread::scope(|scope| {
-        let handles: Vec<_> = peers
-            .into_iter()
-            .map(|p| {
-                scope.spawn(move || {
-                    let key = if p.api_key.is_empty() {
-                        None
-                    } else {
-                        Some(p.api_key.as_str())
-                    };
-                    let ok = probe_peer_with_key(&p.url, 1500, key).is_some();
-                    (p, ok)
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .filter_map(|h| h.join().ok())
-            .collect()
-    });
     let mut list: Vec<Peer> = Vec::new();
-    for (mut p, ok) in results {
+    for mut p in peers {
+        let key = if p.api_key.is_empty() {
+            None
+        } else {
+            Some(p.api_key.as_str())
+        };
+        let ok = probe_peer_with_key(&p.url, 1500, key).is_some();
         if ok {
             p.last_seen = iso8601(epoch_secs());
         }

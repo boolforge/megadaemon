@@ -18,7 +18,7 @@ llama-server b12202 + **Qwen2.5-0.5B-Instruct Q4_K_M real** para el E2E del agen
 
 > MiniMax retiró **M2.5 y M2.7 el 18-nov-2026** — ayer. El daemon tenía `minimax-m2.7` como id por
 > defecto en el MCP, en el router Python, en el HTML del cockpit y en el banner del servidor.
-> **Todas las peticiones al proveedor por defecto de MegaDaemon estaban 返回ando error.**
+> **Todas las peticiones al proveedor por defecto de MegaDaemon estaban devolviendo error.**
 > Y `GitHub Models` (el otro proveedor "gratuito" estrella del README) **fue retirado el 30-jul-2026**:
 > `gh auth token` sigue funcionando, pero no hay ningún modelo detrás.
 

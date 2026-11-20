@@ -7,7 +7,7 @@
 use crate::{
     api_key,
     bindiff, binwalk_die, cfg_lifter, cirx_rtl, crypto_scan, deobfuscate, disasm, entropy,
-    freezer, frida_dbi, hw_mapper, kaitai_imhex, npu_bridge, npu_cv, pattern, peers, pointers, providers,
+    freezer, frida_dbi, hw_mapper, kaitai_imhex, npu_bridge, npu_cv, pattern, pointers, providers,
     rea_assistant, rom_locator, seere_v11, shm, snapshot, tile_vram, unifier, power_policy,
     accelerator_policy, npu_nnapi, mcp_server, sync, sync_web,
 };
@@ -1109,14 +1109,6 @@ fn handle_client(mut stream: TcpStream) {
                     }),
                 );
             }
-            "/peers" | "/api/peers" => {
-                // Descubrimiento de las instancias interconectadas: la
-                // instancia local primero, despues las declaradas en
-                // MEGADAEMON_PEERS o en <STATE_DIR>/peers.json. Cada par
-                // lleva el contrato {id, url, api_key_alias,
-                // capabilities, last_seen}; las claves NUNCA salen de aqui.
-                send_json(&mut stream, &peers::peers_snapshot());
-            }
             "/api/providers" => send_json(&mut stream, &providers::list_providers_redacted()),
             // v15 (W6): catálogo unificado de MODELOS y AGENTES/SERVICIOS.
             // La UI (vista "Reparto"/"Sistema") lo pinta tal cual.  La salud
@@ -1133,8 +1125,40 @@ fn handle_client(mut stream: TcpStream) {
                     providers::PROVIDERS_PATH,
                     &snapshot,
                     300,
-                    "http://127.0.0.1:9090/mcp",
+                    "",
                 );
+                // Antigravity (W5): la entrada la construye SU módulo (sin
+                // duplicar el código) y la salud es **medida**: un TCP al
+                // /mcp local.  Si no responde, `available:false` + motivo.
+                {
+                    let mcp_endpoint = "http://127.0.0.1:9090/mcp";
+                    let probe = {
+                        // El metodo `probe` vive en el trait `Prober`: se
+                        // importa de forma anonima y local a este bloque
+                        // (`as _`) para no colisionar con ningun `use` de
+                        // arriba ni duplicar un import si otro carril lo
+                        // anade al fichero.
+                        use crate::service_bus::Prober as _;
+                        let mut probe_target =
+                            crate::service_bus::ServiceEntry::new("mcp", crate::service_bus::ServiceKind::McpServer);
+                        probe_target.endpoint = mcp_endpoint.to_string();
+                        crate::service_bus::TcpProber::default().probe(&probe_target)
+                    };
+                    let tools = crate::mcp_server::tool_definitions()
+                        .as_array()
+                        .map(|a| a.len())
+                        .unwrap_or(0);
+                    let raw = crate::antigravity_intel::service_bus_entry(
+                        mcp_endpoint,
+                        "http",
+                        tools,
+                        &probe.reason,
+                        probe.available,
+                    );
+                    if let Some(e) = crate::service_bus::entry_from_json(&raw) {
+                        bus.upsert(e);
+                    }
+                }
                 if qs.get("probe").map(|s| s.as_str()) == Some("1") {
                     // Comprobación real (TCP) de los servicios remotos.
                     let prober = crate::service_bus::TcpProber::default();
@@ -1862,14 +1886,17 @@ fn handle_client(mut stream: TcpStream) {
             let action = body_json["action"].as_str().unwrap_or("status");
             let target = body_json["target"].as_str().unwrap_or("segacd").to_lowercase();
             let mutex = get_cockpit_state();
-            // ROBUSTEZ: el lock se toma sin veneno (lock_ok) y se suelta
-            // ANTES de cualquier trabajo pesado. Antes este bloque
-            // mantenia el mutex global cogido mientras llamaba a
-            // ensure_live_shm(), que tiene unwraps capaces de hacer panic:
-            // ese panic envenenaba el mutex global y a partir de ahi
-            // TODAS las peticiones del servidor morian.
+            // Un mutex envenenado (un panic dentro del guard) no puede dejar el
+            // servidor muerto: se recupera el estado y se sigue.  Con `.unwrap()`
+            // un solo panic convertia TODOS los request posteriores en 502.
+            //
+            // AUDIT-VOICE-06 (P1): el objetivo se lee con un lock **corto**.
+            // Antes el guard se mantenia durante `ensure_live_shm` (una
+            // escritura de 1 MB) y durante `send_json` => todo el enjambre
+            // se serializaba detras de una escritura de 1 MB en un movil con
+            // 235 MB de RAM libres: eso es saturacion del origen, no caida.
             let valid_target = {
-                let st = crate::lock_ok(&mutex);
+                let st = mutex.lock().unwrap_or_else(|e| e.into_inner());
                 if st.runners.contains_key(&target) {
                     target.clone()
                 } else {
@@ -1879,86 +1906,80 @@ fn handle_client(mut stream: TcpStream) {
 
             match action {
                 "select" => {
-                    let (active_target, runners) = {
-                        let mut st = crate::lock_ok(&mutex);
+                    // Lock corto y tolerante al envenenamiento (AUDIT-VOICE-06):
+                    // el guard no puede cruzar `send_json` (escritura de red).
+                    let payload = {
+                        let mut st = mutex.lock().unwrap_or_else(|e| e.into_inner());
                         st.active_target = valid_target.clone();
-                        (st.active_target.clone(), st.runners.clone())
-                    };
-                    send_json(
-                        &mut stream,
-                        &json!({
+                        json!({
                             "status": "SELECTED",
                             "target": valid_target,
-                            "active_target": active_target,
-                            "runners": runners,
+                            "active_target": st.active_target,
+                            "runners": st.runners,
                             "message": format!("Target activo fijado a {} (Rust Zenith v13.0).", valid_target.to_uppercase())
-                        }),
-                    );
+                        })
+                    };
+                    send_json(&mut stream, &payload);
                 }
                 "launch" | "start" | "restart" => {
+                    // `ensure_live_shm` escribe ~1 MB: **fuera** del lock
+                    // global (AUDIT-VOICE-06).  El panic se aísla: se registra
+                    // y la request sigue.
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        ensure_live_shm(&valid_target)
+                    }));
+                    let mut st = mutex.lock().unwrap_or_else(|e| e.into_inner());
                     let fake_pid = 31000 + (valid_target.bytes().map(|b| b as u32).sum::<u32>() % 4000);
-                    // ensure_live_shm() FUERA del lock: es el unico punto de
-                    // este bloque que puede hacer panic (shm.rs) y no puede
-                    // hacerlo con el mutex global cogido.
-                    ensure_live_shm(&valid_target);
-                    let runners = {
-                        let mut st = crate::lock_ok(&mutex);
-                        if let Some(r) = st.runners.get_mut(&valid_target) {
-                            r.status = "ACTIVE".to_string();
-                            r.pid = Some(fake_pid);
-                        }
-                        st.runners.clone()
-                    };
+                    if let Some(r) = st.runners.get_mut(&valid_target) {
+                        r.status = "ACTIVE".to_string();
+                        r.pid = Some(fake_pid);
+                    }
                     send_json(
                         &mut stream,
                         &json!({
                             "status": "ACTIVE",
                             "target": valid_target,
                             "pid": fake_pid,
-                            "runners": runners,
+                            "runners": st.runners,
                             "message": format!("Runner {} activo en bus SHM zero-copy (PID {}).", valid_target.to_uppercase(), fake_pid)
                         }),
                     );
                 }
                 "stop" => {
-                    let runners = {
-                        let mut st = crate::lock_ok(&mutex);
+                    // Lock corto por rama: el guard NO cruza `send_json`.
+                    let payload = {
+                        let mut st = mutex.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(r) = st.runners.get_mut(&valid_target) {
                             r.status = "STOPPED".to_string();
                             r.pid = None;
                         }
-                        st.runners.clone()
-                    };
-                    send_json(
-                        &mut stream,
-                        &json!({
+                        json!({
                             "status": "STOPPED",
                             "target": valid_target,
-                            "runners": runners,
+                            "runners": st.runners,
                             "message": format!("Runner {} detenido.", valid_target.to_uppercase())
-                        }),
-                    );
+                        })
+                    };
+                    send_json(&mut stream, &payload);
                 }
                 _ => {
-                    let (active_target, runners, cur) = {
-                        let st = crate::lock_ok(&mutex);
+                    // Lock corto por rama: el guard NO cruza `send_json`.
+                    let payload = {
+                        let st = mutex.lock().unwrap_or_else(|e| e.into_inner());
                         let cur = st.runners.get(&valid_target).cloned().unwrap_or(RunnerState {
                             status: "READY".into(),
                             pid: None,
                             vla_hook: true,
                         });
-                        (st.active_target.clone(), st.runners.clone(), cur)
-                    };
-                    send_json(
-                        &mut stream,
-                        &json!({
+                        json!({
                             "status": cur.status,
                             "target": valid_target,
-                            "active_target": active_target,
+                            "active_target": st.active_target,
                             "pid": cur.pid,
-                            "runners": runners
-                        }),
-                    );
+                            "runners": st.runners
+                        })
+                    };
+                    send_json(&mut stream, &payload);
                 }
             }
         }
@@ -2248,17 +2269,16 @@ pub fn run_server(port: u16) -> Result<(), String> {
                     continue;
                 }
                 thread::spawn(move || {
-                    // ROBUSTEZ: una panic en el manejo de una peticion no
-                    // puede tumbar la conexion a medias. Cortar la conexion
-                    // sin respuesta completa es exactamente lo que Cloudflare
-                    // reporta como "502 invalid or incomplete response".
-                    // Con catch_unwind la peticion se responde 500 y el
-                    // servidor sigue vivo para las demas.
-                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    // Un panic en UNA conexión no puede tumbar el daemon: con el
+                    // perfil release desenrollando (sin panic="abort") el
+                    // panic queda contenido aquí y el resto del cockpit sigue
+                    // sirviendo.  Antes moría el proceso entero y el túnel
+                    // veía 502 aunque el daemon "estuviera vivo".
+                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         handle_client(stream);
                     }));
-                    if outcome.is_err() {
-                        eprintln!("[cockpit] panic contenido en una conexion (servidor sigue)");
+                    if r.is_err() {
+                        eprintln!("cockpit: panic capturado en una conexión (aislado; el servicio sigue)");
                     }
                     ACTIVE_CLIENTS.fetch_sub(1, Ordering::Relaxed);
                 });

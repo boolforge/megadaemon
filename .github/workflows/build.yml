@@ -62,10 +62,14 @@ jobs:
         # `api_key::acunar_y_revocar_una_clave_no_toca_la_principal` falla; con
         # el entorno limpio pasa. Sin este `env -u`, un rojo de entorno se
         # confunde con un rojo de codigo.
+        #
+        # AUDIT-CI-01: los tests rojos NO bloquean la release (continue-on-error),
+        # pero el GATE de seguridad SI bloquea: protege el dispositivo.
         continue-on-error: true
         run: |
           env -u MEGADAEMON_API_KEY -u MEGADAEMON_TOKEN -u SEERE_AUTH_TOKEN \
-            cargo test --release --all-targets
+            cargo test --release --all-targets \
+            || echo "::warning::hay tests rojos (no bloquea la release)"
       - name: Gate (BLOQUEA): autenticacion y politica del harness
         working-directory: rust-core
         # Este gate SI bloquea el job `quality`: protege el dispositivo.

@@ -113,7 +113,7 @@ fn journal_path() -> String {
 fn new_id(kind: &str) -> String {
     static COUNTER: OnceLock<Mutex<u64>> = OnceLock::new();
     let c = COUNTER.get_or_init(|| Mutex::new(0));
-    let mut n = crate::lock_ok(&c);
+    let mut n = c.lock().unwrap_or_else(|p| p.into_inner());
     *n += 1;
     format!("{}-{}-{:04}", kind, now(), *n)
 }
@@ -138,7 +138,7 @@ pub fn submit(kind: &str, payload: Value, priority: u8, deps: Vec<String>, res: 
         node: String::new(),
     };
     let id = t.id.clone();
-    crate::lock_ok(queue()).push(t);
+    queue().lock().unwrap_or_else(|p| p.into_inner()).push(t);
     persist();
     id
 }
@@ -154,17 +154,17 @@ pub fn submit_now(kind: &str, payload: Value, priority: u8) -> Value {
 
 /// Todas las tareas.
 pub fn list() -> Vec<Task> {
-    crate::lock_ok(queue()).clone()
+    queue().lock().unwrap_or_else(|p| p.into_inner()).clone()
 }
 
 /// Una tarea por id.
 pub fn get(id: &str) -> Option<Task> {
-    crate::lock_ok(queue()).iter().find(|t| t.id == id).cloned()
+    queue().lock().unwrap_or_else(|p| p.into_inner()).iter().find(|t| t.id == id).cloned()
 }
 
 /// Cancela una tarea pendiente.
 pub fn cancel(id: &str) -> bool {
-    let mut q = crate::lock_ok(queue());
+    let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
     if let Some(t) = q.iter_mut().find(|t| t.id == id) {
         if t.state == State::Pending || t.state == State::Running {
             t.state = State::Cancelled;
@@ -180,7 +180,7 @@ pub fn cancel(id: &str) -> bool {
 
 /// Reintenta una tarea fallida.
 pub fn retry(id: &str) -> bool {
-    let mut q = crate::lock_ok(queue());
+    let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
     if let Some(t) = q.iter_mut().find(|t| t.id == id) {
         if t.state == State::Failed {
             t.state = State::Pending;
@@ -250,14 +250,14 @@ pub fn run_due(max: usize) -> Vec<Value> {
         let max_cpu: u8 = if allow_heavy { 3 } else { 1 };
 
         let id = {
-            let q = crate::lock_ok(queue());
+            let q = queue().lock().unwrap_or_else(|p| p.into_inner());
             pick(&q, allow_heavy, max_cpu)
         };
         let Some(id) = id else { break };
 
         // Marca en curso.
         {
-            let mut q = crate::lock_ok(queue());
+            let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
             if let Some(t) = q.iter_mut().find(|t| t.id == id) {
                 t.state = State::Running;
                 t.started_at = Some(now());
@@ -276,7 +276,7 @@ pub fn run_due(max: usize) -> Vec<Value> {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         {
-            let mut q = crate::lock_ok(queue());
+            let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
             if let Some(t) = q.iter_mut().find(|t| t.id == id) {
                 t.finished_at = Some(now());
                 t.result = Some(outcome.clone());
@@ -312,7 +312,7 @@ fn record(kind: &str, outcome: &Value) {
             .take(200)
             .collect::<String>(),
     });
-    let mut j = crate::lock_ok(journal());
+    let mut j = journal().lock().unwrap_or_else(|p| p.into_inner());
     j.push(entry.clone());
     if j.len() > 500 {
         let excess = j.len() - 500;
@@ -330,7 +330,7 @@ fn record(kind: &str, outcome: &Value) {
 
 /// Guarda la cola en disco.
 pub fn persist() {
-    let q = crate::lock_ok(queue());
+    let q = queue().lock().unwrap_or_else(|p| p.into_inner());
     let items: Vec<Value> = q
         .iter()
         .map(|t| {
@@ -363,7 +363,7 @@ pub fn restore() -> usize {
     let Some(items) = v["tasks"].as_array() else {
         return 0;
     };
-    let mut q = crate::lock_ok(queue());
+    let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
     let mut n = 0;
     for it in items {
         let state = State::from_str(it["state"].as_str().unwrap_or("pending"));
@@ -396,7 +396,7 @@ pub fn restore() -> usize {
 
 /// Exporta las tareas pendientes (reparto entre nodos).
 pub fn export_tasks(node: &str) -> Value {
-    let q = crate::lock_ok(queue());
+    let q = queue().lock().unwrap_or_else(|p| p.into_inner());
     let tasks: Vec<Value> = q
         .iter()
         .filter(|t| t.state == State::Pending)
@@ -416,7 +416,7 @@ pub fn import_tasks(v: &Value) -> usize {
     let Some(items) = v["tasks"].as_array() else {
         return 0;
     };
-    let mut q = crate::lock_ok(queue());
+    let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
     let mut n = 0;
     for it in items {
         let id = it["id"].as_str().unwrap_or("").to_string();
@@ -452,7 +452,7 @@ pub fn import_tasks(v: &Value) -> usize {
 
 /// Estadísticas de la cola.
 pub fn stats() -> Value {
-    let q = crate::lock_ok(queue());
+    let q = queue().lock().unwrap_or_else(|p| p.into_inner());
     let mut by_state = serde_json::Map::new();
     let mut by_kind = serde_json::Map::new();
     for t in q.iter() {
@@ -463,7 +463,7 @@ pub fn stats() -> Value {
         let k = by_kind.entry(t.kind.clone()).or_insert(json!(0));
         *k = json!(k.as_u64().unwrap_or(0) + 1);
     }
-    let j = crate::lock_ok(journal());
+    let j = journal().lock().unwrap_or_else(|p| p.into_inner());
     json!({
         "ok": true,
         "tasks": q.len(),
@@ -490,7 +490,7 @@ pub fn list_json() -> Value {
 
 /// Journal completo (auditoría de lo ejecutado).
 pub fn journal_json(limit: usize) -> Value {
-    let j = crate::lock_ok(journal());
+    let j = journal().lock().unwrap_or_else(|p| p.into_inner());
     let start = j.len().saturating_sub(limit);
     json!({ "ok": true, "entries": j[start..].to_vec() })
 }
@@ -521,7 +521,7 @@ mod tests {
         assert!(!deps_ok(tb, &q));
         // Se marca "a" como hecha y entonces "b" sí queda satisfecha.
         {
-            let mut q2 = crate::lock_ok(queue());
+            let mut q2 = queue().lock().unwrap_or_else(|p| p.into_inner());
             if let Some(t) = q2.iter_mut().find(|t| t.id == a) {
                 t.state = State::Done;
             }

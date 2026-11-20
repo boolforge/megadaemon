@@ -257,13 +257,41 @@ fn crc32_table() -> &'static [u32; 256] {
 }
 
 /// CRC-32 del payload de un mensaje ADB.
-pub fn crc32(data: &[u8]) -> u32 {
+///
+/// OJO: **no** es el `zlib.crc32`.  AOSP usa `adb_crc32()`, que empieza con
+/// `crc = 0` y **no hace el XOR final**: es el CRC-32 "JAMCRC".
+/// Usar el de zlib hace que adbd rechace el mensaje con
+/// `protocolo: crc32 incorrecto` (fue el bug real que rompi�� la tool `adb`).
+/// CRC-32 IEEE con la convencion estandar (la de `zlib.crc32`): init
+/// 0xFFFF_FFFF y XOR final.  AOSP usa `adb_crc32` (JAMCRC) pero el campo CRC
+/// puede venir calculado con cualquiera de las dos, asi que aceptamos ambas.
+pub fn crc32_zlib(data: &[u8]) -> u32 {
     let table = crc32_table();
-    let mut c: u32 = 0xFFFF_FFFF;
+    let mut crc: u32 = 0xFFFF_FFFF;
     for &b in data {
-        c = table[((c ^ b as u32) & 0xFF) as usize] ^ (c >> 8);
+        crc = (crc >> 8) ^ table[((crc ^ b as u32) & 0xFF) as usize];
     }
-    c ^ 0xFFFF_FFFF
+    crc ^ 0xFFFF_FFFF
+}
+
+pub fn crc32(data: &[u8]) -> u32 {
+    static TABLE: OnceLock<[u32; 256]> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let mut t = [0u32; 256];
+        for (i, e) in t.iter_mut().enumerate() {
+            let mut c = i as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+            *e = c;
+        }
+        t
+    });
+    let mut crc: u32 = 0;
+    for &b in data {
+        crc = (crc >> 8) ^ table[((crc ^ b as u32) & 0xFF) as usize];
+    }
+    crc
 }
 
 /// Mensaje ADB: cabecera + payload.
@@ -321,7 +349,13 @@ impl Message {
             )));
         }
         let payload = buf[HEADER_LEN..HEADER_LEN + len].to_vec();
-        if crc32(&payload) != crc {
+        // El CRC se valida **salvo en el handshake** (CNXN/AUTH): ahi AOSP
+        // puede no informar el campo (su `send_auth` deja el checksum sin
+        // calcular) y el cliente de referencia tampoco lo comprueba ahi.
+        // Cuando si se valida, aceptamos las DOS variantes de CRC-32: la de
+        // AOSP (`adb_crc32`, JAMCRC) y la IEEE/zlib.
+        let es_handshake = matches!(command, CMD_CNXN | CMD_AUTH);
+        if !es_handshake && !payload.is_empty() && crc32(&payload) != crc && crc32_zlib(&payload) != crc {
             return Err(AdbError::Protocol("crc32 incorrecto".into()));
         }
         Ok(Message { command, arg0, arg1, payload })
@@ -939,11 +973,34 @@ mod tests {
     // ---- unidad ---------------------------------------------------------
 
     #[test]
-    fn crc32_coincide_con_zlib() {
-        // valores de referencia de zlib.crc32
-        assert_eq!(crc32(b""), 0x0000_0000);
-        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
-        assert_eq!(crc32(b"The quick brown fox jumps over the lazy dog"), 0x414F_A339);
+    fn crc32_usa_la_variante_de_aosp() {
+        // AOSP adb_crc32: init 0 y sin XOR final (JAMCRC), NO zlib.crc32.
+        assert_eq!(crc32(b"123456789"), 0x2DFD2D88);
+        assert_ne!(crc32(b"123456789"), 0xCBF4_3926); // el de zlib
+        assert_eq!(crc32(b""), 0);
+
+    #[test]
+    fn crc32_zlib_usa_la_convencion_estandar() {
+        // vector clasico de zlib/IEEE (distinto del JAMCRC de AOSP)
+        assert_eq!(crc32_zlib(b"123456789"), 0xCBF4_3926);
+        assert_eq!(crc32_zlib(b""), 0);
+        assert_ne!(crc32_zlib(b"123456789"), crc32(b"123456789"));
+    }
+
+    #[test]
+    fn el_handshake_no_exige_crc() {
+        // CNXN con el campo CRC sin informar (0) debe aceptarse: es lo que
+        // envia AOSP en el handshake y lo que rompia la tool `adb`.
+        let mut m = Vec::new();
+        m.extend_from_slice(&CMD_CNXN.to_le_bytes());
+        m.extend_from_slice(&0x0100_0000u32.to_le_bytes()); // version
+        m.extend_from_slice(&0u32.to_le_bytes());           // arg1
+        m.extend_from_slice(&4u32.to_le_bytes());           // data_length
+        m.extend_from_slice(&0u32.to_le_bytes());           // data_crc32 sin informar
+        m.extend_from_slice(&(CMD_CNXN ^ 0xFFFF_FFFF).to_le_bytes()); // magic
+        m.extend_from_slice(b"test");
+        assert!(Message::decode(&m).is_ok(), "un CNXN con CRC sin informar debe aceptarse");
+    }
     }
 
     #[test]

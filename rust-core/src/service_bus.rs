@@ -284,6 +284,13 @@ pub struct ServiceEntry {
     /// *Dónde* está la credencial: ruta del fichero de secretos.  **Nunca la
     /// credencial.**
     pub auth_ref: String,
+    /// ¿Está la credencial presente en ese fichero?  `None` = no aplica
+    /// (servicio local o keyless) o no se ha comprobado.
+    ///
+    /// Ojo: esto **no** es la salud.  Un proveedor free sin key puede estar
+    /// perfectamente disponible (keyless); lo que dice la salud es si el
+    /// servicio responde.
+    pub auth_ready: Option<bool>,
     /// Salud real.
     pub health: Health,
     /// Latencia medida en ms (`None` si nunca se midió).
@@ -318,6 +325,7 @@ impl ServiceEntry {
             endpoint: String::new(),
             auth_kind: "none".to_string(),
             auth_ref: String::new(),
+            auth_ready: None,
             health: Health::unknown(),
             latency_ms: None,
             cost_estimate: CostEstimate::free(),
@@ -959,6 +967,7 @@ impl ServiceBus {
                     "endpoint": e.endpoint,
                     "auth_kind": e.auth_kind,
                     "auth_ref": e.auth_ref,
+                    "auth_ready": e.auth_ready,
                     "health": {
                         "available": e.health.available,
                         "checked_at": e.health.checked_at,
@@ -1079,6 +1088,7 @@ pub fn catalog_from_providers_json(redacted: &Value, secrets_ref: &str) -> Vec<S
         e.endpoint = endpoint.to_string();
         e.auth_kind = auth_kind_for(auth_type).to_string();
         e.auth_ref = secrets_ref.to_string();
+        e.auth_ready = Some(ready);
         e.model = model.to_string();
         e.tier = tier.to_string();
         e.enabled = p.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
@@ -1574,6 +1584,7 @@ pub fn entry_from_json(v: &Value) -> Option<ServiceEntry> {
         })
         .unwrap_or_default();
     e.enabled = v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true);
+    e.auth_ready = v.get("auth_ready").and_then(|x| x.as_bool());
     e.model = v
         .get("model")
         .and_then(|x| x.as_str())
@@ -1920,8 +1931,11 @@ mod tests {
         // El local es gratis; el cloud con tarifa, de pago.
         assert!(cat[1].cost_estimate.free);
         assert!(!cat[0].cost_estimate.free);
-        // Y la salud nace sin comprobar.
+        // La salud nace sin comprobar (la credencial no es salud).
         assert!(!cat[0].health.available);
+        // Pero sí sabemos si la credencial está puesta.
+        assert_eq!(cat[0].auth_ready, Some(true));
+        assert_eq!(cat[1].auth_ready, Some(true));
     }
 
     #[test]

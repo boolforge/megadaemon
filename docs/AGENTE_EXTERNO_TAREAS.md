@@ -13,13 +13,53 @@
 |---|---|
 | Rol de la instancia | `primary` (maestra) — decide, reparte y sincroniza |
 | Dispositivo | Samsung S21 Ultra (Exynos 2100), root + Magisk — IP LAN **192.168.1.124** |
-| Cockpit (web) | `http://localhost:3000` en el móvil · `http://192.168.1.124:3000` en la LAN |
+| Cockpit (web) | `http://localhost:3000` en el móvil · **`http://192.168.1.124:3000` en la LAN** (RUTA CANÓNICA: es estable) |
 | Alias de puertos | 3000, 3030, 8090, 8080 (puente local) + 9090 (cockpit nativo) |
-| Túnel externo | `https://webpage-ultram-please-communicate.trycloudflare.com` |
-| MCP (JSON-RPC 2.0) | `POST https://webpage-ultram-please-communicate.trycloudflare.com/mcp` (**no** `/sse`) |
-| Cabeceras | `X-API-Key: <MEGADAEMON_API_KEY>` siempre · `X-Seere-Auth-Token: <MEGADAEMON_COCKPIT_TOKEN>` sólo al escribir |
+| MCP por LAN | **`POST http://192.168.1.124:3000/mcp`** (mismo daemon, mismo JSON-RPC 2.0; **no** `/sse`) |
+| Túnel externo | **EFÍMERO**: la URL vigente está en `<state_dir>/tunnel.url` en el móvil (`/data/local/tmp/megadaemon/tunnel.url`) y cambia cada vez que cloudflared se relanza (⇒ 530). Última conocida: `https://pot-implied-approach-input.trycloudflare.com` — **úsala sólo si la LAN falla**, y entonces léela del fichero, no la copies de aquí. |
+| MCP (JSON-RPC 2.0) | `POST <URL del túnel>/mcp` (**no** `/sse`) · cabeceras: `X-API-Key` siempre · `X-Seere-Auth-Token` sólo al escribir |
+| Credenciales | `/workspace/md-secrets/instance.env` (0600) — **nunca al chat**. `tools/phone_url.py --export` refresca las URLs (las del túnel caducan en minutos) |
 | ADB | `adbd` en TCP **5555**: `adb connect 192.168.1.124:5555` (varios equipos a la vez) |
 | ADB nativo Rust | `rust-core/src/adb_client.rs` (protocolo ADB v1 a mano, sin binario `adb`) |
+
+---
+
+## PRIMER ENCARGO CONCRETO (lo primero que debe hacer el nodo externo)
+
+> No le digas "lee el backlog y ayuda": se aburre. Dale estos tres encargos,
+> en este orden, con entregable concreto en cada uno. Son del área del maestro
+> (Samsung) y son justos los que el enjambre no puede resolver desde dentro.
+
+**ENCARGO 1 — Validar el fix del 502 del maestro (tú estás fuera: vantage point ideal)**
+El maestro，返回 502 de forma intermitente. Causa raíz ya diagnosticada:
+`ensure_live_shm()` entra en pánico mientras se mantiene el `Mutex<GlobalCockpitState>`
+global del cockpit → ese panic **envenena el mutex para siempre** → los `lock().unwrap()`
+muerden otra vez → sin `catch_unwind` la conexión se corta a medias → Cloudflare ve
+respuesta incompleta → 502. El watchdog sólo miraba `pgrep` (proceso vivo) → nunca reiniciaba.
+Entregable: **20 peticiones seguidas** al endpoint del maestro con las cabeceras de
+conexión, mediendo código y latencia, y un veredicto: ¿502稳定, intermitente o cero?
+Si aparece un 502, captura el cuerpo exacto y el `logcat` del móvil (`logcat -d -t 200 | grep -i adbd`)
+en el mismo instante. Sin ese par de datos no se arregla nada.
+
+**ENCARGO 2 — Cerrar el handshake ADB contra el Samsung**
+En el Samsung, `adbd` escucha en TCP 5555 (`192.168.1.124:5555`) y el socket **acepta**
+la conexión, pero `adbd` responde **RST** en cuanto recibe el CNXN
+(logcat: `host-16: connection terminated: read failed`). Pistas ya reunidas:
+`ro.adb.secure=0`; la clave de host **ya está registrada** en
+`/data/misc/adb/adb_keys` como `mavis@fleet`; el cliente es
+`rust-core/src/adb_client.rs` (Rust puro, sin binario `adb`) y hay un binario ARM64
+precompilado en `dist/adbonly-arm64` (con su `.sha256`).
+Entregable: el handshake completo hasta obtener el **banner** de `adbd`, o el
+informe exacto de en qué paso se rompe (con los bytes que se enviaron y los que
+se recibieron) y el parche propuesto en `adb_client.rs`.
+
+**ENCARGO 3 — RE del Exynos 2100 (tu especialidad)**
+Volcado RE completo del SoC: `sysfs`, `/proc`, registros del bootloader,
+tablas de firmware, y **por qué `ensure_live_shm()` entra en pánico** (`src/shm.rs`):
+qué es ese shm, quién lo crea, por qué se envenena y cuál es el diseño correcto
+(crear el shm antes de tomar el lock; nuncaargestar bajo el mutex global).
+Entregable: informe con el diff propuesto para `shm.rs` + `cockpit_server.rs`,
+con el test que demuestra que un panic en `ensure_live_shm()` ya no tumba el servidor.
 
 ---
 
@@ -35,8 +75,11 @@ estado compartido y decide. Tú entras como nodo WORKER: aportas tus datos y tu
 músculo. No eres el maestro y no se toca su configuración sin acuerdo.
 
 ## 1. CONECIÓN (primero, sin preguntar nada)
-Endpoint MCP (JSON-RPC 2.0 puro, POST):
-    https://webpage-ultram-please-communicate.trycloudflare.com/mcp
+Endpoint MCP (JSON-RPC 2.0 puro, POST) — **por la LAN primero (es estable)**:
+    http://192.168.1.124:3000/mcp
+Si la LAN no responde, usa el túnel (URL EFÍMERA: léela del móvil en
+/data/local/tmp/megadaemon/tunnel.url; no la copies de un prompt viejo):
+    POST https://<hostname-vivo>.trycloudflare.com/mcp
 Cabeceras obligatorias en CADA POST:
     X-API-Key: <PEGAR_AQUI: MEGADAEMON_API_KEY>
     X-Seere-Auth-Token: <PEGAR_AQUI: MEGADAEMON_COCKPIT_TOKEN>   (sólo si vas a escribir)
@@ -48,6 +91,9 @@ Cliente ya hecho (repo): rust-core/tools/mdmcp.py
     python3 mdmcp.py tools ; python3 mdmcp.py call system_overview '{}'
 PRIMER MOVIMIENTO OBLIGATORIO: `tools/list` COMPLETO + `system_overview`.
 Muéstrame ambos resultados antes de tocar nada.
+
+TUS TRES ENCARGOS (no te pregunten qué hacer; están definidos arriba):
+  E1 validar el fix del 502 desde fuera · E2 cerrar el handshake ADB · E3 RE del Exynos.
 
 ## 2. FASE 1 — VOLCADO COMPLETO DE TUS DATOS (antes de cualquier otra cosa)
 Antes de ayudar en tareas, el maestro necesita TODO lo que tienes. Vuelca, en

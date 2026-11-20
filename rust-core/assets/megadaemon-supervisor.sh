@@ -31,7 +31,22 @@ rotate() {
 log() { echo "[$(date '+%F %T')] $*" >> "$LOG"; }
 
 start_cockpit() {
-  [ -x "$P/megadaemon-core" ] || { log "cockpit: binario ausente"; return 1; }
+  # v15: "existe pero no es ejecutable" (un `mv` sin `chmod` lo deja en
+  # 644) es un fallo distinto de "no existe": antes el supervisor lo
+  # reportaba como "ausente" y se quedaba sin daemon.  Ahora se repara.
+  if [ ! -f "$P/megadaemon-core" ]; then
+    log "cockpit: binario ausente"
+    return 1
+  fi
+  if [ ! -x "$P/megadaemon-core" ]; then
+    chmod 755 "$P/megadaemon-core" 2>/dev/null
+    if [ -x "$P/megadaemon-core" ]; then
+      log "cockpit: el binario no era ejecutable; chmod 755 aplicado"
+    else
+      log "cockpit: el binario existe pero no se puede hacer ejecutable"
+      return 1
+    fi
+  fi
   set -a; [ -f "$P/megadaemon.env" ] && . "$P/megadaemon.env"; set +a
   cd "$P" 2>/dev/null || exit 1
   setsid "$P/megadaemon-core" cockpit 9090 >> "$LOG" 2>&1 < /dev/null &
@@ -73,6 +88,85 @@ run_sync() {
   log "sync: terminada (rc=$?)"
 }
 
+# ---------------------------------------------------------------------------
+# v15: watchdog de RESPONSIVIDAD (no de "vivo").
+#
+# `pgrep` sólo dice que el proceso existe.  Con un mutex envenenado por un
+# panic, el proceso sigue vivo pero CADA petición muere a medias => el
+# túnel de Cloudflare ve 502 y el móvil parece "caído" sin estarlo.
+# Aquí se pregunta de verdad: ¿contesta /health por localhost?  Con DOS
+# fallos seguidos (la red del móvil da falsos positivos) se reinicia.
+# El sondeo es LOCAL (127.0.0.1): salir a internet y volver por el túnel
+# daría falsos positivos y no mide lo que importa.
+# ---------------------------------------------------------------------------
+# v15: watchdog de RESPONSIVIDAD (no de "vivo").
+#
+# `pgrep` sólo dice que el proceso existe.  Con un mutex envenenado por un
+# panic, el proceso sigue vivo pero CADA petición muere a medias => el
+# túnel de Cloudflare ve 502 y el móvil parece "caído" sin estarlo.
+#
+# Reglas (importantes, aprendidas en caliente): el sondeo es LOCAL
+# (127.0.0.1): salir a internet y volver por el túnel daría falsos
+# positivos.  NO se sondea en bucle rápido: durante un arranque /health no
+# contesta y eso NO es un fallo => se exige 1 sondeo cada 30 s y 3 fallos
+# SEGUIDOS antes de reiniciar, y tras reiniciar se ESPERA a que vuelva
+# (si no, el propio watchdog se dispara en bucle y tumba el móvil solo).
+daemon_unresponsive_streak=0
+last_resp_check=0
+daemon_responsive() {
+    local port="${1:-9090}"
+    if [ -x /data/data/com.termux/files/usr/bin/curl ]; then
+        /data/data/com.termux/files/usr/bin/curl -fsS --max-time 8 \
+            -o /dev/null "http://127.0.0.1:$port/health" 2>/dev/null && return 0
+        return 1
+    fi
+    if [ -x /data/data/com.termux/files/usr/bin/python3 ]; then
+        /data/data/com.termux/files/usr/bin/python3 -c \
+            "import http.client,sys
+try:
+    c=http.client.HTTPConnection('127.0.0.1',$port,timeout=8)
+    c.request('GET','/health')
+    sys.exit(0 if c.getresponse().status==200 else 1)
+except Exception:
+    sys.exit(1)" >/dev/null 2>&1 && return 0
+        return 1
+    fi
+    return 0   # sin sonda: no se puede afirmar nada => no se reinicia
+}
+
+wait_daemon_responsive() {
+    local port="${1:-9090}" i=0
+    while [ $i -lt 15 ]; do
+        if daemon_responsive "$port"; then return 0; fi
+        i=$((i + 1)); sleep 3
+    done
+    return 1
+}
+
+check_daemon_responsive() {
+    local port="${1:-9090}" now
+    now=$(date +%s)
+    # Como mucho una comprobación cada 30 s.
+    [ $((now - last_resp_check)) -lt 30 ] && return 0
+    last_resp_check=$now
+    if daemon_responsive "$port"; then
+        daemon_unresponsive_streak=0
+        return 0
+    fi
+    daemon_unresponsive_streak=$((daemon_unresponsive_streak + 1))
+    log "el daemon no responde /health (fallo $daemon_unresponsive_streak/3)"
+    if [ "$daemon_unresponsive_streak" -ge 3 ]; then
+        daemon_unreachable=1
+        daemon_unresponsive_streak=0
+        log "el daemon esta VIVO pero NO responde /health: lo reinicio (puede ser un mutex envenenado por un panic)"
+        pkill -x megadaemon-core 2>/dev/null
+        sleep 3
+        start_cockpit
+        wait_daemon_responsive "$port" || log "el daemon no respondio tras el reinicio (sigue el supervisor)"
+    fi
+    return 0
+}
+
 cd_cockpit=0; cd_tunnel=0; cd_mcp=0
 while true; do
   rotate
@@ -85,9 +179,11 @@ while true; do
 
   if ! pgrep -f "megadaemon-core cockpit" >/dev/null 2>&1; then
     start_cockpit
-    cd_cockpit=$((cd_cockpit+1)); s=$((5*(1<<(cd_cockpit<5?cd_cockpit:5)))); [ "$s" -gt 120 ] && s=120
+    cd_cockpit=$((cd_cockpit+1)); s=$((5*(1<<(cd_cockpit<3?cd_cockpit:3)))); [ "$s" -gt 40 ] && s=40
   else
     cd_cockpit=0; s=30
+    # v15: vivo != funcional.  Se comprueba /health (2 fallos seguidos).
+    check_daemon_responsive "$PORT" || true
   fi
   sleep 5
 

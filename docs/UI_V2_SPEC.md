@@ -294,6 +294,43 @@ SHA-256 del cliente está implementado en JS puro (≈60 líneas) para que
   la **tabla completa de la API v2** (autogenerada por el daemon) y la
   **política de auth**.
 
+### 4.12 Tablero del bus, voz, RE en vivo y administración
+
+**Tablero del bus (en `view-tablero`).**  Card "Tablero del bus (SQLite)" con
+selector de **rol** (`primary` / `worker` / `observer`, por defecto el del
+daemon) y **lease** en segundos.  Pinta las **instancias con su rol** (marca
+"esta") y las **tareas** (id, título, estado, dueño, lease restante, prioridad)
+con tres acciones: **Reclamar**, **Liberar** y **Marcar hecha**.  El claim
+pide `POST /api/v2/tasks/claim` ⇒ el servidor toma el **lock de escritura**
+del SQLite (`BEGIN IMMEDIATE`) y deja un lease: si dos agentes pulsan a la vez,
+sólo uno gana y la UI lo dice ("No se pudo reclamar: otro agente se adelantó").
+
+**Voz (en `view-enjambre`).**  Card "Voz del daemon" con chip
+(`voz: <identidad> (<estado>)`) y botones **whoami** / **status**.  Habla con
+`GET|POST /api/v2/voice`; si el runtime de voz no está, el chip dice
+`voz: n/d` con el motivo (nada de voz fantasma).
+
+**RE en vivo (en `view-re`).**  Card "Inteligencia de apps (en vivo)" con
+`app_intel` (perfiles / escaneo local), `apk_inventory` (análisis de APK) y
+`dex_decompile` (ofuscación).  El resultado se pinta con **los sha256
+destacados en tabla** (se extraen de la respuesta real) y el JSON completo.
+Todo vía `POST /api/tool/<tool>` (tools que existen en el catálogo MCP; hay un
+test que lo comprueba).
+
+**Administración (en `view-sistema`).**  Card "Administración" con dos
+bloques:
+* *API keys por agente*: **Emitir** (`api_keys`/`mint`), **Listar**
+  (`api_keys`/`list`, sin revelar el valor salvo que el daemon lo envíe) y
+  **Revocar…** (`api_keys`/`revoke`) con **confirmación explícita** (el
+  daemon además exige `confirm:true` ⇒ doble barrera).
+* *Instancia*: **Reiniciar instancia…** (`POST /api/v2/admin/restart`, con
+  confirmación) y **Forzar sincronización** (`POST /api/sync/harvest`) +
+  **Estado del sync** (`GET /api/sync/status`).
+
+Criterios: ninguna credencial se pinta en la UI salvo la que el usuario pide
+emitir (y se avisa), las acciones destructivas piden confirmación, y el
+resultado que se muestra es **la respuesta real del daemon**.
+
 ---
 
 ## 5. Cabecera global

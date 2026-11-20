@@ -28,6 +28,7 @@ pub fn lock_ok<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 pub mod adb_client;
 pub mod adb_tool;
 pub mod agent_core;
+pub mod agent_loop;
 pub mod agent_voice;
 pub mod alerts;
 pub mod android;

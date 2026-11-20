@@ -302,8 +302,11 @@ fn run_child(test_name: &str, extra_env: &[(&str, &str)], limit: Duration) -> Op
 // válido).  `/api/status` hace `st["cockpit_engine"] = ...` sobre ese valor:
 // el `IndexMut<&str>` de serde_json PANIQUE si el valor no es un objeto.
 //
-// En el perfil release el crate se compila con `panic = "abort"` (Cargo.toml),
-// así que el panic no mata sólo el hilo del handler: ABORTA EL PROCESO
+// El perfil release usa `panic = "unwind"` (v15, a proposito en Cargo.toml):
+// un panic NO mata el proceso entero, solo el hilo del handler.  Por eso este
+// test comprueba las DOS cosas: que el handler responde (500/err) y que el
+// daemon SIGUE VIVO despues del panic.  (El 134 que se vio en el movil en otro
+// momento no venia de aqui: con unwind un panic no produce 134.)
 // ENTERO y el cockpit cae.  Además, un fichero de estado corrupto es
 // precisamente lo que el daemon debe tolerar.
 
@@ -324,7 +327,7 @@ fn hw01_status_handler_no_debe_panicar_con_estado_corrupto() {
     backup.restore();
     assert!(
         !body.is_empty() && headers.starts_with("HTTP/1.1 200"),
-        "HW-01: el handler de /api/status murió (respuesta vacía) => con panic=abort \
+        "HW-01: el handler de /api/status murió (respuesta vacía) => con unwind \
          (release) el cockpit COMPLETO se cae por un fichero de estado corrupto"
     );
 }

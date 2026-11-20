@@ -57,6 +57,15 @@ const BIN_DIRS: &[&str] = &[
     "/vendor/lib64/hw",
     "/odm/bin",
     "/product/bin",
+    // AUDIT-ENV-01: faltaban estas rutas, asi que la tool respondia
+    // "available: false" sobre ficheros que SI existen:
+    // /vendor/firmware/NPU.bin (1.506.272 B, medido en el S21 Ultra) y los
+    // .rc del init de EDEN en /vendor/etc/init.
+    "/vendor/firmware",
+    "/vendor/etc/init",
+    "/vendor/etc/midas",
+    "/vendor/etc/eden",
+    "/system/etc/init",
 ];
 
 /// Rutas donde se buscan nodos de dispositivo.

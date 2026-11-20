@@ -31,6 +31,7 @@
 
 use rusqlite::Connection;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1838,6 +1839,29 @@ fn device_list_dir(dir: &str) -> Vec<(String, i64)> {
     out
 }
 
+/// Lista un directorio y sus subdirectorios (hasta `depth` niveles).
+fn device_list_tree(dir: &str, depth: usize) -> Vec<(String, i64)> {
+    let mut out = Vec::new();
+    let mut queue: Vec<(String, usize)> = vec![(dir.to_string(), 0)];
+    let mut seen: Vec<String> = Vec::new();
+    while let Some((d, level)) = queue.pop() {
+        if level > depth || seen.contains(&d) {
+            continue;
+        }
+        seen.push(d.clone());
+        for (path, size) in device_list_dir(&d) {
+            if path.ends_with('/') {
+                continue;
+            }
+            out.push((path.clone(), size));
+            if let Some(parent) = path.rfind('/') {
+                queue.push((path[..parent].to_string(), level + 1));
+            }
+        }
+    }
+    out
+}
+
 /// Paquetes instalados que parecen de salud (Salud Responde,IMARY, …).
 fn find_health_packages(installed: &[String]) -> Vec<String> {
     installed
@@ -2696,6 +2720,190 @@ pub fn alert_candidates() -> Value {
 }
 
 // ========================================================================= //
+// 9-bis. Adjuntos binarios de las apps (P2.3)
+// ========================================================================= //
+
+/// Un fichero de media encontrado en el dispositivo.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MediaCandidate {
+    pub service: String,
+    pub path: String,
+    pub size: i64,
+    pub kind: String,
+    /// `true` si el fichero está cifrado (WhatsApp: clave del keystore).
+    pub encrypted: bool,
+}
+
+/// Clasifica un fichero por extensión: qué tipo de adjunto es.
+pub fn classify_media(path: &str) -> &'static str {
+    let ext = path
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "jpg" | "jpeg" | "png" | "gif" | "webp" | "heic" | "bmp" | "svg" => "image",
+        "mp4" | "mkv" | "mov" | "avi" | "webm" | "3gp" | "m4v" => "video",
+        "opus" | "ogg" | "oga" | "m4a" | "mp3" | "amr" | "aac" | "wav" | "flac" => "audio",
+        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "csv" | "rtf"
+        | "odt" | "ods" => "document",
+        "enc" | "crypt" | "crypt15" => "encrypted",
+        _ => "other",
+    }
+}
+
+/// ¿El fichero está cifrado (WhatsApp)?
+///
+/// Los adjuntos de WhatsApp se cifran con la misma clave del keystore que
+/// su almacén de mensajes: se pueden listar y copiar, pero no abrir.
+pub fn is_encrypted_media(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".enc")
+        || lower.ends_with(".crypt")
+        || lower.ends_with(".crypt15")
+        || lower.contains(".enc.")
+}
+
+/// Filtra y ordena los adjuntos: primero los que aportan, y como mucho
+/// `limit` (los ficheros diminutos son iconos y caché, no adjuntos).
+pub fn rank_media(items: Vec<MediaCandidate>, limit: usize) -> Vec<MediaCandidate> {
+    let limit = limit.clamp(1, 5000);
+    let mut out: Vec<MediaCandidate> = items
+        .into_iter()
+        .filter(|m| m.size > 1024 && m.kind != "other")
+        .collect();
+    out.sort_by(|a, b| {
+        b.size
+            .cmp(&a.size)
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    out.truncate(limit);
+    out
+}
+
+/// SHA-256 de un buffer (hex).
+pub fn sha256_bytes(data: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(data);
+    h.finalize().iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Directorios donde cada app guarda sus adjuntos.
+fn media_dirs() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("telegram", "/data/data/org.telegram.messenger/cache"),
+        ("telegram", "/data/data/org.telegram.messenger/photo"),
+        ("telegram", "/data/data/org.telegram.messenger/video"),
+        ("whatsapp", "/data/data/com.whatsapp/media"),
+        ("whatsapp_business", "/data/data/com.whatsapp.w4b/media"),
+        ("claude", "/data/data/com.anthropic.claude/files"),
+        ("claude", "/data/data/com.anthropic.claude/cache"),
+        ("claude", "/data/data/com.anthropic.claude/app_webview/Default/Cache"),
+    ]
+}
+
+/// Lista los adjuntos que hay en el dispositivo.
+///
+/// No se inventa nada: se listan rutas reales con su tamaño real.  Los
+/// ficheros cifrados se marcan como tales (no se abren).
+pub fn attachments(limit: usize) -> Value {
+    let limit = limit.clamp(1, 5000);
+    let mut found: Vec<MediaCandidate> = Vec::new();
+    for (service, dir) in media_dirs() {
+        for (path, size) in device_list_tree(dir, 2) {
+            let kind = classify_media(&path);
+            if kind == "other" {
+                continue;
+            }
+            let encrypted = is_encrypted_media(&path) || kind == "encrypted";
+            found.push(MediaCandidate {
+                service: service.to_string(),
+                path,
+                size,
+                kind: kind.to_string(),
+                encrypted,
+            });
+        }
+    }
+    let ranked = rank_media(found, limit);
+    let total_bytes: i64 = ranked.iter().map(|m| m.size).sum();
+    json!({
+        "ok": true,
+        "count": ranked.len(),
+        "total_bytes": total_bytes,
+        "attachments": ranked.iter().map(|m| json!({
+            "service": m.service,
+            "path": m.path,
+            "size": m.size,
+            "kind": m.kind,
+            "encrypted": m.encrypted,
+        })).collect::<Vec<Value>>(),
+        "note": "los adjuntos cifrados (WhatsApp) se listan y se copian, pero no se pueden abrir sin la clave del keystore",
+    })
+}
+
+/// Vault de adjuntos en el estado de MegaDaemon.
+pub fn attachments_vault_dir() -> String {
+    format!("{}/attachments", crate::cockpit_server::state_dir())
+}
+
+/// Copia los adjuntos al vault local y genera el manifiesto con su SHA-256.
+///
+/// El hash se calcula **en el dispositivo** (`sha256sum`) para no bajar el
+/// fichero por el tunnel sólo para hasharlo.
+pub fn copy_attachments(limit: usize) -> Value {
+    let limit = limit.clamp(1, 200);
+    let listing = attachments(limit);
+    let items: Vec<Value> = listing["attachments"].as_array().cloned().unwrap_or_default();
+    if items.is_empty() {
+        return json!({
+            "ok": true,
+            "copied": 0,
+            "vault": attachments_vault_dir(),
+            "manifest": Vec::<Value>::new(),
+        });
+    }
+    let vault = attachments_vault_dir();
+    let mut script = format!("mkdir -p {} 2>/dev/null; ", crate::android::sh_quote(&vault));
+    for it in &items {
+        let src = it["path"].as_str().unwrap_or("");
+        if src.is_empty() {
+            continue;
+        }
+        let service = it["service"].as_str().unwrap_or("misc");
+        let base = src.rsplit('/').next().unwrap_or("file");
+        let dst = format!("{}/{}/{}", vault, service, base);
+        script.push_str(&format!(
+            "mkdir -p {} 2>/dev/null; cp -f {} {} 2>/dev/null; echo \"COPIED|{}|$(stat -c %s {} 2>/dev/null)|$(sha256sum {} 2>/dev/null | cut -d' ' -f1)\"; ",
+            crate::android::sh_quote(&format!("{}/{}", vault, service)),
+            crate::android::sh_quote(src),
+            crate::android::sh_quote(&dst),
+            crate::android::sh_quote(src),
+            crate::android::sh_quote(&dst),
+            crate::android::sh_quote(src),
+        ));
+    }
+    let r = exec(&script, 300_000);
+    let mut manifest: Vec<Value> = Vec::new();
+    for line in r.stdout.lines() {
+        let p: Vec<&str> = line.split('|').collect();
+        if p.len() >= 4 && p[0] == "COPIED" {
+            manifest.push(json!({
+                "source": p[1],
+                "size": p[2].trim().parse::<i64>().unwrap_or(0),
+                "sha256": p[3].trim(),
+            }));
+        }
+    }
+    json!({
+        "ok": true,
+        "copied": manifest.len(),
+        "vault": vault,
+        "manifest": manifest,
+    })
+}
+
+// ========================================================================= //
 // 10. Definiciones MCP (para cablear el módulo al servidor)
 // ========================================================================= //
 
@@ -2745,6 +2953,22 @@ pub fn tool_definitions() -> Value {
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
+            "name": "messaging_attachments",
+            "description": "Lista los adjuntos binarios de las apps (media de Telegram, media cifrada de WhatsApp, imagenes de Claude) con su tamano, tipo y si estan cifrados.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "limit": { "type": "integer", "default": 50, "maximum": 5000 } }
+            }
+        },
+        {
+            "name": "messaging_copy_attachments",
+            "description": "Copia los adjuntos al vault local de MegaDaemon y genera el manifiesto con el SHA-256 de cada fichero (calculado en el dispositivo).",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "limit": { "type": "integer", "default": 20, "maximum": 200 } }
+            }
+        },
+        {
             "name": "messaging_alert_candidates",
             "description": "Mensajes pendientes relacionados con citas medicas o recordatorios con fecha proxima, con la fecha ya parseada.",
             "inputSchema": { "type": "object", "properties": {} }
@@ -2765,6 +2989,8 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         "messaging_whatsapp" => whatsapp(limit),
         "messaging_medical" => medical(limit),
         "messaging_ingest_all" => ingest_all(),
+        "messaging_attachments" => attachments(limit),
+        "messaging_copy_attachments" => copy_attachments(limit),
         "messaging_alert_candidates" => alert_candidates(),
         _ => return None,
     })
@@ -3339,10 +3565,87 @@ mod tests {
     }
 
     #[test]
+    fn clasifica_los_adjuntos_por_extension() {
+        assert_eq!(classify_media("/data/media/0/photo.jpg"), "image");
+        assert_eq!(classify_media("/data/media/0/video.mp4"), "video");
+        assert_eq!(classify_media("/data/media/0/voice.opus"), "audio");
+        assert_eq!(classify_media("/data/media/0/doc.pdf"), "document");
+        assert_eq!(classify_media("/data/media/0/msg.enc"), "encrypted");
+        assert_eq!(classify_media("/data/media/0/random.bin"), "other");
+    }
+
+    #[test]
+    fn detecta_los_adjuntos_cifrados_de_whatsapp() {
+        assert!(is_encrypted_media("/data/data/com.whatsapp/media/enc/IMG.enc"));
+        assert!(is_encrypted_media("/data/data/com.whatsapp/media/VID.crypt15"));
+        assert!(!is_encrypted_media("/data/data/org.telegram.messenger/cache/x.jpg"));
+    }
+
+    #[test]
+    fn ordena_los_adjuntos_y_filtra_los_insignificantes() {
+        let items = vec![
+            MediaCandidate {
+                service: "telegram".into(),
+                path: "/a.jpg".into(),
+                size: 5000,
+                kind: "image".into(),
+                encrypted: false,
+            },
+            MediaCandidate {
+                service: "whatsapp".into(),
+                path: "/b.jpg".into(),
+                size: 900_000,
+                kind: "image".into(),
+                encrypted: true,
+            },
+            MediaCandidate {
+                service: "telegram".into(),
+                path: "/icon.png".into(),
+                size: 120,
+                kind: "image".into(),
+                encrypted: false,
+            },
+            MediaCandidate {
+                service: "telegram".into(),
+                path: "/basura.bin".into(),
+                size: 900_000,
+                kind: "other".into(),
+                encrypted: false,
+            },
+        ];
+        let ranked = rank_media(items, 10);
+        assert_eq!(ranked.len(), 2, "se descartan los diminutos y los que no son media");
+        assert_eq!(ranked[0].path, "/b.jpg", "el mas grande primero");
+        assert!(ranked[0].encrypted);
+    }
+
+    #[test]
+    fn el_limite_corta_los_adjuntos() {
+        let items: Vec<MediaCandidate> = (0..10)
+            .map(|i| MediaCandidate {
+                service: "telegram".into(),
+                path: format!("/f{}.jpg", i),
+                size: 10_000 + i,
+                kind: "image".into(),
+                encrypted: false,
+            })
+            .collect();
+        assert_eq!(rank_media(items, 3).len(), 3);
+    }
+
+    #[test]
+    fn calcula_el_sha256_de_un_adjunto() {
+        assert_eq!(
+            sha256_bytes(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
     fn las_herramientas_declaran_su_esquema() {
         let defs = tool_definitions();
         let arr = defs.as_array().unwrap();
-        assert_eq!(arr.len(), 7);
+        assert_eq!(arr.len(), 9);
         for d in arr {
             assert!(d["name"].is_string());
             assert!(d["description"].is_string());
