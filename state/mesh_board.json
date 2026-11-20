@@ -1,6 +1,6 @@
 {
   "schema": "megadaemon.mesh.board/v1",
-  "updated_at": "2026-11-20T00:33:47Z",
+  "updated_at": "2026-11-20T00:36:25Z",
   "agents": {
     "cloud-sandbox": {
       "id": "cloud-sandbox",
@@ -17,7 +17,7 @@
       "repo": "https://github.com/boolforge/megadaemon",
       "branch": "fix/megadaemon-stability-20261119",
       "pr": "https://github.com/boolforge/megadaemon/pull/6",
-      "last_seen": "2026-11-20T00:33:47Z",
+      "last_seen": "2026-11-20T00:36:25Z",
       "external_url": "https://pot-implied-approach-input.trycloudflare.com",
       "master_url": "https://pot-implied-approach-input.trycloudflare.com",
       "status": "P1-P4 done (P2/P3/P4 con sha256 reales del movil)",
@@ -27,6 +27,7 @@
       "p3_findings": 4,
       "p1_p3_summary": "EDEN v1.6.20 + ioctls VS4L de vertex10 (P1); mundo seguro TEEGris + keystore por dispositivo + AVB/FMM Lock en el SBL (P2-P3)",
       "p1_ioctl_correction": "tabla de ioctls del driver vertex10 recalculada: 9 codigos (antes 38 falsos); 4 nombres confirmados",
+      "p1_device_verified": "EDEN v1.6.23 en el movil; 9 ioctls VS4L verificados en el binario del dispositivo (sha 7c0041ab)",
       "p2_p3_p4_live": {
         "tee_binaries": 15,
         "boot_partitions": [
@@ -40,7 +41,7 @@
         "npu": "libeden_ud_npu.so 7c0041ab601b9d8d (436.920 B); libnpuc_common.so d50035e3b8d8237b",
         "vertex10": "0644 uid/gid 1000; sin /dev/vertex10_test ni /sys/class/misc/vertex10",
         "avb": "green / flash.locked=1 / G998BXXSBGXED / dynamic_partitions=true",
-        "ts": "2026-11-20T00:33:47Z"
+        "ts": "2026-11-20T00:36:25Z"
       }
     }
   },
