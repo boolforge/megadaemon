@@ -85,7 +85,7 @@ const DEDUP_WINDOW: u64 = 3600;
 pub fn raise(rule: &str, severity: Severity, title: &str, body: &str, dedup_key: &str) -> String {
     let key = if dedup_key.is_empty() { rule } else { dedup_key };
     let ts = now();
-    let mut s = store().lock().unwrap();
+    let mut s = crate::lock_ok(store());
     let existing = s
         .iter_mut()
         .find(|a| a.dedup_key == key && ts.saturating_sub(a.last_seen) < DEDUP_WINDOW);
@@ -133,7 +133,7 @@ pub fn raise(rule: &str, severity: Severity, title: &str, body: &str, dedup_key:
 
 /// Acusa una alerta.
 pub fn acknowledge(id: &str) -> bool {
-    let mut s = store().lock().unwrap();
+    let mut s = crate::lock_ok(store());
     if let Some(a) = s.iter_mut().find(|a| a.id == id) {
         a.acknowledged = true;
         a.ack_at = Some(now());
@@ -145,7 +145,7 @@ pub fn acknowledge(id: &str) -> bool {
 
 /// Lista de alertas (opcionalmente filtrada por severidad mínima).
 pub fn list(min_severity: Option<Severity>, include_ack: bool, limit: usize) -> Value {
-    let s = store().lock().unwrap();
+    let s = crate::lock_ok(store());
     let mut items: Vec<Value> = s
         .iter()
         .filter(|a| include_ack || !a.acknowledged)
@@ -184,7 +184,7 @@ pub fn list(min_severity: Option<Severity>, include_ack: bool, limit: usize) -> 
 
 /// Estado del sistema de alertas.
 pub fn status() -> Value {
-    let s = store().lock().unwrap();
+    let s = crate::lock_ok(store());
     let crit = s.iter().filter(|a| a.severity == Severity::Crit && !a.acknowledged).count();
     let warn = s.iter().filter(|a| a.severity == Severity::Warn && !a.acknowledged).count();
     let info = s.iter().filter(|a| a.severity == Severity::Info && !a.acknowledged).count();
@@ -200,7 +200,7 @@ pub fn status() -> Value {
 
 /// Elimina las alertas acusadas (limpieza).
 pub fn prune() -> usize {
-    let mut s = store().lock().unwrap();
+    let mut s = crate::lock_ok(store());
     let before = s.len();
     s.retain(|a| !a.acknowledged);
     before - s.len()
@@ -376,7 +376,7 @@ mod tests {
         let a = raise("test.dedup", Severity::Info, "A", "b", "k1");
         let b = raise("test.dedup", Severity::Info, "A", "b", "k1");
         assert_eq!(a, b, "la misma clave debe devolver el mismo id");
-        let s = store().lock().unwrap();
+        let s = crate::lock_ok(store());
         let al = s.iter().find(|x| x.id == a).unwrap();
         assert_eq!(al.count, 2, "el contador debeCREMENTar");
     }

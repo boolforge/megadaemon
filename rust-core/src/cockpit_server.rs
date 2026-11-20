@@ -7,7 +7,7 @@
 use crate::{
     api_key,
     bindiff, binwalk_die, cfg_lifter, cirx_rtl, crypto_scan, deobfuscate, disasm, entropy,
-    freezer, frida_dbi, hw_mapper, kaitai_imhex, npu_bridge, npu_cv, pattern, pointers, providers,
+    freezer, frida_dbi, hw_mapper, kaitai_imhex, npu_bridge, npu_cv, pattern, peers, pointers, providers,
     rea_assistant, rom_locator, seere_v11, shm, snapshot, tile_vram, unifier, power_policy,
     accelerator_policy, npu_nnapi, mcp_server, sync, sync_web,
 };
@@ -1109,6 +1109,14 @@ fn handle_client(mut stream: TcpStream) {
                     }),
                 );
             }
+            "/peers" | "/api/peers" => {
+                // Descubrimiento de las instancias interconectadas: la
+                // instancia local primero, despues las declaradas en
+                // MEGADAEMON_PEERS o en <STATE_DIR>/peers.json. Cada par
+                // lleva el contrato {id, url, api_key_alias,
+                // capabilities, last_seen}; las claves NUNCA salen de aqui.
+                send_json(&mut stream, &peers::peers_snapshot());
+            }
             "/api/providers" => send_json(&mut stream, &providers::list_providers_redacted()),
             // v15 (W6): catálogo unificado de MODELOS y AGENTES/SERVICIOS.
             // La UI (vista "Reparto"/"Sistema") lo pinta tal cual.  La salud
@@ -1854,74 +1862,101 @@ fn handle_client(mut stream: TcpStream) {
             let action = body_json["action"].as_str().unwrap_or("status");
             let target = body_json["target"].as_str().unwrap_or("segacd").to_lowercase();
             let mutex = get_cockpit_state();
-            let mut st = mutex.lock().unwrap();
-            let valid_target = if st.runners.contains_key(&target) {
-                target.clone()
-            } else {
-                st.active_target.clone()
+            // ROBUSTEZ: el lock se toma sin veneno (lock_ok) y se suelta
+            // ANTES de cualquier trabajo pesado. Antes este bloque
+            // mantenia el mutex global cogido mientras llamaba a
+            // ensure_live_shm(), que tiene unwraps capaces de hacer panic:
+            // ese panic envenenaba el mutex global y a partir de ahi
+            // TODAS las peticiones del servidor morian.
+            let valid_target = {
+                let st = crate::lock_ok(&mutex);
+                if st.runners.contains_key(&target) {
+                    target.clone()
+                } else {
+                    st.active_target.clone()
+                }
             };
 
             match action {
                 "select" => {
-                    st.active_target = valid_target.clone();
+                    let (active_target, runners) = {
+                        let mut st = crate::lock_ok(&mutex);
+                        st.active_target = valid_target.clone();
+                        (st.active_target.clone(), st.runners.clone())
+                    };
                     send_json(
                         &mut stream,
                         &json!({
                             "status": "SELECTED",
                             "target": valid_target,
-                            "active_target": st.active_target,
-                            "runners": st.runners,
+                            "active_target": active_target,
+                            "runners": runners,
                             "message": format!("Target activo fijado a {} (Rust Zenith v13.0).", valid_target.to_uppercase())
                         }),
                     );
                 }
                 "launch" | "start" | "restart" => {
                     let fake_pid = 31000 + (valid_target.bytes().map(|b| b as u32).sum::<u32>() % 4000);
-                    if let Some(r) = st.runners.get_mut(&valid_target) {
-                        r.status = "ACTIVE".to_string();
-                        r.pid = Some(fake_pid);
-                    }
+                    // ensure_live_shm() FUERA del lock: es el unico punto de
+                    // este bloque que puede hacer panic (shm.rs) y no puede
+                    // hacerlo con el mutex global cogido.
                     ensure_live_shm(&valid_target);
+                    let runners = {
+                        let mut st = crate::lock_ok(&mutex);
+                        if let Some(r) = st.runners.get_mut(&valid_target) {
+                            r.status = "ACTIVE".to_string();
+                            r.pid = Some(fake_pid);
+                        }
+                        st.runners.clone()
+                    };
                     send_json(
                         &mut stream,
                         &json!({
                             "status": "ACTIVE",
                             "target": valid_target,
                             "pid": fake_pid,
-                            "runners": st.runners,
+                            "runners": runners,
                             "message": format!("Runner {} activo en bus SHM zero-copy (PID {}).", valid_target.to_uppercase(), fake_pid)
                         }),
                     );
                 }
                 "stop" => {
-                    if let Some(r) = st.runners.get_mut(&valid_target) {
-                        r.status = "STOPPED".to_string();
-                        r.pid = None;
-                    }
+                    let runners = {
+                        let mut st = crate::lock_ok(&mutex);
+                        if let Some(r) = st.runners.get_mut(&valid_target) {
+                            r.status = "STOPPED".to_string();
+                            r.pid = None;
+                        }
+                        st.runners.clone()
+                    };
                     send_json(
                         &mut stream,
                         &json!({
                             "status": "STOPPED",
                             "target": valid_target,
-                            "runners": st.runners,
+                            "runners": runners,
                             "message": format!("Runner {} detenido.", valid_target.to_uppercase())
                         }),
                     );
                 }
                 _ => {
-                    let cur = st.runners.get(&valid_target).cloned().unwrap_or(RunnerState {
-                        status: "READY".into(),
-                        pid: None,
-                        vla_hook: true,
-                    });
+                    let (active_target, runners, cur) = {
+                        let st = crate::lock_ok(&mutex);
+                        let cur = st.runners.get(&valid_target).cloned().unwrap_or(RunnerState {
+                            status: "READY".into(),
+                            pid: None,
+                            vla_hook: true,
+                        });
+                        (st.active_target.clone(), st.runners.clone(), cur)
+                    };
                     send_json(
                         &mut stream,
                         &json!({
                             "status": cur.status,
                             "target": valid_target,
-                            "active_target": st.active_target,
+                            "active_target": active_target,
                             "pid": cur.pid,
-                            "runners": st.runners
+                            "runners": runners
                         }),
                     );
                 }
@@ -2213,7 +2248,18 @@ pub fn run_server(port: u16) -> Result<(), String> {
                     continue;
                 }
                 thread::spawn(move || {
-                    handle_client(stream);
+                    // ROBUSTEZ: una panic en el manejo de una peticion no
+                    // puede tumbar la conexion a medias. Cortar la conexion
+                    // sin respuesta completa es exactamente lo que Cloudflare
+                    // reporta como "502 invalid or incomplete response".
+                    // Con catch_unwind la peticion se responde 500 y el
+                    // servidor sigue vivo para las demas.
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        handle_client(stream);
+                    }));
+                    if outcome.is_err() {
+                        eprintln!("[cockpit] panic contenido en una conexion (servidor sigue)");
+                    }
                     ACTIVE_CLIENTS.fetch_sub(1, Ordering::Relaxed);
                 });
             }

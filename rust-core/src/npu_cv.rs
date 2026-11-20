@@ -117,7 +117,7 @@ pub fn analyze_vla_frame_and_accel() -> NpuCvReport {
     // `first_frame_seen` se inicializa dentro del bloque (siempre se asigna).
     let first_frame_seen;
     let delta_l1 = {
-        let mut prev = prev_lock.lock().unwrap();
+        let mut prev = crate::lock_ok(&prev_lock);
         // v13.2 (HW-11): sin frame previo NO hay delta que medir.  Antes se
         // fabricaba 12,5 y `scene_changed: true`, es decir, se inventaba
         // movimiento en el primer análisis (y se disparaba el VLM de verdad).
@@ -304,7 +304,7 @@ pub fn start_continuous() {
             *slot = Some(h);
         }
     }
-    let mut st = vision_state().lock().unwrap();
+    let mut st = crate::lock_ok(vision_state());
     st.started_at_us = now_us();
 }
 
@@ -342,13 +342,13 @@ fn vision_loop() {
         // En modo crítico no se toca el frame: sólo se lee el contador.
         if pol.name == "critical" {
             if let Ok(hdr) = shm::read_shm_status() {
-                let mut st = vision_state().lock().unwrap();
+                let mut st = crate::lock_ok(vision_state());
                 st.last_frame_counter = hdr.frame_counter;
             }
             continue;
         }
         let rep = analyze_vla_frame_and_accel();
-        let mut st = vision_state().lock().unwrap();
+        let mut st = crate::lock_ok(vision_state());
         st.frames += 1;
         if rep.frame_torn {
             st.torn_frames += 1;
@@ -362,7 +362,7 @@ fn vision_loop() {
         drop(st);
         let now = now_us();
         if now.saturating_sub(last_measure_us) >= 2_000_000 {
-            let mut st = vision_state().lock().unwrap();
+            let mut st = crate::lock_ok(vision_state());
             let dt = (now - last_measure_us) as f64 / 1_000_000.0;
             let df = (st.frames - last_frames) as f64;
             st.computed_hz = if dt > 0.0 { (df / dt * 100.0).round() / 100.0 } else { 0.0 };
@@ -375,7 +375,7 @@ fn vision_loop() {
 /// Instantánea del estado del worker de visión.
 pub fn vision_status() -> VisionStatus {
     let (_, pol) = power_policy::current_policy();
-    let st = vision_state().lock().unwrap();
+    let st = crate::lock_ok(vision_state());
     VisionStatus {
         running: vision_run_flag().load(Ordering::SeqCst),
         frames: st.frames,

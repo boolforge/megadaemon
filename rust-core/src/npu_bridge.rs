@@ -286,7 +286,7 @@ const PROBE_TTL_SECS: u64 = 5;
 /// Sondeo de hardware con cache corto.
 pub fn probe_exynos_npu_cached() -> ExynosNpuTelemetry {
     let cache = PROBE_CACHE.get_or_init(|| Mutex::new((std::time::Instant::now() - std::time::Duration::from_secs(PROBE_TTL_SECS), probe_exynos_npu())));
-    let mut guard = cache.lock().unwrap();
+    let mut guard = crate::lock_ok(&cache);
     if guard.0.elapsed().as_secs() < PROBE_TTL_SECS {
         return guard.1.clone();
     }
