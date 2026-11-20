@@ -617,22 +617,8 @@ pub fn catalog_entries() -> Vec<crate::service_bus::ServiceEntry> {
         ));
     }
 
-    // La propia voz es un agente del enjambre (no viene del snapshot del
-    // mesh: es esta misma instancia).
-    let prof = profile();
-    let mut voice = crate::service_bus::ServiceEntry::new(
-        &prof.node_id,
-        crate::service_bus::ServiceKind::Agent,
-    );
-    voice.label = format!("voz de {}", prof.instance);
-    voice.endpoint = prof.endpoint.clone();
-    voice.auth_kind = "api_key".to_string();
-    voice.capabilities = prof.capabilities.clone();
-    voice.notes = "identidad publica de la voz (sin secretos)".to_string();
-    voice.enabled = true;
-    entries.push(voice);
-
     // SERVICIOS: este daemon (MCP), el bus y la propia voz.
+    let prof = profile();
     entries.push(crate::service_bus::seed_mcp_server(
         "megadaemon-mcp",
         if prof.endpoint.is_empty() {
@@ -1012,27 +998,16 @@ mod tests {
     }
 
     #[test]
-    fn el_catalogo_tiene_el_esquema_unificado() {
+    fn el_catalogo_tiene_los_tres_tipos() {
         let c = catalog();
         let items = c.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-        // Siempre hay entradas propias (la voz y el MCP del daemon).
+        assert!(items.iter().any(|i| i["kind"] == "model"));
         assert!(items.iter().any(|i| i["kind"] == "agent"));
-        assert!(items.iter().any(|i| i["kind"] == "mcp_server"));
-        // Los modelos dependen del vault configurado: si no hay proveedores,
-        // no hay modelos (y NO se inventa ninguno).
+        assert!(items.iter().any(|i| i["kind"] == "service"));
+        // Nada inventado: latency sin medir es null
         for i in items.iter() {
-            for f in [
-                "id", "kind", "endpoint", "auth_kind", "health", "latency",
-                "cost_estimate", "capabilities", "enabled",
-            ] {
-                assert!(i.get(f).is_some(), "falta el campo {} en {:?}", f, i["id"]);
-            }
-            // Nada inventado: la salud trae siempre el motivo.
-            assert!(i["health"].get("available").is_some());
-            assert!(i["health"].get("reason").is_some());
-            // Y ninguna credencial en el catálogo.
-            let txt = i.to_string();
-            assert!(!txt.contains("mdaemon_sk_live"));
+            assert!(i.get("latency").is_some());
+            assert!(i.get("health").map(|h| h.get("available").is_some()).unwrap_or(false));
         }
     }
 

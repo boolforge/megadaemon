@@ -24,17 +24,24 @@ de maestro de la web y del estado compartido. Tu trabajo tiene dos mitades:
   (B) VOLUMETRIC BROADCAST: TODO lo que descubras debe llegar a TODOS los nodos.
 
 ## 1. Conectar (esto es lo primero, no preguntes nada)
-Endpoint MCP:
-    https://webpage-ultram-please-communicate.trycloudflare.com/mcp
-Cabeceras obligatorias en cada POST:
+Endpoint MCP (el túnel público ROTA de URL; no lo des por bueno):
+    <PEGAR_AQUI: la URL vigente del túnel> + /mcp
+    Si no la tienes: en el móvil, /data/local/tmp/megadaemon/tunnel.url
+    (ruta estable dentro del móvil: http://127.0.0.1:9090/mcp)
+Cabeceras obligatorias en CADA POST (las dos, siempre):
     X-API-Key: <PEGAR_AQUI: MEGADAEMON_API_KEY>
-    X-Seere-Auth-Token: <PEGAR_AQUI: MEGADAEMON_COCKPIT_TOKEN>   # sólo si vas a escribir
+    X-Seere-Auth-Token: <PEGAR_AQUI: MEGADAEMON_COCKPIT_TOKEN>
     Content-Type: application/json
+    OJO, medido: con SÓLO X-API-Key el MCP devuelve 403
+    {"error":"unauthorized","hint":"falta la cabecera X-Seere-Auth-Token"}.
+    El token de sesión es obligatorio también para tools/list (lecturas).
+    Si el MCP empieza a dar 403, el token caducó (rota en cada reinicio del
+    daemon): canjea de nuevo (ver §1.b).
 El body es JSON-RPC 2.0 puro:
     {"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
     {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"system_overview","arguments":{}}}
 Si prefieres un cliente ya hecho, el repo trae rust-core/tools/mdmcp.py:
-    export MEGADAEMON_URL="https://webpage-ultram-please-communicate.trycloudflare.com"
+    export MEGADAEMON_URL="<URL vigente del túnel>"
     export MEGADAEMON_API_KEY="…"; export MEGADAEMON_AUTH_TOKEN="…"
     python3 mdmcp.py tools ; python3 mdmcp.py call system_overview '{}'
 PRIMER MOVIMIENTO OBLIGATORIO: tools/list completo, y luego system_overview.
@@ -164,8 +171,21 @@ Empieza YA: tools/list y system_overview, y muéstramelos antes de tocar nada.
    hace falta acceso de escritura al repo.
 3. **Si el agente externo no tiene MCP**: puede hablar HTTP con `curl` contra el mismo
    endpoint `/mcp` (JSON-RPC 2.0 crudo); `rust-core/tools/mdmcp.py` es sólo una envoltura.
-4. **El `X-Seere-Auth-Token` sólo hace falta para escribir** (fs_write, POST). Para
-   `tools/list` y las lecturas, basta la API key.
+4. **Las DOS cabeceras son obligatorias en cada POST** (incluido `tools/list`):
+   el gate de API key y el de token de sesión son **independientes** y el
+   `auth_ok()` del cockpit (`rust-core/src/cockpit_server.rs:111-121`) sólo
+   acepta `X-Seere-Auth-Token` ⇒ **con sólo `X-API-Key` → 403**. El token de
+   sesión se obtiene con el canje (§1.b) y **rota en cada reinicio del daemon**
+   ⇒ si empieza a fallar, canjea otra vez (no lo reintentes con la API key).
+
 5. **Verificar que el prompt funcionó**: tras su primer mensaje debe haber aparecido
    `/data/local/tmp/megadaemon/state/agents/<nombre>.json` y al menos una línea en
    `sync/re_<nombre>.ndjson` y en `mesh_journal.ndjson`.
+## 1.b. Canje de credenciales (si el MCP da 403)
+    POST <URL>/api/session/exchange
+    Content-Type: application/json
+    {"api_key":"<tu API key>"}          # la key va EN EL CUERPO, no sólo en la cabecera
+    => 200 {"token":"<token de sesion>","expires_in":...}
+Usa ese `token` como `X-Seere-Auth-Token`. Si da 403 con la key correcta, la
+key no es la vigente: no la pegues en ningun sitio, pidela por el bus.
+
