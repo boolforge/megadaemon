@@ -422,6 +422,18 @@ for name, spec in servers.items():
         headers["X-Seere-Auth-Token"] = tok
         changed = True
 if not changed:
+    # El token ya estaba bien, pero el fichero puede tener el modo o el
+    # propietario equivocados (lo escribe root): la app debe poder leerlo
+    # y gestionarlo.
+    try:
+        st = os.stat("/data/user/0/com.agy")
+        os.chown(cfg, st.st_uid, st.st_gid)
+    except Exception:
+        pass
+    try:
+        os.chmod(cfg, 0o600)
+    except Exception:
+        pass
     sys.exit(0)
 tmp = cfg + ".tmp"
 with open(tmp, "w", encoding="utf-8") as f:
