@@ -1946,36 +1946,40 @@ fn handle_client(mut stream: TcpStream) {
                     );
                 }
                 "stop" => {
-                    if let Some(r) = st.runners.get_mut(&valid_target) {
-                        r.status = "STOPPED".to_string();
-                        r.pid = None;
-                    }
-                    send_json(
-                        &mut stream,
-                        &json!({
+                    // Lock corto por rama: el guard NO cruza `send_json`.
+                    let payload = {
+                        let mut st = mutex.lock().unwrap_or_else(|e| e.into_inner());
+                        if let Some(r) = st.runners.get_mut(&valid_target) {
+                            r.status = "STOPPED".to_string();
+                            r.pid = None;
+                        }
+                        json!({
                             "status": "STOPPED",
                             "target": valid_target,
                             "runners": st.runners,
                             "message": format!("Runner {} detenido.", valid_target.to_uppercase())
-                        }),
-                    );
+                        })
+                    };
+                    send_json(&mut stream, &payload);
                 }
                 _ => {
-                    let cur = st.runners.get(&valid_target).cloned().unwrap_or(RunnerState {
-                        status: "READY".into(),
-                        pid: None,
-                        vla_hook: true,
-                    });
-                    send_json(
-                        &mut stream,
-                        &json!({
+                    // Lock corto por rama: el guard NO cruza `send_json`.
+                    let payload = {
+                        let st = mutex.lock().unwrap_or_else(|e| e.into_inner());
+                        let cur = st.runners.get(&valid_target).cloned().unwrap_or(RunnerState {
+                            status: "READY".into(),
+                            pid: None,
+                            vla_hook: true,
+                        });
+                        json!({
                             "status": cur.status,
                             "target": valid_target,
                             "active_target": st.active_target,
                             "pid": cur.pid,
                             "runners": st.runners
-                        }),
-                    );
+                        })
+                    };
+                    send_json(&mut stream, &payload);
                 }
             }
         }
