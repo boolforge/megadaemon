@@ -109,24 +109,62 @@ impl ApiKeyConfig {
     /// Igual que [`load`], pero con el flag `forced` explícito (testeable
     /// sin tocar el entorno).
     pub fn load_with(state_dir: &str, forced: bool) -> Self {
+        let env_key = std::env::var("MEGADAEMON_API_KEY").ok();
+        Self::load_with_env(state_dir, forced, env_key)
+    }
+
+    /// Igual que [`load_with`], pero con la key del entorno pasada de forma
+    /// explícita, para poder probar la resolución **sin mutar el entorno del
+    /// proceso** (los tests que usan `set_var` se pisan entre hilos).
+    ///
+    /// v16 · **P0 de disponibilidad**: antes, si el entorno traía una key
+    /// válida, el daemon **ignoraba el fichero de estado** y no lo
+    /// sincronizaba.  Resultado medido en el S21: el supervisor arrancaba con
+    /// `MEGADAEMON_API_KEY` antigua mientras `state/megadaemon_api.key` contenía
+    /// otra ⇒ el daemon servía la antigua y **quien copiaba la del fichero
+    /// recibía 403 "API key invalida"** sin ninguna pista de por qué (pasó dos
+    /// veces seguidas con la flota completa).  Ahora el entorno manda **y**
+    /// el fichero se sincroniza con él: una sola fuente de verdad.
+    pub fn load_with_env(state_dir: &str, forced: bool, env_key: Option<String>) -> Self {
         let extra_keys = load_extra_keys(state_dir);
-        if let Ok(k) = std::env::var("MEGADAEMON_API_KEY") {
-            let k = k.trim().to_string();
-            // v14: el env manda sólo si contiene una key REAL.  Antes una
-            // basura de 5 caracteres en `megadaemon.env` (p. ej. "none")
-            // tapaba la key buena del fichero de estado => el daemon
-            // rechazaba a todos con "API key invalida" y el puente inyectaba
-            // la misma basura.  Mismo criterio de longitud que el fichero.
-            if k.len() >= 16 {
-                return Self { key: k, extra_keys, enabled: true, forced };
-            }
-        }
         let path = format!("{}/megadaemon_api.key", state_dir);
-        if let Ok(existing) = fs::read_to_string(&path) {
-            let k = existing.trim().to_string();
-            if k.len() >= 16 {
-                return Self { key: k, extra_keys, enabled: true, forced };
+        let file_key = fs::read_to_string(&path)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| s.len() >= 16);
+        // v14: el env manda sólo si contiene una key REAL.  Antes una
+        // basura de 5 caracteres en `megadaemon.env` (p. ej. "none")
+        // tapaba la key buena del fichero de estado => el daemon
+        // rechazaba a todos con "API key invalida" y el puente inyectaba
+        // la misma basura.  Mismo criterio de longitud que el fichero.
+        let env_key = env_key.map(|s| s.trim().to_string()).filter(|s| s.len() >= 16);
+
+        if let Some(k) = env_key {
+            if let Some(fk) = file_key.as_deref() {
+                if !constant_time_eq(fk, &k) {
+                    eprintln!(
+                        "[api_key] AVISO: MEGADAEMON_API_KEY y {}/megadaemon_api.key tienen keys \
+                         distintas (env fnv1a64={}, fichero fnv1a64={}).  Manda el entorno y el \
+                         fichero se sincroniza: es la causa del 403 'API key invalida'.",
+                        state_dir,
+                        fingerprint(&k),
+                        fingerprint(fk)
+                    );
+                }
             }
+            // Sincroniza el fichero con el entorno (fuente de verdad del
+            // supervisor) para que no vuelvan a divergir.
+            if file_key.as_deref() != Some(k.as_str()) {
+                if fs::create_dir_all(state_dir).is_ok()
+                    && fs::write(&path, format!("{}\n", k)).is_ok()
+                {
+                    set_mode_600(&path);
+                }
+            }
+            return Self { key: k, extra_keys, enabled: true, forced };
+        }
+        if let Some(k) = file_key {
+            return Self { key: k, extra_keys, enabled: true, forced };
         }
         if forced {
             // A-04 (P0): `forced` sin key NO puede significar "sirve sin
@@ -685,7 +723,7 @@ mod tests {
         assert!(key.starts_with("mdaemon_sk_live_"));
         assert_eq!(key.len(), "mdaemon_sk_live_".len() + 64);
 
-        let cfg = ApiKeyConfig::load(&dir);
+        let cfg = ApiKeyConfig::load_with_env(&dir, false, None);
         assert!(cfg.accepts(&key), "la clave acuñada debe autorizarse");
         assert!(cfg.accepts("mdaemon_sk_live_principal"), "la principal sigue viva");
 
@@ -695,7 +733,7 @@ mod tests {
         // test rojo desde antes de A-04 (verificado contra HEAD sin mis cambios).
         let target = &key[..20];
         assert!(revoke_extra_key(&dir, target).unwrap());
-        let cfg2 = ApiKeyConfig::load(&dir);
+        let cfg2 = ApiKeyConfig::load_with_env(&dir, false, None);
         assert!(!cfg2.accepts(&key), "la clave revocada ya no autoriza");
         assert!(
             cfg2.accepts("mdaemon_sk_live_principal"),
@@ -730,7 +768,7 @@ mod tests {
         assert!(!revoke_extra_key(&dir, "mdaemon_sk_live_99999999").unwrap());
         let after = fs::read_to_string(extra_keys_path(&dir)).unwrap();
         assert_eq!(before, after);
-        assert!(ApiKeyConfig::load(&dir).accepts(&key));
+        assert!(ApiKeyConfig::load_with_env(&dir, false, None).accepts(&key));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -767,7 +805,7 @@ mod tests {
             .join(format!("md_a04_{}", random_hex(6)))
             .to_string_lossy()
             .to_string();
-        let cfg = ApiKeyConfig::load_with(&dir, true);
+        let cfg = ApiKeyConfig::load_with_env(&dir, true, None);
         assert!(cfg.enabled, "con forced la key autogenerada debe activar el middleware");
         assert!(cfg.forced);
         assert!(cfg.key.len() >= 16);
@@ -784,9 +822,64 @@ mod tests {
             .join(format!("md_a04b_{}", random_hex(6)))
             .to_string_lossy()
             .to_string();
-        let cfg = ApiKeyConfig::load_with(&dir, false);
+        let cfg = ApiKeyConfig::load_with_env(&dir, false, None);
         assert!(!cfg.enabled);
         assert!(cfg.key.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// v16 · P0 de disponibilidad: el entorno y el fichero de estado pueden
+    /// llevar keys distintas.  El daemon servía la del entorno y **nadie**
+    /// avisaba de que la del fichero (la que se copia a mano) ya no valía
+    /// ⇒ 403 "API key invalida" sin diagnóstico.  Ahora el entorno manda **y**
+    /// el fichero se sincroniza.
+    #[test]
+    fn el_entorno_sincroniza_el_fichero_y_evita_el_403_por_divergencia() {
+        let dir = tmp_dir("sync");
+        let de_fichero = "mdaemon_sk_live_fichero_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let del_entorno = "mdaemon_sk_live_entorno_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        fs::write(format!("{}/megadaemon_api.key", &dir), format!("{}\n", de_fichero)).unwrap();
+
+        let cfg = ApiKeyConfig::load_with_env(&dir, false, Some(del_entorno.to_string()));
+        assert_eq!(cfg.key, del_entorno, "manda el entorno (lo que impone el supervisor)");
+        assert!(cfg.accepts(&del_entorno));
+
+        // El fichero queda sincronizado con el entorno: una sola fuente.
+        let despues = fs::read_to_string(format!("{}/megadaemon_api.key", &dir)).unwrap();
+        assert_eq!(despues.trim(), del_entorno, "el fichero debe quedar sincronizado");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Sin entorno, manda el fichero y **no** se toca.
+    #[test]
+    fn sin_entorno_manda_el_fichero_y_no_se_modifica() {
+        let dir = tmp_dir("nofich");
+        let de_fichero = "mdaemon_sk_live_fichero_cccccccccccccccccccccccccccccccc";
+        fs::write(format!("{}/megadaemon_api.key", &dir), format!("{}\n", de_fichero)).unwrap();
+
+        let cfg = ApiKeyConfig::load_with_env(&dir, false, None);
+        assert_eq!(cfg.key, de_fichero);
+        assert!(cfg.accepts(&de_fichero));
+
+        let despues = fs::read_to_string(format!("{}/megadaemon_api.key", &dir)).unwrap();
+        assert_eq!(despues.trim(), de_fichero, "no se reescribe si no hay env");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Una basura corta en el entorno (p. ej. "none") **no** puede tapar la
+    /// key buena del fichero (regresión de v14 que volvió a aparecer).
+    #[test]
+    fn una_basura_corta_en_el_entorno_no_tapa_la_key_del_fichero() {
+        let dir = tmp_dir("basura");
+        let de_fichero = "mdaemon_sk_live_fichero_dddddddddddddddddddddddddddddddd";
+        fs::write(format!("{}/megadaemon_api.key", &dir), format!("{}\n", de_fichero)).unwrap();
+
+        let cfg = ApiKeyConfig::load_with_env(&dir, false, Some("none".to_string()));
+        assert_eq!(cfg.key, de_fichero, "la basura del env no puede tapar la key buena");
+        assert!(cfg.accepts(&de_fichero));
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
