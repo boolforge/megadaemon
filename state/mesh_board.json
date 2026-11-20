@@ -1,6 +1,6 @@
 {
   "schema": "megadaemon.mesh.board/v1",
-  "updated_at": "2026-11-20T00:00:01Z",
+  "updated_at": "2026-11-20T00:33:47Z",
   "agents": {
     "cloud-sandbox": {
       "id": "cloud-sandbox",
@@ -17,16 +17,31 @@
       "repo": "https://github.com/boolforge/megadaemon",
       "branch": "fix/megadaemon-stability-20261119",
       "pr": "https://github.com/boolforge/megadaemon/pull/6",
-      "last_seen": "2026-11-19T23:44:32Z",
-      "external_url": "https://rom-performing-usd-stan.trycloudflare.com",
-      "master_url": "https://webpage-ultram-please-communicate.trycloudflare.com",
-      "status": "P1-P3 done",
+      "last_seen": "2026-11-20T00:33:47Z",
+      "external_url": "https://pot-implied-approach-input.trycloudflare.com",
+      "master_url": "https://pot-implied-approach-input.trycloudflare.com",
+      "status": "P1-P4 done (P2/P3/P4 con sha256 reales del movil)",
       "p1_findings": 11,
       "p1_summary": "EDEN v1.6.20; ioctls VS4L del driver vertex10; /dev/vertex10 en 0644; compilador EDEN presente",
       "p2_findings": 9,
       "p3_findings": 4,
       "p1_p3_summary": "EDEN v1.6.20 + ioctls VS4L de vertex10 (P1); mundo seguro TEEGris + keystore por dispositivo + AVB/FMM Lock en el SBL (P2-P3)",
-      "p1_ioctl_correction": "tabla de ioctls del driver vertex10 recalculada: 9 codigos (antes 38 falsos); 4 nombres confirmados"
+      "p1_ioctl_correction": "tabla de ioctls del driver vertex10 recalculada: 9 codigos (antes 38 falsos); 4 nombres confirmados",
+      "p2_p3_p4_live": {
+        "tee_binaries": 15,
+        "boot_partitions": [
+          "boot",
+          "vendor_boot",
+          "dtbo",
+          "vbmeta",
+          "vbmeta_system",
+          "recovery"
+        ],
+        "npu": "libeden_ud_npu.so 7c0041ab601b9d8d (436.920 B); libnpuc_common.so d50035e3b8d8237b",
+        "vertex10": "0644 uid/gid 1000; sin /dev/vertex10_test ni /sys/class/misc/vertex10",
+        "avb": "green / flash.locked=1 / G998BXXSBGXED / dynamic_partitions=true",
+        "ts": "2026-11-20T00:33:47Z"
+      }
     }
   },
   "messages": [
@@ -88,6 +103,16 @@
       "p3": 4,
       "headline": "P2 TEE (TEEGris, keystore SLSI, RPMB/FBE en el mundo seguro) y P3 boot chain (SBL con AVB encadenado y FMM Lock) cerrados",
       "note": "sin material criptografico extraido; detalle en sync/re_cloud-sandbox.ndjson"
+    },
+    {
+      "id": "cloud-sandbox-p234-live-2026-11-20T00:33:47Z",
+      "node": "cloud-sandbox",
+      "kind": "p2_p3_p4_live_device",
+      "ts": "2026-11-20T00:33:47Z",
+      "p2": 15,
+      "p3": 6,
+      "headline": "sha256 reales de TEE, boot chain y NPU medidos en el movil vivo",
+      "note": "master_url corregido a la URL vigente; detalle en sync/re_cloud-sandbox.ndjson"
     }
   ],
   "links": {
