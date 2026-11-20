@@ -259,18 +259,71 @@ framework Phoebus se encarga. Eso encaja con que **12 apps tengan
 `com.samsung.android.incallui` y `com.samsung.android.callassistant`), y con
 que el permiso **esté concedido a `uid=1000`**.
 
-## 8. El formato OMC: ataque fallido (y por qué da igual)
 
-- Prefijo común de los 126 `cscfeature.xml`: **10 bytes** (`2f2729b7 dac1ac37 e4`);
-  a partir del byte 11 divergen.
-- **No es XOR de 1 byte** (probados los 256 contra gzip/zstd/zlib/xz/zip/bzip2
-  en 24 offsets: ningún magic). Índice de coincidencia **0,0038** (aleatorio) y
-  **sin periodicidad** para claves de 2/4/8/16 bytes ⇒ cifrado de flujo, no
-  XOR con clave repetida. Las longitudes de payload (1100 / 621 / 413 B) **no**
-  son múltiplos de 16 ⇒ no es AES-CBC.
-- **Pero no hace falta descifrarlo**: el móvil ya tiene los 126 CSC en su forma
-  final ⇒ para cambiar de CSC se copia el directorio (o se cambia
-  `mps_code.dat`), sin tocar el OMC.
+## 8. El formato OMC: **descifrado** (rotación + XOR posicional)
+
+El nodo RE lo cerró (referencia `soulr344/OMCDecoder`, `include.h`):
+
+```
+OMC = gzip(XML) con el envoltorio:  out[i] = rotl(b[i], SHIFTS[i%256]) XOR SALTS[i%256]
+```
+La **clave gira cada 256 bytes** (por eso el índice de coincidencia salía
+aleatorio y no había periodicidad). **No es XOR simple ni AES.**
+
+**Portado a Rust** en `rom_migration.rs` (sin crates nuevos: `flate2` ya
+estaba en `Cargo.toml`):
+- `omc_decode()` / `omc_encode()` — el envoltorio, byte a byte.
+- `omc_decode_gzip()` / `omc_encode_gzip()` — OMC ↔ XML plano.
+- `csc_feature_get()` / `csc_features()` / `csc_feature_set()` — leer y
+  escribir banderas `<CscFeature_X>VALOR</CscFeature_X>`.
+- `omc_feature_patch_plan()` — el plan completo de parche.
+
+**Verificado contra el fichero real del móvil** (no contra un fixture): el
+`cscfeature.xml` de AMO (1.109 B, sha16 `ef110140f7bb95e1`) decodifica a
+`<SalesCode>AMO</SalesCode>`, `<Country>SPAIN</Country>`,
+`<CountryISO>ES</CountryISO>`; y `encode(decode(x)) == x` en los **126/126**
+CSC.
+
+### Qué bandera hay que poner (dato duro)
+
+`CscFeature_VoiceCall_ConfigRecording` **sólo existe en 19 de los 126 CSC**:
+
+| Valor | CSC |
+|---|---|
+| `RecordingAllowed` (sin aviso) | **THL, ILO, XXV**, BKD, BTC, CAL, EGY, ILP, LYS, MYM, NPL, SEK, SLK, TUN |
+| `RecordingAllowedByMenu,disclaimer_latin` | CHO, EON, GTO, TPA |
+| `RecordingAllowedByMenu,disclaimer_india` | INU |
+| **ausente** | **AMO** (y 106 más) ⇒ hoy no hay grabación nativa |
+
+### El parche mínimo (y por qué NO cambiar el CSC entero)
+
+AMO = **Orange España** (`<Country>SPAIN</Country>`, `contents.db` →
+`config-com.orange.update.xml`, OOBE `com.aura.oobe.samsung`). Cambiar
+AMO→THL/ILO/XXV **no es cambiar un flag**: cambia el perfil de operador
+(OOBE, permisos por defecto, APN/VoLTE, apps del carrier) ⇒ te puedes quedar
+sin la configuración de Orange.
+
+⇒ **Lo correcto es parchear el `cscfeature.xml` de AMO** añadiéndole el
+`<CscFeature_VoiceCall_ConfigRecording>RecordingAllowed</CscFeature_VoiceCall_ConfigRecording>`
+que hoy no existe (así lo decide el XML de THL/ILO/XXV).
+
+**Pasos exactos** (`omc_feature_patch_plan()`):
+1. Copia de seguridad del fichero.
+2. Decodificar → insertar el flag → re-codificar.
+3. **`/optics` está en solo-lectura** ⇒ `mount -o remount,rw /optics` (root) o
+   un **módulo Magisk systemless** que haga bind-mount del fichero parcheado.
+4. Escribir el fichero parcheado.
+5. **Actualizar `contents.db` a la vez**: guarda el `fileSize` de cada fichero
+   del CSC ⇒ si el tamaño no cuadra, el inventario del CSC no cuadra.
+6. Reiniciar y comprobar.
+7. Revertir = restaurar fichero + `fileSize` original + reiniciar.
+
+**Aviso**: el magic `2f2729b7` **no está en ninguno de los 2.476 ficheros del
+firmware** ⇒ el decodificador **no está en el móvil** (está en las
+herramientas de build de Samsung). El consumidor en runtime (el que aplica el
+flag) hay que buscarlo entre los que **leen** la feature: `services.jar`
+(29 hits), `vsimmanager.jar` (428), `telephony-common.jar` (19),
+`imsmanager.jar` (3).
 
 ## 9. Cambio de CSC: datos reales y riesgo
 
