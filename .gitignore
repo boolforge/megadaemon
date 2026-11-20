@@ -34,3 +34,8 @@ _IA_Cuarentena/
 
 # registro local de pares: puede contener claves de peer -> fuera del repo
 state/peers.json
+
+# secretos (API key, token de sesion) — SIEMPRE fuera del repo, nunca aqui
+md-secrets/
+*.md_key
+*.md_token
