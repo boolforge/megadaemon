@@ -550,7 +550,6 @@ pub const KEYSTORE_DATA_DIR: &str = "/data/misc/keystore";
 /// de las particiones no son utilizables; los **datos** de las claves, en
 /// cambio, son zona privada: no salen del dispositivo y no son portables
 /// (están atados al TEE).
-/// cambio, son zona privada: no salen del dispositivo (viven en el TEE).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KeystorePlan {
     /// Ruta del motor de claves.
@@ -1580,7 +1579,6 @@ mod tests {
             }
         };
         let rep = verify_at_destination(&plan, &lookup);
-        let rep = verify_at_destination(&plan, lookup);
         assert_eq!(rep.verified, 1);
         assert_eq!(rep.mismatched.len(), 1);
         assert_eq!(rep.missing, vec!["c.txt".to_string()]);
