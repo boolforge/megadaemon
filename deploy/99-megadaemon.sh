@@ -380,6 +380,13 @@ sync_antigravity_bridge() {
     [ -x "$PY_BIN" ] || return 0
     tok=$(cat "$PREFIX/state/cockpit_token" 2>/dev/null)
     [ -n "$tok" ] || return 0
+    # Solo se toca (y solo se lanza python) si el token ha cambiado: en el
+    # movil va justo de RAM y no queremos procesos extra por minuto.
+    cur=$(printf "%s" "$tok" | sha256sum 2>/dev/null | cut -c1-16)
+    prev=$(cat "$PREFIX/state/agy_bridge.sha16" 2>/dev/null)
+    if [ -n "$cur" ] && [ "$cur" = "$prev" ]; then
+        return 0
+    fi
     "$PY_BIN" - "$ANTIGRAVITY_CFG" "$tok" <<'PYEOF' 2>/dev/null
 import json, os, sys
 cfg, tok = sys.argv[1], sys.argv[2]
@@ -416,6 +423,7 @@ except Exception:
     pass
 os.chmod(cfg, 0o600)
 PYEOF
+    [ -n "$cur" ] && printf "%s" "$cur" > "$PREFIX/state/agy_bridge.sha16" 2>/dev/null
     return 0
 }
 
@@ -527,6 +535,7 @@ while true; do
     else
         i=0
         ensure_web_bridge
+        sync_antigravity_bridge
         ensure_tunnel "$PORT" "$WEB_TUNNEL_LOG" "$WEB_TUNNEL_URL_FILE" "web" 1
         ensure_tunnel 8765 "$MCP_TUNNEL_LOG" "$MCP_TUNNEL_URL_FILE" "mcp-legacy" 0 \
     /data/data/com.termux/files/home/android-mcp/cloudflared.log
