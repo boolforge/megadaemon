@@ -33,6 +33,7 @@ pub mod deobfuscate;
 pub mod dex_decompile;
 pub mod disasm;
 pub mod entropy;
+pub mod env_introspect;
 pub mod freezer;
 pub mod frida_dbi;
 pub mod git_ops;
