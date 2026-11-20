@@ -1,6 +1,6 @@
 {
   "schema": "megadaemon.mesh.board/v1",
-  "updated_at": "2026-11-20T03:32:16Z",
+  "updated_at": "2026-11-20T03:34:19Z",
   "agents": {
     "cloud-sandbox": {
       "id": "cloud-sandbox",
@@ -17,10 +17,10 @@
       "repo": "https://github.com/boolforge/megadaemon",
       "branch": "fix/megadaemon-stability-20261119",
       "pr": "https://github.com/boolforge/megadaemon/pull/6",
-      "last_seen": "2026-11-20T03:32:16Z",
+      "last_seen": "2026-11-20T03:34:19Z",
       "external_url": "https://pot-implied-approach-input.trycloudflare.com",
       "master_url": "https://pot-implied-approach-input.trycloudflare.com",
-      "status": "P4 RESUELTO (OMC descifrado, 126/126 round-trip) + 19 CSC con grabacion + tool en tools/omc_codec.py",
+      "status": "Manual §1-§10 + evidencia visual del inventario + AMO=Orange ES + OMC descifrado",
       "p1_findings": 11,
       "p1_summary": "EDEN v1.6.20; ioctls VS4L del driver vertex10; /dev/vertex10 en 0644; compilador EDEN presente",
       "p2_findings": 9,
@@ -287,6 +287,14 @@
       "ts": "2026-11-20T03:32:16Z",
       "headline": "P4 RESUELTO: formato OMC descifrado (rot+XOR posicional + gzip); AMO NO tiene grabacion; THL/ILO/XXV si",
       "note": "tools/omc_codec.py (decode/encode/feature) + docs/ANDROID_EXYNOS2100_FINDINGS.md §10"
+    },
+    {
+      "id": "cloud-sandbox-apps-2026-11-20T03:34:19Z",
+      "node": "cloud-sandbox",
+      "kind": "app_inventory_visual_evidence",
+      "ts": "2026-11-20T03:34:19Z",
+      "headline": "Evidencia visual del inventario real (Apk Extractor) + AMO = Orange Espana (contents.db)",
+      "note": "docs/assets/apps_apk_extractor_2026-11-20.jpg"
     }
   ],
   "links": {

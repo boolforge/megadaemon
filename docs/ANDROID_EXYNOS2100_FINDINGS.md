@@ -306,6 +306,31 @@ pm path com.samsung.android.app.contacts
 dumpsys package com.samsung.android.app.contacts | grep versionName
 ```
 
+### 5.1 Evidencia visual del inventario (y un dato que conecta con el CSC)
+
+![Inventario real de apps en el S21 Ultra](../assets/apps_apk_extractor_2026-11-20.jpg)
+
+* `docs/assets/apps_apk_extractor_2026-11-20.jpg` — captura del **Apk Extractor** del propio
+  móvil (lista de apps instaladas, sección M). sha256 `d912fb28f3897722c3c4598127b9befaccce5c2b0182633a6142397c28055c85`.
+* **Lo que se ve**: `Manual Selector` (`com.aura.oobe.samsung`) · `Marina` (`g.pyn.fi`) ·
+  `MarinaPatcher` (`ru.drjmwdme.cgwbfzijr`, nombre ofuscado) · `Markor` · `Marxist Tamil` ·
+  `Maskan` · `MasterClass` (`com.yanka.mc`) · `Mastodon` · `Maps` ·
+  `Mantenimiento del dispositivo` (`com.samsung.android.ool`).
+
+**Hallazgo que conecta §5 con §6 y §10 (alto)**: `com.aura.oobe.samsung` = "Manual Selector"
+es la app de OOBE del **operador**, y en `contents.db` (§P3) aparecen sus ficheros **de AMO**:
+`/prism/etc/carriers/single/AMO/sysconfig/config-com.orange.update.xml` ·
+`.../config-com.aura.oobe.samsung.xml` · `.../default-permissions/privapp-permissions-com.orange.update.xml`.
+⇒ **AMO = Orange España**, coherente con lo que dice el XML descifrado del CSC
+(`<Country>SPAIN</Country>`, `<CountryISO>ES</CountryISO>`) y con el CSC propietario
+(`com.orange.update`).
+⇒ **Aviso para el cambio de CSC**: cambiar AMO→THL/ILO/XXV **no es sólo un flag**: se cambia
+también el **perfil de operador** (OOBE, permisos por defecto, configuración de APN/VoLTE y apps
+del carrier) ⇒ puede dejar de funcionar la configuración específica de Orange (APN, VoLTE, roaming).
+**El parche mínimo y menos invasivo es editar el `cscfeature.xml` de AMO** (añadir el
+`<CscFeature_VoiceCall_ConfigRecording>` que falta) en vez de cambiar el CSC entero ⇒ eso exige
+actualizar `contents.db` (su `fileSize`) y el CRC/formato que el sistema compruebe.
+
 ---
 
 ## 6. Radio y ROM (P6)
