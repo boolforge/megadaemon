@@ -18,6 +18,8 @@
 
 PREFIX=/data/local/tmp/megadaemon
 BIN="$PREFIX/megadaemon-core"
+# v15: binario anterior conocido-bueno (para auto-rollback si el nuevo no arranca).
+PREV_BIN="$PREFIX/megadaemon-core.prev"
 ENV_FILE="$PREFIX/megadaemon.env"
 LOG=/sdcard/megadaemon.log
 LOG_DIR=/sdcard/megadaemon-logs
@@ -496,9 +498,28 @@ start_daemon() {
         log "----- últimas líneas del log -----"
         tail -n 25 "$LOG" 2>/dev/null | while IFS= read -r l; do log "  | $l"; done
         log "-------------------------------"
+        write_state "FALLO_ARRANQUE: el binario muere al arrancar (fallo #$fast_fails/$MAX_FAST_FAILS)"
+        # v15 · AUTO-ROLLBACK: antes, tras MAX_FAST_FAILS el supervisor hacia
+        # `exit 0` => el movil se quedaba SIN daemon Y SIN supervisor y NADIE
+        # volvia a lanzarlo (el canal del enjambre moria para siempre).
+        # Ahora, si hay un binario anterior conocido-bueno, se restaura y se
+        # sigue; el supervisor NUNCA se rinde (ver el `rc -eq 2` del bucle).
+        if [ "$fast_fails" -ge "$MAX_FAST_FAILS" ] && [ -f "$PREV_BIN" ]; then
+            log "AUTO-ROLLBACK: restaurando el binario anterior ($PREV_BIN)"
+            cp -a "$BIN" "$BIN.bad-$(date +%s)" 2>/dev/null || true
+            cp -a "$PREV_BIN" "$BIN.restore" 2>/dev/null || true
+            if [ -f "$BIN.restore" ]; then
+                mv "$BIN.restore" "$BIN"
+                log "AUTO-ROLLBACK: binario restaurado (sha16 $(sha256sum "$BIN" 2>/dev/null | cut -c1-16))"
+                write_state "AUTO-ROLLBACK: binario restaurado; reintentando"
+                fast_fails=0
+                return 1
+            fi
+            log "AUTO-ROLLBACK: no se pudo restaurar $PREV_BIN"
+        fi
         if [ "$fast_fails" -ge "$MAX_FAST_FAILS" ]; then
-            write_state "FALLO_CODIGO: el binario muere al arrancar; el supervisor NO insiste mas"
-            log "ERROR: $MAX_FAST_FAILS fallos de arranque seguidos => se para el supervisor (fallo de codigo, no transitorio)."
+            write_state "FALLO_CODIGO: el binario muere al arrancar; se reintentara cada 5 min"
+            log "ERROR: $MAX_FAST_FAILS fallos de arranque seguidos => el supervisor NO se rinde (reintenta cada 5 min)."
             log "       Estado en $STATE_FILE ; log en $LOG ; URL en $URL_FILE"
             return 2
         fi
@@ -553,8 +574,14 @@ while true; do
         start_daemon
         rc=$?
         if [ "$rc" -eq 2 ]; then
-            log "supervisor detenido: fallo de codigo al arrancar (ver $LOG y $STATE_FILE)"
-            exit 0
+            # v15: el supervisor NO se detiene nunca.  Antes `exit 0` dejaba el
+            # movil sin daemon y sin supervisor => nadie relanzaba nunca.
+            # Ahora espera 5 min y reintenta (1 intento/5 min = coste nulo en
+            # un movil con 390 MB libres) y asi el canal vuelve solo cuando se
+            # instale un binario bueno.
+            log "fallo de codigo al arrancar: el supervisor espera 5 min y reintenta (ver $LOG y $STATE_FILE)"
+            i=0
+            sleep 300
         fi
         i=$((i + 1))
         # backoff: 10s, 20s, 40s ... hasta 300s
