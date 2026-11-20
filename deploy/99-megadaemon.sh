@@ -179,6 +179,15 @@ ensure_web_bridge() {
     if pgrep -f "web_bridge.py" > /dev/null 2>&1; then
         return 0
     fi
+    # Si el daemon YA escucha en los puertos alias (binario v13.4+: 3000/3030/
+    # 8090), el puente sobra y ademas choca con el (EADDRINUSE).  Se comprueba
+    # con ss y, si no existe, con un connect() de toybox.
+    if ss -ltn 2>/dev/null | grep -q ":3000"; then
+        return 0
+    fi
+    if printf '' | timeout 1 toybox nc -w 1 127.0.0.1 3000 > /dev/null 2>&1; then
+        return 0
+    fi
     # El daemon ya sirve los alias (binario nuevo): el puente sobra y solo
     # provocaria un EADDRINUSE que tumba al daemon.
     if alias_ports_listening; then
@@ -518,8 +527,26 @@ start_daemon() {
     # "no existe", que manda el diagnostico por donde no es.  Ahora se
     # AUTO-REPARA y el log dice la verdad.
     if [ ! -f "$BIN" ]; then
-        log "ERROR: no existe $BIN"
-        return 1
+        # v15 (W5): durante una instalacion el binario puede estar AUSENTE
+        # (el `mv` de megadaemon-core.new -> megadaemon-core deja una
+        # ventana de segundos).  Medido el 2026-11-20 02:54: el supervisor
+        # vio "no existe" 4 veces, gastó sus reintentos y, como el
+        # instalador reinició SOLO el daemon, el movil se quedó sin daemon
+        # NI supervisor => 502 (origen caido, no saturacion).
+        # Ahora: si hay un binario en curso (.new / .restore) se ESPERA a
+        # que termine el despliegue sin contar esto como fallo de arranque.
+        if [ -f "$BIN.new" ] || [ -f "$BIN.restore" ]; then
+            log "AVISO: $BIN ausente pero hay un despliegue en curso (.new/.restore): esperando 30 s"
+            sleep 30
+            if [ ! -f "$BIN" ]; then
+                log "ERROR: $BIN sigue ausente tras esperar al despliegue"
+                return 1
+            fi
+            log "el binario aparecio al terminar el despliegue: continuando"
+        else
+            log "ERROR: no existe $BIN (y no hay despliegue en curso)"
+            return 1
+        fi
     fi
     if [ ! -x "$BIN" ]; then
         chmod 755 "$BIN" 2>/dev/null
