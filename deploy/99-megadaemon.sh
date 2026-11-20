@@ -176,31 +176,30 @@ alias_ports_free() {
 
 ensure_web_bridge() {
     [ -f "$BRIDGE" ] || return 0
-    # Ruta ABSOLUTA, no el nombre suelto: con `pgrep -f "web_bridge.py"`
-    # cualquier proceso que mencione ese nombre en su linea de comandos
-    # (p. ej. un `ps | grep web_bridge` de diagnostico) hacia que el puente
-    # estaba vivo => el supervisor NUNCA lo relanzaba y los puertos 80/8080
-    # se quedaban caidos sin explicacion.  Medido el 2026-11-20.
-    if pgrep -f "$BRIDGE" > /dev/null 2>&1; then
+    if pgrep -f "web_bridge.py" > /dev/null 2>&1; then
         return 0
     fi
-    # v15 (medido 2026-11-20 03:44): esto era un BUG y por eso el puerto 80
-    # estaba muerto sin explicación.  El daemon v13.4 sirve 3000/3030/8090 pero
-    # NO el 80 ni el 8080; con el "return 0" de abajo el puente NUNCA
-    # arrancaba y http://localhost (puerto 80) no respondía.
-    #
-    # Ahora la decisión se toma con alias_ports_free(): el puente coge SÓLO
-    # los puertos que NADIE está sirviendo (80 y 8080).  Si no queda ninguno,
-    # el puente sobra de verdad (ahorra RAM, que en este móvil es el
-    # recurso escaso).
-    free=$(alias_ports_free)
-    if [ -z "$free" ]; then
-        log "el daemon sirve TODOS los puertos alias: no hace falta puente web (ahorra RAM)"
+    # Si el daemon YA escucha en los puertos alias (binario v13.4+: 3000/3030/
+    # 8090), el puente sobra y ademas choca con el (EADDRINUSE).  Se comprueba
+    # con ss y, si no existe, con un connect() de toybox.
+    if ss -ltn 2>/dev/null | grep -q ":3000"; then
         return 0
     fi
-    # La lista del puente va separada por COMAS (ver read_ports()).
-    export MEGADAEMON_BRIDGE_PORTS="$free"
-    log "el daemon ya escucha los puertos alias: el puente solo cogera $MEGADAEMON_BRIDGE_PORTS"
+    if printf '' | timeout 1 toybox nc -w 1 127.0.0.1 3000 > /dev/null 2>&1; then
+        return 0
+    fi
+    # El daemon ya sirve los alias (binario nuevo): el puente sobra y solo
+    # provocaria un EADDRINUSE que tumba al daemon.
+    if alias_ports_listening; then
+        free=$(alias_ports_free)
+        if [ -z "$free" ]; then
+            log "el daemon sirve TODOS los puertos alias: no hace falta puente web (ahorra RAM)"
+            return 0
+        fi
+        # La lista del puente va separada por COMAS (ver read_ports()).
+        export MEGADAEMON_BRIDGE_PORTS="$free"
+        log "el daemon ya escucha los puertos alias: el puente solo cogera $MEGADAEMON_BRIDGE_PORTS"
+    fi
     py="$PY_BIN"
     if [ -z "$py" ]; then
         for cand in /data/data/com.termux/files/usr/bin/python3 \
@@ -309,9 +308,7 @@ ensure_tunnel() {
     t_port=$1; t_log=$2; t_urlfile=$3; t_tag=$4; t_dedup=${5:-1}; t_fallback=${6:-}
     [ -x "$CLOUDFLARED" ] || return 0
     t_url=$(cat "$t_urlfile" 2>/dev/null)
-    # Ruta absoluta del binario + el puerto: mismo motivo que el puente
-    # (ningun pgrep por nombre suelto).
-    t_pids=$(pgrep -f "$CLOUDFLARED tunnel .*127.0.0.1:$t_port" 2>/dev/null)
+    t_pids=$(pgrep -f "cloudflared tunnel .*127.0.0.1:$t_port" 2>/dev/null)
     t_n=0
     for p in $t_pids; do t_n=$((t_n + 1)); done
 
@@ -892,10 +889,7 @@ ensure_tunnel 8765 "$MCP_TUNNEL_LOG" "$MCP_TUNNEL_URL_FILE" "mcp-legacy" 0 \
     /data/data/com.termux/files/home/android-mcp/cloudflared.log
 while true; do
     rotate
-    # Coincidencia EXACTA de la linea de comandos completa: con un patron
-    # suelto ("megadaemon-core cockpit") cualquier shell que mentione esas
-    # palabras se hacia pasar por el daemon y el supervisor no lo relanzaba.
-    if ! pgrep -f "(^|/)megadaemon-core cockpit $PORT$" > /dev/null 2>&1; then
+    if ! pgrep -f "megadaemon-core cockpit" > /dev/null 2>&1; then
         log "megadaemon no está corriendo: relanzando (intento $i)"
         start_daemon
         rc=$?
@@ -936,10 +930,7 @@ while true; do
             sleep 5
             k=$((k + 1))
             ensure_web_bridge
-            # Coincidencia EXACTA de la linea de comandos completa: con un patron
-    # suelto ("megadaemon-core cockpit") cualquier shell que mentione esas
-    # palabras se hacia pasar por el daemon y el supervisor no lo relanzaba.
-    if ! pgrep -f "(^|/)megadaemon-core cockpit $PORT$" > /dev/null 2>&1; then
+            if ! pgrep -f "megadaemon-core cockpit" > /dev/null 2>&1; then
                 break
             fi
         done
