@@ -200,9 +200,12 @@ fn adv_a03_la_politica_destructiva_se_esquiva() {
         "reboot bootloader",                       // deja el móvil en el bootloader
         "mv /data/local/tmp/megadaemon /data/local/tmp/megadaemon.bak",
     ];
+    // INVERTIDO (fix de ADV-A-03 en `android.rs`): la politica destructiva ya
+    // NO se esquiva con espacios de mas, opciones largas ni otras formas de
+    // borrar => todos estos comandos DEBEN clasificarse como destructivos.
     for cmd in bypasses {
         assert!(
-            !megadaemon_core::android::is_destructive(cmd),
+            megadaemon_core::android::is_destructive(cmd),
             "«{}» NO se clasifica como destructivo: la política confirm es evadible",
             cmd
         );
