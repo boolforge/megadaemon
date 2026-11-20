@@ -1569,6 +1569,42 @@ impl CscChangePlan {
     }
 }
 
+/// ¿El firmware del CSC es del mismo dispositivo?
+///
+/// El modelo del móvil es `SM-G998B` y el del firmware es `G998BXXU2EUXG`
+/// (sin el prefijo `SM-`): hay que comparar el "core" del modelo.
+pub fn same_device_family(device_model: &str, fw_model: &str) -> bool {
+    let dev = device_model.trim().to_ascii_uppercase();
+    let dev = dev.strip_prefix("SM-").unwrap_or(&dev);
+    let fw = fw_model.trim().to_ascii_uppercase();
+    if dev.is_empty() || fw.is_empty() {
+        return false;
+    }
+    fw.starts_with(dev) || fw.contains(dev) || dev.contains(&fw)
+}
+
+/// Ruta del fichero **persistente** del CSC.
+///
+/// Medido en este S21 Ultra: `/mnt/vendor/efs/mps_code.dat` son 3 bytes con
+/// el código del CSC (`AMO`). Es el mismo fichero que escribe el módem con
+/// `AT+PRECONFG=2,<CSC>`: cambiarlo con root equivale a cambiar el CSC por
+/// la vía del módem, **sin tocar el bootloader y sin triangular el Knox**.
+pub const MPS_CODE_PATH: &str = "/mnt/vendor/efs/mps_code.dat";
+
+/// Códigos de CSC que habilitan la **grabación nativa** de llamadas.
+///
+/// Con un CSC de América (el de este móvil es AMO) la grabación nativa está
+/// desactivada por el flag `CscFeature_VoiceCall_ConfigRecording` del
+/// `cscfeature.xml`. Con un CSC de Asia (THL, INS) el sistema graba solo, sin
+/// hook ni AudioFlinger parcheado: es la vía preferente.
+pub const CALL_RECORDING_CSC_CODES: [&str; 4] = ["THL", "INS", "ILO", "XXV"];
+
+/// ¿Este CSC permite la grabación nativa de llamadas?
+pub fn csc_allows_native_recording(csc: &str) -> bool {
+    let c = csc.trim().to_ascii_uppercase();
+    CALL_RECORDING_CSC_CODES.iter().any(|k| *k == c)
+}
+
 /// Construye el plan de cambio de CSC.
 ///
 /// Reglas (medidas en este dispositivo):
@@ -1596,11 +1632,7 @@ pub fn csc_change_plan(
             device.csc
         ));
     }
-    if !target
-        .model
-        .to_ascii_uppercase()
-        .contains(&device.model.to_ascii_uppercase())
-    {
+    if !same_device_family(&device.model, &target.model) {
         blockers.push(format!(
             "el firmware del CSC destino es {} y este móvil es {}: no son el \
              mismo dispositivo",
@@ -1686,6 +1718,114 @@ pub fn csc_change_plan(
                bootloader."
             .to_string(),
     }
+}
+
+/// Vía para cambiar el CSC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CscSwapMethod {
+    /// Escribir `mps_code.dat` con root (3 bytes). Equivale a `AT+PRECONFG`,
+    /// pero desde el propio móvil. No triangular el Knox.
+    MpsCodeFile,
+    /// Comando AT al módem (`AT+PRECONFG=2,<CSC>`) por el puerto de
+    /// diagnóstico: **sin root**, pero necesita un PC con USB.
+    AtCommand,
+    /// Copiar el directorio del CSC en `/prism` (más invasivo).
+    PrismCopy,
+}
+
+impl CscSwapMethod {
+    /// Nombre estable.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CscSwapMethod::MpsCodeFile => "mps_code",
+            CscSwapMethod::AtCommand => "at_preconfg",
+            CscSwapMethod::PrismCopy => "prism_copy",
+        }
+    }
+
+    /// `true` si la vía necesita root.
+    pub fn needs_root(&self) -> bool {
+        matches!(self, CscSwapMethod::MpsCodeFile | CscSwapMethod::PrismCopy)
+    }
+}
+
+/// Plan de cambio de CSC por la vía de `mps_code.dat` (root, sin Knox).
+///
+/// Es la vía más simple y reversible: se copia el fichero original, se
+/// escriben 3 bytes con el código nuevo y se reinicia. Si algo va mal, se
+/// restaura la copia y se reinicia otra vez.
+pub fn csc_swap_via_mps_code(
+    device: &DeviceFacts,
+    target_code: &str,
+    backup_dir: &str,
+) -> CscChangePlan {
+    let code = target_code.trim().to_ascii_uppercase();
+    let mut blockers: Vec<String> = Vec::new();
+    if code.len() != 3 || !code.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()) {
+        blockers.push(format!("'{}' no parece un código de CSC válido", target_code));
+    }
+    if code == device.csc.trim().to_ascii_uppercase() {
+        blockers.push(format!("el CSC ya es {}", device.csc));
+    }
+    let steps = vec![
+        CscStep {
+            id: "backup_mps".into(),
+            title: "Copia del fichero de CSC persistente (3 bytes)".into(),
+            command: format!(
+                "cp -a {src} {dst}/mps_code.dat.bak && sha256sum {dst}/mps_code.dat.bak",
+                src = MPS_CODE_PATH,
+                dst = backup_dir
+            ),
+            needs_remount_rw: false,
+            reversible: true,
+        },
+        CscStep {
+            id: "write_mps".into(),
+            title: format!("Escribir el CSC {} (3 bytes, sin espacios)", code),
+            command: format!(
+                "printf '%s' {} > {src} && sync && cat {src}",
+                code,
+                src = MPS_CODE_PATH
+            ),
+            needs_remount_rw: false,
+            reversible: true,
+        },
+        CscStep {
+            id: "reboot".into(),
+            title: "Reiniciar y comprobar".into(),
+            command: "getprop ro.csc.sales_code   # debe mostrar el CSC destino".into(),
+            needs_remount_rw: false,
+            reversible: true,
+        },
+    ];
+    let note = format!(
+        "Cambiar el CSC con mps_code.dat NO triangular el Knox (0x0 se queda) y \
+         no toca el bootloader. Ojo: Samsung Wallet/Pass pasa a la región del \
+         CSC nuevo, el proveedor de ID de llamante puede cambiar y la OTA puede \
+         exigir volver al CSC original. La grabación nativa de llamadas depende \
+         del CSC de destino ({} la permiten).",
+        CALL_RECORDING_CSC_CODES.join(", ")
+    );
+    CscChangePlan {
+        current: device.csc.clone(),
+        target: code,
+        steps,
+        blockers,
+        persistent: true,
+        note,
+    }
+}
+
+/// Comandos AT para cambiar el CSC **sin root** (desde un PC con USB).
+///
+/// El módem escribe el `mps_code.dat` del propio `/efs/imei/`.
+pub fn csc_at_commands(target_code: &str) -> Vec<String> {
+    let code = target_code.trim().to_ascii_uppercase();
+    vec![
+        "AT+PRECONFG=1,0        # leer el CSC actual".to_string(),
+        format!("AT+PRECONFG=2,{}        # escribir el CSC nuevo", code),
+        "AT+PRECONFG=1,0        # releer y confirmar".to_string(),
+    ]
 }
 
 /// Plan de reversión: dejar el CSC como estaba.
@@ -1834,6 +1974,35 @@ mod tests {
         assert!(plan2.steps[0].command.contains("prism"));
     }
 
+
+    #[test]
+    fn el_modelo_del_firmware_se_compara_sin_el_prefijo_sm() {
+        assert!(same_device_family("SM-G998B", "G998BXXU2EUXG"));
+        assert!(same_device_family("SM-G998B", "G998BXXU2AMOG"));
+        assert!(!same_device_family("SM-G998B", "SM-S911B"));
+        assert!(!same_device_family("SM-G998B", ""));
+    }
+
+    #[test]
+    fn el_cambio_por_mps_code_no_necesita_prism_y_es_reversible() {
+        let dev = device_ok();
+        let plan = csc_swap_via_mps_code(&dev, "THL", "/sdcard/megadaemon/csc");
+        assert!(plan.is_executable(), "{:?}", plan.blockers);
+        assert_eq!(plan.target, "THL");
+        assert!(plan.persistent, "mps_code.dat sobrevive al reinicio");
+        assert!(plan.steps[0].command.contains("mps_code.dat"));
+        assert!(plan.steps[1].command.contains("THL"));
+        let malo = csc_swap_via_mps_code(&dev, "no-valido", "/x");
+        assert!(!malo.is_executable());
+    }
+
+    #[test]
+    fn los_csc_de_grabacion_nativa_estan_conocidos() {
+        assert!(csc_allows_native_recording("THL"));
+        assert!(csc_allows_native_recording("ins"));
+        assert!(!csc_allows_native_recording("AMO"));
+        assert!(csc_at_commands("THL")[1].contains("AT+PRECONFG=2,THL"));
+    }
     #[test]
     fn el_cambio_de_csc_rechaza_un_bootloader_menor() {
         let dev = device_ok();
