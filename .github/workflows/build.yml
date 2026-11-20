@@ -206,7 +206,13 @@ jobs:
     # Publica en CUALQUIER rama (main y v14-coordination): el tag es v<sha>, así
     # que no chocan entre ramas y el binario ARM64 sale siempre con nombre
     # versionado.
-    if: github.event_name == 'push'
+    #
+    # v16 · `always()` + `needs.build-android.result == 'success'`: el móvil
+    # es la instancia MAESTRA y su binario es el que se despliega; una pata
+    # Linux rota (aarch64 en un runner x86, p.ej. por el RANLIB) NO puede
+    # tumbar la release del ARM64.  Medido: el job ARM64编译aba bien y la
+    # release se saltaba porque `needs` exigia las dos patas.
+    if: always() && github.event_name == 'push' && needs.build-android.result == 'success'
     permissions:
       contents: write
     steps:
