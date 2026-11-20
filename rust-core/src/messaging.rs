@@ -50,6 +50,8 @@ pub const WHATSAPP_W4B_PACKAGE: &str = "com.whatsapp.w4b";
 pub const SMS_PACKAGE: &str = "com.google.android.apps.messaging";
 /// Paquete real de "Salud Responde" (Servicio Andaluz de Salud).
 pub const SALUD_RESPONDE_PACKAGE: &str = "citamovil.saludresponde";
+/// App oficial del Servicio Andaluz de Salud (la que sustituye a Salud Responde).
+pub const SALUD_ANDALUCIA_PACKAGE: &str = "es.juntadeandalucia.msspa.saludandalucia";
 
 /// Directorio de snapshots en el dispositivo (mismo criterio que el
 /// extractor Python de `sync.rs`: global y legible por el proceso).
@@ -149,9 +151,19 @@ const APP_SPECS: &[AppSpec] = &[
         service: "salud_responde",
         package: SALUD_RESPONDE_PACKAGE,
         candidates: &[
+            // En el móvil real la BD se llama "CitaMovilDB" (sin extensión).
+            "/data/data/citamovil.saludresponde/databases/CitaMovilDB",
             "/data/data/citamovil.saludresponde/databases/saludresponde.db",
             "/data/data/citamovil.saludresponde/databases/citas.db",
             "/data/data/citamovil.saludresponde/databases/appointments.db",
+        ],
+    },
+    AppSpec {
+        service: "salud_andalucia",
+        package: SALUD_ANDALUCIA_PACKAGE,
+        candidates: &[
+            "/data/data/es.juntadeandalucia.msspa.saludandalucia/databases/AppDataBase.db",
+            "/data/data/es.juntadeandalucia.msspa.saludandalucia/databases/citas.db",
         ],
     },
 ];
@@ -615,6 +627,94 @@ fn parse_relative_date(text: &str, now: i64) -> Option<ParsedDate> {
 /// ¿La cita es próxima? (hoy o más adelante, según la fecha actual).
 pub fn is_upcoming(date: Option<i64>, now: i64) -> bool {
     date.map(|e| e >= start_of_day(now)).unwrap_or(false)
+}
+
+/// Texto real de un recordatorio de cita (del móvil, app SAS) para tests.
+pub const EJEMPLO_RECORDATORIO_CITA: &str = "D./Dña. JOSE FRANCISCO CARRASCO: Tiene asignada cita en la \
+consulta de medicina de familia el día 15/01/2025 a las 09:04 horas en el centro de salud Ciudad Jardín \
+(Guadalmedina) en la CONSULTA 2";
+
+/// Extrae el servicio (consulta) de un texto de cita: "consulta de medicina de familia".
+pub fn extract_service(text: &str) -> Option<String> {
+    let toks = tokenize_match(text);
+    let mut best: Option<String> = None;
+    for (i, t) in toks.iter().enumerate() {
+        if t != "consulta" {
+            continue;
+        }
+        let mut words: Vec<String> = Vec::new();
+        let mut j = i + 1;
+        if toks.get(j).map(|x| x == "de").unwrap_or(false) {
+            j += 1;
+        }
+        while j < toks.len() && words.len() < 5 {
+            let w = &toks[j];
+            if ["el", "la", "los", "las", "a", "en", "con", "dia", "hora"].contains(&w.as_str()) {
+                break;
+            }
+            words.push(w.clone());
+            j += 1;
+        }
+        if !words.is_empty() {
+            let cand = words.join(" ");
+            if best.as_ref().map(|b| b.len() < cand.len()).unwrap_or(true) {
+                best = Some(cand);
+            }
+        }
+    }
+    best
+}
+
+/// Extrae el lugar de una cita: "centro de salud Ciudad Jardin (Guadalmedina)".
+///
+/// Se trabaja sobre el texto normalizado (sin acentos, en minúsculas) para
+/// poder cortar por "(" y descartar el municipio entre paréntesis.
+pub fn extract_place(text: &str) -> Option<String> {
+    let norm = normalize_for_match(text);
+    for marker in ["centro de salud ", "hospital ", "clinica ", "consulta externa "] {
+        let Some(pos) = norm.find(marker) else { continue };
+        let rest = &norm[pos + marker.len()..];
+        let mut end = rest.len();
+        for stop in ['(', ',', ';', '.'] {
+            if let Some(p) = rest.find(stop) {
+                end = end.min(p);
+            }
+        }
+        for stop in [" en ", " a las ", " el dia ", " para ", " desde "] {
+            if let Some(p) = rest.find(stop) {
+                end = end.min(p);
+            }
+        }
+        let place = rest[..end].trim();
+        if !place.is_empty() {
+            return Some(place.to_string());
+        }
+    }
+    None
+}
+
+/// Construye una cita a partir de un texto (notificación de "Recordatorio de cita").
+///
+/// Devuelve `None` si el texto no habla de una cita.  La fecha se parsea con
+/// el parser de fechas en español (dd/mm/aaaa, "15/01/2025 a las 09:04").
+pub fn appointment_from_text(text: &str, now: i64) -> Option<Value> {
+    let kws = detect_medical_keywords(text);
+    if !kws.iter().any(|k| k == "cita") {
+        return None;
+    }
+    let date = parse_appointment_date(text, now);
+    let service = extract_service(text);
+    let place = extract_place(text);
+    let upcoming = date.as_ref().map(|d| d.epoch >= start_of_day(now)).unwrap_or(false);
+    Some(json!({
+        "date": date.as_ref().map(|d| d.iso.clone()),
+        "date_raw": date.as_ref().map(|d| d.raw.clone()).unwrap_or_default(),
+        "service": service.clone().unwrap_or_default(),
+        "place": place.clone().unwrap_or_default(),
+        "notes": title_from_text(text, 400),
+        "keywords": kws,
+        "upcoming": upcoming,
+    }))
 }
 
 /// Extrae la fecha de un mensaje en español.
@@ -2021,12 +2121,24 @@ pub fn telegram(limit: usize) -> Value {
     {
         candidates.push(c.to_string());
     }
-    // Cualquier otra .db del directorio de bases de datos de Telegram.
-    for (path, _) in device_list_dir("/data/data/org.telegram.messenger/databases") {
-        if path.ends_with(".db") && !candidates.contains(&path) {
-            candidates.push(path);
+    // La BD de Telegram no siempre está en "databases/": en el móvil real
+    // comprobamos que puede estar en cache/ o files/ (y con otro nombre).
+    for dir in [
+        "/data/data/org.telegram.messenger/databases",
+        "/data/data/org.telegram.messenger/cache",
+        "/data/data/org.telegram.messenger/files",
+    ] {
+        for (path, _) in device_list_dir(dir) {
+            if path.ends_with(".db") && !candidates.contains(&path) {
+                candidates.push(path);
+            }
         }
     }
+    // Prioridad: msgstore/messages antes que el resto.
+    candidates.sort_by_key(|p| {
+        let l = p.to_lowercase();
+        if l.contains("msgstore") { 0 } else if l.contains("message") { 1 } else { 2 }
+    });
     let refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
     let Some(remote) = device_find_first(&refs) else {
         return json!({
@@ -2333,9 +2445,6 @@ pub fn extract_appointments_db(path: &Path, limit: usize) -> Value {
         let looks_like_appointments = ["cita", "appointment", "evento", "event", "agenda", "consulta"]
             .iter()
             .any(|k| lname.contains(k));
-        if !looks_like_appointments {
-            continue;
-        }
         let date_col = pick_col(
             &cols,
             &[
@@ -2385,6 +2494,67 @@ pub fn extract_appointments_db(path: &Path, limit: usize) -> Value {
             ],
         )
         .or_else(|| pick_col_loose(&cols, &["nota", "observ", "descri", "comentario"]));
+        // Segunda estrategia: tablas de NOTIFICACIONES (así es donde la app
+        // del Servicio Andaluz de Salud guarda los "Recordatorio de cita":
+        // tabla `notifications` con title/description/date).
+        let title_col = pick_col(
+            &cols,
+            &["title", "titulo", "subject", "asunto", "header", "headline"],
+        );
+        let body_col = pick_col(
+            &cols,
+            &[
+                "description", "descripcion", "body", "text", "content", "mensaje",
+                "message", "detail", "detalle", "summary",
+            ],
+        );
+        if !looks_like_appointments {
+            if let (Some(dc), Some(bc)) = (date_col.as_ref(), body_col.as_ref()) {
+                let sql = format!(
+                    "SELECT {}, {}, {} FROM {} LIMIT {}",
+                    ident(dc),
+                    title_col.as_ref().map(|c| ident(c)).unwrap_or_else(|| "NULL".into()),
+                    ident(bc),
+                    ident(t),
+                    limit
+                );
+                if let Ok(mut st) = conn.prepare(&sql) {
+                    if let Ok(mut rows) = st.query_map([], |row| {
+                        let raw_date = row.get_ref(0).ok().and_then(ref_text);
+                        let title = row.get_ref(1).ok().and_then(ref_text);
+                        let body = row.get_ref(2).ok().and_then(ref_text);
+                        Ok::<(Option<String>, Option<String>, Option<String>), rusqlite::Error>((
+                            raw_date, title, body,
+                        ))
+                    }) {
+                        let mut found = false;
+                        while let Some(Ok((raw_date, title, body))) = rows.next() {
+                            let mut text = format!(
+                                "{} {}",
+                                title.clone().unwrap_or_default(),
+                                body.clone().unwrap_or_default()
+                            );
+                            if let Some(r) = raw_date.as_ref() {
+                                text.push_str(&format!(" {}", r));
+                            }
+                            if let Some(mut ap) = appointment_from_text(&text, now) {
+                                ap["source"] = json!(format!("{}:{}", t, "notificacion"));
+                                ap["table"] = json!(t);
+                                if ap["service"].as_str().unwrap_or("").is_empty() {
+                                    ap["service"] = json!("cita");
+                                }
+                                appointments.push(ap);
+                                found = true;
+                            }
+                        }
+                        if found {
+                            readable = true;
+                        }
+                    }
+                }
+            }
+            continue;
+        }
         let Some(date_col) = date_col else { continue };
         readable = true;
 
@@ -2498,10 +2668,12 @@ pub fn medical(limit: usize) -> Value {
         .filter_map(|l| l.strip_prefix("package:").map(|s| s.trim().to_string()))
         .collect();
     let mut health_packages: Vec<String> = find_health_packages(&installed_list);
-    if !health_packages.iter().any(|p| p == SALUD_RESPONDE_PACKAGE)
-        && installed_list.iter().any(|p| p == SALUD_RESPONDE_PACKAGE)
-    {
-        health_packages.push(SALUD_RESPONDE_PACKAGE.to_string());
+    for known in [SALUD_RESPONDE_PACKAGE, SALUD_ANDALUCIA_PACKAGE] {
+        if !health_packages.iter().any(|p| p == known)
+            && installed_list.iter().any(|p| p == known)
+        {
+            health_packages.push(known.to_string());
+        }
     }
     let mut app_report = json!({
         "installed": !health_packages.is_empty(),
@@ -2512,7 +2684,10 @@ pub fn medical(limit: usize) -> Value {
     for pkg in &health_packages {
         let db_dir = format!("/data/data/{}/databases", pkg);
         for (path, size) in device_list_dir(&db_dir) {
-            if !path.ends_with(".db") {
+            // No se filtra por extensión: en el móvil real la BD de Salud
+            // Responde se llama "CitaMovilDB" (sin ".db").  Se prueba cada
+            // fichero y se descarta el que no sea SQLite.
+            if size <= 0 {
                 continue;
             }
             let mut entry = json!({
@@ -3639,6 +3814,38 @@ mod tests {
             sha256_bytes(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn extrae_el_servicio_de_un_recordatorio_de_cita() {
+        let s = extract_service(EJEMPLO_RECORDATORIO_CITA).unwrap();
+        assert_eq!(s, "medicina de familia");
+    }
+
+    #[test]
+    fn extrae_el_lugar_de_un_recordatorio_de_cita() {
+        let p = extract_place(EJEMPLO_RECORDATORIO_CITA).unwrap();
+        assert_eq!(p, "ciudad jardin");
+        assert!(!p.contains('('), "no debe quedarse el municipio entre parentesis");
+    }
+
+    #[test]
+    fn construye_una_cita_desde_el_texto_real_del_movil() {
+        let ap = appointment_from_text(EJEMPLO_RECORDATORIO_CITA, 1_741_770_000).unwrap();
+        assert_eq!(
+            ap["date"].as_str().unwrap().chars().take(10).collect::<String>(),
+            "2025-01-15"
+        );
+        assert!(ap["date"].as_str().unwrap().contains("09:04"));
+        assert_eq!(ap["service"], json!("medicina de familia"));
+        assert_eq!(ap["place"], json!("ciudad jardin"));
+        assert_eq!(ap["upcoming"], json!(false), "enero de 2025 ya paso");
+    }
+
+    #[test]
+    fn un_texto_sin_cita_no_devuelve_cita() {
+        assert!(appointment_from_text("Buenos días, ¿cómo estás?", 1_741_770_000).is_none());
+        assert!(appointment_from_text("Su clave es: 7553", 1_741_770_000).is_none());
     }
 
     #[test]

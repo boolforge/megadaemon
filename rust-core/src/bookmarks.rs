@@ -109,7 +109,18 @@ pub fn parse_chromium_bookmarks(json_text: &str, source: &str) -> Vec<Bookmark> 
     }
     if let Some(roots) = v.get("roots").and_then(|r| r.as_object()) {
         for (_k, node) in roots {
-            walk(node, "", source, &mut out);
+            // La raiz ("Barra de marcadores", "Otros marcadores", "Movil")
+            // es PARTE de la ruta del marcador: sin ella, dos marcadores
+            // con el mismo nombre de carpeta en raices distintas ("Barra de
+            // marcadores/Carpeta" y "Otros marcadores/Carpeta") salian
+            // ambos con folder="Carpeta" => el inventario de la tool
+            // (que expone `folder`) era ambiguo.  El test lo detectaba.
+            let root_name = node
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string();
+            walk(node, &root_name, source, &mut out);
         }
     }
     out
