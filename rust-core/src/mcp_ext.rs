@@ -671,10 +671,13 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     } else {
                         s("path")
                     };
+                    let et_owned = sa("enabled_tools");
+                    let enabled_tools: Vec<&str> =
+                        et_owned.iter().map(|s| s.as_str()).collect();
                     let bridge = crate::service_bus::antigravity_bridge_config(
                         "http://127.0.0.1:9090/mcp",
                         "md-secrets/instance.env",
-                        &sa("enabled_tools"),
+                        &enabled_tools,
                     );
                     if !b("confirm") {
                         return Some(json!({
@@ -687,8 +690,8 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         }));
                     }
                     match crate::service_bus::apply_bridge_file(&path, &bridge) {
-                        Ok(v) => Some(v),
-                        Err(e) => Some(json!({ "ok": false, "error": e })),
+                        Ok(v) => v,
+                        Err(e) => json!({ "ok": false, "error": e }),
                     }
                 }
                 _ => bus.catalog_json(),
