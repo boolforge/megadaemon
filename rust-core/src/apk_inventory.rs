@@ -21,6 +21,7 @@
 //! | `drift(known)` | Inventario actual contra el manifiesto previo → cambios/additions/bajas |
 //! | `dump_all(out_dir)` | Vuelca todas las APK instaladas a un directorio (rutas + hashes) |
 
+use crate::util_text::hex;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Seek, SeekFrom};
@@ -62,15 +63,6 @@ const DRIFT_PACKAGE_LIMIT: usize = 200;
 // ========================================================================= //
 
 /// Convierte bytes en hexadecimal minúsculas.
-fn hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0f) as usize] as char);
-    }
-    out
-}
 
 /// SHA-256 en hexadecimal. Es la única forma de calcular hashes en este módulo.
 pub fn sha256_hex(data: &[u8]) -> String {
@@ -816,17 +808,6 @@ pub fn manifest_fingerprint(manifest: &Value) -> String {
 // Inventario de apps instaladas
 // ========================================================================= //
 
-/// Extrae las rutas de APK de la salida de `pm list packages -f`.
-///
-/// El formato real es `package:/ruta/app.apk` (NO hay `=`).
-fn parse_apk_paths(stdout: &str) -> Vec<String> {
-    stdout
-        .lines()
-        .filter_map(|l| l.trim().strip_prefix("package:"))
-        .map(|p| p.trim().to_string())
-        .filter(|p| !p.is_empty())
-        .collect()
-}
 
 /// Extrae los nombres de paquete de la salida de `pm list packages`.
 fn parse_package_names(stdout: &str) -> Vec<String> {
@@ -878,7 +859,7 @@ fn list_packages() -> Vec<(String, String)> {
         PM_TIMEOUT_MS,
         512 * 1024,
     );
-    let paths = parse_apk_paths(&with_paths.stdout);
+    let paths = parse_package_names(&with_paths.stdout);
     let names = if paths.len() > 1 {
         let plain = crate::android::root_exec("pm list packages 2>/dev/null", PM_TIMEOUT_MS, 512 * 1024);
         parse_package_names(&plain.stdout)
@@ -1753,7 +1734,7 @@ mod tests {
     fn la_salida_de_pm_list_packages_f_se_interpreta_bien() {
         // El formato real es "package:/ruta/app.apk" (sin '=').
         let salida = "package:/data/app/~~a==/com.foo-1/base.apk\npackage:/system/app/Bar/Bar.apk\n";
-        let rutas = parse_apk_paths(salida);
+        let rutas = parse_package_names(salida);
         assert_eq!(rutas.len(), 2);
         assert_eq!(rutas[0], "/data/app/~~a==/com.foo-1/base.apk");
         assert_eq!(

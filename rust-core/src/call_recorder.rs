@@ -26,6 +26,7 @@
 //! "oficial" es capturar el audio **ya decodificado** en el dispositivo
 //! (salida de AudioFlinger) o interceptarlo **dentro del proceso** de la app.
 
+use crate::util_fs::walk_files;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -797,29 +798,6 @@ pub fn hex(bytes: &[u8]) -> String {
 }
 
 /// Recorre un directorio collecting ficheros regulares (sin seguir symlinks).
-fn walk_files(root: &Path, out: &mut Vec<PathBuf>) {
-    let rd = match fs::read_dir(root) {
-        Ok(r) => r,
-        Err(_) => return,
-    };
-    let mut entries: Vec<fs::DirEntry> = rd.filter_map(|e| e.ok()).collect();
-    entries.sort_by_key(|e| e.file_name());
-    for e in entries {
-        let p = e.path();
-        let md = match fs::symlink_metadata(&p) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        if md.file_type().is_symlink() {
-            continue; // no se siguen symlinks (evita escapar del directorio)
-        }
-        if md.is_dir() {
-            walk_files(&p, out);
-        } else if md.is_file() {
-            out.push(p);
-        }
-    }
-}
 
 /// Inventario de grabaciones de un directorio: tamaño + SHA-256 de cada una.
 pub fn list_recordings(dir: &str) -> Vec<Value> {

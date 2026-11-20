@@ -96,5 +96,6 @@ pub mod sync_web;
 pub mod task_scheduler;
 pub mod tile_vram;
 pub mod unifier;
+pub mod util_fs;
 pub mod util_text;
 pub mod webui;

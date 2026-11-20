@@ -34,6 +34,7 @@
 //! | `decompile_apk(path)` | Extrae `classes*.dex` de un APK y decompila todo |
 //! | `dex_strings(dex)` | Tabla de strings del DEX |
 
+use crate::util_text::hex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -218,15 +219,6 @@ fn sha1(bytes: &[u8]) -> [u8; 20] {
 }
 
 /// Convierte bytes en hexadecimal minúsculas.
-fn hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0f) as usize] as char);
-    }
-    out
-}
 
 /// Decodifica MUTF-8 (el "UTF-8 modificado" que usan los strings del DEX).
 ///
