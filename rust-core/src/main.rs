@@ -357,7 +357,13 @@ fn main() {
         "csc-verify" => {
             // Verificador post-parche del CSC: la feature de grabacion nativa
             // esta realmente activa en el movil? (no "deberia estarlo").
-            let rep = csc_verify::verify();
+            // `csc-verify --expect <valor>` exige un valor EXACTO (p.ej.
+            // "RecordingAllowed" o "RecordingAllowedByMenu,disclaimer_latin").
+            let expect = args
+                .windows(2)
+                .find(|w| w[0] == "--expect")
+                .map(|w| w[1].to_string());
+            let rep = csc_verify::verify_expecting(expect.as_deref());
             println!("{}", serde_json::to_string_pretty(&rep).unwrap());
         }
 
