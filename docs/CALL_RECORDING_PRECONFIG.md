@@ -3,6 +3,35 @@
 Todo lo de aquí está **medido en el S21 Ultra real** (SM-G998B · Android 14 ·
 One UI 6 · Magisk Kitsune v27.2 · SELinux Enforcing), no copiado de manuals.
 
+## 0. Decisión legal (leer antes que nada)
+
+**La grabación nativa de Samsung avisa por voz a la otra parte cuando el CSC
+trae el valor con *disclaimer*.** Hay dos valores medidos en los 126 CSC:
+
+| Valor | CSC que lo usan | Comportamiento |
+|---|---|---|
+| `RecordingAllowed` | **14** (THL, ILO, XXV, BKD, BTC, CAL, EGY, ILP, LYS, MYM, NPL, SEK, SLK, TUN) | grabación **automática y silenciosa** |
+| `RecordingAllowedByMenu,disclaimer_latin` | 4 (CHO, EON, GTO, TPA) | aparece en el menú y **avisa por voz** |
+| `RecordingAllowedByMenu,disclaimer_india` | 1 (INU) | ídem, texto del aviso distinto |
+
+**En España, grabar en silencio la conversación de un tercero es delito
+(art. 197 CP) y vulnera el GDPR.** Por tanto:
+
+* El valor que usa MegaDaemon es **`RecordingAllowedByMenu,disclaimer_latin`**
+  (`rom_migration::recording_value_recommended()`), **no** `RecordingAllowed`
+  a secas.
+* La grabación **no** es automática: el usuario la inicia desde el menú y el
+  sistema avisa a la otra parte.
+* **Nada de grabador silencioso**: lo que se reimplementa en Rust es el
+  **gestor** (`recording_vault.rs`: inventario, hash, pack cifrado, subida),
+  no un grabador sin aviso.
+* El módulo instalado en el móvil se corrigió a este valor con
+  `sh deploy/repatch_csc_disclaimer.sh` (decodifica el OMC, cambia el valor,
+  actualiza el `fileSize` de `contents.db` y reescribe el módulo).
+
+> Revertir el módulo (volver al CSC original sin tocar nada):
+> `touch /data/adb/modules/megadaemon_csc_recording/disable` + reiniciar.
+
 ## 1. Grabar el audio de la llamada: las cuatro vías y cuál vale aquí
 
 | Vía | Qué necesita | ¿Sirve en este móvil? |

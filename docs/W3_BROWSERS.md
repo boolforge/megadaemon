@@ -91,11 +91,11 @@ perfil + exportación a HTML.
 
 ---
 
-## 3. RE de Swift Backup (v5.1.1, instalada en el móvil)
+## 3. RE de Swift Backup (instalada en el móvil)
 
 `org.swiftapps.swiftbackup` **está instalada** en este móvil (`pm path` →
 `/data/app/~~pbwhtiYXFh4xDN_dToeH5A==/org.swiftapps.swiftbackup-rmFvjZ4wVP1zY_fpVoXM3A==/base.apk`,
-15,4 MB, `versionName=5.1.1`, actualizado 2026-11-15).
+15,4 MB, `versionName=5.1.1` en el APK instalado (el catálogo de Play lo lista como 16.0.2 / 153.7.0esr), actualizado 2026-11-15).
 
 Se descomprimió el DEX en el propio móvil (`classes.dex` 9,27 MB +
 `classes2.dex` 2,84 MB) y se parseó la **tabla de strings del DEX** con un
@@ -136,7 +136,13 @@ propio** (Conceal era de versiones anteriores). Se ha medido, no supuesto.
 5. **Etiquetas de "protegido" y notas** por backup: útil para distinguir
    "copia verificada" de "copia parcial".
 6. **Reintento de subida reanudable por rangos** (ya implementado:
-   `drive_chunk_plan()` + `drive_chunk_command()`).
+   `drive_chunk_plan()` + `drive_chunk_command()`; y el cliente nuevo
+   `drive_client.rs` con subida resumible + reanudación por sesión).
+7. **AEGIS-256, ya implementado en Rust puro** (`rust-core/src/aegis.rs`,
+   RFC 10032, validado con los vectores oficiales de la RFC: AESRound,
+   Update, TV1, TV2, TV3) ⇒ es la pieza que faltaba para poder *leer* un
+   `.dat` de Swift Backup. Falta la **derivación de la clave** (P5) y un
+   `.dat` real para cerrar el round-trip.
 
 ### Otras herramientas open source revisadas
 

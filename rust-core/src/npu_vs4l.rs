@@ -152,7 +152,7 @@ pub fn errno_name(e: i32) -> &'static str {
 unsafe fn ioctl_raw(fd: RawFd, code: u32, arg: *mut libc::c_void) -> libc::c_int {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
-        libc::ioctl(fd, code as libc::c_ulong, arg)
+        libc::ioctl(fd, ioctl_req!(code), arg)
     }
     #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
     {
