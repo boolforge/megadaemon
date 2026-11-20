@@ -179,15 +179,14 @@ ensure_web_bridge() {
     if pgrep -f "web_bridge.py" > /dev/null 2>&1; then
         return 0
     fi
-    # Si el daemon YA escucha en los puertos alias (binario v13.4+: 3000/3030/
-    # 8090), el puente sobra y ademas choca con el (EADDRINUSE).  Se comprueba
-    # con ss y, si no existe, con un connect() de toybox.
-    if ss -ltn 2>/dev/null | grep -q ":3000"; then
-        return 0
-    fi
-    if printf '' | timeout 1 toybox nc -w 1 127.0.0.1 3000 > /dev/null 2>&1; then
-        return 0
-    fi
+    # El daemon ya sirve los puertos alias (binario nuevo): el puente NO debe
+    # pelear por ellos (EADDRINUSE tumba al daemon).  PERO no se renuncia al
+    # puente entero: si el daemon NO sirve :80, el puente debe coger ese
+    # puerto -- es la URL que el navegador del movil usa (http://localhost/),
+    # la unica con la key inyectada.
+    # (Antes habia dos "return 0" tempranos -- ss :3000 y toybox nc -- que
+    # dejaban el bloque alias_ports_free() como codigo muerto y mataban el
+    # puente entero: el movil se quedaba sin :80 y la web no le abria.)
     # El daemon ya sirve los alias (binario nuevo): el puente sobra y solo
     # provocaria un EADDRINUSE que tumba al daemon.
     if alias_ports_listening; then
