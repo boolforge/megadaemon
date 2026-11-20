@@ -36,6 +36,29 @@ use crate::rom_migration::{
 /// La bandera que decide si el móvil graba llamadas de forma nativa.
 pub const FEATURE: &str = "CscFeature_VoiceCall_ConfigRecording";
 
+/// Valor de la feature **sin** disclaimer (variante "sin aviso").
+/// OJO: el verificador NO presupone cual de las dos variantes es la legal:
+/// las compara y las exige por parametro.
+pub const VARIANT_PLAIN: &str = "RecordingAllowed";
+/// Prefijo de las variantes **con** disclaimer (con aviso al usuario).
+pub const VARIANT_DISCLAIMER: &str = "RecordingAllowedByMenu";
+
+/// Clasifica el valor de la feature: `sin-disclaimer` | `con-disclaimer` |
+/// `apagado` | `otro-valor`.
+pub fn classify_variant(value: &str) -> &'static str {
+    let v = value.trim();
+    if v.is_empty() || v.eq_ignore_ascii_case("false") || v == "0" {
+        return "apagado";
+    }
+    if v.starts_with(VARIANT_DISCLAIMER) {
+        return "con-disclaimer";
+    }
+    if v.starts_with(VARIANT_PLAIN) {
+        return "sin-disclaimer";
+    }
+    "otro-valor"
+}
+
 /// Estado de una copia en claro del XML de CSC.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeCopy {
@@ -54,6 +77,9 @@ pub struct CscRow {
     pub bytes: u64,
     pub has_feature: bool,
     pub value: Option<String>,
+    /// Valor que se **espera** encontrar (lo exige quien llama, no el modulo).
+    /// ¿Coincide el valor presente con el esperado?
+    /// `sin-disclaimer` | `con-disclaimer` | `apagado` | `otro-valor`.
     pub decode_error: Option<String>,
 }
 
@@ -79,6 +105,12 @@ pub struct CscVerifyReport {
     pub verdict: String,
     /// Valor de la bandera en el CSC activo.
     pub value: Option<String>,
+    /// Valor que se **espera** encontrar (lo exige quien llama, no el modulo).
+    pub expected_value: Option<String>,
+    /// ¿Coincide el valor presente con el esperado?
+    pub value_matches: Option<bool>,
+    /// `sin-disclaimer` | `con-disclaimer` | `apagado` | `otro-valor`.
+    pub variant: Option<String>,
     /// Fichero del CSC activo del que se leyó.
     pub source: Option<String>,
     /// `omc` | `plain`.
@@ -289,12 +321,24 @@ pub fn csc_matrix() -> Vec<CscRow> {
 
 /// Verificación completa.
 pub fn verify() -> CscVerifyReport {
+    verify_expecting(None)
+}
+
+/// Igual que [`verify`], pero **exige** un valor concreto de la feature.
+///
+/// No presupone si el valor correcto es el de disclaimer o el que no lo lleva:
+/// el llamante dice que espera y el verificador comprueba, compara y anota
+/// la discrepancia (veredicto `MISMATCH`).
+pub fn verify_expecting(expect: Option<&str>) -> CscVerifyReport {
     let mut notes: Vec<String> = Vec::new();
     let mut report = CscVerifyReport {
         csc_code: read_csc_code(),
         feature: FEATURE.to_string(),
         verdict: "UNKNOWN".to_string(),
         value: None,
+        expected_value: expect.map(|s| s.to_string()),
+        value_matches: None,
+        variant: None,
         source: None,
         source_encoding: None,
         decode_error: None,
@@ -400,6 +444,23 @@ pub fn verify() -> CscVerifyReport {
         notes.push("la feature está presente en el fichero del CSC activo (o en su copia en claro)".to_string());
     } else if report.verdict == "OFF" {
         notes.push("la feature NO está presente en el CSC activo => la grabación nativa está apagada".to_string());
+    }
+    // 6) variante y comprobacion del valor exigido
+    report.variant = report.value.as_deref().map(classify_variant).map(|v| v.to_string());
+    if let (Some(exp), Some(actual)) = (report.expected_value.clone(), report.value.clone()) {
+        let ok = actual.trim() == exp.trim();
+        report.value_matches = Some(ok);
+        if ok {
+            notes.push(format!("el valor presente ({:?}) es el esperado", actual));
+        } else {
+            notes.push(format!(
+                "ATENCION: valor presente {:?} != valor esperado {:?}",
+                actual, exp
+            ));
+            if report.verdict == "ON" {
+                report.verdict = "MISMATCH".to_string();
+            }
+        }
     }
     report.notes = notes;
     report
