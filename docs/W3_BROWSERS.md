@@ -119,6 +119,17 @@ script propio (`dexstr.py`) para sacar las constantes y las clases.
 que cifra con *Facebook Conceal*; la versión instalada (5.1.1) usa **AEGIS-256
 propio** (Conceal era de versiones anteriores). Se ha medido, no supuesto.
 
+### El formato, al detalle (medido en la nativa)
+
+El APK trae `libsba_archive.so`, que exporta **el algoritmo exacto**:
+**AEGIS-256** (y AEGIS-128X2) por trozos, **Argon2id** para derivar la clave
+(rangos: iteraciones 1..100, memoria 16–64 MiB, paralelismo 1..8, salida
+16–128 B) y el contenido en **TAR comprimido con ZSTD** (magics `SBA1` /
+`SBA_SWIFTTAR`, AAD/nonce por trozo con las etiquetas
+`SBA1-AEGIS256-entry-chunk-aad-v1` / `-nonce-v1`). El detalle completo, con
+el método (los **DEX del mirror son idénticos a los del móvil** ⇒ el RE se
+hace entero en local) está en **`docs/SWIFT_BACKUP_FORMAT.md`**.
+
 ### Lo bueno que se reimplementa en MegaDaemon
 
 1. **Partes explícitas por app** (APP / DATA / EXTDATA / EXPANSION / MEDIA):
