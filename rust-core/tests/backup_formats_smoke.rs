@@ -216,3 +216,32 @@ fn las_rutas_relativas_se_validan() {
     assert!(safe_relative_path("C:\\x").is_err());
     assert!(safe_relative_path("").is_err());
 }
+
+#[test]
+fn el_escaner_de_swift_clasifica_por_parte_y_extension() {
+    let raiz = std::env::temp_dir().join(format!("md-swiftscan-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&raiz);
+    let base = raiz.join("accounts/abc/backups/apps/local/com.agy/1700000000");
+    for (parte, fichero, contenido) in [
+        ("APP", "base.apk", "APK"),
+        ("DATA", "datos.dat", "DATOS"),
+        ("MEDIA", "foto.jpg", "FOTO"),
+    ] {
+        let d = base.join(parte);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join(fichero), contenido).unwrap();
+    }
+    std::fs::write(base.join("metadata.json"), "{}").unwrap();
+    let items = scan_swift_backup(&raiz.to_string_lossy()).unwrap();
+    assert!(items.len() >= 4, "items: {:?}", items.len());
+    let apk = items.iter().find(|i| i.path.ends_with("base.apk")).unwrap();
+    assert_eq!(apk.part.as_deref(), Some("APP"));
+    assert_eq!(apk.extension, "apk");
+    let dat = items.iter().find(|i| i.path.ends_with("datos.dat")).unwrap();
+    assert_eq!(dat.part.as_deref(), Some("DATA"));
+    let med = items.iter().find(|i| i.path.ends_with("foto.jpg")).unwrap();
+    assert_eq!(med.part.as_deref(), Some("MEDIA"));
+    assert_eq!(med.size, 4);
+    assert!(items.iter().any(|i| i.path.ends_with("metadata.json")));
+    let _ = std::fs::remove_dir_all(&raiz);
+}
