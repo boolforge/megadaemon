@@ -1,6 +1,6 @@
 {
   "schema": "megadaemon.mesh.board/v1",
-  "updated_at": "2026-11-20T01:38:58Z",
+  "updated_at": "2026-11-20T02:34:00Z",
   "agents": {
     "cloud-sandbox": {
       "id": "cloud-sandbox",
@@ -17,10 +17,10 @@
       "repo": "https://github.com/boolforge/megadaemon",
       "branch": "fix/megadaemon-stability-20261119",
       "pr": "https://github.com/boolforge/megadaemon/pull/6",
-      "last_seen": "2026-11-20T01:03:21Z",
+      "last_seen": "2026-11-20T02:34:00Z",
       "external_url": "https://pot-implied-approach-input.trycloudflare.com",
       "master_url": "https://pot-implied-approach-input.trycloudflare.com",
-      "status": "P1-P4 done; P2-bis inventario seguro publicado",
+      "status": "P1-P6: manual publicado (docs/ANDROID_EXYNOS2100_FINDINGS.md) + P4/P5/P6 emitidos + tabla VS4L corregida",
       "p1_findings": 11,
       "p1_summary": "EDEN v1.6.20; ioctls VS4L del driver vertex10; /dev/vertex10 en 0644; compilador EDEN presente",
       "p2_findings": 9,
@@ -58,6 +58,14 @@
           ],
           "content_extracted": false,
           "ts": "2026-11-20T01:03:21Z"
+        },
+        "p4_p5_p6": {
+          "broadcast_kinds": [
+            "p4_vendor",
+            "p5_samsung_apps",
+            "p6_radio_rom"
+          ],
+          "ts": "2026-11-20T02:34:00Z"
         }
       },
       "p4_vendor_ioctls": "134 codigos / 333 sitios en 17 librerias; familias G, g/k (Knox GF), E, M, V; retirada de la cifra v1 (5.955)"
@@ -155,6 +163,14 @@
       "ts": "2026-11-20T01:03:21Z",
       "headline": "P2-bis: 7 particiones del mundo seguro con sha256 on-device + inventario EFS (sin contenido)",
       "note": "el material de claves NO se extrajo; solo rutas, tamanos y hashes"
+    },
+    {
+      "id": "cloud-sandbox-manual-2026-11-20T02:34:00Z",
+      "node": "cloud-sandbox",
+      "kind": "manual_android_exynos2100",
+      "ts": "2026-11-20T02:34:00Z",
+      "headline": "Manual Android Exynos 2100 publicado + P4/P5/P6 emitidos + correccion honesta de la tabla VS4L",
+      "note": "docs/ANDROID_EXYNOS2100_FINDINGS.md; la tabla de 9 ioctls no se corrobora en el firmware vivo (0 hits)"
     }
   ],
   "links": {

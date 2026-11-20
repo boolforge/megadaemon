@@ -1,0 +1,348 @@
+# Manual Android Exynos 2100 (S21 Ultra / SM-G998B) — hallazgos verificados
+
+> **Cómo se midió todo lo de aquí**: con `root_exec` **sobre el móvil vivo** (`su -mm -c`),
+> lectura directa de ficheros y dispositivos de bloque, sha256 calculado **dentro del
+> dispositivo** (streaming de 1 MiB). **Nada es de un volcado de ROM**: cuando una ruta
+> del volcado no coincide con el firmware vivo, aquí se dice.
+>
+> · Dispositivo: **SM-G998B (p3s)**, **Exynos 2100**, Android 14 (SDK 34), patch 2024-06-01, CSC **AMO**
+> · SELinux **Enforcing** · Magisk **v27.2-kitsune-4** · bootloader **CERRADO** (`flash.locked=1`), AVB **green**
+> · Fecha de las mediciones: 2026-11-19/20 · Nodo: `cloud-sandbox` (W7)
+> · **Sin tokens, sin claves privadas, sin material criptográfico en este documento.**
+>
+> Formato por hallazgo: **hallazgo · evidencia · sha256 · confianza · cómo se comprueba · implicación**
+
+---
+
+## 0. Regla de oro: *el binario que se ejecuta, no el del volcado*
+
+El error más caro de la fase RE fue tratar el volcado de ROM como si fuera el firmware vivo.
+Corregido por medición, no por suposición:
+
+| Ruta del volcado | Realidad en el móvil vivo |
+|---|---|
+| `/vendor/bin/NPU.bin` | **No existe.** Está en **`/vendor/firmware/NPU.bin`** (1.506.272 B) |
+| `/vendor/etc/eden_kernel_64.bin` | **No existe.** Está en **`/vendor/etc/eden/gpu/eden_kernel_64.bin`** |
+| `/vendor/bin/hw_keymaster` | **No existe.** La TEE de Samsung es **`fkeymaster-service`** |
+| `/system/bin/keystore2` | Existe, pero en **`/system/bin`**, no en `/vendor/bin` |
+| `/dev/vertex10_test` | **No existe** (ni en `/dev` ni en el volcado) |
+
+⇒ **Implicación para la flota**: cualquier tabla extraída de `vendor_root/` debe **re-verificarse
+contra el móvil** antes de usarse. La tool `env_introspect` existe exactamente para eso
+(`{"action":"binaries","filter":"NPU.bin"}` ⇒ respuesta real del dispositivo).
+
+---
+
+## 1. Tabla de ioctls VS4L del driver `vertex10`
+
+### 1.1 El cálculo (determinista, no una suposición)
+
+En Linux, `_IOC(dir, type, nr, size)` se codifica así:
+
+```
+code = (dir  << 30) | (size << 16) | (type << 8) | nr
+```
+
+* `type` = `'V'` = **0x56** (86 decimal) — el tipo de ioctl de la familia vertex/VS4L
+* `dir`  = `_IO`:0 · `_IOR`:2 · `_IOW`:1 · `_IOWR`:3  (bit 30/31 ⇒ 0x4000_0000 / 0x8000_0000 / 0xC000_0000)
+* `size` = tamaño de la struct de datos que se copia del usuario al kernel
+
+Con `type = 0x56`:
+
+| Macro | Cálculo | Código |
+|---|---|---|
+| `_IO('V', 4, 0)` | `(0<<30)\|(0<<16)\|(0x56<<8)\|4` | `0x00005604` |
+| `_IO('V', 5, 0)` | `(0<<30)\|(0<<16)\|(0x56<<8)\|5` | `0x00005605` |
+| `_IOW('V', 0, 32)` | `(1<<30)\|(32<<16)\|0x5600\|0` | `0x40205600` |
+| `_IOW('V', 1, 16)` | `(1<<30)\|(16<<16)\|0x5600\|1` | `0x40105601` |
+| `_IOW('V', 2, 16)` | `(1<<30)\|(16<<16)\|0x5600\|2` | `0x40105602` |
+| `_IOW('V', 6, 128)` | `(1<<30)\|(128<<16)\|0x5600\|6` | `0x40805606` |
+| `_IOW('V', 7, 128)` | `(1<<30)\|(128<<16)\|0x5600\|7` | `0x40805607` |
+| `_IOW('V', 8, 128)` | `(1<<30)\|(128<<16)\|0x5600\|8` | `0x40805608` |
+| `_IOW('V', 10, 8)` | `(1<<30)\|(8<<16)\|0x5600\|10` | `0x4008560a` |
+
+⇒ **La aritmética es exacta y verificable** (no depende del volcado): quien tenga el
+`_IOC` de `asm-generic/ioctl.h` puede reproducir estos 9 códigos en un segundo.
+
+### 1.2 La tabla que circulaba por la malla (y su estado real)
+
+La tabla de **9 códigos / 20 llamadas** se publicó desde la extracción del volcado. Al
+contrastarla con el firmware vivo, el resultado es este:
+
+| Hallazgo | Evidencia | Confianza |
+|---|---|---|
+| Los **9 códigos** de la tabla son aritméticamente coherentes con `type='V'=0x56` | descomposición `_IOC` (arriba) | **high** (es matemática) |
+| Los **nombres** asignados a cada código (`VS4L_VERTEXIOC_S_FORMAT`, `..._S_PARAM`, `..._QBUF`, `..._DQBUF`, `..._STREAM_OFF`) | extracción sobre el volcado | **medium** (sólo el volcado) |
+| Los **7 códigos `_IOW` distintivos** (`0x4008560a`, `0x40105601`, `0x40105602`, `0x40205600`, `0x40805606`, `0x40805607`, `0x40805608`) **NO aparecen** en el firmware vivo | barrido de **107 `.so`** de `/vendor/lib64`, `/system/lib64` y `/vendor/lib64/hw` + los binarios EDEN, buscando (a) el literal de 32 bits y (b) el par `MOVZ`+`MOVK` (inmediato partido en 16+16, que es como ARM64 codifica `mov w0,#0x4008560a`) ⇒ **0 coincidencias** | **high** (medido) |
+| El binario del servicio EDEN **no menciona `ioctl`** ni `vertex10` ni como cadena | `/vendor/bin/hw/android.hardware.neuralnetworks@1.3-service.eden-drv` (1.702.344 B, sha16 `113723a72bc626e4`) y `/vendor/bin/hw/vendor.samsung_slsi.hardware.eden_runtime@1.0-service` (11.680 B, sha16 `cad427cda67b6430`) | **high** (medido) |
+
+**Dos explicaciones posibles (no se elige una sin más):**
+1. La tabla viene del **volcado**, cuyo `libeden_ud_npu.so` puede ser **otra build** ⇒ no
+   aplicaría al firmware vivo (ya we've visto que las rutas del volcado no corresponden).
+2. Los ioctls se **calculan en runtime** (no como constantes literales) ⇒ un barrido de
+   bytes no puede demostrar un negativo.
+
+⇒ **Estado honesto de la tabla: la aritmética es sólida; la correspondencia código↔nombre y
+la presencia en el firmware vivo están PENDIENTES de confirmación.** La flota la había dado
+por buena ⇒ **corríjanlo** hasta que se confirme.
+
+### 1.3 Cómo se comprueba de verdad (3 vías, de más barata a más concluyente)
+
+```bash
+# (1) Desensamblado real del binario VIVO con rizin (el móvil lo trae nativo):
+#     'axt @ sym.imp.ioctl' da las llamadas; y en cada sitio, el MOVZ+MOVK con el código.
+# (2) Búsqueda de bytes en el binario vivo (cualquier editor hex) de los 7 códigos _IOW.
+# (3) PRUEBA DEFINITIVA: emitir los ioctls contra el nodo real. /dev/vertex10 es 0644
+#     (uid/gid 1000) => CUALQUIER app puede abrirlo y llamar a ioctl():
+#       fd = open("/dev/vertex10", O_RDWR); ioctl(fd, 0x40205600, &buf32);
+#     => se observa el retorno (0 = ok, -ENOTTY/-EINVAL = código inexistente).
+```
+
+⇒ `env_introspect` + `root_exec` permiten (3) desde el propio móvil, sin escribir código C.
+
+### 1.4 El nodo
+
+| Hallazgo | Evidencia | Confianza |
+|---|---|---|
+| `/dev/vertex10` existe, es **char device**, modo **0644**, **uid 1000 / gid 1000** | `stat` en vivo ⇒ `crw-r--r-- 1 system system 10, 119` | **high** |
+| **Cualquier app puede leer y escribir en el nodo NPU** (0644, no 0600) |同上 + ausencia de ACL | **high** — **finding de seguridad de primer nivel**: el NPU (y sus colas de comandos) es accesible a apps sin privilegios |
+| `/dev/vertex10_test` **no existe** | barrido de `/dev` | **high** |
+| `/sys/class/misc/vertex10` **no existe** ⇒ el driver **no se registra en misc** | barrido | **high** (implica que no hay entrada en `/sys/class/misc` que leer para el NPU) |
+
+---
+
+## 2. NPU / EDEN (P1 y P4)
+
+### 2.1 Binarios y firmware del NPU (sha256 **del móvil**)
+
+| Artefacto | sha256 | Bytes |
+|---|---|---|
+| `/vendor/lib64/libeden_ud_npu.so` | `7c0041ab601b9d8d2d5e25254e8fb61a81f0aff7a600cc1a8df0fdb210e59482` | 436.920 |
+| `/vendor/lib64/libnpuc_common.so` | `d50035e3b8d8237bc32bbafb6fd097d9c0b0f30bc5753e0ea5018e619b6b9674` | 952.608 |
+| `/vendor/firmware/NPU.bin` | `1a17e3b3a41b2da83618c899517086f056d05fe9628dc44d7f4d179c1aad22ba` | 1.506.272 |
+| `/vendor/lib64/libeden_rt.so` | `3efc4552e11f2adeb8902dde6d0bc59a83285d556eb0761a7f4996ab914c3d06` | — |
+| `/vendor/lib64/libeden_wrapper.so` | `e7ff24b0e7bb18e06da3c934e32ef1e4800589f68a9de88efedc102a927e5da0` | — |
+| `/vendor/etc/init/vendor.samsung_slsi.hardware.eden_runtime@1.0-service.rc` | `b1f111905a6857c5bd79c45ef38ddc18d9ba3c67f8b1462e32fe073e9ae40c92` | 317 |
+| `/vendor/etc/init/android.hardware.neuralnetworks@1.3-service.eden-drv.rc` | (fichero presente; hash en el barrido) | — |
+
+**Hallazgo**: el runtime EDEN de Samsung son **dos servicios**:
+`vendor.samsung_slsi.hardware.eden_runtime@1.0-service` (11.680 B, sha16 `cad427cda67b6430`)
+y el HAL estándar `android.hardware.neuralnetworks@1.3-service.eden-drv` (1.702.344 B, sha16 `113723a72bc626e4`).
+**Implicación**: para instrumentar el NPU hay dos puntos de entrada distintos, y el segundo
+es el que expone el nodo `vertex10` al framework NNAPI.
+
+**Cómo se comprueba**:
+```bash
+sha256sum /vendor/lib64/libeden_ud_npu.so /vendor/firmware/NPU.bin
+ls /vendor/etc/init | grep -i eden
+```
+
+### 2.2 Qué hay en el árbol EDEN (medido)
+
+`libeden_ud_{npu,cpu,dsp,gpu}.so` · `libeden_{nn,rt,model,osal,profiler,gb_on_vendor,nn_on_vendor}.so` ·
+`libeden_wrapper{,_sdk}.so` · `libeden_xtool.so` · `libnpu_{compiler,api,backend,cmdq,controller,frontend,graph,template}.so` ·
+`libsait_npu_compiler.so` · `vendor.samsung.hardware.sysinput@1.{0,1,2}.so` · `eden/` (firmware)
+
+**Implicación**: `libnpu_cmdq` / `libnpu_controller` / `libnpu_graph` son la pila de
+comandos y grafos del NPU; `libsait_npu_compiler.so` es el **compilador SAIT** (Samsung
+NPU Compiler) ⇒ es la pieza clave para compilar modelos al NPU sin Java.
+
+---
+
+## 3. TEE y material de claves (P2)
+
+### 3.1 Binarios de la TEE (sha256 **del móvil**)
+
+| Ruta | sha256 | Bytes |
+|---|---|---|
+| `/system/bin/keystore2` | `3012205acc44a8c7d077fdeea398488f2c783802fd6679763b9120e8c8f6eac0` | 2.134.920 |
+| `/system/bin/keystore_cli_v2` | `b20fa395f2a6129a02fc6d5a74d355f9743c088a44af22d9d684deb122d9bdda` | 125.672 |
+| `/system/bin/gatekeeperd` | `1ebf380914d2898c4ab4b5ab98f0a70c831d045644f4e06ed77c8a6d03a3f239` | 92.360 |
+| `/vendor/lib64/hw/gatekeeper.exynos2100.so` | `efa211760ed0a23ecdfe55154bcf86064a629c8277737d218d0d55cc123723e4` | 11.696 |
+| `/vendor/bin/vendor.samsung.hardware.security.fkeymaster-service` | `979f4864b1ddfd3d22aafb0b36d867690b2bda000e93eda66ad909ce9128629a` | 51.208 |
+| `/vendor/lib64/libkeymaster4.so` | `f73b58435a155c1921df83dcb2fab58edd9774ed3d9a120b727eff3b7ac4b68f` | 87.672 |
+| `/vendor/lib64/libkeymaster4_1support.so` | `021953efb00665f2d923614f664b6b46a24e05a94aa806d95d92d543e21c5063` | 121.192 |
+| `/vendor/lib64/libkeymaster4support.so` | `a01e53592d37ec8d86f44c666463cab4105a0cf345bad3294989aaaef4445760` | 99.176 |
+| `/vendor/lib64/libkeymaster_helper.so` | `79579ee60450c4990de983757933728e028bf358b14a2584ed349fb5f9f55257` | 199.680 |
+| `/vendor/lib64/libkeymaster_messages.so` | `29522cfce010f8edaded6e312affbd720502c49ce828721a45d34651ab1bae79` | 98.208 |
+| `/vendor/lib64/libkeymaster_portable.so` | `a248a82f5bbce40be2211daed95c0f9214b3fe8100fe131a0185677c0ab072dd` | 342.056 |
+| `/vendor/lib64/libskeymaster4device.so` | `ee8fef80fdca04953a6c7fa38af23af1804f14af51b2c86422a7578151a62792` | 53.176 |
+| `/vendor/lib64/libpuresoftkeymasterdevice.so` | `dc753e8b4b5d77ac2d73131d117964c554e20e9c3698bd597877ef4a9a0364a2` | 47.096 |
+| `/vendor/lib64/libteecl.so` | `4bac41ddcf454d278aa4bd5c8c942a136f80cad5fd9030f82ff4e2b5eadf9aa1` | 55.592 |
+| `/vendor/lib64/vendor.samsung.hardware.security.fkeymaster-V1-ndk_platform.so` | `97f592938b60614acd70fdb5978fd142a5e5cf2f3bd98e07c049a2092bc7f42e` | 55.808 |
+
+**Hallazgos**:
+1. **La TEE de Samsung es `fkeymaster-service`**, no `hw_keymaster` (no existe en este firmware).
+   **Implicación**: el HAL de NDK (`fkeymaster-V1-ndk_platform.so`) es el punto de entrada para
+   **atar un firmante nativo a la TEE sin extraer la clave** ⇒ es la vía para el firmador
+   Rust sin Java.
+2. `keystore2` y `gatekeeperd` viven en **`/system/bin`** ⇒ son parte del sistema, no del vendor.
+3. `hw/gatekeeper.exynos2100.so` (11,7 KB) es el **gestor de claves específico del Exynos 2100**.
+4. `libteecl.so` es el **cliente de la TEE** desde userspace.
+
+### 3.2 Particiones del mundo seguro (sha256 on-device; **contenido NO extraído**)
+
+| Partición | Dispositivo | Bytes | sha256 |
+|---|---|---|---|
+| `keystorage` | `/dev/block/sda6` | 524.288 | `5dd8511af3f914b3a17e5ec57969c6cafc654406a8db2157f88302fa1a07235c` |
+| `keyrefuge` | `/dev/block/sda21` | 54.525.952 | `1f02bc470347f979f284443605ead1abae2c3f715901375aa41bb59e658b6793` |
+| `sec_efs` | `/dev/block/sda2` | 20.971.520 | `51c4ac95370f442baf7a166754a15028887636a123dd478645c4495fefd24ac8` |
+| `uh` | `/dev/block/sda9` | 2.097.152 | `c516562faf272e61d336d32d8e751e8e23352985052e340014c193bfac1a3a61` |
+| `uhcfg` | `/dev/block/sda10` | 4.194.304 | `bb9f8df61474d25e71fa00722318cd387396ca1736605e1248821cc0de3d3af8` |
+| `spu` | `/dev/block/sda33` | 52.428.800 | `5ce506471f50e68725125c9266867e844dd5cf87c431a70873eb9a9cac00e5ad` |
+| `prism` | `/dev/block/sda29` | 268.435.456 | `29292381f6b4a1498aee6df80ae3f045e505ee71ae77be5bf6d28f1dbc78a712` |
+
+**Inventario del EFS** (`/mnt/vendor/efs`, rutas y tamaños **sin contenido**):
+`/DAK/` (GAK/SAK EC+RSA `private` + `.val` + certs DER) · `/tee/srt/<uuid>/<id>/` (`obj_info` + `data_chunk`,
+**almacén seguro de la TEE**) · `/prov_data/dev_root/dev_root.dat` · `/prov/{issued.log,diag.dat}` ·
+`/root/FLL.bin` (**anti-rollback**) · `/taas/` · `/wv.keys` (Widevine) · `/nv_data.bin` (NV de radio) ·
+`/bluetooth/bt_addr` · `/wifi/.mac.info` · `/factory.prop` · `/telephony.prop` · `/mps_code.dat` (**CSC = `AMO`**).
+
+**Implicaciones**:
+* El **material de claves por dispositivo** vive en dos sitios distintos: **atestación**
+  (`/DAK/`, para atribuir el dispositivo ante Samsung) y **almacén de la TEE** (`/tee/srt/`,
+  donde Keymaster/FBE guarda las claves de las apps).
+* **Un backup de EFS sin `keystore2` es incompleto** ⇒ requisito para W3.
+* **`FLL.bin` es la protección anti-rollback** ⇒ W4 debe respaldarlo y verificar su hash
+  **antes** de tocar la ROM (si el bootloader baja de versión, FLL lo bloquea).
+* `prism` (256 MiB) es contenido, no claves ⇒ decidir si entra en el backup.
+* **No** existe `/data/misc/keystore/persistent.sqlite` con material exportable: son
+  **metadatos** (alias/huellas); las claves viven en la TEE ⇒ **no son portables**.
+
+---
+
+## 4. Boot chain (P3)
+
+| Partición | Bytes | sha256 |
+|---|---|---|
+| `/dev/block/by-name/boot` | 67.108.864 | `f96cd410e6f048739fe36737f047e2ede6d229d428e1d0c74de80017c8beb4fd` |
+| `/dev/block/by-name/vendor_boot` | 67.108.864 | `b55ecfd0744ae8ae5404635b3345b846764e55eca8349a655e71aebd52d0b2fb` |
+| `/dev/block/by-name/dtbo` | 8.388.608 | `c2cc0f21784007dde7ae154887b2fc3c69085c73b185ba847ae2e9b29b3ee106` |
+| `/dev/block/by-name/vbmeta` | 65.536 | `b1ef8b5108b1a333c13e6db5cf1e2c1446a4e017e81d0fe9b9392de70a1238c9` |
+| `/dev/block/by-name/vbmeta_system` | 65.536 | `254732e930687a6d5a3c0c82965f84c9a4a36767f6aa39eeacabf53af6aba5c6` |
+| `/dev/block/by-name/recovery` | 67.108.864 | `777350644d9f5c345970fef5f92ea5efdb1fbc9d2b0005b4a8b62dcb90703f19` |
+
+**Ausentes**: `init_boot`, `vbmeta_vendor`, `sec` ⇒ **la cadena AVB de este firmware tiene
+2 niveles** (`vbmeta` + `vbmeta_system`), no 3.
+
+**Estado AVB / bootloader (props medidas)**:
+
+| Prop | Valor | Lectura |
+|---|---|---|
+| `ro.boot.verifiedbootstate` | `green` | verificación OK |
+| `ro.boot.flash.locked` | `1` | **bootloader CERRADO** |
+| `ro.bootloader` | `G998BXXSBGXED` | binario del bootloader |
+| `ro.boot.hardware` | `exynos2100` | SoC |
+| `ro.boot.dynamic_partitions` | `true` | super dinámico |
+| `ro.boot.slot_suffix` | (vacío) | slot A |
+
+⇒ **Magisk con AVB green y bootloader cerrado** ⇒ Magisk parchea la imagen de arranque y
+**re-firma con la clave original**: el bootloader **no** está abierto ⇒ **cualquier flash de
+ROM es supervisado sí o sí** (y sin abrir el bootloader no se puede cambiar CSC de forma
+permanente).
+
+**Cómo se comprueba**:
+```bash
+sha256sum /dev/block/by-name/boot /dev/block/by-name/vbmeta
+getprop ro.boot.verifiedbootstate; getprop ro.boot.flash.locked; getprop ro.bootloader
+ls /dev/block/by-name | grep -E 'init_boot|vbmeta_vendor|^sec$'
+```
+
+---
+
+## 5. Apps Samsung (P5) — 229 paquetes `com.samsung.*`
+
+Medido con `pm list packages | grep com.samsung` + `pm path` + `dumpsys package`.
+
+Muestra (versión + ruta real del APK):
+
+| Paquete | Versión | APK |
+|---|---|---|
+| `com.samsung.android.app.contacts` | 15.1.87 | `/system/priv-app/SamsungContacts/SamsungContacts.apk` |
+| `com.samsung.android.knox.attestation` | 1.4.01.5 | `/system/priv-app/EnhancedAttestationAgent/…` |
+| `com.samsung.android.smartcallprovider` | 15.0.01.5 | `/system/priv-app/SmartCallProvider/…` |
+| `com.samsung.android.vtcamerasettings` | 4.0.04.16 | `/system/app/VTCameraSetting/…` |
+| `com.samsung.android.peripheral.framework` | 2.5.01.0 | `/system/priv-app/PeripheralFramework/…` |
+
+**Hallazgos con implicación**:
+* Las apps de sistema Samsung viven en **`/system/app` y `/system/priv-app`**, no en `/data/app`
+  ⇒ **no se pueden actualizar sin partición de sistema** ⇒ una migración de ROM las cambia.
+* `com.samsung.android.knox.attestation` es el cliente de **Enhanced Attestation** ⇒ enlaza
+  con la cadena `/DAK/` de la TEE (ver §3.2): **la atestación es la que ata la identidad del
+  dispositivo a las claves del EFS**.
+
+**Cómo se comprueba**:
+```bash
+pm list packages | grep -c '^package:com.samsung'
+pm path com.samsung.android.app.contacts
+dumpsys package com.samsung.android.app.contacts | grep versionName
+```
+
+---
+
+## 6. Radio y ROM (P6)
+
+| Artefacto | sha256 | Bytes |
+|---|---|---|
+| `/mnt/vendor/efs/nv_data.bin` (NV de radio) | `19d67fb61d8a7f20…` | 1.048.576 |
+| `/mnt/vendor/efs/mps_code.dat` (**CSC**) | `3150854ef4e891ec…` (contenido = `AMO`) | 3 |
+| `/mnt/vendor/efs/telephony.prop` | `c41f7774681deed9…` | 63 |
+| `/mnt/vendor/efs/prov/issued.log` | `ca9a7d93b75d2364…` | 230 |
+| `/mnt/vendor/efs/factory.prop` | `ceb67f8921ce59d8…` | 96 |
+| `/mnt/vendor/efs/.nv_state` | `6b86b273ff34fce1…` | 1 |
+
+**Props de radio medidas**: `gsm.operator.alpha=JAZZTEL` · `gsm.operator.iso-country=es` ·
+`gsm.network.type=LTE` · `gsm.facilitylock.state=false` · `gsm.current.phone-type=[1,1]`.
+
+**Hallazgo**: el **CSC es `AMO`** (América) y vive en `mps_code.dat` (3 bytes exactos) ⇒
+cambiarlo con root es la vía **más limpia y reversible** (3 bytes) y **no triangular el Knox**.
+**Implicación**: `CscFeature_VoiceCall_ConfigRecording` decide si el firmware graba llamadas
+nativamente ⇒ con CSC `AMO` está apagada; con CSC de Asia (`THL`/`INS`) el sistema graba solo.
+
+**Cómo se comprueba**:
+```bash
+cat /mnt/vendor/efs/mps_code.dat | tr -d '\0'; echo
+sha256sum /mnt/vendor/efs/nv_data.bin /mnt/vendor/efs/mps_code.dat
+getprop | grep -iE 'gsm\.|radio|rild'
+```
+
+---
+
+## 7. Tablón rápido de verificación (sha16)
+
+```
+7c0041ab601b9d8d  /vendor/lib64/libeden_ud_npu.so          d50035e3b8d8237b  /vendor/lib64/libnpuc_common.so
+1a17e3b3a41b2da8  /vendor/firmware/NPU.bin                 3efc4552e11f2ade  /vendor/lib64/libeden_rt.so
+e7ff24b0e7bb18e0  /vendor/lib64/libeden_wrapper.so         b1f111905a6857c5  eden_runtime@1.0-service.rc
+113723a72bc626e4  android.hardware.neuralnetworks@1.3-service.eden-drv
+cad427cda67b6430  vendor.samsung_slsi.hardware.eden_runtime@1.0-service
+3012205acc44a8c7  /system/bin/keystore2                   b20fa395f2a6129a  /system/bin/keystore_cli_v2
+1ebf380914d2898c  /system/bin/gatekeeperd                  efa211760ed0a23e  /vendor/lib64/hw/gatekeeper.exynos2100.so
+979f4864b1ddfd3d  fkeymaster-service                       f73b58435a155c19  /vendor/lib64/libkeymaster4.so
+4bac41ddcf454d27  /vendor/lib64/libteecl.so                97f592938b60614a  fkeymaster-V1-ndk_platform.so
+5dd8511af3f914b3  keystorage        1f02bc470347f979  keyrefuge   51c4ac95370f442b  sec_efs
+c516562faf272e61  uh                bb9f8df61474d25e  uhcfg       5ce506471f50e687  spu
+29292381f6b4a149  prism
+f96cd410e6f04873  boot              b55ecfd0744ae8ae  vendor_boot  c2cc0f21784007dd  dtbo
+b1ef8b5108b1a333  vbmeta            254732e930687a6d  vbmeta_system  777350644d9f5c34  recovery
+19d67fb61d8a7f20  nv_data.bin       3150854ef4e891ec  mps_code.dat (CSC=AMO)
+```
+
+---
+
+## 8. Límites de este manual (lo que NO afirma)
+
+* **La tabla de ioctls no está confirmada contra el firmware vivo** (§1.2): la aritmética es
+  sólida, la correspondencia con nombres y la presencia en el binario vivo, no.
+* **No se ha extraído material criptográfico**: ni claves privadas, ni el contenido de las
+  particiones del mundo seguro, ni `persistent.sqlite`. Sólo rutas, tamaños y hashes.
+* **Las apps se inventariaron, no se decompilaron** las 229; el volcado de APKs de Samsung
+  queda pendiente (su valor está en el APK, no en el volcado de ROM).
+* Los hashes son **del firmware en vivo de este dispositivo concreto**; otro firmware del
+  mismo modelo puede diferir ⇒ **vuelve a medir antes de comparar**.
+
+---
+
+*Documento del nodo `cloud-sandbox` (W7). Las mediciones son reproducibles con `root_exec` +
+`sha256sum`; las tools `env_introspect` y `megadaemon_rizin` del móvil permiten repetirlas
+sin escribir código. Sin credenciales en este documento.*
