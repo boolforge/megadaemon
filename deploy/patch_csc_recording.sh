@@ -11,7 +11,7 @@
 set -e
 CSC=AMO
 FEAT=CscFeature_VoiceCall_ConfigRecording
-VAL=RecordingAllowed
+VAL=RecordingAllowedByMenu,disclaimer_latin
 SRC=/optics/configs/carriers/single/$CSC/conf/system/cscfeature.xml
 DB=/prism/etc/carriers/single/$CSC/contents.db
 MOD=/data/adb/modules/megadaemon_csc_recording

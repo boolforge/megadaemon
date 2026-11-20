@@ -2477,8 +2477,37 @@ pub fn omc_feature_patch_plan(
 /// La bandera que habilita la grabación nativa de llamadas.
 pub const RECORDING_FEATURE: &str = "CscFeature_VoiceCall_ConfigRecording";
 
-/// Valor que usan los CSC con grabación nativa sin diálogo de aviso.
+/// Valor que usan los CSC con grabación nativa **sin** diálogo de aviso.
+///
+/// ⚠️ **Medido en los 126 CSC**: lo usan 14 (THL, ILO, XXV, BKD, BTC, CAL,
+/// EGY, ILP, LYS, MYM, NPL, SEK, SLK, TUN) ⇒ la grabación queda
+/// **automática y sin avisar a la otra parte**. En España eso es un
+/// **delito** (art. 197 CP) y vulnera el GDPR ⇒ **no lo usamos**.
 pub const RECORDING_VALUE_ALLOWED: &str = "RecordingAllowed";
+
+/// Valor con **aviso** (diálogo y locución) — el que corresponde a Europa.
+///
+/// Lo usan CHO, EON, GTO y TPA (`disclaimer_latin`) e INU (`disclaimer_india`).
+/// La grabación **no** es automática: aparece en el menú y **avisa por voz**
+/// a la otra parte, que es lo legal en España.
+pub const RECORDING_VALUE_ALLOWED_WITH_DISCLAIMER: &str = "RecordingAllowedByMenu,disclaimer_latin";
+
+/// Variante para la India (mismo sentido, texto del aviso distinto).
+pub const RECORDING_VALUE_ALLOWED_WITH_DISCLAIMER_INDIA: &str =
+    "RecordingAllowedByMenu,disclaimer_india";
+
+/// ¿Este valor de la feature **incluye aviso** a la otra parte?
+///
+/// `true` ⇒ la grabadora nativa avisa (legal en España).
+/// `false` ⇒ grabación automática y silenciosa (delito en España).
+pub fn recording_value_has_disclaimer(value: &str) -> bool {
+    value.contains("disclaimer")
+}
+
+/// Valor recomendado en España: con aviso, y **no** automático.
+pub fn recording_value_recommended() -> &'static str {
+    RECORDING_VALUE_ALLOWED_WITH_DISCLAIMER
+}
 
 /// Un fichero del módulo Magisk (systemless) que activa la grabación nativa.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2517,7 +2546,7 @@ pub fn csc_recording_module_files(csc: &str) -> Vec<CscModuleFile> {
          {f}={v}. Desactivar el modulo = volver al estado original.\n",
         csc = csc,
         f = RECORDING_FEATURE,
-        v = RECORDING_VALUE_ALLOWED
+        v = RECORDING_VALUE_ALLOWED_WITH_DISCLAIMER
     );
     let script = format!(
         "#!/system/bin/sh\n\

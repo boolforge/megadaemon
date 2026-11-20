@@ -92,13 +92,25 @@ fn main() -> std::process::ExitCode {
     };
 
     let una_vez = flag("--once");
+    let state_dir = arg("--state-dir");
     loop {
         let ip = match ip_explicita.clone() {
             Some(i) => Some(i),
             None => duckdns::public_ip(),
         };
         let res = match ip {
-            Some(ip) => duckdns::update_once(&domain, &token, &ip, state_file.as_deref()),
+            Some(ip) => {
+                let r = duckdns::update_once(&domain, &token, &ip, state_file.as_deref());
+                // URL viva del canal estable: se publica para que nadie la
+                // hardcodee (la leen de `channel.url`).
+                if r.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+                    let _ = duckdns::write_channel_url(
+                        state_dir.as_deref(),
+                        &format!("https://{domain}"),
+                    );
+                }
+                r
+            }
             None => json!({
                 "ok": false,
                 "error": "no_public_ip",
