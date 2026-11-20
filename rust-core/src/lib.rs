@@ -31,6 +31,7 @@ pub mod coordination;
 pub mod crypto_scan;
 pub mod delegate;
 pub mod deobfuscate;
+pub mod device_inventory;
 pub mod dex_decompile;
 pub mod disasm;
 pub mod entropy;
