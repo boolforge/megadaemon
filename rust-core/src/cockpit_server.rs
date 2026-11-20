@@ -927,12 +927,12 @@ fn handle_client(mut stream: TcpStream) {
                     "invalid_api_key"
                 )
             );
-            send_http_response(
-                &mut stream,
-                403,
-                "application/json",
-                b"{\"error\":\"forbidden\",\"hint\":\"API key invalida\"}",
+            // I-08: el 403 dice si el problema es TU credencial (no el movil).
+            let body = api_key::forbidden_body(
+                &state_dir(),
+                api_key::extract_key(&header_str).as_deref(),
             );
+            send_http_response(&mut stream, 403, "application/json", body.as_bytes());
             return;
         }
         api_key::Decision::RateLimited => {
