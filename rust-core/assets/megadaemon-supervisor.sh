@@ -167,6 +167,27 @@ check_daemon_responsive() {
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# v15 (F3): shell root PERSISTENTE para el bucle agentico.
+#
+# El bucle agentico NO puede abrir un 'su' por llamada: en este movil cada
+# llamada crea 2+ procesos (su -mm -c sh -c ...) y la maquina va al limite
+# (load 17,65, 876 procesos) => un bucle cerrado tumba el movil.  Con UN
+# shell vivo por socket unix, las llamadas cuestan 0 procesos.
+#
+# El socket va 0600 (acceso root) y las acciones destructivas exigen
+# 'confirm: true' explicito (politica del veto de la voz).
+SHELL_SOCK="$P/state/shell.sock"
+ensure_shell_service() {
+    [ -x "$P/md-shell-serve" ] || return 0
+    if pgrep -f "md-shell-serve" > /dev/null 2>&1; then
+        return 0
+    fi
+    mkdir -p "$P/state" 2>/dev/null
+    log "F3: arrancando el shell root persistente (socket $SHELL_SOCK)"
+    setsid sh -c "su -mm -c '$P/md-shell-serve $SHELL_SOCK'" > /dev/null 2>&1 < /dev/null &
+}
+
 cd_cockpit=0; cd_tunnel=0; cd_mcp=0
 while true; do
   rotate
@@ -184,6 +205,7 @@ while true; do
     cd_cockpit=0; s=30
     # v15: vivo != funcional.  Se comprueba /health (2 fallos seguidos).
     check_daemon_responsive "$PORT" || true
+    ensure_shell_service
   fi
   sleep 5
 

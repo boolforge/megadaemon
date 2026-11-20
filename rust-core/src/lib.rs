@@ -13,6 +13,7 @@ pub mod agent_core;
 pub mod agent_adapters;
 pub mod agent_loop;
 pub mod persistent_shell;
+pub mod price_table;
 pub mod agent_voice;
 pub mod aegis;
 pub mod alerts;
