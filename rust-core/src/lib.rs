@@ -39,6 +39,7 @@ pub mod deobfuscate;
 pub mod device_inventory;
 pub mod dex_decompile;
 pub mod disasm;
+pub mod duckdns;
 pub mod backup_ab;
 pub mod drive_client;
 pub mod entropy;
