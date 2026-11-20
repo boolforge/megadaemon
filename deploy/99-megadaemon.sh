@@ -360,6 +360,65 @@ ensure_tunnel() {
     fi
 }
 
+# --- puente con Antigravity (cliente MCP) ---------------------------------
+# Antigravity (paquete com.agy) es un CLIENTE MCP: su config
+# .gemini/config/mcp_config.json puede apuntar a un servidor Streamable HTTP
+# con cabeceras.  El daemon expone POST /mcp y acepta el TOKEN DE SESION
+# (X-Seere-Auth-Token); la API key sola NO abre /mcp (medido: 403).
+#
+# El token de sesion se materializa al arrancar el daemon => en cada
+# reinicio el valor que hay en la config de Antigravity queda caduco y el
+# puente se rompe en silencio.  Por eso, tras cada arranque del daemon, se
+# re-sincroniza la config con el token vigente.  Es IDEMPOTENTE: no se
+# duplica nada, se reescribe solo la cabecera del servidor HTTP local, y
+# se respetan el resto de la config (providers, otros servidores).
+ANTIGRAVITY_PKG=com.agy
+ANTIGRAVITY_CFG=/data/user/0/$ANTIGRAVITY_PKG/files/.gemini/config/mcp_config.json
+
+sync_antigravity_bridge() {
+    [ -f "$ANTIGRAVITY_CFG" ] || return 0
+    [ -x "$PY_BIN" ] || return 0
+    tok=$(cat "$PREFIX/state/cockpit_token" 2>/dev/null)
+    [ -n "$tok" ] || return 0
+    "$PY_BIN" - "$ANTIGRAVITY_CFG" "$tok" <<'PYEOF' 2>/dev/null
+import json, os, sys
+cfg, tok = sys.argv[1], sys.argv[2]
+try:
+    with open(cfg, "r", encoding="utf-8") as f:
+        data = json.load(f)
+except Exception:
+    sys.exit(0)
+servers = data.get("mcpServers")
+if not isinstance(servers, dict):
+    sys.exit(0)
+changed = False
+for name, spec in servers.items():
+    if not isinstance(spec, dict):
+        continue
+    url = str(spec.get("url", ""))
+    if "127.0.0.1:9090/mcp" not in url and "localhost:9090/mcp" not in url:
+        continue
+    headers = spec.setdefault("headers", {})
+    if headers.get("X-Seere-Auth-Token") != tok:
+        headers["X-Seere-Auth-Token"] = tok
+        changed = True
+if not changed:
+    sys.exit(0)
+tmp = cfg + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+os.replace(tmp, cfg)
+try:
+    st = os.stat("/data/user/0/com.agy")
+    os.chown(cfg, st.st_uid, st.st_gid)
+except Exception:
+    pass
+os.chmod(cfg, 0o600)
+PYEOF
+    return 0
+}
+
 # --- identidad de instancia ----------------------------------------------
 # El movil Samsung es la instancia MAESTRA (rol primary): es la que reparte
 # tareas, decide y sincroniza.  El PC Linux y el resto son workers.
@@ -411,6 +470,7 @@ start_daemon() {
     fi
     fast_fails=0
     ensure_web_bridge
+    sync_antigravity_bridge
     write_state "OK: cockpit vivo en http://localhost:$PORT/"
     write_url
     log "cockpit verificado vivo -> http://localhost:$PORT/ (URL guardada en $URL_FILE)"

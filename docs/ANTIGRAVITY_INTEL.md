@@ -359,3 +359,138 @@ ni `mcp_config` ni `mcpServers`) ⇒ la config es estable frente al bootstrap.
 
 **Pendiente**: reiniciar el language server de Antigravity para que relea la config (implica
 tocar la app en uso ⇒ no se hace de forma automática).
+
+---
+
+## 7. Sección del carril de apps/ocultación (`275a2232`) — medidas del cliente vivo y puente
+
+> Complemento medido **en el móvil del usuario** (no del paquete de distribución).
+> Todo lo que sigue es reproducible con `root_exec` + `curl` contra `127.0.0.1:9090`.
+
+### 7.1 La pregunta clave: ¿Antigravity habla MCP? — **SÍ, y por qué lo sabemos**
+
+| Evidencia | Dónde | Qué demuestra |
+|---|---|---|
+| `mcpServers` con `command`/`args`/`env` y con `url`/`headers` | `~/.gemini/config/mcp_config.json` | El cliente acepta los **dos** transportes |
+| `types.McpStdioServer(name, command, args)` y `types.McpStreamableHttpServer(name, url, headers)` | plugin `google-antigravity-sdk`, `skills/.../mcp_tools.md` | El **SDK oficial** documenta stdio **y** Streamable HTTP con cabeceras |
+| `google3/third_party/golang/github.com/modelcontextprotocol/go_sdk/v/v0/mcp/mcp` (`CallToolParams`, `ClientCapabilities`, `Implementation{clientInfo, protocolVersion}`) | cadenas de `liblanguage_server.so` | El binario embuelve el **SDK oficial de MCP en Go**: es un cliente MCP de pleno derecho |
+| `~/.gemini/antigravity-app/mcp/<server_id>/*.json` | caché del cliente | El cliente guarda los **schemas de las tools** por servidor ⇒ ya negoció `tools/list` con él |
+
+Servidores MCP que el cliente tiene hoy:
+
+| `server_id` | Origen | Tools en caché |
+|---|---|---|
+| `megadaemon-minimax` | el nuestro (ver §7.3) | 7 (esquemas viejos, del intento por stdio) |
+| `data-agent-kit-plugin_dak-notebook` | plugin del propio Antigravity | 9 |
+| `gemini-api_gemini-api-docs` | plugin del propio Antigravity | 2 (+ `instructions.md`) |
+| `data-agent-kit-plugin_dak-viz` | plugin del propio Antigravity | — |
+
+### 7.2 El puente, con la **corrección** de la receta
+
+Medido contra el daemon vivo:
+
+| Petición a `POST http://127.0.0.1:9090/mcp` | Resultado |
+|---|---|
+| sin cabeceras | **403** |
+| sólo `X-API-Key` | **403** |
+| sólo `X-Seere-Auth-Token` | **200** |
+| las dos (como está en la config de Antigravity) | **200** |
+
+⇒ **La API key NO abre `/mcp`**; lo abre el **token de sesión**. La receta que circulated con
+`X-API-Key` sola daría 403. Además la respuesta es **JSON plano**
+(`Content-Type: application/json`) y **sin** cabecera `Mcp-Session-Id` ⇒ el servidor MCP es
+**sin estado** y no hay que mantener sesión en el puente.
+
+La entrada correcta en `~/.gemini/config/mcp_config.json` (ya aplicada en el móvil):
+
+```json
+{ "mcpServers": { "megadaemon-minimax": {
+    "url": "http://127.0.0.1:9090/mcp",
+    "headers": { "X-Seere-Auth-Token": "<token de sesión, 0600>" } } } }
+```
+
+- **LAN**: `http://192.168.1.124:9090/mcp` (mismo daemon, otra interfaz).
+- **Túnel**: `https://<tunnel-url>/mcp` (la URL efímera vive en `/data/local/tmp/megadaemon/tunnel.url`).
+- El `providers.minimax.api_key` (BYOK del cliente) **se conserva**: el modelo del IDE y el MCP
+  son cosas distintas.
+
+### 7.3 El token rota ⇒ el puente se rompía solo (y su arreglo)
+
+El token de sesión se materializa **al arrancar el daemon** ⇒ en cada reinicio el valor escrito en
+la config de Antigravity quedaba caduco y el MCP moría **en silencio** (el cliente reintenta y no
+dice nada). Arreglo en el supervisor (`deploy/99-megadaemon.sh`, función
+`sync_antigravity_bridge`): tras cada arranque verificado del daemon se re-sincroniza **sólo** la
+cabecera del servidor HTTP local del `mcp_config.json` (merge idempotente, conserva `providers` y
+el resto), y el fichero queda `0600` del usuario de la app. **El secreto nunca sale del móvil**:
+ni al repo, ni al chat, ni al tablón.
+
+### 7.4 Inventario del cliente vivo (medido)
+
+- **Paquete**: `com.agy` ("AGY v2"); APK en `/data/app/~~j0Ed8z8Ure_gK6t8fDORYg==/com.agy-*/base.apk`.
+- **Sandbox POSIX**: `/data/user/0/com.agy/files/` (37 entradas: `usr/bin` con toolchain completa —
+  `bash`, `python3`, `7z`, `aapt`, `clang`, `rish` (Shizuku, uid 2000) —, `usr/lib/python3.*/site-packages`,
+  `megadaemon/` con un **clon git** del repo, `dumper-web/antigravity-android-repo/`, `agy_standalone/`).
+- **Procesos**: la app `com.agy` (pid 2679) + el **language server** (Go) como hijo:
+  `libloader.so … liblanguage_server.so --standalone --override_ide_name antigravity --subclient_type hub
+  --override_ide_version 2.11.0 --https_server_port 45157 --csrf_token <uuid> --app_data_dir antigravity-app
+  --web_bundle_path …/web --enable_sidecars`.
+- **Storages**: `.gemini/antigravity-app/{brain,conversations,plugin_data,sidecar_data,mcp,builtin,bin,
+  annotations,presence,crashes}` + `*.pbtxt` (`antigravity_state.pbtxt`, `jetski_state.pbtxt`) +
+  `conversation_summaries.db` + `agyhub_summaries_proto.pb`.
+- **Hooks del daemon**: `Snatcher-MegaDaemon-SuperLoop` (interval 300 s) y `minimax_bootstrap`
+  (cron, deshabilitado) en `~/.gemini/antigravity-app/daemon/tasks.json`; el daemon acepta
+  `interval | cron | github | file | battery | webhook` (webhook autenticado con `X-AGY-Token`
+  en `127.0.0.1`, cuerpo ≤ 64 KB).
+- **Permisos**: `config.json → userSettings.globalPermissionGrants.allow` (concesiones globales),
+  `autoExecutionPolicy`, `browserJsExecutionPolicy`, `enableTerminalSandbox: false`.
+- **Credenciales (sólo estructura)**: `providers.<id>.api_key` en `mcp_config.json`/`config.json`,
+  `mcpServers.<n>.env`/`.headers`, `~/.gemini/jetski-standalone-oauth-token`,
+  `antigravity/custom_models.json → models[].apiKey`.
+- ⚠️ **Hallazgo de seguridad**: el **bearer OAuth de Google aparece en claro** en
+  `agy_standalone/probe.log` (registro del proxy de pruebas). No se reproduce aquí; conviene
+  rotarlo y dejar ese log en `0600` (o borrarlo).
+
+### 7.5 Proveedores: mapeo, **sin duplicar** (`providers.rs` ya tiene 18 entradas)
+
+| Antigravity (provider/model) | Proveedor de MegaDaemon | Modelo |
+|---|---|---|
+| `minimax` / `MiniMax-M3.1-Flash` | `minimax-m3.1-flash` | MiniMax-M3.1-Flash |
+| `minimax` / `MiniMax-M3` | `minimax-m3` | MiniMax-M3 |
+| `gemini` | `google-ai-studio` | gemini-3.8-flash |
+| `glm` | `zai-glm-free` | glm-4.7-flash |
+| `openrouter` / `groq` / `pollinations` | `openrouter-free` / `groq-free` / `pollinations-free` | — |
+| `anthropic` / `deepseek` / `cerebras` / `mistral` | `anthropic` / `deepseek` / `cerebras` / `mistral-free` | — |
+| `seere` / local | `local-seere` | local |
+
+El cliente declara hoy un único modelo BYOK (`minimax` / `MiniMax-M3.1-Flash`) ⇒ **coincide 1:1**
+con `minimax-m3.1-flash`. La tabla completa vive en `antigravity_intel::provider_map_table()`.
+
+### 7.6 Del cliente al tablón y al bus de servicios
+
+- `antigravity_intel::tasks_to_board_tasks(&hooks)` proyecta las tareas propias de Antigravity al
+  formato de `state/mesh_board.json` (`task_id: "antigravity-<id>"`, `owner: "antigravity"`,
+  `payload.trigger`, `interval_sec`, `last_run_status`…), **sin credenciales**.
+- `antigravity_intel::service_bus_entry(...)` deja la entrada lista para W6
+  (`id: "antigravity"`, `kind: "agent_client"`, `transport: "http"`, `auth_kind: "session_token_file"`,
+  `health` = **el valor medido**, nunca inventado).
+
+### 7.7 Cómo verificar el puente de punta a punta en 10 segundos
+
+1. Abrir Antigravity y pedirle al agente cualquier tool del servidor `megadaemon-minimax`
+   (p. ej. `system_overview`).
+2. En el móvil, el daemon deja traza de la llamada del cliente:
+   `grep '"/mcp"' /sdcard/megadaemon.log | tail` → debe aparecer una entrada con **UA del cliente**
+   (no `curl/7.88.1`) y `reason` vacío ⇒ el cliente se conectó de verdad.
+3. La lista de tools del daemon son **45**; el IDE debería/cachear los schemas en
+   `~/.gemini/antigravity-app/mcp/megadaemon-minimax/`.
+
+### 7.8 Módulo y tests
+
+- `rust-core/src/antigravity_intel.rs` — escaneo con tipos, parseo de `mcp_config.json` /
+  `config.json` / `custom_models.json` / `tasks.json`, **estructura de credenciales sin valores**
+  (nombre de campo + longitud + sha16), detección de servidores MCP **rotos**, mapeo de
+  proveedores, generación del `mcpServers` HTTP y del `merge_server_entry`, proyección al tablón y
+  entrada de `service_bus`.
+- `rust-core/tests/antigravity_intel_smoke.rs` — `#[path]` (no toca `lib.rs`): monta un árbol
+  `.gemini` sintético y comprueba que **ningún valor de credencial sale del módulo**.
+- `cargo test --test antigravity_intel_smoke` → **14 passed / 0 failed** (4 del arnés + 10 internos).
