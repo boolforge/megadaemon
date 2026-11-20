@@ -1270,7 +1270,7 @@ pub fn browser_exclude_paths() -> Vec<&'static str> {
 /// cae en la copia root cuando no la hay.
 pub fn browser_sync_strategy(profile: &BrowserProfile) -> Vec<String> {
     let mut steps: Vec<String> = Vec::new();
-    match profile.native_sync {
+    match &profile.native_sync {
         Some(sync) => {
             steps.push(format!(
                 "1º Sincronización nativa ({}): es la única vía que replica \
@@ -1570,14 +1570,14 @@ mod tests {
             Level::L2UserData,
             vec![item("a.txt", 1), item("b.txt", 1), item("c.txt", 1)],
         );
-        let mut lookup = |rel: &str| -> Option<String> {
+        let lookup = |rel: &str| -> Option<String> {
             match rel {
                 "a.txt" => Some(plan.items[0].sha256.clone()),
                 "b.txt" => Some("0".repeat(64)),
                 _ => None,
             }
         };
-        let rep = verify_at_destination(&plan, &mut lookup);
+        let rep = verify_at_destination(&plan, lookup);
         assert_eq!(rep.verified, 1);
         assert_eq!(rep.mismatched.len(), 1);
         assert_eq!(rep.missing, vec!["c.txt".to_string()]);
