@@ -1102,3 +1102,577 @@ MODE:
 }
 
 // ====================================================================
+
+// ===========================================================================
+// Captura del audio de la llamada: qué se puede y cómo
+// ===========================================================================
+
+/// Permiso que exige Android para capturar el audio de una llamada
+/// (`MediaRecorder.AudioSource.VOICE_CALL` / `VOICE_UPLINK` / `VOICE_DOWNLINK`).
+///
+/// Es `signature|privileged`: **ninguna app normal puede obtenerlo**, ni con
+/// `RECORD_AUDIO`. Medido en este S21 Ultra: la app SamsungInCallUI es la que
+/// lo usa (y por eso el móvil puede grabar llamadas "nativas" con CSC THL/INS).
+pub const CAPTURE_AUDIO_OUTPUT: &str = "android.permission.CAPTURE_AUDIO_OUTPUT";
+
+/// UID del usuario `system` (1000). En AOSP es un `sharedUserId` firmado con
+/// la clave de plataforma, así que **cualquier proceso que corra bajo ese UID
+/// tiene el permiso de captura de audio de llamada**.
+pub const SYSTEM_UID: u32 = 1000;
+
+/// Fuente de captura de audio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CaptureSource {
+    /// Micrófono. Lo único que puede usar una app normal.
+    Mic,
+    /// Audio completo de la llamada (lo que dice el otro + lo que oyes).
+    VoiceCall,
+    /// Sólo la voz de quien llama (uplink / TX).
+    VoiceUplink,
+    /// Sólo lo que se oye en el auricular (downlink / RX).
+    VoiceDownlink,
+    /// Submix remoto: el audio que reproduce otra app.
+    RemoteSubmix,
+}
+
+impl CaptureSource {
+    /// Nombre estable.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CaptureSource::Mic => "mic",
+            CaptureSource::VoiceCall => "voice_call",
+            CaptureSource::VoiceUplink => "voice_uplink",
+            CaptureSource::VoiceDownlink => "voice_downlink",
+            CaptureSource::RemoteSubmix => "remote_submix",
+        }
+    }
+
+    /// Valor de `android.media.MediaRecorder.AudioSource`.
+    pub fn android_source(&self) -> u32 {
+        match self {
+            CaptureSource::Mic => 1,
+            CaptureSource::VoiceUplink => 2,
+            CaptureSource::VoiceDownlink => 3,
+            CaptureSource::VoiceCall => 4,
+            CaptureSource::RemoteSubmix => 8,
+        }
+    }
+
+    /// `true` si hace falta `CAPTURE_AUDIO_OUTPUT` para esta fuente.
+    pub fn requires_capture_audio_output(&self) -> bool {
+        matches!(
+            self,
+            CaptureSource::VoiceCall | CaptureSource::VoiceUplink | CaptureSource::VoiceDownlink
+        )
+    }
+
+    /// `true` si la fuente es audio de llamada (y no micrófono).
+    pub fn captures_call_audio(&self) -> bool {
+        self.requires_capture_audio_output()
+    }
+}
+
+/// Cómo lanzar el grabador para capturar el audio de llamada.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CaptureLaunch {
+    /// Fuente elegida.
+    pub source: CaptureSource,
+    /// Comando exacto.
+    pub command: String,
+    /// UID con el que corre.
+    pub uid: u32,
+    /// `true` si hace falta root.
+    pub needs_root: bool,
+    /// Notas honestas sobre el camino elegido.
+    pub notes: Vec<String>,
+}
+
+/// Plan de lanzamiento del grabador nativo para una fuente dada.
+///
+/// **La vía que funciona con root y sin parchar nada** es correr el grabador
+/// bajo el **UID de sistema (1000)**: ese UID está firmado con la clave de
+/// plataforma, así que tiene `CAPTURE_AUDIO_OUTPUT` y puede abrir
+/// `VOICE_CALL`. Medido en el móvil: `su 1000 -c id` ⇒ `uid=1000(system)`.
+///
+/// Lo que **no** se puede prometer: que el HAL de Samsung exponga la voz del
+/// módem como entrada capturable. Si el HAL sólo tiene salida de voz, el
+/// `VOICE_CALL` devuelve silencio y **no hay parche de AudioFlinger que lo
+/// arregle**: la vía real sería el grabador nativo de Samsung (CSC THL/INS).
+pub fn capture_launch_plan(source: CaptureSource, binary: &str) -> CaptureLaunch {
+    let mut notes = Vec::new();
+    let mut command;
+    let mut uid = 0u32;
+    let mut needs_root = false;
+
+    if source.requires_capture_audio_output() {
+        needs_root = true;
+        uid = SYSTEM_UID;
+        command = format!(
+            "su -mm -c \"su {uid} -c '{binary} --source {src} --out /data/local/tmp/megadaemon-call.raw'\"",
+            uid = SYSTEM_UID,
+            binary = binary,
+            src = source.android_source()
+        );
+        notes.push(format!(
+            "{} exige {}: se corre bajo el UID de sistema ({})",
+            source.as_str(),
+            CAPTURE_AUDIO_OUTPUT,
+            SYSTEM_UID
+        ));
+        notes.push(
+            "Si el HAL de Samsung no expone la voz del modem como entrada, el \
+             fichero sale en silencio: eso NO se arregla parcheando AudioFlinger, \
+             se comprueba grabando y mirando si el PCM no es todo ceros."
+                .to_string(),
+        );
+        notes.push(
+            "Alternativa sin root: cambiar el CSC a uno que habilite la grabación \
+             nativa (THL/INS) y usar el grabador de Samsung."
+                .to_string(),
+        );
+    } else {
+        command = format!(
+            "{} --source {} --out /data/local/tmp/megadaemon-call.raw",
+            binary,
+            source.android_source()
+        );
+        notes.push(
+            "El micrófono capta lo que entra por el micrófono: con el altavoz \
+             se oye al interlocutor, pero NO es el audio de la llamada."
+                .to_string(),
+        );
+        notes.push(
+            "Con la pantalla bloqueada, el micrófono puede dejar de dar datos \
+             (depende del firmware); la grabación quedaría vacía."
+                .to_string(),
+        );
+    }
+
+    CaptureLaunch {
+        source,
+        command,
+        uid,
+        needs_root,
+        notes,
+    }
+}
+
+// ===========================================================================
+// Política de audio: ¿hace falta parchearla?
+// ===========================================================================
+
+/// Hechos extraídos de la política de audio del dispositivo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioPolicyFacts {
+    /// Ruta de la política analizada.
+    pub policy_path: String,
+    /// Mixports declarados.
+    pub mix_ports: Vec<String>,
+    /// `true` si existe el puerto de dispositivo "Voice Call Mic".
+    pub has_voice_call_device_port: bool,
+    /// `true` si la política declara alguna fuente `AUDIO_SOURCE_VOICE_*`.
+    pub has_voice_call_source: bool,
+    /// `true` si existe un mixport de captura específico de llamada.
+    pub has_call_capture_mix_port: bool,
+}
+
+impl AudioPolicyFacts {
+    /// ¿Hace falta un parche de política para capturar la llamada?
+    ///
+    /// En este S21 Ultra la respuesta es **no**: la voz entra por el módem y
+    /// se mezcla en el HAL, no hay un mixport de voz que capturar; lo que hay
+    /// es un puerto de dispositivo "Voice Call Mic" enrutado a `primary-in`.
+    /// Un parche de política sólo ayudaría en dispositivos donde la voz **sí**
+    /// pasa por un mixport del sistema (AOSP puro), y entonces consistiría en
+    /// **añadir** un mixport de captura, no en "desbloquear" uno existente.
+    pub fn needs_policy_patch(&self) -> bool {
+        !self.has_call_capture_mix_port && self.has_voice_call_source
+    }
+}
+
+/// Analiza una política de audio (XML) y extrae los hechos relevantes.
+pub fn audio_policy_facts(path: &str, xml: &str) -> AudioPolicyFacts {
+    let mut mix_ports = Vec::new();
+    for cap in xml.split("mixPort name=\"").skip(1) {
+        if let Some(end) = cap.find('"') {
+            mix_ports.push(cap[..end].to_string());
+        }
+    }
+    let has_voice_call_device_port = xml.contains("AUDIO_DEVICE_IN_VOICE_CALL");
+    let has_voice_call_source = xml.contains("AUDIO_SOURCE_VOICE_CALL")
+        || xml.contains("AUDIO_SOURCE_VOICE_UPLINK")
+        || xml.contains("AUDIO_SOURCE_VOICE_DOWNLINK");
+    let has_call_capture_mix_port = mix_ports.iter().any(|m| {
+        let m = m.to_ascii_lowercase();
+        m.contains("call") || m.contains("voice") || m.contains("record")
+    });
+    AudioPolicyFacts {
+        policy_path: path.to_string(),
+        mix_ports,
+        has_voice_call_device_port,
+        has_voice_call_source,
+        has_call_capture_mix_port,
+    }
+}
+
+// ===========================================================================
+// Flags de CSC (la vía de la grabación NATIVA)
+// ===========================================================================
+
+/// Dónde puede vivir la configuración de CSC en un Samsung.
+pub const CSC_FEATURE_SOURCES: [&str; 6] = [
+    "/optics/configs/carriers/single/{csc}/conf/system/cscfeature.xml",
+    "/prism/etc/carriers/single/{csc}/contents.db",
+    "/prism/etc/carriers/single/{csc}/sysconfig",
+    "/prism/etc/carriers/single/{csc}/permissions",
+    "/optics/configs/carriers/single/{csc}/conf",
+    "/prism/etc/carriers/single/{csc}/default-permissions",
+];
+
+/// Rutas candidatas para la configuración del CSC indicado.
+///
+/// Nota: `contents.db` **es** SQLite pero es un **inventario de ficheros**
+/// (tabla `contents(salesCode, _id, filePath, fileSize)`, 2.006 filas): sirve
+/// para auditar qué ficheros forman el CSC y sus tamaños esperados, **no**
+/// guarda los valores de `CscFeature_*`. Los valores están en el
+/// `cscfeature.xml` de cada CSC, que va **ofuscado con OMC**.
+///
+/// Además, para saber qué ficheros componen un CSC conviene tener el
+/// `cscfeature.xml` de otro CSC (p. ej. THL) para comparar
+pub fn csc_feature_candidates(csc: &str) -> Vec<String> {
+    let csc = csc.trim().to_ascii_uppercase();
+    CSC_FEATURE_SOURCES
+        .iter()
+        .map(|p| p.replace("{csc}", &csc))
+        .collect()
+}
+
+/// Una bandera de CSC con su valor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CscFeature {
+    /// Nombre de la bandera (p. ej. `CscFeature_VoiceCall_ConfigRecording`).
+    pub key: String,
+    /// Valor: `true`/`false` si es booleano; el texto si no.
+    pub value: String,
+}
+
+impl CscFeature {
+    /// El valor leído como booleano (`1`/`0`/`true`/`false`).
+    pub fn enabled(&self) -> Option<bool> {
+        match self.value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        }
+    }
+}
+
+/// Parsea las banderas de CSC de un blob.
+///
+/// Acepta los dos formatos que se han visto en Samsung:
+/// · `clave=valor;clave2=valor2` (el de `sysconfig`/`contents.db`)
+/// · XML de atributos `name="clave" value="1"` (el de `cscfeature.xml`)
+pub fn parse_csc_features(blob: &str) -> Vec<CscFeature> {
+    let mut out: Vec<CscFeature> = Vec::new();
+
+    // Formato clave=valor
+    for chunk in blob.split(';').flat_map(|p| p.split('\n')) {
+        let chunk = chunk.trim();
+        if chunk.is_empty() || !chunk.contains('=') {
+            continue;
+        }
+        if let Some((k, v)) = chunk.split_once('=') {
+            let key = k.trim().trim_matches('"').trim();
+            let val = v.trim().trim_matches('"').trim();
+            if key.is_empty() || key.contains(' ') {
+                continue;
+            }
+            out.push(CscFeature {
+                key: key.to_string(),
+                value: val.to_string(),
+            });
+        }
+    }
+
+    // Formato XML de atributos
+    let mut rest = blob;
+    while let Some(i) = rest.find("name=\"") {
+        let after = &rest[i + 6..];
+        let key_end = match after.find('"') {
+            Some(e) => e,
+            None => break,
+        };
+        let key = after[..key_end].to_string();
+        let tail = &after[key_end..];
+        let value = match tail.find("value=\"") {
+            Some(v) => {
+                let vs = &tail[v + 7..];
+                let ve = vs.find('"').unwrap_or(0);
+                vs[..ve].to_string()
+            }
+            None => String::new(),
+        };
+        if key.starts_with("CscFeature_") {
+            out.push(CscFeature {
+                key,
+                value: value.clone(),
+            });
+        }
+        rest = tail;
+    }
+
+    out
+}
+
+/// Busca una bandera de CSC por nombre.
+pub fn csc_feature<'a>(features: &'a [CscFeature], key: &str) -> Option<&'a CscFeature> {
+    features.iter().find(|f| f.key == key)
+}
+
+/// ¿Está activada la grabación **nativa** de llamadas?
+///
+/// La bandera es `CscFeature_VoiceCall_ConfigRecording`: la lee la app
+/// SamsungInCallUI (medido en su DEX) y es la que hace aparecer el botón de
+/// grabar en la pantalla de llamada.
+pub fn voice_call_config_recording(features: &[CscFeature]) -> Option<bool> {
+    csc_feature(features, "CscFeature_VoiceCall_ConfigRecording").and_then(|f| f.enabled())
+}
+
+
+// ===========================================================================
+// Estado del envoltorio OMC y veredicto final de la captura
+// ===========================================================================
+
+/// Cómo está codificado un fichero de configuración de Samsung.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum OmcState {
+    /// Texto legible: se puede parsear tal cual.
+    Plaintext,
+    /// Comprimido con gzip (magic `1f 8b`).
+    Gzip,
+    /// Envoltorio OMC propietario: cabecera binaria, no texto.
+    Obfuscated {
+        /// Cabecera en hexadecimal.
+        magic: String,
+        /// Tamaño del fichero.
+        bytes: usize,
+    },
+}
+
+/// Detecta cómo está codificado un fichero de CSC.
+///
+/// **Medido**: el `cscfeature.xml` del CSC AMO de este móvil son **1.109 B** y
+/// empieza por `2f 27 29 b7 da c1 ac 37`: **no** es gzip (`1f 8b`) ni texto ⇒
+/// el envoltorio OMC es un **formato binario propio con cabecera**, no
+/// "gzip + XOR". Por eso buscar el XOR a ciegas no funciona: hay que leer la
+/// cabecera OMC primero.
+pub fn omc_state(bytes: &[u8]) -> OmcState {
+    if bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b {
+        return OmcState::Gzip;
+    }
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        if text.contains("CscFeature_") {
+            return OmcState::Plaintext;
+        }
+    }
+    let n = bytes.len().min(8);
+    let magic = bytes[..n]
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<String>>()
+        .join("");
+    OmcState::Obfuscated {
+        magic,
+        bytes: bytes.len(),
+    }
+}
+
+/// Los hechos que determinan si se puede grabar el audio de una llamada.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CallAudioFacts {
+    /// ¿El HAL de audio expone un camino de captura de voz?
+    ///
+    /// **Medido en este móvil**: `libaudiohal.so` (33.184 B) tiene **cero**
+    /// cadenas `voice|voip|csd|VOICE_CALL|capture|in_call` ⇒ **no lo expone**:
+    /// el audio de la llamada lo genera el **modem** y **ningún parche de
+    /// AudioFlinger lo arregla**.
+    pub hal_has_voice_path: bool,
+    /// Apps que **declaran** `CAPTURE_AUDIO_OUTPUT` en su manifiesto.
+    ///
+    /// **Medido**: sólo dos, y **ninguna de Samsung**: `YourPhone_P1_5` y
+    /// `LinkToWindowsService` (Microsoft). El grabador tampoco está en los
+    /// jars de `/system/framework`.
+    pub apps_with_capture_permission: Vec<String>,
+    /// ¿El CSC actual habilita el grabador nativo de Samsung?
+    pub csc_allows_native: bool,
+    /// ¿Se puede correr como UID de sistema (root)?
+    pub system_uid_available: bool,
+}
+
+impl CallAudioFacts {
+    /// El veredicto honesto, en una frase.
+    ///
+    /// El orden de preferencia real, medido en este móvil:
+    /// 1. **Cambiar el CSC** a uno que habilite la grabación nativa
+    ///    (`THL`/`INS`): el propio sistema graba, sin hacks.
+    /// 2. **UID de sistema + `VOICE_CALL`**: tiene el permiso, pero si el HAL
+    ///    no expone la voz el PCM sale en silencio ⇒ hay que comprobarlo
+    ///    grabando (fichero no vacío y no todo ceros).
+    /// 3. Las apps de **Microsoft** ya tienen el permiso declarado.
+    pub fn conclusion(&self) -> String {
+        let mut v: Vec<String> = Vec::new();
+        if self.csc_allows_native {
+            v.push("el CSC actual ya habilita el grabador nativo de Samsung: se usa ese".to_string());
+        } else {
+            v.push(
+                "el CSC actual NO habilita el grabador nativo: la via fiable es cambiarlo \
+                 (THL/INS) o usar una app con CAPTURE_AUDIO_OUTPUT"
+                    .to_string(),
+            );
+        }
+        if !self.hal_has_voice_path {
+            v.push(
+                "el HAL no expone un camino de captura de voz (medido: cero cadenas de voz \
+                 en libaudiohal.so): el audio lo genera el modem y ningun parche de \
+                 AudioFlinger lo arregla"
+                    .to_string(),
+            );
+        }
+        if self.system_uid_available {
+            v.push(
+                "con root se puede correr el grabador bajo el UID de sistema (1000), que tiene \
+                 CAPTURE_AUDIO_OUTPUT, pero hay que comprobar que el PCM no sale en silencio"
+                    .to_string(),
+            );
+        }
+        if !self.apps_with_capture_permission.is_empty() {
+            v.push(format!(
+                "apps con el permiso ya declarado: {}",
+                self.apps_with_capture_permission.join(", ")
+            ));
+        }
+        v.join(". ")
+    }
+}
+
+
+// ===========================================================================
+// Captura de la voz del modem por ALSA (la vía que SÍ funciona)
+// ===========================================================================
+
+/// Los PCM de captura **WDMA0..7** del Exynos 2100
+/// (`/dev/snd/pcmC0D12..19`) son la **ruta de voz AP<->CP**: el audio de la
+/// llamada pasa por ahí, no por el HAL de audio de usuario.
+///
+/// **Medido**: `/proc/asound/pcm` lista `00-12: WDMA0 ... 00-19: WDMA7` como
+/// `capture`. Por eso el HAL no tiene cadenas de voz (la voz no pasa por él) y
+/// sin embargo **la voz es capturable, sin `CAPTURE_AUDIO_OUTPUT`**.
+pub const ALSA_WDMA_DEVICES: [&str; 8] = [
+    "hw:0,12", "hw:0,13", "hw:0,14", "hw:0,15", "hw:0,16", "hw:0,17", "hw:0,18",
+    "hw:0,19",
+];
+
+/// Dispositivos ALSA donde el audio de la llamada **no** está.
+pub const ALSA_NOT_VOICE_HINT: &str =
+    "Los PCM WDMA son la ruta de voz del modem; los demas (RDMA/WDMA de audio \
+     multimedia) no la llevan.";
+
+/// Plan de captura por ALSA.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AlsaCapturePlan {
+    /// Dispositivo ALSA (p. ej. `hw:0,12`).
+    pub device: String,
+    /// Frecuencia de muestreo.
+    pub sample_rate: u32,
+    /// Canales.
+    pub channels: u16,
+    /// Formato.
+    pub format: String,
+    /// Comando exacto del capturador.
+    pub command: String,
+    /// Salida.
+    pub out: String,
+    /// Notas honestas.
+    pub notes: Vec<String>,
+}
+
+/// Plan de captura de la voz del modem por ALSA.
+///
+/// **La ventaja**: no necesita `CAPTURE_AUDIO_OUTPUT`, ni parche de
+/// AudioFlinger, ni cambio de CSC: lee el PCM del hardware directamente.
+/// **Lo que hay que comprobar**: que el PCM correcta sea la de la llamada
+/// (hace falta una llamada en curso) y en qué sentido va cada una (el
+/// uplink y el downlink suelen ir en WDMA distintos).
+pub fn alsa_voice_capture_plan(device: &str, seconds: u32) -> AlsaCapturePlan {
+    AlsaCapturePlan {
+        device: device.to_string(),
+        sample_rate: 48000,
+        channels: 1,
+        format: "S16_LE".to_string(),
+        command: format!(
+            "su -mm -c \"md_alsa --dev {} --sec {} --out /data/local/tmp/megadaemon-wdma.raw\"",
+            device, seconds
+        ),
+        out: "/data/local/tmp/megadaemon-wdma.raw".to_string(),
+        notes: vec![
+            "Los nodos /dev/snd/* son system:audio 0660 => hace falta root (o grupo audio).".to_string(),
+            ALSA_NOT_VOICE_HINT.to_string(),
+            "Sin llamada en curso el PCM devuelve silencio: hay que comprobarlo DURANTE una llamada.".to_string(),
+            "El binario se compila con el NDK y se enlaza con -lasound (libasound del propio Android).".to_string(),
+        ],
+    }
+}
+
+// ===========================================================================
+// Cambio de CSC: lo que hay en el móvil y el riesgo real
+// ===========================================================================
+
+/// Operador de la SIM **medido** en este móvil.
+pub const SIM_OPERATOR_ALPHA: &str = "JAZZTEL";
+/// MCC/MNC de la SIM **medido**: 214 = España, 03 = Jazztel.
+pub const SIM_OPERATOR_NUMERIC: &str = "21403";
+
+/// CSC presentes en el móvil que **habilitan la grabación nativa**.
+///
+/// `INS` (India) **no está** en este firmware; sí están `THL`, `ILO` y `XXV`.
+pub const RECORDING_CSC_AVAILABLE: [&str; 3] = ["THL", "ILO", "XXV"];
+
+/// Riesgo de cambiar el CSC, en texto honesto.
+///
+/// El CSC **no** cambia la SIM ni su MCC/MNC: el módem sigue registrando en
+/// la red de la SIM (aquí Jazztel 21403, que ya no coincide con el CSC
+/// `AMO`). El CSC elige el **juego de configuración** (operador, MMS, APN,
+///VoLTE, y las banderas `CscFeature_*`). Cambiarlo puede, por tanto, tocar
+/// el APN/VoLTE y **perder alguna función del operador**, aunque la llamada
+/// y los datos siguen funcionan en la red de la SIM.
+pub fn csc_switch_risk(sim_numeric: &str, target_csc: &str) -> String {
+    format!(
+        "Cambiar el CSC a {t} no cambia la SIM ({s}) ni su MCC/MNC: el modem sigue \
+         registrando en la red de la SIM. Lo que cambia es el juego de configuracion \
+         (APN, VoLTE/IMS, MMS y las banderas CscFeature_*). Riesgos reales: (1) el \
+         APN/IMS pueden no encajar con la SIM y perder VoLTE o datos; (2) con AVB \
+         verde y /prism montado en solo-lectura, el cambio no es permanente, solo \
+         dura hasta que el sistema reescriba el CSC; (3) es reversible: se \
+         restauran los 3 bytes de mps_code.dat y se reinicia.",
+        t = target_csc,
+        s = sim_numeric
+    )
+}
+
+/// Comprobaciones **después** de cambiar el CSC.
+pub fn csc_switch_verify_plan(target_csc: &str) -> Vec<String> {
+    vec![
+        format!(
+            "`getprop ro.csc.sales_code` debe mostrar {}",
+            target_csc
+        ),
+        "`getprop gsm.version.baseband` debe ser coherente con el CSC destino".to_string(),
+        "Comprobar que la app de llamadas de Samsung (`com.samsung.android.incallui`) \
+         tiene el flag `CscFeature_VoiceCall_ConfigRecording` a 1: con el CSC de \
+         America (AMO) esta apagado y el boton de grabar no aparece."
+            .to_string(),
+        "Si la llamada saliente pierde IMS/VoLTE: revertir (restaurar mps_code.dat y reiniciar)."
+            .to_string(),
+    ]
+}
+
