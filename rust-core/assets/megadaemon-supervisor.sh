@@ -31,7 +31,22 @@ rotate() {
 log() { echo "[$(date '+%F %T')] $*" >> "$LOG"; }
 
 start_cockpit() {
-  [ -x "$P/megadaemon-core" ] || { log "cockpit: binario ausente"; return 1; }
+  # v15: "existe pero no es ejecutable" (un `mv` sin `chmod` lo deja en
+  # 644) es un fallo distinto de "no existe": antes el supervisor lo
+  # reportaba como "ausente" y se quedaba sin daemon.  Ahora se repara.
+  if [ ! -f "$P/megadaemon-core" ]; then
+    log "cockpit: binario ausente"
+    return 1
+  fi
+  if [ ! -x "$P/megadaemon-core" ]; then
+    chmod 755 "$P/megadaemon-core" 2>/dev/null
+    if [ -x "$P/megadaemon-core" ]; then
+      log "cockpit: el binario no era ejecutable; chmod 755 aplicado"
+    else
+      log "cockpit: el binario existe pero no se puede hacer ejecutable"
+      return 1
+    fi
+  fi
   set -a; [ -f "$P/megadaemon.env" ] && . "$P/megadaemon.env"; set +a
   cd "$P" 2>/dev/null || exit 1
   setsid "$P/megadaemon-core" cockpit 9090 >> "$LOG" 2>&1 < /dev/null &
@@ -85,7 +100,7 @@ while true; do
 
   if ! pgrep -f "megadaemon-core cockpit" >/dev/null 2>&1; then
     start_cockpit
-    cd_cockpit=$((cd_cockpit+1)); s=$((5*(1<<(cd_cockpit<5?cd_cockpit:5)))); [ "$s" -gt 120 ] && s=120
+    cd_cockpit=$((cd_cockpit+1)); s=$((5*(1<<(cd_cockpit<3?cd_cockpit:3)))); [ "$s" -gt 40 ] && s=40
   else
     cd_cockpit=0; s=30
   fi

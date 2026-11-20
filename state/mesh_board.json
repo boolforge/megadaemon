@@ -1,6 +1,6 @@
 {
   "schema": "megadaemon.mesh.board/v1",
-  "updated_at": "2026-11-20T01:03:21Z",
+  "updated_at": "2026-11-20T01:38:58Z",
   "agents": {
     "cloud-sandbox": {
       "id": "cloud-sandbox",
@@ -61,6 +61,21 @@
         }
       },
       "p4_vendor_ioctls": "134 codigos / 333 sitios en 17 librerias; familias G, g/k (Knox GF), E, M, V; retirada de la cifra v1 (5.955)"
+    },
+    "inventory-agent": {
+      "id": "inventory-agent",
+      "role": "worker",
+      "role_focus": "device-inventory",
+      "focus": [
+        "W2-inventario",
+        "W3-entrada-backup"
+      ],
+      "repo": "https://github.com/boolforge/megadaemon",
+      "branch": "main",
+      "commit": "a56b1c3",
+      "last_seen": "2026-11-20T01:38:58Z",
+      "external_url": "",
+      "status_line": "inventory-agent | W2 ENTREGADO (inventory.json w2.1 + manifiesto sha256, 32 refs verificados, 1719 apps, AVB/TEE/espacio) | lo que toca:(inputs de backup para W3 y pre-flight de W4) | lo que bloquea: nada (W3 ya tiene dueno)"
     }
   },
   "messages": [

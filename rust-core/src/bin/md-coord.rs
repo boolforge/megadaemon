@@ -152,7 +152,7 @@ fn main() -> ExitCode {
                     .or_else(|| arg("--report"))
                     .or_else(|| arg("--ok-text"))
                     .or_else(|| {
-                        // `--ok` puede actuar como bandera o端口ar el texto.
+                        // `--ok` puede actuar como bandera o portar el texto.
                         arg("--ok").filter(|v| !v.starts_with("--"))
                     })
                     .or_else(|| {

@@ -533,6 +533,52 @@ pub const EFS_SAFE_WORLD: [&str; 7] = [
 /// firmware.
 pub const EFS_NON_EXISTENT: [&str; 3] = ["init_boot", "vbmeta_vendor", "sec"];
 
+/// El motor de claves (`keystore2`) **no vive en las particiones del mundo
+/// seguro**: está en `/system/bin`. Sin él, una copia de EFS está incompleta.
+pub const KEYSTORE2_ENGINE: &str = "/system/bin/keystore2";
+
+/// SHA-256 **medido** del motor de claves en este S21 Ultra.
+pub const KEYSTORE2_ENGINE_SHA256: &str =
+    "3012205acc44a8c7d077fdeea398488f2c783802fd6679763b9120e8c8f6eac0";
+
+/// Directorio de datos del keystore (el sistema de claves de Android).
+pub const KEYSTORE_DATA_DIR: &str = "/data/misc/keystore";
+
+/// Plan de lo que hay que respaldar del motor de claves.
+///
+/// El **binario** del motor se respalda (con su hash) porque sin él las claves
+/// de las particiones no son utilizables; los **datos** de las claves, en
+/// cambio, son zona privada: no salen del dispositivo y no son portables
+/// (están atados al TEE).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KeystorePlan {
+    /// Ruta del motor de claves.
+    pub engine_path: String,
+    /// SHA-256 medido del motor.
+    pub engine_sha256: String,
+    /// Ruta de los datos de claves.
+    pub data_dir: String,
+    /// `false`: los datos de claves nunca salen del dispositivo.
+    pub data_portable: bool,
+    /// Explicación.
+    pub note: String,
+}
+
+/// El plan del motor de claves (`keystore2`).
+pub fn keystore2_plan() -> KeystorePlan {
+    KeystorePlan {
+        engine_path: KEYSTORE2_ENGINE.to_string(),
+        engine_sha256: KEYSTORE2_ENGINE_SHA256.to_string(),
+        data_dir: KEYSTORE_DATA_DIR.to_string(),
+        data_portable: false,
+        note: "El motor (binario) se respalda con su SHA-256: sin él, una copia de \
+               EFS no permite usar las claves. Los DATOS de las claves no son \
+               portables (viven en el TEE) y no salen del dispositivo: sólo su \
+               inventario (alias y huellas)."
+            .to_string(),
+    }
+}
+
 /// Algo que **no** es recuperable, con el motivo.
 ///
 /// Un backup sin esto miente: dice "está respaldado" cuando en realidad sólo
@@ -1222,7 +1268,7 @@ pub fn browser_exclude_paths() -> Vec<&'static str> {
 /// cae en la copia root cuando no la hay.
 pub fn browser_sync_strategy(profile: &BrowserProfile) -> Vec<String> {
     let mut steps: Vec<String> = Vec::new();
-    match profile.native_sync {
+    match &profile.native_sync {
         Some(sync) => {
             steps.push(format!(
                 "1º Sincronización nativa ({}): es la única vía que replica \
@@ -1526,7 +1572,7 @@ mod tests {
                 _ => None,
             }
         };
-        let rep = verify_at_destination(&plan, &mut lookup);
+        let rep = verify_at_destination(&plan, &lookup);
         assert_eq!(rep.verified, 1);
         assert_eq!(rep.mismatched.len(), 1);
         assert_eq!(rep.missing, vec!["c.txt".to_string()]);

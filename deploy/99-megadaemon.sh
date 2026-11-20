@@ -467,7 +467,23 @@ export MEGADAEMON_INSTANCE_DEVICE="${MEGADAEMON_INSTANCE_DEVICE:-samsung}"
 
 # --- arranque -------------------------------------------------------------
 start_daemon() {
-    [ -x "$BIN" ] || { log "ERROR: no existe $BIN"; return 1; }
+    # v15: si el binario existe pero NO es ejecutable (un `mv` sin `chmod`
+    # lo deja en 644), el daemon no arranca nunca y el supervisor dice
+    # "no existe", que manda el diagnostico por donde no es.  Ahora se
+    # AUTO-REPARA y el log dice la verdad.
+    if [ ! -f "$BIN" ]; then
+        log "ERROR: no existe $BIN"
+        return 1
+    fi
+    if [ ! -x "$BIN" ]; then
+        chmod 755 "$BIN" 2>/dev/null
+        if [ -x "$BIN" ]; then
+            log "AVISO: $BIN no era ejecutable (permisos); chmod 755 aplicado"
+        else
+            log "ERROR: $BIN existe pero no se puede hacer ejecutable"
+            return 1
+        fi
+    fi
     if [ -f "$ENV_FILE" ]; then
         # set -a para exportar todo lo definido y que lo lean los hijos
         set -a
