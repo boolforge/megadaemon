@@ -59,7 +59,11 @@ fn serve_patched(listener: TcpListener) {
             let mut stream = stream;
             let mut req = [0u8; 512];
             let _ = stream.read(&mut req);
-            let is_panic = req.windows(7).any(|w| w == b"/panic");
+            // OJO: la ventana debe medir EXACTAMENTE lo que se busca.
+            // Con windows(7) contra b"/panic" (5 bytes) la comparación nunca
+            // era cierta, el panic no se disparaba y el test pasaba/fallaba
+            // por motivos equivocados.
+            let is_panic = req.windows(5).any(|w| w == b"/panic");
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 // 1) el estado global se toma con lock_ok (a prueba de veneno)
                 let mut st = lock_ok(state());

@@ -182,6 +182,26 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "store_manager",
+            "description": "Gestor de tiendas/repos universal: registra tiendas (repo, modulo Magisk, APK, payload, herramienta), descarga y cachea su indice, lo verifica (sha256 por entrada y firma RSA opcional del indice), busca entradas y las instala con verificacion de hash. Sin SDK de terceros ni binarios externos. Acciones: list, add, remove, refresh, search, plan, install, stats.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["list", "add", "remove", "refresh", "search", "plan", "install", "stats"], "default": "list" },
+                    "id": { "type": "string", "description": "Identificador de la tienda" },
+                    "name": { "type": "string" },
+                    "kind": { "type": "string", "enum": ["repo", "magisk", "apk", "payload", "tool"], "default": "repo" },
+                    "base_url": { "type": "string" },
+                    "index_path": { "type": "string" },
+                    "public_key": { "type": "string", "description": "Clave publica RSA en base64 con el formato n:e" },
+                    "trust": { "type": "string", "enum": ["sha256", "signed"], "default": "sha256" },
+                    "query": { "type": "string" },
+                    "entry": { "type": "string", "description": "id de la entrada a instalar" },
+                    "confirm": { "type": "boolean", "default": false }
+                }
+            }
+        },
+        {
             "name": "root_detectors",
             "description": "Apps que DETECTAN root, medido en el dispositivo: extrae la tabla de cadenas real del DEX de cada APK, busca firmas de deteccion (rutas de su, Magisk, props, Xposed/Frida, Play Integrity, emulador, Knox) y anade la evidencia dinamica vista en logcat. Cada hallazgo lleva la cadena exacta y el fichero de la que salio.",
             "inputSchema": {
@@ -1010,6 +1030,14 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 }),
                 _ => json!({ "ok": false, "error": "unknown_action", "hint": "repos|issues|prs|publish|bridge" }),
             }
+        }
+        // v15: gestor de tiendas/repos universal ("mega store manager").
+        // Sin SDK de terceros ni binarios externos: todo en Rust, con
+        // sha256 por entrada y firma RSA opcional del índice.
+        "store_manager" => {
+            let action = s("action");
+            let dir = std::path::PathBuf::from(crate::mesh::default_state_dir());
+            crate::store_manager::handle_action(&action, args, &dir)
         }
         _ => return None,
     };
