@@ -43,6 +43,10 @@ UA = "MegaDaemon-channel-discover"
 # CANÓNICO: el endpoint del daemon (PÚBLICO, payload mínimo) servido por el
 # relay del PC => URL estable, sin PAT en el móvil y sin caché de CDN.
 CANONICAL_DEF = "https://mdtmfnc.duckdns.org/channel.json"
+# Dominio estable (canónico) del canal: el subdominio que EXISTE en la cuenta
+# de DuckDNS. ⚠️ DuckDNS responde "OK" aunque no cree un subdominio que no
+# esté registrado => un "OK" no prueba nada => el dominio se comprueba por DNS.
+DOMINIO_DEF = "mdtmfnc.duckdns.org"
 # Respaldo canónico: el fichero en el repo (vía Contents API, que no cachea).
 REPO_DEF = ("https://raw.githubusercontent.com/boolforge/megadaemon/"
             "main/state/channel.json")
@@ -55,6 +59,51 @@ def fetch(url, timeout=TIMEOUT):
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read().decode("utf-8", errors="replace")
+
+
+def host_de(url):
+    """Host de una URL (minúsculas, sin esquema ni ruta)."""
+    if not url or not isinstance(url, str):
+        return ""
+    u = url.strip()
+    if "://" not in u:
+        u = "https://" + u
+    m = re.match(r"https?://([^/:?#]+)", u)
+    return m.group(1).lower() if m else ""
+
+
+def normaliza_dominio(estado, dominio):
+    """Reescribe al dominio canónico los dominios obsoletos del estado.
+
+    El `state/channel.json` lo **sobrescribe el móvil** al publicar: hasta
+    que publique con la release nueva puede traer un dominio que **no
+    existe** (medido: `mdtmfnc-s21.duckdns.org` no está registrado en la
+    cuenta ⇒ NXDOMAIN, aunque la API de DuckDNS respondiera "OK"). Un lector
+    que sirva ese valor "parece vivo" pero no lo está ⇒ se normaliza y se
+    marca, para que la diferencia sea visible y no silenciosa.
+    """
+    if not isinstance(estado, dict):
+        return estado
+    canonico = (dominio or DOMINIO_DEF).strip().lower()
+    cambios = []
+    for campo in ("duckdns", "canonical"):
+        v = estado.get(campo)
+        if not isinstance(v, str) or not v:
+            continue
+        h = host_de(v)
+        if not h or h == canonico or "duckdns.org" not in h:
+            # los respaldos legítimos (p.ej. raw.githubusercontent.com) se dejan
+            continue
+        nuevo = (f"https://{canonico}" if campo == "duckdns"
+                 else f"https://{canonico}/channel.json")
+        cambios.append(f"{campo}: {v} -> {nuevo}")
+        estado[campo] = nuevo
+    if cambios:
+        estado["_dominio_normalizado"] = True
+        motivo = ("el estado traía un dominio obsoleto (el móvil aún no ha "
+                  "publicado con la release nueva): " + "; ".join(cambios))
+        estado["nota"] = (str(estado.get("nota", "")).strip() + " | " + motivo).strip(" |")
+    return estado
 
 
 def desde_json(texto):
@@ -169,7 +218,8 @@ def main():
     ap.add_argument("--canonical", default=CANONICAL_DEF,
                     help="URL estable del estado (raw del repo)")
     ap.add_argument("--paste", help="URL de un paste conocido (respaldo)")
-    ap.add_argument("--duckdns", help="dominio estable (p.ej. mdtmfnc.duckdns.org)")
+    ap.add_argument("--duckdns", default=DOMINIO_DEF,
+                    help="dominio estable/canónico (p.ej. mdtmfnc.duckdns.org)")
     ap.add_argument("--state", default="~/.mavis/channel.json",
                     help="fichero local donde se guarda el último estado")
     ap.add_argument("--no-guardar", action="store_true")
@@ -221,7 +271,7 @@ def main():
                 avisos.append(f"paste no accesible: {type(e).__name__}: {e}")
 
     # 3) dominio estable
-    if args.duckdns:
+    if args.duckdns and args.duckdns != DOMINIO_DEF:
         d = desde_duckdns(args.duckdns)
         if estado is None:
             estado = d
@@ -233,6 +283,10 @@ def main():
             print(a, file=sys.stderr)
         print("sin canal: usa --canonical, --paste o --duckdns", file=sys.stderr)
         return 1
+
+    # el estado puede traer un dominio obsoleto (el móvil aún no ha publicado
+    # con la release nueva) => se normaliza al canónico y se marca
+    estado = normaliza_dominio(estado, args.duckdns or DOMINIO_DEF)
 
     edad = edad_horas(estado)
     if edad is not None:
