@@ -1,31 +1,22 @@
 #!/data/data/com.termux/files/usr/bin/sh
-# fix-movil.sh — ENTRADA DE COMPATIBILIDAD (el móvil ya tenía esta URL).
-#
-# La implementación ÚNICA está en deploy/fix-entorno.sh: un solo fichero
-# que detecta si se ejecuta en el móvil o en el PC y hace lo correcto en
-# cada caso.  Este wrapper sólo lo descarga y lo ejecuta, para que la
-# orden que ya usas siga funcionando y tome la versión FIXED.
+# fix-movil.sh — ENTRADA DE COMPATIBILIDAD (esta URL ya se usaba).
+# La implementación ÚNICA es deploy/instalador-megadaemon.sh: los dos
+# caminos (móvil y PC) en un solo instalador.
 #
 #   sh fix-movil.sh              # instala (arregla)
-#   sh fix-movil.sh --diagnostico  # sólo diagnostica, no toca nada
+#   sh fix-movil.sh --diagnostico
 #
-# MEDIDO el 2026-11-21: esta versión vieja se rompía en el paso 2 con
+# MEDIDO el 2026-11-21: la versión vieja de este fichero se rompía con
 # "curl: (22) 404" porque buscaba el tag de release "latest", que NO
-# existe: los tags son `v<sha>`.  El canónico resuelve la release por la
-# API de GitHub y por eso ya no da 404.
+# existe (los tags son v<sha>).  El canónico usa la URL estable
+# /releases/latest/download/<asset>.
 set -u
-
-CANON="https://raw.githubusercontent.com/boolforge/megadaemon/main/deploy/fix-entorno.sh"
-DEST="${TMPDIR:-/tmp}/fix-entorno.sh"
-
-# si ya estamos en un clon del repo, se usa el fichero local (más fiable)
-LOCAL="$(dirname "$0")/fix-entorno.sh"
-if [ -f "$LOCAL" ]; then
-  exec sh "$LOCAL" "$@"
-fi
-
+CANON="https://raw.githubusercontent.com/boolforge/megadaemon/main/deploy/instalador-megadaemon.sh"
+LOCAL="$(dirname "$0")/instalador-megadaemon.sh"
+if [ -f "$LOCAL" ]; then exec sh "$LOCAL" "$@"; fi
 CURL="$(command -v curl 2>/dev/null || echo /data/data/com.termux/files/usr/bin/curl)"
 [ -x "$CURL" ] || { echo "ERROR: no hay curl (pkg install curl)"; exit 1; }
+DEST="${TMPDIR:-/tmp}/instalador-megadaemon.sh"
 "$CURL" -fsSL -o "$DEST" "$CANON" || { echo "ERROR: no pude descargar $CANON"; exit 1; }
 chmod 755 "$DEST"
 exec sh "$DEST" "$@"
