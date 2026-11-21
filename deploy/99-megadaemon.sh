@@ -29,11 +29,17 @@ ENV_FILE="$PREFIX/megadaemon.env"
 # peers.json, audit.ndjson, board.sqlite y la key: TODO en el mismo sitio).
 if [ -f "$ENV_FILE" ]; then
     . "$ENV_FILE" 2>/dev/null
-    # Sólo las variables NO secretas se exportan a los hijos: la API key se
-    # exporta más abajo, sólo al daemon (igual que antes).
-    export MEGADAEMON_STATE_DIR="${MEGADAEMON_STATE_DIR:-/data/local/tmp/megadaemon/state}"
-    export MEGADAEMON_LISTEN="${MEGADAEMON_LISTEN:-127.0.0.1:9090}"
 fi
+# Los defaults se exportan SIEMPRE, no sólo cuando existe el env file.
+# BUG MEDIDO (2026-11-21): con el export dentro del `if`, si el móvil no
+# tiene $ENV_FILE el daemon caía al default DEL CRATE RUST
+# (/data/user/0/com.agy/files/megadaemon/state), que en el móvil NO existe
+# => la key, tunnel.url, channel.json, peers.json, audit.ndjson y
+# board.sqlite se dispersaban => 403 global y /channel.json sin 'quick'.
+# Sólo las variables NO secretas se exportan a los hijos: la API key se
+# exporta más abajo, sólo al daemon (igual que antes).
+export MEGADAEMON_STATE_DIR="${MEGADAEMON_STATE_DIR:-/data/local/tmp/megadaemon/state}"
+export MEGADAEMON_LISTEN="${MEGADAEMON_LISTEN:-127.0.0.1:9090}"
 LOG=/sdcard/megadaemon.log
 LOG_DIR=/sdcard/megadaemon-logs
 MAX_BYTES=$((10 * 1024 * 1024))
@@ -603,6 +609,33 @@ check_daemon_responsive() {
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# v15 (F3): shell root PERSISTENTE para el bucle agentico.
+#
+# El bucle agentico NO puede abrir un 'su' por llamada: en este movil cada
+# llamada crea 2+ procesos (su -mm -c sh -c ...) y la maquina va al limite
+# (load 17,65, 876 procesos) => un bucle cerrado tumba el movil.  Con UN
+# shell vivo por socket unix, las llamadas cuestan 0 procesos.
+#
+# El socket va 0600 (acceso root) y las acciones destructivas exigen
+# 'confirm: true' explicito (politica del veto de la voz).
+#
+# BUG MEDIDO (2026-11-21): esta funcion usaba $P, que NO existe en este
+# script (la variable es $PREFIX).  Con $P vacio => socket en /state/... y
+# el test `[ -x "$P/md-shell-serve" ]` era SIEMPRE falso => el shell root
+# persistente NUNCA se arranco => el bucle agentico seguia abriendo un 'su'
+# por llamada (el incidente de saturacion que esta funcion evita).
+SHELL_SOCK="$PREFIX/state/shell.sock"
+ensure_shell_service() {
+    [ -x "$PREFIX/md-shell-serve" ] || return 0
+    if pgrep -f "md-shell-serve" > /dev/null 2>&1; then
+        return 0
+    fi
+    mkdir -p "$PREFIX/state" 2>/dev/null
+    log "F3: arrancando el shell root persistente (socket $SHELL_SOCK)"
+    setsid sh -c "su -mm -c '$PREFIX/md-shell-serve $SHELL_SOCK'" > /dev/null 2>&1 < /dev/null &
+}
+
 start_daemon() {
     # v15: si el binario existe pero NO es ejecutable (un `mv` sin `chmod`
     # lo deja en 644), el daemon no arranca nunca y el supervisor dice
@@ -927,6 +960,7 @@ while true; do
         # vivo).  Dos fallos seguidos de /health => se reinicia.
         probe_iface_init
         check_daemon_responsive "$PORT" || true
+        ensure_shell_service
         apply_energy_policy
         ensure_web_bridge
         sync_antigravity_bridge
