@@ -102,6 +102,11 @@ mkdir -p "$PREFIX" "$STATE" 2>/dev/null
 # ── Descarga (el móvil NO tiene curl; sí toybox wget) ──────────────────
 REPO_RAW=https://raw.githubusercontent.com/boolforge/megadaemon/main
 REPO_API=https://api.github.com/repos/boolforge/megadaemon
+# OJO: la API y la descarga son hosts DISTINTOS.  La API sirve el JSON de la
+# release en api.github.com; los ficheros se descargan de
+# github.com/<owner>/<repo>/releases/download/<tag>/<asset>.  Usar
+# api.github.com/.../releases/download/... devuelve 404 (medido).
+REPO_DL=https://github.com/boolforge/megadaemon/releases/download
 
 fetch() {
     # $1 = url  $2 = destino.  Devuelve 0 si se descargó.
@@ -232,7 +237,7 @@ auto_update() {
     _tag=$(grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' "$_json" 2>/dev/null | head -1 | sed -E 's/.*"([^"]*)".*/\1/')
     [ -n "$_tag" ] || { log "AVISO: no se pudo leer el tag de la release"; return 1; }
     log "release: $_tag"
-    _base="$REPO_API/releases/download/$_tag"
+    _base="$REPO_DL/$_tag"
     _asset="$PREFIX/megadaemon-core.new"
     if ! fetch "$_base/megadaemon-core-android-arm64" "$_asset"; then
         log "AVISO: no se pudo bajar el binario"
