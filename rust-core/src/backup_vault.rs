@@ -41,6 +41,7 @@
 //! garantiza nonces únicos por (bóveda, fichero, chunk) sin necesidad de un
 //! generador aleatorio durante el cifrado.
 
+use crate::util_fs::walk_files;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -920,29 +921,6 @@ fn normalize_rel(rel: &str) -> Result<String, String> {
 }
 
 /// Recorre un directorio recogiendo ficheros regulares (sin symlinks).
-fn walk_files(root: &Path, out: &mut Vec<PathBuf>) {
-    let rd = match fs::read_dir(root) {
-        Ok(r) => r,
-        Err(_) => return,
-    };
-    let mut entries: Vec<fs::DirEntry> = rd.filter_map(|e| e.ok()).collect();
-    entries.sort_by_key(|e| e.file_name());
-    for e in entries {
-        let p = e.path();
-        let md = match fs::symlink_metadata(&p) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        if md.file_type().is_symlink() {
-            continue;
-        }
-        if md.is_dir() {
-            walk_files(&p, out);
-        } else if md.is_file() {
-            out.push(p);
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Sellado (cifrado)

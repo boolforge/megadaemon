@@ -22,6 +22,7 @@
 //! * **sin secretos**: lo que se difunde son textos, ids y hashes, nunca keys;
 //! * **auditable**: cada acción deja una línea en el journal con su resultado.
 
+pub use crate::util_text::now_iso;
 use serde_json::{json, Value};
 
 /// Rol con el que el daemon se presenta en el tablón del enjambre.
@@ -538,34 +539,6 @@ pub fn whoami(profile: &VoiceProfile) -> Value {
 }
 
 /// Hora actual en ISO-8601 UTC (sin dependencias: días→fecha civil).
-pub fn now_iso() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let days = secs.div_euclid(86_400);
-    let rem = secs.rem_euclid(86_400);
-    // días → fecha civil (algoritmo de Hinnant)
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        y,
-        m,
-        d,
-        rem / 3600,
-        (rem % 3600) / 60,
-        rem % 60
-    )
-}
 
 fn truncate(s: &str, n: usize) -> String {
     if s.chars().count() <= n {

@@ -12,6 +12,12 @@
 
 #[path = "../src/backup_full.rs"]
 mod backup_full;
+// `util_fs` es el helper canonico de `walk_files` (MEDIDO el 2026-11-21: al
+// fusionar `fix/robustness-20261120` los tres consumidores pasaron a usarlo y
+// los arneses autocontenidos dejaron de compilar: E0432).  Solo usa `std`.
+#[path = "../src/util_fs.rs"]
+#[allow(dead_code, unused_imports, unused_mut)]
+mod util_fs;
 
 use backup_full::{
     build_pack, chunk_sha256, classify_zone, level_specs, not_recoverable, plan_chunks,
