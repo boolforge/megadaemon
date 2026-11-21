@@ -142,10 +142,19 @@ STATE_REAL="$(root 'echo $MEGADAEMON_STATE_DIR' | tr -d '\r\n')"
 CODEC_LOCAL=""
 PATCHER_LOCAL=""
 RAW=https://raw.githubusercontent.com/boolforge/megadaemon/main
+# El CSC se parchea con el BINARIO RUST (megadaemon-core csc): sin python3
+# en el movil.  Si el binario es antiguo, se cae al script de Python.
+MD_BIN_LOCAL="$MD_DIR/megadaemon-core"
 descargar_herramientas_csc() {
   [ -n "$CURL" ] || return 1
   DESTDIR="$MD_DIR"
   [ -d "$DESTDIR" ] || DESTDIR="${TMPDIR:-/tmp}"
+  CODEC_LOCAL=""
+  PATCHER_LOCAL=""
+  if [ -x "$MD_BIN_LOCAL" ] && "$MD_BIN_LOCAL" csc --help >/dev/null 2>&1; then
+    CSC_CMD="$MD_BIN_LOCAL csc"
+    return 0
+  fi
   if [ ! -f "$DESTDIR/omc_codec.py" ]; then
     "$CURL" -fsSL -o "$DESTDIR/omc_codec.py" "$RAW/tools/omc_codec.py" 2>/dev/null || return 1
   fi
@@ -154,6 +163,7 @@ descargar_herramientas_csc() {
   fi
   CODEC_LOCAL="$DESTDIR/omc_codec.py"
   PATCHER_LOCAL="$DESTDIR/patch_csc_value.py"
+  CSC_CMD="$PATCHER_LOCAL"
   return 0
 }
 
@@ -220,14 +230,18 @@ diagnostico() {
     warn "no pude resolver la última release (¿red? ¿API de GitHub?)"
   fi
   say "--- CSC: descubrimiento de features ---"
-  descargar_herramientas_csc
-  if [ -n "$CODEC_LOCAL" ] && [ -n "$PATCHER_LOCAL" ]; then
-    PY3="$(command -v python3 2>/dev/null || echo /data/data/com.termux/files/usr/bin/python3)"
-    if [ -x "$PY3" ]; then
-      "$PY3" "$PATCHER_LOCAL" --listar 2>/dev/null | head -40 | while read -r l; do say "  $l"; done
-    fi
+  if descargar_herramientas_csc; then
+    case "$CSC_CMD" in
+      *megadaemon-core*)
+        $CSC_CMD list 2>/dev/null | head -40 | while read -r l; do say "  $l"; done
+        ;;
+      *)
+        PY3="$(command -v python3 2>/dev/null || echo /data/data/com.termux/files/usr/bin/python3)"
+        [ -x "$PY3" ] && "$PY3" "$PATCHER_LOCAL" --listar 2>/dev/null | head -40 | while read -r l; do say "  $l"; done
+        ;;
+    esac
   else
-    warn "no pude traer el decodificador OMC (sin red?)"
+    warn "no pude traer las herramientas CSC (sin red?)"
   fi
   CSCV="$(root "settings get secure recording_allowed_value 2>/dev/null" | tr -d '\r\n')"
   [ -n "$CSCV" ] && say "CSC (settings): $CSCV"
@@ -315,6 +329,35 @@ if [ -z "$NEWD" ]; then
 fi
 say "daemon arrancado (pid $NEWD)"
 
+say "=== 3b) arranque automatico (service.d) ==="
+# Magisk ejecuta /data/adb/service.d/* al arrancar el movil: con el trio
+# instalado, el daemon + el tunel + el watchdog levantan SOLOS tras cada
+# reinicio, sin Termux.  Sin esto, al cerrar Termux se cae todo.
+install_service() {
+  # $1 = fichero en el repo (raw), $2 = ruta destino en el movil
+  SRC_URL="$RAW/$1"
+  DST="$2"
+  if root "test -f $DST" | tr -d '\r\n' | grep -q SI; then
+    say "  ya esta: $DST"
+    return 0
+  fi
+  TMPD="${TMPDIR:-/tmp}/svc.$$"
+  if ! "$CURL" -fsSL -o "$TMPD" "$SRC_URL" 2>/dev/null; then
+    warn "  no pude descargar $SRC_URL"
+    return 1
+  fi
+  root "mkdir -p $(dirname $DST); cp -f $TMPD $DST; chmod 755 $DST"
+  if root "test -x $DST" | tr -d '\r\n' | grep -q SI; then
+    say "  instalado: $DST"
+  else
+    warn "  no pude instalar $DST"
+  fi
+}
+install_service "deploy/99-megadaemon.sh" "$SUP"
+install_service "deploy/98-cloudflared.sh" "/data/adb/service.d/98-cloudflared.sh"
+install_service "deploy/tunnel-watchdog.sh" "$MD_DIR/tunnel-watchdog.sh"
+say "arranque automatico: supervisor + tunel + watchdog (Magisk service.d)"
+
 say "=== 4) túnel y canal ==="
 CF="$(root 'pgrep -c cloudflared' | tr -d ' \r\n')"
 say "procesos cloudflared: ${CF:-0} (1 es lo correcto)"
@@ -339,20 +382,32 @@ fi
 say "=== 5) CSC: parche de la feature de grabación ==="
 if [ "$CSC_ACTIVO" = "0" ]; then
   say "CSC: omitido (--sin-csc)"
-elif descargar_herramientas_csc && [ -n "$PATCHER_LOCAL" ]; then
-  PY3="$(command -v python3 2>/dev/null || echo /data/data/com.termux/files/usr/bin/python3)"
-  if [ -x "$PY3" ]; then
-    say "descubrimiento de features del CSC:"
-    "$PY3" "$PATCHER_LOCAL" --listar 2>&1 | head -40 | while read -r l; do say "  $l"; done
-    say "parcheando CscFeature_VoiceCall_ConfigRecording = $CSC_VALOR"
-    OUT="$("$PY3" "$PATCHER_LOCAL" "$CSC_VALOR" 2>&1)"
+elif descargar_herramientas_csc; then
+  say "descubrimiento de features del CSC:"
+  case "$CSC_CMD" in
+    *megadaemon-core*)
+      $CSC_CMD list 2>&1 | head -40 | while read -r l; do say "  $l"; done
+      say "parcheando CscFeature_VoiceCall_ConfigRecording = $CSC_VALOR"
+      OUT="$($CSC_CMD set "$CSC_VALOR" 2>&1)"
+      ;;
+    *)
+      PY3="$(command -v python3 2>/dev/null || echo /data/data/com.termux/files/usr/bin/python3)"
+      if [ ! -x "$PY3" ]; then
+        warn "no hay binario CSC nuevo ni python3: actualiza el binario del release o instala python"
+        OUT=""
+      else
+        "$PY3" "$PATCHER_LOCAL" --listar 2>&1 | head -40 | while read -r l; do say "  $l"; done
+        say "parcheando CscFeature_VoiceCall_ConfigRecording = $CSC_VALOR"
+        OUT="$("$PY3" "$PATCHER_LOCAL" "$CSC_VALOR" 2>&1)"
+      fi
+      ;;
+  esac
+  if [ -n "$OUT" ]; then
     printf '%s\n' "$OUT" | while read -r l; do say "  $l"; done
     case "$OUT" in
-      *"modulo actualizado"*) say "CSC parcheado (modulo Magisk).  El bind-mount se aplica al reiniciar." ;;
+      *"módulo:"*|*"modulo actualizado"*) say "CSC parcheado (modulo Magisk).  El bind-mount se aplica al reiniciar." ;;
       *) warn "el parche CSC no se pudo aplicar (mira el detalle arriba)" ;;
     esac
-  else
-    warn "no hay python3 en el móvil (pkg install python)"
   fi
 else
   warn "no pude traer las herramientas CSC (sin red?)"
