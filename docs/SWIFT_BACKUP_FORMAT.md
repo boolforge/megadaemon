@@ -312,3 +312,151 @@ Swift Backup) y de la tabla de imports de la nativa:
 * ⇒ El alcance honesto del lector queda: **parse + derivar clave + verificar
   key-check + verificar el MAC del índice** ⇒ y el **AEAD por trozos**
   (`aead_no_replicado`), que es donde vive la confidencialidad.
+
+
+---
+
+## 7. El AEAD por trozos: lo que se ha medido en la nativa
+
+> Medición sobre `libsba_archive.so` (x86_64, `lib/x86_64/`), el mismo
+> binario que la app usa en Android (ARM64) — las dos arquitecturas
+> coinciden en la secuencia.
+> Código: `rust-core/src/swift_archive.rs` (funciones `derive_chunk_nonce`,
+> `derive_chunk_aad`, `aead_cifrar`, `aead_descifrar`).
+
+### 7.1 El AESEA es **SHA-256** (no hay AES detrás)
+
+Los valores iniciales que la nativa carga en `.rodata` son **exactamente**
+los de SHA-256:
+
+| Offset en el `.so` (x86_64) | Valor | Es |
+|---|---|---|
+| `0x150c0` | `6a09e667 bb67ae85 3c6ef372 a54ff53a` | H0..H3 de SHA-256 |
+| `0x14fa0` | `510e527f 9b05688c 1f83d9ab 5be0cd19` | H4..H7 de SHA-256 |
+
+Y el relleno final usa la longitud **en bits big-endian** (`bswap` de un
+`u64` en `0x77328`) ⇒ es **SHA-256 estándar**, no una variante.
+
+### 7.2 Nonce y AAD por trozo
+
+Dos funciones internas distintas, una por etiqueta:
+
+| | Función | Entrada | Salida |
+|---|---|---|---|
+| **nonce** | `0x77190` | `SHA-256( etiqueta_nonce ‖ D )` | 32 B |
+| **AAD** | `0x77770` | `SHA-256( etiqueta_aad ‖ D )` | 32 B |
+
+Etiquetas (literales en `.rodata`):
+
+| Método | Etiqueta del nonce | Etiqueta del AAD |
+|---|---|---|
+| AEGIS-256 | `SBA1-AEGIS256-entry-chunk-nonce-v1` (`0x1536d`) | `SBA1-AEGIS256-entry-chunk-aad-v1` (`0x18802`) |
+| AEGIS-128X2 | `SBA1-AEGIS128X2-entry-chunk-nonce-v1` (`0x1528d`) | `SBA1-AEGIS128X2-entry-chunk-aad-v1` (`0x13588`) |
+
+⇒ **nonce y AAD se derivan del MISMO bloque `D` con etiquetas distintas**
+⇒ es **separación de dominio** por hash, no dos claves distintas.
+
+### 7.3 Qué es `D`: **el bloque de 16 bytes de la cabecera**
+
+El constructor del contexto (`0x7070c`) copia:
+
+```
+ctx+0x00 = "AEGIS-256"                       (el nombre del algoritmo)
+ctx+0x08 = "SBA1-AEGIS256-entry-chunk-nonce-v1"
+ctx+0x10 = "SBA1-AEGIS256-entry-chunk-aad-v1"
+ctx+0x18 = <callback del AEAD>              (0x88450)
+ctx+0x20 = 32                                (longitud de la clave)
+ctx+0x28 = <int>                             (el "entry order")
+ctx+0x30 = <32 B>  ← la clave
+ctx+0x48 = <16 B>  ← **D**    (`mov $0x10,%ecx` + `memcpy`)
+ctx+0x60 = <N B>             (bloque variable)
+```
+
+⇒ **D son 16 bytes** ⇒ por la forma del key-check
+(`SHA-256(etiqueta ‖ salt ‖ nonce2 ‖ clave)`) y por los tres bloques de
+16 B de la cabecera, **D = el `salt`** (`bloque1`).
+
+### 7.4 El AEAD es un **flujo continuo**, no un AEAD por trozo
+
+El contexto se construye **una vez** por entrada y el bucle de trozos
+(`ctx+0x88/0x90` = par *offset/length*, `ctx+0xb8` = cursor) reutiliza el
+**mismo estado** ⇒ ⇒ el relleno con ceros del último bloque parcial va
+**al final del mensaje**, no por trozo ⇒ ⇒ **equivale a cifrar el mensaje
+entero de una vez** ⇒ ⇒ el `aegis.rs` del repo (que es one-shot) sirve
+tal cual.
+
+### 7.5 Los otros dos números medidos
+
+| Parámetro | Valor | Evidencia |
+|---|---|---|
+| **Tamaño de trozo** | `1..=0x10000` (**64 KiB** máximo) | la validación compara con `0x10001`; error *"AEGIS-256 chunk size is out of range"* |
+| **Longitud de la etiqueta AEAD** | **16 B** | `mov $0x10,%edx` justo antes de la llamada al callback del AEAD |
+| **Firma JNI** | `b(int, long, int, byte[], byte[], byte[], long, long, int, listener): long[]` | `SbaLibaegisCryptoNative.b` en el DEX |
+
+### 7.6 Lo que queda por cerrar (con un `.dat` real)
+
+| Pieza | Estado |
+|---|---|
+| Nonce, AAD, clave, etiqueta y flujo | ✅ **medidos y replicados** (`swift_archive.rs`) |
+| **Encuadre del contenedor** | 🟡 **se descubre**: el lector prueba las geometrías plausibles y **valida con el MAC del índice** (HMAC-SHA256 ⇒ 32 B ⇒ sin falsos positivos). Falta un `.dat` real para confirmar que alguna cuadra |
+| **AEGIS-128X2** | ❌ no replicado (es la alternativa; AEGIS-256 es el principal, según `isSbaAegis256Available`) |
+| **Nonce/AAD por *entrada*** | 🟡 si el contenedor tuviese **una sub-cabecera por entrada**, el `D` sería el de esa entrada ⇒ el lector lo trata como un parámetro, no como una constante |
+
+⇒ Con un `.dat` real, el lector **descubre el encuadre solo** (validando
+el MAC del índice) y devuelve el contenido descifrado con la etiqueta
+AEAD verificada.
+
+
+
+### 7.7 El encuadre del contenedor (modelo medido + autodeteción)
+
+La estructura que la nativa deja (lectura de los mensajes de error y del
+escritor):
+
+```text
++--------------------------------+ 0
+|  cabecera SBA1 (96 ó 144 B)    |
++--------------------------------+ header_size
+|  stream AEAD:                 |
+|    payload cifrado             |
+|    indice cifrado             |  index_off
++--------------------------------+ tag_off
+|  etiqueta AEAD (16 B)         |
++--------------------------------+ mac_off
+|  MAC del indice (en claro)    |
++--------------------------------+ fin
+```
+
+* El **índice va cifrado** (dentro del stream): el verificador falla con
+  *"SBA encrypted index MAC mismatch"* ⇒ ⇒ el MAC se calcula **sobre los
+  bytes cifrados del índice**.
+* El **MAC va en claro y al final** (se escribe con `pwrite` en *"SBA v2
+  index location"*; error *"SBA archive is too small for v2 index MAC"*).
+* El MAC del índice es `HMAC-SHA256(indice_cifrado, clave_mac)` con
+  `clave_mac = SHA-256("SBA2-index-mac-key-v1" ‖ salt ‖ nonce2 ‖ clave)`
+  (misma forma que el key-check, con **otra etiqueta**).  Existe además
+  `SBA2-index-metadata-mac-v1` para los metadatos.
+
+⇒ **El lector se autodetecta**: prueba las longitudes de índice plausibles
+(declaradas en la cabecera + una lista) contra las del MAC y **sólo acepta
+la geometría cuyo MAC cuadra** ⇒ ⇒ 32 bytes de HMAC ⇒ **sin falsos
+positivos**.
+
+### 7.8 Estado de la replicación (honesto)
+
+| Pieza | Estado |
+|---|---|
+| KDF Argon2id | ✅ `crate::argon2::derive_key` (verificado, RFC 9106 + oráculo C) |
+| Key-check | ✅ `SHA-256(etiqueta ‖ salt ‖ nonce2 ‖ clave)[:16]` |
+| Clave HMAC del payload | ✅ `SHA-256("SBA1-payload-hmac-key-v1" ‖ salt ‖ nonce2 ‖ clave)` (32 B) |
+| **Nonce por trozo** | ✅ `SHA-256("SBA1-AEGIS256-entry-chunk-nonce-v1" ‖ salt)` (32 B) |
+| **AAD por trozo** | ✅ `SHA-256("SBA1-AEGIS256-entry-chunk-aad-v1" ‖ salt)` (32 B) |
+| **Flujo AEAD** | ✅ AEGIS-256 continuo, **etiqueta de 16 B** (usa `crate::aegis`, RFC 10032) |
+| **Encuadre del contenedor** | 🟡 **autodetección por el MAC del índice** (funciona; falta confirmarlo con un `.dat` real) |
+| AEGIS-128X2 | ❌ alternativa de la app; no replicada (AEGIS-256 es el principal) |
+| Descifrado **por entrada** (sub-cabecera propia) | 🟡 si el contenedor tuviese una sub-cabecera por entrada, el `D` (salt) sería el de esa entrada ⇒ el código lo toma como **parámetro**, no como constante |
+
+⇒ El estado `aead_no_replicado` **ya no se usa para el AEAD** (que sí está
+replicado y medido); queda reservado para AEGIS-128X2 y para cuando el
+encuadre no se puede validar.
+
