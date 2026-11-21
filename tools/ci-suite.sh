@@ -54,20 +54,40 @@ grep -E '^test result:' "$LOG" | sed 's/^/  /' | tail -60
 
 # Qué binarios de test han fallado.  Cargo imprime la línea "Running <algo>.rs"
 # justo antes del "test result:" de ese binario.
+#
+# MEDIDO el 2026-11-21: un binario que **muere** (SIGKILL/OOM) NO deja
+# "test result: FAILED": cargo deja "error: test failed, but no test output" o
+# "error: signal: 9".  Con la busqueda antigua, la suite entera daba "rojo
+# sin binario identificable" y no se podia saber cual era.  Ahora tambien se
+# cuentan esos casos.
 FALLANOS="$(awk '
   /^ *Running / {
     if (match($0, /[a-z0-9_]+\.rs/)) { bin = substr($0, RSTART, RLENGTH - 3) }
     else { bin = "?" }
     next
   }
-  /^test result: FAILED/ { if (bin != "") print bin }
+  /^test result: FAILED/ { if (bin != "") print bin; next }
+  /^error: (test failed|signal:|process didn.t exit|linking with|can.t find crate)/ {
+    if (bin != "") print bin
+  }
 ' "$LOG" | sort -u)"
 
 if [ -z "$FALLANOS" ]; then
     if [ "$RC" -ne 0 ]; then
-        # Rojo sin binario identificado: se mira el log entero.
+        # Rojo sin binario identificado: casi siempre es un ERROR DE
+        # COMPILACION o un binario muerto antes de imprimir nada.  Se sacan
+        # las lineas de error de cargo y se publican como anotacion (las
+        # anotaciones se leen SIN permisos de admin: son la unica forma de
+        # diagnosticar un rojo del CI desde fuera).
         echo "::error::la suite fallo (rc=$RC) pero no se pudo identificar el binario"
-        tail -40 "$LOG"
+        ERR="$(grep -nE '^(error|warning: unused manifest key|note: )' "$LOG" | head -25)"
+        if [ -n "$ERR" ]; then
+            echo "::error::errores de cargo (primeros 25):$(printf '\n%s' "$ERR" | head -c 1800)"
+            printf '%s\n' "$ERR" | head -25
+        else
+            echo "::error::sin lineas 'error:' en el log; ultimas 30:"
+            tail -30 "$LOG"
+        fi
         exit 1
     fi
     echo "::notice::suite completa VERDE"
