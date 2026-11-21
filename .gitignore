@@ -15,6 +15,9 @@ scummvm.ini
 state/providers.json
 state/api_keys.json
 state/*.key
+state/*.keys
+state/*.url
+state/delegated_tasks.json
 re_pipeline/llm_config.json
 .env
 *.secret

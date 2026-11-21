@@ -578,6 +578,19 @@ fn hw07_cabecera_shm_no_puede_forzar_12gb() {
     let _g = lock_guard();
 
     if std::env::var("SCOUT_CHILD").is_ok() {
+        // Hijo: limita el segmento de datos/heap a 1 GiB (en Android Bionic,
+        // Scudo reserva ~64 GiB de espacio de direcciones virtual no-residente
+        // durante execve, por lo que `ulimit -v` hace fallar `exec: Out of space`
+        // antes de main(); RLIMIT_DATA / RLIMIT_AS tras arrancar caza una
+        // reserva real de 12,9 GB sin impedir execve).
+        #[cfg(unix)]
+        unsafe {
+            let lim = libc::rlimit {
+                rlim_cur: 1024 * 1024 * 1024,
+                rlim_max: 1024 * 1024 * 1024,
+            };
+            let _ = libc::setrlimit(libc::RLIMIT_DATA, &lim);
+        }
         // Hijo: analiza el frame con una cabecera hostil (65535x65535).
         let rep = megadaemon_core::npu_cv::analyze_vla_frame_and_accel();
         println!(
@@ -590,15 +603,9 @@ fn hw07_cabecera_shm_no_puede_forzar_12gb() {
     let backup = Backup::take(SHM_PATH);
     write_shm(65535, 65535, 0xAB);
 
-    // Límite de 1 GiB de espacio de direcciones: la asignación desborda.
     let exe = std::env::current_exe().unwrap();
-    let cmd = format!(
-        "ulimit -v 1000000; exec '{}' --exact hw07_cabecera_shm_no_puede_forzar_12gb --nocapture",
-        exe.display()
-    );
-    let out = Command::new("sh")
-        .arg("-c")
-        .arg(&cmd)
+    let out = Command::new(&exe)
+        .args(["--exact", "hw07_cabecera_shm_no_puede_forzar_12gb", "--nocapture"])
         .env("SCOUT_CHILD", "1")
         .output()
         .unwrap();

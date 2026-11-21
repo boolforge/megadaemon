@@ -135,18 +135,14 @@ fn check_kleidiai_dotprod() -> (bool, Vec<String>) {
                             type HasDotprodFn = unsafe extern "C" fn() -> c_int;
                             let f: HasDotprodFn = std::mem::transmute(sym);
                             dotprod = f() != 0;
+                        } else if let Ok(cpuinfo) = fs::read_to_string("/proc/cpuinfo") {
+                            if cpuinfo.contains("asimddp") {
+                                dotprod = true;
+                            }
                         }
                     }
                     libc::dlclose(h);
                 }
-            }
-        }
-    }
-
-    if !dotprod {
-        if let Ok(cpuinfo) = fs::read_to_string("/proc/cpuinfo") {
-            if cpuinfo.contains("asimddp") {
-                dotprod = true;
             }
         }
     }
