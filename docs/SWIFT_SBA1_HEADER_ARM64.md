@@ -41,12 +41,14 @@ entre arquitecturas.
 
 * El helper `0x6aa00` **no es un append de ancho fijo**: tiene **varias rutas** de
   escritura ⇒ el **ancho se recibe como argumento** (`x2`/`w2`).
-* **BIG-ENDIAN confirmado en dos anchos**: en la ruta de 2 bytes se storea
-  `valor>>8` y luego `valor` (`0x6aa2c`/`0x6aac8`); en la de 4 bytes se storean
-  los desplazamientos **24, 16, 8, 0** (`0x6ab98`, `0x6ac34`, …) ⇒ ⇒ **el byte
-  más alto va primero en todos los anchos** ⇒ coherente con `DataOutputStream`
-  de Java/Kotlin ⇒ ⇒ ⇒ **no es Little-Endian**: un lector que lo asumiera leería
-  los campos al revés.
+* **BIG-ENDIAN: invariante del formato** (no una observación puntual). En la ruta
+  de 2 bytes se storea `valor>>8` y luego `valor` (`0x6aa2c`/`0x6aac8`); en la
+  de 4 bytes se storean los desplazamientos **24, 16, 8, 0** (`0x6ab98`,
+  `0x6ac34`, …) ⇒ ⇒ **el byte más alto va primero en todos los anchos**
+  ⇒ coherente con `DataOutputStream` de Java/Kotlin ⇒ ⇒ ⇒ **no es
+  Little-Endian**: un lector que lo asumiera leería los campos al revés.
+  ⇒ **regla para el lector: todos los enteros de la cabecera se leen
+  big-endian, sin excepción**.
 * El argumento de ancho que se usa en la tanda de campos **no es una constante**
   sino un valor calculado (`x25 = x22 - x23`, `0x656cc`) ⇒ ⇒ **de aquí no sale
   el ancho exacto de cada campo**.
@@ -71,6 +73,24 @@ compressionMethodId, compressionLevel, encryption, encryptionMethodId,
 kdfMethodId, kdfIterations, payloadChunkSize, kdf` — modelo medido por el agente
 DEX en `docs/SWIFT_BACKUP_FORMAT.md`).
 
+### Qué NO replicamos: la derivación de nonce/AAD
+
+La derivación del **nonce** y del **AAD** por trozo es **NATIVA**
+(`SbaLibaegisCryptoNative_decryptAegis256ChunkedEntryFdRaw` y compañía): las
+etiquetas (`SBA1-AEGIS256-entry-chunk-nonce-v1`, `…-aad-v1`) son *etiquetas*,
+no el algoritmo ⇒ ⇒ ⇒ **queda documentada como "derivación nativa, no
+replicada"** ⇒ ⇒ ⇒ **no se inventa** ⇒ ⇒ ⇒ ⇒ **y el lector NO depende de ella
+para ser útil**: con el KDF verificado puede
+  1. **parsear la cabecera** (invariante big-endian + tabla de offsets),
+  2. **derivar la clave** (Argon2id, por la API del signer) y
+  3. **verificar el key-check** ⇒ ⇒ **eso prueba que la passphrase es correcta**
+     y que el fichero no está manipulado ⇒ ⇒ ⇒ ⇒ **interop real**: abrir y
+     ver backups cuyo key-check coincide **sin conocer la derivación exacta**.
+⇒ ⇒ Lo que **queda fuera** (y se dice explícitamente): **extraer el contenido**
+de las entradas ⇒ ⇒ ⇒ ⇒ por eso el lector debe responder
+`status:"aead_no_replicado"` cuando llega a esa parte, en vez de devolver
+basura.
+
 ### Por qué el ancho exacto sigue ABIERTO (y no lo voy a inventar)
 
 El escritor **calcula** el ancho en runtime ⇒ ⇒ el mapeo definitivo campo↔nombre
@@ -84,6 +104,12 @@ fuentes, y ambas son externas a mi carril:
 ⇒ ⇒ **hasta entonces el lector debe vivir con el layout en tabla versionada y
 responder `status:"layout_no_verificado"`**, y **nunca** congelar estos offsets
 en tests.
+
+⇒ ⇒ **El mapa de offsets de esta tabla se le ha pasado tal cual al agente DEX**
+(`659db26c`), que lo cierra contra el marshalling real de Kotlin
+(`docs/SWIFT_KOTLIN_MARSHALLING.md`: campo ↔ offset ↔ ancho ↔ tipo ↔
+significado, con la evidencia y `NO DETERMINADO` donde no se pueda) ⇒ ⇒ **el
+lector lo consume de ahí; no se escribe aquí**.
 
 ## Regla de honestidad (no se congela en tests)
 
