@@ -11,7 +11,33 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
 
+/// Ruta HISTÓRICA del fichero de providers (instalaciones antiguas y
+/// despliegue dentro de la app Antigravity).  Se conserva como LECTURA de
+/// respaldo; la escritura va siempre a [`providers_path`].
 pub const PROVIDERS_PATH: &str = "/data/user/0/com.agy/files/megadaemon/state/providers.json";
+
+/// Ruta REAL del fichero de providers (donde viven las API keys BYOK).
+///
+/// Se deriva del `state_dir` del daemon (una sola fuente de verdad).
+/// MEDIDO 2026-11-21: antes el fichero estaba SIEMPRE en el directorio
+/// privado de la app (`/data/user/0/com.agy/files/megadaemon/state/`), que
+/// en el móvil NO es la zona que se respalda => las claves BYOK del usuario
+/// quedaban FUERA del backup.  En el móvil ahora es
+/// `/data/local/tmp/megadaemon/state/providers.json` (dentro de la zona
+/// respaldada); en la app, `/data/user/0/com.agy/files/megadaemon/state/`.
+pub fn providers_path() -> String {
+    format!("{}/providers.json", crate::cockpit_server::state_dir())
+}
+
+/// Rutas de lectura, en orden: la actual y la histórica.
+fn providers_read_candidates() -> Vec<String> {
+    let mut v = vec![providers_path()];
+    let legacy = PROVIDERS_PATH.to_string();
+    if !v.contains(&legacy) {
+        v.push(legacy);
+    }
+    v
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderEntry {
@@ -74,7 +100,11 @@ fn default_vault() -> ProviderVault {
 }
 
 pub fn load_vault() -> ProviderVault {
-    if let Ok(raw) = fs::read_to_string(PROVIDERS_PATH) {
+    for path in providers_read_candidates() {
+        let raw = match fs::read_to_string(&path) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
         match serde_json::from_str::<ProviderVault>(&raw) {
             Ok(v) => return v,
             Err(e) => {
@@ -82,12 +112,15 @@ pub fn load_vault() -> ProviderVault {
                 // defecto y el siguiente save_vault() SOBRESCRIBÍA el
                 // fichero, perdiendo TODAS las API keys del usuario.
                 // Ahora se hace una copia .corrupt-<ts> y se avisa.
-                let bak = format!("{}.corrupt-{}", PROVIDERS_PATH, ts_now());
+                let bak = format!("{}.corrupt-{}", path, ts_now());
                 let _ = fs::write(&bak, &raw);
                 eprintln!(
                     "[providers] providers.json corrupto ({}); copia en {}; se usa el catálogo por defecto",
                     e, bak
                 );
+                // No se sigue con el siguiente candidato: el fichero existe
+                // pero está roto => avisar, no seguir leyendo el respaldo.
+                break;
             }
         }
     }
@@ -102,11 +135,12 @@ fn ts_now() -> u64 {
 }
 
 pub fn save_vault(vault: &ProviderVault) -> Result<(), String> {
-    if let Some(parent) = Path::new(PROVIDERS_PATH).parent() {
+    let path = providers_path();
+    if let Some(parent) = Path::new(&path).parent() {
         let _ = fs::create_dir_all(parent);
     }
     let text = serde_json::to_string_pretty(vault).map_err(|e| e.to_string())?;
-    fs::write(PROVIDERS_PATH, text).map_err(|e| e.to_string())
+    fs::write(&path, text).map_err(|e| e.to_string())
 }
 
 fn mask_key(k: &str) -> String {
