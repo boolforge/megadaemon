@@ -723,8 +723,21 @@ pub fn profile_by_id(id: &str) -> Option<AppProfile> {
 fn is_url_delimiter(c: u8) -> bool {
     matches!(
         c,
-        b' ' | b'\t' | b'\n' | b'\r' | b'"' | b'\'' | b'`' | b'<' | b'>' | b')' | b'(' | b']'
-            | b'[' | b',' | b';' | b'\\'
+        b' ' | b'\t'
+            | b'\n'
+            | b'\r'
+            | b'"'
+            | b'\''
+            | b'`'
+            | b'<'
+            | b'>'
+            | b')'
+            | b'('
+            | b']'
+            | b'['
+            | b','
+            | b';'
+            | b'\\'
     )
 }
 
@@ -907,8 +920,7 @@ pub fn classify_file(path: &Path) -> String {
     if full.contains("/local storage/leveldb")
         || full.contains("/session storage/leveldb")
         || lower.ends_with(".ldb")
-        || lower.ends_with(".log")
-            && full.contains("/leveldb/")
+        || lower.ends_with(".log") && full.contains("/leveldb/")
     {
         return "leveldb".to_string();
     }
@@ -959,10 +971,7 @@ fn format_mtime(secs: i64) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        y, m, d, h, mi, s
-    )
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, h, mi, s)
 }
 
 /// SHA-256 en hexadecimal.
@@ -1122,13 +1131,7 @@ fn walk(
             return;
         }
 
-        scan_one_file(
-            &path,
-            files,
-            all_urls,
-            all_tokens,
-            total_bytes,
-        );
+        scan_one_file(&path, files, all_urls, all_tokens, total_bytes);
     }
 }
 
@@ -1156,9 +1159,7 @@ fn scan_one_file(
         .unwrap_or_else(|| "unknown".to_string());
 
     let sha256 = if size <= MAX_HASH_BYTES {
-        fs::read(path)
-            .map(|b| sha256_hex(&b))
-            .unwrap_or_default()
+        fs::read(path).map(|b| sha256_hex(&b)).unwrap_or_default()
     } else {
         String::new()
     };
@@ -1170,10 +1171,7 @@ fn scan_one_file(
         if let Ok(buf) = fs::read(path) {
             let text = String::from_utf8_lossy(&buf);
             urls = extract_endpoints(&text);
-            tokens = extract_secrets(&text)
-                .into_iter()
-                .map(|(_, v)| v)
-                .collect();
+            tokens = extract_secrets(&text).into_iter().map(|(_, v)| v).collect();
         }
     }
 
@@ -1359,9 +1357,7 @@ fn plan_item(source: &Path, original: &Path, base: &str) -> Vec<ExportItem> {
     let rel = rel.replace('/', "_");
 
     let sha256 = if size <= MAX_HASH_BYTES {
-        fs::read(source)
-            .map(|b| sha256_hex(&b))
-            .unwrap_or_default()
+        fs::read(source).map(|b| sha256_hex(&b)).unwrap_or_default()
     } else {
         String::new()
     };
@@ -1460,15 +1456,7 @@ fn collect_dir(
             ) {
                 continue;
             }
-            collect_dir(
-                &path,
-                base_dir,
-                base,
-                out,
-                found,
-                warnings,
-                depth + 1,
-            );
+            collect_dir(&path, base_dir, base, out, found, warnings, depth + 1);
             continue;
         }
         if !meta.is_file() {
@@ -1491,9 +1479,7 @@ fn collect_dir(
             format!("{}/blobs/{}.{}", base, rel, kind)
         };
         let sha256 = if meta.len() <= MAX_HASH_BYTES {
-            fs::read(&path)
-                .map(|b| sha256_hex(&b))
-                .unwrap_or_default()
+            fs::read(&path).map(|b| sha256_hex(&b)).unwrap_or_default()
         } else {
             String::new()
         };
@@ -1514,12 +1500,12 @@ fn collect_dir(
 /// Si la base no se puede abrir (cifrada con el keyring del SO, corrupta o de
 /// otra app), devuelve `None`: es preferible no exportar a exportar basura.
 pub fn sqlite_to_ndjson(path: &Path) -> Option<(String, usize)> {
-    let conn = rusqlite::Connection::open_with_flags(
-        path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .ok()?;
-    let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type='table'").ok()?;
+    let conn =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .ok()?;
+    let mut stmt = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+        .ok()?;
     let tables: Vec<String> = stmt
         .query_map([], |r| r.get::<_, String>(0))
         .ok()?
@@ -1785,7 +1771,8 @@ pub fn interop_notes(profile_id: &str) -> Vec<String> {
         _ => {
             notes.push(
                 "Sin notas específicas: el perfil no tiene datos verificados. \
-                 No interoperar contra rutas no confirmadas.".to_string(),
+                 No interoperar contra rutas no confirmadas."
+                    .to_string(),
             );
             notes.push(
                 "VÍA GENÉRICA: (1) reutilizar la sesión guardada en disco, (2) hookear \
@@ -1822,28 +1809,88 @@ pub fn interop_notes(profile_id: &str) -> Vec<String> {
 ///
 /// Formato de cada entrada: `(id, clase, severidad, marcador literal)`.
 pub const PATCHER_TOOLKIT_MARKERS: &[(&str, &str, &str, &str)] = &[
-    ("aosp-testkey-material", "signing", "critical", "testkey.pk8"),
-    ("aosp-testkey-material", "signing", "critical", "testkey.x509.pem"),
+    (
+        "aosp-testkey-material",
+        "signing",
+        "critical",
+        "testkey.pk8",
+    ),
+    (
+        "aosp-testkey-material",
+        "signing",
+        "critical",
+        "testkey.x509.pem",
+    ),
     ("aosp-testkey-material", "signing", "critical", "media.pk8"),
-    ("aosp-testkey-material", "signing", "critical", "platform.pk8"),
+    (
+        "aosp-testkey-material",
+        "signing",
+        "critical",
+        "platform.pk8",
+    ),
     ("aosp-testkey-material", "signing", "critical", "shared.pk8"),
-    ("keystore-p12-embedded", "signing", "critical", "keystore.ks"),
-    ("apksigner-embedded", "signing", "high", "com/android/apksigner"),
-    ("apksigner-embedded", "signing", "high", "com.android.apksigner"),
-    ("play-license-bypass", "license-bypass", "critical", "ITestServiceInterface"),
-    ("play-vending-embedded", "license-bypass", "high", "com/android/vending"),
-    ("play-vending-embedded", "license-bypass", "high", "com.android.vending"),
+    (
+        "keystore-p12-embedded",
+        "signing",
+        "critical",
+        "keystore.ks",
+    ),
+    (
+        "apksigner-embedded",
+        "signing",
+        "high",
+        "com/android/apksigner",
+    ),
+    (
+        "apksigner-embedded",
+        "signing",
+        "high",
+        "com.android.apksigner",
+    ),
+    (
+        "play-license-bypass",
+        "license-bypass",
+        "critical",
+        "ITestServiceInterface",
+    ),
+    (
+        "play-vending-embedded",
+        "license-bypass",
+        "high",
+        "com/android/vending",
+    ),
+    (
+        "play-vending-embedded",
+        "license-bypass",
+        "high",
+        "com.android.vending",
+    ),
     // En el DEX la clase va con barras ("Lcom/xposed/XSupport;"); con puntos
     // aparece en el manifiesto y en `assets/xposed_init`.
     ("xposed-module", "hook", "critical", "com.xposed.XSupport"),
     ("xposed-module", "hook", "critical", "com/xposed/XSupport"),
     ("xposed-metadata", "hook", "high", "xposedminversion"),
     ("xposed-scope-metadata", "hook", "medium", "xposedscope"),
-    ("uploads-target-apk", "exfiltration", "critical", "patch.chelpus.com/submit"),
-    ("plaintext-patch-endpoint", "network", "high", "http://patch.chelpus.com"),
+    (
+        "uploads-target-apk",
+        "exfiltration",
+        "critical",
+        "patch.chelpus.com/submit",
+    ),
+    (
+        "plaintext-patch-endpoint",
+        "network",
+        "high",
+        "http://patch.chelpus.com",
+    ),
     ("raw-ip-endpoint", "network", "high", "109.95.209.70"),
     ("raw-ip-endpoint-tls", "network", "high", "149.56.155.246"),
-    ("affiliate-tracking-id", "tracking", "medium", "appnext.com/myid.html"),
+    (
+        "affiliate-tracking-id",
+        "tracking",
+        "medium",
+        "appnext.com/myid.html",
+    ),
     ("ad-sdk-tapjoy", "tracking", "low", "tapjoyads.com"),
     ("ad-sdk-adsense", "tracking", "low", "googlesyndication.com"),
     ("promo-supersu", "promo", "low", "eu.chainfire.supersu"),
@@ -1895,6 +1942,910 @@ pub fn patcher_toolkit_impact_notes() -> Vec<&'static str> {
 }
 
 // ========================================================================= //
+// Veredictos sobre el software instalado
+// ========================================================================= //
+//
+// El veredicto **no es una opinión**: sale de reglas medidas.
+//
+// * `DESINSTALAR`      — hay evidencia medida (permisos que la app no
+//   necesita, APK repaquetado que sube el APK a un tercero, relicto
+//   deshabilado que ocupa sitio, duplicado cuya función ya cubre el
+//   mega-binario Rust).
+// * `REIMPLEMENTAR EN RUST` — la función cabe en un módulo concreto del
+//   mega-binario: el veredicto **nombra el módulo destino** para que la
+//   lista sea accionable.
+// * `KEEP`             — no hay evidencia medida en contra.  Las apps de
+//   sistema (Samsung, Google, AOSP) **no se desinstalan**: viven en
+//   `/system`, `/product` o `/vendor` y sólo se quitan con una partición.
+//
+// Un módulo de destino marcado `nuevo:` todavía **no existe** en el repo:
+//   es la pieza que hay que escribir.
+
+/// Veredicto: la app se queda.
+pub const VERDICT_KEEP: &str = "KEEP";
+
+/// Veredicto: la app se sustituye por un módulo Rust del mega-binario.
+pub const VERDICT_REIMPLEMENTAR: &str = "REIMPLEMENTAR EN RUST";
+
+/// Veredicto: la app se quita del móvil.
+pub const VERDICT_DESINSTALAR: &str = "DESINSTALAR";
+
+/// Módulos destino del mega-binario: `(id, categoría, módulo, qué hace)`.
+///
+/// El campo `módulo` es el **destino exacto**: lo que hay que escribir (o lo
+/// que ya existe) para que la app pueda desaparecer.
+pub const RUST_TARGETS: &[(&str, &str, &str, &str)] = &[
+    (
+        "grabaciones",
+        "Grabador de llamadas / audio",
+        "rust-core/src/recording_vault.rs",
+        "bóveda cifrada de grabaciones: lista, metadatos, transcripción, subida",
+    ),
+    (
+        "backup",
+        "Copia de seguridad de apps",
+        "rust-core/src/backup_formats.rs",
+        "lector/escritor de formatos de backup (Swift Backup, AEGIS, Zstd, AB)",
+    ),
+    (
+        "backup-engine",
+        "Motor de backup unificado",
+        "rust-core/src/backup_engine.rs (nuevo)",
+        "orquestador de backup: qué se copia, dónde y con qué cifrado",
+    ),
+    (
+        "parcheo",
+        "Parcheador de APK / DEX",
+        "rust-core/src/dex_decompile.rs",
+        "motor DEX: parcheo, re-firma, inyección de módulos y hook",
+    ),
+    (
+        "escaneo-apk",
+        "Escáner de APK",
+        "rust-core/src/apk_inventory.rs",
+        "inventario y análisis de APK: ofuscación, packs, firma, permisos",
+    ),
+    (
+        "inteligencia",
+        "Interoperabilidad con apps",
+        "rust-core/src/app_intel.rs",
+        "perfiles de apps, endpoints, planes de exportación de datos",
+    ),
+    (
+        "laboratorio",
+        "Laboratorio de desofuscación",
+        "rust-core/src/lab_kit.rs",
+        "laboratorio: desofuscación, diff, extracción de artefactos",
+    ),
+    (
+        "adb",
+        "Utilidades ADB",
+        "rust-core/src/adb_client.rs",
+        "cliente ADB nativo (push, pull, shell, logcat)",
+    ),
+    (
+        "inventario",
+        "Inventario del dispositivo",
+        "rust-core/src/device_inventory.rs",
+        "inventario vivo del móvil: apps, cuentas, espacio, particiones",
+    ),
+    (
+        "magisk",
+        "Módulos Magisk / root",
+        "rust-core/src/magisk_module.rs",
+        "instalación y verificación de módulos Magisk systemless",
+    ),
+    (
+        "firma",
+        "Firma de artefactos",
+        "rust-core/src/signing_vault.rs",
+        "firma y verificación de APK/artefactos con las claves de la bóveda",
+    ),
+    (
+        "root-stealth",
+        "Ocultación de root",
+        "rust-core/src/root_stealth.rs",
+        "ocultación de root y anti-detección",
+    ),
+    (
+        "csc",
+        "Verificación de CSC / ROM",
+        "rust-core/src/csc_verify.rs",
+        "verificación de CSC y build de Samsung",
+    ),
+    (
+        "mensajeria",
+        "Mensajería / backup de chats",
+        "rust-core/src/messaging.rs",
+        "extractores de mensajería y copia de chats",
+    ),
+    (
+        "visor",
+        "Visión por NPU",
+        "rust-core/src/npu_cv.rs",
+        "visión por computadora sobre el NPU del Exynos",
+    ),
+];
+
+/// Catálogo curado de apps instaladas y su veredicto.
+///
+/// Campos: `(paquete, nombre, categoría, veredicto, módulo Rust, motivo)`.
+///
+/// El motivo es **cortante** a propósito: el detalle medido (permisos,
+/// firma, estado) lo aporta el escáner en tiempo de ejecución; aquí va el
+/// "por qué" qualitatively verificable.
+/// Catalogo curado de apps instaladas y su veredicto.
+///
+/// Campos: `(paquete, nombre, categoria, veredicto, modulo Rust, motivo)`.
+///
+/// El motivo es **cortante** a proposito: el detalle medido (permisos,
+/// firma, estado) lo aporta el escaner en tiempo de ejecucion; aqui va el
+/// "por que" qualitative verificable.
+pub const VERDICT_CATALOG: &[(&str, &str, &str, &str, &str, &str)] = &[
+    (
+        "ru.drjmwdme.cgwbfzijr",
+        "MarinaPatcher (Lucky Patcher reempaquetado)",
+        "RE / parcheador",
+        VERDICT_DESINSTALAR,
+        "rust-core/src/dex_decompile.rs",
+        "sube el APK que parchea a patch.chelpus.com con IPs crudas y sin TLS; pide root y es módulo Xposed",
+    ),
+    (
+        "ru.drjmwdme.cgwbfzijr.bak",
+        "MarinaPatcher (copia)",
+        "BASURA",
+        VERDICT_DESINSTALAR,
+        "",
+        "duplicado del mismo APK reempaquetado",
+    ),
+    (
+        "ru.drjmwdme.cgwbfzijr.x",
+        "MarinaPatcher (variante)",
+        "BASURA",
+        VERDICT_DESINSTALAR,
+        "",
+        "mismo binario reempaquetado con otro nombre",
+    ),
+    (
+        "gpyn.fi",
+        "Marina",
+        "RE / parcheador",
+        VERDICT_DESINSTALAR,
+        "rust-core/src/dex_decompile.rs",
+        "motor de parcheo ART en runtime que descarga parches de terceros",
+    ),
+    (
+        "org.lsposed.lspatch",
+        "LSPatch",
+        "RE / parcheador",
+        VERDICT_REIMPLEMENTAR,
+        "rust-core/src/dex_decompile.rs",
+        "inyecta un módulo en un APK y lo re-firma: es el caso base del motor de parcheo Rust",
+    ),
+    (
+        "io.mesalabs.knoxpatch",
+        "KnoxPatch",
+        "RE / parcheador",
+        VERDICT_REIMPLEMENTAR,
+        "rust-core/src/dex_decompile.rs",
+        "parcheo de APK con soporte Knox: caso del motor de parcheo Rust",
+    ),
+    (
+        "org.meowcat.edxposed.manager",
+        "EdXposed (manager)",
+        "RE / framework de hooks",
+        VERDICT_REIMPLEMENTAR,
+        "rust-core/src/dex_decompile.rs",
+        "gestor del framework de hooks: el motor Rust cubre el hook",
+    ),
+    (
+        "com.htetz.monopatch",
+        "MonoPatch",
+        "RE / parcheador",
+        VERDICT_REIMPLEMENTAR,
+        "rust-core/src/dex_decompile.rs",
+        "parche de un solo DEX: caso del motor de parcheo Rust",
+    ),
+    (
+        "ru.bluecat.sberbankpatcher",
+        "SberbankPatcher",
+        "RE / parcheador",
+        VERDICT_REIMPLEMENTAR,
+        "rust-core/src/dex_decompile.rs",
+        "parche quirúrgico de una app: sirve de referencia de diseño",
+    ),
+    (
+        "io.github.huskydg.magisk",
+        "Magisk (27.2-kitsune)",
+        "RE / root",
+        VERDICT_KEEP,
+        "rust-core/src/magisk_module.rs",
+        "es el sistema de archivos de la flota (módulos systemless); no se reimplementa",
+    ),
+    (
+        "com.legendsayantan.adbtools",
+        "ADB tools",
+        "RE / utilidad",
+        VERDICT_REIMPLEMENTAR,
+        "rust-core/src/adb_client.rs",
+        "utilidades ADB ya cubiertas por el cliente ADB en Rust",
+    ),
+    (
+        "adb.captain",
+        "adb captain",
+        "RE / utilidad",
+        VERDICT_REIMPLEMENTAR,
+        "rust-core/src/adb_client.rs",
+        "utilidades ADB ya cubiertas por el cliente ADB en Rust",
+    ),
+    (
+        "com.kitsumed.shizucallrecorder",
+        "Shizuku Call Recorder",
+        "Grabador (open-source)",
+        VERDICT_REIMPLEMENTAR,
+        "rust-core/src/recording_vault.rs",
+        "su función es la lista/transcripción/cifrado/subida de grabaciones: la bóveda Rust",
+    ),
+    (
+        "com.github.axet.audiorecorder",
+        "Audio Recorder (open-source)",
+        "Grabador (open-source)",
+        VERDICT_REIMPLEMENTAR,
+        "rust-core/src/recording_vault.rs",
+        "grabación de audio: la gestión de los archivos es de la bóveda Rust",
+    ),
+    (
+        "com.digipom.easyvoicerecorder.pro",
+        "Easy Voice Recorder Pro",
+        "Grabador",
+        VERDICT_REIMPLEMENTAR,
+        "rust-core/src/recording_vault.rs",
+        "grabador comercial: su gestión de archivos la cubre la bóveda Rust",
+    ),
+    (
+        "com.axyos.contacts",
+        "BCR (Basic Call Recorder)",
+        "Grabador",
+        VERDICT_REIMPLEMENTAR,
+        "rust-core/src/recording_vault.rs",
+        "gestor de grabaciones (NO grabación silenciosa: en España es delito)",
+    ),
+    (
+        "com.microsoft.YourPhone_P1_5",
+        "Microsoft Phone (Your Phone)",
+        "Enlace con el PC",
+        VERDICT_KEEP,
+        "",
+        "declara CAPTURE_AUDIO_OUTPUT: es de Microsoft y su enlace con el PC se usa",
+    ),
+    (
+        "com.microsoft.LinkToWindowsService",
+        "Link to Windows (servicio)",
+        "Enlace con el PC",
+        VERDICT_KEEP,
+        "",
+        "declara CAPTURE_AUDIO_OUTPUT: es de Microsoft y su enlace con el PC se usa",
+    ),
+    (
+        "com.samsung.android.ool",
+        "Mantenimiento del dispositivo (Samsung)",
+        "Sistema Samsung",
+        VERDICT_KEEP,
+        "",
+        "app de sistema: avisa de la grabación nativa en Europa",
+    ),
+    (
+        "org.swiftapps.swiftbackup",
+        "Swift Backup",
+        "Backup",
+        VERDICT_REIMPLEMENTAR,
+        "rust-core/src/backup_formats.rs",
+        "sus formatos (AEGIS-256, Zstd, info page) ya los lee el motor Rust",
+    ),
+    (
+        "com.callapp.contacts",
+        "CallApp / Lucky Patcher (recarga)",
+        "RE / dudoso",
+        VERDICT_DESINSTALAR,
+        "",
+        "deshabilitada y con el máximo de permisos de riesgo del móvil: no hace nada",
+    ),
+    (
+        "com.huami.watch.hmwatchmanager",
+        "Huami Watch Manager",
+        "Relicto",
+        VERDICT_DESINSTALAR,
+        "",
+        "relicto de smartwatch: deshabilitada y con 21 permisos de riesgo",
+    ),
+    (
+        "com.mc.amazfit1",
+        "Amazfit",
+        "Relicto",
+        VERDICT_DESINSTALAR,
+        "",
+        "relicto de wearable: deshabilitada y con 20 permisos de riesgo",
+    ),
+    (
+        "com.xiaomi.hm.health",
+        "Mi Fitness (Xiaomi)",
+        "Relicto",
+        VERDICT_DESINSTALAR,
+        "",
+        "relicto de wearable: deshabilitada y con 20 permisos de riesgo",
+    ),
+    (
+        "com.xplora.kidswatch360",
+        "Kids Watch 360 (Xplora)",
+        "Relicto",
+        VERDICT_DESINSTALAR,
+        "",
+        "relicto de reloj infantil: deshabilitada y con 19 permisos de riesgo",
+    ),
+    (
+        "org.kde.kdeconnect_tp",
+        "KDE Connect (teléfono)",
+        "Relicto",
+        VERDICT_DESINSTALAR,
+        "",
+        "sin contraparte en este móvil: deshabilitada y con 18 permisos de riesgo",
+    ),
+    (
+        "com.termux",
+        "Termux",
+        "Terminal / desarrollo",
+        VERDICT_KEEP,
+        "",
+        "es el entorno (bash, python3, git) en el que vive el tooling del fleet",
+    ),
+    (
+        "com.termux.api",
+        "Termux:API",
+        "Terminal / desarrollo",
+        VERDICT_KEEP,
+        "",
+        "puente con la API de Android (SMS, llamadas, batería) que usa el supervisor",
+    ),
+    (
+        "com.agy",
+        "Antigravity (IDE de Google)",
+        "RE / IDE",
+        VERDICT_KEEP,
+        "rust-core/src/antigravity_intel.rs",
+        "es el cliente MCP que valida el carril del fleet",
+    ),
+    (
+        "app.revanced.android.gms",
+        "ReVanced GMS (microG parcheado)",
+        "Sistema / parcheado",
+        VERDICT_KEEP,
+        "",
+        "Play Services parcheado: sustituye a las apps de parche tipo Lucky Patcher",
+    ),
+    (
+        "net.osmand.plus",
+        "OsmAnd+",
+        "Navegación",
+        VERDICT_KEEP,
+        "",
+        "mapas y navegación offline: app legítima del usuario",
+    ),
+    (
+        "net.gsantner.markor",
+        "Markor",
+        "Notas",
+        VERDICT_REIMPLEMENTAR,
+        "rust-core/src/bookmarks.rs",
+        "el gestor de notas y marcadores del mega-binario cubre su función",
+    ),
+    (
+        "me.weishu.kernelsu",
+        "KernelSU",
+        "RE / root",
+        VERDICT_KEEP,
+        "rust-core/src/magisk_module.rs",
+        "gestor de root alternativo: su funcion la cubre el modulo Magisk del mega-binario",
+    ),
+    (
+        "it.mirko.transcriber",
+        "Transcriber",
+        "Grabador / transcripcion",
+        VERDICT_REIMPLEMENTAR,
+        "rust-core/src/recording_vault.rs",
+        "transcribe audio y lo guarda: el flujo completo (transcripcion, metadatos, cifrado, subida) es de la boveda Rust",
+    ),
+    (
+        "eu.opencloud.android",
+        "OpenCloud",
+        "Sync / backup",
+        VERDICT_KEEP,
+        "",
+        "cliente de Nextcloud: sube a un servidor propio, algo que el mega-binario no cubre",
+    ),
+    (
+        "org.exobel.routerkeygen",
+        "Router Keygen",
+        "RE / utilidad",
+        VERDICT_KEEP,
+        "",
+        "calcula claves WPS: es material de RE del propio usuario",
+    ),
+    (
+        "com.lge.app1",
+        "LG SmartWorld",
+        "Relicto",
+        VERDICT_DESINSTALAR,
+        "",
+        "relicto de un telefono LG: sideload sin instalador, 14 permisos de riesgo y target_sdk 28, sin ningun LG conectado",
+    ),
+    (
+        "de.nulide.findmydevice",
+        "Find My Device (Nulide)",
+        "Relicto",
+        VERDICT_DESINSTALAR,
+        "",
+        "relicto de app de fabricante: 13 permisos de riesgo y estado pm disabled-until-used (enabled=4)",
+    ),
+    (
+        "com.google.android.apps.maps",
+        "Maps (Google)",
+        "Navegacion",
+        VERDICT_DESINSTALAR,
+        "",
+        "duplica la navegacion de OsmAnd+, que ya esta instalada: 40 permisos pedidos (14 de riesgo) frente a 21 (10)",
+    ),
+    (
+        "com.google.android.dialer",
+        "Telefono (Google)",
+        "Llamadas",
+        VERDICT_DESINSTALAR,
+        "",
+        "duplica al marcador de Samsung (com.samsung.android.dialer, 0 permisos, en /system): el de Google pide 60 permisos (18 de riesgo)",
+    ),
+    (
+        "fork.risin42.nagramx",
+        "NagramX (fork de Telegram)",
+        "Mensajeria",
+        VERDICT_DESINSTALAR,
+        "",
+        "fork con firma e4317a73, distinta de la oficial de Telegram (9744bfe6), y 15 permisos de riesgo: el cliente oficial ya esta instalado",
+    ),
+    (
+        "ch.threema.app.libre",
+        "Threema",
+        "Mensajeria",
+        VERDICT_KEEP,
+        "",
+        "mensajeria cifrada instalada desde F-Droid: la usa el usuario",
+    ),
+    (
+        "com.facebook.stella",
+        "Messenger Lite",
+        "Mensajeria",
+        VERDICT_KEEP,
+        "",
+        "mensajeria ligera: la usa el usuario",
+    ),
+    (
+        "com.twitter.android",
+        "X (Twitter) parcheado",
+        "Mensajeria",
+        VERDICT_KEEP,
+        "",
+        "parcheada con ReVanced: es material de RE del usuario",
+    ),
+    (
+        "com.whatsapp",
+        "WhatsApp",
+        "Mensajeria",
+        VERDICT_KEEP,
+        "",
+        "mensajeria del usuario (cuenta activa medida)",
+    ),
+    (
+        "org.telegram.messenger",
+        "Telegram",
+        "Mensajeria",
+        VERDICT_KEEP,
+        "",
+        "cliente oficial (firma 9744bfe6): la usa el usuario",
+    ),
+    (
+        "us.zoom.videomeetings",
+        "Zoom",
+        "Videollamadas",
+        VERDICT_KEEP,
+        "",
+        "videollamadas del usuario (cuenta activa medida)",
+    ),
+    (
+        "com.google.android.apps.tachyon",
+        "Google Meet",
+        "Videollamadas",
+        VERDICT_KEEP,
+        "",
+        "videollamadas de Google: la usa el usuario",
+    ),
+    (
+        "com.google.android.googlequicksearchbox",
+        "Google (buscador/launcher)",
+        "Sistema / launcher",
+        VERDICT_KEEP,
+        "",
+        "es el launcher del movil: 21 permisos de riesgo y 95 pedidos, pero no se toca",
+    ),
+    (
+        "com.google.android.gms",
+        "Google Play Services",
+        "Sistema",
+        VERDICT_KEEP,
+        "",
+        "nucleo del movil (ademas hay una variante parcheada por ReVanced)",
+    ),
+    (
+        "com.android.vending",
+        "Play Store",
+        "Sistema",
+        VERDICT_KEEP,
+        "",
+        "la tienda: 90 permisos pedidos (13 de riesgo); es lo que instala el resto",
+    ),
+    (
+        "com.google.android.apps.photos",
+        "Google Fotos",
+        "Galeria",
+        VERDICT_KEEP,
+        "",
+        "galeria del sistema: encima hay una variante ReVanced, no un sustituto",
+    ),
+    (
+        "anddea.youtube",
+        "YouTube parcheado (ReVanced)",
+        "Multimedia",
+        VERDICT_KEEP,
+        "",
+        "parche ReVanced: se usa",
+    ),
+    (
+        "org.torproject.torbrowser",
+        "Tor Browser",
+        "Navegador",
+        VERDICT_KEEP,
+        "",
+        "navegador del usuario",
+    ),
+    (
+        "com.android.chrome",
+        "Chrome",
+        "Navegador",
+        VERDICT_KEEP,
+        "",
+        "navegador del usuario: 40 permisos pedidos (12 de riesgo)",
+    ),
+    (
+        "com.samsung.android.rampart",
+        "Rampart (Samsung)",
+        "Sistema Samsung",
+        VERDICT_KEEP,
+        "",
+        "modulo anti-tamper de Samsung: la actualiza el firmware, no se desinstala",
+    ),
+    (
+        "com.samsung.android.ipsgeofence",
+        "IP Geofence (Samsung)",
+        "Sistema Samsung",
+        VERDICT_KEEP,
+        "",
+        "geofencing por IP de Samsung: la actualiza el firmware",
+    ),
+    (
+        "com.samsung.android.carkey",
+        "CarKey (Samsung)",
+        "Sistema Samsung",
+        VERDICT_KEEP,
+        "",
+        "llaves de coche digitales de Samsung: trae deteccion de manipulacion propia",
+    ),
+    (
+        "com.samsung.android.knox.attestation",
+        "Knox Attestation (Samsung)",
+        "Sistema Samsung",
+        VERDICT_KEEP,
+        "",
+        "cliente de Enhanced Attestation: es el mundo seguro, no se toca",
+    ),
+    (
+        "com.samsung.android.smartcallprovider",
+        "SmartCall (Samsung)",
+        "Sistema Samsung",
+        VERDICT_KEEP,
+        "",
+        "proveedor de llamadas inteligente (spam/identificacion) de Samsung",
+    ),
+    (
+        "com.samsung.android.vtcamerasettings",
+        "Camaras (Samsung)",
+        "Sistema Samsung",
+        VERDICT_KEEP,
+        "",
+        "ajustes de camara de Samsung: 0 permisos, no se toca",
+    ),
+    (
+        "com.samsung.android.incallui",
+        "InCallUI (Samsung)",
+        "Sistema Samsung",
+        VERDICT_KEEP,
+        "",
+        "app de llamada en curso de Samsung: 0 permisos, no se toca",
+    ),
+    (
+        "com.samsung.android.game.gametools",
+        "Game Booster (Samsung)",
+        "Sistema Samsung",
+        VERDICT_KEEP,
+        "",
+        "optimizacion de juegos de Samsung: 34 permisos pedidos (4 de riesgo)",
+    ),
+    (
+        "com.samsung.android.spay",
+        "Samsung Pay",
+        "Sistema Samsung",
+        VERDICT_KEEP,
+        "",
+        "pagos de Samsung: 100 permisos pedidos (18 de riesgo), pero es app de sistema",
+    ),
+    (
+        "com.samsung.android.oneconnect",
+        "OneConnect (Samsung)",
+        "Sistema Samsung",
+        VERDICT_KEEP,
+        "",
+        "enlace con el PC de Samsung: 89 permisos pedidos (19 de riesgo), app de sistema",
+    ),
+    (
+        "com.samsung.android.app.contacts",
+        "Contactos (Samsung)",
+        "Sistema Samsung",
+        VERDICT_KEEP,
+        "",
+        "contactos de Samsung: 43 permisos pedidos (11 de riesgo), app de sistema",
+    ),
+    (
+        "com.samsung.android.dialer",
+        "Telefono (Samsung)",
+        "Sistema Samsung",
+        VERDICT_KEEP,
+        "",
+        "marcador de Samsung: 0 permisos, en /system/priv-app",
+    ),
+    (
+        "com.samsung.android.app.notes",
+        "Samsung Notes",
+        "Sistema Samsung",
+        VERDICT_KEEP,
+        "",
+        "notas de Samsung: 48 permisos pedidos (7 de riesgo), app de sistema",
+    ),
+    (
+        "com.sec.android.gallery3d",
+        "Galeria (Samsung)",
+        "Sistema Samsung",
+        VERDICT_KEEP,
+        "",
+        "galeria de Samsung: 39 permisos pedidos (9 de riesgo), app de sistema",
+    ),
+    (
+        "com.sec.android.easyMover.Agent",
+        "EasyMover (Samsung)",
+        "Sistema Samsung",
+        VERDICT_KEEP,
+        "",
+        "migracion de datos entre moviles Samsung: 27 permisos (4 de riesgo)",
+    ),
+    (
+        "com.aura.oobe.samsung",
+        "Manual Selector (OOBE del operador)",
+        "Sistema / operador",
+        VERDICT_KEEP,
+        "",
+        "OOBE del operador: el CSC (AMO = Orange Espana) decide la configuracion regional",
+    ),
+];
+
+/// Ficha del catálogo de un paquete.
+pub struct CatalogEntry {
+    /// Nombre legible de la app.
+    pub name: String,
+    /// Categoría funcional.
+    pub category: String,
+    /// Veredicto (`KEEP`, `REIMPLEMENTAR EN RUST`, `DESINSTALAR`).
+    pub verdict: String,
+    /// Módulo Rust destino (vacío si no aplica).
+    pub rust_module: String,
+    /// Motivo (texto corto y verificable).
+    pub reason: String,
+}
+
+/// Busca la ficha de catálogo de un paquete.
+pub fn catalog_entry(package: &str) -> Option<CatalogEntry> {
+    VERDICT_CATALOG
+        .iter()
+        .find(|(pkg, ..)| *pkg == package)
+        .map(|(_pkg, name, cat, verdict, module, reason)| CatalogEntry {
+            name: (*name).to_string(),
+            category: (*cat).to_string(),
+            verdict: (*verdict).to_string(),
+            rust_module: (*module).to_string(),
+            reason: (*reason).to_string(),
+        })
+}
+
+/// ¿La app vive en la partición de sistema (no se desinstala sin partición)?
+pub fn is_system_app(apk_path: &str) -> bool {
+    apk_path.starts_with("/system/")
+        || apk_path.starts_with("/product/")
+        || apk_path.starts_with("/vendor/")
+        || apk_path.starts_with("/apex/")
+        || apk_path.starts_with("/prism/")
+        || apk_path.starts_with("/odm/")
+        || apk_path.starts_with("/system_ext/")
+}
+
+/// Veredicto de una app instalada, a partir de su ficha **medida**.
+///
+/// La ficha es la que devuelve `crate::apk_inventory::scan_installed`.
+/// Devuelve `{ verdict, reason, rust_module, source }`.
+pub fn verdict_for(record: &Value) -> Value {
+    let package = record["package"].as_str().unwrap_or("").to_string();
+    let apk_path = record["apk_path"].as_str().unwrap_or("");
+    let score = record["risk_score"].as_i64().unwrap_or(0);
+    let system = is_system_app(apk_path);
+
+    // 1) Catálogo curado: manda sobre el heurístico.
+    if let Some(entry) = catalog_entry(&package) {
+        let reason = format!("{} (medido: riesgo {})", entry.reason, score);
+        return json!({
+            "verdict": entry.verdict,
+            "reason": reason,
+            "rust_module": entry.rust_module,
+            "source": "catalogo",
+        });
+    }
+
+    // 2) Reglas medidas para lo que no está en el catálogo.
+    let frameworks: Vec<String> = record["patch_frameworks"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v["name"].as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let packs: Vec<String> = record["packers"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v["name"].as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let dangerous = record["requested_permissions"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter(|v| {
+                    v.as_str()
+                        .map(|p| crate::apk_inventory::permission_risk_class(p) == "peligroso")
+                        .unwrap_or(false)
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    let enabled = record["enabled"].as_str().unwrap_or("");
+    let target = record["target_sdk"].as_i64().unwrap_or(0);
+
+    // 2.a) Un APK repaquetado que sube el APK a un tercero: fuera.
+    if frameworks.iter().any(|f| f.contains("Lucky Patcher")) {
+        return json!({
+            "verdict": VERDICT_DESINSTALAR,
+            "reason": format!(
+                "APK repaquetado que sube el APK a un tercero ({}): medido en el marcador del DEX",
+                frameworks.join(", ")
+            ),
+            "rust_module": "rust-core/src/dex_decompile.rs",
+            "source": "medido",
+        });
+    }
+    // 2.b) Relicto deshabilitado que pide permisos peligrosos: fuera.
+    if enabled == "0" && dangerous >= 3 {
+        return json!({
+            "verdict": VERDICT_DESINSTALAR,
+            "reason": format!(
+                "app deshabilitada que no hace nada y declara {} permisos peligroso(s)",
+                dangerous
+            ),
+            "rust_module": "",
+            "source": "medido",
+        });
+    }
+    // 2.b2) App heredada (targetSdk < 26) con permisos peligrosos: el
+    // instalador los concede sin preguntar, así que el riesgo es real.
+    if target > 0 && target < 26 && dangerous >= 3 {
+        return json!({
+            "verdict": VERDICT_DESINSTALAR,
+            "reason": format!(
+                "targetSdk {} (los permisos se conceden al instalar) y {} permiso(s) peligroso(s)",
+                target, dangerous
+            ),
+            "rust_module": "",
+            "source": "medido",
+        });
+    }
+    // 2.c) Sistema: nunca se desinstala (vive en la partición).
+    if system {
+        return json!({
+            "verdict": VERDICT_KEEP,
+            "reason": format!("app de sistema ({})", apk_path),
+            "rust_module": "",
+            "source": "medido",
+        });
+    }
+    // 2.d) Empaquetador o framework de parche: es material de RE, no de uso diario.
+    if !packs.is_empty() || !frameworks.is_empty() {
+        let mut what = packs.clone();
+        what.extend(frameworks.clone());
+        return json!({
+            "verdict": VERDICT_KEEP,
+            "reason": format!("material de RE dentro del APK: {}", what.join(", ")),
+            "rust_module": "rust-core/src/dex_decompile.rs",
+            "source": "medido",
+        });
+    }
+    // 2.e) Por defecto: no hay evidencia medida en contra.
+    json!({
+        "verdict": VERDICT_KEEP,
+        "reason": format!(
+            "sin evidencia medida en contra (riesgo {}, {} permiso(s) peligroso(s))",
+            score, dangerous
+        ),
+        "rust_module": "",
+        "source": "medido",
+    })
+}
+
+/// Resumen de veredictos de un conjunto de fichas.
+pub fn verdict_summary(records: &[Value]) -> Value {
+    let mut keep = 0usize;
+    let mut reimplementar = 0usize;
+    let mut desinstalar = 0usize;
+    let mut rows: Vec<Value> = Vec::with_capacity(records.len());
+    for r in records {
+        let v = verdict_for(r);
+        match v["verdict"].as_str().unwrap_or("") {
+            VERDICT_DESINSTALAR => desinstalar += 1,
+            VERDICT_REIMPLEMENTAR => reimplementar += 1,
+            _ => keep += 1,
+        }
+        let mut row = r.clone();
+        if let Some(m) = row.as_object_mut() {
+            m.insert("verdict".to_string(), v["verdict"].clone());
+            m.insert("verdict_reason".to_string(), v["reason"].clone());
+            m.insert("rust_module".to_string(), v["rust_module"].clone());
+        }
+        rows.push(row);
+    }
+    json!({
+        "count": records.len(),
+        "counts": {
+            "KEEP": keep,
+            "REIMPLEMENTAR EN RUST": reimplementar,
+            "DESINSTALAR": desinstalar,
+        },
+        "packages": rows,
+    })
+}
+
+// ========================================================================= //
 // Tests
 // ========================================================================= //
 
@@ -1904,11 +2855,8 @@ mod tests {
     use std::io::Write;
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let base = std::env::temp_dir().join(format!(
-            "md_app_intel_{}_{}",
-            tag,
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("md_app_intel_{}_{}", tag, std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).expect("debe crear el temporal");
         base
@@ -1958,7 +2906,10 @@ mod tests {
         assert!(cursor.data_paths.iter().any(|p| p == "~/.cursor-server/"));
 
         let windsurf = profiles.iter().find(|p| p.id == "windsurf").unwrap();
-        assert!(windsurf.data_paths.iter().any(|p| p == "~/.codeium/windsurf/"));
+        assert!(windsurf
+            .data_paths
+            .iter()
+            .any(|p| p == "~/.codeium/windsurf/"));
 
         let codex = profiles.iter().find(|p| p.id == "codex-cli").unwrap();
         assert!(codex.auth_storage.iter().any(|p| p == "~/.codex/auth.json"));
@@ -1968,7 +2919,10 @@ mod tests {
     #[test]
     fn los_paquetes_android_verificados_tienen_formato_de_paquete() {
         let profiles = known_profiles();
-        for p in profiles.iter().filter(|p| p.platform == "android" && p.verified) {
+        for p in profiles
+            .iter()
+            .filter(|p| p.platform == "android" && p.verified)
+        {
             assert!(
                 p.package.contains('.') && !p.package.contains(' '),
                 "{} no parece un paquete: {}",
@@ -2041,7 +2995,10 @@ mod tests {
         let root = temp_dir("scan");
         let claude = root.join(".claude");
         write_file(
-            &claude.join("projects").join("proyecto").join("sesion.jsonl"),
+            &claude
+                .join("projects")
+                .join("proyecto")
+                .join("sesion.jsonl"),
             "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n",
         );
         write_file(
@@ -2080,9 +3037,7 @@ mod tests {
             .iter()
             .find(|f| f.path.ends_with("sesion.jsonl"))
             .unwrap();
-        let expected = sha256_hex(
-            "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n".as_bytes(),
-        );
+        let expected = sha256_hex("{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n".as_bytes());
         assert_eq!(jsonl.sha256, expected);
         assert!(jsonl.mtime.ends_with('Z'));
 
@@ -2103,7 +3058,11 @@ mod tests {
             !dumped.contains(secret),
             "¡el secreto apareció entero en el escaneo!"
         );
-        assert!(dumped.contains("sk-a…45"), "redacción inesperada: {}", dumped);
+        assert!(
+            dumped.contains("sk-a…45"),
+            "redacción inesperada: {}",
+            dumped
+        );
         assert_eq!(scan.summary["redacted_tokens"].as_array().unwrap().len(), 1);
 
         let _ = fs::remove_dir_all(&root);
@@ -2127,7 +3086,14 @@ mod tests {
     #[test]
     fn el_barrido_respeta_el_limite_de_profundidad() {
         let root = temp_dir("depth");
-        let deep = root.join("a").join("b").join("c").join("d").join("e").join("f").join("g");
+        let deep = root
+            .join("a")
+            .join("b")
+            .join("c")
+            .join("d")
+            .join("e")
+            .join("f")
+            .join("g");
         write_file(&deep.join("dato.json"), "{}");
         let scan = scan_local_storage(root.to_str().unwrap());
         // Con MAX_SCAN_DEPTH = 6, el fichero a 7 niveles no debe aparecer.
@@ -2152,7 +3118,11 @@ mod tests {
     fn el_plan_de_exportacion_es_idempotente_y_tiene_sha256() {
         let root = temp_dir("plan");
         write_file(
-            &root.join(".claude").join("projects").join("p").join("s.jsonl"),
+            &root
+                .join(".claude")
+                .join("projects")
+                .join("p")
+                .join("s.jsonl"),
             "{\"a\":1}\n",
         );
         let profile = profile_by_id("claude-code").expect("perfil claude-code");
@@ -2175,7 +3145,11 @@ mod tests {
 
         // Y si cambia el contenido, cambia el hash (se reescribe sólo eso).
         write_file(
-            &root.join(".claude").join("projects").join("p").join("s.jsonl"),
+            &root
+                .join(".claude")
+                .join("projects")
+                .join("p")
+                .join("s.jsonl"),
             "{\"a\":2}\n",
         );
         let plan3 = data_exchange_plan(&profile, root.to_str().unwrap());
@@ -2190,10 +3164,7 @@ mod tests {
         let profile = profile_by_id("claude-code").expect("perfil claude-code");
         let plan = data_exchange_plan(&profile, root.to_str().unwrap());
         assert!(plan.items.is_empty());
-        assert!(plan
-            .warnings
-            .iter()
-            .any(|w| w.contains("no existe en")));
+        assert!(plan.warnings.iter().any(|w| w.contains("no existe en")));
         assert!(plan
             .warnings
             .iter()
@@ -2218,11 +3189,8 @@ mod tests {
         }
         {
             let conn = rusqlite::Connection::open(&db).expect("debe abrir la base");
-            conn.execute(
-                "CREATE TABLE ItemTable (key TEXT, value TEXT)",
-                [],
-            )
-            .expect("debe crear la tabla");
+            conn.execute("CREATE TABLE ItemTable (key TEXT, value TEXT)", [])
+                .expect("debe crear la tabla");
             conn.execute(
                 "INSERT INTO ItemTable VALUES ('composerData:1', '{\"x\":1}')",
                 [],
@@ -2238,9 +3206,10 @@ mod tests {
             .find(|i| i.kind == "ndjson")
             .expect("debe haber un NDJSON");
         assert!(nd.target.ends_with(".ndjson"));
-        assert_eq!(nd.sha256, sha256_hex(
-            "{\"key\":\"composerData:1\",\"value\":\"{\\\"x\\\":1}\"}\n".as_bytes()
-        ));
+        assert_eq!(
+            nd.sha256,
+            sha256_hex("{\"key\":\"composerData:1\",\"value\":\"{\\\"x\\\":1}\"}\n".as_bytes())
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -2260,9 +3229,7 @@ mod tests {
         // Un perfil desconocido cae en la nota genérica, sin inventar datos.
         let unknown = interop_notes("no-existe");
         assert!(!unknown.is_empty());
-        assert!(unknown
-            .iter()
-            .any(|n| n.contains("Sin notas específicas")));
+        assert!(unknown.iter().any(|n| n.contains("Sin notas específicas")));
     }
 
     #[test]
@@ -2278,7 +3245,8 @@ mod tests {
     #[test]
     fn detecta_toolkit_de_parcheo_reampaquetado() {
         // Marcadores medidos en el caso C2 (MarinaPatcher / Lucky Patcher).
-        let dex = "Lcom/android/apksigner/ApkSignerTool;Lcom/android/vending/ITestServiceInterface;\
+        let dex =
+            "Lcom/android/apksigner/ApkSignerTool;Lcom/android/vending/ITestServiceInterface;\
                    Lcom/xposed/XSupport;testkey.pk8;keystore.ks;http://patch.chelpus.com/submit;\
                    109.95.209.70;149.56.155.246;appnext.com/myid.html";
         let ids = detect_patcher_toolkit(dex);
@@ -2290,7 +3258,10 @@ mod tests {
         assert!(ids.contains(&"uploads-target-apk".to_string()));
         assert!(ids.contains(&"raw-ip-endpoint".to_string()));
         // Sin duplicados aunque el marcador case mas de una vez.
-        assert_eq!(ids.len(), ids.iter().collect::<std::collections::HashSet<_>>().len());
+        assert_eq!(
+            ids.len(),
+            ids.iter().collect::<std::collections::HashSet<_>>().len()
+        );
 
         let det = detect_patcher_toolkit_detail(dex);
         assert!(!det.is_empty());
@@ -2300,7 +3271,8 @@ mod tests {
 
     #[test]
     fn un_app_normal_no_dispara_el_detector() {
-        let texto = "Landroid/os/Build;Lcom/google/android/gms/ads/AdRequest;https://api.ejemplo.com/v1";
+        let texto =
+            "Landroid/os/Build;Lcom/google/android/gms/ads/AdRequest;https://api.ejemplo.com/v1";
         assert!(detect_patcher_toolkit(texto).is_empty());
     }
 
@@ -2308,10 +3280,120 @@ mod tests {
     fn perfil_lucky_patcher_documenta_el_ocultamiento() {
         let p = profile_by_id("lucky-patcher").expect("perfil");
         assert_eq!(p.platform, "android");
-        assert!(p.endpoints.iter().any(|e| e.contains("patch.chelpus.com/submit")));
-        assert!(p.features.iter().any(|f| f.starts_with("obfuscation:package-and-label-only")));
+        assert!(p
+            .endpoints
+            .iter()
+            .any(|e| e.contains("patch.chelpus.com/submit")));
+        assert!(p
+            .features
+            .iter()
+            .any(|f| f.starts_with("obfuscation:package-and-label-only")));
         assert!(p.verified);
         assert!(patcher_toolkit_impact_notes().len() >= 4);
     }
 
+    // ================================================================= //
+    // Tests del motor de veredictos
+    // ================================================================= //
+
+    #[test]
+    fn el_catalogo_manda_sobre_el_heuristico() {
+        let e = catalog_entry("ru.drjmwdme.cgwbfzijr").expect("entrada de catálogo");
+        assert_eq!(e.verdict, VERDICT_DESINSTALAR);
+        assert!(e.reason.contains("patch.chelpus.com"));
+        // El módulo destino se nombra: la lista tiene que ser accionable.
+        let r = catalog_entry("org.swiftapps.swiftbackup").expect("entrada de catálogo");
+        assert_eq!(r.verdict, VERDICT_REIMPLEMENTAR);
+        assert_eq!(r.rust_module, "rust-core/src/backup_formats.rs");
+    }
+
+    #[test]
+    fn el_veredicto_medido_saca_los_relictos_y_deja_el_sistema() {
+        // Relicto deshabilitado con permisos peligrosos.
+        let rec = json!({
+            "package": "com.relicto",
+            "apk_path": "/data/app/~~x==/com.relicto/base.apk",
+            "requested_permissions": [
+                "android.permission.CAMERA",
+                "android.permission.RECORD_AUDIO",
+                "android.permission.ACCESS_FINE_LOCATION",
+            ],
+            "exported_without_permission": [],
+            "installer": "null",
+            "target_sdk": 34,
+            "enabled": "0",
+            "risk_score": 20,
+        });
+        let v = verdict_for(&rec);
+        assert_eq!(v["verdict"], json!(VERDICT_DESINSTALAR));
+        assert_eq!(v["source"], json!("medido"));
+        assert!(v["reason"].as_str().unwrap_or("").contains("deshabilitada"));
+
+        // App de sistema: nunca se desinstala.
+        let sistema = json!({
+            "package": "com.samsung.android.foo",
+            "apk_path": "/system/priv-app/foo/foo.apk",
+            "requested_permissions": ["android.permission.CAMERA"],
+            "exported_without_permission": [],
+            "installer": "com.android.vending",
+            "target_sdk": 34,
+        });
+        let v = verdict_for(&sistema);
+        assert_eq!(v["verdict"], json!(VERDICT_KEEP));
+        assert!(v["reason"].as_str().unwrap_or("").contains("sistema"));
+    }
+
+    #[test]
+    fn el_veredicto_por_defecto_es_keep() {
+        let rec = json!({
+            "package": "com.normal",
+            "apk_path": "/data/app/~~x==/com.normal/base.apk",
+            "requested_permissions": ["android.permission.INTERNET"],
+            "exported_without_permission": [],
+            "installer": "com.android.vending",
+            "target_sdk": 34,
+            "risk_score": 0,
+        });
+        let v = verdict_for(&rec);
+        assert_eq!(v["verdict"], json!(VERDICT_KEEP));
+        assert!(v["reason"]
+            .as_str()
+            .unwrap_or("")
+            .contains("sin evidencia medida"));
+    }
+
+    #[test]
+    fn el_resumen_de_veredictos_cuadra() {
+        let recs = vec![
+            json!({
+                "package": "com.a", "apk_path": "/data/app/a/base.apk",
+                "requested_permissions": [], "exported_without_permission": [],
+                "installer": "com.android.vending", "target_sdk": 34,
+            }),
+            json!({
+                "package": "ru.drjmwdme.cgwbfzijr", "apk_path": "/data/app/b/base.apk",
+                "requested_permissions": [], "exported_without_permission": [],
+                "installer": "null", "target_sdk": 28,
+            }),
+        ];
+        let s = verdict_summary(&recs);
+        assert_eq!(s["count"], json!(2));
+        assert_eq!(s["counts"]["KEEP"], json!(1));
+        assert_eq!(s["counts"]["DESINSTALAR"], json!(1));
+        assert_eq!(s["counts"]["REIMPLEMENTAR EN RUST"], json!(0));
+        assert_eq!(s["packages"][1]["verdict"], json!(VERDICT_DESINSTALAR));
+    }
+
+    #[test]
+    fn la_tabla_de_modulos_destino_esta_vacia_de_huecos() {
+        assert!(!RUST_TARGETS.is_empty());
+        for (id, _cat, module, _desc) in RUST_TARGETS {
+            assert!(!id.is_empty());
+            assert!(
+                module.starts_with("rust-core/src/"),
+                "módulo con ruta rara: {}",
+                module
+            );
+        }
+    }
 }
