@@ -1,6 +1,0 @@
-id=megadaemon_csc_recording
-name=MegaDaemon - grabacion nativa de llamadas (CSC patch)
-version=v1.0
-versionCode=1
-author=MegaDaemon W3W4
-description=Bind-mount systemless del cscfeature.xml de AMO parcheado con CscFeature_VoiceCall_ConfigRecording=RecordingAllowed. Desactivar el modulo = volver al estado original.
