@@ -466,6 +466,14 @@ fi
 TURL="$(root 'cat /sdcard/megadaemon.url 2>/dev/null; cat /data/local/tmp/megadaemon/tunnel.url 2>/dev/null' | tr -d '\r\n' | grep -o 'https://[a-z0-9.-]*' | tail -1)"
 if [ -n "$TURL" ]; then
   say "URL vigente: $TURL (sha16 $(sha16 "$TURL"))"
+  # MEDIDO el 2026-11-21: el watchdog publicaba la URL en
+  # /data/local/tmp/megadaemon/tunnel.url, pero el daemon (y la flota)
+  # leen <state_dir>/tunnel.url  =>  el "quick" salia VACIO y el enjambre
+  # se quedaba ciego.  Se escribe en LOS DOS sitios.
+  root "mkdir -p $STATE_REAL; printf '%s' '$TURL' > $STATE_REAL/tunnel.url; chmod 644 $STATE_REAL/tunnel.url"
+  root "printf '%s' '$TURL' > $MD_DIR/tunnel.url 2>/dev/null"
+  root "printf '%s' '$TURL' > /sdcard/megadaemon.url 2>/dev/null"
+  say "URL escrita en $STATE_REAL/tunnel.url (y en $MD_DIR y /sdcard)"
   if [ -n "$SECRETS" ]; then
     mkdir -p "$SECRETS" 2>/dev/null; chmod 700 "$SECRETS" 2>/dev/null
     [ -f "$ENVFILE" ] || : > "$ENVFILE"; chmod 600 "$ENVFILE"
@@ -512,6 +520,44 @@ else
   warn "no pude traer las herramientas CSC (sin red?)"
 fi
 
+if [ "$DESTINO" = movil ]; then
+  say "=== 5b) DuckDNS: A record desde el movil (su IP publica es la de casa) ==="
+  DTOKEN=""
+  for t in "$HOME/.mavis/duckdns.token" "$HOME/.duckdns.token" "$MD_DIR/duckdns.token"; do
+    [ -f "$t" ] && DTOKEN="$(cat "$t" | tr -d '\r\n ')" && say "  token encontrado en $t" && break
+  done
+  DDNS_NAME="${MD_DDNS_NAME:-mdtmfnc}"
+  if [ -z "$DTOKEN" ]; then
+    warn "  no hay token de DuckDNS en el movil (puedes ponerlo en ~/.mavis/duckdns.token)"
+    warn "  sin el, el canal canonico no existe: solo queda el tunel rapido"
+  else
+    WANIP="$("$CURL" -fsSL -m 15 https://api.ipify.org 2>/dev/null | tr -d '\r\n ')"
+    [ -z "$WANIP" ] && WANIP="$("$CURL" -fsSL -m 15 https://ifconfig.me 2>/dev/null | tr -d '\r\n ')"
+    if [ -z "$WANIP" ]; then
+      warn "  no pude saber la IP publica"
+    else
+      say "  IP publica del movil: $WANIP"
+      UPD="$("$CURL" -fsSL -m 20 "https://www.duckdns.org/update?domains=$DDNS_NAME&token=$DTOKEN&ip=$WANIP" 2>/dev/null | tr -d '\r\n')"
+      case "$UPD" in
+        OK|ok) say "  DuckDNS: OK (A record $DDNS_NAME.duckdns.org -> $WANIP)" ;;
+        *) warn "  DuckDNS respondio: $UPD" ;;
+      esac
+      # VERIFICACION real por DoH (un OK no prueba nada)
+      sleep 2
+      RESOLVED="$("$CURL" -fsSL -m 15 -H 'accept: application/dns-json' \
+        "https://cloudflare-dns.com/dns-query?name=$DDNS_NAME.duckdns.org&type=A" 2>/dev/null \
+        | tr ',' '\n' | grep -o '"data":"[0-9.]*"' | head -1 | cut -d'"' -f4)"
+      if [ -n "$RESOLVED" ]; then
+        say "  DNS verificado: $DDNS_NAME.duckdns.org -> $RESOLVED"
+        [ "$RESOLVED" = "$WANIP" ] && say "  OK: el dominio apunta a la IP publica real" \
+          || warn "  el dominio apunta a $RESOLVED, no a $WANIP"
+      else
+        warn "  el subdominio $DDNS_NAME.duckdns.org NO resuelve todavia (puede estar sin registrar en la cuenta)"
+      fi
+    fi
+  fi
+fi
+
 if [ "$DESTINO" = pc ]; then
   say "=== 6) relay del PC (DuckDNS) ==="
   if [ -x "$REPO/deploy/relay-pc.sh" ]; then
@@ -526,6 +572,25 @@ if [ "$DESTINO" = pc ]; then
     warn "no encuentro deploy/relay-pc.sh"
   fi
   say "AVISO: el A record de DuckDNS lo publica SÓLO el PC (el sandbox puso el dominio apuntando al NAT del datacenter)"
+fi
+
+say "=== 6b) verificación real (health + MCP + puertos) ==="
+KEYV="$(root "cat $STATE_REAL/megadaemon_api.key 2>/dev/null || cat $MD_DIR/state/megadaemon_api.key 2>/dev/null" | tr -d '\r\n')"
+for P in 9090 3000 3030 8090; do
+  H="$(root "curl -s -m 4 -o /dev/null -w '%{http_code}' http://127.0.0.1:$P/health 2>/dev/null" | tr -d '\r\n')"
+  say "  127.0.0.1:$P/health -> ${H:-sin curl}"
+done
+if [ -n "$KEYV" ] && [ -n "$CURL" ]; then
+  MCP="$("$CURL" -s -m 10 -X POST -H "X-API-Key: $KEYV" -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+        "http://127.0.0.1:9090/mcp" 2>/dev/null)"
+  NT="$(printf '%s' "$MCP" | grep -o '"name"' | wc -l | tr -d ' ')"
+  say "  MCP tools/list -> ${NT:-0} tools"
+  if [ "${NT:-0}" -gt 0 ] 2>/dev/null; then
+    say "  OK: la flota puede entrar (MCP responde con $NT herramientas)"
+  else
+    warn "  MCP no responde: la key o el daemon no cuadran (403 = credencial, 000 = daemon)"
+  fi
 fi
 
 say "=== 7) verificación final ==="
@@ -543,6 +608,14 @@ if [ -n "$TURL" ]; then
     000) warn "000: sin ruta al túnel desde aquí (usa el relay del PC)" ;;
   esac
 fi
+say ""
+say "VEREDICTO POR ESLABÓN:"
+say "  daemon        : ${NEWD:-NO} proc | binario $RELEASE_TAG sha256 $GOT"
+say "  credencial    : $STATE_REAL (sha16 $KEYFP)"
+say "  arranque auto : service.d instalado (daemon+tunel+watchdog) => sobrevive a reinicios"
+say "  canal         : $TURL (sha16 $(sha16 "$TURL"))"
+say "  CSC           : ${CSC_VALOR} en CscFeature_VoiceCall_ConfigRecording"
+say "  basura        : $((0)) matados por evidencia (ascendientes nunca)"
 say ""
 say "LISTO. Estado en 3 líneas:"
 say "  daemon pid $NEWD | binario ARM64 $RELEASE_TAG con +x, sha256 $GOT"
