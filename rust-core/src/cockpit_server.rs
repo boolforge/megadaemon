@@ -1193,6 +1193,44 @@ fn handle_client(mut stream: TcpStream) {
                     html.as_bytes(),
                 );
             }
+            // Intercambio: API key válida → token de sesión para el navegador.
+            //
+            // POST /api/session/exchange   body: {"api_key": "..."}
+            // → 200 {"ok":true,"token":"..."}  (el token va al navegador, no al
+            //   HTML público).  Con la API key incorrecta → 403.
+            "/api/session/exchange" => {
+                let body: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);
+                let provided = body
+                    .get("api_key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let ok = !provided.is_empty()
+                    && cfg.enabled
+                    && provided == cfg.key
+                    && !cfg.key.is_empty();
+                if ok {
+                    send_json(
+                        &mut stream,
+                        &json!({
+                            "ok": true,
+                            "token": auth_token(),
+                            "expires_hint": "el token es de la instancia; rotarlo reinicia la sesión",
+                        }),
+                    );
+                } else {
+                    REQ_REJECTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    send_json(
+                        &mut stream,
+                        &json!({
+                            "ok": false,
+                            "error": "invalid_api_key",
+                            "hint": "la API key no coincide con la configurada en la instancia",
+                        }),
+                    );
+                }
+            }
             "/health" | "/api/health" => {
                 // Fase 3: endpoint de salud del demonio (monitorizable por
                 // Termux, Uptime Kuma, etc.).

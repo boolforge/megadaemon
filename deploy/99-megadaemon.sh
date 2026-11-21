@@ -47,6 +47,26 @@ KEEP=5
 # Puerto del cockpit.  Configurable por MEGADAEMON_COCKPIT_PORT (se lee del
 # fichero de entorno); el valor por defecto es el que usa el despliegue actual.
 PORT=9090
+URL_FILE=/sdcard/megadaemon.url
+STATE_FILE=/sdcard/megadaemon.state
+# Fallos de arranque seguidos => se considera fallo de código y el supervisor
+# para (antes reintentaba en bucle infinito y se comía la batería).
+MAX_FAST_FAILS=3
+fast_fails=0
+
+# Estado del daemon para el usuario: un fichero con la última línea conocida.
+write_state() {
+    printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" > "$STATE_FILE" 2>/dev/null
+}
+
+# URL real del cockpit: el usuario no tiene que adivinar el puerto.
+write_url() {
+    {
+        echo "# MegaDaemon - cockpit (generado por 99-megadaemon.sh)"
+        echo "URL=http://localhost:$PORT/"
+        echo "HEALTH=http://localhost:$PORT/health"
+    } > "$URL_FILE" 2>/dev/null
+}
 
 # Intérprete python3 del sistema (Termux o el sandbox de Antigravity): lo
 # usan el puente web y la sincronización del puente MCP de Antigravity.
