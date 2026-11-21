@@ -2,6 +2,8 @@
   "canonical": "https://raw.githubusercontent.com/boolforge/megadaemon/main/state/channel.json",
   "duckdns": "https://mdtmfnc-s21.duckdns.org",
   "nota": "estado provisional escrito desde el sandbox; el movil lo sobrescribe al publicar (tool MCP channel_publish o channel-publish --repo-publish)",
-  "quick": "",
-  "ts": "2026-11-21T04:07:00Z"
+  "quick": "https://graphical-subscriber-sys-oil.trycloudflare.com",
+  "ts": "2026-11-21T04:07:00Z",
+  "updated_at": "2026-11-22T00:00:00Z",
+  "measured_by": "instalador-megadaemon.sh --diagnostico en el Samsung (2026-11-21 23:52)"
 }
