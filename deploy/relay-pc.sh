@@ -49,7 +49,54 @@
 # =============================================================================
 set -uo pipefail
 
-PHONE_IP="${MEGADAEMON_PHONE_IP:-192.168.1.124}"
+PHONE_IP="${MEGADAEMON_PHONE_IP:-}"
+
+# ── Descubrimiento del móvil por el beacon LAN ─────────────────────────
+# El móvil emite un beacon UDP en difusión (puerto 9099) con su IP.  La IP
+# por DHCP CAMBIA, así que tenerla fija en el relay es pedir que un día
+# deje de funcionar.  Si el usuario no fija MEGADAEMON_PHONE_IP, se pregunta
+# al beacon; si no contesta, se avisa con claridad (y se prueban las IPs
+# que el beacon mencione).
+descubrir_phone_ip() {
+    [ -n "$PHONE_IP" ] && { echo "$PHONE_IP"; return 0; }
+    _ip=""
+    if command -v python3 >/dev/null 2>&1; then
+        # El beacon va SIEMPRE al 9099 (puerto UDP fijo del protocolo).
+        _ip=$(python3 <<'PYEOF' 2>/dev/null
+import socket, json
+try:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.settimeout(0.5)
+    s.bind(("", 9099))
+    import time
+    deadline = time.time() + 12
+    while time.time() < deadline:
+        try:
+            data, _ = s.recvfrom(4096)
+        except socket.timeout:
+            continue
+        except OSError:
+            break
+        try:
+            v = json.loads(data.decode("utf-8", "replace"))
+        except Exception:
+            continue
+        if v.get("kind") != "megadaemon-beacon/v1":
+            continue
+        ips = v.get("ips") or []
+        if ips:
+            print(ips[0])
+            break
+except Exception:
+    pass
+PYEOF
+)
+    fi
+    [ -n "$_ip" ] && { echo "$_ip"; return 0; }
+    return 1
+}
+
 PHONE_PORT="${MEGADAEMON_PHONE_PORT:-3000}"
 # ⚠️ El subdominio TIENE QUE ESTAR REGISTRADO en la cuenta de DuckDNS:
 # la API responde "OK" aunque no cree nada (medido: -s21 daba NXDOMAIN
@@ -64,6 +111,19 @@ MODE="${1:---diagnostico}"
 say()  { echo "==> $*"; }
 warn() { echo "AVISO: $*" >&2; }
 die()  { echo "ERROR: $*" >&2; exit 1; }
+
+# El móvil se descubre por el beacon LAN (la IP por DHCP cambia).
+if [ -z "$PHONE_IP" ]; then
+    if _found=$(descubrir_phone_ip); then
+        PHONE_IP="$_found"
+        say "móvil descubierto por el beacon LAN: $PHONE_IP"
+    else
+        PHONE_IP="192.168.1.124"
+        warn "no.contestó el beacon LAN (9099): uso $PHONE_IP por defecto"
+        warn "  · ¿está el móvil en la misma red? · ¿está vivo el daemon?"
+        warn "  · o fija MEGADAEMON_PHONE_IP=<ip> en el entorno del relay"
+    fi
+fi
 
 # ── 0. token de DuckDNS (para el TLS DNS-01) ────────────────────────────────
 DUCKDNS_TOKEN="${DUCKDNS_TOKEN:-}"
