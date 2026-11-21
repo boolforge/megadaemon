@@ -10,6 +10,8 @@
 | [`LLM_SWITCH_PLAN.md`](LLM_SWITCH_PLAN.md) | Plan de cambio de LLM con datos: 4 modelos medidos, jerarquía de palancas, 5 fases, umbrales, riesgos y rollback. |
 | [`DEVICE_DEPLOY.md`](DEVICE_DEPLOY.md) | **Despliegue real en el dispositivo** (Galaxy S21 Ultra / Exynos 2100): inventario, megadaemon como demonio, API key remota verificada, deduplicación de los tres entornos, subida a Drive y estado de cada fase. |
 | [`SEERE_V11.md`](SEERE_V11.md) | Harness SEERE: los 24 defectos de la v10, el diseño de la v11 (gramáticas tipadas, anti-eco, huella fuera del prompt) y los benchmarks E2E con modelos reales. |
+| [`CERTIFICADOS_Y_SEDES_ELECTRONICAS.md`](CERTIFICADOS_Y_SEDES_ELECTRONICAS.md) | **Certificados y sedes electrónicas**: SALUD Andalucía (historia clínica), Receta Electrónica Andalucía, Sede Electrónica de la Junta, Sede Judicial Electrónica, Seguridad Social y Cl@ve — qué se puede automatizar, qué **no** (prescripción, dispensación, firma) y con qué URL oficial está verificado cada cosa. |
+| [`CERT_SYNC_EN_NODOS.md`](CERT_SYNC_EN_NODOS.md) | **Sincronización de certificados entre nodos**: flujo inventario → cifrado (AEGIS-256 + Argon2id) → transferencia → despliegue → uso → revocación, con la política de `confirm`, la traza de auditoría y la frontera legal (certificados personales e intransferibles, datos de salud = categoría especial RGPD art. 9). |
 
 ## Código de referencia y evidencia
 
