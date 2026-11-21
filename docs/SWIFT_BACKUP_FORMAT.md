@@ -117,3 +117,125 @@ TAR con el formato público, Argon2id con la RFC 9106). Ver
    iteraciones, de memoria, de paralelismo) sin desensamblar nada.
 3. **El dominio de las etiquetas (`-aad-v1`, `-nonce-v1`) dice cómo se
    derivan** el AAD y el nonce ⇒ es la pista para la última pieza del KDF.
+
+---
+
+## 6. El layout **byte a byte** de la cabecera (medido en el escritor)
+
+> Añadido por el agente RE de APK/nativo.  Source: **escritor ARM64**
+> (`SbaArchiveNative_createArchive` de `libsba_archive.so`, la arquitectura
+> del móvil).  **Contrasteado** con la medición del escritor **x86_64**
+> (otro agente) ⇒ **las dos arquitecturas coinciden en la secuencia
+> completa de 27 escrituras** ⇒ el layout **no cambia** por arquitectura.
+
+### 6.1 Cómo se localizó (sin símbolos: la `.so` va stripped)
+
+1. El literal `"SBA1"` está en `.rodata` en el offset **0x11b35**
+   (verificado: `SBA1\x00failed to a…`).
+2. El xref es **`adrp x2, 0x11000`** + **`add x2, x2, #0xb35`**
+   (`0x6562c` / `0x65630`) ⇒ ése es el escritor de la cabecera.
+3. A partir de ahí, la secuencia de llamadas a los *helpers* de *append*
+   da el orden exacto de los campos.
+
+### 6.2 Los helpers (y lo que dicen)
+
+| Helper | Qué es | Evidencia |
+|---|---|---|
+| `0x6ae10` | **append de bytes** `(buf, ptr, len)` | `bl 0x6ae10` con `x2="SBA1"`, `w4=4` |
+| `0x6aa00` | **append de entero de 2 bytes, BIG-ENDIAN** | `lsr w8,w20,#8` + `strb w8` (byte **alto**) y luego `strb w20` (byte ** bajo**); **no recibe argumento de ancho** ⇒ siempre 2 bytes |
+| `0x6ab6c` | **append de entero de ancho variable** (1..3 B) | `lsr w8,w20,#24` + `strb` ⇒ escribe el byte más alto primero; el ancho lo elige el llamante con un `csel` |
+| `0x6b140` | **append de bytes** (sin prefijo) | `memcpy` de `x4` bytes |
+| `0x6b524` | **append de bloque** (longitud + bytes) | `mov x21,x2` (longitud) · `mov x22,x3` (puntero) |
+
+### 6.3 La tabla: los 27 campos, en orden
+
+| # | Bytes | Tipo | Contenido | Origen en el escritor |
+|---|-------|------|-----------|----------------------|
+| 1 | 4 | ASCII | `SBA1` | `adrp/add` → `bl 0x6ae10` (`x2=0x11b35`, `w4=4`) |
+| 2 | 2 | **u16 BE** | `flags` | `ldr w1,[x20]` → `bl 0x6aa00` |
+| 3 | 2 | **u16 BE** | `headerSize` = **0x60 (96)** ó **0x90 (144)** | `mov w8,#0x60` + `csel w23,w9,w8,eq` → `bl 0x6aa00` |
+| 4 | **1..3** | **var BE** | `encryptionMethodId` | `ldr w8,[x20,#4]` + `csel w1,w10,w9,eq` → `bl 0x6ab6c` |
+| 5 | 8 | **u64 BE** | `createdAtEpochMs` = `time(NULL)*1000` | `bl time@plt`; `mul x28,x0,#1000`; escrito **byte a byte** con `lsr x20,x28,x21` empezando por `>>56` ⇒ **MSB primero** |
+| 6 | 2 | u16 BE | campo A (sin nombre confirmado) | `ldr w1,[sp,#20]` → `bl 0x6aa00` |
+| 7 | 2 | u16 BE | campo B (sin nombre confirmado) | `ldr w1,[sp,#16]` → `bl 0x6aa00` |
+| 8 | 2 | u16 BE | `struct[0x04]` | `ldr w1,[x20,#4]` → `bl 0x6aa00` |
+| 9 | 2 | u16 BE | `struct[0x08]` | `ldr w1,[x20,#8]` → `bl 0x6aa00` |
+| 10 | 2 | u16 BE | `struct[0x0c]` | `ldr w1,[x20,#12]` → `bl 0x6aa00` |
+| 11 | 2 | u16 BE | **longitud del bloque 1** | `ldr w8,[x20,#72]` − `ldr w9,[x20,#64]` → `bl 0x6aa00` |
+| 12 | 2 | u16 BE | **longitud del bloque 2** | `ldr w8,[x20,#96]` − `ldr w9,[x20,#88]` → `bl 0x6aa00` |
+| 13 | 2 | u16 BE | **longitud del bloque 3** | `ldr w8,[x20,#120]` − `ldr w9,[x20,#112]` → `bl 0x6aa00` |
+| 14 | 4 | u32 BE | longitud del bloque 1 | `bl 0x6b140`/`0x6b524` |
+| 15 | N | bytes | **bloque 1** | `ldp x2,x3,[x20,#64]` → `sub x4,x3,x2` |
+| 16 | 4 | u32 BE | longitud del bloque 2 | |
+| 17 | M | bytes | **bloque 2** | `ldp x2,x3,[x20,#88]` |
+| 18 | 4 | u32 BE | longitud del bloque 3 | |
+| 19 | P | bytes | **bloque 3** | `ldp x2,x3,[x20,#112]` |
+| 20 | 2 | u16 BE | `0` | `mov w1,wzr` → `bl 0x6aa00` |
+| 21 | 2 | u16 BE | `0` | `mov w1,wzr` → `bl 0x6aa00` |
+| 22 | **1..3** | **var BE** | `struct[0x18]` | `ldr w1,[x20,#24]` → `bl 0x6ab6c` |
+| 23 | **1..3** | **var BE** | `struct[0x10]` — **sólo si `flags == 2`** | `cmp w8,#2` → `ldr w1,[x20,#16]` → `bl 0x6ab6c` |
+| 24 | 2 | u16 BE | `struct[0x14]` | `ldr w1,[x20,#20]` → `bl 0x6aa00` |
+| 25 | 2 | u16 BE | `struct[0x1c]` | `ldr w1,[x20,#28]` → `bl 0x6aa00` |
+| 26 | 2 | u16 BE | `struct[0x20]` | `ldr w1,[x20,#32]` → `bl 0x6aa00` |
+| 27 | 2 | u16 BE | `struct[0x04]` (última escritura) | `ldr w8,[x20,#4]` → `bl 0x6aa00` |
+
+### 6.4 Los tres bloques de bytes
+
+El struct nativo (`x20`) tiene **tres arrays**, leídos como
+`(inicio, fin)` en los offsets:
+
+| Bloque | Inicio | Fin | Tamaño máximo observado |
+|---|---|---|---|
+| 1 | `struct[0x40]` | `struct[0x48]` | 32 B (candidato: **key-check** = SHA-256) |
+| 2 | `struct[0x58]` | `struct[0x60]` | 16 B (candidato: **sal**) |
+| 3 | `struct[0x70]` | `struct[0x78]` | 8 B (candidato: **id/nonce**) |
+
+⇒ Los candidatos a `salt`, `kdf` y `keyCheck` del modelo Kotlin de 12
+campos (`headerSize, flags, createdAtEpochMs, compression,
+compressionMethodId, compressionLevel, encryption, encryptionMethodId,
+kdfMethodId, kdfIterations, payloadChunkSize, kdf`) están **entre estos
+tres**, pero **cuál es cuál no está confirmado** ⇒ no se les pone nombre.
+
+### 6.5 Reglas del formato que sí quedan **cerradas**
+
+1. **BIG-ENDIAN para todos los enteros, sin excepción.**  Verificado en dos
+   helpers independientes: el de 2 bytes (`0x6aa00`: `value>>8` primero) y
+   el de 8 bytes (`createdAtEpochMs`: `>>56` primero) ⇒ coherente con
+   `DataOutputStream` de Java/Kotlin ⇒ ⇒ **un lector little-endian leería
+   todos los campos al revés**.
+2. **`headerSize` es 96 (0x60) o 144 (0x90)**: 96 para la info page de una
+   entrada, 144 para la del archivo raíz.
+3. **La secuencia de campos no depende de la arquitectura** (ARM64 == x86_64).
+4. Los campos **4, 22 y 23** tienen **ancho variable** ⇒ **un lector no
+   puede deducir su ancho sólo de los bytes**.
+
+### 6.6 El lector y el escritor (`rust-core/src/swift_sba1_header.rs`)
+
+Módulo nuevo, con **9 tests** (round-trip, big-endian, truncados, magic
+inválido, tamaño desconocido):
+
+| API | Qué hace |
+|---|---|
+| `Cabecera::escribir(&self, perfil)` | escribe la cabecera **exactamente** como el nativo |
+| `Cabecera::leer(bytes, perfil)` | la lee; devuelve la cabecera y los bytes consumidos |
+| `leer_auto(bytes)` | prueba los dos perfiles (con/sin cifrado) y se queda con el que cuadra |
+| `Perfil` | los **anchos** de los campos de ancho variable (1..3 bytes) |
+
+⇒ El perfil es explícito **a propósito**: hasta que haya un `.dat` real,
+**no se congela** el layout.  Cuando llegue, se casa el perfil con los
+bytes y *entonces* se fija en un test (misma regla que §3.2).
+
+### 6.7 Lo que **sigue** sin poder cerrarse
+
+| Pieza | Por qué | Dónde está |
+|---|---|---|
+| **nonce y AAD por trozo** | la derivación es **NATIVA** (`SbaLibaegisCryptoNative_decryptAegis256ChunkedEntryFdRaw`) ⇒ las etiquetas `SBA1-AEGIS256-entry-chunk-nonce-v1` / `-aad-v1` son **etiquetas**, no el algoritmo | `libsba_archive.so` |
+| **ancho de los campos variables** | lo decide el escritor con un `csel` según otros campos ⇒ no es autodominante | `Perfil` |
+| **nombre de los 3 bloques** | faltan bytes reales | §6.4 |
+| **un `.dat` real** | el usuario tiene que exportar el backup | — |
+
+⇒ **El round-trip sintético** (escribir → leer) **sí** está hecho y
+testeado: prueba que nuestro escritor reproduce la secuencia del nativo y
+que el lector la invierte.  Lo que **no** prueba (y no se afirma) es la
+interoperabilidad con la app, que necesita el `.dat` real y la derivación
+nativa de nonce/AAD.
