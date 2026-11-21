@@ -948,16 +948,6 @@ fn parse_apk_paths(stdout: &str) -> Vec<String> {
         .collect()
 }
 
-/// Extrae las rutas de APK de la salida de `pm list packages -f`.
-fn parse_apk_paths(stdout: &str) -> Vec<String> {
-    stdout
-        .lines()
-        .filter_map(|l| l.trim().strip_prefix("package:"))
-        .map(|p| p.trim().to_string())
-        .filter(|p| !p.is_empty())
-        .collect()
-}
-
 /// Extrae los nombres de paquete de la salida de `pm list packages`.
 fn parse_package_names(stdout: &str) -> Vec<String> {
     stdout
@@ -1005,7 +995,7 @@ fn pair_packages(names: &[String], paths: &[String]) -> Vec<(String, String)> {
 fn list_packages() -> Vec<(String, String)> {
     let with_paths =
         crate::android::root_exec("pm list packages -f 2>/dev/null", PM_TIMEOUT_MS, 512 * 1024);
-    let paths = parse_package_paths(&with_paths.stdout);
+    let paths = parse_apk_paths(&with_paths.stdout);
     let names = if paths.len() > 1 {
         let plain =
             crate::android::root_exec("pm list packages 2>/dev/null", PM_TIMEOUT_MS, 512 * 1024);
