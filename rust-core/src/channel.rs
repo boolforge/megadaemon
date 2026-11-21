@@ -290,6 +290,22 @@ pub fn es_canal_muerto(code: u16) -> bool {
     matches!(code, 0 | 502 | 503 | 504 | 530)
 }
 
+/// Payload **público** del canal: lo único que hace falta para **redescubrir
+/// el canal** son las URLs.
+///
+/// ⚠️ `ip_publica` y `cloudflared_pids` **NO** se publican por defecto: son
+/// dato de reconocimiento del dispositivo y no aportan al propósito (lo pidió
+/// el agente de cockpit/web). Se quedan en el `channel.json` **local** del
+/// móvil, que es privado.
+pub fn public_payload(estado: &Value) -> Value {
+    json!({
+        "quick": estado.get("quick").cloned().unwrap_or(Value::Null),
+        "duckdns": estado.get("duckdns").cloned().unwrap_or(Value::Null),
+        "canonical": CANONICAL_URL,
+        "ts": now_iso(),
+    })
+}
+
 /// Estado completo del canal + publicación en paste (si se puede).
 ///
 /// * `quick`: la URL del *quick tunnel* vigente.
@@ -331,14 +347,19 @@ pub fn publish(
         .unwrap_or("")
         .to_string();
 
-    // 2) el paste lleva la URL del paste anterior (cadena auto-renovable) y
-    //    **la URL canónica** (que es la que de verdad sirve lo último).
+    // 2) el paste lleva la URL del paste anterior (cadena auto-renovable), la
+    //    URL canónica y **sólo las URLs** (nada de IP ni de PIDs: eso queda en
+    //    el channel.json local, que es privado).
     if let Some(o) = estado.as_object_mut() {
         o.insert("prev_paste".to_string(), json!(paste_previo));
         o.insert("canonical".to_string(), json!(CANONICAL_URL));
         o.insert("ts".to_string(), json!(now_iso()));
     }
-    let texto = serde_json::to_string_pretty(&estado).unwrap_or_default();
+    let mut publico = public_payload(&estado);
+    if let Some(o) = publico.as_object_mut() {
+        o.insert("prev_paste".to_string(), json!(paste_previo));
+    }
+    let texto = serde_json::to_string_pretty(&publico).unwrap_or_default();
     match publish_paste(&texto) {
         Some(url_paste) => {
             if let Some(o) = estado.as_object_mut() {
