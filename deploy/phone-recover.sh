@@ -109,14 +109,32 @@ REPO_API=https://api.github.com/repos/boolforge/megadaemon
 # api.github.com/.../releases/download/... devuelve 404 (medido).
 REPO_DL=https://github.com/boolforge/megadaemon/releases/download
 
+# El movil tiene varias rutas de descarga y NO todas sirven para HTTPS:
+#   * `curl` de Termux (si está) => el mejor;
+#   * `wget` de Termux;
+#   * `toybox wget` => puede ir sin TLS según la build;
+#   * `busybox wget`.
+# Se prueban EN ORDEN y se usa la primera que funcione.
+TERMUX_BIN=/data/data/com.termux/files/usr/bin
+
 fetch() {
     # $1 = url  $2 = destino.  Devuelve 0 si se descargó.
     _u="$1"; _d="$2"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL -m 120 -o "$_d" "$_u" 2>/dev/null && return 0
-    fi
+    for c in curl wget; do
+        if command -v "$c" >/dev/null 2>&1; then
+            "$c" -fsSL -m 120 -o "$_d" "$_u" 2>/dev/null && return 0
+            "$c" -q -T 60 -O "$_d" "$_u" 2>/dev/null && return 0
+        fi
+        if [ -x "$TERMUX_BIN/$c" ]; then
+            "$TERMUX_BIN/$c" -fsSL -m 120 -o "$_d" "$_u" 2>/dev/null && return 0
+            "$TERMUX_BIN/$c" -q -T 60 -O "$_d" "$_u" 2>/dev/null && return 0
+        fi
+    done
     if command -v toybox >/dev/null 2>&1; then
-        toybox wget -q -O "$_d" "$_u" 2>/dev/null && return 0
+        toybox wget -q -T 60 -O "$_d" "$_u" 2>/dev/null && return 0
+    fi
+    if command -v busybox >/dev/null 2>&1; then
+        busybox wget -q -T 60 -O "$_d" "$_u" 2>/dev/null && return 0
     fi
     return 1
 }
