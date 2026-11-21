@@ -520,7 +520,7 @@ fn mesh_snapshot() -> Option<Value> {
 
 /// Lee el tablero SQLite de coordinación (si existe).
 fn coordination_snapshot() -> Option<Value> {
-    let path = Path::new(&bus_state_dir()).join("board.sqlite");
+    let path = Path::new(&coord_board_dir()).join("board.sqlite");
     if !path.exists() {
         return None;
     }
@@ -893,9 +893,10 @@ pub fn node_assign(node_id: &str, kind: &str, payload: &Value, capability: &str)
         return json!({ "ok": false, "error": "publish_failed", "detail": e });
     }
 
-    // Tablero SQLite (opcional).
+    // Tablero SQLite (opcional): puede estar en otro `state_dir` que el del
+    // bus (el del daemon) ⇒ se resuelve por candidatas.
     let mut board_task_id = Value::Null;
-    let sqlite = Path::new(&dir).join("board.sqlite");
+    let sqlite = Path::new(&coord_board_dir()).join("board.sqlite");
     if sqlite.exists() {
         if let Ok(board) = crate::coordination::TaskBoard::open(&sqlite.to_string_lossy()) {
             if let Ok(id) = board.add_task(
@@ -1001,7 +1002,7 @@ pub fn node_migrate(target_version: &str) -> Value {
         "sqlite_plan": Value::Null,
         "mesh_plan": Value::Null,
     });
-    let sqlite = Path::new(&dir).join("board.sqlite");
+    let sqlite = Path::new(&coord_board_dir()).join("board.sqlite");
     if sqlite.exists() {
         if let Ok(b) = crate::coordination::TaskBoard::open(&sqlite.to_string_lossy()) {
             if let Ok(plan) = b.migration_plan(&target) {
@@ -1052,7 +1053,7 @@ pub fn task_board() -> Value {
     if let Some(c) = &coord {
         board_status = json!({
             "deployed": true,
-            "path": format!("{}/board.sqlite", bus_state_dir()),
+            "path": format!("{}/board.sqlite", coord_board_dir()),
             "tasks_by_status": c.get("tasks_by_status").cloned().unwrap_or(Value::Null),
             "instances": c.get("instances").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0),
         });
@@ -3502,9 +3503,47 @@ pub fn prompt_external(include_secrets: bool, api_key: &str) -> Value {
 // 12) Tablero del bus: claim/release con rol y bajo lock
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Candidatas, en orden, de dónde puede estar el tablero SQLite.
+///
+/// El bus (mesh) usa `/data/local/tmp/megadaemon` en Android, pero el daemon
+/// vive en **su** `state_dir` (`MEGADAEMON_STATE_DIR` ⇒ en el móvil
+/// `/data/local/tmp/megadaemon/state`) ⇒ se prueban **todas** y se usa la
+/// primera que **exista** ⇒ así el tablero se ve esté donde esté.
+///
+/// Antes se miraba sólo `bus_state_dir()` ⇒ sin la variable de entorno, en
+/// Android, se buscaba `/data/local/tmp/megadaemon/board.sqlite` mientras que
+/// el fichero real está un nivel más abajo (`.../state/board.sqlite`) ⇒ el
+/// tablero salía **vacío** sin decir por qué.
+pub fn coord_board_dirs() -> Vec<String> {
+    let cockpit = cockpit_state_dir();
+    let bus = bus_state_dir();
+    let mut out = vec![cockpit, bus.clone()];
+    let nested = format!("{}/state", bus);
+    if !out.contains(&nested) {
+        out.push(nested);
+    }
+    out
+}
+
+/// Primera candidata que contiene `board.sqlite`; si ninguna, la primera
+/// (la del daemon: es donde se debe escribir).
+fn coord_board_dir_in(cands: &[String]) -> String {
+    for c in cands {
+        if Path::new(c).join("board.sqlite").exists() {
+            return c.clone();
+        }
+    }
+    cands.first().cloned().unwrap_or_default()
+}
+
+/// Directorio efectivo del tablero SQLite.
+pub fn coord_board_dir() -> String {
+    coord_board_dir_in(&coord_board_dirs())
+}
+
 /// Ruta del tablero SQLite de coordinación (la que usa `coordination::TaskBoard`).
 fn coord_board_path() -> String {
-    format!("{}/board.sqlite", bus_state_dir())
+    format!("{}/board.sqlite", coord_board_dir())
 }
 
 /// Instancia local (id + rol) registrada en el tablero.
@@ -4117,6 +4156,35 @@ pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// El tablero se busca en TODAS las candidatas: si está en la tercera
+    /// (layout Android sin variable de entorno), se encuentra; y si aparece
+    /// en la primera, manda la primera.
+    #[test]
+    fn el_tablon_se_resuelve_por_candidatas() {
+        let base = std::env::temp_dir().join(format!("md-webui-boarddir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let a = base.join("cockpit");
+        let b = base.join("bus");
+        let c = base.join("bus_state");
+        for d in [&a, &b, &c] {
+            std::fs::create_dir_all(d).expect("dir de prueba");
+        }
+        let cands = vec![
+            a.to_string_lossy().to_string(),
+            b.to_string_lossy().to_string(),
+            c.to_string_lossy().to_string(),
+        ];
+        // Sin tablero en ninguna: se escribe en la primera (la del daemon).
+        assert_eq!(coord_board_dir_in(&cands), cands[0]);
+        // El tablero real está en la tercera ⇒ se encuentra.
+        std::fs::write(c.join("board.sqlite"), b"x").expect("tablero");
+        assert_eq!(coord_board_dir_in(&cands), cands[2]);
+        // Si aparece en la primera, manda la primera.
+        std::fs::write(a.join("board.sqlite"), b"x").expect("tablero");
+        assert_eq!(coord_board_dir_in(&cands), cands[0]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     /// Ruta del HTML de la UI v2 (relativo al crate).
     fn ui_path() -> PathBuf {
