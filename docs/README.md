@@ -2,6 +2,8 @@
 
 | Documento | Qué contiene |
 |---|---|
+| [`QA_SECURITY_HARNESS_SPEC.md`](QA_SECURITY_HARNESS_SPEC.md) | **Especificación del harness de QA y de seguridad**: qué del manual de QA móvil/pen-test ya existe en MegaDaemon (con `fichero.rs:línea`), matriz manual → MegaDaemon, la frontera de alcance, y el diseño propuesto de `qa_engine.rs`, `sec_audit.rs` e `ipc_audit.rs` más el puente de interceptación Brida. |
+| [`REPO_TRIAGE.md`](REPO_TRIAGE.md) | **Triage de 67 repos de referencia**: URL, descripción, licencia verificada en el fichero `LICENSE` (o `NO VERIFICADO`), lenguaje, relevancia, acción concreta y destino en el daemon, más el Top 10 por valor. |
 | [`EXTERNAL_AGENT_PROMPT_FINAL.md`](EXTERNAL_AGENT_PROMPT_FINAL.md) | **Prompt listo para pegar al agente externo de RE Android** (conexión MCP, self-check, las 27 tools, el encargo de reverse por fases y el contrato de entrega `MANIFEST.ndjson` + `REPORT.md` + `findings.ndjson` v1.2). Las dos credenciales van como marcadores: la copia rellenada vive fuera del repo, en `/workspace/md-secrets/EXTERNAL_AGENT_PROMPT_WITH_KEYS.md` (0600). |
 | [`CONNECT_EXTERNAL_AGENT_ANDROID_RE.md`](CONNECT_EXTERNAL_AGENT_ANDROID_RE.md) | Contrato completo del agente externo: enums cerrados de `detector`/`class`/`method`, reglas de los 19 campos, política de Play Integrity y canales verificados de subida. |
 | [`NPU_REAL.md`](NPU_REAL.md) | **NPU real**: qué se ejecuta en el NPU (NNAPI INT8), qué NO puede ejecutarse (el LLM) y por qué, con la evidencia y el protocolo de verificación en el dispositivo. |
