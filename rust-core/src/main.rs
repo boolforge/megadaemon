@@ -65,6 +65,28 @@ fn main() {
             mcp_server::run_stdio_mcp_server();
         }
 
+        // v13.3 — Motor de sincronización de conversaciones (CLI).
+        "sync" => {
+            let services: Option<Vec<String>> = args.get(2).map(|s| {
+                s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()
+            });
+            let cookies = args.iter().any(|a| a == "--cookies");
+            let r = megadaemon_core::sync::run_sync(services, cookies);
+            println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+        }
+
+        "conv-search" => {
+            let q = args.get(2).cloned().unwrap_or_default();
+            let svc = args.get(3).cloned();
+            let r = megadaemon_core::sync::search(&q, svc.as_deref(), 20);
+            println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+        }
+
+        "conv-stats" => {
+            let r = megadaemon_core::sync::status();
+            println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+        }
+
         "chat" => {
             let model = args.get(2).map(|s| s.as_str());
             let prompt = if args.len() > 3 { args[3..].join(" ") } else { "Hello".into() };

@@ -1309,10 +1309,37 @@ impl Arsenal {
         // lanzar el comando real: si la sonda falla, el runner no sirve y se
         // pasa al siguiente; si la sonda pasa, el comando se ejecuta UNA vez
         // y su fallo se devuelve tal cual.
+        let run_prog = |bin: &std::path::Path, flag: &str, cmd_arg: &str| {
+            match Command::new(bin).arg(flag).arg(cmd_arg).output() {
+                Ok(o) => Ok(o),
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                    // En Android SELinux (`untrusted_app`), `execve()` directo
+                    // sobre un script `#!` en `app_data_file` devuelve EACCES
+                    // (os error 13).  Si es un script, se invoca vía `/system/bin/sh`.
+                    let sh = if std::path::Path::new("/system/bin/sh").exists() {
+                        "/system/bin/sh"
+                    } else {
+                        "/bin/sh"
+                    };
+                    Command::new(sh).arg(bin).arg(flag).arg(cmd_arg).output()
+                }
+                Err(e) => Err(e),
+            }
+        };
         let mut last_fail: Option<String> = None;
         for (prog, flag) in &[("su", "-c"), ("rish", "-c"), ("sh", "-c")] {
+            // Resolver en std::env::var_os("PATH") explícitamente: en Android
+            // Bionic `posix_spawnp`/`execvp` lee `environ` de libc, donde un
+            // script hijo (`rish`) puede alterar el orden si no se fija la ruta.
+            let resolved = std::env::var_os("PATH")
+                .and_then(|paths| {
+                    std::env::split_paths(&paths)
+                        .map(|d| d.join(prog))
+                        .find(|p| p.is_file())
+                })
+                .unwrap_or_else(|| std::path::PathBuf::from(prog));
             // Sonda: ¿arranca el runner? (no tiene efectos secundarios)
-            let probe = match Command::new(prog).arg(flag).arg("exit 0").output() {
+            let probe = match run_prog(&resolved, flag, "exit 0") {
                 Ok(o) => o,
                 Err(_) => continue, // el binario no existe: siguiente runner
             };
@@ -1324,7 +1351,7 @@ impl Arsenal {
                 last_fail = Some(format!("ERR_RUNNER_UNAVAILABLE:{}:{}", prog, p_err));
                 continue; // el runner no arranca (su denegado, rish caído)
             }
-            let out = match Command::new(prog).arg(flag).arg(c).output() {
+            let out = match run_prog(&resolved, flag, c) {
                 Ok(o) => o,
                 Err(e) => {
                     last_fail = Some(format!("ERR:{}", e));

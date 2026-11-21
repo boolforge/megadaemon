@@ -168,8 +168,15 @@ fn http_post(port: u16, path: &str, body: &str, extra_headers: &str) -> String {
 }
 
 /// Crea un directorio temporal con scripts falsos y lo devuelve.
+/// En Android `/storage` o algunos `TMPDIR` pueden estar en `noexec`, por lo
+/// que se prioriza el directorio interno ejecutable `/data/user/0/com.agy/files/tmp`.
 fn fake_bin_dir(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("seere_{}_{}", tag, std::process::id()));
+    let base = if std::path::Path::new("/data/user/0/com.agy/files/tmp").exists() {
+        std::path::PathBuf::from("/data/user/0/com.agy/files/tmp")
+    } else {
+        std::env::temp_dir()
+    };
+    let dir = base.join(format!("seere_{}_{}", tag, std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -177,7 +184,26 @@ fn fake_bin_dir(tag: &str) -> std::path::PathBuf {
 
 fn write_exec(dir: &std::path::Path, name: &str, body: &str) {
     let p = dir.join(name);
-    std::fs::write(&p, body).unwrap();
+    // En Android SELinux (`untrusted_app`), un script en `app_data_file` no
+    // puede tener `#! /system/bin/sh` (SELinux deniega `execute_no_trans` ->
+    // EACCES os error 13), pero sí el ELF nativo `usr/bin/bash` del propio sandbox.
+    let fixed_body = if !std::path::Path::new("/bin/sh").exists()
+        && std::path::Path::new("/data/user/0/com.agy/files/usr/bin/bash").exists()
+        && body.starts_with("#!/bin/sh\n")
+    {
+        body.replacen(
+            "#!/bin/sh\n",
+            "#!/data/user/0/com.agy/files/usr/bin/bash\n",
+            1,
+        )
+        .replace(
+            "exec /bin/sh",
+            "exec /data/user/0/com.agy/files/usr/bin/bash",
+        )
+    } else {
+        body.to_string()
+    };
+    std::fs::write(&p, fixed_body).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

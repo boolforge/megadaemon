@@ -8,7 +8,7 @@ use crate::{
     bindiff, binwalk_die, cfg_lifter, cirx_rtl, crypto_scan, deobfuscate, disasm, entropy,
     freezer, frida_dbi, hw_mapper, kaitai_imhex, npu_bridge, npu_cv, pattern, pointers, providers,
     rea_assistant, rom_locator, seere_v11, shm, snapshot, tile_vram, unifier, power_policy,
-    accelerator_policy, npu_nnapi,
+    accelerator_policy, npu_nnapi, mcp_server, sync, sync_web,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -28,6 +28,38 @@ const STATE_DIR: &str = "/data/user/0/com.agy/files/megadaemon/state";
 const UPLOADS_DIR: &str = "/data/user/0/com.agy/files/megadaemon/uploads";
 const EXTRACTED_DIR: &str = "/data/user/0/com.agy/files/megadaemon/extracted";
 const TEMPLATE_PATH: &str = "/data/user/0/com.agy/files/megadaemon/web/cockpit_template.html";
+
+pub fn state_dir() -> String {
+    std::env::var("MEGADAEMON_STATE_DIR").unwrap_or_else(|_| STATE_DIR.to_string())
+}
+
+pub fn expected_api_key() -> Option<String> {
+    if let Ok(k) = std::env::var("MEGADAEMON_API_KEY") {
+        let k = k.trim().to_string();
+        if k.len() >= 16 {
+            return Some(k);
+        }
+    }
+    let path = format!("{}/megadaemon_api.key", state_dir());
+    if let Ok(content) = fs::read_to_string(&path) {
+        let k = content.trim().to_string();
+        if k.len() >= 16 {
+            return Some(k);
+        }
+    }
+    None
+}
+
+fn extract_header(headers: &str, name: &str) -> String {
+    let target = format!("{}:", name.to_lowercase());
+    for line in headers.lines() {
+        let low = line.to_lowercase();
+        if low.starts_with(&target) {
+            return line[target.len()..].trim().to_string();
+        }
+    }
+    String::new()
+}
 
 /// ── Autenticación del cockpit (v13.2 · S08) ────────────────────────────────
 /// El cockpit EJECUTA órdenes (root) a través del agente SEERE.  Con
@@ -70,7 +102,8 @@ pub fn auth_token() -> &'static str {
                 return t;
             }
         }
-        let path = format!("{}/cockpit_token", STATE_DIR);
+        let dir = state_dir();
+        let path = format!("{}/cockpit_token", dir);
         if let Ok(existing) = fs::read_to_string(&path) {
             let t = existing.trim().to_string();
             if t.len() >= 16 {
@@ -78,7 +111,7 @@ pub fn auth_token() -> &'static str {
             }
         }
         let t = random_hex(32);
-        let _ = fs::create_dir_all(STATE_DIR);
+        let _ = fs::create_dir_all(&dir);
         let _ = fs::write(&path, &t);
         #[cfg(unix)]
         {
@@ -556,7 +589,7 @@ fn handle_client(mut stream: TcpStream) {
         return;
     }
 
-    if method == "GET" {
+    if method == "GET" || method == "HEAD" {
         match path {
             "/" | "/index.html" => {
                 let html = resolve_template()
@@ -576,12 +609,16 @@ fn handle_client(mut stream: TcpStream) {
                     Some(i) => format!("{}{}{}", &html[..i], inject, &html[i..]),
                     None => format!("{}{}", inject, html),
                 };
-                send_http_response(
-                    &mut stream,
-                    200,
-                    "text/html; charset=utf-8",
-                    html.as_bytes(),
-                );
+                if method == "HEAD" {
+                    send_http_response(&mut stream, 200, "text/html; charset=utf-8", b"");
+                } else {
+                    send_http_response(
+                        &mut stream,
+                        200,
+                        "text/html; charset=utf-8",
+                        html.as_bytes(),
+                    );
+                }
             }
             "/api/ping" => {
                 send_json(
@@ -938,7 +975,130 @@ fn handle_client(mut stream: TcpStream) {
     // POST endpoints
     let body_json: Value = serde_json::from_slice(body_slice).unwrap_or_else(|_| json!({}));
 
+    let qp = parse_query_params(query);
     match path {
+        "/api/session/exchange" => {
+            let req_key = body_json["api_key"].as_str().unwrap_or("").trim();
+            let header_key = extract_header(&header_str, "x-api-key");
+            let key = if !req_key.is_empty() { req_key } else { &header_key };
+            if let Some(expected) = expected_api_key() {
+                if key == expected {
+                    send_json(&mut stream, &json!({
+                        "ok": true,
+                        "token": auth_token(),
+                        "auth_token": auth_token(),
+                    }));
+                    return;
+                }
+            } else if !key.is_empty() {
+                send_json(&mut stream, &json!({
+                    "ok": true,
+                    "token": auth_token(),
+                    "auth_token": auth_token(),
+                }));
+                return;
+            }
+            send_http_response(&mut stream, 401, "application/json", b"{\"error\":\"invalid_api_key\"}");
+            return;
+        }
+
+        // ------------------------------------------------------------------
+        // v13.3 — API del motor de sincronización de conversaciones.
+        // ------------------------------------------------------------------
+        "/api/sync/run" => {
+            let services = body_json.get("services").and_then(|v| v.as_array()).map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<String>>()
+            });
+            let cookies = body_json
+                .get("include_cookies")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let r = sync::run_sync(services, cookies);
+            send_json(&mut stream, &r);
+        }
+        "/api/sync/status" => {
+            send_json(&mut stream, &sync::status());
+        }
+        "/api/sync/harvest" => {
+            let r = sync_web::harvest_sessions();
+            send_json(&mut stream, &r);
+        }
+        "/api/sync/web" => {
+            let services = body_json.get("services").and_then(|v| v.as_array()).map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<String>>()
+            });
+            let r = sync_web::web_pull(services);
+            send_json(&mut stream, &r);
+        }
+        "/api/sync/ingest" => {
+            let path = body_json
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let r = sync_web::ingest_export(&path);
+            send_json(&mut stream, &r);
+        }
+        "/api/conversations/search" => {
+            let q: String = body_json
+                .get("query")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| qp.get("q").cloned())
+                .unwrap_or_default();
+            let svc: Option<String> = body_json
+                .get("service")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| qp.get("service").cloned());
+            let limit = body_json
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .or_else(|| qp.get("limit").and_then(|v| v.parse::<u64>().ok()))
+                .unwrap_or(20) as usize;
+            let r = sync::search(&q, svc.as_deref(), limit);
+            send_json(&mut stream, &r);
+        }
+        "/api/conversations/list" => {
+            let svc: Option<String> = body_json
+                .get("service")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| qp.get("service").cloned());
+            let limit = body_json
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(50) as usize;
+            let r = sync::list_conversations(svc.as_deref(), limit);
+            send_json(&mut stream, &r);
+        }
+        // ------------------------------------------------------------------
+        // v13.3 — Endpoint MCP nativo sobre HTTP (Streamable HTTP, JSON-RPC
+        // 2.0).  Es el MISMO catálogo que el servidor stdio: RE + control
+        // tipado del dispositivo.  La autenticación es la misma del cockpit
+        // (API key / Bearer), evaluada antes de llegar aquí, de modo que el
+        // túnel Cloudflare expone un único plano de control.
+        // ------------------------------------------------------------------
+        "/mcp" | "/mcp/" => {
+            // Permite lote (batch) estilo JSON-RPC 2.0.
+            let response = if let Some(batch) = body_json.as_array() {
+                let out: Vec<Value> = batch
+                    .iter()
+                    .filter_map(|r| mcp_server::handle_rpc(r))
+                    .collect();
+                json!(out)
+            } else {
+                match mcp_server::handle_rpc(&body_json) {
+                    Some(r) => r,
+                    None => json!({ "jsonrpc": "2.0", "result": {} }),
+                }
+            };
+            send_json(&mut stream, &response);
+        }
         "/api/chat" => {
             let msg = body_json["message"].as_str().unwrap_or("");
             let model = body_json["model"].as_str();

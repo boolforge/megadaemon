@@ -79,13 +79,24 @@ pub fn catalog_v13_1() -> Vec<ProviderEntry> {
         ),
         prov!(
             "local-seere-vllm",
-            "SEERE v13.1 Local (vLLM / LM Studio / Ollama)",
+            "SEERE v13.3 Local (Lemonade / vLLM / LM Studio / Ollama)",
             "Local-Exynos",
             "http://127.0.0.1:8000/v1/chat/completions",
             "local",
             "local",
             "offline",
             "",
+            false
+        ),
+        prov!(
+            "lemonade-local",
+            "Lemonade Server Local (GGUF/ONNX/Hybrid Local Companion)",
+            "Lemonade",
+            "http://127.0.0.1:8000/api/v0/chat/completions",
+            "local",
+            "local",
+            "offline",
+            "https://lemonade-server.ai/",
             false
         ),
 
@@ -103,14 +114,25 @@ pub fn catalog_v13_1() -> Vec<ProviderEntry> {
         ),
         prov!(
             "ovhcloud-free",
-            "OVHcloud AI Endpoints (anónimo, 2 req/min)",
+            "OVHcloud AI Endpoints (Qwen3.6-35B-A3B anónimo, zero-key verificado)",
             "OVHcloud",
             "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
-            "gpt-4o-mini",
+            "qwen3.6-35b-a3b",
             "none",
             "keyless",
             "https://endpoints.ai.cloud.ovh.net/",
-            false
+            true
+        ),
+        prov!(
+            "ovhcloud-gpt-oss-120b",
+            "OVHcloud AI Endpoints (GPT-OSS-120B anónimo, zero-key verificado)",
+            "OVHcloud",
+            "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
+            "gpt-oss-120b",
+            "none",
+            "keyless",
+            "https://endpoints.ai.cloud.ovh.net/",
+            true
         ),
 
         // ---------------- FREE CON KEY (sin tarjeta) ---------------- //

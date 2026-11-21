@@ -1,9 +1,58 @@
 [
   {
-    "id": "task-1794997319765",
-    "prompt": "a otro llm para que analice la descompilaci\u00f3n de Snatcher en C++",
-    "timestamp": 1794997319.7656481,
+    "id": "task-1795056449902",
+    "origin": "SEERE_V12_RUST_HARNESS",
+    "prompt": "S14_TASK_MARKER resume",
+    "status": "QUEUED_OFFLINE",
+    "timestamp": 1795056449902
+  },
+  {
+    "id": "task-1795079994292",
+    "prompt": "Snatcher Engine Differential Bug Detectado:\nSubsistema: WORD_RAM_BANK_TIMING\nDirecci\u00f3n: 0xa12003\nEsperado: 4 cycles latency\nDetectado: 0 cycles (Instantaneous zero-wait)\nImpacto: Potential race condition in video playback decompression\n\nProporciona la soluci\u00f3n en c\u00f3digo C++ para engines/snatcher/snatcher.cpp en 2-3 l\u00edneas concisas.",
+    "timestamp": 1795079994.2925043,
     "status": "QUEUED_FOR_SUPERIOR_AGENT",
-    "origin": "SEERE_LOCAL_HARNESS"
+    "origin": "SEERE_V11_HARNESS"
+  },
+  {
+    "id": "task-1795079997393",
+    "prompt": "Snatcher platform Sega CD. Current scene is TITLE_LOGO_TRANSITION, acoustic event is ACOUSTIC_GUNSHOT_SFX. Action executed: Title screen detected. Initiating boot sequence via [START]. What is the next tactical objective?",
+    "timestamp": 1795079997.3939962,
+    "status": "QUEUED_FOR_SUPERIOR_AGENT",
+    "origin": "SEERE_V11_HARNESS"
+  },
+  {
+    "id": "task-1795079998858",
+    "prompt": "Snatcher platform PC Engine. Current scene is VIDEOPHONE_COMMUNICATION, acoustic event is ACOUSTIC_GUNSHOT_SFX. Action executed: Default interactive prompt: confirming via [I]. What is the next tactical objective?",
+    "timestamp": 1795079998.8585598,
+    "status": "QUEUED_FOR_SUPERIOR_AGENT",
+    "origin": "SEERE_V11_HARNESS"
+  },
+  {
+    "id": "task-1795080000314",
+    "prompt": "Snatcher platform PlayStation 1. Current scene is COMBAT_TURBOCYCLE_3X3, acoustic event is ACOUSTIC_GUNSHOT_SFX. Action executed: Combat Target detected in sector (0, 0)! Superhuman reflex aim: UP+LEFT + FIRE [SQUARE]. What is the next tactical objective?",
+    "timestamp": 1795080000.3143897,
+    "status": "QUEUED_FOR_SUPERIOR_AGENT",
+    "origin": "SEERE_V11_HARNESS"
+  },
+  {
+    "id": "task-1795080001776",
+    "prompt": "Snatcher platform Sega Saturn. Current scene is COMBAT_TURBOCYCLE_3X3, acoustic event is ACOUSTIC_GUNSHOT_SFX. Action executed: Combat Target detected in sector (0, 1)! Superhuman reflex aim: UP + FIRE [A]. What is the next tactical objective?",
+    "timestamp": 1795080001.7763011,
+    "status": "QUEUED_FOR_SUPERIOR_AGENT",
+    "origin": "SEERE_V11_HARNESS"
+  },
+  {
+    "id": "task-1795080003230",
+    "prompt": "Snatcher platform MSX2. Current scene is VIDEOPHONE_COMMUNICATION, acoustic event is ACOUSTIC_GUNSHOT_SFX. Action executed: Default interactive prompt: confirming via [RETURN]. What is the next tactical objective?",
+    "timestamp": 1795080003.2302043,
+    "status": "QUEUED_FOR_SUPERIOR_AGENT",
+    "origin": "SEERE_V11_HARNESS"
+  },
+  {
+    "id": "task-1795080004684",
+    "prompt": "Snatcher platform PC-8801. Current scene is COMBAT_TURBOCYCLE_3X3, acoustic event is ACOUSTIC_GUNSHOT_SFX. Action executed: Combat Target detected in sector (0, 1)! Superhuman reflex aim: UP + FIRE [SPACE]. What is the next tactical objective?",
+    "timestamp": 1795080004.6844187,
+    "status": "QUEUED_FOR_SUPERIOR_AGENT",
+    "origin": "SEERE_V11_HARNESS"
   }
 ]

@@ -14,7 +14,23 @@ fn write_jsonrpc(val: &Value) {
     }
 }
 
-fn tool_definitions() -> Value {
+/// Catálogo unificado de herramientas MCP (RE + control del dispositivo).
+/// Las de dispositivo viven en `crate::android`; se fusionan aquí para que
+/// stdio y HTTP expongan EXACTAMENTE el mismo catálogo.
+pub fn tool_definitions() -> Value {
+    let mut base = tool_definitions_core();
+    if let Some(arr) = base.as_array_mut() {
+        if let Some(dev_arr) = crate::android::tool_definitions().as_array().cloned() {
+            arr.extend(dev_arr);
+        }
+        if let Some(sync_arr) = crate::sync::tool_definitions().as_array().cloned() {
+            arr.extend(sync_arr);
+        }
+    }
+    base
+}
+
+fn tool_definitions_core() -> Value {
     json!([
         {
             "name": "minimax_chat",
@@ -106,7 +122,32 @@ fn tool_definitions() -> Value {
     ])
 }
 
-fn dispatch_tool(name: &str, args: &Value) -> Value {
+/// Despacha una herramienta. Las de dispositivo se resuelven en
+/// `crate::android::dispatch` (capa tipada con validación y auditoría).
+pub fn dispatch_tool(name: &str, args: &Value) -> Value {
+    if let Some(r) = crate::sync::dispatch(name, args) {
+        let text = serde_json::to_string_pretty(&r).unwrap_or_default();
+        return json!({
+            "content": [{ "type": "text", "text": text }],
+            "structuredContent": r,
+            "isError": r.get("ok").and_then(|v| v.as_bool()) == Some(false),
+        });
+    }
+    if crate::android::tool_definitions()
+        .as_array()
+        .map(|a| a.iter().any(|d| d["name"].as_str() == Some(name)))
+        .unwrap_or(false)
+    {
+        let r = crate::android::dispatch(name, args);
+        // Formato MCP: el contenido va en `content[].text`; los campos
+        // estructurados se añaden aparte para clientes que los saben usar.
+        let text = serde_json::to_string_pretty(&r).unwrap_or_default();
+        return json!({
+            "content": [{ "type": "text", "text": text }],
+            "structuredContent": r,
+            "isError": r.get("ok").and_then(|v| v.as_bool()) == Some(false),
+        });
+    }
     match name {
         "minimax_chat" => {
             let prompt = args["prompt"].as_str().unwrap_or("");
@@ -176,6 +217,49 @@ fn dispatch_tool(name: &str, args: &Value) -> Value {
     }
 }
 
+/// Núcleo JSON-RPC 2.0 compartido por el transporte stdio y el HTTP.
+/// Devuelve `None` para notificaciones (no requieren respuesta).
+pub fn handle_rpc(req: &Value) -> Option<Value> {
+    let id = req.get("id").cloned();
+    let method = req["method"].as_str().unwrap_or("");
+
+    let result = match method {
+        "initialize" => Some(json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": { "tools": { "listChanged": false } },
+            "serverInfo": { "name": "megadaemon-zenith", "version": env!("CARGO_PKG_VERSION") },
+            "instructions": "MegaDaemon v13.3 — servidor MCP nativo: análisis RE (DiE/Binwalk/Rizin/CIRX/NPU) + control tipado del dispositivo Android (root_exec, apps, pantalla, Magisk, SELinux, props, duplicados SHA-256)."
+        })),
+        "ping" => Some(json!({})),
+        "tools/list" => Some(json!({ "tools": tool_definitions() })),
+        "tools/call" => {
+            let params = &req["params"];
+            let name = params["name"].as_str().unwrap_or("");
+            let args = &params["arguments"];
+            Some(dispatch_tool(name, args))
+        }
+        "resources/list" => Some(json!({ "resources": [] })),
+        "prompts/list" => Some(json!({ "prompts": [] })),
+        _ => None,
+    };
+
+    let id_val = match id {
+        Some(v) => v,
+        None => return None, // notificación
+    };
+    match method {
+        "notifications/initialized" | "notifications/cancelled" => None,
+        _ => match result {
+            Some(r) => Some(json!({ "jsonrpc": "2.0", "id": id_val, "result": r })),
+            None => Some(json!({
+                "jsonrpc": "2.0",
+                "id": id_val,
+                "error": { "code": -32601, "message": format!("Method not found: {}", method) }
+            })),
+        },
+    }
+}
+
 pub fn run_stdio_mcp_server() {
     let stdin = io::stdin();
     for line in stdin.lock().lines().flatten() {
@@ -187,65 +271,8 @@ pub fn run_stdio_mcp_server() {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let id = req.get("id").cloned();
-        let method = req["method"].as_str().unwrap_or("");
-
-        match method {
-            "initialize" => {
-                if let Some(id_val) = id {
-                    write_jsonrpc(&json!({
-                        "jsonrpc": "2.0",
-                        "id": id_val,
-                        "result": {
-                            "protocolVersion": "2024-11-05",
-                            "capabilities": { "tools": {} },
-                            "serverInfo": {
-                                "name": "megadaemon-minimax-zenith",
-                                "version": "13.0.0"
-                            }
-                        }
-                    }));
-                }
-            }
-            "notifications/initialized" | "notifications/cancelled" => {
-                // Notification — no response required
-            }
-            "ping" => {
-                if let Some(id_val) = id {
-                    write_jsonrpc(&json!({ "jsonrpc": "2.0", "id": id_val, "result": {} }));
-                }
-            }
-            "tools/list" => {
-                if let Some(id_val) = id {
-                    write_jsonrpc(&json!({
-                        "jsonrpc": "2.0",
-                        "id": id_val,
-                        "result": { "tools": tool_definitions() }
-                    }));
-                }
-            }
-            "tools/call" => {
-                if let Some(id_val) = id {
-                    let params = &req["params"];
-                    let name = params["name"].as_str().unwrap_or("");
-                    let args = &params["arguments"];
-                    let res = dispatch_tool(name, args);
-                    write_jsonrpc(&json!({
-                        "jsonrpc": "2.0",
-                        "id": id_val,
-                        "result": res
-                    }));
-                }
-            }
-            _ => {
-                if let Some(id_val) = id {
-                    write_jsonrpc(&json!({
-                        "jsonrpc": "2.0",
-                        "id": id_val,
-                        "error": { "code": -32601, "message": format!("Method not found: {}", method) }
-                    }));
-                }
-            }
+        if let Some(resp) = handle_rpc(&req) {
+            write_jsonrpc(&resp);
         }
     }
 }
