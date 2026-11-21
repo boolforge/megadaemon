@@ -31,11 +31,50 @@ PREFIX=/data/local/tmp/megadaemon
 MOD=/data/adb/modules/megadaemon_csc_recording
 LOG=$PREFIX/phone_finalize.log
 DEF=/data/user/0/com.agy/files/megadaemon/state
-RELEASE=va82941ca63e5dbc244d462b7f805290e5e11a063
+# Release: por defecto el ULTIMO publicado (v15.3).  Se puede fijar con
+# RELEASE=<tag>.  MEDIDO el 2026-11-21: el release estaba FIJO a un binario
+# viejo, asi que el "pegado unico" instalaba un daemon que ya no era el del
+# repo => el usuario creia tener la ultima version y no la tenia.
+RELEASE="${RELEASE:-latest}"
 ASSET=megadaemon-core-android-arm64
-URL="https://github.com/boolforge/megadaemon/releases/download/${RELEASE}/${ASSET}"
-SHA256=718c1c59ccf6b6bfcf15955a9f2c27c46b579e07141ddcce3242c03daba70751
+REPO_URL="https://github.com/boolforge/megadaemon"
 REBOOT="${REBOOT:-0}"
+SHA256=""
+
+# Descarga con curl o, si el movil NO tiene curl (medido: el movil puede no
+# tenerlo), con el python3 de Termux/Antigravity.
+PY=""
+for c in /data/data/com.termux/files/usr/bin/python3 /data/data/com.agy/files/usr/bin/python3; do
+  [ -x "$c" ] && PY="$c" && break
+done
+http_code() { # http_code <url> [valor-de-X-API-Key]
+  if command -v curl >/dev/null 2>&1; then
+    if [ -n "${2:-}" ]; then
+      curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "X-API-Key: $2" "$1" 2>/dev/null || echo 000
+    else
+      curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$1" 2>/dev/null || echo 000
+    fi
+  elif [ -n "$PY" ]; then
+    "$PY" -c 'import sys,urllib.request as u,urllib.error
+url=sys.argv[1]; hdr=sys.argv[2] if len(sys.argv)>2 else ""
+req=u.Request(url, headers={"X-API-Key":hdr} if hdr else {})
+try:
+    print(u.urlopen(req,timeout=15).status)
+except urllib.error.HTTPError as e: print(e.code)
+except Exception: print("000")' "$1" "${2:-}"
+  else
+    echo 000
+  fi
+}
+dl() { # dl <url> <destino>
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL -o "$2" "$1"
+  elif [ -n "$PY" ]; then
+    "$PY" -c "import sys,urllib.request as u; open(sys.argv[2],'wb').write(u.urlopen(sys.argv[1],timeout=120).read())" "$1" "$2"
+  else
+    return 127
+  fi
+}
 say() { echo "[$(date +%H:%M:%S)] $*"; }
 mkdir -p "$PREFIX"
 exec >>"$LOG" 2>&1
@@ -72,12 +111,29 @@ if [ -n "$KEY" ] && [ -f "$ENVF" ]; then
   chmod 600 "$ENVF"
   say "   megadaemon.env sincronizado"
 fi
-S=$(curl -s -o /dev/null -w '%{http_code}' -H "X-API-Key: $KEY" http://127.0.0.1:9090/api/status 2>/dev/null || echo 000)
+S=$(http_code http://127.0.0.1:9090/api/status "$KEY")
 say "   api/status local con la key: $S   (200 = desbloqueado)"
 
 # --- 1) binario --------------------------------------------------------------
 say "1) binario oficial ($ASSET)"
-if curl -fsSL -o "$PREFIX/megadaemon-core.new" "$URL"; then
+# 1a) que release?  (latest => se consulta la API de GitHub)
+if [ "$RELEASE" = "latest" ]; then
+  if dl "https://api.github.com/repos/boolforge/megadaemon/releases/latest" "$PREFIX/.rel.json"; then
+    R=$(grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' "$PREFIX/.rel.json" | head -1 | sed 's/.*"\(v[^"]*\)"/\1/')
+    [ -n "$R" ] && RELEASE="$R" && say "   release mas reciente: $RELEASE"
+  fi
+  [ "$RELEASE" = "latest" ] && { say "   ABORTO: no se pudo resolver el release mas reciente"; RELEASE=""; }
+fi
+URL="$REPO_URL/releases/download/${RELEASE}/${ASSET}"
+# 1b) el sha256 sale del propio release (fichero .sha256 publicado), no de
+#     una constante aqui => si el release cambia, la comprobacion sigue
+#     siendo valida (fail-closed si no cuadra).
+if dl "$REPO_URL/releases/download/${RELEASE}/${ASSET}.sha256" "$PREFIX/.sha256"; then
+  SHA256=$(awk '{print $1}' "$PREFIX/.sha256" | head -1)
+fi
+if [ -z "$SHA256" ]; then
+  say "   ABORTO: no se pudo obtener el sha256 del release $RELEASE (se deja el binario actual)"
+elif dl "$URL" "$PREFIX/megadaemon-core.new"; then
   GOT=$(sha256sum "$PREFIX/megadaemon-core.new" | cut -d' ' -f1)
   if [ "$GOT" = "$SHA256" ]; then
     cp "$PREFIX/megadaemon-core" "$PREFIX/megadaemon-core.prev" 2>/dev/null
@@ -96,7 +152,7 @@ fi
 say "2) reparche del CSC con el valor QUE AVISA"
 CODEC=/data/local/tmp/megadaemon/omc_codec.py
 if [ ! -f "$CODEC" ]; then
-  curl -fsSL -o "$CODEC" https://raw.githubusercontent.com/boolforge/megadaemon/main/tools/omc_codec.py && say "   omc_codec.py descargado"
+  dl https://raw.githubusercontent.com/boolforge/megadaemon/main/tools/omc_codec.py "$CODEC" && say "   omc_codec.py descargado"
 fi
 PY=/data/data/com.termux/files/usr/bin/python3
 [ -x "$PY" ] || PY=python3
@@ -148,8 +204,8 @@ say "   pid: $(pidof megadaemon-core 2>/dev/null || echo 0)  cloudflared: $(pido
 
 # --- 4) mediciones -----------------------------------------------------------
 say "4) mediciones"
-say "   health local: $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9090/health 2>/dev/null)"
-say "   api/status  : $(curl -s -o /dev/null -w '%{http_code}' -H "X-API-Key: $KEY" http://127.0.0.1:9090/api/status 2>/dev/null)"
+say "   health local: $(http_code http://127.0.0.1:9090/health)"
+say "   api/status  : $(http_code http://127.0.0.1:9090/api/status "$KEY")"
 say "   tunel       : $(cat $PREFIX/state/tunnel.url 2>/dev/null || cat $PREFIX/tunnel.url 2>/dev/null)"
 say "   ro.csc.sales_code: $(getprop ro.csc.sales_code)"
 say "   cscfeature servido: $(sha256sum /optics/configs/carriers/single/AMO/conf/system/cscfeature.xml 2>/dev/null | cut -d' ' -f1)"
@@ -186,7 +242,7 @@ say "   carga: $(cat /proc/loadavg)"
 
 # --- 5) tunel roto -> relanzar ---------------------------------------------
 UV=$(cat "$PREFIX/state/tunnel.url" 2>/dev/null | tr -d '\r\n')
-CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 12 "$UV/health" 2>/dev/null || echo 000)
+CODE=$(http_code "$UV/health")
 if [ -z "$UV" ] || [ "$CODE" = "530" ] || [ "$CODE" = "000" ]; then
   say "5) tunel no responde ($CODE) -> relanzando cloudflared"
   pkill -f cloudflared 2>/dev/null; sleep 3
