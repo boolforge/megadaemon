@@ -63,6 +63,88 @@ pub struct KdfParams {
     pub out_len: usize,
 }
 
+impl KdfParams {
+    /// Rangos que **la propia app** impone (medidos en el DEX de Swift
+    /// Backup, clase `Ly87;.a([C[BIIII)[B`):
+    /// * sal: **16 bytes exactos** (`array-length` == 16),
+    /// * iteraciones: **1..=100**,
+    /// * memoria: **16384..=65536 KiB** (16..64 MiB),
+    /// * paralelismo: **1..=8**,
+    /// * salida: **> 0** (la app comprueba `outputBytes > 0`).
+    ///
+    /// ⇒ si algo se sale, la app falla antes de derivar ⇒ el lector avisa
+    /// en vez de derivar una clave que la app nunca produciría.
+    pub fn validate(&self, salt_len: usize) -> Result<(), String> {
+        if salt_len != 16 {
+            return Err(format!(
+                "la sal debe medir 16 B (la app lo exige) y mide {}",
+                salt_len
+            ));
+        }
+        if !(1..=100).contains(&self.iterations) {
+            return Err(format!(
+                "iteraciones fuera de rango: {} (la app exige 1..100)",
+                self.iterations
+            ));
+        }
+        if !(16384..=65536).contains(&self.memory_kib) {
+            return Err(format!(
+                "memoria fuera de rango: {} KiB (la app exige 16384..65536)",
+                self.memory_kib
+            ));
+        }
+        if !(1..=8).contains(&self.parallelism) {
+            return Err(format!(
+                "paralelismo fuera de rango: {} (la app exige 1..8)",
+                self.parallelism
+            ));
+        }
+        if self.out_len == 0 {
+            return Err("la salida debe medir al menos 1 B".to_string());
+        }
+        Ok(())
+    }
+}
+
+/// Cómo se compone el **key-check** (la autocomprobación de la cabecera).
+///
+/// **Medido** en el DEX de Swift Backup (clase `Ly87;.d(sc7;[B[B[B)[B`):
+/// ```text
+/// MessageDigest md = MessageDigest.getInstance("SHA-256");
+/// md.update(etiqueta);   // "SBA1-<cipher>-key-check-v1"
+/// md.update(salt);
+/// md.update(nonce2);      // el segundo bloque aleatorio de 16 B
+/// md.update(clave);      // la clave derivada con Argon2id
+/// return Arrays.copyOf(md.digest(), 16);   // TRUNCADO a 16 bytes
+/// ```
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum KeyCheckComposition {
+    /// SHA-256(clave) (o clave||ordinal). Es lo que se tenía antes.
+    #[default]
+    Sha256KeyOnly,
+    /// Swift Backup: SHA-256(etiqueta || salt || nonce2 || clave)[:ancho].
+    SwiftTagged,
+}
+
+/// Etiqueta de dominio del key-check según el método de cifrado.
+///
+/// Medidas en `Ly87;.<clinit>` (los `static final byte[]`):
+/// `a`=7zAES, `b`=AES256GCM, `c`=AES256GCMSIV, `d`=AEGIS256,
+/// `e`=AEGIS128X2.  El enum `sc7` (métodos de cifrado) es:
+/// `None`, `SevenZipAes`, `Aes256Gcm`, `Aes256GcmSiv`, `Aegis256`,
+/// `Aegis128X2` ⇒ el ordinal del enum elige la etiqueta.
+pub fn key_check_tag(encryption_method: &str) -> Option<&'static str> {
+    match encryption_method {
+        "sevenzip_aes" | "SevenZipAes" => Some("SBA1-7zAES-key-check-v1"),
+        "aes256_gcm" | "Aes256Gcm" => Some("SBA1-AES256GCM-key-check-v1"),
+        "aes256_gcm_siv" | "Aes256GcmSiv" => Some("SBA1-AES256GCMSIV-key-check-v1"),
+        "aegis256" | "Aegis256" => Some("SBA1-AEGIS256-key-check-v1"),
+        "aegis128x2" | "Aegis128X2" => Some("SBA1-AEGIS128X2-key-check-v1"),
+        _ => None,
+    }
+}
+
+
 /// Un campo de la cabecera: dónde está, cuánto ocupa y cómo se lee.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HeaderField {
@@ -98,6 +180,35 @@ pub struct KeyCheckSpec {
     /// **NO DETERMINADO todavia** (el agente DEX lo cierra con el marshalling):
     /// por eso es un flag explicito y no una suposicion escondida.
     pub include_ordinal: bool,
+    /// Composición del key-check (medida en el DEX: etiqueta + salt + nonce2
+    /// + clave, SHA-256 truncado a 16 B).
+    #[serde(default)]
+    pub composition: KeyCheckComposition,
+    /// Etiqueta de dominio que se hashea antes que la clave
+    /// (`SBA1-AEGIS256-key-check-v1`…); vacía = sin etiqueta.
+    #[serde(default)]
+    pub tag: String,
+    /// Nombres de los bloques de la cabecera que entran en el key-check:
+    /// el salt y el "segundo bloque aleatorio" (16 B).
+    #[serde(default)]
+    pub salt_block: String,
+    #[serde(default)]
+    pub nonce_block: String,
+}
+
+impl Default for KeyCheckSpec {
+    fn default() -> Self {
+        KeyCheckSpec {
+            offset: 0,
+            width: 16,
+            method_ordinal: 0,
+            include_ordinal: false,
+            composition: KeyCheckComposition::Sha256KeyOnly,
+            tag: String::new(),
+            salt_block: "salt".to_string(),
+            nonce_block: "nonce2".to_string(),
+        }
+    }
 }
 
 /// Tabla del layout de la cabecera. **Versionada a propósito**: si la
@@ -205,9 +316,23 @@ pub struct SwiftArchiveReport {
     pub notes: Vec<String>,
 }
 
+/// Devuelve los bytes de un bloque de la cabecera por su nombre (`salt`,
+/// `keyCheck`, `nonce2`…), o `None` si la tabla no lo describe.
+pub fn bloque_named(header: &HeaderReport, bytes: &[u8], name: &str) -> Option<Vec<u8>> {
+    let b = header
+        .blocks
+        .iter()
+        .find(|b| b.name.eq_ignore_ascii_case(name))?;
+    let off = b.data_offset as usize;
+    let end = off.checked_add(b.len as usize)?;
+    if end > bytes.len() {
+        return None;
+    }
+    Some(bytes[off..end].to_vec())
+}
+
 /// Lee un entero big-endian (o little-endian) de un slice.
-pub fn read_uint(bytes: &[u8], big_endian: bool) -> u64 {
-    let mut v = 0u64;
+pub fn read_uint(bytes: &[u8], big_endian: bool) -> u64 {    let mut v = 0u64;
     if big_endian {
         for b in bytes {
             v = (v << 8) | *b as u64;
@@ -333,19 +458,22 @@ pub fn verify_key_check(
                 .to_string(),
         ),
     };
-    let salt = header
-        .blocks
-        .iter()
-        .find(|b| b.name.eq_ignore_ascii_case("salt"))
-        .map(|b| {
-            let off = b.data_offset as usize;
-            bytes[off..off + b.len as usize].to_vec()
-        })
-        .unwrap_or_default();
+    let salt = bloque_named(&header, bytes, "salt").unwrap_or_default();
     if salt.is_empty() {
         notes.push("salt no localizada en la cabecera => el layout no dice donde esta => no se deriva la clave".into());
         return SwiftArchiveReport {
             status: "layout_no_verificado".into(),
+            header: Some(header),
+            key_check: None,
+            kdf: None,
+            notes,
+        };
+    }
+    // Los rangos del KDF los impone la propia app (medidos en el DEX).
+    if let Err(e) = params.validate(salt.len()) {
+        notes.push(format!("parametros del KDF fuera de lo que acepta la app: {}", e));
+        return SwiftArchiveReport {
+            status: "kdf_error".into(),
             header: Some(header),
             key_check: None,
             kdf: None,
@@ -396,9 +524,40 @@ pub fn verify_key_check(
             notes,
         };
     }
-    // El key-check es SHA-256 sobre la clave (mas el ordinal del metodo si la
-    // tabla dice que entra) => la composicion exacta la fija la tabla, no el codigo.
-    let mut buf = key.clone();
+    // La COMPOSICION del key-check la fija la tabla (medida en el DEX), no el
+    // codigo:
+    //   * `Sha256KeyOnly`: SHA-256(clave[||ordinal])
+    //   * `SwiftTagged`:   SHA-256(etiqueta || salt || nonce2 || clave)
+    //                      truncado al ancho (16 B en Swift Backup)
+    let mut buf: Vec<u8> = Vec::new();
+    match spec.composition {
+        KeyCheckComposition::Sha256KeyOnly => {
+            buf.extend_from_slice(&key);
+        }
+        KeyCheckComposition::SwiftTagged => {
+            if !spec.tag.is_empty() {
+                buf.extend_from_slice(spec.tag.as_bytes());
+            }
+            buf.extend_from_slice(&salt);
+            match bloque_named(&header, bytes, &spec.nonce_block) {
+                Some(nonce) => buf.extend_from_slice(&nonce),
+                None => {
+                    notes.push(format!(
+                        "bloque '{}' no localizado en la cabecera => no se puede componer el key-check",
+                        spec.nonce_block
+                    ));
+                    return SwiftArchiveReport {
+                        status: "layout_no_verificado".into(),
+                        header: Some(header),
+                        key_check: None,
+                        kdf: Some(kdf_info),
+                        notes,
+                    };
+                }
+            }
+            buf.extend_from_slice(&key);
+        }
+    }
     if spec.include_ordinal {
         buf.extend_from_slice(&spec.method_ordinal.to_be_bytes());
     }
@@ -553,6 +712,7 @@ mod tests {
                 width: 32,
                 method_ordinal: 1,
                 include_ordinal: false,
+                ..Default::default()
             }),
         }
     }
@@ -686,7 +846,133 @@ mod tests {
             KdfParams { iterations: 0, memory_kib: 16384, parallelism: 1, out_len: 32 },
         );
         assert_eq!(r.status, "kdf_error");
-        assert!(r.notes.iter().any(|n| n.contains("el KDF fallo")));
+        // el rechazo puede venir de la validacion de rangos (la app los
+        // impone antes de derivar) o del propio KDF
+        assert!(
+            r.notes.iter().any(|n| n.contains("el KDF fallo"))
+                || r.notes.iter().any(|n| n.contains("fuera de lo que acepta la app")),
+            "notas: {:?}",
+            r.notes
+        );
+    }
+
+    /// Layout con la forma **medida** de Swift Backup: magic, un entero,
+    /// tres bloques de bytes (salt, nonce2) y el key-check de 16 B.
+    fn layout_swift() -> HeaderLayout {
+        HeaderLayout {
+            magic: Some("SBA1".into()),
+            header_size: Some(96),
+            fields: vec![HeaderField {
+                name: "headerSize".into(),
+                offset: 4,
+                width: 2,
+                big_endian: true,
+            }],
+            byte_blocks: vec![
+                ByteBlock { name: "salt".into(), len_offset: 8, len_width: 2, data_offset: 10 },
+                ByteBlock { name: "nonce2".into(), len_offset: 26, len_width: 2, data_offset: 28 },
+            ],
+            key_check: Some(KeyCheckSpec {
+                offset: 44,
+                width: 16,
+                method_ordinal: 4,
+                include_ordinal: false,
+                composition: KeyCheckComposition::SwiftTagged,
+                tag: "SBA1-AEGIS256-key-check-v1".into(),
+                salt_block: "salt".into(),
+                nonce_block: "nonce2".into(),
+            }),
+        }
+    }
+
+    fn cabecera_swift(salt: &[u8; 16], nonce2: &[u8; 16]) -> Vec<u8> {
+        let mut v = vec![0u8; 96];
+        v[..4].copy_from_slice(b"SBA1");
+        v[4..6].copy_from_slice(&96u16.to_be_bytes());
+        v[8..10].copy_from_slice(&(salt.len() as u16).to_be_bytes());
+        v[10..26].copy_from_slice(salt);
+        v[26..28].copy_from_slice(&(nonce2.len() as u16).to_be_bytes());
+        v[28..44].copy_from_slice(nonce2);
+        v
+    }
+
+    #[test]
+    fn key_check_con_etiqueta_da_ok_con_el_algoritmo_medido() {
+        // Reproduce la composicion medida en el DEX:
+        //   keyCheck = SHA-256("SBA1-AEGIS256-key-check-v1" || salt || nonce2
+        //                      || claveArgon2id)[0..16]
+        let salt = [0x02u8; 16];
+        let nonce2 = [0x03u8; 16];
+        let params = KdfParams { iterations: 3, memory_kib: 16384, parallelism: 4, out_len: 32 };
+        let clave = kdf_argon2id(
+            "secreto",
+            &salt,
+            params.iterations,
+            params.memory_kib,
+            params.parallelism,
+            params.out_len,
+        )
+        .unwrap();
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"SBA1-AEGIS256-key-check-v1");
+        buf.extend_from_slice(&salt);
+        buf.extend_from_slice(&nonce2);
+        buf.extend_from_slice(&clave);
+        let esperado = sha256(&buf);
+        let mut cab = cabecera_swift(&salt, &nonce2);
+        cab[44..60].copy_from_slice(&esperado[..16]);
+
+        let r = verificar(&cab, &layout_swift(), "secreto", params);
+        assert_eq!(r.status, "ok", "notas: {:?}", r.notes);
+        assert!(r.key_check.unwrap().matched);
+
+        // con otra passphrase => mismatch (no "ok")
+        let r2 = verificar(&cab, &layout_swift(), "otra", params);
+        assert_eq!(r2.status, "key_check_mismatch");
+    }
+
+    #[test]
+    fn los_parametros_fuera_de_rango_de_la_app_se_rechazan() {
+        let salt = [0x02u8; 16];
+        let nonce2 = [0x03u8; 16];
+        let cab = cabecera_swift(&salt, &nonce2);
+        // 100 iteraciones es el máximo de la app: vale
+        assert!(KdfParams { iterations: 100, memory_kib: 16384, parallelism: 1, out_len: 32 }
+            .validate(16)
+            .is_ok());
+        // 101 no
+        assert!(KdfParams { iterations: 101, memory_kib: 16384, parallelism: 1, out_len: 32 }
+            .validate(16)
+            .is_err());
+        // la sal tiene que medir 16 B
+        assert!(KdfParams { iterations: 1, memory_kib: 16384, parallelism: 1, out_len: 32 }
+            .validate(8)
+            .is_err());
+        // el lector devuelve kdf_error y no deriva
+        let r = verificar(
+            &cab,
+            &layout_swift(),
+            "secreto",
+            KdfParams { iterations: 0, memory_kib: 16384, parallelism: 1, out_len: 32 },
+        );
+        assert_eq!(r.status, "kdf_error");
+    }
+
+    #[test]
+    fn las_etiquetas_de_dominio_son_las_medidas() {
+        assert_eq!(
+            key_check_tag("Aegis256"),
+            Some("SBA1-AEGIS256-key-check-v1")
+        );
+        assert_eq!(
+            key_check_tag("Aegis128X2"),
+            Some("SBA1-AEGIS128X2-key-check-v1")
+        );
+        assert_eq!(
+            key_check_tag("Aes256Gcm"),
+            Some("SBA1-AES256GCM-key-check-v1")
+        );
+        assert_eq!(key_check_tag("inventado"), None);
     }
 
     #[test]

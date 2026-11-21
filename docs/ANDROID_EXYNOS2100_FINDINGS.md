@@ -366,7 +366,7 @@ actualizar `contents.db` (su `fileSize`) y el CRC/formato que el sistema comprue
 **Hallazgo**: el **CSC es `AMO`** (América) y vive en `mps_code.dat` (3 bytes exactos) ⇒
 cambiarlo con root es la vía **más limpia y reversible** (3 bytes) y **no triangular el Knox**.
 **Implicación**: `CscFeature_VoiceCall_ConfigRecording` decide si el firmware graba llamadas
-nativamente ⇒ **CORREGIDO (medido en vivo el 2026-11-21 con `csc_verify`)**: el CSC `AMO` **SÍ trae la feature**, con el valor `RecordingAllowedByMenu,disclaimer_latin` ⇒ **la grabación nativa está DISPONIBLE y AVISA** ⇒ **no hace falta parchar el CSC** ⇒ (lo que decía antes —«AMO no la tiene»— estaba mal: salió de una lista de CSC incompleta, no del móvil).
+nativamente ⇒ **Aclaración IMPORTANTE (medido en vivo el 2026-11-21 con `csc_verify`)**: el `cscfeature.xml` **de fábrica** de AMO son **1109 B** (sha256 `ef110140f7bb95e109e623a11b644335843c1253bceaecdcf751fc43316e4d16`) y **NO trae** la feature ⇒ ⇒ **mi conclusión original era la correcta** ⇒ el valor `RecordingAllowedByMenu,disclaimer_latin` (1143 B) medido en el móvil es el **parche Magisk systemless `megadaemon_csc_recording`** del agente de grabación (sha `d009908fa0b10aa387f9790f07eb1a593de9f47997b54853b1faa83a54bdaebb`, con `contents.db` `fileSize=1143`) ⇒ ⇒ **CON aviso** ⇒ legal en España ⇒ ⇒ **reversible** con `touch /data/adb/modules/megadaemon_csc_recording/disable` + reboot ⇒ ⇒ **y nunca con `RecordingAllowed` a secas** (silencioso = art. 197 CP + GDPR).
 
 **Cómo se comprueba**:
 ```bash
