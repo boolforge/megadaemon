@@ -144,25 +144,44 @@ pub fn errno_name(e: i32) -> &'static str {
 // Sondeo
 // --------------------------------------------------------------------------
 
-/// `libc::ioctl` cambia el tipo del *request* segun el **sistema operativo**,
-/// no segun la arquitectura:
+/// `libc::ioctl` cambia el tipo del *request* según el **sistema operativo**,
+/// no según la arquitectura:
 ///
-/// * **Linux** (x86_64, aarch64-linux-gnu, ...): el request es `c_ulong`.
-/// * **Android** (aarch64-android, x86-android, ...): el request es `c_int`.
+/// * **Linux glibc/uclibc** (x86_64, aarch64-linux-gnu, ...): `c_ulong`.
+/// * **Android/bionic** (aarch64-android, x86-android, ...): `c_int`.
+/// * **Linux musl**: `c_int`.
 ///
-/// Decidir por la arquitectura rompia el build de
+/// Medido en `libc-0.2.191`:
+/// `src/unix/linux_like/linux/gnu/mod.rs:18` ⇒ `c_ulong`;
+/// `src/unix/linux_like/android/mod.rs:16` ⇒ `c_int`;
+/// `src/unix/linux_like/linux/musl/mod.rs:56` ⇒ `c_int`.
+///
+/// Decidir por la arquitectura rompía el build de
 /// `aarch64-unknown-linux-gnu` (`E0308: expected u64, found i32`): aarch64 en
 /// Linux usa `c_ulong`, pero el mismo aarch64 en Android usa `c_int`.
+///
+/// Decidir por SO con una lista propia (`android` vs. resto) arregla el build
+/// de CI, pero **deja la misma trampa armada en musl**: allí el request es
+/// `c_int` y la lista mete `c_ulong` ⇒ `E0308: expected i32, found u64`
+/// (medido: `cargo check --target x86_64-unknown-linux-musl`).
+///
+/// **Este envoltorio usa `libc::Ioctl`**, que es *exactamente* el tipo que
+/// cada plataforma declara en su prototipo de `ioctl`: una sola línea, sin
+/// `cfg`, sin lista de SO que se quede vieja y sin excepciones de
+/// plataforma.
+///
+/// Además conserva **los 32 bits del código** en el request: un `_IOWR`
+/// (`dir = 3`) tiene el bit 31 puesto y un cast con *sign-extension*
+/// (p. ej. `(code as c_int) as u64`) lo mandaría al driver como
+/// `0xffffffff_c0205600` en vez de `0x00000000_c0205600` ⇒ el ioctl no se
+/// reconocería. Lo fija el test `el_request_conserva_los_32_bits_del_codigo`.
+///
+/// El `arg` viaja como variádico y **siempre es un puntero** (`*mut c_void`),
+/// que es lo que el prototipo C espera; en el sondeo real es `NULL` a
+/// propósito, para que el driver responda con el tamaño que espera.
 #[inline]
 unsafe fn ioctl_raw(fd: RawFd, code: u32, arg: *mut libc::c_void) -> libc::c_int {
-    #[cfg(target_os = "android")]
-    {
-        libc::ioctl(fd, code as libc::c_int, arg)
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        libc::ioctl(fd, code as libc::c_ulong, arg)
-    }
+    libc::ioctl(fd, code as libc::Ioctl, arg)
 }
 
 /// Emite **un** ioctl **sin argumento** contra un fd ya abierto.
@@ -388,5 +407,32 @@ mod tests {
             }
             assert!(*size > 0, "{} no debería tener size 0", name);
         }
+    }
+
+    /// **Regresión del fallo de CI**: el tipo del *request* de `ioctl` cambia
+    /// entre plataformas (`c_ulong` en glibc, `c_int` en bionic y musl) y el
+    /// request que ve el kernel debe ser **siempre los mismos 32 bits** del
+    /// código.
+    ///
+    /// Si el cast hiciera *sign-extension* (p. ej. `(code as c_int) as u64`),
+    /// un `_IOWR` (`dir = 3`, bit 31 puesto) llegaría al driver como
+    /// `0xffffffff_c0205600` en vez de `0x00000000_c0205600` ⇒ el ioctl no se
+    /// reconocería. Este test falla si eso vuelve a colarse.
+    #[test]
+    fn el_request_conserva_los_32_bits_del_codigo() {
+        for (_, code, _, _, _) in VS4L_IOCTLS {
+            // `as u32` es una reinterpretación de bits: da igual que el tipo
+            // subyacente sea `u64` (glibc) o `i32` (bionic/musl).
+            assert_eq!(
+                (*code as libc::Ioctl) as u32,
+                *code,
+                "el request no conserva los bits del código {:#x}",
+                code
+            );
+        }
+        // El caso que delata el sign-extension: `_IOWR` con el bit 31 puesto.
+        let iowr: u32 = 0xC020_5600;
+        assert_eq!(ioc_dir(iowr), 3, "este código debe ser _IOWR");
+        assert_eq!((iowr as libc::Ioctl) as u32, iowr);
     }
 }
