@@ -27,6 +27,18 @@ URL_FILE="$LOG_DIR/tunnel.url"
 TUNNEL_LOG="$LOG_DIR/tunnel.log"
 LOG="$LOG_DIR/tunnel-watchdog.log"
 PUBLISH="${PUBLISH:-$LOG_DIR/channel-publish}"
+# ⚠️ Lo lanza Magisk (hermano del supervisor) => hay que leer el env aquí.
+# Sin `set -a`: la API key no se exporta a ningún hijo.
+ENV_FILE="${MEGADAEMON_ENV:-/data/local/tmp/megadaemon/megadaemon.env}"
+if [ -f "$ENV_FILE" ]; then
+    . "$ENV_FILE" 2>/dev/null
+fi
+# Ni la key ni el token de sesión viajan a cloudflared/watchdog: este
+# script no los necesita (y una variable que ya estaba exportada en el
+# entorno mantiene su atributo de exportación al reasignarla).
+unset MEGADAEMON_API_KEY MEGADAEMON_COCKPIT_TOKEN 2>/dev/null
+# El estado del daemon (tunnel.url, channel.json, key) vive AQUÍ.
+STATE_DIR="${MEGADAEMON_STATE_DIR:-/data/local/tmp/megadaemon/state}"
 CF="${CF:-/data/data/com.termux/files/usr/bin/cloudflared}"
 TARGET="${CFT_TARGET:-http://127.0.0.1:9090}"
 
@@ -83,7 +95,9 @@ publicar() {
         log "sin $PUBLISH: no puedo publicar (channel.json + paste)"
         return
     fi
-    "$PUBLISH" --quick "$url" --pids "$pids" >>"$LOG" 2>&1
+    # --state-dir explícito: si no, el binario usaría su valor por defecto
+    # (otra ruta) => el estado se escribiría donde el daemon no lo lee.
+    "$PUBLISH" --state-dir "$STATE_DIR" --quick "$url" --pids "$pids" >>"$LOG" 2>&1
     log "publicado: $url (pids: $pids)"
 }
 

@@ -128,7 +128,7 @@ deploy_files() {
         return 1
     fi
     if [ "$ON_PHONE" = "1" ]; then
-        mkdir -p "$PREFIX" "$WEB_DIR" 2>/dev/null
+        mkdir -p "$PREFIX" "$WEB_DIR" "$STATE" 2>/dev/null
         [ -f "$BIN" ] && cp -f "$BIN" "$BIN.bak" 2>/dev/null
         cp -f "$SRC_BIN" "$BIN" || die "no se pudo copiar el binario"
         chmod 755 "$BIN" 2>/dev/null
@@ -137,7 +137,7 @@ deploy_files() {
     else
         have adb || die "adb no está instalado en este PC"
         adb wait-for-device || die "no hay ningún móvil conectado por adb"
-        adb shell "mkdir -p $PREFIX $WEB_DIR" || true
+        adb shell "mkdir -p $PREFIX $WEB_DIR $STATE" || true
         adb push "$SRC_BIN" "$BIN" >/dev/null || die "adb push del binario falló"
         adb shell "chmod 755 $BIN" || true
         if [ -f "$REPO_ROOT/web/cockpit_template.html" ]; then
