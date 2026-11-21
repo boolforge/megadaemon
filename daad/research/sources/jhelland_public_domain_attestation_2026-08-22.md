@@ -1,0 +1,42 @@
+# j-helland Public-Domain Attestation Boundary — 2026-08-22
+
+| Header field | Value |
+| --- | --- |
+| **Candidate** | [`j-helland/8086-disassembler`](https://github.com/j-helland/8086-disassembler), pinned revision `1979e794d1cbcd92714d0863a2fd17fd89af4fcd` |
+| **Attestation received** | The project user states that this candidate is public domain. |
+| **External source evidence at record time** | No public-domain declaration, `UNLICENSE`, CC0 text, or source license notice was observed in the pinned checkout. |
+| **Classification** | `public_domain_and_project_authorization_confirmed_by_user`; accepted as the project authorization basis. |
+| **Execution result** | The candidate remains non-executable for retained bytes. |
+
+## Evidence distinction
+
+The user’s statement is preserved as project provenance and is accepted as the
+project authorization basis. For repository auditability, the absence of an
+upstream license text remains separately observable rather than being rewritten
+as an upstream declaration. A future public author declaration, repository
+license file, dedicated waiver, or equivalent material can add upstream evidence
+without changing the accepted project authorization status.
+
+## Independent technical blocks
+
+The original pinned CMake build remains independently observed as failing on the
+host because `instruction.cpp` lacks declarations used for `abs`, `printf`, and
+`std::out_of_range`. The repository-owned optional health recipe now verifies the
+source pin, creates a temporary copy, applies only the three documented standard
+headers, and requires 19 upstream NASM fixture successes. It does not modify or
+vendor the upstream source.
+
+Even if licensing becomes externally evidenced, retained i8086 input remains
+blocked on the DOS COM/MZ admission contract: container identity, origin or load
+segment, entry evidence, relocation and PSP facts where applicable, and preserved
+cross-tool disagreement evidence are all separate requirements.
+
+> Project authorization removes the licensing block. The isolated health recipe
+> does not authorize retained-byte analysis or turn disassembler output into
+> recovered source or runtime behavior.
+
+## References
+
+1. [Pinned candidate repository](https://github.com/j-helland/8086-disassembler/tree/1979e794d1cbcd92714d0863a2fd17fd89af4fcd)
+2. [Existing source and build boundary](jhelland_8086_disassembler_boundary_2026-08-22.md)
+3. [DOS i8086 admission contract](../../reverse_engineering/workflows/dos_i8086_load_model_admission.json)

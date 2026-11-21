@@ -1,0 +1,794 @@
+{
+  "schema_version": 1,
+  "policy": "docs/SELF_CONTAINED_REGENERATION.md",
+  "entries": [
+    {
+      "id": "c64-jabato-original-tap-evidence",
+      "description": "Regenerates and byte-verifies the committed original Jabato Side A/Part 1 and Side B/Part 2 raw-TAP evidence reports from retained media, RAM observations, and DDB fixtures.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10 standard library",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/regenerate_jabato_c64_tap_evidence.py",
+        "arguments": [
+          "--check"
+        ]
+      },
+      "inputs": [
+        {
+          "path": "preservation_corpus/extracted/depth1_8dfc7ab2_Jabato (1989)(Aventuras AD)(Side A).tap",
+          "sha256": "99e873fd309be0325e37668f9385937d22337c1a4c1d2b9094ac2ef575082ad1"
+        },
+        {
+          "path": "preservation_corpus/derived/commodore_loader/vice/jabato_side_a_tap_credits.ram",
+          "sha256": "e2ebd0b931dcab49ea71e2221add54d19d2edaa23ee5fd7fb0dc33f569a7eee6"
+        },
+        {
+          "path": "preservation_corpus/derived/commodore_loader/jabato_side_a_tap_second_space_part1.ddb",
+          "sha256": "7ffbee6ca3e614011b30261a74022d199ee3345843a0525e92dc9cb5b7bdb5e6"
+        },
+        {
+          "path": "preservation_corpus/extracted/depth1_5114b2dd_Jabato (1989)(Aventuras AD)(Side B).tap",
+          "sha256": "090ff428dfa5731ee29fecb7caaf25c1bf41d36c80d0e0dd7ac34d669cfc8fc6"
+        },
+        {
+          "path": "preservation_corpus/derived/commodore_loader/vice/jabato_side_b_tap_post_input_12.ram",
+          "sha256": "ff40ccec1e164de11b2b944fa0952f28eee07e8bb6f0ae6ea14661043724f6c3"
+        },
+        {
+          "path": "preservation_corpus/derived/commodore_loader/jabato_side_b_tap_post_input_12_part2.ddb",
+          "sha256": "ee3b41f61fc01c27ad776e271f313a2e3fc88875cc9c8e0debebe6904fa48e69"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "preservation_corpus/derived/commodore_loader/jabato_side_a_tap_pulse_analysis.json",
+          "sha256": "2fc76147977ee2f44dba1f9247408b3475e8c7e57d26126492b9043e59207bc8"
+        },
+        {
+          "path": "preservation_corpus/derived/commodore_loader/jabato_side_b_tap_pulse_analysis.json",
+          "sha256": "7a38c9b06d96724ee26932cc353ed84044fd3974b48a7d1eb61fab0ffb30c064"
+        }
+      ],
+      "external_validators": [
+        {
+          "name": "VICE",
+          "role": "acquisition-time controlled-runtime observation only; not invoked by the primary regeneration command"
+        },
+        {
+          "name": "c64tapedecode",
+          "role": "independent ROM-bootstrap corroboration only; not invoked by the primary regeneration command"
+        }
+      ]
+    },
+    {
+      "id": "c64-jabato-original-runtime-ddb-recovery",
+      "description": "Structurally parses and byte-verifies the committed Part 1 and Part 2 DDB recoveries directly from retained 64 KiB original-runtime RAM captures.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10 standard library",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/verify_jabato_c64_runtime_recovery.py",
+        "arguments": []
+      },
+      "inputs": [
+        {
+          "path": "preservation_corpus/derived/commodore_loader/vice/jabato_side_a_tap_credits.ram",
+          "sha256": "e2ebd0b931dcab49ea71e2221add54d19d2edaa23ee5fd7fb0dc33f569a7eee6"
+        },
+        {
+          "path": "preservation_corpus/derived/commodore_loader/vice/jabato_side_b_tap_post_input_12.ram",
+          "sha256": "ff40ccec1e164de11b2b944fa0952f28eee07e8bb6f0ae6ea14661043724f6c3"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "preservation_corpus/derived/commodore_loader/jabato_side_a_tap_second_space_part1.ddb",
+          "sha256": "7ffbee6ca3e614011b30261a74022d199ee3345843a0525e92dc9cb5b7bdb5e6"
+        },
+        {
+          "path": "preservation_corpus/derived/commodore_loader/jabato_side_b_tap_post_input_12_part2.ddb",
+          "sha256": "ee3b41f61fc01c27ad776e271f313a2e3fc88875cc9c8e0debebe6904fa48e69"
+        }
+      ],
+      "external_validators": [
+        {
+          "name": "VICE",
+          "role": "acquisition-time RAM-capture producer only; not invoked by the primary recovery verification command"
+        },
+        {
+          "name": "ADP fixtures",
+          "role": "independent retained byte-identity corroboration only; not read by the primary recovery verification command"
+        }
+      ]
+    },
+    {
+      "id": "all-platform-retained-game-corpus-integrity",
+      "description": "Verifies the committed all-platform SQLite evidence ledger, coverage ledger, and every retained artifact hash. This is an integrity claim, not a media-acquisition replay.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10 standard library",
+        "SQLite support included with Python",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/verify_game_corpus.py",
+        "arguments": []
+      },
+      "inputs": [
+        {
+          "path": "preservation_corpus/state.db",
+          "sha256": "26c0f4b6279770706c93a56ae8855712d48a9ce53d682934cd5adf0fa1d72d2e"
+        },
+        {
+          "path": "preservation_corpus/COVERAGE_LEDGER.md",
+          "sha256": "6bd18818cc77a1f711fe52be77617a4f5d935da5e58df8998e585ff5c969a284"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "preservation_corpus/state.db",
+          "sha256": "26c0f4b6279770706c93a56ae8855712d48a9ce53d682934cd5adf0fa1d72d2e"
+        },
+        {
+          "path": "preservation_corpus/COVERAGE_LEDGER.md",
+          "sha256": "6bd18818cc77a1f711fe52be77617a4f5d935da5e58df8998e585ff5c969a284"
+        }
+      ],
+      "external_validators": []
+    },
+    {
+      "id": "commodore-runtime-resource-integrity",
+      "description": "Verifies the committed Commodore runtime-resource manifest, all listed firmware/resources, retained captures, authorization directive, and required local links. This is an integrity claim, not a live-emulation replay.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10 standard library",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/verify_runtime_resources.py",
+        "arguments": []
+      },
+      "inputs": [
+        {
+          "path": "preservation_corpus/runtime_resources/commodore/manifest.json",
+          "sha256": "abaa3ed29bd1da74d5079db5bb283cf661e93f278e93ab6d87348b9956c7be09"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "preservation_corpus/runtime_resources/commodore/manifest.json",
+          "sha256": "abaa3ed29bd1da74d5079db5bb283cf661e93f278e93ab6d87348b9956c7be09"
+        }
+      ],
+      "external_validators": [
+        {
+          "name": "VICE",
+          "role": "optional live-emulation validation and historical capture acquisition only; not invoked by this primary integrity verifier"
+        }
+      ]
+    },
+    {
+      "id": "reverse-engineering-corpus-integrity",
+      "description": "Verifies retained reverse-engineering source, comparison, and generated-output hashes from committed manifests. It preserves tool-output integrity only and does not promote external-tool semantics as repository-native decompilation.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10 standard library",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/verify_reverse_corpus.py",
+        "arguments": []
+      },
+      "inputs": [
+        {
+          "path": "reverse_engineering/manifests/official_interpreters.json",
+          "sha256": "c4cfdd53c1fc8062023ec566246e40e80faba37e871e9e30e808f24558551a76"
+        },
+        {
+          "path": "reverse_engineering/manifests/public_sources.json",
+          "sha256": "eec0ed60b65b7a42d865f4f9171802b71bc47e0dadd7e9201dd5a7b24e1f5faf"
+        },
+        {
+          "path": "reverse_engineering/manifests/third_party_comparisons.json",
+          "sha256": "449dfa5db893ee39162103a389019580f507fe9f1c55c9b7b356a08b0ae86185"
+        },
+        {
+          "path": "reverse_engineering/manifests/adp_implementation.json",
+          "sha256": "5521b25da5f038b44d00ffe8adf30c098be9e6d5c8e0edfb1710c260b7014b8e"
+        },
+        {
+          "path": "reverse_engineering/manifests/adp_verification.json",
+          "sha256": "17f839331fa4c97938b6cbc0894acbdec64e8f29ce5a3a0dd234f56c24530329"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "reverse_engineering/manifests/official_interpreters.json",
+          "sha256": "c4cfdd53c1fc8062023ec566246e40e80faba37e871e9e30e808f24558551a76"
+        },
+        {
+          "path": "reverse_engineering/manifests/public_sources.json",
+          "sha256": "eec0ed60b65b7a42d865f4f9171802b71bc47e0dadd7e9201dd5a7b24e1f5faf"
+        },
+        {
+          "path": "reverse_engineering/manifests/third_party_comparisons.json",
+          "sha256": "449dfa5db893ee39162103a389019580f507fe9f1c55c9b7b356a08b0ae86185"
+        },
+        {
+          "path": "reverse_engineering/manifests/adp_implementation.json",
+          "sha256": "5521b25da5f038b44d00ffe8adf30c098be9e6d5c8e0edfb1710c260b7014b8e"
+        },
+        {
+          "path": "reverse_engineering/manifests/adp_verification.json",
+          "sha256": "17f839331fa4c97938b6cbc0894acbdec64e8f29ce5a3a0dd234f56c24530329"
+        }
+      ],
+      "external_validators": [
+        {
+          "name": "Ghidra, radare2, and architecture-specific disassemblers",
+          "role": "retained independent analysis producers; this native verifier checks their recorded outputs but does not use them to regenerate or promote semantic conclusions"
+        }
+      ]
+    },
+    {
+      "id": "static-preservation-report",
+      "description": "Regenerates and byte-verifies the committed browser-safe static preservation report from the retained corpus state, catalogs, library manifest, detection table, and bounded logs using a recorded fixed timestamp.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10",
+        "declared project Python dependencies",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/regenerate_preservation_report.py",
+        "arguments": [
+          "--check"
+        ]
+      },
+      "inputs": [
+        {
+          "path": "preservation_corpus/state.db",
+          "sha256": "26c0f4b6279770706c93a56ae8855712d48a9ce53d682934cd5adf0fa1d72d2e"
+        },
+        {
+          "path": "preservation_corpus/detection_tables.h",
+          "sha256": "66824e9176855ff47664c2d7a719cd4c15c1fe027cc2db4ed746f4a886ba4003"
+        },
+        {
+          "path": "preservation_corpus/library/manifest.json",
+          "sha256": "f76871c9ec67a52b8d40514eb9bcd8579b620a0eed4f00ee40b0813848fbee01"
+        },
+        {
+          "path": "preservation_corpus/daad_catalog.json",
+          "sha256": "a3c900fc224bb489d4291792dbb14463c4c509974dd9b8757315503763119881"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "preservation_corpus/report_data.json",
+          "sha256": "a4c5b57dad5fae49d1e3addc970a137f611ddb30df363b23c7d313259b091419"
+        }
+      ],
+      "external_validators": [
+        {
+          "name": "browser report viewer",
+          "role": "optional presentation consumer only; not invoked by the primary report-regeneration command"
+        }
+      ]
+    },
+    {
+      "id": "public-retained-artifact-manifest",
+      "description": "Regenerates and byte-verifies the browser-safe manifest that maps every retained authorized artifact across all platforms and technical media to an opaque public deployment path, complete digest suite, provenance, and evidence state.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10",
+        "declared project Python dependencies",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/build_public_artifact_manifest.py",
+        "arguments": [
+          "--check"
+        ]
+      },
+      "inputs": [
+        {
+          "path": "preservation_corpus/state.db",
+          "sha256": "26c0f4b6279770706c93a56ae8855712d48a9ce53d682934cd5adf0fa1d72d2e"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "preservation_corpus/public_artifacts_manifest.json",
+          "sha256": "9b3787ef7257af29cb96f5db2ad3d1668d6a3c34a755349bc7b13616e75c1450"
+        }
+      ],
+      "external_validators": [
+        {
+          "name": "Pages static-artifact staging",
+          "role": "CI copies only manifest-approved bytes and independently recomputes their retained-byte digests; it is not a source of preservation evidence"
+        }
+      ]
+    },
+    {
+      "id": "c64-jabato-ass-scene-variant-comparison",
+      "description": "Structurally validates and byte-compares the retained ASS scene members' post-command Part 1 and Part 2 runtime DDBs against the original Side A and Side B recoveries.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10 standard library",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/verify_jabato_c64_ass_scene_variant.py",
+        "arguments": []
+      },
+      "inputs": [
+        {
+          "path": "preservation_corpus/extracted/depth1_a05bba25_JABATO P.1",
+          "sha256": "528d6b6f9c47153f6a7b64316a2b9c46f90020089de3212fe7568a7e31914af0"
+        },
+        {
+          "path": "preservation_corpus/extracted/depth1_20a1cd01_JABATO P.2",
+          "sha256": "65e8e2b2358caecf302a367374d87993c685bb76b894e11da51e8aa7a0eba6c7"
+        },
+        {
+          "path": "preservation_corpus/derived/commodore_loader/vice/jabato_c64_ass_part1_mirar.ram",
+          "sha256": "b54145cc3d76417ecb5bbddc6cc0ecb71f9608ef5ee15de623857ed36fd6576f"
+        },
+        {
+          "path": "preservation_corpus/derived/commodore_loader/vice/jabato_c64_ass_part2_mirar.ram",
+          "sha256": "402fca8d2112f599943b8a7f3820dad3866cf3e6386dddabe4552ad555dd84db"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "preservation_corpus/derived/commodore_loader/jabato_ass_part1_post_mirar.ddb",
+          "sha256": "7ffbee6ca3e614011b30261a74022d199ee3345843a0525e92dc9cb5b7bdb5e6"
+        },
+        {
+          "path": "preservation_corpus/derived/commodore_loader/jabato_ass_part2_post_mirar.ddb",
+          "sha256": "ee3b41f61fc01c27ad776e271f313a2e3fc88875cc9c8e0debebe6904fa48e69"
+        }
+      ],
+      "external_validators": [
+        {
+          "name": "VICE",
+          "role": "acquisition-time producer of the retained post-command RAM captures only; not invoked by this primary comparison command"
+        },
+        {
+          "name": "ADP fixtures",
+          "role": "independent comparison reference only; not read by this primary comparison command"
+        }
+      ]
+    },
+    {
+      "id": "official-r4-msx-dos-fat12-profile",
+      "description": "Validates the official DAAD R4 embedded MSX.DSK through the current documented MSX-DOS FAT12 no-trailer profile and byte-verifies its five extracted package members.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10 standard library",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/verify_official_daad_r4_msx_disk.py",
+        "arguments": []
+      },
+      "inputs": [
+        {
+          "path": "preservation_corpus/downloads/250_DAAD_R4.zip",
+          "sha256": "205c35b8eecc6639eb25a1058f07a11d8610b8a23e6dc4ee7a56ff8a150f4f8a"
+        },
+        {
+          "path": "preservation_corpus/extracted/depth1_38ecfcb6_MSX.DSK",
+          "sha256": "c39ea8a663bae9258563783ef62cd122d1cc1ba1f55749224663190b416fe67e"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "preservation_corpus/derived/official_r4/official_r4_msx_disk_evidence.json",
+          "sha256": "b1ab2ab419675137695108f1ad7c4d4b5792f42f615e841df107fa32d6f7bb6b"
+        }
+      ],
+      "external_validators": []
+    },
+    {
+      "id": "pcw-torreoscura-validated-chr-atlas",
+      "description": "Renders and byte-verifies a grayscale glyph atlas from the retained Torreoscura PCW ADP-writer CHR profile. The derived atlas preserves byte-index order only and does not assert a character code page or runtime relationship.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10 standard library",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/render_chr_atlas.py",
+        "arguments": [
+          "--input",
+          "preservation_corpus/extracted/depth2_918656c1_PARTE001.CHR",
+          "--output",
+          "preservation_corpus/derived/pcw_chr/torreoscura_parte001_chr_atlas.png",
+          "--metadata",
+          "preservation_corpus/derived/pcw_chr/torreoscura_parte001_chr_atlas.json",
+          "--scale",
+          "2"
+        ]
+      },
+      "inputs": [
+        {
+          "path": "preservation_corpus/extracted/depth2_918656c1_PARTE001.CHR",
+          "sha256": "715c0a6e717e9475d80cf5a6c2afbb7bff76dcdc235435bc51cebe02cbc6c6ba"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "preservation_corpus/derived/pcw_chr/torreoscura_parte001_chr_atlas.png",
+          "sha256": "70e01c501e7630e81ea5c7e1073d8831ce2a99e07c9babf4ec9328eacaf7a9c1"
+        },
+        {
+          "path": "preservation_corpus/derived/pcw_chr/torreoscura_parte001_chr_atlas.json",
+          "sha256": "5f45140f142b5d0717888697b55673deaebe05caaf47da1a4dd2742abc36e390"
+        }
+      ],
+      "external_validators": []
+    },
+    {
+      "id": "pcw-torreoscura-same-disk-ddb-companions",
+      "description": "Re-extracts the two retained Torreoscura PCW disks through the native CPC/CP/M path and verifies only same-disk, exact-byte membership between each validated PCW DDB and its same-stem CHR and DAT companions. It does not assert DDB-internal references, runtime load behavior, requiredness, semantic equivalence, or an inter-platform relation.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10 standard library",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/record_pcw_bundle_relationships.py",
+        "arguments": [
+          "--check"
+        ]
+      },
+      "inputs": [
+        {
+          "path": "preservation_corpus/extracted/depth1_65a49c5a_TO.DSK",
+          "sha256": "b4e9e38015c45c87c9e491143d4947761fc49b25c47ee87922b7f393bd993d94"
+        },
+        {
+          "path": "preservation_corpus/extracted/depth1_d3410775_TO2.DSK",
+          "sha256": "e21cfe9856364286ea51ea65ac9aad71f71374fe212f0c9b9cb51c482ce1381e"
+        },
+        {
+          "path": "preservation_corpus/state.db",
+          "sha256": "26c0f4b6279770706c93a56ae8855712d48a9ce53d682934cd5adf0fa1d72d2e"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "preservation_corpus/derived/pcw_bundle/torreoscura_same_disk_relationships.json",
+          "sha256": "ec20f4d2bea8238faabd70f17f7ad12e861f694f6662416b5fe37ce40ff1f026"
+        }
+      ],
+      "external_validators": []
+    },
+    {
+      "id": "spectrum-observed-authorized-acquisition-integration",
+      "description": "Regenerates and byte-verifies the retained integration summary for checksum-pinned Spectrum Computing releases from the committed authorization queue and corpus state. It does not fetch media or promote release completeness beyond the recorded roots, extraction, and structural scan.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10",
+        "declared project Python dependencies",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/verify_spectrum_observed_acquisition_integration.py",
+        "arguments": [
+          "--check"
+        ]
+      },
+      "inputs": [
+        {
+          "path": "research/authorized_candidate_sources.json",
+          "sha256": "daa89148af5bc209664a54fcd11570190074e9a458c4b8a64b5516a5a5a1a73e"
+        },
+        {
+          "path": "preservation_corpus/state.db",
+          "sha256": "26c0f4b6279770706c93a56ae8855712d48a9ce53d682934cd5adf0fa1d72d2e"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "preservation_corpus/derived/spectrum_observed_acquisition_integration.json",
+          "sha256": "2804a68dd3cea44237a4863ee80412d203139f50abd28eb1c40a79de5700849c"
+        }
+      ],
+      "external_validators": []
+    },
+    {
+      "id": "official-daad-cpc-fnt-documentation",
+      "description": "Regenerates and byte-verifies the retained pinned official DAAD changelog evidence that documents DAAD.FNT as the standard CPC font used by the CPC tape loader. It does not establish glyph grammar, rendering, runtime load success, erased-file meaning, or equivalence with SINTAC FNT3/FNT4.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10 standard library",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/capture_official_daad_fnt_cpc_evidence.py",
+        "arguments": [
+          "--check"
+        ]
+      },
+      "inputs": [
+        {
+          "path": "research/sources/daad_official_changelog_4a7e745235a12af5b397902dbd9214bc930c7680.md.gz",
+          "sha256": "761c8149cb4449e0ebddf980224fa9d472113a1349da7653e8152813729869b2"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "research/sources/daad_official_fnt_cpc_evidence.json",
+          "sha256": "15c7e007ef0ab769bac91afc378eed49a4d33e8907b796f253e2a826bf916dfa"
+        }
+      ],
+      "external_validators": []
+    },
+    {
+      "id": "official-cpc-tapmast-fnt-loader-literals",
+      "description": "Regenerates exact retained-byte evidence that the official CPC DLPART1 and DLPART2 loader templates contain the observed DAAD.FNT literal at a fixed byte offset. It does not decode tokenized BASIC or establish a load call, runtime success, glyph grammar, rendering, or cross-package equivalence.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10 standard library",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/record_cpc_fnt_loader_literals.py",
+        "arguments": [
+          "--check"
+        ]
+      },
+      "inputs": [
+        {
+          "path": "preservation_corpus/extracted/depth1_dcd3ab68_DAAD.FNT",
+          "sha256": "fb10eff788f33453e39027e80ee14e022302a31d21d34cfc457ef974f378c15a"
+        },
+        {
+          "path": "preservation_corpus/extracted/depth1_469e2636_DLPART1.BAS",
+          "sha256": "2291b9fbaaf3d7b764650f65fd317336f7e8e95541e30b311ccd9d6103e44df6"
+        },
+        {
+          "path": "preservation_corpus/extracted/depth1_19c8e032_DLPART2.BAS",
+          "sha256": "cd410d16d479ec4263c9b1ab08955b9f03b1ff32aba30c79342e181927f1bd09"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "preservation_corpus/derived/cpc_fnt/official_tapmast_loader_literals.json",
+          "sha256": "f973ffd8836e44a79d7164f9498147466a84fb1ac5a55764f3665e833aacbc02"
+        }
+      ],
+      "external_validators": []
+    },
+    {
+      "id": "torreoscura-pcw-public-download-discovery",
+      "description": "Regenerates the retained public author-site discovery record for Torreoscura's PCW archive link. It does not acquire media or establish release identity, byte equivalence, loader behavior, or PARTE000.PIC grammar.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10",
+        "beautifulsoup4",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/capture_torreoscura_pcw_source.py",
+        "arguments": [
+          "--check"
+        ]
+      },
+      "inputs": [
+        {
+          "path": "research/sources/torreoscura_pcw_download_index_2026-08-22.html.gz",
+          "sha256": "eb6cfd7da68efa331f976eaffbb27c3f423f58b63caf19f5cb981c726a74bb28"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "research/sources/torreoscura_pcw_download_index_2026-08-22.json",
+          "sha256": "3303860cebe21d33c8eaab54a409a9692a6cb24793b916c2d390b8b63b2a2ec7"
+        }
+      ],
+      "external_validators": []
+    },
+    {
+      "id": "py8dis-capability-boundary-discovery",
+      "description": "Regenerates a retained py8dis README capability boundary. It does not run py8dis or establish Z80 support, Spectrum Next support, a load model, or an interpreter-analysis result.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/capture_py8dis_capability_boundary.py",
+        "arguments": [
+          "--check"
+        ]
+      },
+      "inputs": [
+        {
+          "path": "research/sources/py8dis_README_2a604635_2026-08-22.md.gz",
+          "sha256": "79d502b6c1d50c6edf6486a7fc8830e1aaadbe259ae56754f26949e688e4edc6"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "research/sources/py8dis_capability_boundary_2026-08-22.json",
+          "sha256": "6d5048388665469a02a997719ce9c38e8215bfb4c9bd345586a5600acacba4f4"
+        }
+      ],
+      "external_validators": []
+    },
+    {
+      "id": "zxdaad128-load-boundary-discovery",
+      "description": "Regenerates retained ZXDAAD128 README load assumptions. It does not run ZXDAAD128 or establish a historical load model, runtime behavior, Spectrum Next support, or compatibility claim.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/capture_zxdaad128_load_boundary.py",
+        "arguments": [
+          "--check"
+        ]
+      },
+      "inputs": [
+        {
+          "path": "research/sources/zxdaad128_README_fe714e0_2026-08-22.md.gz",
+          "sha256": "7e79aa09e897ecfaa8767519cf4f9b36ec62e3788255aa1e2c96c00cbc2a4f39"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "research/sources/zxdaad128_load_boundary_2026-08-22.json",
+          "sha256": "24568727862261358e622a4a9ef4d07091d6c90fc87a60126909acf80c883fb3"
+        }
+      ],
+      "external_validators": []
+    },
+    {
+      "id": "skoolkit-analysis-boundary-discovery",
+      "description": "Regenerates retained SkoolKit README analysis boundaries. It does not run SkoolKit or establish control/data truth, a historical load model, runtime behavior, or Spectrum Next support.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/capture_skoolkit_analysis_boundary.py",
+        "arguments": [
+          "--check"
+        ]
+      },
+      "inputs": [
+        {
+          "path": "research/sources/skoolkit_README_760eeaa_2026-08-22.md.gz",
+          "sha256": "7d2913edd107b093927dba7c759d8516c9c0ef94a1b25993a354bd926fec56e5"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "research/sources/skoolkit_analysis_boundary_2026-08-22.json",
+          "sha256": "7edea01669a344b24ce92293bd265285e7db53c4c397fbee9e20b03cad1b4dc5"
+        }
+      ],
+      "external_validators": []
+    },
+    {
+      "id": "redasm-capability-boundary-discovery",
+      "description": "Regenerates a retained redasm README processor-table capability boundary. It does not run redasm or establish Z80, MSX, Spectrum, or Spectrum Next support, a load model, runtime behavior, control/data classification, or an interpreter-analysis result.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/capture_redasm_capability_boundary.py",
+        "arguments": [
+          "--check"
+        ]
+      },
+      "inputs": [
+        {
+          "path": "research/sources/redasm_README_113245ef_2026-08-22.md.gz",
+          "sha256": "cba16b77354c08498481048bc3dde6c23c8911261b5bbd789b5bddaf62806e04"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "research/sources/redasm_capability_boundary_2026-08-22.json",
+          "sha256": "c0b0c46c0e2f3a75d7c28eb766b9c7126ab223875a866d9fb371e4f50932396a"
+        }
+      ],
+      "external_validators": []
+    },
+    {
+      "id": "retained-analysis-commentary-review-scaffold",
+      "description": "Regenerates and byte-verifies the evidence-bound commentary review scaffold from retained static-analysis records. The scaffold indexes byte identity, tool records, outputs, hashes, load-model non-claims, and empty review layers; it does not parse analyzer listings, recover source, or establish runtime behavior.",
+      "primary_class": "repository-native",
+      "requires_network": false,
+      "declared_dependencies": [
+        "Python >= 3.10 standard library",
+        "repository source tree"
+      ],
+      "command": {
+        "runner": "python",
+        "script": "scripts/generate_analysis_commentary_scaffold.py",
+        "arguments": [
+          "--check"
+        ]
+      },
+      "inputs": [
+        {
+          "path": "reverse_engineering/manifests/official_interpreters.json",
+          "sha256": "c4cfdd53c1fc8062023ec566246e40e80faba37e871e9e30e808f24558551a76"
+        },
+        {
+          "path": "reverse_engineering/workflows/analyzer_adapters.json",
+          "sha256": "bb6bfe1342852f4c8ff277e18d2a6751e64c2e0726d930140625103834f75177"
+        },
+        {
+          "path": "scripts/generate_analysis_commentary_scaffold.py",
+          "sha256": "857577b7720a9e287c69ee76b4052239c9ff2962374ba426c1b12b6449c4aef8"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "reverse_engineering/derived/COMMENTARY_REVIEW_SCAFFOLD.md",
+          "sha256": "a675b61ba5f89b9b34fd1bda412f0a640471c987ba6f704ad804bc6c54401a6e"
+        }
+      ],
+      "external_validators": [
+        {
+          "name": "Retained Ghidra, radare2, and architecture-static records",
+          "role": "The native scaffold indexes their recorded metadata and hashes only; it does not invoke tools or promote their output to source or behavior evidence."
+        }
+      ]
+    }
+  ]
+}
