@@ -1,0 +1,105 @@
+name: Build and deploy preservation report
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install and verify committed primary evidence
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-lock.txt
+          pip install pytest pytest-asyncio pyflakes
+          python scripts/run_primary_workflow.py
+
+      - name: Validate and stage committed public evidence
+        run: |
+          test -s preservation_corpus/report_data.json
+          test -s preservation_corpus/detection_tables.h
+          test -s preservation_corpus/library/manifest.json
+          test -s preservation_corpus/public_artifacts_manifest.json
+          python scripts/build_public_artifact_manifest.py --check
+          python scripts/build_pages_docs.py
+
+      - name: Set up Node
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node runtime and cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build the static viewer
+        working-directory: web/report-viewer
+        env:
+          VITE_BASE_PATH: /DAAD-harvester/
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          cp ../../preservation_corpus/report_data.json public/report_data.json
+          cp ../../preservation_corpus/detection_tables.h public/detection_tables.h
+          cp ../../preservation_corpus/public_artifacts_manifest.json public/public_artifacts_manifest.json
+          python ../../scripts/stage_public_artifacts.py --stage-dir public
+          mkdir -p public/library
+          cp ../../preservation_corpus/library/manifest.json public/library/manifest.json
+          pnpm run build
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/report-viewer/dist
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  verify-public-deployment:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out verification script
+        uses: actions/checkout@v4
+      - name: Verify canonical public portal content
+        run: |
+          expected_report_sha256="$(sha256sum preservation_corpus/report_data.json | awk '{print $1}')"
+          expected_manifest_sha256="$(sha256sum preservation_corpus/public_artifacts_manifest.json | awk '{print $1}')"
+          python scripts/verify_pages_deployment.py \
+            --url "${{ needs.deploy.outputs.page_url }}" \
+            --documentation-url "${{ needs.deploy.outputs.page_url }}documentation/index.html" \
+            --minimum-sources 1 \
+            --minimum-artifacts 1 \
+            --expected-report-sha256 "$expected_report_sha256" \
+            --expected-manifest-sha256 "$expected_manifest_sha256" \
+            --minimum-public-artifacts 1
