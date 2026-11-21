@@ -132,6 +132,18 @@ jobs:
           # "megadaemon-core" sobrescrito a pelo.
           cp dist/megadaemon-core-android-arm64 dist/megadaemon-core-android-arm64-${GITHUB_SHA::7}
           sha256sum dist/megadaemon-core-android-arm64-${GITHUB_SHA::7} > dist/megadaemon-core-android-arm64-${GITHUB_SHA::7}.sha256
+          # Binarios AUXILIARES del movil.  `cargo build` sin --bin ya los
+          # compila todos; faltaba publicarlos.  Son imprescindible para la
+          # autocuracion: `channel-publish` es el que SONDEA el tunel (el
+          # movil no tiene curl) y el que publica el estado del canal; sin
+          # el, la recuperacion se queda a medias.
+          for aux in channel-publish duckdns-updater md-lan-listen npu-probe; do
+            if [ -f "target/aarch64-linux-android/release/$aux" ]; then
+              cp "target/aarch64-linux-android/release/$aux" "dist/$aux-arm64"
+              sha256sum "dist/$aux-arm64" > "dist/$aux-arm64.sha256"
+              echo "  dist/$aux-arm64"
+            fi
+          done
       - name: Subir artefacto
         uses: actions/upload-artifact@v4
         with:

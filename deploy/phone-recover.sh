@@ -257,6 +257,27 @@ auto_update() {
     mv -f "$_asset" "$BIN" 2>/dev/null || { log "ERROR: no se pudo instalar el binario"; return 1; }
     chmod 755 "$BIN" 2>/dev/null
     log "binario instalado: $(sha256_de "$BIN" | cut -c1-16)… ($(stat -c %s "$BIN" 2>/dev/null) B)"
+
+    # Binarios AUXILIARES: `channel-publish` es imprescindible (es el que
+    # sondea el tunel —el movil no tiene curl— y el que publica el canal).
+    for aux in channel-publish duckdns-updater md-lan-listen npu-probe; do
+        _a="$PREFIX/$aux"
+        _tmp="$PREFIX/.$aux.new"
+        fetch "$_base/$aux-arm64" "$_tmp" || { rm -f "$_tmp" 2>/dev/null; continue; }
+        _sf="$PREFIX/.$aux.sha256"
+        if fetch "$_base/$aux-arm64.sha256" "$_sf"; then
+            _esp=$(awk '{print $1}' "$_sf" 2>/dev/null | head -1)
+            _rea=$(sha256_de "$_tmp")
+            if [ -n "$_esp" ] && [ "$_esp" != "$_rea" ]; then
+                log "ERROR: SHA-256 de $aux no coincide => NO se instala"
+                rm -f "$_tmp"
+                continue
+            fi
+        fi
+        mv -f "$_tmp" "$_a" 2>/dev/null && chmod 755 "$_a" 2>/dev/null \
+            && log "auxiliar instalado: $aux ($(sha256_de "$_a" | cut -c1-16)…)"
+        rm -f "$_sf" 2>/dev/null
+    done
     return 0
 }
 
