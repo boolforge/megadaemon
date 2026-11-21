@@ -206,8 +206,11 @@ fn requires_auth(path: &str, method: &str, local_browser: bool) -> bool {
     // el túnel la página pediría un token que todavía no existe (403) y el
     // navegador pediría el CSS sin cabeceras (401) ⇒ la UI cargaría sin
     // estilos.  Los DATOS de la v2 (`/api/v2/*`) siguen protegidos.
+    // v15 (W1): la página, su CSS y `/channel.json` (público, payload
+    // mínimo: URLs del canal + ts; ni credenciales ni IP ni pids).
     if path == "/" || path == "/index.html" || path == "/v2" || path == "/ui"
         || path == "/webui_v2.css"
+        || path == "/channel.json"
     {
         return false;
     }
@@ -228,10 +231,38 @@ fn requires_auth(path: &str, method: &str, local_browser: bool) -> bool {
     // sesión: el token se lo inyectamos en la página.  Las ESCRITURAS
     // (POST/PUT/DELETE) siguen exigiendo token ⇒ una web maliciosa que
     //借 el puerto del móvil sigue sin poder ejecutar comandos.
-    if local_browser && method == "GET" {
-        return false;
-    }
+    // v15 (A-18 · resto, P1): la exención de "local" se queda **SÓLO en la
+    // PÁGINA** (ya exenta más arriba) y en las sondas de sólo lectura.
+    //
+    // Antes: `local_browser && method == "GET"` eximía de token a **TODOS**
+    // los GET de un cliente "local" ⇒ cualquier app instalada en el móvil
+    // (que conecta desde 127.0.0.1) leía `/api/providers`, `/api/status`,
+    // `/api/live_frame`… **sin credencial**: fuga de datos (el root ya lo
+    // cerró `9f30665`).
+    //
+    // El navegador local no pierde nada: su token va **incrustado en la
+    // página** que sirve el propio daemon (y el puente lo inyecta); "local"
+    // se decide además por el **peer loopback real**, no sólo por el `Host`.
+    let _ = local_browser;
     true
+}
+
+/// Payload **público y mínimo** del estado del canal.
+///
+/// Del `state/channel.json` en disco sólo sale lo necesario para
+/// redescubrir el canal: `quick`, `duckdns`, `canonical` y `ts`.  **Nunca**
+/// salen `ip_publica` ni `cloudflared_pids` (huella del móvil): ésos se
+/// quedan en el fichero local.
+pub fn channel_public_payload(v: &Value) -> Value {
+    let mut out = serde_json::Map::new();
+    for k in ["quick", "duckdns", "canonical", "ts"] {
+        if let Some(val) = v.get(k) {
+            if !val.is_null() {
+                out.insert(k.to_string(), val.clone());
+            }
+        }
+    }
+    serde_json::Value::Object(out)
 }
 
 /// Resuelve el HTML del cockpit.
@@ -840,6 +871,10 @@ fn handle_client(mut stream: TcpStream) {
         .peer_addr()
         .map(|a| a.ip())
         .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+    // v15: una vez por proceso, el log dice **la ruta que usa el daemon** y
+    // la huella de su key (nunca el secreto) ⇒ un "403" futuro se lee en el
+    // log sin adivinar (la ruta por defecto ya nos costó un incidente).
+    api_key::log_startup_state(&state_dir());
     let cfg = api_key::ApiKeyConfig::load(&state_dir());
     // BUG v13.4 (AUDIT-WEB-02): la página pública (`/`) se servía DESPUÉS del
     // gate de API key, así que el navegador recibía 401 y la UI "no
@@ -857,10 +892,16 @@ fn handle_client(mut stream: TcpStream) {
     // (no exponen datos de usuario: versión, uptime, puertos y contadores),
     // igual que ya se documentaba en el commit 4771277.
     // v15 (W1): `/v2` y su CSS son públicos (HTML/CSS); los datos de la v2 no.
+    // v15 (W1): `/channel.json` es PÚBLICO y con payload MÍNIMO (URLs del
+    // canal + ts): es el punto canónico estable que sirve el relay del PC
+    // (`https://<dominio>/channel.json`) para que el sandbox redescubra el
+    // canal **sin que el móvil necesite un PAT de GitHub** (ninguna
+    // credencial de escritura en el dispositivo).
     let is_public_page = path == "/" || path == "/index.html"
         || path == "/v2"
         || path == "/ui"
-        || path == "/webui_v2.css";
+        || path == "/webui_v2.css"
+        || path == "/channel.json";
     let is_public_probe = matches!(
         path,
         "/health" | "/api/health" | "/metrics" | "/api/metrics" | "/api/ping"
@@ -960,11 +1001,14 @@ fn handle_client(mut stream: TcpStream) {
     // token.  Sin esto, cualquiera (página web con CORS abierto, o alguien en
     // la LAN) podía hacer POST /api/chat con "$ comando" y obtener RCE root.
     if requires_auth(path, method, local_browser) && !auth_ok(&header_str) {
+        // v15 (A-18): el 403 nombra el `state_dir` efectivo y, si el daemon no
+        // tiene ninguna key configurada, lo dice con la ruta exacta.
+        let body_s = api_key::token_required_body(&state_dir());
         send_http_response(
             &mut stream,
             403,
             "application/json",
-            b"{\"error\":\"unauthorized\",\"hint\":\"falta la cabecera X-Seere-Auth-Token\"}",
+            body_s.as_bytes(),
         );
         return;
     }
@@ -1010,6 +1054,30 @@ fn handle_client(mut stream: TcpStream) {
                     "text/css; charset=utf-8",
                     EMBEDDED_V2_CSS.as_bytes(),
                 );
+                return;
+            }
+            // v15 (W1): estado del canal, PÚBLICO y con payload MÍNIMO.
+            //
+            // El fichero en disco puede llevar más (IP pública, pids de
+            // cloudflared: eso se queda en el móvil), pero por HTTP sale
+            // sólo lo necesario para **redescubrir el canal**: `quick`,
+            // `duckdns`, `canonical` y `ts`.  Sin credenciales ⇒ se puede
+            // servir desde un relay público sin filtrar nada.
+            "/channel.json" => {
+                match crate::channel::read_channel_json(None) {
+                    Some(v) => {
+                        let body = channel_public_payload(&v);
+                        send_json(&mut stream, &body);
+                    }
+                    None => {
+                        send_http_response(
+                            &mut stream,
+                            404,
+                            "application/json",
+                            b"{\"error\":\"channel_state_missing\",\"hint\":\"el movil aun no ha publicado el estado del canal\"}",
+                        );
+                    }
+                }
                 return;
             }
             _ => {}
@@ -1591,11 +1659,16 @@ fn handle_client(mut stream: TcpStream) {
                 );
             } else {
                 REQ_REJECTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // v15 (A-18): el 403 del canje dice la verdad: si el daemon
+                // no tiene NINGUNA key configurada, lo dice (con la ruta),
+                // y no un "API key invalida" que no distingue nada.
+                let presented = api_key::extract_key(&header_str);
+                let body_s = api_key::forbidden_body(&state_dir(), presented.as_deref());
                 send_http_response(
                     &mut stream,
                     403,
                     "application/json",
-                    b"{\"ok\":false,\"error\":\"invalid_api_key\",\"hint\":\"la API key no coincide con la configurada en la instancia\"}",
+                    body_s.as_bytes(),
                 );
             }
         }
@@ -2305,3 +2378,42 @@ pub fn run_server(port: u16) -> Result<(), String> {
 /// romper ningún acceso existente (bookmarks, túnel, scripts).  Todos sirven
 /// la MISMA instancia y comparten token, estado y cola de tareas.
 pub const ALIAS_PORTS: &[u16] = &[3000, 3030, 8090, 9090];
+
+#[cfg(test)]
+mod channel_json_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// El payload público del canal NO puede llevar la huella del móvil.
+    #[test]
+    fn el_payload_publico_del_canal_es_minimo() {
+        let full = json!({
+            "quick": "https://abc.trycloudflare.com",
+            "duckdns": "https://mdtmfnc-s21.duckdns.org",
+            "canonical": "https://mdtmfnc-s21.duckdns.org/channel.json",
+            "ts": 1732000000,
+            "ip_publica": "47.253.4.207",
+            "cloudflared_pids": "123,456",
+            "api_key": "mdaemon_sk_live_secreto"
+        });
+        let out = channel_public_payload(&full);
+        assert_eq!(out["quick"], json!("https://abc.trycloudflare.com"));
+        assert_eq!(out["duckdns"], json!("https://mdtmfnc-s21.duckdns.org"));
+        assert_eq!(out["canonical"], json!("https://mdtmfnc-s21.duckdns.org/channel.json"));
+        assert_eq!(out["ts"], json!(1732000000));
+        // Lo que NO puede salir por HTTP:
+        assert!(out.get("ip_publica").is_none(), "la IP pública no sale");
+        assert!(out.get("cloudflared_pids").is_none(), "los pids no salen");
+        assert!(out.get("api_key").is_none(), "ninguna credencial sale");
+        // Y el número de claves es como máximo 4.
+        assert!(out.as_object().unwrap().len() <= 4);
+    }
+
+    /// Un canal vacío no inventa campos.
+    #[test]
+    fn el_payload_publico_ignora_lo_que_falte() {
+        let out = channel_public_payload(&json!({ "quick": null, "ts": 1 }));
+        assert!(out.get("quick").is_none());
+        assert_eq!(out["ts"], json!(1));
+    }
+}

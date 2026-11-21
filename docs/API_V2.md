@@ -127,6 +127,7 @@ Un test de Rust comprueba que **la UI llama exactamente a estas rutas** y que
 | POST | `/api/v2/voice` | acción de la voz: `status` \| `whoami` \| `plan` \| `act` \| `speak` |
 | POST | `/api/v2/admin/restart` | reinicia la instancia (`confirm:true`): el daemon sale y el supervisor lo relanza |
 | GET | `/api/v2/routes` | esta tabla en JSON + política de auth |
+| GET | `/channel.json` | **estado del canal, PÚBLICO y con payload mínimo** (`quick`, `duckdns`, `canonical`, `ts`): punto canónico estable para el relay del PC. **Sin** credenciales, IP ni pids. |
 
 Rutas de la v1 que la v2 **reutiliza** (no se duplican): `POST /api/tool/agent`
 (planificar/ejecutar), `POST /api/tool/task_queue` (submit/run/cancel/retry),
@@ -713,6 +714,33 @@ Cuerpo de `claim`:
 `id` y el `role` de esta instancia.  `POST` ejecuta una acción
 (`status`, `whoami`, `plan`, `act`, `speak`) y devuelve la respuesta **real**
 del runtime dentro de `voice`.
+
+### `GET /channel.json` (público, payload mínimo)
+
+Sirve el estado del canal del móvil con **payload mínimo**: `quick`,
+`duckdns`, `canonical` y `ts`.  **No** lleva credenciales, IP pública ni pids
+(eso se queda en el `state/channel.json` local del móvil).
+
+Es el **punto canónico estable**: el relay del PC lo sirve como
+`https://<dominio>/channel.json` ⇒ el sandbox redescubre el canal **sin que
+el móvil necesite un PAT de GitHub** (ninguna credencial de escritura en el
+dispositivo).  Si el móvil aún no ha publicado estado ⇒ `404`
+`{"error":"channel_state_missing"}`.
+
+### Política de acciones que **publican datos del móvil fuera**
+
+Regla (aplicada ya por `channel_publish` y por las acciones de esta API):
+
+| Regla | Por qué |
+|---|---|
+| Toda tool/acción que **saque datos del dispositivo fuera** (paste público, webhook, Telegram/SMS, fichero compartido, canal) exige **`confirm=true`** | expone la URL/IP del móvil en un sitio público |
+| La **descripción de la tool lo dice** (el cliente la ve antes de llamar) | que lahey vis a la UI sin tener que abrir el código |
+| La respuesta dice **qué se publica y dónde** | el agente puede pegarlo en el tablón sin filtrar nada más |
+| **Nada de credenciales** en lo publicado | las keys van al fichero 0600, nunca a un paste |
+
+En la UI (v2) esto son las acciones de la card **Administración**: reiniciar
+instancia, instalar APK, shell root, rotar clave y forzar sync — todas con
+`confirm` explícito (el daemon además lo exige ⇒ doble barrera).
 
 ### `POST /api/v2/admin/restart`
 
