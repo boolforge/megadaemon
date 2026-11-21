@@ -47,7 +47,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 
 use crate::swift_archive::{
-    bloque_named, parse_header, sba1_detectar, sba1_layout, HeaderLayout, HeaderReport,
+    bloque_named, parse_header, sba1_detectar, sba1_layout, HeaderReport,
 };
 
 /// Magic del contenedor de archivo.
@@ -142,35 +142,16 @@ pub struct Cabecera {
 }
 
 /// Escribe un entero **big-endian** de `ancho` bytes.
-fn put_uint(out: &mut [u8], offset: usize, value: u64, ancho: usize) {
+///
+/// El formato medido es **big-endian sin excepción** (invariante), así que
+/// no hay variante little-endian que mantener.
+fn escribir_campo(out: &mut [u8], offset: usize, ancho: usize, valor: u64) {
     for i in 0..ancho {
-        let byte = ((value >> (8 * (ancho - 1 - i))) & 0xff) as u8;
+        let byte = ((valor >> (8 * (ancho - 1 - i))) & 0xff) as u8;
         if offset + i < out.len() {
             out[offset + i] = byte;
         }
     }
-}
-
-/// Escribe una tabla de valores en un buffer, según el layout medido.
-fn escribir_campo(
-    out: &mut [u8],
-    offset: usize,
-    ancho: usize,
-    valor: u64,
-    big_endian: bool,
-) {
-    if !big_endian {
-        // El formato es big-endian; si algún día measurement cambia, aquí
-        // se ve enseguida.
-        for i in 0..ancho {
-            let byte = ((valor >> (8 * i)) & 0xff) as u8;
-            if offset + i < out.len() {
-                out[offset + i] = byte;
-            }
-        }
-        return;
-    }
-    put_uint(out, offset, valor, ancho);
 }
 
 impl Cabecera {
@@ -228,7 +209,8 @@ impl Cabecera {
         ];
         for f in &layout.fields {
             if let Some((_, v)) = scalares.iter().find(|(n, _)| *n == f.name) {
-                escribir_campo(&mut out, f.offset as usize, f.width as usize, *v, f.big_endian);
+                debug_assert!(f.big_endian, "la tabla medida es big-endian");
+                escribir_campo(&mut out, f.offset as usize, f.width as usize, *v);
             }
         }
         // Los bloques: longitud en `len_offset` (u16 BE) y datos en
@@ -245,7 +227,6 @@ impl Cabecera {
                     b.len_offset as usize,
                     b.len_width as usize,
                     datos.len() as u64,
-                    true,
                 );
                 let ini = b.data_offset as usize;
                 for (i, byte) in datos.iter().enumerate() {
@@ -264,7 +245,7 @@ impl Cabecera {
     pub fn leer(bytes: &[u8]) -> Result<(Cabecera, usize), ErrorCabecera> {
         let layout = sba1_detectar(bytes).ok_or(ErrorCabecera::MagicInvalido)?;
         let report = parse_header(bytes, &layout).map_err(|_| ErrorCabecera::Truncado)?;
-        let mut cab = Self::desde_report(&report, &layout);
+        let mut cab = Self::desde_report(&report);
         cab.bloque1 = bloque_named(&report, bytes, "bloque1").unwrap_or_default();
         cab.bloque2 = bloque_named(&report, bytes, "bloque2").unwrap_or_default();
         cab.bloque3 = bloque_named(&report, bytes, "bloque3").unwrap_or_default();
@@ -276,7 +257,7 @@ impl Cabecera {
     }
 
     /// Construye la cabecera desde el informe de la tabla medida.
-    fn desde_report(report: &HeaderReport, _layout: &HeaderLayout) -> Cabecera {
+    fn desde_report(report: &HeaderReport) -> Cabecera {
         let mut cab = Cabecera {
             header_size: report.header_size as u16,
             ..Default::default()
