@@ -366,6 +366,38 @@ cargo test --lib -j 1 --offline apk_inventory app_intel
 | Tamaño exacto por APK | El escáner lo tiene (`size` de la entrada del ZIP) pero el volcado W2 no lo guardaba | `scan_installed` lo rellena cuando vuelva el canal |
 | Telemetría por app (quién llama a quién) | `endpoints` da los candidatos; falta correlación con el tráfico real | Requeriría captura de red en vivo |
 
+### 15.1 Parche exacto para el dispatcher MCP (lo hace cockpit/web)
+
+Hoy `rust-core/src/mcp_ext.rs:435` despacha las acciones `analyze`, `dump` y `drift`, y el
+`default` cae en `inventory`.  Para añadir las tres acciones nuevas basta con **tres brazos**
+(ningún cambio de firma en lo existente):
+
+```rust
+"apk_inventory" => match s("action").as_str() {
+    "analyze" => crate::apk_inventory::analyze_apk(&s("path")),
+    "dump" => crate::apk_inventory::dump_all(&s("dest_dir")),
+    "drift" => crate::apk_inventory::drift(args.get("known").unwrap_or(&Value::Null)),
+    // --- Nuevas (MegaDaemon-APK) ---
+    "scan" => crate::apk_inventory::scan_installed(if n("limit") == 0 { 60 } else { n("limit") as usize }),
+    "rank" => crate::apk_inventory::rank_risk(if n("limit") == 0 { 60 } else { n("limit") as usize }),
+    "verdict" => crate::apk_inventory::verdict_installed(if n("limit") == 0 { 60 } else { n("limit") as usize }),
+    _ => crate::apk_inventory::inventory(if n("limit") == 0 { 50 } else { n("limit") as usize }),
+},
+```
+
+Y en el catálogo de la tool (`rust-core/src/mcp_ext.rs:87`) basta con **documentar** las tres
+acciones nuevas en la descripción (el `action` ya es un parámetro libre):
+
+| `action` | Qué devuelve | Coste en el móvil |
+|---|---|---|
+| `scan` | Fichas medidas por app + ranking de riesgo | 2 llamadas + 1 manifiesto por APK |
+| `rank` | Lo mismo, ordenado por riesgo descendente | idem |
+| `verdict` | Lo anterior + veredicto y módulo Rust destino | idem |
+
+`limit` = 0 ⇒ tope de seguridad de 60 apps (`MAX_SCAN_APPS`): el móvil va cargado (load 17,6)
+y leer 1.262 APK no es una opción.
+
+
 ## 16. Historial de cambios
 
 | Fecha | Cambio |
