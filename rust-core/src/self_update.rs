@@ -206,21 +206,30 @@ pub fn manifiesto() -> Result<Manifiesto, String> {
     parsear_manifiesto(&v, Target::actual())
 }
 
+/// Decisión **pura**: ¿está al día o hay versión nueva?
+///
+/// Separada de `comprobar()` para que el test no dependa de la red (el
+/// sandbox tiene internet: un test que espera "sin red" es un test que
+/// falla cuando hay red).
+pub fn decidir(actual: Option<&str>, short_nuevo: &str) -> Estado {
+    match actual {
+        Some(a) if a == short_nuevo => Estado::Actual,
+        Some(a) => Estado::Actualizable {
+            short: format!("{a} -> {short_nuevo}"),
+        },
+        None => Estado::Desconocido {
+            motivo: "no se pudo calcular el sha del binario instalado".to_string(),
+        },
+    }
+}
+
 /// Comprueba si hay una versión nueva.  **No descarga el binario.**
 pub fn comprobar(ruta_bin: &Path) -> Estado {
     let m = match manifiesto() {
         Ok(m) => m,
         Err(e) => return Estado::Desconocido { motivo: e },
     };
-    match Manifiesto::short_de_binario(ruta_bin) {
-        Some(actual) if actual == m.short => Estado::Actual,
-        Some(actual) => Estado::Actualizable {
-            short: format!("{actual} -> {}", m.short),
-        },
-        None => Estado::Desconocido {
-            motivo: "no se pudo calcular el sha del binario instalado".to_string(),
-        },
-    }
+    decidir(Manifiesto::short_de_binario(ruta_bin).as_deref(), &m.short)
 }
 
 /// Descarga, verifica e instala la última release.
@@ -420,14 +429,29 @@ mod tests {
     }
 
     #[test]
-    fn el_estado_actual_no_pide_nada() {
+    fn la_decision_es_pura_y_determinista() {
+        // La MISMA version => no hay nada que hacer.
+        assert_eq!(decidir(Some("abc1234"), "abc1234"), Estado::Actual);
+        // Version distinta => hay version nueva (con el antes/despues).
+        match decidir(Some("abc1234"), "def5678") {
+            Estado::Actualizable { short } => assert_eq!(short, "abc1234 -> def5678"),
+            otro => panic!("se esperaba Actualizable, came {otro:?}"),
+        }
+        // Sin sha del binario => desconocido (nunca "actualizable" a ciegas).
+        assert!(matches!(decidir(None, "abc1234"), Estado::Desconocido { .. }));
+    }
+
+    #[test]
+    fn el_sha_del_binario_es_estable_entre_llamadas() {
         let dir = std::env::temp_dir().join(format!("md_upd_est_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("bin");
-        std::fs::write(&f, b"x").unwrap();
-        // Sin red, el estado es "desconocido" (nunca "actualizable" a ciegas).
-        let e = comprobar(&f);
-        assert!(matches!(e, Estado::Desconocido { .. }));
+        std::fs::write(&f, b"contenido fijo").unwrap();
+        let a = Manifiesto::short_de_binario(&f).unwrap();
+        let b = Manifiesto::short_de_binario(&f).unwrap();
+        assert_eq!(a, b);
+        // Y la decisión con ese sha: "actual" si el nuevo coincide.
+        assert_eq!(decidir(Some(&a), &a), Estado::Actual);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
