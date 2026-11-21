@@ -214,6 +214,39 @@ fn main() {
             println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
         }
 
+        "daad" => {
+            let sub = args.get(2).map(|s| s.as_str()).unwrap_or("scan");
+            let target_path = args.get(3).cloned().unwrap_or_default();
+            if target_path.is_empty() {
+                eprintln!("Uso: megadaemon daad <scan|embedded> <fichero>");
+                std::process::exit(1);
+            }
+            let data = match std::fs::read(&target_path) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("Error leyendo {}: {}", target_path, e);
+                    std::process::exit(1);
+                }
+            };
+            match sub {
+                "scan" => {
+                    let analysis = megadaemon_core::daad::DAADBytecodeParser::parse_ddb(&data, &target_path);
+                    println!("{}", serde_json::to_string_pretty(&analysis).unwrap_or_default());
+                }
+                "embedded" => {
+                    if let Some((offset, size, analysis)) = megadaemon_core::daad::DAADBytecodeParser::find_embedded_ddb(&data) {
+                        println!("Encontrado DDB embebido en offset 0x{:08X} ({} bytes):", offset, size);
+                        println!("{}", serde_json::to_string_pretty(&analysis).unwrap_or_default());
+                    } else {
+                        println!("No se encontró DDB embebido.");
+                    }
+                }
+                _ => {
+                    eprintln!("Comando daad desconocido: {}", sub);
+                }
+            }
+        }
+
         "chat" => {
             let model = args.get(2).map(|s| s.as_str());
             let prompt = if args.len() > 3 { args[3..].join(" ") } else { "Hello".into() };

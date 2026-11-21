@@ -48,6 +48,18 @@ pub fn tool_definitions() -> Value {
                 "required": ["confirm"]
             }
         },
+        {
+            "name": "daad_harvester",
+            "description": "Evidence-led DAAD (Diseñador de Aventuras AD) database recognizer and extractor. Validates target-aware DRC v2/v3 and historical legacy v1/v2 DDB structures (ZX Spectrum, Commodore 64, Amstrad CPC, MSX, Atari ST, Amiga, PC/DOS, PCW, Plus/4), condact streams, and embedded databases.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Ruta absoluta al fichero o imagen de disco a analizar" },
+                    "action": { "type": "string", "enum": ["scan", "embedded"], "default": "scan" }
+                },
+                "required": ["path"]
+            }
+        },
 
         {
             "name": "clipboard",
@@ -538,6 +550,34 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             });
             let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
             json!({ "content": [{ "type": "text", "text": txt }] })
+        }
+        "daad_harvester" => {
+            let path = s("path");
+            let action = s("action");
+            if path.is_empty() {
+                json!({ "content": [{ "type": "text", "text": "{\"ok\":false,\"error\":\"missing_path\"}" }], "isError": true })
+            } else {
+                match std::fs::read(&path) {
+                    Ok(data) => {
+                        let res = if action == "embedded" {
+                            if let Some((offset, size, analysis)) = crate::daad::DAADBytecodeParser::find_embedded_ddb(&data) {
+                                json!({ "ok": true, "embedded": true, "offset": offset, "size": size, "analysis": analysis })
+                            } else {
+                                json!({ "ok": true, "embedded": false, "message": "no embedded DDB found" })
+                            }
+                        } else {
+                            let analysis = crate::daad::DAADBytecodeParser::parse_ddb(&data, &path);
+                            json!({ "ok": true, "analysis": analysis })
+                        };
+                        let txt = serde_json::to_string_pretty(&res).unwrap_or_default();
+                        json!({ "content": [{ "type": "text", "text": txt }] })
+                    }
+                    Err(e) => {
+                        let txt = serde_json::to_string_pretty(&json!({ "ok": false, "error": e.to_string() })).unwrap_or_default();
+                        json!({ "content": [{ "type": "text", "text": txt }], "isError": true })
+                    }
+                }
+            }
         }
         "clipboard" => {
             let dir = crate::cockpit_server::state_dir();

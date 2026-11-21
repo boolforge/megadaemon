@@ -137,6 +137,17 @@ pub fn identify(data: &[u8]) -> Vec<FormatMatch> {
             evidence: hex(m.bytes),
         });
     }
+    let daad_res = crate::daad::DAADBytecodeParser::parse_ddb(data, "");
+    if daad_res.is_daad {
+        out.push(FormatMatch {
+            name: "DAAD DDB",
+            kind: "game/adventure",
+            mime: "application/x-daad-ddb",
+            offset: daad_res.payload_offset,
+            confidence: 100,
+            evidence: format!("{}: platform={}, lang={}", daad_res.ddb_format.unwrap_or_default(), daad_res.platform, daad_res.language),
+        });
+    }
     out.sort_by(|a, b| b.confidence.cmp(&a.confidence));
     out
 }

@@ -42,6 +42,7 @@ pub mod cockpit_server;
 pub mod coordination;
 pub mod crypto_scan;
 pub mod csc_verify;
+pub mod daad;
 pub mod delegate;
 pub mod deobfuscate;
 pub mod device_inventory;
