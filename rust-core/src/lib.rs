@@ -33,6 +33,7 @@ pub mod bindiff;
 pub mod binwalk_die;
 pub mod bookmarks;
 pub mod capability;
+pub mod cert_vault;
 pub mod channel;
 pub mod clipboard;
 pub mod recordings;
