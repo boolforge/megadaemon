@@ -123,7 +123,7 @@ Drive** (`PENDIENTE DE CREDENCIAL`).
 * `compression_level_app_data`, `s3_chunk_size`, `nextcloud_chunk_size`,
   `multithreads_downloads`: **S3 y Nextcloud** además de Google Drive.
 * `messages_backup_mms`, `KEY_DEF_SMS_PACKAGE`: copia de SMS/MMS.
-* `apps_multiple_backups_strategy`:策略 de varias copias por app.
+* `apps_multiple_backups_strategy`: politica de varias copias por app.
 * `battery_opt`, `schedule_last_run_msg_…`: optimizations de batería.
 
 ⇒ Swift Backup **no** es sólo un copiador de ficheros: es un gestor de
@@ -229,34 +229,158 @@ Swift Backup hace, y (b) hace más cosas.
 
 ---
 
-## 5. Cómo traer los ficheros (PENDIENTE: el móvil está caído)
+## 5. Cómo traer los ficheros
+
+### 5.1 Desde Drive (YA FUNCIONA, sin token)
+
+La carpeta es **pública** y se puede consultar con una API key:
+
+```sh
+tools/drive_ls.py                       # listado completo (64k ficheros)
+tools/drive_ls.py --get 6               # baja los 6 más pequeños
+tools/drive_ls.py --ext dat --get 3     # los 3 .dat más pequeños
+```
+
+Para leer la **cabecera** de un fichero de 2 GB sin bajarlo:
+
+```sh
+curl -sSL -H "Range: bytes=0-143" "https://drive.usercontent.google.com/download?id=<ID>&export=download&confirm=t&uuid=<UUID>"
+```
+
+### 5.2 Desde el móvil (para el APK y el DB de la app)
 
 El móvil se quedó sin daemon el 2026-11-21 (ver `docs/RESILIENCE.md` y el
 commit `19b12a6`). Cuando vuelva:
 
 ```sh
-# 1. El APK (para el RE)
-python3 tools/swift_extract.sh apk
-
-# 2. Las piezas de la copia de seguridad
-python3 tools/swift_extract.sh backups
-
-# 3. El DB de la app (índices y preferencias)
-python3 tools/swift_extract.sh db
+python3 tools/swift_extract.sh apk       # el APK (para el RE)
+python3 tools/swift_extract.sh backups   # las piezas de la copia local
+python3 tools/swift_extract.sh db        # la DB de la app (índices y preferencias)
+python3 tools/swift_extract.sh drive     # busca el token OAuth de Drive
 ```
 
-El script usa el MCP del móvil (`root_exec` + `fs_read`), que ya funciona por
-el túnel o por la LAN.
-
-### Alternativa: Drive
-
-La carpeta `1L-XKLJKy68Jmjf0K8uIRXOklL4gUIdO1` de `jfcarrb@gmail.com`
-contiene las copias de la nube. Con un token OAuth de Drive (el que falta)
-se puede bajar por la API sin tocar el móvil.
+El script usa el MCP del móvil (`root_exec` + `fs_read`), que funciona por el
+túnel o por la LAN.
 
 ---
 
-## 6. Lo que NO se sabe (y no se inventa)
+
+---
+
+## 6. LA NUBE: 64.143 ficheros, 1,04 TB (medido el 2026-11-21 a las 13:0x)
+
+La carpeta de Drive es **pública** ("cualquier persona con el enlace puede
+ver", confirmado por la captura de "Acceso general").  No hace falta OAuth:
+basta una API key para el listado y `drive.google.com/uc?export=download&id=`
+para la descarga (con el interstitial de "virus scan" resuelto extrayendo el
+`confirm`/`uuid`).
+
+```sh
+tools/drive_ls.py              # listado completo -> _listado_completo.json
+tools/drive_ls.py --get 6      # baja los 6 más pequeños
+```
+
+### 7.1 Composición de la carpeta
+
+| Tipo | Nº | Qué es |
+|---|---:|---|
+| `.app` | 18.918 | **el APK** de cada app |
+| `.dat` | 18.695 | **los datos** de cada app (el backup) |
+| `.extra` | 17.668 | la pieza `v1:::` del MTP |
+| `.splits` | 5.742 | los APK de configuración (splits) |
+| `.extdat` | 2.622 | datos externos |
+| `.msg` | 227 | **SMS** (7-Zip) |
+| `.cls` | 218 | **llamadas** (7-Zip) |
+| `.wal`/`.png` | 5 | fondos de pantalla |
+| `.med`/`.libs`/`.exp` | 47 | varios |
+
+**Total: 64.143 ficheros · 1.042.152.811.827 bytes (1,04 TB).**
+
+El patrón de nombre es:
+`<paquete>.<tipo> (SM-G998B) (id-<AAAAMMDD-HHMMSS-XX>)`
+⇒ el `id` es la fecha/hora de la copia (hora de España).
+
+### 7.2 Los `.dat`: DOS formatos, con frontera medida
+
+| Tamaño | Formato | Contenido |
+|---|---|---|
+| **≤ 329 B** | **ZIP (deflate)** con dentro `<pkg>.tar` | apps **sin datos** (stub: el TAR sólo contiene el directorio del paquete) |
+| **≥ 944 B** | **`SBA1`** (cifrado) | todo lo demás |
+
+Muestra medida (28 ficheros, cabecera leída con `Range`):
+
+```
+      292  ZIP+tar  com.atr.tedit.dat
+      307  ZIP+tar  com.facebook.mlite.dat
+      329  ZIP+tar  com.mixplorer.addon.codecs.dat
+      944  SBA1     com.letsappbuilder.dat
+      958  SBA1     com.edifier.s1000a.dat
+    9.699  SBA1     es.inmovens.badi.dat
+   71.359.533  SBA1  com.discord.dat
+1.083.860.674  SBA1  com.termux.dat
+2.351.786.591  SBA1  io.github.forkmaintainers.iceraven.dat
+```
+
+⇒ **Para restaurar datos de verdad hace falta la passphrase**; los ZIP+tar
+son stubs de apps sin contenido.
+
+### 7.3 La cabecera `SBA1` REAL (144 B) — cerrada
+
+Descargada con `Range` (HTTP 206) del primer bloque de un `.dat` de 2,35 GB.
+**Vector congelado en `rust-core/tests/swift_sba1_real.rs` (5 tests).**
+
+```text
+@  0   4   magic "SBA1"
+@  4   2   formato              = 2
+@  6   2   headerSize           = 144          (96 en el formato corto)
+@  8   4   compression          = 3
+@ 12   8   createdAtEpochMs     = 1795152489000  (2026-11-20T05:28:09Z)
+@ 20   2   flags                = 1
+@ 22   2   flags2               = 1
+@ 24   2   campo3               = 4
+@ 26   2   campo4               = 1
+@ 28   2   campo5               = 3
+@ 30   2   lenBloque1           = 16   ┐
+@ 32   2   lenBloque2           = 16   ├ longitudes (u16 BE)
+@ 34   2   lenBloque3           = 16   ┘
+@ 36  16   bloque1  = SALT
+@ 52  16   bloque2  = NONCE2
+@ 68  16   bloque3  = KEY-CHECK
+@ 84   2   flags3               = 0
+@ 86   2   flags4               = 0
+@ 88   4   chunkSize            = 1048576      (1 MiB)   <-- MEDIDO HOY
+@ 92   4   argon2MemoryKib      = 16384        (16 MiB) <-- MEDIDO HOY
+@ 96   2   campo14              = 1
+@ 98   2   campo15              = 1
+@100   2   keyLength            = 32
+@102   2   campo17              = 1
+@104  32   payloadHmac                       (32 B no nulos)  <-- MEDIDO HOY
+@136   8   reservado            = 0 (ocho ceros)
+```
+
+Esto **confirma** lo medido antes en el DEX (magic, 144 B para formato 2,
+big-endian, key-check de 16 B, HMAC de payload de 32 B, memoria Argon2id en
+el rango 16384..65536 KiB, clave de 32 B) y **añade** los valores que faltaban:
+el tamaño del trozo (**1 MiB**, no 64 KiB), la memoria exacta del KDF
+(**16384 KiB**) y la longitud de clave (**32**).
+
+El `createdAtEpochMs` **coincide con el `id` del nombre del fichero**
+(`20261120-062807` en hora de España = `05:28:09Z`): es el mismo reloj, no
+una aproximación.
+
+### 7.4 Lo que queda: la passphrase
+
+El key-check es `SHA-256("SBA1-<cipher>-key-check-v1" ‖ salt ‖ nonce2 ‖
+clave)[:16]`.  Con la passphrase del usuario se puede:
+
+1. derivar la clave (Argon2id, 16384 KiB) y **verificar el key-check**;
+2. comprobar el HMAC del payload;
+3. descifrar por trozos de 1 MiB y **cerrar el round-trip** con el primer
+`.dat` real (el de 944 B: `com.letsappbuilder.dat`, que cabe entero).
+
+Sin ella, el formato queda medido pero no verificado criptográficamente.
+
+## 7. Lo que NO se sabe (y no se inventa)
 
 | Punto | Por qué |
 |---|---|

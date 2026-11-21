@@ -121,20 +121,28 @@ pub struct Cabecera {
     pub campo10: u16,
     /// `campo11` (offset 86, u16 BE).
     pub campo11: u16,
-    /// `campo12` (offset 88, u32 BE).
-    pub campo12: u32,
-    /// `campo13` (offset 92, u32 BE) — sólo en la variante extendida.
-    pub campo13: u32,
+    /// Tamaño del TROZO del AEAD (offset 88, u32 BE).
+    ///
+    /// MEDIDO el 2026-11-21 en cabeceras reales de Drive: siempre
+    /// **1048576** (1 MiB).
+    pub chunk_size: u32,
+    /// Memoria (KiB) de Argon2id del KDF (offset 92, u32 BE) — sólo en la
+    /// variante extendida.  MEDIDO: **16384**.
+    pub argon2_memory_kib: u32,
     /// `campo14` (offset 96, u16 BE) — sólo extendida.
     pub campo14: u16,
     /// `campo15` (offset 98, u16 BE) — sólo extendida.
     pub campo15: u16,
-    /// `campo16` (offset 100, u16 BE) — sólo extendida.
-    pub campo16: u16,
+    /// Longitud de la clave derivada en bytes (offset 100, u16 BE) — sólo
+    /// extendida.  MEDIDO: **32**.
+    pub key_length: u16,
     /// `campo17` (offset 102, u16 BE) — sólo extendida.
     pub campo17: u16,
-    /// `reservado32` (offset 104, 32 B) — sólo extendida.
-    pub reservado32: Vec<u8>,
+    /// HMAC del payload (offset 104, 32 B) — sólo extendida.
+    ///
+    /// MEDIDO: 32 bytes NO nulos ⇒ es
+    /// `SHA-256("SBA1-payload-hmac-key-v1" || salt || nonce2 || clave)`.
+    pub payload_hmac: Vec<u8>,
     /// `reservado8` (offset 136, 8 B) — sólo extendida.
     pub reservado8: Vec<u8>,
     /// `reservado4` (offset 92, 4 B) — sólo en la variante corta.
@@ -200,11 +208,11 @@ impl Cabecera {
             ("lenBloque3", self.len_bloque3 as u64),
             ("campo10", self.campo10 as u64),
             ("campo11", self.campo11 as u64),
-            ("campo12", self.campo12 as u64),
-            ("campo13", self.campo13 as u64),
+            ("chunkSize", self.chunk_size as u64),
+            ("argon2MemoryKib", self.argon2_memory_kib as u64),
             ("campo14", self.campo14 as u64),
             ("campo15", self.campo15 as u64),
-            ("campo16", self.campo16 as u64),
+            ("keyLength", self.key_length as u64),
             ("campo17", self.campo17 as u64),
         ];
         for f in &layout.fields {
@@ -279,11 +287,11 @@ impl Cabecera {
                 "lenBloque3" => cab.len_bloque3 = v as u16,
                 "campo10" => cab.campo10 = v as u16,
                 "campo11" => cab.campo11 = v as u16,
-                "campo12" => cab.campo12 = v as u32,
-                "campo13" => cab.campo13 = v as u32,
+                "chunkSize" | "campo12" => cab.chunk_size = v as u32,
+                "argon2MemoryKib" | "campo13" => cab.argon2_memory_kib = v as u32,
                 "campo14" => cab.campo14 = v as u16,
                 "campo15" => cab.campo15 = v as u16,
-                "campo16" => cab.campo16 = v as u16,
+                "keyLength" | "campo16" => cab.key_length = v as u16,
                 "campo17" => cab.campo17 = v as u16,
                 _ => {}
             }
@@ -569,7 +577,7 @@ mod tests {
             bloque3: vec![0xEF; 16],
             campo10: 7,
             campo11: 8,
-            campo12: 9,
+            chunk_size: 9,
             ..Default::default()
         }
     }
@@ -604,7 +612,7 @@ mod tests {
         assert_eq!(leida.bloque1, cab.bloque1);
         assert_eq!(leida.bloque2, cab.bloque2);
         assert_eq!(leida.bloque3, cab.bloque3);
-        assert_eq!(leida.campo12, cab.campo12);
+        assert_eq!(leida.chunk_size, cab.chunk_size);
     }
 
     #[test]
