@@ -51,15 +51,27 @@ pub const PASTE_URL: &str = "https://paste.rs";
 /// Respaldo: si paste.rs no responde, se prueba éste.
 pub const PASTE_URL_ALT: &str = "https://paste.c-net.org/";
 
-/// **URL canónica y estable** del estado del canal: el fichero del **repo**.
+/// **URL canónica y estable** del estado del canal: el **endpoint del daemon**
+/// (`GET /channel.json`, público y con payload mínimo) servido por el **relay
+/// del PC**.
 ///
-/// ⚠️ Por qué hace falta: el paste **rota** en cada publicación ⇒ una cadena
-/// de pastes sólo se puede seguir **hacia atrás** (`prev_paste`), así que el
-/// sandbox que conoce un paste **no puede descubrir el siguiente**. El *raw*
-/// del repo **siempre sirve la última versión** ⇒ el sandbox la puede pollar
-/// y.descubrir el cambio de URL sin que nadie le copie nada a mano.
-pub const CANONICAL_URL: &str =
-    "https://raw.githubusercontent.com/boolforge/megadaemon/main/state/channel.json";
+/// ⚠️ Por qué no el paste: cada publicación crea un paste **nuevo** ⇒ el
+/// sandbox que conoce el paste P1 **no puede descubrir P2** (la cadena
+/// `prev_paste` sólo se sigue hacia atrás). Y por qué no el `raw` del repo:
+/// **cachea en CDN** ⇒ puede servir la versión vieja. El relay no cachea y
+/// su URL no rota ⇒ es el único que sirve de verdad "lo último".
+///
+/// Se puede sobrescribir con `MEGADAEMON_CANONICAL_URL` (p. ej. si el
+/// dominio del relay cambia).
+pub const CANONICAL_URL: &str = "https://mdtmfnc-s21.duckdns.org/channel.json";
+
+/// URL canónica efectiva: la del entorno si la hay, si no la de por defecto.
+pub fn canonical_efectiva() -> String {
+    match std::env::var("MEGADAEMON_CANONICAL_URL") {
+        Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+        _ => CANONICAL_URL.to_string(),
+    }
+}
 
 /// Publica un fichero en el repo con la **Contents API** de GitHub ⇒ la URL
 /// `raw` de ese fichero es estable y siempre sirve la última versión.
@@ -267,6 +279,16 @@ fn paste_en(url: &str, text: &str) -> Option<String> {
 /// · `401/403` ⇒ **el daemon respondió** ⇒ el túnel está **VIVO**: es la
 ///   credencial, **no** la red ⇒ **no se toca el túnel**.
 pub fn probe_url(url: &str) -> (u16, bool) {
+    let (code, es_daemon, _detalle) = probe_url_detalle(url);
+    (code, es_daemon)
+}
+
+/// Como `probe_url`, pero además devuelve el **detalle** del 403 (`reason`,
+/// `sent_key_fp`, `key_path`) que el daemon ya expone (`forbidden_body`).
+///
+/// ⇒ El watchdog puede distinguir "no hay ninguna key configurada" de "la
+/// credencial no coincide" **sin abrir el móvil** y **sin parsear el hint**.
+pub fn probe_url_detalle(url: &str) -> (u16, bool, Value) {
     let cfg = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(12)))
         .timeout_connect(Some(Duration::from_secs(5)))
@@ -283,7 +305,8 @@ pub fn probe_url(url: &str) -> (u16, bool) {
             let code = resp.status().as_u16();
             let cuerpo = resp.into_body().read_to_string().unwrap_or_default();
             let es_daemon = cuerpo.contains("\"error\"") || cuerpo.contains("\"jsonrpc\"");
-            (code, es_daemon)
+            let detalle: Value = serde_json::from_str(&cuerpo).unwrap_or(Value::Null);
+            (code, es_daemon, detalle)
         }
         Err(e) => {
             // `ureq::Error::StatusCode(u16)`: la variante YA es el codigo.
@@ -291,7 +314,7 @@ pub fn probe_url(url: &str) -> (u16, bool) {
                 ureq::Error::StatusCode(c) => c,
                 _ => 0,
             };
-            (code, false)
+            (code, false, Value::Null)
         }
     }
 }
@@ -312,7 +335,7 @@ pub fn public_payload(estado: &Value) -> Value {
     json!({
         "quick": estado.get("quick").cloned().unwrap_or(Value::Null),
         "duckdns": estado.get("duckdns").cloned().unwrap_or(Value::Null),
-        "canonical": CANONICAL_URL,
+        "canonical": canonical_efectiva(),
         "ts": now_iso(),
     })
 }
@@ -363,7 +386,7 @@ pub fn publish(
     //    el channel.json local, que es privado).
     if let Some(o) = estado.as_object_mut() {
         o.insert("prev_paste".to_string(), json!(paste_previo));
-        o.insert("canonical".to_string(), json!(CANONICAL_URL));
+        o.insert("canonical".to_string(), json!(canonical_efectiva()));
         o.insert("ts".to_string(), json!(now_iso()));
     }
     let mut publico = public_payload(&estado);

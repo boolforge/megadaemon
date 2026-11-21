@@ -37,9 +37,13 @@
 #
 # QUÉ HACE
 #   1. Comprueba que el móvil responde (http://IP:PUERTO/health).
-#   2. Escribe la configuración del proxy (Caddyfile o nginx).
-#   3. Arranca/recarga el proxy.
-#   4. Verifica el canal a través del dominio y DICE QUÉ ABRIR.
+#   2. **Publica el A record de DuckDNS** (con el token): sin él el dominio
+#      no resuelve y el canónico no existe.  (El módulo DNS de Caddy sólo
+#      gestiona el TXT del desafío ACME, no el A record.)
+#   3. Escribe la configuración del proxy (Caddyfile o nginx), incluida la
+#      ruta /channel.json (el canónico que lee el sandbox).
+#   4. Arranca/recarga el proxy.
+#   5. Verifica el canal a través del dominio y DICE QUÉ ABRIR.
 #
 # NO toca el móvil: el relay es del PC y el móvil no necesita cambiar nada.
 # =============================================================================
@@ -77,6 +81,30 @@ if [ "$CODE" != "200" ]; then
 else
     say "móvil OK en http://$PHONE_IP:$PHONE_PORT/health"
 fi
+
+# ── 1b. A record de DuckDNS ────────────────────────────────────────────────
+# ⚠️ El módulo DNS de Caddy (duckdns) sólo gestiona el **TXT** del desafío
+# ACME: el **A record** lo tiene que crear alguien. Sin él, el dominio NO
+# resuelve ⇒ el "canónico" no existe ⇒ nada llega al sandbox. Por eso el
+# relay publica el A record él mismo (con el token de DuckDNS).
+publicar_ddns() {
+    if [ -z "$DUCKDNS_TOKEN" ]; then
+        warn "sin token de DuckDNS (DUCKDNS_TOKEN o $TOKEN_FILE): el dominio NO resolverá"
+        return 1
+    fi
+    ip=$(curl -s -m 10 https://api.ipify.org 2>/dev/null | tr -d '\r\n ')
+    if [ -z "$ip" ]; then
+        warn "no se pudo descubrir la IP pública (api.ipify.org no responde)"
+        return 1
+    fi
+    say "A record de $DOMAIN -> $ip"
+    resp=$(curl -s -m 20 "https://www.duckdns.org/update?domains=$DOMAIN&token=$DUCKDNS_TOKEN&ip=$ip" 2>/dev/null | tr -d '\r\n ')
+    case "$resp" in
+        OK|ip\ updated|"ip%20updated") say "DuckDNS: OK (registro actualizado)" ;;
+        "") warn "DuckDNS no respondió" ;;
+        *) warn "DuckDNS respondió: $resp" ;;
+    esac
+}
 
 # ── 2. configuración ───────────────────────────────────────────────────────
 escribir_caddy() {
@@ -169,15 +197,20 @@ verificar() {
 
 case "$MODE" in
     --instalar|--install)
+        # 1) el A record primero: sin él el dominio no existe
+        publicar_ddns
+        # 2) el proxy
         if command -v caddy >/dev/null 2>&1; then escribir_caddy
         else escribir_nginx; fi
         arrancar
+        # 3) verificar
         verificar
         ;;
     --diagnostico|--diag|"")
         CODE=$(health "$PHONE_IP" "$PHONE_PORT")
         say "movil: http://$PHONE_IP:$PHONE_PORT/health -> $CODE"
         say "dominio: $DOMAIN -> $(dig +short "$DOMAIN" 2>/dev/null | tail -1)"
+        say "A record: $(curl -s -m 10 https://api.ipify.org 2>/dev/null | tr -d '\r\n ') (el que deberia apuntar $DOMAIN)"
         say "caddy: $(command -v caddy || echo 'no instalado') | nginx: $(command -v nginx || echo 'no instalado')"
         say "token DuckDNS: $([ -n "$DUCKDNS_TOKEN" ] && echo 'disponible' || echo 'FALTA')"
         ;;
