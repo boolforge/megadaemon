@@ -672,6 +672,44 @@ impl ServiceBus {
         }
     }
 
+    /// Anuncia las cuentas de delegación al bus **sin credenciales**.
+    ///
+    /// Cada cuenta se publica como un servicio de tipo `model`.  La salud es
+    /// la **real** (la última llamada medida): si la cuenta nunca se llamó,
+    /// `available=false` con motivo "sin comprobar" (no se inventa que esté
+    /// sana).  De la credencial sólo sale el modo y la ruta del fichero.
+    pub fn announce_delegate(&mut self, engine: &crate::delegate::DelegateEngine) -> usize {
+        let mut n = 0usize;
+        for st in engine.account_statuses() {
+            let mut e = ServiceEntry::new(&format!("delegate-{}", st.id), ServiceKind::Model);
+            e.label = format!("{} · {}", st.model, st.provider);
+            e.auth_kind = st.auth_kind.clone();
+            e.auth_ref = st.auth_ref.clone();
+            e.auth_ready = st.auth_ready;
+            e.health = Health {
+                available: st.available,
+                checked_at: st.checked_at_epoch.map(crate::delegate::iso_from_epoch),
+                reason: st.reason.clone(),
+                detail: st.detail.clone(),
+            };
+            e.latency_ms = st.latency_ms;
+            e.cost_estimate = CostEstimate {
+                usd_per_1k_input: st.usd_per_1k_input,
+                usd_per_1k_output: st.usd_per_1k_output,
+                usd_per_call: 0.0,
+                free: st.free,
+            };
+            e.capabilities = st.capabilities.clone();
+            e.enabled = st.enabled;
+            e.model = st.model.clone();
+            e.tier = st.tier.clone();
+            e.notes = st.notes.clone();
+            self.upsert(e);
+            n += 1;
+        }
+        n
+    }
+
     /// Quita una entrada; devuelve si estaba.
     pub fn remove(&mut self, id: &str) -> bool {
         let n = self.entries.len();
@@ -1651,30 +1689,16 @@ pub fn now_epoch() -> u64 {
         .unwrap_or(0)
 }
 
-/// Hora actual en ISO-8601 UTC (algoritmo de Hinnant: días → fecha civil).
+/// Fecha ISO-8601 (UTC) de un epoch en segundos (algoritmo de Hinnant).
+///
+/// La conversión vive en `crate::delegate` (que la necesita para los intentos
+/// y la salud) y aquí sólo se delega: una sola implementación.
+pub fn iso_from_epoch(secs: u64) -> String {
+    crate::delegate::iso_from_epoch(secs)
+}
+
 pub fn now_iso() -> String {
-    let secs = now_epoch() as i64;
-    let days = secs.div_euclid(86_400);
-    let rem = secs.rem_euclid(86_400);
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        y,
-        m,
-        d,
-        rem / 3600,
-        (rem % 3600) / 60,
-        rem % 60
-    )
+    iso_from_epoch(now_epoch())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
