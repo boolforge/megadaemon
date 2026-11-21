@@ -1100,6 +1100,7 @@ dependencies = [
  "flate2",
  "libc",
  "memmap2",
+ "ring",
  "rsa",
  "rusqlite",
  "russh",
