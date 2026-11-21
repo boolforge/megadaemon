@@ -23,7 +23,7 @@ Uso:
     tools/channel_discover.py                       # canónico + respaldo
     tools/channel_discover.py --canonical https://raw.githubusercontent.com/.../channel.json
     tools/channel_discover.py --paste https://paste.rs/abcd
-    tools/channel_discover.py --duckdns mdtmfnc-s21.duckdns.org
+    tools/channel_discover.py --duckdns mdtmfnc.duckdns.org
 
 Imprime el estado del canal en JSON. NO contiene secretos: la key del MCP va
 en ficheros 0600 aparte.
@@ -42,7 +42,7 @@ TIMEOUT = 20
 UA = "MegaDaemon-channel-discover"
 # CANÓNICO: el endpoint del daemon (PÚBLICO, payload mínimo) servido por el
 # relay del PC => URL estable, sin PAT en el móvil y sin caché de CDN.
-CANONICAL_DEF = "https://mdtmfnc-s21.duckdns.org/channel.json"
+CANONICAL_DEF = "https://mdtmfnc.duckdns.org/channel.json"
 # Respaldo canónico: el fichero en el repo (vía Contents API, que no cachea).
 REPO_DEF = ("https://raw.githubusercontent.com/boolforge/megadaemon/"
             "main/state/channel.json")
@@ -169,7 +169,7 @@ def main():
     ap.add_argument("--canonical", default=CANONICAL_DEF,
                     help="URL estable del estado (raw del repo)")
     ap.add_argument("--paste", help="URL de un paste conocido (respaldo)")
-    ap.add_argument("--duckdns", help="dominio estable (p.ej. mdtmfnc-s21.duckdns.org)")
+    ap.add_argument("--duckdns", help="dominio estable (p.ej. mdtmfnc.duckdns.org)")
     ap.add_argument("--state", default="~/.mavis/channel.json",
                     help="fichero local donde se guarda el último estado")
     ap.add_argument("--no-guardar", action="store_true")

@@ -9,7 +9,7 @@
 #
 #       DuckDNS ──► router (443) ──► PC (este relay) ──► móvil (LAN:3000)
 #
-#   Así el dominio `mdtmfnc-s21.duckdns.org` es **estable** y con TLS
+#   Así el dominio `mdtmfnc.duckdns.org` es **estable** y con TLS
 #   válido (Let's Encrypt por DNS-01, que es lo que permite DuckDNS), sin
 #   depender de que el quick tunnel esté vivo.
 #
@@ -25,7 +25,7 @@
 #   Variables de entorno:
 #     MEGADAEMON_PHONE_IP   (por defecto 192.168.1.124)
 #     MEGADAEMON_PHONE_PORT (por defecto 3000)
-#     MEGADAEMON_DOMAIN     (por defecto mdtmfnc-s21.duckdns.org)
+#     MEGADAEMON_DOMAIN     (por defecto mdtmfnc.duckdns.org)
 #     DUCKDNS_TOKEN         (token de DuckDNS; se lee de ~/.mavis/duckdns.token
 #                            si no está en el entorno)
 #
@@ -51,7 +51,10 @@ set -uo pipefail
 
 PHONE_IP="${MEGADAEMON_PHONE_IP:-192.168.1.124}"
 PHONE_PORT="${MEGADAEMON_PHONE_PORT:-3000}"
-DOMAIN="${MEGADAEMON_DOMAIN:-mdtmfnc-s21.duckdns.org}"
+# ⚠️ El subdominio TIENE QUE ESTAR REGISTRADO en la cuenta de DuckDNS:
+# la API responde "OK" aunque no cree nada (medido: -s21 daba NXDOMAIN
+# mientras la API decia OK). Por eso, tras publicar, se VERIFICA el DNS.
+DOMAIN="${MEGADAEMON_DOMAIN:-mdtmfnc.duckdns.org}"
 LISTEN_PORT="${LISTEN_PORT:-443}"
 CADDY_DIR="${CADDY_DIR:-/etc/caddy}"
 CADDYFILE="$CADDY_DIR/Caddyfile"
@@ -100,10 +103,25 @@ publicar_ddns() {
     say "A record de $DOMAIN -> $ip"
     resp=$(curl -s -m 20 "https://www.duckdns.org/update?domains=$DOMAIN&token=$DUCKDNS_TOKEN&ip=$ip" 2>/dev/null | tr -d '\r\n ')
     case "$resp" in
-        OK|ip\ updated|"ip%20updated") say "DuckDNS: OK (registro actualizado)" ;;
+        OK|ip\ updated|"ip%20updated") say "DuckDNS: OK" ;;
         "") warn "DuckDNS no respondió" ;;
         *) warn "DuckDNS respondió: $resp" ;;
     esac
+    # ⚠️ "OK" NO prueba que el dominio exista: DuckDNS sólo crea los
+    # subdominios registrados en la cuenta. Se verifica el DNS de verdad.
+    sleep 2
+    actual=$(getent hosts "$DOMAIN" 2>/dev/null | awk '{print $1}' | head -1)
+    if [ -z "$actual" ]; then
+        warn "$DOMAIN NO RESUELVE ⇒ el subdominio no está registrado en la cuenta de DuckDNS"
+        warn "  (DuckDNS responde OK aunque no cree nada) ⇒ créalo en la UI de DuckDNS (10 s)"
+        return 1
+    fi
+    if [ "$actual" != "$ip" ]; then
+        warn "$DOMAIN -> $actual (la IP pública de este PC es $ip): la propagación puede tardar"
+    else
+        say "$DOMAIN -> $actual ✔ (A record correcto)"
+    fi
+    return 0
 }
 
 # ── 2. configuración ───────────────────────────────────────────────────────

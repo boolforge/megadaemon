@@ -63,7 +63,13 @@ pub const PASTE_URL_ALT: &str = "https://paste.c-net.org/";
 ///
 /// Se puede sobrescribir con `MEGADAEMON_CANONICAL_URL` (p. ej. si el
 /// dominio del relay cambia).
-pub const CANONICAL_URL: &str = "https://mdtmfnc-s21.duckdns.org/channel.json";
+///
+/// ⚠️ **Un subdominio que no esté registrado en la cuenta NO EXISTE** y la
+/// API de DuckDNS responde **`OK` igualmente** (no crea nada) ⇒ un "OK" no
+/// prueba que el dominio resuelva ⇒ hay que **verificar el DNS** después de
+/// publicar (lo hace `deploy/relay-pc.sh`). Por eso usamos el subdominio que
+/// **sí** está registrado en la cuenta.
+pub const CANONICAL_URL: &str = "https://mdtmfnc.duckdns.org/channel.json";
 
 /// URL canónica efectiva: la del entorno si la hay, si no la de por defecto.
 pub fn canonical_efectiva() -> String {
