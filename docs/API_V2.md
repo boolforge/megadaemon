@@ -714,6 +714,21 @@ Cuerpo de `claim`:
 (`status`, `whoami`, `plan`, `act`, `speak`) y devuelve la respuesta **real**
 del runtime dentro de `voice`.
 
+### Política de acciones que **publican datos del móvil fuera**
+
+Regla (aplicada ya por `channel_publish` y por las acciones de esta API):
+
+| Regla | Por qué |
+|---|---|
+| Toda tool/acción que **saque datos del dispositivo fuera** (paste público, webhook, Telegram/SMS, fichero compartido, canal) exige **`confirm=true`** | expone la URL/IP del móvil en un sitio público |
+| La **descripción de la tool lo dice** (el cliente la ve antes de llamar) | que lahey vis a la UI sin tener que abrir el código |
+| La respuesta dice **qué se publica y dónde** | el agente puede pegarlo en el tablón sin filtrar nada más |
+| **Nada de credenciales** en lo publicado | las keys van al fichero 0600, nunca a un paste |
+
+En la UI (v2) esto son las acciones de la card **Administración**: reiniciar
+instancia, instalar APK, shell root, rotar clave y forzar sync — todas con
+`confirm` explícito (el daemon además lo exige ⇒ doble barrera).
+
 ### `POST /api/v2/admin/restart`
 
 Reinicia la instancia.  Exige `{"confirm": true}` (si no, responde
