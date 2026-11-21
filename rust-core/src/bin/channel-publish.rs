@@ -113,7 +113,9 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         };
         let estado = channel::read_channel_json(state_dir.as_deref()).unwrap_or_else(|| json!({}));
-        let texto = serde_json::to_string_pretty(&estado).unwrap_or_default();
+        // Al repo va el payload PUBLICO (sólo URLs): el repo es público.
+        let publico = channel::public_payload(&estado);
+        let texto = serde_json::to_string_pretty(&publico).unwrap_or_default();
         // El `match` produce el código de salida (no puede ser una sentencia
         // whose arms devuelven ExitCode: eso no compila).
         let codigo = match channel::publish_to_repo(owner, name, &path, &token, &texto) {
