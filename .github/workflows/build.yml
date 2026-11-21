@@ -51,27 +51,18 @@ jobs:
       - name: Clippy (advertencias como aviso, no bloquea)
         working-directory: rust-core
         run: cargo clippy --release --all-targets -- -D warnings || echo "::warning::clippy reportó avisos"
-      - name: Tests (entorno limpio)
-        working-directory: rust-core
-        # NO bloquea el pipeline: hay tests rojos de varios dueños (modulos de
-        # otros agentes) y mientras tanto el binario ARM64 de la instancia
-        # maestra no puede dejar de publicarse. Los errores siguen visibles en
-        # el log y como anotacion del run.
+      - name: "Tests: la suite completa (los rojos CONOCIDOS no bloquean; los demás, sí)"
+        # AUDIT-CI-02 (medido el 2026-11-21): antes esto era
+        # `cargo test --all-targets || echo warning`, es decir, `continue-on-error`
+        # => el job salía VERDE con cualquier test roto.  Llevaba tiempo así:
+        # tres tests de `agent_loop` estaban rojos (contradecían a la
+        # implementación) y nadie se enteró.
         #
-        # ENTORNO LIMPIO (obligatorio): una API key o un token exportados en el
-        # runner hacen fallar tests de autenticacion por el ENTORNO, no por el
-        # codigo. Caso real medido: con una key obsoleta exportada,
-        # `api_key::acunar_y_revocar_una_clave_no_toca_la_principal` falla; con
-        # el entorno limpio pasa. Sin este `env -u`, un rojo de entorno se
-        # confunde con un rojo de codigo.
-        #
-        # AUDIT-CI-01: los tests rojos NO bloquean la release (continue-on-error),
-        # pero el GATE de seguridad SI bloquea: protege el dispositivo.
-        continue-on-error: true
-        run: |
-          env -u MEGADAEMON_API_KEY -u MEGADAEMON_TOKEN -u SEERE_AUTH_TOKEN \
-            cargo test --release --all-targets \
-            || echo "::warning::hay tests rojos (no bloquea la release)"
+        # Ahora `tools/ci-suite.sh` ejecuta la suite completa y falla si hay
+        # un binario rojo que NO esté en `tools/ci-known-red.txt`.  Sólo
+        # `audit_adversarial_v15` está en esa lista: son auditorías que
+        # fallan a propósito mientras el defecto que vigilan exista.
+        run: tools/ci-suite.sh rust-core
       - name: "Gate (BLOQUEA): autenticacion y politica del harness"
         working-directory: rust-core
         # Este gate SI bloquea el job `quality`: protege el dispositivo.

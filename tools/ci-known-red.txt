@@ -1,0 +1,12 @@
+# Tests con rojo INTENCIONAL: no bloquean el CI.
+#
+# Son auditorías adversariales: fallan MIENTRAS el defecto que vigilan siga
+# existiendo.  Cuando el defecto se corrija, hay que BORRAR la línea de aquí
+# (y el test seguirá verde, que es lo que se quiere).
+#
+# Formato: un binario de test por línea.  Todo lo que NO esté en esta lista
+# y falle, hace fallar el job.
+
+# Auditoría adversarial v15: 3 auditorías vivas sobre la exención local y el
+# token root, y una sobre la colisión del conversor de señal.
+audit_adversarial_v15
