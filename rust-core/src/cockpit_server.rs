@@ -23,8 +23,6 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const MEGADAEMON_DIR: &str = "/data/user/0/com.agy/files/megadaemon";
-const RE_DIR: &str = "/data/user/0/com.agy/files/megadaemon/re_pipeline";
 const SCUMMVM_TOOLS_DIR: &str = "/data/user/0/com.agy/files/scummvm/tools/re_pipeline";
 const STATE_DIR: &str = "/data/user/0/com.agy/files/megadaemon/state";
 
@@ -43,9 +41,66 @@ pub fn state_dir() -> String {
     }
     STATE_DIR.to_string()
 }
-const UPLOADS_DIR: &str = "/data/user/0/com.agy/files/megadaemon/uploads";
-const EXTRACTED_DIR: &str = "/data/user/0/com.agy/files/megadaemon/extracted";
-const TEMPLATE_PATH: &str = "/data/user/0/com.agy/files/megadaemon/web/cockpit_template.html";
+/// Directorio BASE de la instancia: el **padre** de `state_dir()`.
+///
+/// UNA SOLA FUENTE DE VERDAD (medido 2026-11-21): `uploads`, `extracted`,
+/// `web` y `re_pipeline` tenían rutas FIJAS a
+/// `/data/user/0/com.agy/files/megadaemon/...`, que en el móvil NO existen.
+/// Consecuencia real: la plantilla desplegada por el instalador en
+/// `$PREFIX/web/cockpit_template.html` NUNCA se usaba (el binario caía al
+/// `include_str!` embebido => cualquier arreglo de la UI necesitaba recompilar
+/// el binario para llegar al móvil) y los adjuntos se guardaban en el
+/// directorio privado de la app en vez de en el prefijo del despliegue.
+///
+/// Al derivarlo de `state_dir()`:
+///   * móvil  (`MEGADAEMON_STATE_DIR=/data/local/tmp/megadaemon/state`)
+///     -> `/data/local/tmp/megadaemon/{uploads,extracted,web,re_pipeline}`
+///   * in-app (default del crate)
+///     -> `/data/user/0/com.agy/files/megadaemon/{uploads,extracted,web,re_pipeline}`
+/// En ambos casos es exactamente donde el instalador ya deja los ficheros.
+pub fn base_dir() -> String {
+    base_dir_of(&state_dir())
+}
+
+/// Versión PURA de [`base_dir`] (testeable sin tocar el entorno).
+pub fn base_dir_of(state_dir: &str) -> String {
+    match Path::new(state_dir).parent() {
+        Some(p) => {
+            let t = p.to_string_lossy().to_string();
+            if t.is_empty() || t == "/" {
+                state_dir.to_string()
+            } else {
+                t
+            }
+        }
+        None => state_dir.to_string(),
+    }
+}
+
+/// Directorio de la instancia (lo que se muestra como "workspace").
+pub fn instance_dir() -> String {
+    base_dir()
+}
+
+/// Adjuntos subidos por la UI.
+pub fn uploads_dir() -> String {
+    format!("{}/uploads", base_dir())
+}
+
+/// Adjuntos ya extraídos.
+pub fn extracted_dir() -> String {
+    format!("{}/extracted", base_dir())
+}
+
+/// Salida del pipeline de ingeniería inversa.
+pub fn re_dir() -> String {
+    format!("{}/re_pipeline", base_dir())
+}
+
+/// Plantilla HTML de la UI en disco (si existe; si no, la embebida).
+pub fn template_path() -> String {
+    format!("{}/web/cockpit_template.html", base_dir())
+}
 
 /// ── Autenticación del cockpit (v13.2 · S08) ────────────────────────────────
 /// El cockpit EJECUTA órdenes (root) a través del agente SEERE.  Con
@@ -290,7 +345,10 @@ pub fn resolve_template() -> Option<String> {
     }
     cands.push("web/cockpit_template.html".to_string());
     cands.push("../web/cockpit_template.html".to_string());
-    cands.push(TEMPLATE_PATH.to_string());
+    // La ruta derivada del estado del daemon es la que el instalador
+    // usa ($PREFIX/web) => la plantilla desplegada SÍ se usa.
+    cands.push(template_path());
+    cands.push(format!("{}/web/cockpit_template.html", instance_dir()));
     for c in cands {
         if Path::new(&c).exists() {
             return Some(c);
@@ -437,7 +495,7 @@ fn get_cockpit_state() -> &'static Mutex<GlobalCockpitState> {
 
 fn read_json_file_fallback(filename: &str, default_val: Value) -> Value {
     let p1 = format!("{}/{}", SCUMMVM_TOOLS_DIR, filename);
-    let p2 = format!("{}/{}", RE_DIR, filename);
+    let p2 = format!("{}/{}", re_dir(), filename);
     let p3 = format!("{}/{}", state_dir(), filename);
     for p in &[p1, p2, p3] {
         if let Ok(s) = fs::read_to_string(p) {
@@ -652,9 +710,10 @@ fn send_json(stream: &mut TcpStream, val: &Value) {
 }
 
 fn list_uploaded_files() -> Value {
-    let _ = fs::create_dir_all(UPLOADS_DIR);
+    let up = uploads_dir();
+    let _ = fs::create_dir_all(&up);
     let mut items = Vec::new();
-    if let Ok(rd) = fs::read_dir(UPLOADS_DIR) {
+    if let Ok(rd) = fs::read_dir(&up) {
         for entry in rd.flatten() {
             let p = entry.path();
             if p.is_file() {
@@ -686,7 +745,7 @@ fn list_uploaded_files() -> Value {
             .unwrap_or("")
             .cmp(b["filename"].as_str().unwrap_or(""))
     });
-    json!({ "uploads": items, "count": items.len(), "dir": UPLOADS_DIR })
+    json!({ "uploads": items, "count": items.len(), "dir": up })
 }
 
 /// Contadores del cockpit (Fase 4: /metrics).
@@ -1866,7 +1925,8 @@ fn handle_client(mut stream: TcpStream) {
         }
         "/api/chat_upload" => {
             // 100% UNRESTRICTED file upload: accepts .7z, .exe, .dll, .apk, .dex, .elf, .so, .macho, .md, .py, .rs, .bin, .iso, ANYTHING!
-            let _ = fs::create_dir_all(UPLOADS_DIR);
+            let up = uploads_dir();
+            let _ = fs::create_dir_all(&up);
             let raw_name = body_json["filename"].as_str().unwrap_or("upload.bin");
             let safe_name = Path::new(raw_name)
                 .file_name()
@@ -1875,7 +1935,7 @@ fn handle_client(mut stream: TcpStream) {
                 .replace([' ', '/', '\\'], "_");
             let b64 = body_json["data_b64"].as_str().unwrap_or("");
             let raw_bytes = decode_base64(b64);
-            let out_path = format!("{}/{}", UPLOADS_DIR, safe_name);
+            let out_path = format!("{}/{}", up, safe_name);
             let _ = fs::write(&out_path, &raw_bytes);
 
             let sz = raw_bytes.len();
@@ -1926,7 +1986,7 @@ fn handle_client(mut stream: TcpStream) {
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("carved");
-            let out_dir = format!("{}/{}", EXTRACTED_DIR, stem);
+            let out_dir = format!("{}/{}", extracted_dir(), stem);
             match binwalk_die::extract_archive_or_carve(&file_path, &out_dir) {
                 Ok(v) => send_json(&mut stream, &v),
                 Err(e) => send_json(&mut stream, &json!({"status": "error", "message": e})),
@@ -2204,7 +2264,7 @@ fn handle_client(mut stream: TcpStream) {
                     "status": "executed",
                     "endpoint": path,
                     "engine": "rust-arm64-v13.0",
-                    "workspace": MEGADAEMON_DIR
+                    "workspace": instance_dir()
                 }),
             );
         }
@@ -2415,5 +2475,51 @@ mod channel_json_tests {
         let out = channel_public_payload(&json!({ "quick": null, "ts": 1 }));
         assert!(out.get("quick").is_none());
         assert_eq!(out["ts"], json!(1));
+    }
+}
+
+#[cfg(test)]
+mod rutas_derivadas_tests {
+    use super::*;
+
+    /// MEDIDO 2026-11-21: en el móvil el estado vive en
+    /// /data/local/tmp/megadaemon/state, pero `uploads`, `extracted` y `web`
+    /// tenían rutas fijas a /data/user/0/com.agy/... (que NO existen) =>
+    /// la plantilla desplegada nunca se usaba.
+    #[test]
+    fn las_rutas_cuelgan_del_state_dir() {
+        assert_eq!(
+            base_dir_of("/data/local/tmp/megadaemon/state"),
+            "/data/local/tmp/megadaemon"
+        );
+        assert_eq!(
+            base_dir_of("/data/user/0/com.agy/files/megadaemon/state"),
+            "/data/user/0/com.agy/files/megadaemon"
+        );
+    }
+
+    /// Un state_dir en la raiz no puede dejar un padre degenerado.
+    #[test]
+    fn un_state_dir_en_la_raiz_no_rompe_la_ruta() {
+        assert_eq!(base_dir_of("/state"), "/state");
+        assert_eq!(base_dir_of("/"), "/");
+    }
+
+    /// Con el env del móvil, TODO cuelga del prefijo del despliegue.
+    #[test]
+    fn en_el_movil_todo_cuelga_del_prefijo() {
+        let sd = "/data/local/tmp/megadaemon/state";
+        let b = base_dir_of(sd);
+        assert_eq!(format!("{}/uploads", b), "/data/local/tmp/megadaemon/uploads");
+        assert_eq!(
+            format!("{}/extracted", b),
+            "/data/local/tmp/megadaemon/extracted"
+        );
+        assert_eq!(
+            format!("{}/web/cockpit_template.html", b),
+            "/data/local/tmp/megadaemon/web/cockpit_template.html"
+        );
+        // y NINGUNA ruta fija a /data/user/0/com.agy
+        assert!(!format!("{}/uploads", b).contains("com.agy"));
     }
 }
