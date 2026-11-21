@@ -63,18 +63,26 @@ STATE_REAL_DEFAULT=/data/user/0/com.agy/files/megadaemon/state
 SUP=/data/adb/service.d/99-megadaemon.sh
 REPO_SLUG=boolforge/megadaemon
 API=https://api.github.com/repos/$REPO_SLUG/releases/latest
+BASE_RELEASES_LATEST=https://github.com/$REPO_SLUG/releases/latest
 SECRETS="${MD_SECRETS_DIR:-/workspace/md-secrets}"
 ENVFILE="$SECRETS/instance.env"
 ADB="${ADB:-adb}"
 SERIAL="${MD_SERIAL:-}"
 MODE=diagnostico
 DESTINO=auto          # auto | movil | pc
+# Valor de la feature CSC de grabacion.  El usuario lo elige explicitamente;
+# el valor por defecto es el que deja la grabacion AUTOMATICA (sin aviso).
+# Valor alternativo (con aviso por voz): RecordingAllowedByMenu,disclaimer_latin
+CSC_VALOR="${MD_CSC_VALOR:-RecordingAllowed}"
+CSC_ACTIVO=1
 
 for a in "$@"; do
   case "$a" in
     --diagnostico|--verificar) MODE=diagnostico ;;
     --instalar|--arreglar)     MODE=instalar ;;
     --movil)                   DESTINO=movil ;;
+    --csc-valor=*)             CSC_VALOR="${a#*=}" ;;
+    --sin-csc)                 CSC_ACTIVO=0 ;;
     --pc)                      DESTINO=pc ;;
     --serie=*)                 SERIAL="${a#*=}" ;;
     -h|--help)
@@ -130,6 +138,25 @@ fi
 STATE_REAL="$(root 'echo $MEGADAEMON_STATE_DIR' | tr -d '\r\n')"
 [ -z "$STATE_REAL" ] && STATE_REAL="$STATE_REAL_DEFAULT"
 
+# --- herramientas CSC (decodificador OMC + parcheador) ----------------------
+CODEC_LOCAL=""
+PATCHER_LOCAL=""
+RAW=https://raw.githubusercontent.com/boolforge/megadaemon/main
+descargar_herramientas_csc() {
+  [ -n "$CURL" ] || return 1
+  DESTDIR="$MD_DIR"
+  [ -d "$DESTDIR" ] || DESTDIR="${TMPDIR:-/tmp}"
+  if [ ! -f "$DESTDIR/omc_codec.py" ]; then
+    "$CURL" -fsSL -o "$DESTDIR/omc_codec.py" "$RAW/tools/omc_codec.py" 2>/dev/null || return 1
+  fi
+  if [ ! -f "$DESTDIR/patch_csc_value.py" ]; then
+    "$CURL" -fsSL -o "$DESTDIR/patch_csc_value.py" "$RAW/deploy/patch_csc_value.py" 2>/dev/null || return 1
+  fi
+  CODEC_LOCAL="$DESTDIR/omc_codec.py"
+  PATCHER_LOCAL="$DESTDIR/patch_csc_value.py"
+  return 0
+}
+
 # =============================================================================
 # 0) CONTEXTO
 # =============================================================================
@@ -161,6 +188,13 @@ resolve_release() {
   else
     release_json="$("$CURL" -fsSL -H 'Accept: application/vnd.github+json' "$API" 2>/dev/null)"
     TAG="$(printf '%s' "$release_json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+    if [ -z "$TAG" ]; then
+      # FALLBACK sin API y sin cuota: /releases/latest redirige (302) a
+      # /releases/tag/v<sha>.  Los tags SON `v<sha>`: no existe "latest".
+      LOC="$("$CURL" -sI "$BASE_RELEASES_LATEST" 2>/dev/null | tr -d '\r' | sed -n 's/^[Ll]ocation:[[:space:]]*\(.*\/releases\/tag\/[^[:space:]]*\).*/\1/p' | head -1)"
+      TAG="$(printf '%s' "$LOC" | sed -n 's/.*\/releases\/tag\/\([^/?]*\).*/\1/p')"
+      [ -n "$TAG" ] && say "release resuelta por redireccion (la API no respondio o dio 429): $TAG"
+    fi
   fi
   [ -n "$TAG" ] || return 1
   RELEASE_TAG="$TAG"
@@ -185,16 +219,19 @@ diagnostico() {
   else
     warn "no pude resolver la última release (¿red? ¿API de GitHub?)"
   fi
-  say "--- CSC (legal) ---"
-  CSCV="$(root "settings get secure recording_allowed_value 2>/dev/null; settings get secure csc_default_value 2>/dev/null" | tr -d '\r\n' | head -1)"
-  if [ -z "$CSCV" ]; then
-    say "CSC: valor no legible desde aqui (comprobado por el modulo Magisk, si esta instalado)"
-  elif [ "$CSCV" = "RecordingAllowedByMenu,disclaimer_latin" ]; then
-    say "CSC: RecordingAllowedByMenu,disclaimer_latin  OK (graba sólo con aviso)"
+  say "--- CSC: descubrimiento de features ---"
+  descargar_herramientas_csc
+  if [ -n "$CODEC_LOCAL" ] && [ -n "$PATCHER_LOCAL" ]; then
+    PY3="$(command -v python3 2>/dev/null || echo /data/data/com.termux/files/usr/bin/python3)"
+    if [ -x "$PY3" ]; then
+      "$PY3" "$PATCHER_LOCAL" --listar 2>/dev/null | head -40 | while read -r l; do say "  $l"; done
+    fi
   else
-    warn "CSC: valor '$CSCV'.  Con 'RecordingAllowed' a secas la grabación es AUTOMÁTICA y SILENCIOSA"
-    warn "     (delito art. 197 CP + GDPR en España).  Repáralo con: sh deploy/repatch_csc_disclaimer.sh"
+    warn "no pude traer el decodificador OMC (sin red?)"
   fi
+  CSCV="$(root "settings get secure recording_allowed_value 2>/dev/null" | tr -d '\r\n')"
+  [ -n "$CSCV" ] && say "CSC (settings): $CSCV"
+  say "CSC (modulo Magisk): $(root "test -f /data/adb/modules/megadaemon_csc_recording/cscfeature.xml && echo ACTIVO || echo NO")"
   say "--- canal ---"
   TURL="$(root 'cat /sdcard/megadaemon.url 2>/dev/null; cat /data/local/tmp/megadaemon/tunnel.url 2>/dev/null' | tr -d '\r\n' | grep -o 'https://[a-z0-9.-]*' | tail -1)"
   [ -n "$TURL" ] && say "URL vigente: $TURL (sha16 $(sha16 "$TURL"))" || say "URL vigente: NO ENCONTRADA"
@@ -299,15 +336,26 @@ else
   warn "no encuentro la URL del túnel"
 fi
 
-say "=== 5) CSC (legal) ==="
-CSCV="$(root "settings get secure recording_allowed_value 2>/dev/null" | tr -d '\r\n')"
-if [ -n "$CSCV" ] && [ "$CSCV" != "RecordingAllowedByMenu,disclaimer_latin" ]; then
-  warn "CSC = '$CSCV': grabación de llamadas AUTOMÁTICA y SILENCIOSA (art. 197 CP + GDPR)"
-  warn "reparación: sh deploy/repatch_csc_disclaimer.sh  (no reinicio el móvil por mi cuenta)"
-elif [ -z "$CSCV" ]; then
-  say "CSC: valor no legible desde aquí (si el módulo Magisk está instalado, el valor legal ya lo pone él)"
+say "=== 5) CSC: parche de la feature de grabación ==="
+if [ "$CSC_ACTIVO" = "0" ]; then
+  say "CSC: omitido (--sin-csc)"
+elif descargar_herramientas_csc && [ -n "$PATCHER_LOCAL" ]; then
+  PY3="$(command -v python3 2>/dev/null || echo /data/data/com.termux/files/usr/bin/python3)"
+  if [ -x "$PY3" ]; then
+    say "descubrimiento de features del CSC:"
+    "$PY3" "$PATCHER_LOCAL" --listar 2>&1 | head -40 | while read -r l; do say "  $l"; done
+    say "parcheando CscFeature_VoiceCall_ConfigRecording = $CSC_VALOR"
+    OUT="$("$PY3" "$PATCHER_LOCAL" "$CSC_VALOR" 2>&1)"
+    printf '%s\n' "$OUT" | while read -r l; do say "  $l"; done
+    case "$OUT" in
+      *"modulo actualizado"*) say "CSC parcheado (modulo Magisk).  El bind-mount se aplica al reiniciar." ;;
+      *) warn "el parche CSC no se pudo aplicar (mira el detalle arriba)" ;;
+    esac
+  else
+    warn "no hay python3 en el móvil (pkg install python)"
+  fi
 else
-  say "CSC: RecordingAllowedByMenu,disclaimer_latin OK"
+  warn "no pude traer las herramientas CSC (sin red?)"
 fi
 
 if [ "$DESTINO" = pc ]; then

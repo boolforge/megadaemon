@@ -85,7 +85,7 @@ if [ -z "$FALLANOS" ]; then
         # anotaciones se leen SIN permisos de admin: son la unica forma de
         # diagnosticar un rojo del CI desde fuera).
         echo "::error::la suite fallo (rc=$RC) pero no se pudo identificar el binario"
-        ERR="$(grep -nE '^(error|warning: unused manifest key|note: )' "$LOG" | head -25)"
+        ERR="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" | grep -nE '^(error|warning: unused manifest key|note: )' | head -25)"
         if [ -n "$ERR" ]; then
             echo "::error::errores de cargo (primeros 25):$(printf '\n%s' "$ERR" | head -c 1800)"
             printf '%s\n' "$ERR" | head -25
@@ -95,9 +95,33 @@ if [ -z "$FALLANOS" ]; then
         # Las anotaciones de GitHub son de UNA LINEA: los saltos de linea
         # reales cortan el mensaje.  Se codifican como %0A (MEDIDO el
         # 2026-11-21: sin esto solo se leia la primera linea del log).
-        TAIL="$(tail -60 "$LOG" | head -c 2400 | sed -e 's/%/%25/g' -e 's/\r/%0D/g' -e 's/\n/%0A/g')"
-        echo "::error::final del log ($(wc -l < "$LOG") lineas):$TAIL"
-        tail -40 "$LOG"
+        # MEDIDO el 2026-11-21: el log de cargo trae CODIGOS ANSI (\x1b[1m...)
+        # => `grep '^error'` NO casa nunca con nada (por eso el job daba
+        # "rojo sin binario identificable" sin decir cual era el error).
+        # Y `sed` NO convierte separadores de linea: hay que hacerlo con
+        # awk/printf.  Ademas el error puede no estar al FINAL del log, asi
+        # que se vuelca el log ENTERO en trozos de anotaciones (24 x 2200 B).
+        LIMPIO="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG")"
+        {
+            echo "### Suite: fallo sin binario identificable (rc=$RC)"
+            echo
+            echo '```'
+            printf '%s\n' "$LIMPIO"
+            echo '```'
+        } >> "${GITHUB_STEP_SUMMARY:-/dev/null}" 2>/dev/null || true
+        ANNOT=0
+        OFFSET=0
+        TOTAL="$(wc -c < "$LOG")"
+        while [ "$OFFSET" -lt "$TOTAL" ] && [ "$ANNOT" -lt 24 ]; do
+            CHUNK="$(printf '%s' "$LIMPIO" | dd bs=1 skip="$OFFSET" count=2200 2>/dev/null \
+                     | awk '{printf "%s%%0A", $0}')"
+            [ -n "$CHUNK" ] || break
+            echo "::error::log($OFFSET/$TOTAL):$CHUNK"
+            OFFSET=$((OFFSET + 2200))
+            ANNOT=$((ANNOT + 1))
+        done
+        echo "::error::fin del log. lineas=$(wc -l < "$LOG") bytes=$TOTAL"
+        printf '%s\n' "$LIMPIO" | tail -40
         exit 1
     fi
     echo "::notice::suite completa VERDE"

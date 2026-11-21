@@ -26,6 +26,11 @@ fn cuenta(id: &str, tier: &str, model: &str, caps: &[&str], cuota: Option<u32>) 
         priority: 0,
         enabled: true,
         notes: String::new(),
+        // Campos que anadio el bloque de delegacion (MEDIDO el 2026-11-21:
+        // sin ellos el arnes no compila, E0063 "missing auth_kind and
+        // auth_ref", y el job de calidad caia por esto).
+        auth_kind: String::new(),
+        auth_ref: String::new(),
     }
 }
 
