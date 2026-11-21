@@ -62,9 +62,9 @@ principal**).
 | **AEGIS-256** | ✅ hecho y validado (RFC 10032) | — |
 | **TAR** | ✅ hecho (`read_tar`, nombres largos GNU, pax) | — |
 | **AEGIS-128X2** | opcional | vectores A.4/A.5 de la RFC si hace falta |
-| **Argon2id** | ❌ | implementarlo **en Rust puro** (BLAKE2b + núcleo Argon2) y validarlo con los vectores de la **RFC 9106** (no hay crate disponible: crates.io no es accesible desde el build) |
-| **zstd** | ❌ | sin crate ⇒ dos vías: **FFI a `libzstd`** del sistema o el binario `zstd` de Termux; el payload es zstd ⇒ **es el cuello de botella** |
-| **Cabecera** (orden de campos: magic, versión, sal, iteraciones, memoria, tamaño de trozo, entradas) | ❌ |ingeniería inversa del *writer* en la nativa (xref al magic `SBA1`) |
+| **Argon2id** | ✅ **hecho y validado** | `rust-core/src/argon2.rs`: BLAKE2b + H' + H0 + relleno, **verde con los 3 vectores oficiales de la RFC 9106** (d/i/id) **y** con 36/36 comparaciones byte a byte contra el **oráculo C** (`phc-winner-argon2` 20190702) en el rango de Swift. API: `derive_key(passphrase, salt, iterations, memory_kib, parallelism, out_len)` |
+| **zstd** | ✅ **hecho** | `rust-core/src/zstd.rs`: **FFI por `dlopen`** a `libzstd.so.1` (sin dependencia de compilación) **con fallback al binario `zstd -d -c`** de Termux. Fixture real congelado en el test |
+| **Cabecera** (orden de campos: magic, versión, sal, iteraciones, memoria, tamaño de trozo, entradas) | 🟡 **inspeccionada, no congelada** | `rust-core/src/swift_sba1.rs`: se reconoce el magic, se deduce el tamaño (96/144) y se **inspeccionan** las candidatas big-endian. **No se congela el layout hasta tener un `.dat` real** |
 | **Derivación del nonce y del AAD por trozo** | ❌ | misma vía (las etiquetas de dominio están, la función KDF no) |
 | **Un `.dat` real** | ❌ | necesita el móvil (o el usuario lo suba) |
 
@@ -72,6 +72,31 @@ principal**).
 del KDF, las etiquetas de dominio, los magics, y que el contenido es TAR.
 ⇒ **Lo que NO es aún**: abrir un `.dat` de principio a fin (faltan Argon2id,
 zstd, la cabecera y un fichero real).
+
+## 3.1. Estado del lector (2026-11-21)
+
+`rust-core/src/swift_sba1.rs` + `rust-core/src/zstd.rs` (**14/14 tests verdes**):
+
+| Qué hace | Cómo | Nota de honestidad |
+|---|---|---|
+| Reconoce el contenedor | `es_sba1()` / `leer_cabecera()` | magic `SBA1` y `SBA_SWIFTTAR` |
+| Deduce el tamaño de cabecera | 96 o 144 bytes (**big-endian**, medido en el escritor ARM64 ⇒ mismo orden en x86_64) | por *scanning*, no por offset fijo |
+| Inspecciona los campos | candidatas u32/u64 big-endian con su offset | **no** se interpretan: hace falta un `.dat` real |
+| **Descomprime el payload** | zstd → TAR | **esto sí está resuelto** (TAR + ZSTD es lo medido) |
+| Extrae a disco | `extraer_tar_zstd()` con rutas saneadas (`..`, absolutas y `:` se rechazan) | evita escribir fuera del destino |
+| Limitaciones | `max_salida` acota la RAM (el backup completo del usuario no cabe en el móvil) | error explícito, no desbordamiento silencioso |
+
+⇒ **Lo que falta para abrir un `.dat` de punta a punta**: el layout exacto de
+la cabecera, la derivación **nativa** de nonce/AAD por trozo, y un fichero
+real contra el que validar. El **KDF ya no bloquea** (Argon2id verificado) y
+**zstd tampoco**.
+
+## 3.2. Regla de oro del formato: no congelar lo no medido
+
+El `SBA1` **no** tiene todavía un layout publicado. Por eso `leer_cabecera()`
+devuelve `crudo` + `campos` (offset, valor) en vez de un `struct` con campos
+con nombre: cuando llegue un `.dat` real, se **casa** el layout y *entonces*
+se congela en un test. Congelar ahora sería escribir el formato a ciegas.
 
 ## 4. Postura legal
 
