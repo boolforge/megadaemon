@@ -64,12 +64,6 @@ pub fn publish_to_repo(
     use base64ct::Encoding;
     let b64 = base64ct::Base64::encode_string(text.as_bytes());
     let url = format!("https://api.github.com/repos/{owner}/{repo}/contents/{path}");
-    let body = json!({
-        "message": "canal: estado del canal (quick tunnel + canal estable)",
-        "content": b64,
-        "branch": "main",
-    })
-    .to_string();
 
     let cfg = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(20)))
@@ -77,6 +71,32 @@ pub fn publish_to_repo(
         .http_status_as_error(false)
         .build();
     let agent = ureq::Agent::new_with_config(cfg);
+
+    // ⚠️ La Contents API **exige el `sha` del blob actual** para ACTUALIZAR un
+    // fichero que ya existe (si no, responde 422 "Validation Failed"). Sin
+    // este GET, el móvil podría publicar **una sola vez** y luego fallar
+    // siempre ⇒ el estado se congelaría en la primera URL.
+    let sha_actual = agent
+        .get(&url)
+        .header("Authorization", &format!("Bearer {token}"))
+        .header("User-Agent", "MegaDaemon-channel")
+        .header("Accept", "application/vnd.github+json")
+        .call()
+        .ok()
+        .and_then(|r| r.into_body().read_to_string().ok())
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v.get("sha").and_then(|s| s.as_str()).map(|s| s.to_string()));
+
+    let mut body_obj = json!({
+        "message": "canal: estado del canal (quick tunnel + canal estable)",
+        "content": b64,
+        "branch": "main",
+    });
+    if let (Some(o), Some(sha)) = (body_obj.as_object_mut(), sha_actual.as_ref()) {
+        o.insert("sha".to_string(), json!(sha));
+    }
+    let body = body_obj.to_string();
+
     let resp = agent
         .put(&url)
         .header("Authorization", &format!("Bearer {token}"))

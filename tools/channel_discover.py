@@ -26,8 +26,10 @@ Imprime el estado del canal en JSON. NO contiene secretos: la key del MCP va
 en ficheros 0600 aparte.
 """
 import argparse
+import base64
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -45,25 +47,58 @@ def fetch(url, timeout=TIMEOUT):
 
 
 def desde_json(texto):
-    """El contenido puede ser JSON o texto plano con la URL."""
+    """El contenido puede ser JSON, la envolvente de la Contents API (base64)
+    o texto plano con la URL."""
     texto = texto.strip()
     try:
-        return json.loads(texto)
+        v = json.loads(texto)
     except json.JSONDecodeError:
         if texto.startswith("http"):
             return {"quick": texto.splitlines()[0].strip()}
         raise
+    # Envolvente de la Contents API: el fichero va en base64.
+    if isinstance(v, dict) and isinstance(v.get("content"), str) and "sha" in v:
+        try:
+            return json.loads(base64.b64decode(v["content"]).decode("utf-8", "replace"))
+        except Exception:
+            return v
+    return v
 
 
 def desde_canonico(url):
-    """El `raw` del repo: SIEMPRE la última versión del estado."""
-    v = desde_json(fetch(url))
-    if not isinstance(v, dict):
+    """El punto canónico: SIEMPRE la última versión del estado.
+
+    ⚠️ `raw.githubusercontent.com` **cachea en CDN** ⇒ puede servir la versión
+    vieja durante minutos (medido: tras publicar, el raw seguía con el
+    contenido anterior). Por eso se intenta **primero la Contents API**
+    (`api.github.com/repos/{o}/{r}/contents/{path}?ref=main`), que no cachea;
+    el `raw` queda como respaldo.
+    """
+    for candidato in (api_equivalente(url), url):
+        if not candidato:
+            continue
+        try:
+            v = desde_json(fetch(candidato))
+        except Exception:
+            continue
+        if not isinstance(v, dict):
+            continue
+        if not (v.get("quick") or v.get("duckdns")):
+            continue
+        v["_fuente"] = candidato
+        return v
+    return None
+
+
+def api_equivalente(raw_url):
+    """Convierte una URL `raw` en la de la Contents API (sin caché)."""
+    m = re.match(
+        r"https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.*)$", raw_url)
+    if not m:
         return None
-    if not (v.get("quick") or v.get("duckdns")):
-        return None
-    v["_fuente"] = url
-    return v
+    owner, repo, ref, path = m.groups()
+    return (f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+            f"?ref={ref}")
 
 
 def desde_paste(url):
