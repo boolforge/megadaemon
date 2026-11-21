@@ -539,6 +539,71 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
     }
 
+    /// El fix que motivo el cambio: el `quick` (URL viva del tunel) se
+    /// rellena al LEER el canal desde `tunnel.url`, que es la fuente de
+    /// verdad (la escribe `98-cloudflared.sh` en cada arranque).
+    /// MEDIDO: sin esto, `/channel.json` servia `"quick": ""` SIEMPRE
+    /// (el script escribia en el log_dir y el daemon leia en otro sitio).
+    #[test]
+    fn el_quick_se_rellena_desde_tunnel_url() {
+        let d = dir_tmp("md_channel_test_quick");
+        let s = d.to_string_lossy().to_string();
+        // channel.json SIN quick (estado recien creado, sin fusionar).
+        fs::write(
+            channel_path(Some(&s), CHANNEL_JSON),
+            r#"{"duckdns":"https://mdtmfnc.duckdns.org","ts":"2026-11-21T00:00:00Z"}"#,
+        )
+        .unwrap();
+        write_url_file(Some(&s), TUNNEL_URL, "https://vivo.trycloudflare.com").unwrap();
+        let v = read_channel_json(Some(&s)).unwrap();
+        assert_eq!(
+            v.get("quick").and_then(|x| x.as_str()),
+            Some("https://vivo.trycloudflare.com"),
+            "el quick debe salir de tunnel.url: {v}"
+        );
+        // el resto de campos NO se tocan
+        assert_eq!(
+            v.get("duckdns").and_then(|x| x.as_str()),
+            Some("https://mdtmfnc.duckdns.org")
+        );
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// Si el estado YA trae un `quick` (fusionado por el publicador), ese
+    /// manda: el relleno es un fallback, no una sobrescritura.
+    #[test]
+    fn un_quick_ya_fusionado_no_se_sobrescribe() {
+        let d = dir_tmp("md_channel_test_quick2");
+        let s = d.to_string_lossy().to_string();
+        fs::write(
+            channel_path(Some(&s), CHANNEL_JSON),
+            r#"{"quick":"https://ya-fusionado.trycloudflare.com"}"#,
+        )
+        .unwrap();
+        write_url_file(Some(&s), TUNNEL_URL, "https://otro.trycloudflare.com").unwrap();
+        let v = read_channel_json(Some(&s)).unwrap();
+        assert_eq!(
+            v.get("quick").and_then(|x| x.as_str()),
+            Some("https://ya-fusionado.trycloudflare.com")
+        );
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// Sin `tunnel.url` no hay nada que rellenar: NO se inventa un valor.
+    #[test]
+    fn sin_tunnel_url_el_quick_sigue_vacio() {
+        let d = dir_tmp("md_channel_test_quick3");
+        let s = d.to_string_lossy().to_string();
+        fs::write(channel_path(Some(&s), CHANNEL_JSON), r#"{"ts":"2026-11-21T00:00:00Z"}"#)
+            .unwrap();
+        let v = read_channel_json(Some(&s)).unwrap();
+        assert!(
+            v.get("quick").and_then(|x| x.as_str()).unwrap_or("").is_empty(),
+            "no debe inventarse un quick: {v}"
+        );
+        let _ = fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn la_fecha_utc_es_coherente() {
         let s = now_iso();

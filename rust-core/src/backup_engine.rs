@@ -1154,6 +1154,8 @@ pub fn verify(container: &str, passphrase: Option<&str>) -> Result<VerifyReport,
     }
 
     let ok = payload_ok && manifest_ok && entries_bad.is_empty();
+    // El detalle se calcula ANTES de mover `entries_bad` al informe.
+    let bad_len = entries_bad.len();
     Ok(VerifyReport {
         ok,
         encrypted,
@@ -1166,8 +1168,7 @@ pub fn verify(container: &str, passphrase: Option<&str>) -> Result<VerifyReport,
             format!("{entries_checked} entradas verificadas: payload, manifiesto y hashes cuadran")
         } else {
             format!(
-                "payload_ok={payload_ok} manifest_ok={manifest_ok} entradas_cojas={}",
-                entries_bad.len()
+                "payload_ok={payload_ok} manifest_ok={manifest_ok} entradas_cojas={bad_len}",
             )
         },
     })
@@ -1486,7 +1487,9 @@ pub fn restore(
             if let Some(parent) = bpath.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            std::fs::copy(&target, &bpath).ok()
+            // `undone` guarda la RUTA del backup (no el numero de bytes):
+            // al reponer hay que saber de donde se copio.
+            std::fs::copy(&target, &bpath).ok().map(|_| bpath)
         } else {
             None
         };
@@ -1566,6 +1569,9 @@ pub fn restore(
         written.clear();
     }
 
+    // Las longitudes se calculan ANTES de mover los vectores al informe.
+    let written_len = written.len();
+    let failed_len = failed.len();
     Ok(RestoreReport {
         dry_run: options.dry_run,
         ok,
@@ -1575,13 +1581,13 @@ pub fn restore(
         rolled_back,
         bytes,
         detail: if options.dry_run {
-            format!("simulación: {} ficheros seleccionados, {} bytes", written.len(), bytes)
+            format!("simulacion: {} ficheros seleccionados, {} bytes", written_len, bytes)
         } else if ok {
-            format!("{} ficheros restaurados, {} bytes", written.len(), bytes)
+            format!("{} ficheros restaurados, {} bytes", written_len, bytes)
         } else {
             format!(
-                "fallo en {} ficheros ⇒ rollback ({})",
-                failed.len(),
+                "fallo en {} ficheros => rollback ({})",
+                failed_len,
                 if rolled_back { "hecho" } else { "no" }
             )
         },

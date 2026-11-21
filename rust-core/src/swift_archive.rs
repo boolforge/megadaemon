@@ -279,15 +279,25 @@ pub fn sba1_layout(formato: u16) -> HeaderLayout {
         HeaderField { name: "lenBloque3".into(), offset: 34, width: 2, big_endian: true },
         HeaderField { name: "campo10".into(), offset: 84, width: 2, big_endian: true },
         HeaderField { name: "campo11".into(), offset: 86, width: 2, big_endian: true },
-        HeaderField { name: "campo12".into(), offset: 88, width: 4, big_endian: true },
+        // MEDIDO el 2026-11-21 en cabeceras REALES descargadas de Google
+        // Drive (Swift Backup, `com.android.chrome.dat` e
+        // `io.github.forkmaintainers.iceraven.dat`): el valor es SIEMPRE
+        // 1048576 = 1 MiB => es el TAMAÑO DEL TROZO del AEAD.
+        HeaderField { name: "chunkSize".into(), offset: 88, width: 4, big_endian: true },
     ];
     if ext {
-        fields.push(HeaderField { name: "campo13".into(), offset: 92, width: 4, big_endian: true });
+        // MEDIDO: 16384 => es la MEMORIA (KiB) de Argon2id del KDF
+        // (coincide con el rango medido en el DEX: 16384..65536 KiB).
+        fields.push(HeaderField { name: "argon2MemoryKib".into(), offset: 92, width: 4, big_endian: true });
         fields.push(HeaderField { name: "campo14".into(), offset: 96, width: 2, big_endian: true });
         fields.push(HeaderField { name: "campo15".into(), offset: 98, width: 2, big_endian: true });
-        fields.push(HeaderField { name: "campo16".into(), offset: 100, width: 2, big_endian: true });
+        // MEDIDO: 32 => longitud de la clave derivada (bytes).
+        fields.push(HeaderField { name: "keyLength".into(), offset: 100, width: 2, big_endian: true });
         fields.push(HeaderField { name: "campo17".into(), offset: 102, width: 2, big_endian: true });
-        fields.push(HeaderField { name: "reservado32".into(), offset: 104, width: 32, big_endian: true });
+        // MEDIDO: 32 B no nulos => es el HMAC DEL PAYLOAD
+        // (SHA-256("SBA1-payload-hmac-key-v1" || salt || nonce2 || clave)).
+        fields.push(HeaderField { name: "payloadHmac".into(), offset: 104, width: 32, big_endian: true });
+        // Los ultimos 8 B son CERO en todas las cabeceras medidas.
         fields.push(HeaderField { name: "reservado8".into(), offset: 136, width: 8, big_endian: true });
     } else {
         fields.push(HeaderField { name: "reservado4".into(), offset: 92, width: 4, big_endian: true });

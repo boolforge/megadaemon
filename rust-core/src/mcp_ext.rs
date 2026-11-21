@@ -340,19 +340,6 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
-            "name": "delegate",
-            "description": "Delegación parasitaria a cuentas gratuitas cloud: breaker de 3 estados POR CUENTA, presupuesto por hora (global y por modelo), coste MEDIDO (tokens y latencia reales de providers::execute_chat) con la fuente del precio (NO VERIFICADO si no hay fuente) y anuncio al bus SIN credenciales (sólo modo de auth y ruta del fichero). Con el circuito abierto, la voz local (SEERE) sigue disponible: el enjambre nunca se queda mudo.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["accounts", "status", "announce", "execute"], "default": "status" },
-                    "prompt": { "type": "string", "description": "encargo a delegar (para execute)" },
-                    "account": { "type": "string", "description": "cuenta concreta (para execute); vacío = la que elija el enrutado" },
-                    "kind": { "type": "string", "default": "research", "description": "tipo de tarea (plantilla de prompt)" }
-                }
-            }
-        },
-        {
             "name": "api_keys",
             "description": "Gestiona el registro de API keys por agente: acuña una clave nueva y revocable sin tocar la clave principal, revoca una existente o lista el registro. La revocacion es destructiva y exige confirm=true.",
             "inputSchema": {
@@ -432,7 +419,6 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     }
                 }
                 _ => {
-                    // Subir es publicar en un remoto => exige confirm.
                     if !b("confirm") {
                         json!({ "content": [{ "type": "text", "text": "drive_backup exige confirm=true (sube el contenido a Google Drive)" }] })
                     } else {
@@ -452,11 +438,8 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                             let folder = s("folder_id");
                             match crate::drive_native::upload_path(std::path::Path::new(&path), &name, &folder, Some(&st)) {
                                 Ok(u) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({
-                                    "ok": true,
-                                    "file_id": u.file_id,
-                                    "name": u.name,
-                                    "bytes": u.bytes,
-                                    "sha256": u.sha256,
+                                    "ok": true, "file_id": u.file_id, "name": u.name,
+                                    "bytes": u.bytes, "sha256": u.sha256,
                                     "transport": "nativo (ureq, Rust puro)"
                                 })).unwrap_or_default() }] }),
                                 Err(e) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({ "ok": false, "error": e })).unwrap_or_default() }], "isError": true }),
@@ -464,6 +447,24 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         }
                     }
                 }
+            }
+        }
+        "channel_publish" => {
+            // Publicar la URL del dispositivo fuera del movil. NO es
+            // destructivo, pero SI expone una URL publica: por eso exige
+            // `confirm: true` (misma politica que el resto de tools).
+            if !b("confirm") {
+                json!({ "content": [{ "type": "text", "text": "channel_publish exige confirm=true (publica la URL del dispositivo en un paste publico)" }] })
+            } else {
+                let out = crate::channel::publish(
+                    None,
+                    Some(s("quick")).filter(|x| !x.is_empty()).as_deref(),
+                    Some(s("duckdns")).filter(|x| !x.is_empty()).as_deref(),
+                    Some(s("ip_publica")).filter(|x| !x.is_empty()).as_deref(),
+                    Some(s("cloudflared_pids")).filter(|x| !x.is_empty()).as_deref(),
+                );
+                let txt = serde_json::to_string_pretty(&out).unwrap_or_default();
+                json!({ "content": [{ "type": "text", "text": txt }] })
             }
         }
         "npu_vs4l_probe" => {
@@ -481,6 +482,24 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 Some(exp.as_str())
             });
             let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
+            json!({ "content": [{ "type": "text", "text": txt }] })
+        }
+        "clipboard" => {
+            let dir = crate::cockpit_server::state_dir();
+            let accion = {
+                let a = s("action");
+                if a.is_empty() { "list".to_string() } else { a }
+            };
+            let cuerpo = json!({
+                "action": accion,
+                "text": s("text"),
+                "query": s("query"),
+                "id": s("id"),
+                "origin": s("origin"),
+                "limit": n("limit"),
+            });
+            let r = crate::clipboard::handle_action(&accion, &cuerpo, &dir);
+            let txt = serde_json::to_string_pretty(&r).unwrap_or_default();
             json!({ "content": [{ "type": "text", "text": txt }] })
         }
         "capabilities" => match s("action").as_str() {
@@ -876,107 +895,6 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     }
                 }
                 _ => bus.catalog_json(),
-            }
-        }
-        // v15 (W6): delegación parasitaria (breaker por cuenta, presupuesto
-        // por hora y por modelo, coste medido, anuncio al bus sin credenciales).
-        "delegate" => {
-            let redacted = crate::providers::list_providers_redacted();
-            let accounts = crate::delegate::accounts_from_redacted(
-                &redacted,
-                crate::providers::PROVIDERS_PATH,
-            );
-            let mut engine = crate::delegate::DelegateEngine::new(accounts);
-            match s("action").as_str() {
-                "accounts" => json!({ "ok": true, "accounts": engine.account_statuses() }),
-                "status" => {
-                    let now = crate::service_bus::now_epoch();
-                    json!({
-                        "ok": true,
-                        "budget": engine.budget_status(now),
-                        "breakers": engine.breaker_states().into_iter().map(|(id, state, fails)| json!({"id": id, "state": state, "failures": fails})).collect::<Vec<_>>(),
-                        "measured_calls": engine.measured_calls().len(),
-                    })
-                }
-                "announce" => {
-                    let dir = crate::mesh::default_state_dir();
-                    let snapshot = match crate::mesh::Mesh::open(&dir) {
-                        Ok(m) => m.snapshot(),
-                        Err(e) => json!({ "peers": [], "error": e.to_string() }),
-                    };
-                    let mut bus = crate::service_bus::bus_from_runtime(
-                        &redacted,
-                        crate::providers::PROVIDERS_PATH,
-                        &snapshot,
-                        300,
-                        "http://127.0.0.1:9090/mcp",
-                    );
-                    let n = bus.announce_delegate(&engine);
-                    json!({ "ok": true, "announced": n, "catalog": bus.catalog_json() })
-                }
-                "execute" => {
-                    let prompt = s("prompt");
-                    if prompt.trim().is_empty() {
-                        json!({ "ok": false, "error": "falta el prompt" })
-                    } else {
-                        let mut runner = |model: &str, p: &str, max: u32| {
-                            let r = crate::providers::execute_chat(p, Some(model), None, None, max);
-                            crate::delegate::ProviderReply {
-                                reply: r.reply,
-                                model_id: r.model_id,
-                                tokens_used: r.tokens_used,
-                                latency_ms: r.latency_ms,
-                                fallback_used: r.fallback_used,
-                            }
-                        };
-                        let mut task = crate::delegate::DelegationTask {
-                            id: String::new(),
-                            prompt: prompt.clone(),
-                            kind: s("kind"),
-                            required_capabilities: Vec::new(),
-                            max_tokens: 1024,
-                            deadline: None,
-                            status: "queued".to_string(),
-                            attempts: Vec::new(),
-                            assigned_account: None,
-                        };
-                        if task.kind.trim().is_empty() {
-                            task.kind = "research".to_string();
-                        }
-                        let task_id = engine.submit(task);
-                        let cuenta = if !s("account").is_empty() {
-                            s("account")
-                        } else {
-                            engine
-                                .task(&task_id)
-                                .and_then(|t| t.assigned_account.clone())
-                                .unwrap_or_default()
-                        };
-                        if cuenta.is_empty() {
-                            json!({ "ok": false, "error": "no hay cuenta que pueda atender la tarea" })
-                        } else {
-                            match engine.execute_measured_with(&task_id, &cuenta, &prompt, &mut runner) {
-                                Ok(m) => json!({
-                                    "ok": true,
-                                    "account": m.account_id,
-                                    "model": m.model,
-                                    "served_by": m.served_by,
-                                    "llamada_ok": m.ok,
-                                    "tokens": m.tokens_total,
-                                    "tokens_in": m.tokens_in,
-                                    "tokens_out": m.tokens_out,
-                                    "latency_ms": m.latency_ms,
-                                    "coste_usd": m.cost.usd,
-                                    "coste_fuente": m.cost.source,
-                                    "coste_nota": m.cost.note,
-                                    "error": m.error,
-                                }),
-                                Err(e) => json!({ "ok": false, "error": e }),
-                            }
-                        }
-                    }
-                }
-                _ => json!({ "ok": false, "error": "acción desconocida" }),
             }
         }
         // v15 (W6): conector de GitHub (repos, issues/PRs, publicar estado).

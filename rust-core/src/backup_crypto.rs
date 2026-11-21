@@ -891,7 +891,9 @@ pub fn parse_swift_info_page(bytes: &[u8]) -> Result<SwiftInfoPage, String> {
         header_size,
         method_id,
         created_at_ms,
-        kdf_method_id,
+        kdf_method_id: kdf_method_id
+            .try_into()
+            .map_err(|_| "kdf_method_id fuera de rango u16".to_string())?,
         iteration_candidates,
         blocks,
         u16s,
@@ -1444,7 +1446,7 @@ mod tests {
     fn el_aead_por_trozos_ida_y_vuelta() {
         let key = vec![9u8; AEGIS_KEY_LEN];
         let c = ChunkCipher::own(&key).unwrap();
-        let datos = b"contenido de prueba, con acentos: ñ é 😀".repeat(10);
+        let datos = "contenido de prueba, con acentos: ñ é 😀".repeat(10).into_bytes();
         let frame = c.seal_chunk("payload/app.dat", 0, &datos);
         let abierto = c.open_chunk("payload/app.dat", 0, &frame).unwrap();
         assert_eq!(abierto, datos);
