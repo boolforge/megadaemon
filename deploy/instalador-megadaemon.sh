@@ -12,6 +12,11 @@
 #   EN EL MÓVIL (Termux, SIN PC, sin adb):
 #     sh instalador-megadaemon.sh --diagnostico
 #     sh instalador-megadaemon.sh --instalar
+#     sudo bash instalador-megadaemon.sh --instalar   (para lo que pide root)
+#     OJO: `sudo su <script>` NO vale (el sudo de Termux es un wrapper y su
+#     no acepta argumentos de script): se usa `sudo bash <script>` o
+#     `su -mm -c "sh <script>"`.  El script usa `su -mm` por su cuenta para
+#     lo que necesita root, asi que basta con lanzarlo con `sh`.
 #
 #   DESCARGARLO EN EL MÓVIL (una línea, sin PC):
 #     curl -fsSL https://raw.githubusercontent.com/boolforge/megadaemon/main/deploy/instalador-megadaemon.sh -o instalador.sh && sh instalador.sh --instalar
@@ -227,7 +232,9 @@ mis_ancestros() {
 # --- Antigravity: INSPECCION (no se mata nada sin evidencia) --------------
 inspeccionar_antigravity() {
   say "--- Antigravity: instalacion y procesos (INSPECCION, no se toca nada) ---"
-  AG="$(procs | grep -i "antigravity\|language_server\|liblanguage_server" || true)"
+  # -a: las lineas de comandos traen bytes no imprimibles y grep diria
+  # "binary file matches" sin listar nada (MEDIDO en el movil el 2026-11-22).
+  AG="$(procs | grep -a -i "antigravity\|language_server\|liblanguage_server" || true)"
   if [ -n "$AG" ]; then
     printf '%s\n' "$AG" | head -20 | while read -r pid rss cmd; do
       say "  pid $pid  RSS ${rss:-0} kB  ${cmd}"
@@ -252,7 +259,7 @@ limpiar_procesos() {
   MATADOS=0
   # 1) our short-lived tools: si siguen vivos, estan ATASCADOS
   for pat in md-clipboard md-dict md-lan-listen npu-probe adbonly duckdns-updater channel-publish; do
-    for pid in $(procs | grep -F "$pat" | awk '{print $1}'); do
+    for pid in $(procs | grep -a -F "$pat" | awk '{print $1}'); do
       es_mio "$pid" && continue
       root "kill -9 $pid 2>/dev/null"
       say "  muerto: $pid ($pat, tool de una sola ejecucion atascado)"
@@ -260,7 +267,7 @@ limpiar_procesos() {
     done
   done
   # 2) cloudflared duplicado: cada uno tiene su hostname y roban trafico
-  CFS="$(procs | grep -F cloudflared | awk '{print $1}')"
+  CFS="$(procs | grep -a -F cloudflared | awk '{print $1}')"
   N=0
   for pid in $CFS; do
     N=$((N + 1))
@@ -273,7 +280,7 @@ limpiar_procesos() {
   done
   [ "${N:-0}" -gt 1 ] && say "  cloudflared: $N -> queda 1"
   # 3) megadaemon-core duplicado
-  MDS="$(procs | grep -F megadaemon-core | grep -v md-clipboard | awk '{print $1}')"
+  MDS="$(procs | grep -a -F megadaemon-core | grep -a -v md-clipboard | awk '{print $1}')"
   N=0
   for pid in $MDS; do
     N=$((N + 1))
@@ -288,7 +295,7 @@ limpiar_procesos() {
   # 4) Antigravity: SÓLO con --purgar-antigravity (los workers del language
   #    server se relanzan solos; la ventana principal NO se toca nunca)
   if [ "$PURGAR_AG" = "1" ]; then
-    for pid in $(procs | grep -i "language_server" | awk '{print $1}'); do
+    for pid in $(procs | grep -a -i "language_server" | awk '{print $1}'); do
       es_mio "$pid" && continue
       root "kill -9 $pid 2>/dev/null"
       say "  muerto: $pid (worker de Antigravity; se relanza solo)"
