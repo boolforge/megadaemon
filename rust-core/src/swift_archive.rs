@@ -126,6 +126,17 @@ pub enum KeyCheckComposition {
     SwiftTagged,
 }
 
+/// Etiqueta de dominio de la **clave HMAC del payload**.
+///
+/// Medida en el DEX (`Ly87;.c([B[B[B)[B`, y el `static final byte[] f` de
+/// `Ly87;`): `SHA-256("SBA1-payload-hmac-key-v1" || salt || nonce2 ||
+/// clave)` — **la misma forma que el key-check**, pero con **otra etiqueta**
+/// y **sin truncar** (32 bytes).
+///
+/// ⇒ el campo `e` del modelo (`Lg87;`) es exactamente esta clave:
+/// `e = Ly87;.c(a, c, d)` = `SHA-256(tag || salt || nonce2 || clave)`.
+pub const PAYLOAD_HMAC_TAG: &str = "SBA1-payload-hmac-key-v1";
+
 /// Etiqueta de dominio del key-check según el método de cifrado.
 ///
 /// Medidas en `Ly87;.<clinit>` (los `static final byte[]`):
@@ -404,8 +415,20 @@ pub struct SwiftArchiveReport {
     pub key_check: Option<KeyCheckReport>,
     /// Qué KDF se ha usado (y si es el verificado).
     pub kdf: Option<KdfInfo>,
+    /// **Clave HMAC del payload** (hex): `SHA-256(etiqueta || salt ||
+    /// nonce2 || clave)` con la etiqueta `SBA1-payload-hmac-key-v1`.
+    ///
+    /// Se calcula cuando la clave se ha derivado ⇒ sirve para **autenticar
+    /// el contenido** cuando el AEAD por trozos esté replicado.
+    #[serde(default)]
+    pub payload_hmac_key: Option<String>,
     /// Lo que **no** se ha hecho (por qué).
     pub notes: Vec<String>,
+}
+
+/// Hex en minúsculas de un vector de bytes.
+pub fn hex_bytes(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{:02x}", x)).collect()
 }
 
 /// Devuelve los bytes de un bloque de la cabecera por su nombre (`salt`,
@@ -523,6 +546,7 @@ pub fn verify_key_check(
                 header: None,
                 key_check: None,
                 kdf: None,
+                payload_hmac_key: None,
                 notes: vec![e],
             }
         }
@@ -536,6 +560,7 @@ pub fn verify_key_check(
                 header: Some(header),
                 key_check: None,
                 kdf: None,
+                payload_hmac_key: None,
                 notes,
             };
         }
@@ -627,6 +652,9 @@ pub fn verify_key_check(
         //   * `SwiftTagged`:   SHA-256(etiqueta || salt || nonce2 || clave)
         //                      truncado al ancho (16 B en Swift Backup)
         let mut buf: Vec<u8> = Vec::new();
+        // El "nonce2" (segundo bloque aleatorio de 16 B) entra tanto en el
+        // key-check como en la clave HMAC del payload.
+        let mut nonce: Vec<u8> = Vec::new();
         match spec.composition {
             KeyCheckComposition::Sha256KeyOnly => {
                 buf.extend_from_slice(&key);
@@ -636,7 +664,7 @@ pub fn verify_key_check(
                     buf.extend_from_slice(spec.tag.as_bytes());
                 }
                 buf.extend_from_slice(&salt);
-                let nonce = bytes_de(nombre_nonce);
+                nonce = bytes_de(nombre_nonce);
                 if nonce.is_empty() {
                     ultimo_error = Some(format!("bloque '{}' vacio o inexistente", nombre_nonce));
                     continue;
@@ -649,6 +677,21 @@ pub fn verify_key_check(
             buf.extend_from_slice(&spec.method_ordinal.to_be_bytes());
         }
         let expected = sha256(&buf);
+
+        // La clave HMAC del payload tiene la **misma forma** que el key-check
+        // (medido en el DEX: `Ly87;.c([B[B[B)[B` = SHA-256(etiqueta || salt
+        // || nonce2 || clave)) pero con **otra etiqueta** y **sin truncar**.
+        let payload_hmac_key: Option<String> = match spec.composition {
+            KeyCheckComposition::SwiftTagged => {
+                let mut b = Vec::new();
+                b.extend_from_slice(PAYLOAD_HMAC_TAG.as_bytes());
+                b.extend_from_slice(&salt);
+                b.extend_from_slice(&nonce);
+                b.extend_from_slice(&key);
+                Some(hex_bytes(&sha256(&b)))
+            }
+            KeyCheckComposition::Sha256KeyOnly => None,
+        };
 
         // El key-check esperado, ya sea en un offset fijo o dentro de un bloque.
         let found: Vec<u8> = if nombre_kc.is_empty() {
@@ -693,10 +736,11 @@ pub fn verify_key_check(
                 header: Some(header),
                 key_check: Some(KeyCheckReport {
                     matched,
-                    expected_hex: expected.iter().map(|b| format!("{:02x}", b)).collect(),
+                    expected_hex: hex_bytes(&expected),
                     method_ordinal: spec.method_ordinal,
                 }),
                 kdf: Some(kdf_info),
+                payload_hmac_key: payload_hmac_key.clone(),
                 notes,
             };
         }
@@ -734,6 +778,7 @@ pub fn verify_key_check(
             method_ordinal: spec.method_ordinal,
         }),
         kdf: ultimo_kdf,
+        payload_hmac_key: None,
         notes,
     }
 }
@@ -1159,6 +1204,21 @@ mod tests {
             r.notes.iter().any(|n| n.contains("ORDEN DE BLOQUES")),
             "debe descubrir el orden: {:?}",
             r.notes
+        );
+
+        // La clave HMAC del payload: MISMA forma que el key-check (SHA-256 de
+        // etiqueta||salt||nonce2||clave) pero con la etiqueta del payload y
+        // **sin truncar** (medido en el DEX: `Ly87;.c`).
+        let mut hbuf = Vec::new();
+        hbuf.extend_from_slice(PAYLOAD_HMAC_TAG.as_bytes());
+        hbuf.extend_from_slice(&salt);
+        hbuf.extend_from_slice(&nonce2);
+        hbuf.extend_from_slice(&clave);
+        let hmac_esperada = hex_bytes(&sha256(&hbuf));
+        assert_eq!(
+            r.payload_hmac_key.as_deref(),
+            Some(hmac_esperada.as_str()),
+            "la clave HMAC del payload debe coincidir"
         );
 
         // Con otra passphrase => mismatch (no "ok").
