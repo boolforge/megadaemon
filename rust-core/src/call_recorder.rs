@@ -1676,3 +1676,309 @@ pub fn csc_switch_verify_plan(target_csc: &str) -> Vec<String> {
     ]
 }
 
+// ---------------------------------------------------------------------------
+// Supervisor de grabación (armar → grabar → marcar → cerrar)
+// ---------------------------------------------------------------------------
+//
+// El supervisor **no** graba por su cuenta: gobierna el **grabador nativo de
+// Samsung**, que es el único que reproduce el aviso legal. Por eso el flujo
+// real es: se arma la *feature* CSC con el valor **con disclaimer**, el
+// usuario hace la llamada, el sistema avisa por voz, y al terminar el
+// supervisor localiza el fichero, lo marca y lo cierra.
+//
+// **Guarda legal (obligatoria, no negociable):** en España grabar a un tercero
+// sin su consentimiento es delito (art. 197 CP) y además viola el RGPD. Por
+// eso `armar` **se niega** si la feature está en `RecordingAllowed` a secas
+// (grabación automática y silenciosa). El único valor admitido es
+// `RecordingAllowedByMenu,disclaimer_latin` (o `_india`), que **avisa**.
+
+/// Valor de feature que **sí** admite el supervisor (con aviso).
+pub const RECORDING_VALUE_WITH_DISCLAIMER: &str = "RecordingAllowedByMenu,disclaimer_latin";
+/// Valor de feature India (con aviso en inglés/indio).
+pub const RECORDING_VALUE_WITH_DISCLAIMER_INDIA: &str =
+    "RecordingAllowedByMenu,disclaimer_india";
+/// Valor **prohibido**: grabación automática y silenciosa.
+pub const RECORDING_VALUE_SILENT: &str = "RecordingAllowed";
+
+/// Estados del supervisor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SupervisorState {
+    /// Sin armar: aún no se ha comprobado el CSC.
+    Idle,
+    /// Comprobado y listo: la feature avisa.
+    Armed,
+    /// Hay una llamada en curso y el sistema está grabando.
+    Recording,
+    /// La llamada terminó y el fichero está localizado (tamaño + sha256).
+    Marked,
+    /// Cerrado: la grabación queda verificada y entregable a la bóveda.
+    Closed,
+    /// Algo falló; el motivo queda en `notes`.
+    Failed,
+}
+
+impl SupervisorState {
+    /// Nombre estable (para logs y JSON).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SupervisorState::Idle => "idle",
+            SupervisorState::Armed => "armed",
+            SupervisorState::Recording => "recording",
+            SupervisorState::Marked => "marked",
+            SupervisorState::Closed => "closed",
+            SupervisorState::Failed => "failed",
+        }
+    }
+}
+
+/// ¿El valor de la feature implica **aviso** al interlocutor?
+pub fn recording_value_avisa(value: &str) -> bool {
+    let v = value.trim();
+    v == RECORDING_VALUE_WITH_DISCLAIMER || v == RECORDING_VALUE_WITH_DISCLAIMER_INDIA
+}
+
+/// ¿El valor de la feature es **grabación silenciosa automática** (prohibida)?
+pub fn recording_value_es_silenciosa(value: &str) -> bool {
+    value.trim() == RECORDING_VALUE_SILENT
+}
+
+/// Comprobación previa: ¿se puede armar la grabación **con aviso**?
+///
+/// Devuelve `Err` con el motivo exacto cuando no se puede, para que el
+/// operador no tenga que interpretar un `false`.
+pub fn csc_permite_grabacion_con_aviso(csc: &str, feature_value: &str) -> Result<(), String> {
+    let c = csc.trim().to_ascii_uppercase();
+    if c.is_empty() {
+        return Err("no se conoce el CSC (ro.csc.sales_code vacío)".to_string());
+    }
+    if recording_value_es_silenciosa(feature_value) {
+        return Err(format!(
+            "la feature vale `{RECORDING_VALUE_SILENT}` (grabación automática y SILENCIOSA): \
+             está prohibido (art. 197 CP y RGPD). Usa `{RECORDING_VALUE_WITH_DISCLAIMER}`."
+        ));
+    }
+    if !recording_value_avisa(feature_value) {
+        return Err(format!(
+            "la feature vale `{feature_value}`: no avisa al interlocutor, luego no se arma."
+        ));
+    }
+    Ok(())
+}
+
+/// Supervisor de una grabación nativa (una llamada = una grabación).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordingSupervisor {
+    /// Estado actual.
+    pub state: SupervisorState,
+    /// CSC vigente (el que permite la grabación nativa).
+    pub csc: String,
+    /// Valor de la feature CSC encontrado.
+    pub feature_value: String,
+    /// Identificador de la sesión de llamada.
+    pub session_id: String,
+    /// Inicio de la llamada (ISO-8601).
+    pub started_at: String,
+    /// Fin de la llamada (ISO-8601), vacío si sigue en curso.
+    pub ended_at: String,
+    /// Ruta del fichero grabado (vacía hasta `marcar`).
+    pub recording_path: String,
+    /// Tamaño del fichero grabado en bytes (0 hasta `marcar`).
+    pub size_bytes: u64,
+    /// SHA-256 del fichero grabado (vacío hasta `marcar`).
+    pub sha256: String,
+    /// El grabador ha reproducido el aviso: se exige que el CSC avise.
+    pub aviso_reproducido: bool,
+    /// Notas y avisos del recorrido.
+    pub notes: Vec<String>,
+}
+
+impl Default for RecordingSupervisor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RecordingSupervisor {
+    /// Supervisor nuevo, sin armar.
+    pub fn new() -> Self {
+        RecordingSupervisor {
+            state: SupervisorState::Idle,
+            csc: String::new(),
+            feature_value: String::new(),
+            session_id: String::new(),
+            started_at: String::new(),
+            ended_at: String::new(),
+            recording_path: String::new(),
+            size_bytes: 0,
+            sha256: String::new(),
+            aviso_reproducido: false,
+            notes: Vec::new(),
+        }
+    }
+
+    /// **Fase 1 — armar.** Comprueba el CSC y la feature; si el CSC no es de
+    /// los que graban nativamente (THL/INS/ILO/XXV) o la feature no avisa,
+    /// se niega y explica por qué.
+    pub fn armar(&mut self, csc: &str, feature_value: &str) -> Result<(), String> {
+        self.csc = csc.trim().to_ascii_uppercase();
+        self.feature_value = feature_value.trim().to_string();
+        match self.estado_para_armar() {
+            Ok(()) => {
+                self.state = SupervisorState::Armed;
+                self.aviso_reproducido = true; // con disclaimer, el aviso es inherente
+                self.notes.push(format!(
+                    "armado con CSC {} y feature `{feature_value}` (con aviso)",
+                    self.csc
+                ));
+                Ok(())
+            }
+            Err(e) => {
+                self.state = SupervisorState::Failed;
+                self.notes.push(format!("armado rechazado: {e}"));
+                Err(e)
+            }
+        }
+    }
+
+    /// Comprobaciones internas de `armar` (separadas para poder probarlas).
+    fn estado_para_armar(&self) -> Result<(), String> {
+        csc_permite_grabacion_con_aviso(&self.csc, &self.feature_value)?;
+        if !native_recording_allowed(&self.csc) {
+            return Err(format!(
+                "el CSC {} no tiene grabación nativa (sirven {})",
+                self.csc,
+                NATIVE_RECORDING_CSC_CODES.join(", ")
+            ));
+        }
+        Ok(())
+    }
+
+    /// **Fase 2 — empieza la llamada.** El sistema graba y avisa.
+    pub fn iniciar_llamada(&mut self, session_id: &str, started_at: &str) -> Result<(), String> {
+        if self.state != SupervisorState::Armed {
+            return Err(format!(
+                "no se puede iniciar una llamada en estado {}",
+                self.state.as_str()
+            ));
+        }
+        if session_id.trim().is_empty() {
+            return Err("la sesión necesita identificador".to_string());
+        }
+        self.session_id = session_id.trim().to_string();
+        self.started_at = started_at.to_string();
+        self.state = SupervisorState::Recording;
+        self.notes
+            .push(format!("llamada {} iniciada (con aviso previo)", self.session_id));
+        Ok(())
+    }
+
+    /// **Fase 3 — marcar.** Localiza el fichero de la grabación y calcula su
+    /// tamaño y su SHA-256 (la evidencia que se publica).
+    pub fn marcar(&mut self, path: &str, ended_at: &str) -> Result<(), String> {
+        if self.state != SupervisorState::Recording {
+            return Err(format!(
+                "no se puede marcar una grabación en estado {}",
+                self.state.as_str()
+            ));
+        }
+        let p = Path::new(path);
+        let meta = fs::metadata(p).map_err(|e| format!("no se encuentra {path}: {e}"))?;
+        if !meta.is_file() {
+            return Err(format!("{path} no es un fichero regular"));
+        }
+        let size = meta.len();
+        if size == 0 {
+            return Err(format!("{path} está vacío: la llamada no se grabó"));
+        }
+        let hash = sha256_file(p).ok_or_else(|| format!("no se puede leer {path}"))?;
+        self.recording_path = path.to_string();
+        self.size_bytes = size;
+        self.sha256 = hash;
+        self.ended_at = ended_at.to_string();
+        self.state = SupervisorState::Marked;
+        self.notes.push(format!(
+            "grabación marcada: {size} bytes, sha256 {}",
+            &self.sha256[..16.min(self.sha256.len())]
+        ));
+        Ok(())
+    }
+
+    /// **Fase 4 — cerrar.** Verifica que todo cuadra y deja la grabación
+    /// entregable a la bóveda (`recording_vault`).
+    pub fn cerrar(&mut self) -> Result<(), String> {
+        if self.state != SupervisorState::Marked {
+            return Err(format!(
+                "no se puede cerrar una grabación en estado {}",
+                self.state.as_str()
+            ));
+        }
+        if !self.aviso_reproducido {
+            return Err("no consta que el aviso se reprodujera: no se cierra".to_string());
+        }
+        if self.size_bytes == 0 || self.sha256.is_empty() {
+            return Err("falta la evidencia (tamaño o sha256)".to_string());
+        }
+        self.state = SupervisorState::Closed;
+        self.notes
+            .push("grabación cerrada: lista para la bóveda".to_string());
+        Ok(())
+    }
+
+    /// ¿Está todo listo para entregar?
+    pub fn listo_para_boveda(&self) -> bool {
+        self.state == SupervisorState::Closed
+    }
+
+    /// Evidencia publicable de la grabación.
+    pub fn evidencia(&self) -> Value {
+        json!({
+            "estado": self.state.as_str(),
+            "csc": self.csc,
+            "feature_value": self.feature_value,
+            "aviso": self.aviso_reproducido,
+            "session_id": self.session_id,
+            "started_at": self.started_at,
+            "ended_at": self.ended_at,
+            "path": self.recording_path,
+            "size_bytes": self.size_bytes,
+            "sha256": self.sha256,
+            "notes": self.notes,
+        })
+    }
+
+    /// Volcado JSON del supervisor.
+    pub fn to_json(&self) -> Value {
+        self.evidencia()
+    }
+}
+
+/// Plan de comprobación **antes** de la llamada de prueba.
+///
+/// Devuelve la lista de lo que hay que mirar en el móvil (comandos y
+/// expectativas). Es una función pura: no toca el dispositivo.
+pub fn supervisor_preflight(csc: &str, feature_value: &str) -> Vec<String> {
+    let mut v = vec![
+        format!("getprop ro.csc.sales_code  =>  {csc}"),
+        format!(
+            "la feature de grabación debe ser `{RECORDING_VALUE_WITH_DISCLAIMER}` (valor leído: `{feature_value}`)"
+        ),
+        "el botón de grabar debe aparecer en la app de llamadas (InCallUI)".to_string(),
+        "el aviso debe sonar al iniciar la grabación (es lo que hace legal la grabación)".to_string(),
+        "el CSC debe ser uno de THL/INS/ILO/XXV para que grabe el sistema".to_string(),
+    ];
+    if let Err(e) = csc_permite_grabacion_con_aviso(csc, feature_value) {
+        v.push(format!("BLOQUEO: {e}"));
+    }
+    v
+}
+
+/// Requisitos para que la grabación sea entregable (bóveda, informe).
+pub fn supervisor_requisitos() -> Vec<String> {
+    vec![
+        "CSC con grabación nativa (THL/INS/ILO/XXV)".to_string(),
+        format!("feature = `{RECORDING_VALUE_WITH_DISCLAIMER}` (con aviso)"),
+        "el aviso se reprodujo al iniciar la llamada".to_string(),
+        "fichero de audio no vacío, con tamaño y sha256 medidos".to_string(),
+        "consentimiento del interlocutor (aviso verbal)".to_string(),
+    ]
+}

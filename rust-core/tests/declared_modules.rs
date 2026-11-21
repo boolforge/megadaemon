@@ -27,6 +27,9 @@ const GUARDADOS: &[(&str, &[&str])] = &[
             "pub fn voice_call_config_recording",
             "pub fn omc_state",
             "pub const SIM_OPERATOR_NUMERIC",
+            "pub struct RecordingSupervisor",
+            "pub fn supervisor_preflight",
+            "pub const RECORDING_VALUE_WITH_DISCLAIMER",
         ],
     ),
     (
