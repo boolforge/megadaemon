@@ -23,6 +23,7 @@ pub mod meta_agent;
 pub mod api_key;
 pub mod apk_inventory;
 pub mod app_intel;
+pub mod argon2;
 pub mod backup_formats;
 pub mod backup_vault;
 pub mod battery_advanced;
