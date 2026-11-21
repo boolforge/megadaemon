@@ -69,6 +69,7 @@ MODE=recuperar
 NO_TUNNEL=0
 INSTALL_BIN=""
 AUTO_UPDATE=0
+BINARY_CHANGED=0
 
 # El directorio de este script: aquí se buscan los ficheros a desplegar.
 SELF_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
@@ -258,10 +259,17 @@ auto_update() {
         log "AVISO: no hay .sha256 en el release (se instala sin verificar)"
     fi
     # Instalación con rollback: el binario actual se conserva como .prev.
+    _sha_antes=$(sha256_de "$BIN" 2>/dev/null)
     if [ -f "$BIN" ]; then cp -f "$BIN" "$PREFIX/megadaemon-core.prev" 2>/dev/null; fi
     mv -f "$_asset" "$BIN" 2>/dev/null || { log "ERROR: no se pudo instalar el binario"; return 1; }
     chmod 755 "$BIN" 2>/dev/null
-    log "binario instalado: $(sha256_de "$BIN" | cut -c1-16)… ($(stat -c %s "$BIN" 2>/dev/null) B)"
+    _sha_despues=$(sha256_de "$BIN" 2>/dev/null)
+    if [ -n "$_sha_antes" ] && [ "$_sha_antes" != "$_sha_despues" ]; then
+        BINARY_CHANGED=1
+        log "binario CAMBIADO (${_sha_antes:0:16} -> ${_sha_despues:0:16}) => el daemon se reiniciara"
+    else
+        log "binario instalado: ${_sha_despues:0:16} ($(stat -c %s "$BIN" 2>/dev/null) B)"
+    fi
 
     # Binarios AUXILIARES: `channel-publish` es imprescindible (es el que
     # sondea el tunel —el movil no tiene curl— y el que publica el canal).
@@ -288,11 +296,17 @@ auto_update() {
 
 if [ -n "$INSTALL_BIN" ] && [ -f "$INSTALL_BIN" ]; then
     step "Instalando binario desde $INSTALL_BIN"
+    _sha_antes=$(sha256_de "$BIN" 2>/dev/null)
     cp -f "$INSTALL_BIN" "$BIN.new" 2>/dev/null
     if [ -f "$BIN" ]; then cp -f "$BIN" "$BIN.prev" 2>/dev/null; fi
     mv -f "$BIN.new" "$BIN" 2>/dev/null
     chmod 755 "$BIN" 2>/dev/null
-    log "binario instalado: $(sha256sum "$BIN" 2>/dev/null | cut -c1-16) · $(stat -c %s "$BIN" 2>/dev/null) B"
+    _sha_despues=$(sha256_de "$BIN" 2>/dev/null)
+    if [ -n "$_sha_antes" ] && [ "$_sha_antes" != "$_sha_despues" ]; then
+        BINARY_CHANGED=1
+        log "binario CAMBIADO => el daemon se reiniciara"
+    fi
+    log "binario instalado: ${_sha_despues:0:16} ($(stat -c %s "$BIN" 2>/dev/null) B)"
 fi
 [ -x "$BIN" ] || log "AVISO: no hay binario en $BIN (usa --install)"
 
@@ -309,6 +323,11 @@ daemon_ok() {
     done
     return 1
 }
+if [ "$BINARY_CHANGED" = "1" ]; then
+    log "el binario cambio => reinicio del daemon inevitable (si no, seguiria el viejo)"
+    pkill -f megadaemon-core >/dev/null 2>&1
+    sleep 3
+fi
 if daemon_ok; then
     log "daemon VIVO y sano (pid $(pidof megadaemon-core 2>/dev/null)) — no se toca"
 else
