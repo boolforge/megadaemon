@@ -234,6 +234,22 @@ bytes y *entonces* se fija en un test (misma regla que §3.2).
 | **nombre de los 3 bloques** | faltan bytes reales | §6.4 |
 | **un `.dat` real** | el usuario tiene que exportar el backup | — |
 
+### 6.8 Lo que se ha cerrado desde que se escribió esto
+
+* **El key-check ya tiene fórmula exacta** (otro agente, commit `42bb52a`):
+  `SHA-256( tag ‖ salt ‖ nonce2 ‖ clave )[:16]`, con la etiqueta
+  `SBA1-AEGIS256-key-check-v1` ⇒ ver `docs/SWIFT_KOTLIN_MARSHALLING.md` y
+  `rust-core/src/swift_archive.rs` (`KeyCheckComposition::SwiftTagged`).
+* **El lector DEX del repo ya está arreglado** (los mismos tres bugs que
+  encontró este agente, de forma independiente):
+  1. el opcode va en el **byte bajo** del code unit (el comentario anterior
+     "byte alto" estaba equivocado ⇒ el desensamblado era casi todo `nop`);
+  2. el payload de `encoded_value` **no** tiene ancho fijo por tipo;
+  3. `read_u8` recibía el offset por valor ⇒ el payload no avanzaba el `pos`.
+  ⇒ **el motor de este repo (`apk_deobfuscator.rs`) lleva su propio lector
+  de DEX, little-endian y tolerante**, y da **0 errores** con esos tres
+  bugs ya corregidos de forma independiente en el lector compartido.
+
 ⇒ **El round-trip sintético** (escribir → leer) **sí** está hecho y
 testeado: prueba que nuestro escritor reproduce la secuencia del nativo y
 que el lector la invierte.  Lo que **no** prueba (y no se afirma) es la
