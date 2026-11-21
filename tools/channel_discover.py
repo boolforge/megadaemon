@@ -10,11 +10,14 @@ versión ⇒ el sandbox la puede pollar y ve el cambio de hostname sin que
 nadie le copie una URL a mano.
 
 Orden de descubrimiento:
-  1. **canónico** (`--canonical`, por defecto el `raw` del repo): estado
-     actual, siempre.
-  2. **paste** (`--paste`): el último paste conocido (y su cadena hacia
-     atrás, como respaldo si el repo no está accesible).
-  3. **dominio estable** (`--duckdns`): si el usuario abrió el puerto.
+  1. **canónico** (`--canonical`, por defecto `https://<dominio>/channel.json`):
+     lo sirve el daemon (público, payload mínimo) a través del relay del PC
+     ⇒ URL estable, sin PAT en el móvil y sin caché de CDN.
+  2. **respaldo**: el fichero del repo vía Contents API (no cachea).
+  3. **paste** (`--paste`): el último paste conocido. ⚠️ `paste.rs` **no
+     tiene caducidad** ⇒ el lector aplica un **TTL de 6 h**: un paste más
+     viejo se **ignora** (y se va al canónico).
+  4. **dominio estable** (`--duckdns`): si el usuario abrió el puerto.
 
 Uso:
     tools/channel_discover.py                       # canónico + respaldo
@@ -27,6 +30,7 @@ en ficheros 0600 aparte.
 """
 import argparse
 import base64
+import datetime
 import json
 import os
 import re
@@ -36,8 +40,15 @@ import urllib.request
 
 TIMEOUT = 20
 UA = "MegaDaemon-channel-discover"
-CANONICAL_DEF = ("https://raw.githubusercontent.com/boolforge/megadaemon/"
-                 "main/state/channel.json")
+# CANÓNICO: el endpoint del daemon (PÚBLICO, payload mínimo) servido por el
+# relay del PC => URL estable, sin PAT en el móvil y sin caché de CDN.
+CANONICAL_DEF = "https://mdtmfnc-s21.duckdns.org/channel.json"
+# Respaldo canónico: el fichero en el repo (vía Contents API, que no cachea).
+REPO_DEF = ("https://raw.githubusercontent.com/boolforge/megadaemon/"
+            "main/state/channel.json")
+# El paste no tiene caducidad (paste.rs no manda TTL) => la caducidad la
+# impone el LECTOR: un paste más viejo de esto se ignora.
+TTL_HORAS = 6
 
 
 def fetch(url, timeout=TIMEOUT):
@@ -65,6 +76,19 @@ def desde_json(texto):
     return v
 
 
+def edad_horas(estado):
+    """Antigüedad del estado en horas (None si no hay ts legible)."""
+    ts = (estado or {}).get("ts")
+    if not ts:
+        return None
+    try:
+        t = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=datetime.timezone.utc)
+    except Exception:
+        return None
+    return (datetime.datetime.now(datetime.timezone.utc) - t).total_seconds() / 3600.0
+
+
 def desde_canonico(url):
     """El punto canónico: SIEMPRE la última versión del estado.
 
@@ -74,7 +98,12 @@ def desde_canonico(url):
     (`api.github.com/repos/{o}/{r}/contents/{path}?ref=main`), que no cachea;
     el `raw` queda como respaldo.
     """
-    for candidato in (api_equivalente(url), url):
+    candidatos = [url]
+    if "raw.githubusercontent.com" in url:
+        api = api_equivalente(url)
+        if api:
+            candidatos = [api, url]
+    for candidato in candidatos:
         if not candidato:
             continue
         try:
@@ -160,6 +189,15 @@ def main():
         except Exception as e:
             avisos.append(f"canónico no accesible: {type(e).__name__}: {e}")
 
+    # 1b) respaldo: el repo (Contents API, sin caché de CDN)
+    if estado is None and not args.sin_canonico:
+        try:
+            estado = desde_canonico(REPO_DEF)
+            if estado:
+                print(f"respaldo en el repo {REPO_DEF} -> OK", file=sys.stderr)
+        except Exception as e:
+            avisos.append(f"respaldo del repo no accesible: {type(e).__name__}: {e}")
+
     # 2) paste (el conocido, o el último guardado) + cadena hacia atrás
     if estado is None:
         url_paste = args.paste
@@ -172,8 +210,13 @@ def main():
                     url_paste = None
         if url_paste:
             try:
-                estado = desde_paste(url_paste)
-                print(f"paste {url_paste} -> OK", file=sys.stderr)
+                cand = desde_paste(url_paste)
+                edad = edad_horas(cand)
+                if edad is not None and edad > TTL_HORAS:
+                    avisos.append(f"paste {url_paste} demasiado viejo ({edad:.1f} h > {TTL_HORAS} h): se ignora")
+                else:
+                    estado = cand
+                    print(f"paste {url_paste} -> OK", file=sys.stderr)
             except Exception as e:
                 avisos.append(f"paste no accesible: {type(e).__name__}: {e}")
 
@@ -191,6 +234,10 @@ def main():
         print("sin canal: usa --canonical, --paste o --duckdns", file=sys.stderr)
         return 1
 
+    edad = edad_horas(estado)
+    if edad is not None:
+        estado["_edad_h"] = round(edad, 2)
+        estado["_stale"] = edad > TTL_HORAS
     if avisos:
         estado["_avisos"] = avisos
     if not args.no_guardar:

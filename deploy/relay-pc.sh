@@ -17,6 +17,11 @@
 #   sudo ./deploy/relay-pc.sh --instalar          # instala y arranca
 #   sudo ./deploy/relay-pc.sh --diagnostico       # sólo comprueba
 #
+#   Flags exactos (lo que puede pegar el usuario):
+#     --instalar     : escribe Caddyfile (o config nginx), arranca el proxy
+#                      y VERIFICA https://<dominio>/channel.json y /health.
+#     --diagnostico  : comprueba móvil, DNS, herramientas y token. NO toca nada.
+#
 #   Variables de entorno:
 #     MEGADAEMON_PHONE_IP   (por defecto 192.168.1.124)
 #     MEGADAEMON_PHONE_PORT (por defecto 3000)
@@ -87,7 +92,13 @@ $DOMAIN {
             token {$DUCKDNS_TOKEN}
         }
     }
-    reverse_proxy http://$PHONE_IP:$PHONE_PORT
+    # El canónico del canal: lo sirve el daemon (PÚBLICO, payload mínimo).
+    # El sandbox lee https://$DOMAIN/channel.json => URL estable, sin PAT y
+    # sin caché de CDN (por eso NO se usa el 'raw' de GitHub).
+    handle /channel.json {
+        reverse_proxy $PHONE_IP:$PHONE_PORT
+    }
+    reverse_proxy $PHONE_IP:$PHONE_PORT
     header Strict-Transport-Security "max-age=31536000"
 }
 EOF
@@ -103,6 +114,12 @@ server {
     server_name $DOMAIN;
     ssl_certificate     /etc/ssl/megadaemon/$DOMAIN.pem;
     ssl_certificate_key /etc/ssl/megadaemon/$DOMAIN.key;
+    # Canónico del canal: lo sirve el daemon (público, payload mínimo).
+    location = /channel.json {
+        proxy_pass http://$PHONE_IP:$PHONE_PORT;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-Proto https;
+    }
     location / {
         proxy_pass http://$PHONE_IP:$PHONE_PORT;
         proxy_set_header Host \$host;
@@ -131,6 +148,13 @@ arrancar() {
 # ── 3. verificación ────────────────────────────────────────────────────────
 verificar() {
     sleep 2
+    # El canónico del canal: el sandbox lo leerá aquí.
+    ch=$(curl -s -m 10 "https://$DOMAIN/channel.json" 2>/dev/null | head -c 300)
+    if [ -n "$ch" ]; then
+        say "CANÓNICO del canal: https://$DOMAIN/channel.json -> $ch"
+    else
+        warn "https://$DOMAIN/channel.json no responde (¿el daemon lo sirve? ¿el daemon está vivo?)"
+    fi
     code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "https://$DOMAIN/health" 2>/dev/null)
     if [ "$code" = "200" ]; then
         say "CANAL ESTABLE: https://$DOMAIN/health -> 200"

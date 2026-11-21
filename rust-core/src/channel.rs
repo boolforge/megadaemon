@@ -28,6 +28,17 @@
 //!
 //! Reglas: nunca panica, nunca espera infinita (timeouts cortos), y **el
 //! token de DuckDNS no aparece aquí** (eso vive en `duckdns.rs`).
+//!
+//! 📜 **Política de publicación de datos del móvil**: `docs/API_V2.md` §5.15 —
+//! toda tool que publique fuera exige `confirm=true`, lo dice en su
+//! descripción y responde con **QUÉ** se publica y **DÓNDE**.
+//!
+//! 📡 **El punto canónico NO es el paste**: `paste.rs` no tiene caducidad y
+//! cada publicación crea un paste nuevo (el sandbox no puede descubrir el
+//! siguiente). El canónico es el **endpoint `/channel.json` del daemon**
+//! (público, payload mínimo) servido por el relay del PC ⇒ URL estable, sin
+//! PAT en el móvil y sin caché de CDN. El repo (Contents API) y el paste
+//! (TTL de 6 h impuesto por el lector) son **respaldos**.
 
 use serde_json::{json, Value};
 use std::fs;
