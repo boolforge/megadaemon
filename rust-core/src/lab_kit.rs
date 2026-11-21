@@ -12,14 +12,36 @@
 //! | [`recordings`] | BCR, grabadores de audio | **Gestor** de grabaciones: listar, transcribir, cifrar con el vault, subir. **No** graba en silencio (ver la nota legal) |
 //! | [`backups`] | Swift Backup | Lector de backups (Android Backup AB/AB-v2) |
 //!
-//! ## Nota legal (deliberada)
+//! ## Nota legal (corregida el 2026-11-21 con fuentes)
 //!
 //! Este módulo **gestiona** grabaciones existentes: las lista, las transcribe,
-//! las cifra y las sube. **No** implementa grabación silenciosa: grabar una
-//! llamada sin aviso es delito en España (art. 197 CP) y vulnera el GDPR.  En
-//! Europa la vía nativa de Samsung **avisa por voz**; esa es la que se
-//! soporta.  Si el usuario quiere silencio, es una decisión suya y se
-//! registra como tal, no un «detalle de implementación».
+//! las cifra y las sube.  Lo que **no** hace es decidir por el usuario si se
+//! graba y a quién se le avisa.
+//!
+//! Lo que dice la norma (verificado; antes lo tenía mal escrito y lo corrijo):
+//! * **Grabar una llamada en la que participas es legal en España sin avisar**
+//!   al otro interlocutor: art. 18 CE y jurisprudencia del TS (STC 114/1984),
+//!   principio del "consentimiento de una sola parte" ([recordinglaw.com](https://www.recordinglaw.com/es/world-laws/world-recording-laws/spain-recording-laws/),
+//!   [Xataka móvil](https://www.xatakamovil.com/tutoriales/como-grabar-llamadas-iphone-android-descargar-aplicaciones)).
+//! * Lo que sí es delito es **interceptar la comunicación de terceros**
+//!   (art. 197.1 CP) y **difundir** lo grabado o usarlo para humillar
+//!   (arts. 197.3 y 197.7 CP).
+//! * RGPD/LOPDGDD: la voz es dato personal; si se usa para identificación
+//!   biométrica es de categoría especial (art. 9) y necesita base jurídica
+//!   (consentimiento, contrato, obligación legal o interés legítimo) y
+//!   **informar** al interesado (art. 5 LOPD).  La AEPD alabó en su
+//!   resolución E/02223/2018 el procedimiento de Samsung, que **avisa por
+//!   locución** antes de grabar.
+//! * Por eso el CSC parcheado del móvil usa `RecordingAllowedByMenu,
+//!   disclaimer_latin` (menú + aviso), no `RecordingAllowed` a secas: la vía
+//!   nativa europea **avisa por voz** y ese diseño es el que hay que
+//!   preservar.
+//!
+//! Traducción al producto: el mega-binario gestiona, transcribe, cifra y
+//! publica bajo demanda; **no** automatiza una grabación silenciosa sin
+//! dejar constancia.  Si el usuario quiere silencio, se registra como
+//! decisión suya, con su fecha y su aviso (o su no-aviso), no como un
+//! «detalle de implementación».
 //!
 //! ## Qué es medido y qué no
 //!
