@@ -17,6 +17,23 @@ use crate::npu_vs4l;
 pub fn tool_definitions() -> Value {
     json!([
         {
+            "name": "drive_backup",
+            "description": "Google Drive desde el propio MegaDaemon: sube un fichero o un directorio ENTERO (se comprime en ZIP) con subida resumible en trozos de 256 KiB, SHA-256 verificado en local y credenciales OAuth leidas del fichero 0600. Sin curl, sin dd, sin scripts: todo en Rust. Acciones: upload | download | status. Subir publica el contenido en un remoto: exige confirm=true.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["upload", "download", "status"], "default": "upload" },
+                    "path": { "type": "string", "description": "Ruta local a subir (fichero o directorio)" },
+                    "name": { "type": "string", "description": "Nombre en Drive (opcional; por defecto, el del fichero)" },
+                    "folder_id": { "type": "string", "description": "Carpeta destino en Drive (vacio = Mi Drive)" },
+                    "file_id": { "type": "string", "description": "Id de Drive a descargar (action=download)" },
+                    "dest": { "type": "string", "description": "Ruta destino de la descarga (action=download)" },
+                    "confirm": { "type": "boolean", "default": false }
+                },
+                "required": ["confirm"]
+            }
+        },
+        {
             "name": "channel_publish",
             "description": "Publica el estado del canal del movil (URL del quick tunnel y la del canal estable DuckDNS) FUERA del movil: escribe state/channel.json y lo publica en un paste publico, para que el sandbox redescubra la URL aunque el tunel este caido. Publicar expone una URL del dispositivo en un sitio publico: por eso exige confirm=true.",
             "inputSchema": {
@@ -413,6 +430,67 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
     };
 
     let r = match name {
+        "drive_backup" => {
+            // Toda la ruta Drive del daemon (token OAuth + subida resumible)
+            // vive en Rust: aqui no se shella a curl ni se invoca Python.
+            let action = {
+                let a = s("action");
+                if a.trim().is_empty() { "upload".to_string() } else { a }
+            };
+            let st = crate::cockpit_server::state_dir();
+            match action.as_str() {
+                "status" => {
+                    let v = crate::drive_native::status(Some(&st));
+                    json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] })
+                }
+                "download" => {
+                    let file_id = s("file_id");
+                    if file_id.is_empty() {
+                        json!({ "content": [{ "type": "text", "text": "drive_backup download: falta file_id" }], "isError": true })
+                    } else {
+                        let dest = {
+                            let d = s("dest");
+                            if d.trim().is_empty() {
+                                crate::drive_native::default_download_path(&file_id).display().to_string()
+                            } else { d }
+                        };
+                        match crate::drive_native::download_file(&file_id, std::path::Path::new(&dest), Some(&st)) {
+                            Ok(n) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({ "ok": true, "bytes": n, "dest": dest })).unwrap_or_default() }] }),
+                            Err(e) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({ "ok": false, "error": e })).unwrap_or_default() }], "isError": true }),
+                        }
+                    }
+                }
+                _ => {
+                    if !b("confirm") {
+                        json!({ "content": [{ "type": "text", "text": "drive_backup exige confirm=true (sube el contenido a Google Drive)" }] })
+                    } else {
+                        let path = s("path");
+                        if path.trim().is_empty() {
+                            json!({ "content": [{ "type": "text", "text": "drive_backup upload: falta path" }], "isError": true })
+                        } else {
+                            let name = {
+                                let n = s("name");
+                                if n.trim().is_empty() {
+                                    std::path::Path::new(&path)
+                                        .file_name()
+                                        .map(|x| x.to_string_lossy().to_string())
+                                        .unwrap_or_else(|| "backup.bin".to_string())
+                                } else { n }
+                            };
+                            let folder = s("folder_id");
+                            match crate::drive_native::upload_path(std::path::Path::new(&path), &name, &folder, Some(&st)) {
+                                Ok(u) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({
+                                    "ok": true, "file_id": u.file_id, "name": u.name,
+                                    "bytes": u.bytes, "sha256": u.sha256,
+                                    "transport": "nativo (ureq, Rust puro)"
+                                })).unwrap_or_default() }] }),
+                                Err(e) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({ "ok": false, "error": e })).unwrap_or_default() }], "isError": true }),
+                            }
+                        }
+                    }
+                }
+            }
+        }
         "channel_publish" => {
             // Publicar la URL del dispositivo fuera del movil. NO es
             // destructivo, pero SI expone una URL publica: por eso exige

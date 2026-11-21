@@ -335,6 +335,175 @@ pub fn is_swift_part(part: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// zstd + TAR en streaming
+// ---------------------------------------------------------------------------
+
+/// Comprime con zstd (nivel 1..=22).
+///
+/// El crate `zstd` enlaza el **C de zstd embebido** (no la libzstd del
+/// sistema): Android no trae ninguna ⇒ el binario ARM64 es autónomo.
+pub fn zstd_compress(data: &[u8], level: i32) -> Result<Vec<u8>, String> {
+    zstd::bulk::compress(data, level).map_err(|e| format!("zstd: {e}"))
+}
+
+/// Descomprime con zstd (con la longitud de salida conocida).
+pub fn zstd_decompress(data: &[u8], capacity: usize) -> Result<Vec<u8>, String> {
+    zstd::bulk::decompress(data, capacity).map_err(|e| format!("zstd: {e}"))
+}
+
+/// Lee las entradas de un **TAR comprimido con zstd**.
+///
+/// Es el interior de los contenedores de Swift Backup: `tar` + zstd
+/// (`SbaSwiftTarNative::extractTarZstdFromFdRaw`).
+pub fn read_tar_zstd(bytes: &[u8]) -> Result<Vec<TarEntry>, String> {
+    let plain = zstd::bulk::decompress(bytes, bytes.len() * 8 + 4096)
+        .map_err(|e| format!("zstd: {e}"))?;
+    read_tar(&plain)
+}
+
+/// Extrae un **TAR comprimido con zstd** a un directorio, de forma segura.
+pub fn tar_extract_zstd(bytes: &[u8], dest: &Path) -> Result<Vec<String>, String> {
+    let plain = zstd::bulk::decompress(bytes, bytes.len() * 8 + 4096)
+        .map_err(|e| format!("zstd: {e}"))?;
+    tar_extract(&plain, dest)
+}
+
+/// Una entrada de un tar leída **en streaming**.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TarStreamEntry {
+    /// Ruta dentro del tar.
+    pub name: String,
+    /// Tamaño del contenido.
+    pub size: u64,
+    /// mtime (epoch).
+    pub mtime: u64,
+    /// Permisos.
+    pub mode: u32,
+    /// Byte de tipo.
+    pub typeflag: u8,
+}
+
+/// Lector de tar **en streaming**.
+///
+/// Necesario para backups de gigas: el tar completo no cabe en la RAM del
+/// móvil, así que se vaentry a entry, y el contenido se copia directamente al
+/// destino.
+pub struct TarStream<R: std::io::Read> {
+    reader: R,
+    buf: Vec<u8>,
+    remaining: u64,
+    done: bool,
+    current: Option<TarStreamEntry>,
+}
+
+impl<R: std::io::Read> TarStream<R> {
+    /// Crea el lector.
+    pub fn new(reader: R) -> TarStream<R> {
+        TarStream {
+            reader,
+            buf: vec![0u8; 512],
+            remaining: 0,
+            done: false,
+            current: None,
+        }
+    }
+
+    /// Lee la **siguiente** entrada (descarta el contenido de la anterior).
+    ///
+    /// Devuelve `Ok(None)` al final del tar.
+    pub fn next_entry(&mut self) -> Result<Option<TarStreamEntry>, String> {
+        if self.done {
+            return Ok(None);
+        }
+        // Descarta lo que quede de la entrada anterior.
+        if self.remaining > 0 {
+            let mut sink = std::io::sink();
+            let mut left = self.remaining;
+            let mut chunk = vec![0u8; 64 * 1024];
+            while left > 0 {
+                let n = left.min(chunk.len() as u64) as usize;
+                let read = self
+                    .reader
+                    .read(&mut chunk[..n])
+                    .map_err(|e| format!("error leyendo el tar: {e}"))?;
+                if read == 0 {
+                    self.done = true;
+                    return Ok(None);
+                }
+                left -= read as u64;
+                std::io::Write::write_all(&mut sink, &chunk[..read])
+                    .map_err(|e| format!("error descartando: {e}"))?;
+            }
+            self.remaining = 0;
+        }
+        loop {
+            let n = self
+                .reader
+                .read(&mut self.buf)
+                .map_err(|e| format!("error leyendo la cabecera del tar: {e}"))?;
+            if n == 0 {
+                self.done = true;
+                return Ok(None);
+            }
+            if n < 512 {
+                // rellena con ceros: cabecera parcial
+                for b in self.buf[n..].iter_mut() {
+                    *b = 0;
+                }
+            }
+            if self.buf.iter().all(|&b| b == 0) {
+                self.done = true;
+                return Ok(None);
+            }
+            let size = octal(&self.buf[124..136]);
+            let typeflag = self.buf[156];
+            let mode = octal(&self.buf[100..108]) as u32;
+            let mtime = octal(&self.buf[136..148]);
+            let prefix = cstr(&self.buf[345..500]);
+            let base = cstr(&self.buf[0..100]);
+            let name = if prefix.is_empty() {
+                base
+            } else {
+                format!("{prefix}/{base}")
+            };
+            self.remaining = size;
+            let entry = TarStreamEntry {
+                name,
+                size,
+                mtime,
+                mode,
+                typeflag,
+            };
+            self.current = Some(entry.clone());
+            return Ok(Some(entry));
+        }
+    }
+
+    /// Copia el contenido de la entrada actual a un escritor.
+    ///
+    /// Devuelve los bytes copiados. Si se pide menos de lo que queda, la
+    /// entrada queda a medias (el siguiente `next_entry` descarta el resto).
+    pub fn copy_data(&mut self, out: &mut impl std::io::Write) -> Result<u64, String> {
+        let mut chunk = vec![0u8; 64 * 1024];
+        let mut total = 0u64;
+        while self.remaining > 0 {
+            let want = self.remaining.min(chunk.len() as u64) as usize;
+            let n = self
+                .reader
+                .read(&mut chunk[..want])
+                .map_err(|e| format!("error leyendo el contenido: {e}"))?;
+            if n == 0 {
+                return Err("el tar termina antes de lo que dice la cabecera".to_string());
+            }
+            std::io::Write::write_all(out, &chunk[..n]).map_err(|e| format!("error escribiendo: {e}"))?;
+            self.remaining -= n as u64;
+            total += n as u64;
+        }
+        Ok(total)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Seguridad de rutas
 // ---------------------------------------------------------------------------
 

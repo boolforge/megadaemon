@@ -1,0 +1,101 @@
+{
+ "nota": "Argon2id v1.3 (RFC 9106) sin secret ni AD, como el JNI SbaNativeCrypto.deriveArgon2id. Generado con la implementacion de referencia (P-H-C/phc-winner-argon2, dominio publico).",
+ "vectores": [
+  {
+   "password_utf8": "contrasena-de-ejemplo",
+   "password_hex": "636f6e74726173656e612d64652d656a656d706c6f",
+   "salt_hex": "000102030405060708090a0b0c0d0e0f",
+   "iterations": 3,
+   "memory_kib": 65536,
+   "parallelism": 4,
+   "output_bytes": 32,
+   "type": "id",
+   "expected_hex": "19cc3464d21d32b2c2fcbc9a042574c360019110c23a0ec692c82456c9bb10f5",
+   "error": null
+  },
+  {
+   "password_utf8": "contrasena-de-ejemplo",
+   "password_hex": "636f6e74726173656e612d64652d656a656d706c6f",
+   "salt_hex": "000102030405060708090a0b0c0d0e0f",
+   "iterations": 3,
+   "memory_kib": 32768,
+   "parallelism": 4,
+   "output_bytes": 32,
+   "type": "id",
+   "expected_hex": "b091c00e8539bc9b71cbb2351d9bb7dfbcc74eb1815f3c7b83198d9c7599d837",
+   "error": null
+  },
+  {
+   "password_utf8": "contraseña-áéí-中文-😀",
+   "password_hex": "636f6e7472617365c3b1612dc3a1c3a9c3ad2de4b8ade696872df09f9880",
+   "salt_hex": "ffeeddccbbaa99887766554433221100",
+   "iterations": 3,
+   "memory_kib": 65536,
+   "parallelism": 4,
+   "output_bytes": 32,
+   "type": "id",
+   "expected_hex": "b7bb2f336d0d976611b55b368cf25ca3076ade6f9dd0aadce130d29537b64b9a",
+   "error": null
+  },
+  {
+   "password_utf8": "contrasena-de-ejemplo",
+   "password_hex": "636f6e74726173656e612d64652d656a656d706c6f",
+   "salt_hex": "000102030405060708090a0b0c0d0e0f",
+   "iterations": 1,
+   "memory_kib": 16384,
+   "parallelism": 1,
+   "output_bytes": 32,
+   "type": "id",
+   "expected_hex": "e994281dd73f0fe6478a6d396862e9837652d1060d63bb57d0f9fcf3475bbdd4",
+   "error": null
+  },
+  {
+   "password_utf8": "contrasena-de-ejemplo",
+   "password_hex": "636f6e74726173656e612d64652d656a656d706c6f",
+   "salt_hex": "000102030405060708090a0b0c0d0e0f",
+   "iterations": 100,
+   "memory_kib": 16384,
+   "parallelism": 8,
+   "output_bytes": 32,
+   "type": "id",
+   "expected_hex": "b58dffca6776d5dc18029803f06c07887fcc9ef917fe7269ae7f3267b351b06e",
+   "error": null
+  },
+  {
+   "password_utf8": "contrasena-de-ejemplo",
+   "password_hex": "636f6e74726173656e612d64652d656a656d706c6f",
+   "salt_hex": "000102030405060708090a0b0c0d0e0f",
+   "iterations": 2,
+   "memory_kib": 32768,
+   "parallelism": 2,
+   "output_bytes": 16,
+   "type": "id",
+   "expected_hex": "a198eff29d11fc9cb9b301990dfc2360",
+   "error": null
+  },
+  {
+   "password_utf8": "contrasena-de-ejemplo",
+   "password_hex": "636f6e74726173656e612d64652d656a656d706c6f",
+   "salt_hex": "000102030405060708090a0b0c0d0e0f",
+   "iterations": 2,
+   "memory_kib": 32768,
+   "parallelism": 2,
+   "output_bytes": 64,
+   "type": "id",
+   "expected_hex": "5dbf007c11841933fc20446c51a517f04589537be526aa558213fccf426be862e0a32a8fd529eed1bd80ac915158dfc76538558a2741182d3fa85fee8a1756d8",
+   "error": null
+  },
+  {
+   "password_utf8": "",
+   "password_hex": "",
+   "salt_hex": "000102030405060708090a0b0c0d0e0f",
+   "iterations": 3,
+   "memory_kib": 16384,
+   "parallelism": 1,
+   "output_bytes": 32,
+   "type": "id",
+   "expected_hex": null,
+   "note": "password vacia: la app la rechaza (SBA encryption password must not be empty)"
+  }
+ ]
+}
