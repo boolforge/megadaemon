@@ -124,6 +124,7 @@ pub mod signing;
 pub mod signing_vault;
 pub mod snapshot;
 pub mod sshd;
+pub mod store_manager;
 pub mod swift_archive;
 pub mod swift_sba1;
 pub mod swift_sba1_header;
