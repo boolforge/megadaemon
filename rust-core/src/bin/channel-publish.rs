@@ -56,10 +56,26 @@ fn main() -> ExitCode {
     // ── Modo sondeo: stdout = el código HTTP (para el watchdog), stderr = detalle.
     //    El móvil no tiene curl: el sondeo lo hace este binario.
     if let Some(url) = arg("--probe").filter(|s| !s.trim().is_empty()) {
-        let (code, es_daemon) = channel::probe_url(&url);
+        let (code, es_daemon, detalle) = channel::probe_url_detalle(&url);
+        // `forbidden_body` del daemon: `reason` + `sent_key_fp` + `key_path`.
+        // Con eso el watchdog sabe si es credencial sin abrir el móvil.
+        let reason = detalle
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let fp = detalle
+            .get("sent_key_fp")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let kpath = detalle
+            .get("key_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         eprintln!(
-            "channel-publish: {url} -> HTTP {code} ({}) cuerpo_daemon={es_daemon} muerto={}",
-            if es_daemon { "respondio" } else { "sin cuerpo" },
+            "channel-publish: {url} -> HTTP {code} cuerpo_daemon={es_daemon} muerto={} reason={reason} sent_key_fp={fp} key_path={kpath}",
             channel::es_canal_muerto(code)
         );
         println!("{code}");
