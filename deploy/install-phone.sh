@@ -158,9 +158,11 @@ deploy_files() {
 # cloudflared, independiente del daemon).
 install_extras() {
     src_dir=$(dirname "$SRC_BIN")
-    # `md-clipboard` (portapapeles) y `md-dict` (diccionarios del teclado)
-    # son CLIs que se usan directamente en el movil.
-    for b in channel-publish duckdns-updater npu-probe md-lan-listen md-clipboard md-dict; do
+    # ⚠️ `duckdns-updater` se instala (para subdominios NO canónicos) pero
+    # NUNCA actualiza el dominio canónico: ese lo publica el host del relay
+    # (`deploy/relay-pc.sh`, desde el PC). Y aquí no se programa: el A record
+    # tiene un solo escritor.
+    for b in channel-publish duckdns-updater npu-probe; do
         [ -f "$src_dir/$b" ] || continue
         if [ "$ON_PHONE" = "1" ]; then
             cp -f "$src_dir/$b" "$PREFIX/$b" 2>/dev/null && chmod 755 "$PREFIX/$b" 2>/dev/null
@@ -168,18 +170,6 @@ install_extras() {
             adb push "$src_dir/$b" "$PREFIX/$b" >/dev/null 2>&1 && adb shell "chmod 755 $PREFIX/$b" >/dev/null 2>&1
         fi
     done
-    # El script de RECUPERACION: es lo que el usuario ejecuta en el movil
-    # cuando algo se rompe.  Con --auto-update se autorepara solo.
-    if [ -f "$REPO_ROOT/deploy/phone-recover.sh" ]; then
-        if [ "$ON_PHONE" = "1" ]; then
-            cp -f "$REPO_ROOT/deploy/phone-recover.sh" "$PREFIX/phone-recover.sh" 2>/dev/null \
-                && chmod 755 "$PREFIX/phone-recover.sh" 2>/dev/null
-        else
-            adb push "$REPO_ROOT/deploy/phone-recover.sh" "$PREFIX/phone-recover.sh" >/dev/null 2>&1 \
-                && adb shell "chmod 755 $PREFIX/phone-recover.sh" >/dev/null 2>&1
-        fi
-        say "script de recuperación instalado: $PREFIX/phone-recover.sh"
-    fi
     if [ -f "$REPO_ROOT/deploy/tunnel-watchdog.sh" ]; then
         if [ "$ON_PHONE" = "1" ]; then
             cp -f "$REPO_ROOT/deploy/tunnel-watchdog.sh" "$PREFIX/tunnel-watchdog.sh" 2>/dev/null \

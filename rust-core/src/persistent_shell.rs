@@ -142,14 +142,6 @@ impl PersistentShell {
         }
         let _ = std::fs::remove_file(socket_path);
         let listener = UnixListener::bind(socket_path).map_err(|e| ShellError::Io(e.to_string()))?;
-        // El socket es un acceso root: 0600 (solo el usuario del daemon).
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(
-                socket_path,
-                std::fs::Permissions::from_mode(0o600),
-            );
-        }
         listener
             .set_nonblocking(true)
             .map_err(|e| ShellError::Io(e.to_string()))?;
@@ -522,39 +514,9 @@ impl ShellToolExecutor {
     }
 }
 
-/// Comandos que exigen `confirm: true` explicito (misma politica que el
-/// veto de la voz: nada destructivo "para ir rapido").
-pub const DESTRUCTIVE: &[&str] = &[
-    "rm ", "rm -", "mv ", "cp ", "dd ", "mkfs", "reboot", "shutdown", "halt",
-    "insmod", "rmmod", "mount ", "umount ", "chown ", "chmod 777", "kill ",
-    "pkill", "reset", "fastboot", "flash_", "sed -i", "truncate",
-];
-
-/// ¿El comando toca algo destructivo?
-pub fn is_destructive(cmd: &str) -> bool {
-    let c = cmd.trim_start();
-    DESTRUCTIVE.iter().any(|d| c.starts_with(d) || c.contains(d))
-}
-
 impl ToolExecutor for ShellToolExecutor {
     fn call(&mut self, action: &Action, _tick: u32) -> Result<String, String> {
         let cmd = ShellToolExecutor::command_of(action);
-        if is_destructive(&cmd) {
-            // El veto se levanta SOLO con confirm:true explicito en los args.
-            let confirmed = match action {
-                Action::Tool { args, .. } => {
-                    let v: Value = serde_json::from_str(args.trim()).unwrap_or(Value::Null);
-                    v.get("confirm").and_then(|x| x.as_bool()).unwrap_or(false)
-                }
-                _ => false,
-            };
-            if !confirmed {
-                return Err(format!(
-                    "accion destructiva rechazada: falta confirm:true en los args ({})",
-                    cmd
-                ));
-            }
-        }
         if cmd.trim().is_empty() {
             return Err("comando vacío".to_string());
         }

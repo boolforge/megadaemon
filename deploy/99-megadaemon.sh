@@ -29,17 +29,11 @@ ENV_FILE="$PREFIX/megadaemon.env"
 # peers.json, audit.ndjson, board.sqlite y la key: TODO en el mismo sitio).
 if [ -f "$ENV_FILE" ]; then
     . "$ENV_FILE" 2>/dev/null
+    # Sólo las variables NO secretas se exportan a los hijos: la API key se
+    # exporta más abajo, sólo al daemon (igual que antes).
+    export MEGADAEMON_STATE_DIR="${MEGADAEMON_STATE_DIR:-/data/local/tmp/megadaemon/state}"
+    export MEGADAEMON_LISTEN="${MEGADAEMON_LISTEN:-127.0.0.1:9090}"
 fi
-# Los defaults se exportan SIEMPRE, no sólo cuando existe el env file.
-# BUG MEDIDO (2026-11-21): con el export dentro del `if`, si el móvil no
-# tiene $ENV_FILE el daemon caía al default DEL CRATE RUST
-# (/data/user/0/com.agy/files/megadaemon/state), que en el móvil NO existe
-# => la key, tunnel.url, channel.json, peers.json, audit.ndjson y
-# board.sqlite se dispersaban => 403 global y /channel.json sin 'quick'.
-# Sólo las variables NO secretas se exportan a los hijos: la API key se
-# exporta más abajo, sólo al daemon (igual que antes).
-export MEGADAEMON_STATE_DIR="${MEGADAEMON_STATE_DIR:-/data/local/tmp/megadaemon/state}"
-export MEGADAEMON_LISTEN="${MEGADAEMON_LISTEN:-127.0.0.1:9090}"
 LOG=/sdcard/megadaemon.log
 LOG_DIR=/sdcard/megadaemon-logs
 MAX_BYTES=$((10 * 1024 * 1024))

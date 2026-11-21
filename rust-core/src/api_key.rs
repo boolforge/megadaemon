@@ -552,102 +552,16 @@ pub fn fingerprint(key: &str) -> String {
 ///     local del agente es mas antigua, ve al instante que su key caducó.
 pub fn forbidden_body(state_dir: &str, presented: Option<&str>) -> String {
     let fp = presented.map(fingerprint).unwrap_or_else(|| "-".to_string());
-    let key_path = format!("{}/megadaemon_api.key", state_dir);
-    let meta = std::fs::metadata(&key_path).ok();
-    let rotated = meta
-        .as_ref()
+    let rotated = std::fs::metadata(format!("{}/megadaemon_api.key", state_dir))
+        .ok()
         .and_then(|m| m.modified().ok())
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let env_key = std::env::var("MEGADAEMON_API_KEY")
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let env_ok = env_key.len() >= 16;
-    // Si no hay fichero de key NI key en el env ⇒ el daemon **no tiene
-    // ninguna**: rechaza TODAS las credenciales y el 403 debe decirlo con
-    // la ruta exacta (si no, el enjambre busca a ciegas).
-    if meta.is_none() && !env_ok {
-        return serde_json::json!({
-            "error": "forbidden",
-            "reason": "el daemon no tiene ninguna key configurada",
-            "hint": format!(
-                "el daemon no tiene ninguna key configurada: ponla en {} o exporta MEGADAEMON_API_KEY",
-                key_path
-            ),
-            "state_dir": state_dir,
-            "key_path": key_path,
-            "sent_key_fp": fp,
-            "key_rotated_at": 0,
-        })
-        .to_string();
-    }
-    serde_json::json!({
-        "error": "forbidden",
-        "reason": "la credencial no coincide con la vigente",
-        "hint": format!(
-            "API key invalida o caducada: esta credencial no coincide con la vigente (key vigente en {})",
-            key_path
-        ),
-        "state_dir": state_dir,
-        "key_path": key_path,
-        "sent_key_fp": fp,
-        "key_rotated_at": rotated,
-    })
-    .to_string()
-}
-
-/// Cuerpo del 403 cuando falta el **token de sesión** (no la API key).
-///
-/// Nombra el `state_dir` efectivo y, si además el daemon no tiene key
-/// configurada, lo dice: así el 403 se autodiagnostica sin abrir el móvil.
-pub fn token_required_body(state_dir: &str) -> String {
-    let key_path = format!("{}/megadaemon_api.key", state_dir);
-    let has_key = std::fs::metadata(&key_path).is_ok()
-        || std::env::var("MEGADAEMON_API_KEY")
-            .unwrap_or_default()
-            .trim()
-            .len()
-            >= 16;
-    let mut v = serde_json::json!({
-        "error": "unauthorized",
-        "hint": "falta la cabecera X-Seere-Auth-Token (el token de sesión va en la página /v2 o se canjea con la API key)",
-        "state_dir": state_dir,
-        "key_path": key_path,
-    });
-    if !has_key {
-        v["reason"] = serde_json::json!("el daemon no tiene ninguna key configurada");
-        v["hint"] = serde_json::json!(format!(
-            "el daemon no tiene ninguna key configurada: ponla en {} o exporta MEGADAEMON_API_KEY; ademas falta el token de sesion",
-            key_path
-        ));
-    }
-    v.to_string()
-}
-
-/// Log de arranque (una vez por proceso): **la ruta que usa el daemon** y la
-/// huella de su key (nunca el secreto) ⇒ cualquier "403" futuro se lee en el
-/// log sin adivinar.
-pub fn log_startup_state(state_dir: &str) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static LOGGED: AtomicBool = AtomicBool::new(false);
-    if !LOGGED.swap(true, Ordering::Relaxed) {
-        let cfg = ApiKeyConfig::load(state_dir);
-        let fp = if cfg.key.is_empty() {
-            "-".to_string()
-        } else {
-            fingerprint(&cfg.key)
-        };
-        eprintln!(
-            "[api_key] state_dir={} key={} key_fp={} extra_keys={} enabled={}",
-            state_dir,
-            if cfg.key.is_empty() { "NO" } else { "si" },
-            fp,
-            cfg.extra_keys.len(),
-            cfg.enabled
-        );
-    }
+    format!(
+        "{{\"error\":\"forbidden\",\"hint\":\"API key invalida o caducada: esta credencial no coincide con la vigente\",\"sent_key_fp\":\"{}\",\"key_rotated_at\":{}}}",
+        fp, rotated
+    )
 }
 
 /// Aviso una sola vez por proceso: "key no configurada" con `forced`.
@@ -988,6 +902,22 @@ mod forbidden_body_tests {
         assert!(b.contains("\"error\":\"forbidden\""), "{}", b);
         assert!(b.contains("sent_key_fp"), "{}", b);
         assert!(!b.contains("mdaemon_sk_live_ABCDEF"), "el secreto no debe aparecer: {}", b);
+        let b2 = forbidden_body("/no/existe", None);
+        assert!(b2.contains("sent_key_fp"), "{}", b2);
+    }
+}
+
+#[cfg(test)]
+mod forbidden_body_tests {
+    use super::forbidden_body;
+
+    #[test]
+    fn no_filtra_la_key_vigente_ni_la_presentada() {
+        let b = forbidden_body("/no/existe", Some("mdaemon_sk_live_ABCDEF"));
+        assert!(b.contains("\"error\":\"forbidden\""), "{}", b);
+        assert!(b.contains("sent_key_fp"), "{}", b);
+        assert!(!b.contains("mdaemon_sk_live_ABCDEF"), "el secreto no debe aparecer: {}", b);
+        // sin key presented: no debe Romper el JSON
         let b2 = forbidden_body("/no/existe", None);
         assert!(b2.contains("sent_key_fp"), "{}", b2);
     }

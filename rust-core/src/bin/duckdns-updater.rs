@@ -16,6 +16,11 @@
 //! duckdns-updater --status                # sólo informa del estado
 //! ```
 //!
+//! ⚠️ `duckdns.org/update` pone el A record a la IP de **quien llama** ⇒ el
+//! dominio **canónico** lo publica el host del relay (`deploy/relay-pc.sh`,
+//! desde el PC): por eso este binario **no lo toca** salvo opt-in
+//! (`--allow-canonical` o `MEGADAEMON_ALLOW_CANONICAL_DNS=1`).
+//!
 //! El token se lee de un **fichero 0600** (`--token-file`, por defecto
 //! `/data/local/tmp/megadaemon/duckdns.token`). Nunca se imprime, ni se
 //! guarda en el estado, ni va en la línea de órdenes.

@@ -4,6 +4,18 @@
 //! Por qué DuckDNS y no el *quick tunnel* de Cloudflare: un *quick tunnel*
 //! **rota el hostname en cada reinicio** y además no resuelve, así que cada
 //! reinicio del móvil deja a todos los agentes sin canal (530/403). Un
+//! ⚠️ **El A record lo publica el host del RELAY** (`deploy/relay-pc.sh`,
+//! desde el PC): `duckdns.org/update` pone el A record a la IP de **quien
+//! llama** ⇒ llamarlo desde el móvil o desde el sandbox de un agente deja el
+//! dominio apuntando a la IP equivocada y rompe el relay (medido el
+//! 2026-11-21: apuntaba al NAT del datacenter). ⇒ el binario **no actualiza
+//! el dominio canónico** salvo opt-in (`--allow-canonical`).
+//!
+//! ⚠️ Y un **`OK` de la API no prueba que el dominio exista**: DuckDNS sólo
+//! crea los subdominios **registrados en la cuenta** ⇒ hay que **verificar
+//! el DNS** después (DoH: `Status 0` + Answer = existe · `Status 3` = no
+//! existe).
+//!
 //! dominio propio (p. ej. `mdtmfnc.duckdns.org`) es **estable** y permite
 //! además obtener un certificado Let's Encrypt por **DNS-01**.
 //!

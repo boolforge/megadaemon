@@ -6,6 +6,11 @@ authors = ["MegaDaemon Engineering Team <megadaemon@agy.internal>"]
 description = "MegaDaemon v13.0 Zenith — Pure Rust Multi-OS RE Workbench (DiE, Binwalk, Tile Molester, ImHex/Kaitai, CIRX v3.4 SSA, MBA, Rizin/Frida, Exynos NPU/CV, Parasitic LLM Swarm & Antigravity MCP Server)"
 
 [dependencies]
+# KDF del motor de backup: **Argon2id** (RFC 9106), el mismo KDF que mide
+# Swift Backup. `default-features = false` + `alloc` deja fuera `password-hash`
+# y `rand` => **cero dependencias de entropía del sistema** (Android no siempre
+# expone /dev/urandom al proceso) y binario más pequeño para ARM64.
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 base64ct = { version = "1", features = ["alloc"] }   # base64 de la clave publica (SPKI)
 flate2 = "1"           # inflate (entradas deflate de los ZIP/APK)
 libc = "0.2"
@@ -23,6 +28,14 @@ sha1 = { version = "0.10", features = ["oid"] }  # feature oid: AssociatedOid pa
 sha2 = "0.10"          # SHA-256 nativo (inventario de APK, dedup, firmados)
 ureq = { version = "3.5.2", features = ["rustls", "json"] }
 zip = { version = "2.2", default-features = false, features = ["deflate"] }  # lectura de APK/DEX
+# zstd: contenedor TAR+zstd (el interior de Swift Backup) y el nuestro.
+#
+# `default-features = false` + `arrays` => **NO** se activan `bindgen` (exige
+# libclang en el NDK) ni `pkg-config` (exige libzstd del sistema). El crate
+# `zstd-sys` compila el **C de zstd embebido** y lo enlaza estático ⇒ el
+# binario ARM64 no depende de ninguna libzstd del sistema (Android no trae
+# ninguna). Mismo mecanismo que el SQLite `bundled` de arriba.
+zstd = { version = "0.13", default-features = false, features = ["arrays"] }
 
 [features]
 

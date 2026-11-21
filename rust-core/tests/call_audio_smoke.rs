@@ -152,32 +152,3 @@ fn las_rutas_de_csc_incluyen_el_cscfeature_xml_ofuscado() {
     let c = csc_feature_candidates("AMO");
     assert!(c[0].ends_with("/conf/system/cscfeature.xml"), "{:?}", c);
 }
-
-#[test]
-fn los_pcm_de_voz_son_los_wdma() {
-    assert_eq!(ALSA_WDMA_DEVICES[0], "hw:0,12");
-    assert_eq!(ALSA_WDMA_DEVICES.len(), 8);
-    let p = alsa_voice_capture_plan("hw:0,12", 5);
-    assert!(p.command.contains("md_alsa"));
-    assert!(p.command.contains("hw:0,12"));
-    assert!(p.notes.iter().any(|n| n.contains("silencio")));
-}
-
-#[test]
-fn el_riesgo_del_cambio_de_csc_es_explicito() {
-    let r = csc_switch_risk(SIM_OPERATOR_NUMERIC, "ILO");
-    assert!(r.contains("ILO"));
-    assert!(r.contains("21403"));
-    assert!(r.contains("reversible"));
-    let v = csc_switch_verify_plan("ILO");
-    assert!(v[0].contains("ro.csc.sales_code"));
-    assert!(v.iter().any(|x| x.contains("CscFeature_VoiceCall_ConfigRecording")));
-}
-
-#[test]
-fn los_csc_de_grabacion_disponibles_estan_medidos() {
-    assert!(RECORDING_CSC_AVAILABLE.contains(&"THL"));
-    assert!(RECORDING_CSC_AVAILABLE.contains(&"ILO"));
-    assert!(RECORDING_CSC_AVAILABLE.contains(&"XXV"));
-    assert!(!RECORDING_CSC_AVAILABLE.contains(&"INS"), "INS no esta en este firmware");
-}

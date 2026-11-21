@@ -243,7 +243,7 @@ Esto **no** entra en el repo y **no** se reimplementa:
 | Reimplementar el **cracking de licencias** | evasión de medidas técnicas (DSM Directive 2019/790, art. 41; en España art. 270 LO) |
 | **Bypassear la verificación de compra** (Play Billing / IAP) | ídem |
 | **Bypassear DRM** (Widevine, FairPlay…) | ídem |
-| Reimplementar el **SDK de parcheo** de Lucky Patcher/LSPatch | no es interop: es copiar la funcionalidad |
+| Reimplementar el **SDK de parcheo** de Lucky Patcher/LSPatch | no es interop: es copiar la 기능 |
 | Publicar o distribuir **claves privadas** de AOSP | son públicas, pero no seGQ este repo las copia |
 
 **Lo que sí se hace y sí es útil para un auditor**:

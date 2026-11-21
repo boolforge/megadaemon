@@ -55,42 +55,63 @@ http_code() {
 }
 
 # Resolutor DoH (JSON): imprime la IP A del nombre o nada.
-doh_lookup() {
+doh_status() {
     curl -s -m "$TIMEOUT" -H 'accept: application/dns-json' "$1" 2>/dev/null | python3 -c '
 import json, sys
 try:
     d = json.load(sys.stdin)
 except Exception:
-    raise SystemExit(1)
-if d.get("Status") not in (0, None):
-    raise SystemExit(1)
-for a in d.get("Answer") or []:
-    if a.get("type") == 1 and a.get("data"):
-        print(a["data"])
-        break
+    print("|err|"); raise SystemExit
+st = d.get("Status")
+ip = ""
+if st == 0:
+    for a in (d.get("Answer") or []):
+        if a.get("type") == 1 and a.get("data"):
+            ip = a["data"]; break
+print("|%s|%s" % (st, ip))
 ' 2>/dev/null
 }
 
 # ── 1) DNS: el A record del dominio ───────────────────────────────────────
 say "1) DNS de $DOMAIN"
-A_IP=""
-if command -v dig >/dev/null 2>&1; then
+# NIVEL: auto (dig -> getent -> DoH) · local (sólo dig/getent) · doh (sólo DoH).
+# Para PROBAR cada nivel en cualquier máquina (p.ej. en un móvil donde
+# `getent` puede fallar y dejaría un falso negativo).
+NIVEL="${VERIFY_CANAL_DNS:-auto}"
+A_IP=""; DNS_COMO=""; DNS_ESTADO=""
+if [ "$NIVEL" != "doh" ] && command -v dig >/dev/null 2>&1; then
     A_IP="$(dig +short "$DOMAIN" A 2>/dev/null | head -1)"
-elif command -v getent >/dev/null 2>&1; then
+elif [ "$NIVEL" != "doh" ] && command -v getent >/dev/null 2>&1; then
     A_IP="$(getent hosts "$DOMAIN" 2>/dev/null | awk '{print $1}' | head -1)"
+    [ -n "$A_IP" ] && DNS_COMO="getent"
 fi
 # Sin `dig` (el sandbox NO lo tiene) ni `getent` => DoH por JSON.
 # MEDIDO 2026-11-21: ambos resolvers (Google y Cloudflare) responden.
 if [ -z "$A_IP" ] && command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
-    A_IP="$(doh_lookup "https://dns.google/resolve?name=${DOMAIN}&type=A" | head -1)"
-    if [ -z "$A_IP" ]; then
-        A_IP="$(doh_lookup "https://cloudflare-dns.com/dns-query?name=${DOMAIN}&type=A" | head -1)"
+    D1="$(doh_status "https://dns.google/resolve?name=${DOMAIN}&type=A")"
+    ST1="${D1#|*}"; ST1="${ST1%%|*}"; IP1="${D1##*|}"
+    if [ -n "$IP1" ]; then
+        A_IP="$IP1"; DNS_COMO="DoH(google)"
+    else
+        D2="$(doh_status "https://cloudflare-dns.com/dns-query?name=${DOMAIN}&type=A")"
+        ST2="${D2#|*}"; ST2="${ST2%%|*}"; IP2="${D2##*|}"
+        if [ -n "$IP2" ]; then
+            A_IP="$IP2"; DNS_COMO="DoH(cloudflare)"
+        else
+            case "$ST2" in
+                3) DNS_ESTADO="nxdomain" ;;
+                *) DNS_ESTADO="sin-respuesta" ;;
+            esac
+            DNS_COMO="DoH"
+        fi
     fi
     [ -n "$A_IP" ] && info "A record vía DoH (sin dig/getent)"
 fi
 if [ -n "$A_IP" ]; then
-    ok "$DOMAIN -> $A_IP" "dns" "\"ok\""
-    RES="$RES\"dns_ip\":\"$A_IP\","
+    ok "$DOMAIN -> $A_IP (vía ${DNS_COMO:-DNS})" "dns" "\"ok\""
+    RES="$RES\"dns_ip\":\"$A_IP\",\"dns_como\":\"${DNS_COMO:-DNS}\","
+elif [ "$DNS_ESTADO" = "nxdomain" ]; then
+    fail "$DOMAIN NO EXISTE en DNS (NXDOMAIN) ⇒ el subdominio no está registrado en la cuenta de DuckDNS (o el relay no lo ha publicado todavía)" "dns"
 else
     fail "$DOMAIN NO resuelve (¿arrancó el relay? ¿se publicó el A record?)" "dns"
 fi
@@ -180,13 +201,14 @@ print(d.get("_fuente") or "ok")
         "")           fail "el lector no devolvió nada" "lector" ;;
         *)
             RES="$RES\"lector_fuente\":\"$SRC\","
-            if [ "$CNUM" = "200" ]; then
+            CANON_DEF="https://${DOMAIN}/channel.json"
+            if [ "$CNUM" = "200" ] && [ "$CANON" = "$CANON_DEF" ]; then
                 # El canonico responde 200 pero el lector oficial NO lo usa
                 # => el enjambre no encontraria el movil por la via
                 # principal => "CANAL OK" no seria verdad.  => FAIL.
                 fail "el canónico responde 200 pero el lector cayó al respaldo ($SRC)" "lector"
             else
-                info "el lector cayó al respaldo (fuente: $SRC) — esperable: el canónico no responde ($CNUM)"
+                info "el lector cayó al respaldo (fuente: $SRC) — esperable: el canónico probado no es el real (--canonico) o no responde ($CNUM)"
             fi
             ;;
     esac
