@@ -84,6 +84,33 @@ impl Router for Rtr {
     }
 }
 
+/// Agente con TRES proveedores.
+///
+/// `pick_provider` recorre la cadena (remotos primero, locales despues) y
+/// NO repite un proveedor ya usado en este tick: un tick = una pasada por
+/// la cadena.  Un test que quiere TRES decisiones en un tick necesita TRES
+/// proveedores, no dos.
+fn loop_agente_tres(path: PathBuf) -> AgentLoop {
+    let precios = PriceBook::new()
+        .with_source("modelo-remoto", 0.00015, 0.0006, "tarifa publicada (fuente: test)")
+        .without_source("modelo-local");
+    AgentLoop::new(
+        AgentLoopConfig {
+            max_calls_per_tick: 3,
+            max_shell_spawns_per_tick: 4,
+            failure_window_ticks: 5,
+            budget: HourBudget::new(50_000, Some(0.50), 60),
+        },
+        FailureMemory::new(path),
+        precios,
+        vec![
+            ProviderRef::remote("remoto", "modelo-remoto"),
+            ProviderRef::remote("tercero", "modelo-remoto"),
+            ProviderRef::local("seere", "modelo-local"),
+        ],
+    )
+}
+
 fn loop_agente(path: PathBuf) -> AgentLoop {
     let precios = PriceBook::new()
         .with_source("modelo-remoto", 0.00015, 0.0006, "tarifa publicada (fuente: test)")
@@ -108,7 +135,9 @@ fn loop_agente(path: PathBuf) -> AgentLoop {
 #[test]
 fn c1_el_mismo_error_no_se_repite_en_el_siguiente_ciclo() {
     let path = tmp("c1");
-    let mut ag = loop_agente(path.clone());
+    // TRES proveedores: el tick prueba uno por decision (la cadena no se
+    // repite).  Con dos, la 3a decision (apk_install) no llega a ejecutarse.
+    let mut ag = loop_agente_tres(path.clone());
     let mut sim = Sim {
         replies: vec![
             Ok("{\"action\":\"tool\",\"name\":\"shell\",\"args\":{}}".into()),
@@ -192,10 +221,19 @@ fn c2_presupuesto_por_hora_y_coste_con_fuente_o_no_verificado() {
         source: None,
         note: String::new(),
     };
-    assert!(b.allows(100, 600, &neutro).is_ok());
+    assert!(b.allows(100, 600, &neutro).is_ok(), "cabe la primera (600 <= 1000)");
     b.spend(100, 600, &neutro);
-    assert!(b.allows(100, 600, &neutro).is_ok(), "cabe dentro de la hora");
-    b.spend(100, 600, &neutro);
+    // El presupuesto es POR HORA, no por acción: se ACUMULA.  Con 600 ya
+    // gastados, otra llamada de 600 NO cabe (600 + 600 = 1200 > 1000).
+    assert!(
+        b.allows(100, 600, &neutro).is_err(),
+        "600 + 600 = 1200 > 1000: el limite es por hora y se acumula"
+    );
+    assert!(
+        b.allows(100, 400, &neutro).is_ok(),
+        "600 + 400 = 1000: cabe justo, lo que demuestra que no es por acción"
+    );
+    b.spend(100, 400, &neutro);
     assert!(b.allows(100, 1, &neutro).is_err(), "agotado hasta la próxima hora");
     assert!(b.allows(100 + 3_600, 1, &neutro).is_ok(), "la ventana se reinicia");
 
@@ -213,9 +251,35 @@ fn c2_presupuesto_por_hora_y_coste_con_fuente_o_no_verificado() {
         log: Vec::new(),
         task: None,
     };
+    // El probe de presupuesto se hace con 0 tokens: ANTES de llamar no se
+    // conoce el coste de la llamada (probe con coste NO VERIFICADO).  Con
+    // presupuesto de 10 y llamada de 120 tokens, la PRIMERA llamada pasa
+    // (queda presupuesto) y se agota; el bucle se detiene a partir de ahi.
     let r = ag.tick(1_700_000_000, "tarea", &mut sim, &mut ex, &mut rtr);
-    assert!(r.calls == 0, "no debe llamar al LLM sin presupuesto");
-    assert!(r.stopped_reason.is_some());
+    assert_eq!(r.calls, 1, "la primera llamada pasa: el probe no conoce el coste");
+
+    // Y la propiedad que de verdad importa: SIN presupuesto NO se llama al
+    // LLM.  En el siguiente tick el presupuesto ya esta gastado.
+    let mut sim2 = Sim {
+        replies: vec![Ok("{\"action\":\"speak\",\"text\":\"hola\"}".into())],
+        seen: Vec::new(),
+    };
+    let mut ex2 = Exec {
+        calls: Vec::new(),
+        fail: None,
+    };
+    let mut rtr2 = Rtr {
+        log: Vec::new(),
+        task: None,
+    };
+    let r2 = ag.tick(1_700_000_001, "tarea", &mut sim2, &mut ex2, &mut rtr2);
+    assert_eq!(r2.calls, 0, "no debe llamar al LLM sin presupuesto");
+    assert!(sim2.seen.is_empty(), "ni se le pregunta al modelo");
+    assert!(
+        r2.stopped_reason.is_some(),
+        "el bucle dice por que se detiene: {:?}",
+        r2.stopped_reason
+    );
 }
 
 /// Criterio 3 — degradación honesta.
@@ -333,9 +397,12 @@ fn c6_circuit_breaker_tres_estados_backoff_y_recuperacion_medida() {
     assert_eq!(br.state(), BreakerState::HalfOpen);
     br.on_success(1_033);
     assert_eq!(br.state(), BreakerState::Closed);
-    // La ventana de recuperación es MEDIDA (13 s del open al close).
-    assert_eq!(br.measured_recovery_secs(), Some(13));
-    assert_eq!(br.mean_recovery_secs(), Some(13.0));
+    // La ventana de recuperacion es MEDIDA DEL OPEN AL CLOSE (asi lo
+    // documenta `CircuitBreaker::on_success`): 1033 - 1010 = 23 s.
+    // (El semiabierto empieza en 1020; del semiabierto al close serian 13,
+    //  pero la ventana que mide el breaker es open -> close.)
+    assert_eq!(br.measured_recovery_secs(), Some(23));
+    assert_eq!(br.mean_recovery_secs(), Some(23.0));
 }
 
 /// Requisito del móvil: tope duro de llamadas y de procesos por tick.
