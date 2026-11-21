@@ -14,3 +14,6 @@ audit_adversarial_v15
 audit_scout_ui
 # Auditorias adversariales AUDIT_SCOUT_VOICE: fallan mientras el defecto exista.
 audit_scout_voice
+# Auditoria adversarial AUDIT_SCOUT_HW (incluye hw02_memory_freeze):
+# falla a proposito mientras el defecto exista.
+audit_scout_hw

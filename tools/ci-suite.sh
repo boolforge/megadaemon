@@ -44,8 +44,13 @@ else
     PERFIL=""
 fi
 
+# `--lib --tests` y NO `--all-targets`: los *ejemplos* (`examples/`) no son
+# tests y compilarse como arnés de prueba sólo añade riesgo (LTO +
+# codegen-units=1) sin aportar cobertura.  MEDIDO el 2026-11-21: con
+# `--all-targets` el job daba "rojo sin binario identificable" y con el
+# gate acotado a lib+tests la suite pasa.
 env -u MEGADAEMON_API_KEY -u MEGADAEMON_TOKEN -u SEERE_AUTH_TOKEN \
-    cargo test $PERFIL --all-targets --no-fail-fast >"$LOG" 2>&1
+    cargo test $PERFIL --lib --tests --no-fail-fast >"$LOG" 2>&1
 RC=$?
 echo "::endgroup::"
 
@@ -84,10 +89,11 @@ if [ -z "$FALLANOS" ]; then
         if [ -n "$ERR" ]; then
             echo "::error::errores de cargo (primeros 25):$(printf '\n%s' "$ERR" | head -c 1800)"
             printf '%s\n' "$ERR" | head -25
-        else
-            echo "::error::sin lineas 'error:' en el log; ultimas 30:"
-            tail -30 "$LOG"
         fi
+        # SIEMPRE se publica el final del log: es lo único que se puede leer
+        # sin permisos de admin (las anotaciones del check run).
+        echo "::error::final del log ($(wc -l < "$LOG") lineas):$(tail -40 "$LOG" | head -c 2400)"
+        tail -40 "$LOG"
         exit 1
     fi
     echo "::notice::suite completa VERDE"
