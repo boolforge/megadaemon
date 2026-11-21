@@ -1,197 +1,348 @@
-#!/usr/bin/env bash
+#!/usr/bin/env sh
 # =============================================================================
-# fix-entorno.sh — Deja el MegaDaemon del usuario en un estado CONOCIDO y
-# VERIFICADO.  Un solo archivo, sin pasos manuales, sin secretos en el repo.
+# fix-entorno.sh — EL ARCHIVO ÚNICO para dejar el MegaDaemon del usuario
+# (PC + móvil) en un estado CONOCIDO y VERIFICADO.  Un solo fichero, sin
+# pasos manuales, sin secretos en el repo.
 #
-#   ./deploy/fix-entorno.sh --verificar     # sólo diagnóstico (sin tocar nada)
-#   sudo ./deploy/fix-entorno.sh --instalar  # arregla todo (PC + móvil)
+#   EN EL PC (con el móvil por adb):
+#     ./deploy/fix-entorno.sh --diagnostico     # sólo lee, no toca nada
+#     sudo ./deploy/fix-entorno.sh --instalar    # arregla PC + móvil
 #
-# QUÉ ARREGLA (todo lo que está medido que falla hoy):
+#   EN EL MÓVIL (Termux, sin adb):
+#     sh fix-entorno.sh --diagnostico
+#     sh fix-entorno.sh --instalar
+#
+# El script DETECTA dónde se está ejecutando.  Sin argumentos hace
+# diagnóstico y no toca nada (modo seguro por defecto).
+#
+# QUÉ ARREGLA (todo medido que hoy falla):
 #   1. CREDENCIAL EN UN SOLO SITIO.  El daemon valida contra
-#      <state_dir>/megadaemon_api.key.  Si ese directorio está vacío, el daemon
-#      rechaza CUALQUIER key -> 403 "API key invalida" a toda la flota (y no
-#      es que la key haya caducado).  Aqui se copia/deriva la key al state_dir
-#      REAL y se deja UNA sola fuente de verdad.
-#   2. BINARIO ARM64 VERIFICADO: sha256 + ELF aarch64 + chmod 755 ANTES de
-#      arrancar (sin el bit +x el supervisor lo da por inexistente y SE RINDE:
-#      esa fue la causa medida del 502) + backup del anterior + ROLLBACK si
-#      /health no responde.
-#   3. SUPERVISOR PERSISTENTE (PPID 1) con MEgADAEMON_STATE_DIR exportado, para
-#      que el daemon SIEMPRE mire el mismo sitio.
-#   4. TUNEL CON URL ESTABLE: un solo cloudflared y un registro de la URL
-#      vigente en <STATE_DIR>/tunnel.url.  Los hostnames quick-tunnel cambian en
-#      cada reinicio y hacen que la flota diagnostique "red caida" sin motivo.
-#   5. RELAY DEL PC (DuckDNS) si esta caido: sudo ./deploy/relay-pc.sh --instalar
-#   6. VERIFICACION FINAL con numeros: /health, web, MCP, RAM del movil.
+#      <state_dir>/megadaemon_api.key.  Si ese directorio está vacío el
+#      daemon rechaza CUALQUIER key -> 403 "API key invalida" a toda la
+#      flota (NO es que la key haya caducado: es que no la encuentra).
+#   2. BINARIO ARM64 VERIFICADO desde el RELEASE real de GitHub:
+#      se resuelve la última release por la API (los tags son `v<sha>`,
+#      NO existe un tag "latest" -> 404), se descarga el asset
+#      `megadaemon-core-android-arm64` + su `.sha256`, se COMPARA el
+#      sha256, se comprueba que es ELF aarch64, se instala con chmod 755
+#      ANTES de arrancar (sin el bit +x el supervisor lo da por inexistente
+#      y SE RINDE: esa fue la causa medida del 502) y con ROLLBACK si el
+#      daemon no arranca.
+#   3. SUPERVISOR PERSISTENTE (PPID 1) con MEGADAEMON_STATE_DIR exportado:
+#      el daemon y el supervisor miran el MISMO sitio.
+#   4. UN SOLO cloudflared y la URL vigente en el fichero canónico
+#      (los hostnames quick-tunnel cambian en cada reinicio y hacen que
+#      la flota diagnostique "red caída" sin motivo).
+#   5. CSC LEGAL: comprueba que el valor de grabación sea
+#      `RecordingAllowedByMenu,disclaimer_latin`.  Con `RecordingAllowed`
+#      a secas la grabación de llamadas es AUTOMÁTICA y SILENCIOSA, lo que
+#      en España es delito (art. 197 CP) y vulnera el GDPR.  Avisa y
+#      repara; nunca reinicia el móvil por su cuenta.
+#   6. (Sólo en el PC) RELAY DEL CANAL con DuckDNS: el A record lo publica
+#      SÓLO el PC (es el único con la IP doméstica; llamarlo desde el
+#      sandbox dejó el dominio apuntando al NAT del datacenter).
 #
-# REQUISITOS: adb (en el PC, con el movil en "device"), sudo para el relay.
-# SECRETOS: nunca se imprimen.  Solo se comparan por sha16.
+# REQUISITOS: en el móvil, Termux (root por `su -mm`; `sudo` en Android
+# NO es root).  En el PC, adb con el móvil en estado "device".
+# SECRETOS: nunca se imprimen.  De las keys y URLs sólo se publica su
+# sha16 (16 hex) para poder compararlas sin filtrarlas.
 # =============================================================================
-set -uo pipefail
+set -u
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# --- donde estamos ----------------------------------------------------------
+SELF="$0"
+case "$SELF" in
+  /*) ;;
+  *) SELF="$PWD/$SELF" ;;
+esac
+REPO="$(cd "$(dirname "$SELF")/.." 2>/dev/null && pwd)"
+[ -n "${REPO:-}" ] || REPO="$PWD"
+
+MD_DIR=/data/local/tmp/megadaemon
+STATE_REAL_DEFAULT=/data/user/0/com.agy/files/megadaemon/state
+SUP=/data/adb/service.d/99-megadaemon.sh
+REPO_SLUG=boolforge/megadaemon
+API=https://api.github.com/repos/$REPO_SLUG/releases/latest
 SECRETS="${MD_SECRETS_DIR:-/workspace/md-secrets}"
 ENVFILE="$SECRETS/instance.env"
-PHONE_DIR="/data/local/tmp/megadaemon"
-STATE_DIR="$PHONE_DIR/state"
-BIN_LOCAL="$REPO/dist/megadaemon-core-arm64"
 ADB="${ADB:-adb}"
 SERIAL="${MD_SERIAL:-}"
-MODE="verificar"
-
-log()  { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
-warn() { printf '[%s] AVISO: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
-die()  { printf '[%s] ERROR: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; exit 1; }
+MODE=diagnostico
+DESTINO=auto          # auto | movil | pc
 
 for a in "$@"; do
   case "$a" in
-    --verificar) MODE="verificar" ;;
-    --instalar)  MODE="instalar" ;;
-    --serial=*)  SERIAL="${a#*=}" ;;
-    *) die "opcion desconocida: $a (usa --verificar o --instalar)" ;;
+    --diagnostico|--verificar) MODE=diagnostico ;;
+    --instalar|--arreglar)     MODE=instalar ;;
+    --movil)                   DESTINO=movil ;;
+    --pc)                      DESTINO=pc ;;
+    --serie=*)                 SERIAL="${a#*=}" ;;
+    -h|--help)
+      sed -n '2,40p' "$SELF" | sed 's/^# \{0,1\}//'
+      exit 0 ;;
+    *) printf 'opción desconocida: %s (usa --diagnostico | --instalar | --movil | --pc | --serie=IP:PUERTO)\n' "$a" >&2
+       exit 2 ;;
   esac
 done
 
-# --- 0) ADB ------------------------------------------------------------------
-command -v "$ADB" >/dev/null 2>&1 || die "no encuentro '$ADB' (instala platform-tools)"
-[ -n "$SERIAL" ] && ADB="$ADB -s $SERIAL"
-DEVLINE="$("$ADB" devices | awk 'NR>1 && $2=="device"{print $1; exit}')"
-[ -n "$DEVLINE" ] || die "ningun movil en estado 'device' (adb devices). El movil debe estar conectado por USB o con 'adb connect <ip>:5555'."
-ADB="$ADB -s $DEVLINE"
-log "movil: $DEVLINE"
+# --- log --------------------------------------------------------------------
+say()  { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
+warn() { printf '[%s] AVISO: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
+die()  { printf '[%s] ERROR: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; exit 1; }
+sha16() { printf '%s' "$1" | sha256sum 2>/dev/null | cut -c1-16; }
 
-sh_on_phone() { "$ADB" shell "su -mm -c '$1'" 2>/dev/null | tr -d '\r'; }
-push_to_phone() { "$ADB" push "$1" "$2" >/dev/null 2>&1 || return 1; }
+# --- detección de entorno ---------------------------------------------------
+es_android() {
+  [ -n "${PREFIX:-}" ] && case "$PREFIX" in *com.termux*) return 0 ;; esac
+  [ -d /data/local/tmp/megadaemon ] && return 0
+  [ -d /data/adb ] && return 0
+  case "$(uname -s 2>/dev/null)" in Android) return 0 ;; esac
+  return 1
+}
+if [ "$DESTINO" = auto ]; then
+  if es_android; then DESTINO=movil; else DESTINO=pc; fi
+fi
 
-# --- 1) DIAGNOSTICO ----------------------------------------------------------
-log "=== diagnostico ==="
-STATE_REAL="$(sh_on_phone 'echo $MEGADAEMON_STATE_DIR' | tr -d '\n')"
-[ -z "$STATE_REAL" ] && STATE_REAL="/data/user/0/com.agy/files/megadaemon/state"
-log "state_dir que usa el daemon: $STATE_REAL"
-HAS_KEY="$(sh_on_phone "ls -1 $STATE_DIR/megadaemon_api.key 2>/dev/null | wc -l" | tr -d ' \n')"
-HAS_KEY_REAL="$(sh_on_phone "ls -1 $STATE_REAL/megadaemon_api.key 2>/dev/null | wc -l" | tr -d ' \n')"
-DAEMON="$(sh_on_phone 'pgrep -f "megadaemon-core" | head -1' | tr -d ' \n')"
-log "daemon vivo: ${DAEMON:-NO}"
-log "key en $STATE_DIR: ${HAS_KEY:-0} | key en state_dir real: ${HAS_KEY_REAL:-0}"
-KEY_SHA16="$(sh_on_phone "cat $STATE_DIR/megadaemon_api.key 2>/dev/null" | tr -d '\r\n' | sha256sum | cut -c1-16)"
-log "sha16 de la key en el movil: ${KEY_SHA16:-<ninguna>}"
+CURL=""
+for c in curl "$(command -v curl 2>/dev/null)" /data/data/com.termux/files/usr/bin/curl; do
+  [ -n "$c" ] && [ -x "$c" ] && CURL="$c" && break
+done
 
-if [ "$MODE" = "verificar" ]; then
-  echo
-  log "resumen: daemon=${DAEMON:-NO} key_en_state_dir=${HAS_KEY:-0} (real=${HAS_KEY_REAL:-0})"
-  log "si key_en_state_dir=0 => el daemon rechaza TODAS las keys (no es caducidad)"
+# =============================================================================
+# MÓVIL: helpers (todo lo que necesita root va por `su -mm`)
+# =============================================================================
+if [ "$DESTINO" = movil ]; then
+  root() { su -mm -c "$1" 2>/dev/null | tr -d '\r'; }
+  SCRIPT="sh"
+else
+  # desde el PC: todo por adb
+  DEVLINE=""
+  [ -n "$SERIAL" ] && ADB="$ADB -s $SERIAL"
+  if command -v "$ADB" >/dev/null 2>&1; then
+    DEVLINE="$("$ADB" devices 2>/dev/null | awk 'NR>1 && $2=="device"{print $1; exit}')"
+    [ -n "$DEVLINE" ] && ADB="$ADB -s $DEVLINE"
+  fi
+  root() { [ -n "$DEVLINE" ] || return 1; "$ADB" shell "su -mm -c '$1'" 2>/dev/null | tr -d '\r'; }
+  sh_on() { [ -n "$DEVLINE" ] || return 1; "$ADB" shell "$1" 2>/dev/null | tr -d '\r'; }
+  SCRIPT="sh"
+fi
+
+STATE_REAL="$(root 'echo $MEGADAEMON_STATE_DIR' | tr -d '\r\n')"
+[ -z "$STATE_REAL" ] && STATE_REAL="$STATE_REAL_DEFAULT"
+
+# =============================================================================
+# 0) CONTEXTO
+# =============================================================================
+say "=== 0) contexto ==="
+say "modo: $MODE | destino: $DESTINO"
+if [ "$DESTINO" = movil ]; then
+  [ "$(id -u)" = "0" ] || warn "no soy root: lo que necesite root va por 'su -mm' (en Android 'sudo' NO es root)"
+  [ -n "$CURL" ] || warn "no hay curl en Termux: instálalo con 'pkg install curl' (la descarga del release lo necesita)"
+fi
+say "state_dir que usa el daemon: $STATE_REAL"
+DAEMON="$(root 'pgrep -f megadaemon-core | head -1' | tr -d '\r\n')"
+say "daemon: ${DAEMON:-NO}"
+KEYS="$(root "ls -1 $MD_DIR/state/megadaemon_api.key $MD_DIR/state/megadaemon_api.keys 2>/dev/null | wc -l" | tr -d '\r\n ')"
+say "keys disponibles en $MD_DIR/state: ${KEYS:-0}"
+KEYFP="$(root "cat $MD_DIR/state/megadaemon_api.key 2>/dev/null" | sha256sum | cut -c1-16)"
+say "sha16 de la key: ${KEYFP:-<ninguna>}"
+
+# =============================================================================
+# RESOLUCIÓN DEL RELEASE (aquí estaba el 404)
+# =============================================================================
+# Los tags de release SON `v<sha>`: no existe un tag "latest", por eso
+# `releases/download/latest/...` devolvía 404.  Se resuelve por la API y,
+# si no hay jq, con sed.  MD_RELEASE_TAG permite fijar el tag.
+release_json=""
+resolve_release() {
+  [ -n "$CURL" ] || return 1
+  if [ -n "${MD_RELEASE_TAG:-}" ]; then
+    TAG="$MD_RELEASE_TAG"
+  else
+    release_json="$("$CURL" -fsSL -H 'Accept: application/vnd.github+json' "$API" 2>/dev/null)"
+    TAG="$(printf '%s' "$release_json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  fi
+  [ -n "$TAG" ] || return 1
+  RELEASE_TAG="$TAG"
+  BASE="https://github.com/$REPO_SLUG/releases/download/$TAG"
+  # asset exacto (el que NO es .sha256)
+  ASSET="$BASE/megadaemon-core-android-arm64"
+  if [ -n "$release_json" ]; then
+    U="$(printf '%s' "$release_json" | tr ',' '\n' | grep 'browser_download_url' | grep 'megadaemon-core-android-arm64"' | grep -v '\.sha256' | sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+    [ -n "$U" ] && ASSET="$U"
+  fi
+  return 0
+}
+
+# =============================================================================
+# 1) DIAGNÓSTICO (no toca nada)
+# =============================================================================
+diagnostico() {
+  say "--- release ---"
+  if resolve_release; then
+    say "última release: $RELEASE_TAG"
+    say "asset ARM64: $ASSET"
+  else
+    warn "no pude resolver la última release (¿red? ¿API de GitHub?)"
+  fi
+  say "--- CSC (legal) ---"
+  CSCV="$(root "settings get secure recording_allowed_value 2>/dev/null; settings get secure csc_default_value 2>/dev/null" | tr -d '\r\n' | head -1)"
+  if [ -z "$CSCV" ]; then
+    say "CSC: valor no legible desde aqui (comprobado por el modulo Magisk, si esta instalado)"
+  elif [ "$CSCV" = "RecordingAllowedByMenu,disclaimer_latin" ]; then
+    say "CSC: RecordingAllowedByMenu,disclaimer_latin  OK (graba sólo con aviso)"
+  else
+    warn "CSC: valor '$CSCV'.  Con 'RecordingAllowed' a secas la grabación es AUTOMÁTICA y SILENCIOSA"
+    warn "     (delito art. 197 CP + GDPR en España).  Repáralo con: sh deploy/repatch_csc_disclaimer.sh"
+  fi
+  say "--- canal ---"
+  TURL="$(root 'cat /sdcard/megadaemon.url 2>/dev/null; cat /data/local/tmp/megadaemon/tunnel.url 2>/dev/null' | tr -d '\r\n' | grep -o 'https://[a-z0-9.-]*' | tail -1)"
+  [ -n "$TURL" ] && say "URL vigente: $TURL (sha16 $(sha16 "$TURL"))" || say "URL vigente: NO ENCONTRADA"
+  CF="$(root 'pgrep -c cloudflared' | tr -d ' \r\n')"
+  say "procesos cloudflared: ${CF:-0} (1 es lo correcto; cada uno genera un hostname distinto)"
+  SUPX="$(root "test -f $SUP && echo SI" | tr -d '\r\n')"
+  say "supervisor ($SUP): ${SUPX:-NO} (sin él, el daemon no sobrevive a un reinicio del móvil)"
+  if [ "$DESTINO" = pc ]; then
+    say "--- PC ---"
+    command -v caddy >/dev/null 2>&1 && say "caddy: presente" || say "caddy: AUSENTE (el relay necesita caddy o nginx+socat)"
+    for t in "$HOME/.mavis/duckdns.token" "$SECRETS/duckdns.token" "$REPO/../md-secrets/duckdns.token"; do
+      [ -f "$t" ] && say "token DuckDNS encontrado en $t (NO se imprime)" && break
+    done
+  fi
+}
+
+if [ "$MODE" = diagnostico ]; then
+  diagnostico
+  say ""
+  say "resumen: daemon=${DAEMON:-NO} keys=${KEYS:-0} key_fp=${KEYFP:-none} state_dir=$STATE_REAL"
+  say "para ARREGLAR: sudo ./deploy/fix-entorno.sh --instalar  (o 'sh fix-entorno.sh --instalar' en el móvil)"
   exit 0
 fi
 
-# --- 2) CREDENCIAL EN UN SOLO SITIO ------------------------------------------
-log "=== paso 1/5: credencial unificada ==="
-if [ "${HAS_KEY:-0}" = "0" ] || [ "${HAS_KEY_REAL:-0}" = "0" ]; then
-  sh_on_phone "mkdir -p $STATE_REAL && cp -f $STATE_DIR/megadaemon_api.key $STATE_DIR/megadaemon_api.keys $STATE_REAL/ 2>/dev/null; chmod 600 $STATE_REAL/megadaemon_api.* 2>/dev/null; ls -la $STATE_REAL" >/dev/null
-  log "key copiada al state_dir del daemon (sin reiniciar: la config se recarga por peticion)"
-else
-  log "la key ya estaba en ambos sitios"
+# =============================================================================
+# 2) INSTALACIÓN
+# =============================================================================
+say "=== 1) credencial unificada ==="
+root "mkdir -p $STATE_REAL && cp -f $MD_DIR/state/megadaemon_api.key $MD_DIR/state/megadaemon_api.keys $STATE_REAL/ 2>/dev/null; chmod 600 $STATE_REAL/megadaemon_api.* 2>/dev/null"
+COPIED="$(root "ls -1 $STATE_REAL/megadaemon_api.key 2>/dev/null | wc -l" | tr -d '\r\n ')"
+[ "${COPIED:-0}" = "0" ] && warn "no encuentro la key en $MD_DIR/state: revisa el state_dir real del daemon"
+say "key en $STATE_REAL: ${COPIED:-0}"
+root "mkdir -p $(dirname $SUP); touch $SUP; grep -q MEGADAEMON_STATE_DIR $SUP || echo 'export MEGADAEMON_STATE_DIR=$STATE_REAL' >> $SUP; chmod 755 $SUP"
+say "supervisor: MEGADAEMON_STATE_DIR unificado"
+
+say "=== 2) binario ARM64 (desde el release real) ==="
+[ -n "$CURL" ] || die "no hay curl: en Termux, 'pkg install curl' (el móvil NO trae curl de fábrica)"
+resolve_release || die "no pude resolver la última release de GitHub"
+say "release: $RELEASE_TAG"
+DL="$PWD/megadaemon-core.new"
+[ "$DESTINO" = movil ] && DL="$MD_DIR/megadaemon-core.new"
+"$CURL" -fsSL -o "$DL" "$ASSET" || die "no pude descargar $ASSET (HTTP $(curl -s -o /dev/null -w '%{http_code}' -I "$ASSET" 2>/dev/null))"
+SA="$ASSET.sha256"
+[ -n "$release_json" ] && SA="$(printf '%s' "$release_json" | tr ',' '\n' | grep 'browser_download_url' | grep 'megadaemon-core-android-arm64.sha256"' | sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+EXPECT=""
+if "$CURL" -fsSL -o "$DL.sha256" "$SA" 2>/dev/null; then
+  EXPECT="$(cut -d' ' -f1 < "$DL.sha256" | tr -d '\r\n ')"
 fi
-# la URL vigente del tunel, al fichero canonico
-TURL="$(sh_on_phone 'cat /sdcard/megadaemon.url 2>/dev/null || cat /data/local/tmp/megadaemon/tunnel.url 2>/dev/null' | tr -d '\r\n' | tail -c 200)"
-if [ -n "$TURL" ]; then
-  mkdir -p "$SECRETS"; chmod 700 "$SECRETS" 2>/dev/null
-  [ -f "$ENVFILE" ] || : > "$ENVFILE"; chmod 600 "$ENVFILE"
-  grep -q '^MEGADAEMON_URL=' "$ENVFILE" 2>/dev/null && sed -i "s|^MEGADAEMON_URL=.*|MEGADAEMON_URL=$TURL|" "$ENVFILE" \
-    || printf 'MEGADAEMON_URL=%s\n' "$TURL" >> "$ENVFILE"
-  log "URL viva registrada en $ENVFILE (sha16 $(printf '%s' "$TURL" | sha256sum | cut -c1-16))"
+GOT="$(sha256sum "$DL" | cut -d' ' -f1)"
+if [ -n "$EXPECT" ]; then
+  [ "$EXPECT" != "$GOT" ] && die "sha256 del release ($EXPECT) != el descargado ($GOT)"
+  say "sha256 verificado: $GOT"
 else
-  warn "no encuentro la URL del tunel en el movil"
+  warn "no pude descargar el .sha256: SIGO con el binario sin verificar (NO recomendado)"
 fi
-
-# --- 3) BINARIO ARM64 --------------------------------------------------------
-log "=== paso 2/5: binario ARM64 ==="
-[ -f "$BIN_LOCAL" ] || die "no existe $BIN_LOCAL (descargalo del artefacto del CI: dist/)"
-EXPECT="$(cut -d' ' -f1 < "$BIN_LOCAL.sha256" 2>/dev/null)"
-GOT="$(sha256sum "$BIN_LOCAL" | cut -d' ' -f1)"
-[ -n "$EXPECT" ] && [ "$EXPECT" != "$GOT" ] && die "sha256 local != el del .sha256 ($EXPECT != $GOT)"
-log "sha256 verificado: $GOT"
-command -v file >/dev/null && file "$BIN_LOCAL" | grep -q "aarch64" || warn "el binario no parece aarch64 (revisalo)"
-
-log "subiendo el binario (10 MB)..."
-"$ADB" push "$BIN_LOCAL" "$PHONE_DIR/megadaemon-core.new" >/dev/null 2>&1 || die "fallo el push del binario"
-# el orden importa: chmod 755 ANTES de que el supervisor lo pueda arrancar
-sh_on_phone "chmod 755 $PHONE_DIR/megadaemon-core.new && ls -la $PHONE_DIR/megadaemon-core.new" >/dev/null
-REMOTE_SHA="$(sh_on_phone "sha256sum $PHONE_DIR/megadaemon-core.new 2>/dev/null | cut -d' ' -f1" | tr -d '\r\n')"
-[ -n "$EXPECT" ] && [ "$REMOTE_SHA" != "$EXPECT" ] && die "sha256 en el movil ($REMOTE_SHA) != el esperado ($EXPECT)"
-log "sha256 en el movil: $REMOTE_SHA (ok)"
-
-# backup del binario vivo y mv (nunca cp sobre un binario en ejecucion)
-sh_on_phone "cp -f $PHONE_DIR/megadaemon-core $PHONE_DIR/megadaemon-core.bak 2>/dev/null; mv -f $PHONE_DIR/megadaemon-core.new $PHONE_DIR/megadaemon-core; chmod 755 $PHONE_DIR/megadaemon-core; test -x $PHONE_DIR/megadaemon-core && echo INSTALADO" >/dev/null
-INST="$(sh_on_phone "test -x $PHONE_DIR/megadaemon-core && echo SI" | tr -d '\r\n')"
-[ "$INST" = "SI" ] || { sh_on_phone "cp -f $PHONE_DIR/megadaemon-core.bak $PHONE_DIR/megadaemon-core" >/dev/null; die "el binario no quedó ejecutable: restaurado el anterior"; }
-log "binario instalado y ejecutable (+x)"
-
-# --- 4) REINICIO Y SUPERVISOR -----------------------------------------------
-log "=== paso 3/5: reinicio del daemon ==="
-sh_on_phone "pkill -x megadaemon-core 2>/dev/null; sleep 2" >/dev/null
-sleep 3
-NEWD="$(sh_on_phone 'pgrep -f "megadaemon-core" | head -1' | tr -d '\n')"
-[ -n "$NEWD" ] || { sh_on_phone "cp -f $PHONE_DIR/megadaemon-core.bak $PHONE_DIR/megadaemon-core; chmod 755 $PHONE_DIR/megadaemon-core; pkill -x megadaemon-core; sleep 3" >/dev/null; die "el daemon no arranco: binario restaurado"; }
-log "daemon arrancado (pid $NEWD)"
-
-SUP="$(sh_on_phone 'ls /data/adb/service.d/99-megadaemon.sh 2>/dev/null' | tr -d '\r\n')"
-if [ -z "$SUP" ]; then
-  warn "no encuentro el supervisor /data/adb/service.d/99-megadaemon.sh (el daemon no sobrevivira a un reinicio del movil)"
+# ¿es realmente un ELF aarch64?
+if command -v readelf >/dev/null 2>&1; then
+  readelf -h "$DL" 2>/dev/null | grep -qi "aarch64" || die "el binario descargado NO es aarch64"
+fi
+chmod 755 "$DL"
+if [ "$DESTINO" = movil ]; then
+  root "cp -f $MD_DIR/megadaemon-core $MD_DIR/megadaemon-core.bak 2>/dev/null; mv -f $DL $MD_DIR/megadaemon-core; chmod 755 $MD_DIR/megadaemon-core; test -x $MD_DIR/megadaemon-core && echo INSTALADO"
+  [ "$(root "test -x $MD_DIR/megadaemon-core && echo SI" | tr -d '\r\n')" = "SI" ] || { root "cp -f $MD_DIR/megadaemon-core.bak $MD_DIR/megadaemon-core"; die "el binario no quedó ejecutable: restaurado el anterior"; }
 else
-  log "supervisor presente"
+  "$ADB" push "$DL" "$MD_DIR/megadaemon-core.new" >/dev/null 2>&1 || die "fallo el push del binario al móvil"
+  root "chmod 755 $MD_DIR/megadaemon-core.new"
+  RSHA="$(root "sha256sum $MD_DIR/megadaemon-core.new 2>/dev/null | cut -d' ' -f1" | tr -d '\r\n')"
+  [ -n "$EXPECT" ] && [ "$RSHA" != "$EXPECT" ] && die "sha256 en el móvil ($RSHA) != el esperado ($EXPECT)"
+  root "cp -f $MD_DIR/megadaemon-core $MD_DIR/megadaemon-core.bak 2>/dev/null; mv -f $MD_DIR/megadaemon-core.new $MD_DIR/megadaemon-core; chmod 755 $MD_DIR/megadaemon-core"
+  [ "$(root "test -x $MD_DIR/megadaemon-core && echo SI" | tr -d '\r\n')" = "SI" ] || { root "cp -f $MD_DIR/megadaemon-core.bak $MD_DIR/megadaemon-core"; die "el binario no quedó ejecutable: restaurado el anterior"; }
 fi
-# una sola fuente de verdad: el supervisor debe exportar el STATE_DIR
-sh_on_phone "grep -q MEGADAEMON_STATE_DIR /data/adb/service.d/99-megadaemon.sh || echo 'export MEGADAEMON_STATE_DIR=$STATE_DIR' >> /data/adb/service.d/99-megadaemon.sh" >/dev/null
-log "MEGADAEMON_STATE_DIR unificado en el supervisor"
+say "binario instalado y ejecutable (+x)"
 
-# --- 5) TUNEL + RELAY --------------------------------------------------------
-log "=== paso 4/5: tunel y relay ==="
-CF="$(sh_on_phone 'pgrep -c cloudflared 2>/dev/null' | tr -d '\r\n')"
-log "procesos cloudflared: ${CF:-0} (idealmente 1; cada uno genera un hostname distinto)"
+say "=== 3) reinicio del daemon ==="
+root "pkill -x megadaemon-core 2>/dev/null; sleep 2"
+sleep 4
+NEWD="$(root 'pgrep -f megadaemon-core | head -1' | tr -d '\r\n')"
+if [ -z "$NEWD" ]; then
+  root "cp -f $MD_DIR/megadaemon-core.bak $MD_DIR/megadaemon-core; chmod 755 $MD_DIR/megadaemon-core; pkill -x megadaemon-core; sleep 3"
+  die "el daemon no arrancó: binario anterior restaurado (no he dejado el móvil sin daemon)"
+fi
+say "daemon arrancado (pid $NEWD)"
+
+say "=== 4) túnel y canal ==="
+CF="$(root 'pgrep -c cloudflared' | tr -d ' \r\n')"
+say "procesos cloudflared: ${CF:-0} (1 es lo correcto)"
 if [ "${CF:-0}" -gt 1 ] 2>/dev/null; then
-  warn "hay varios cloudflared: cada reinicio cambia la URL. Se deja como esta (matarlo ahora cortaria el canal)."
+  warn "varios cloudflared: cada uno tiene su hostname y roban tráfico. NO los mato ahora (cortar el canal)."
 fi
-if [ -x "$REPO/deploy/relay-pc.sh" ]; then
-  if command -v sudo >/dev/null 2>&1 && [ "$(id -u)" != "0" ]; then
-    sudo -n true 2>/dev/null && sudo "$REPO/deploy/relay-pc.sh" --instalar >/dev/null 2>&1 && log "relay del PC instalado" || warn "el relay del PC necesita sudo con password (o token en ~/.mavis/duckdns.token)"
-  else
-    "$REPO/deploy/relay-pc.sh" --instalar >/dev/null 2>&1 && log "relay del PC instalado" || warn "no pude instalar el relay del PC"
+TURL="$(root 'cat /sdcard/megadaemon.url 2>/dev/null; cat /data/local/tmp/megadaemon/tunnel.url 2>/dev/null' | tr -d '\r\n' | grep -o 'https://[a-z0-9.-]*' | tail -1)"
+if [ -n "$TURL" ]; then
+  say "URL vigente: $TURL (sha16 $(sha16 "$TURL"))"
+  if [ -n "$SECRETS" ]; then
+    mkdir -p "$SECRETS" 2>/dev/null; chmod 700 "$SECRETS" 2>/dev/null
+    [ -f "$ENVFILE" ] || : > "$ENVFILE"; chmod 600 "$ENVFILE"
+    grep -q '^MEGADAEMON_URL=' "$ENVFILE" 2>/dev/null \
+      && sed -i "s|^MEGADAEMON_URL=.*|MEGADAEMON_URL=$TURL|" "$ENVFILE" \
+      || printf 'MEGADAEMON_URL=%s\n' "$TURL" >> "$ENVFILE"
+    say "URL registrada en $ENVFILE (0600)"
   fi
 else
-  warn "no encuentro deploy/relay-pc.sh"
+  warn "no encuentro la URL del túnel"
 fi
 
-# --- 6) VERIFICACION ---------------------------------------------------------
-log "=== paso 5/5: verificacion final ==="
-sleep 5
-LOCAL_H="$(sh_on_phone 'curl -s -m 5 -o /dev/null -w %{http_code} http://127.0.0.1:9090/health 2>/dev/null' | tr -d '\r\n')"
-log "health en el movil (127.0.0.1:9090): ${LOCAL_H:-sin curl en el movil (normal)}"
-RAM="$(sh_on_phone "grep -E 'MemAvailable' /proc/meminfo | awk '{print int(\$2/1024)}'" | tr -d '\r\n')"
-log "RAM libre en el movil: ${RAM:-?} MB"
-LOAD="$(sh_on_phone "cat /proc/loadavg | cut -d' ' -f1-3" | tr -d '\r\n')"
-log "load del movil: ${LOAD:-?}"
+say "=== 5) CSC (legal) ==="
+CSCV="$(root "settings get secure recording_allowed_value 2>/dev/null" | tr -d '\r\n')"
+if [ -n "$CSCV" ] && [ "$CSCV" != "RecordingAllowedByMenu,disclaimer_latin" ]; then
+  warn "CSC = '$CSCV': grabación de llamadas AUTOMÁTICA y SILENCIOSA (art. 197 CP + GDPR)"
+  warn "reparación: sh deploy/repatch_csc_disclaimer.sh  (no reinicio el móvil por mi cuenta)"
+elif [ -z "$CSCV" ]; then
+  say "CSC: valor no legible desde aquí (si el módulo Magisk está instalado, el valor legal ya lo pone él)"
+else
+  say "CSC: RecordingAllowedByMenu,disclaimer_latin OK"
+fi
 
-if [ -n "$TURL" ]; then
-  APIKEY="$(grep '^MEGADAEMON_API_KEY=' "$ENVFILE" 2>/dev/null | cut -d= -f2-)"
-  if [ -z "$APIKEY" ]; then
-    APIKEY="$(sh_on_phone "cat $STATE_DIR/megadaemon_api.key 2>/dev/null" | tr -d '\r\n')"
-    if [ -n "$APIKEY" ] && [ -f "$ENVFILE" ]; then
-      grep -q '^MEGADAEMON_API_KEY=' "$ENVFILE" || printf 'MEGADAEMON_API_KEY=%s\n' "$APIKEY" >> "$ENVFILE"
-      chmod 600 "$ENVFILE"
+if [ "$DESTINO" = pc ]; then
+  say "=== 6) relay del PC (DuckDNS) ==="
+  if [ -x "$REPO/deploy/relay-pc.sh" ]; then
+    if [ "$(id -u)" = "0" ]; then
+      "$REPO/deploy/relay-pc.sh" --instalar || warn "el relay no se instaló (revisa el token de DuckDNS)"
+    elif command -v sudo >/dev/null 2>&1; then
+      sudo "$REPO/deploy/relay-pc.sh" --instalar || warn "el relay necesita sudo (o token en ~/.mavis/duckdns.token)"
+    else
+      warn "sin sudo: el relay no se puede instalar"
     fi
+  else
+    warn "no encuentro deploy/relay-pc.sh"
   fi
-  CODE="$(curl -s -m 20 -o /dev/null -w '%{http_code}' -H "X-API-Key: $APIKEY" "$TURL/health" 2>/dev/null)"
-  log "health por el tunel ($TURL): HTTP ${CODE:-000}"
+  say "AVISO: el A record de DuckDNS lo publica SÓLO el PC (el sandbox puso el dominio apuntando al NAT del datacenter)"
+fi
+
+say "=== 7) verificación final ==="
+RAM="$(root "grep MemAvailable /proc/meminfo | awk '{print int(\$2/1024)}'" | tr -d '\r\n ')"
+LOAD="$(root 'cut -d" " -f1-3 /proc/loadavg' | tr -d '\r\n')"
+say "RAM libre: ${RAM:-?} MB | load: ${LOAD:-?}"
+if [ -n "$TURL" ]; then
+  KEY="$(root "cat $MD_DIR/state/megadaemon_api.key 2>/dev/null" | tr -d '\r\n')"
+  CODE="$("$CURL" -s -m 20 -o /dev/null -w '%{http_code}' -H "X-API-Key: $KEY" "$TURL/health" 2>/dev/null)"
+  say "health por el túnel: HTTP ${CODE:-000}"
   case "$CODE" in
-    200) log "OK: daemon + tunel + credencial operativos" ;;
-    401|403) warn "el tunel llega pero la credencial no cuadra (401/403): revisa MEGADAEMON_API_KEY en $ENVFILE" ;;
-    530) warn "530: el tunel no esta conectado al edge (reinicia cloudflared, no el daemon)" ;;
-    000) warn "000: no hay ruta al tunel desde aqui (mismo host? usa el relay del PC)" ;;
+    200) say "OK: daemon + túnel + credencial operativos" ;;
+    401|403) warn "el túnel llega pero la credencial no cuadra (401/403)" ;;
+    530) warn "530: el túnel no está conectado al edge (reinicia cloudflared, NO el daemon)" ;;
+    000) warn "000: sin ruta al túnel desde aquí (usa el relay del PC)" ;;
   esac
 fi
-
-echo
-log "LISTO. Estado en 3 lineas:"
-log "  daemon=$(sh_on_phone 'pgrep -f megadaemon-core | wc -l' | tr -d ' \n') proc | binario ARM64 instalado con +x y sha256 $GOT"
-log "  credencial en un solo sitio: $STATE_REAL"
-log "  URL vigente en $ENVFILE (sha16 $(printf '%s' "$TURL" | sha256sum | cut -c1-16))"
+say ""
+say "LISTO. Estado en 3 líneas:"
+say "  daemon pid $NEWD | binario ARM64 $RELEASE_TAG con +x, sha256 $GOT"
+say "  credencial unificada en $STATE_REAL (sha16 $KEYFP)"
+say "  túnel $TURL (sha16 $(sha16 "$TURL"))"
