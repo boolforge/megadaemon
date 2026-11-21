@@ -103,11 +103,32 @@ fn main() -> std::process::ExitCode {
                 let r = duckdns::update_once(&domain, &token, &ip, state_file.as_deref());
                 // URL viva del canal estable: se publica para que nadie la
                 // hardcodee (la leen de `channel.url`).
-                if r.get("ok").and_then(|v| v.as_bool()) == Some(true) {
-                    let _ = duckdns::write_channel_url(
+                let ok = r.get("ok").and_then(|v| v.as_bool()) == Some(true);
+                let saltado = r.get("skipped").is_some();
+                if ok {
+                    let url_estable = format!("https://{domain}");
+                    let _ = duckdns::write_channel_url(state_dir.as_deref(), &url_estable);
+                    // Estado completo del canal (lo lee el sandbox).
+                    let _ = megadaemon_core::channel::merge_channel_field(
                         state_dir.as_deref(),
-                        &format!("https://{domain}"),
+                        "duckdns",
+                        serde_json::json!(url_estable),
                     );
+                    let _ = megadaemon_core::channel::merge_channel_field(
+                        state_dir.as_deref(),
+                        "ip_publica",
+                        serde_json::json!(ip),
+                    );
+                    // El paste se publica SOLO cuando la URL cambia de verdad.
+                    if !saltado && flag("--publish") {
+                        let _ = megadaemon_core::channel::publish(
+                            state_dir.as_deref(),
+                            None,
+                            Some(&url_estable),
+                            Some(&ip),
+                            None,
+                        );
+                    }
                 }
                 r
             }
