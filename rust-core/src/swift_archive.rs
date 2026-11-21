@@ -8,9 +8,12 @@
 //! la tabla esté incompleta, el lector **se niega a parsear** y lo dice:
 //!
 //! * `status: "layout_no_verificado"` — falta el layout ⇒ no se inventa nada.
-//! * `status: "kdf_no_verificado"`    — falta el KDF (Argon2id) ⇒ el módulo
-//!   **no** trae KDF propio: se **inyecta** (`KdfFn`) desde el módulo `argon2`
-//!   del repo, que es de otro dueño. Una sola implementación del KDF.
+//! * `status: "kdf_error"`             — el KDF falló (parámetros fuera de
+//!   rango). El KDF **ya no falta**: el valor por defecto es
+//!   `crate::argon2::derive_key` (Argon2id, verificado contra la RFC 9106 y
+//!   el oráculo C 36/36) ⇒ **una sola implementación del KDF en el repo**.
+//!   Se puede seguir **inyectando** otro KDF (`KdfFn`) para el arnés
+//!   aislado, pero entonces el informe lo dice (`kdf.verificada = false`).
 //! * `status: "aead_no_replicado"`    — la derivación de nonce/AAD por trozo es
 //!   **nativa** (`SBA1-AEGIS256-entry-chunk-nonce-v1`): **no se replica**.
 //!
@@ -23,6 +26,33 @@ use serde::{Deserialize, Serialize};
 /// KDF inyectado (Argon2id). La implementación es del módulo `argon2` del repo.
 pub type KdfFn =
     fn(&str, &[u8], u32, u32, u32, usize) -> Result<Vec<u8>, String>;
+
+/// **El KDF por defecto**: la implementación **única** del repo.
+///
+/// `crate::argon2::derive_key` = Argon2id (RFC 9106) verificado por el
+/// agente del signer contra los vectores oficiales **y** contra el oráculo C
+/// `phc-winner-argon2` (36/36 en el rango de parámetros de Swift:
+/// iter 1..100, memoria 16384..65536 KiB, paralelismo 1..8, salida 16..128 B).
+///
+/// ⇒ **una sola implementación del KDF en el repo** (el crate `argon2` de
+/// crates.io queda fuera) ⇒ ⇒ el crate `argon2` de crates.io queda fuera para siempre.
+pub fn kdf_argon2id(
+    passphrase: &str,
+    salt: &[u8],
+    iterations: u32,
+    memory_kib: u32,
+    parallelism: u32,
+    out_len: usize,
+) -> Result<Vec<u8>, String> {
+    crate::argon2::derive_key(
+        passphrase,
+        salt,
+        iterations,
+        memory_kib,
+        parallelism,
+        out_len,
+    )
+}
 
 /// Parámetros del KDF, tal y como se leen de la cabecera.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
@@ -144,14 +174,33 @@ pub struct KeyCheckReport {
     pub method_ordinal: u32,
 }
 
+/// Informe del KDF que se ha usado.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KdfInfo {
+    /// `"argon2id"` (la del repo) o `"inyectado"` (arnés/tests).
+    pub algoritmo: String,
+    /// `true` ⇒ se ha usado la implementación **verificada** del repo.
+    pub verificada: bool,
+    /// De dónde sale (ruta del código).
+    pub source: String,
+    pub iterations: u32,
+    pub memory_kib: u32,
+    pub parallelism: u32,
+    pub out_len: usize,
+    /// Longitud de la sal leída de la cabecera (0 ⇒ no se encontró).
+    pub salt_len: usize,
+}
+
 /// Informe completo.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SwiftArchiveReport {
-    /// `ok` | `layout_no_verificado` | `kdf_no_verificado` |
+    /// `ok` | `layout_no_verificado` | `kdf_error` |
     /// `key_check_mismatch` | `aead_no_replicado`.
     pub status: String,
     pub header: Option<HeaderReport>,
     pub key_check: Option<KeyCheckReport>,
+    /// Qué KDF se ha usado (y si es el verificado).
+    pub kdf: Option<KdfInfo>,
     /// Lo que **no** se ha hecho (por qué).
     pub notes: Vec<String>,
 }
@@ -236,8 +285,11 @@ pub fn parse_header(bytes: &[u8], layout: &HeaderLayout) -> Result<HeaderReport,
 
 /// Verifica el key-check con la clave derivada.
 ///
-/// `kdf` es **inyectado**: este módulo no implementa Argon2id (es de otro
-/// dueño). Sin KDF ⇒ `status: "kdf_no_verificado"` y **no** se inventa.
+/// `kdf` es **inyectable** (arnés aislado / tests). Si se pasa `None` se usa
+/// **la implementación verificada del repo** (`crate::argon2::derive_key`,
+/// Argon2id: RFC 9106 + oráculo C 36/36) ⇒ ⇒ **una sola implementación del
+/// KDF** ⇒ ⇒ el estado `kdf_no_verificado` **ya no existe**: el KDF siempre
+/// está; si falla (parámetros fuera de rango) ⇒ `kdf_error`.
 pub fn verify_key_check(
     bytes: &[u8],
     layout: &HeaderLayout,
@@ -253,6 +305,7 @@ pub fn verify_key_check(
                 status: "layout_no_verificado".into(),
                 header: None,
                 key_check: None,
+                kdf: None,
                 notes: vec![e],
             }
         }
@@ -265,21 +318,20 @@ pub fn verify_key_check(
                 status: "layout_no_verificado".into(),
                 header: Some(header),
                 key_check: None,
+                kdf: None,
                 notes,
             };
         }
     };
-    let kdf = match kdf {
-        Some(k) => k,
-        None => {
-            notes.push("KDF no inyectado (argon2::derive_key todavia no esta verde) => no se deriva la clave".into());
-            return SwiftArchiveReport {
-                status: "kdf_no_verificado".into(),
-                header: Some(header),
-                key_check: None,
-                notes,
-            };
-        }
+    // El KDF: el **verificado del repo**, salvo que se inyecte otro (arnés).
+    let (kdf_fn, kdf_verificada, kdf_source) = match kdf {
+        Some(k) => (k, false, "KdfFn inyectado (arnes aislado)".to_string()),
+        None => (
+            kdf_argon2id as KdfFn,
+            true,
+            "crate::argon2::derive_key (Argon2id verificado: RFC 9106 + oraculo C 36/36)"
+                .to_string(),
+        ),
     };
     let salt = header
         .blocks
@@ -291,22 +343,43 @@ pub fn verify_key_check(
         })
         .unwrap_or_default();
     if salt.is_empty() {
-        notes.push("salt no localizada en la cabecera => no se deriva la clave".into());
+        notes.push("salt no localizada en la cabecera => el layout no dice donde esta => no se deriva la clave".into());
         return SwiftArchiveReport {
-            status: "kdf_no_verificado".into(),
+            status: "layout_no_verificado".into(),
             header: Some(header),
             key_check: None,
+            kdf: None,
             notes,
         };
     }
-    let key = match kdf(passphrase, &salt, params.iterations, params.memory_kib, params.parallelism, params.out_len) {
+    let kdf_info = KdfInfo {
+        algoritmo: if kdf_verificada {
+            "argon2id".into()
+        } else {
+            "inyectado".into()
+        },
+        verificada: kdf_verificada,
+        source: kdf_source,
+        iterations: params.iterations,
+        memory_kib: params.memory_kib,
+        parallelism: params.parallelism,
+        out_len: params.out_len,
+        salt_len: salt.len(),
+    };
+    notes.push(if kdf_verificada {
+        "KDF: Argon2id VERIFICADA del repo (una sola implementacion; crates.io fuera)".into()
+    } else {
+        "KDF inyectado: NO es la implementacion verificada del repo".into()
+    });
+    let key = match kdf_fn(passphrase, &salt, params.iterations, params.memory_kib, params.parallelism, params.out_len) {
         Ok(k) => k,
         Err(e) => {
             notes.push(format!("el KDF fallo: {}", e));
             return SwiftArchiveReport {
-                status: "kdf_no_verificado".into(),
+                status: "kdf_error".into(),
                 header: Some(header),
                 key_check: None,
+                kdf: Some(kdf_info),
                 notes,
             };
         }
@@ -319,6 +392,7 @@ pub fn verify_key_check(
             status: "layout_no_verificado".into(),
             header: Some(header),
             key_check: None,
+            kdf: Some(kdf_info),
             notes,
         };
     }
@@ -348,8 +422,22 @@ pub fn verify_key_check(
             expected_hex: expected.iter().map(|b| format!("{:02x}", b)).collect(),
             method_ordinal: spec.method_ordinal,
         }),
+        kdf: Some(kdf_info),
         notes,
     }
+}
+
+/// Atajo: verifica con el KDF **verificado** del repo (sin inyectar nada).
+///
+/// Es la vía que debe usar el resto del código: una sola implementación del
+/// KDF en el repo ⇒ ningún otro sitio deriva claves por su cuenta.
+pub fn verificar(
+    bytes: &[u8],
+    layout: &HeaderLayout,
+    passphrase: &str,
+    params: KdfParams,
+) -> SwiftArchiveReport {
+    verify_key_check(bytes, layout, None, passphrase, params)
 }
 
 /// SHA-256 mínimo (el repo ya tiene `sha2`; aquí se evita depender de el para
@@ -533,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn sin_kdf_inyectado_no_verifica() {
+    fn sin_kdf_inyectado_usa_el_argon2id_verificado_del_repo() {
         let r = verify_key_check(
             &cabecera_demo(),
             &layout_demo(),
@@ -541,9 +629,64 @@ mod tests {
             "secreto",
             KdfParams { iterations: 1, memory_kib: 16384, parallelism: 1, out_len: 32 },
         );
-        assert_eq!(r.status, "kdf_no_verificado");
-        assert!(r.key_check.is_none());
-        assert!(r.notes.iter().any(|n| n.contains("KDF no inyectado")));
+        // El estado "kdf_no_verificado" ya no existe: el KDF del repo se usa.
+        assert_ne!(r.status, "kdf_no_verificado");
+        let k = r.kdf.expect("el informe debe decir que KDF se uso");
+        assert!(k.verificada, "sin KDF inyectado debe usarse el verificado del repo");
+        assert_eq!(k.algoritmo, "argon2id");
+        assert!(k.source.contains("argon2::derive_key"), "{}", k.source);
+        assert_eq!(k.salt_len, 16);
+        // El key-check del fixture no cuadra con la clave real => mismatch.
+        assert_eq!(r.status, "key_check_mismatch");
+    }
+
+    #[test]
+    fn el_kdf_del_repo_reproduce_el_vector_congelado_del_signer() {
+        // Vector congelado en `rust-core/tests/argon2_smoke.rs` (oráculo C
+        // `phc-winner-argon2`): iter 3, 16 MiB, 4 carriles, salida 32.
+        let k = kdf_argon2id("aaaaaaaaaaaaaaaa", &[0x02u8; 16], 3, 16384, 4, 32).unwrap();
+        let hex: String = k.iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(
+            hex,
+            "c7f25bb92e59b63b36f9c1577069ad17d1ac8a232133008212ffaf56ddba03be"
+        );
+    }
+
+    #[test]
+    fn key_check_ok_con_el_argon2id_real() {
+        // Cabecera con key-check = sha256(clave real derivada con Argon2id).
+        let params = KdfParams { iterations: 3, memory_kib: 16384, parallelism: 4, out_len: 32 };
+        let salt = [0x02u8; 16];
+        let clave = kdf_argon2id(
+            "secreto",
+            &salt,
+            params.iterations,
+            params.memory_kib,
+            params.parallelism,
+            params.out_len,
+        )
+        .unwrap();
+        let mut cab = cabecera_demo();
+        cab[12..28].copy_from_slice(&salt);
+        cab[40..72].copy_from_slice(&sha256(&clave));
+        let r = verificar(&cab, &layout_demo(), "secreto", params);
+        assert_eq!(r.status, "ok");
+        assert!(r.key_check.unwrap().matched);
+        assert!(r.kdf.unwrap().verificada);
+    }
+
+    #[test]
+    fn kdf_roto_da_kdf_error() {
+        // iterations = 0 => el KDF del repo lo rechaza => "kdf_error"
+        // (y NO "kdf_no_verificado", que ya no existe).
+        let r = verificar(
+            &cabecera_demo(),
+            &layout_demo(),
+            "secreto",
+            KdfParams { iterations: 0, memory_kib: 16384, parallelism: 1, out_len: 32 },
+        );
+        assert_eq!(r.status, "kdf_error");
+        assert!(r.notes.iter().any(|n| n.contains("el KDF fallo")));
     }
 
     #[test]

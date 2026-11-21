@@ -87,6 +87,7 @@ pub mod signing;
 pub mod signing_vault;
 pub mod snapshot;
 pub mod sshd;
+pub mod swift_archive;
 pub mod swift_sba1;
 pub mod sync;
 pub mod sync_web;
