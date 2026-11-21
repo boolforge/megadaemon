@@ -31,9 +31,7 @@
 //! * **dump de `content query`** (el de arriba), una fila por línea;
 //! * **JSON**: un array de `{id, sender, body, timestamp}`.
 
-use megadaemon_core::antispam::{
-    classify_sms, InboundSms, ScanContext, SpamLists, SpamVerdict,
-};
+use megadaemon_core::antispam::{classify_sms, InboundSms, ScanContext, SpamLists, SpamVerdict};
 use megadaemon_core::otp::{extract_otp_in_inbox, OtpCandidate, OtpMessage};
 use megadaemon_core::telecom::{
     call_with_retry, parse_content_sms, CallOutcome, CallStatus, RetryCondition, RetryPolicy,
@@ -139,7 +137,9 @@ fn parse_mensajes(raw: &str) -> Result<Vec<OtpMessage>, String> {
     if trimmed.starts_with('[') || trimmed.starts_with('{') {
         // JSON: array de {id, sender, body, timestamp}
         let v: Value = serde_json::from_str(raw).map_err(|e| format!("JSON inválido: {e}"))?;
-        let arr = v.as_array().ok_or("el JSON debe ser un array de mensajes")?;
+        let arr = v
+            .as_array()
+            .ok_or("el JSON debe ser un array de mensajes")?;
         let mut out = Vec::new();
         for (i, item) in arr.iter().enumerate() {
             out.push(OtpMessage::new(
@@ -148,10 +148,10 @@ fn parse_mensajes(raw: &str) -> Result<Vec<OtpMessage>, String> {
                     .or_else(|| item.get("address"))
                     .and_then(|x| x.as_str())
                     .unwrap_or_default(),
-                item.get("body").and_then(|x| x.as_str()).unwrap_or_default(),
-                item.get("timestamp")
-                    .and_then(|x| x.as_i64())
-                    .unwrap_or(0),
+                item.get("body")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or_default(),
+                item.get("timestamp").and_then(|x| x.as_i64()).unwrap_or(0),
             ));
             let _ = i;
         }
@@ -225,6 +225,19 @@ fn cmd_otp(opts: &HashMap<String, String>) -> i32 {
     0
 }
 
+/// Recorta a `n` **caracteres** sin partir un UTF-8 por la mitad.
+///
+/// Un `&s[..n]` a pelo revienta (panic) si `n` cae dentro de un carácter
+/// multibyte: un remitente o un cuerpo con acentos o emoji lo harían.
+fn recortar(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(n).collect();
+    out.push('…');
+    out
+}
+
 /// `md-telecom antispam`
 fn cmd_antispam(opts: &HashMap<String, String>) -> i32 {
     let raw = match leer_entrada(opts) {
@@ -295,9 +308,9 @@ fn cmd_antispam(opts: &HashMap<String, String>) -> i32 {
             println!(
                 "{:<10} {:<22} {:.2}  {}",
                 v.decision.label(),
-                if m.sender.len() > 22 { &m.sender[..22] } else { &m.sender },
+                recortar(&m.sender, 22),
                 v.score.total,
-                if m.body.len() > 60 { &m.body[..60] } else { &m.body }
+                recortar(&m.body, 60)
             );
             for s in &v.score.signals {
                 println!("             {:+.2} {:<20} {}", s.weight, s.rule, s.detail);
@@ -350,7 +363,12 @@ fn cmd_call(opts: &HashMap<String, String>) -> i32 {
             "failed" => (CallStatus::Failed, "fallo temporal"),
             _ => (CallStatus::Busy, "linea ocupada"),
         };
-        prov.push_call(CallOutcome::new(&numero, status, status == CallStatus::Answered, detalle));
+        prov.push_call(CallOutcome::new(
+            &numero,
+            status,
+            status == CallStatus::Answered,
+            detalle,
+        ));
     }
 
     let mut clock = SimClock::new(1_700_000_000_000);
@@ -414,7 +432,8 @@ mod tests {
 
     #[test]
     fn parse_mensajes_acepta_el_dump_de_content_query() {
-        let raw = "Row: 0 _id=3, address=+34600111222, body=Tu código es 123456, date=1712345678000";
+        let raw =
+            "Row: 0 _id=3, address=+34600111222, body=Tu código es 123456, date=1712345678000";
         let m = parse_mensajes(raw).unwrap();
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].id, "3");
@@ -424,7 +443,8 @@ mod tests {
 
     #[test]
     fn parse_mensajes_acepta_json() {
-        let raw = r#"[{"id":"7","sender":"BANCO","body":"código 654321","timestamp":1712345678000}]"#;
+        let raw =
+            r#"[{"id":"7","sender":"BANCO","body":"código 654321","timestamp":1712345678000}]"#;
         let m = parse_mensajes(raw).unwrap();
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].sender, "BANCO");
@@ -434,5 +454,13 @@ mod tests {
     #[test]
     fn el_json_invalido_da_error_y_no_panic() {
         assert!(parse_mensajes("[{\"id\":}").is_err());
+    }
+
+    #[test]
+    fn recortar_no_parte_un_utf8_por_la_mitad() {
+        // Con acentos y emoji: un `&s[..n]` a pelo reventaría.
+        assert_eq!(recortar("áéíóú", 3), "áéí…");
+        assert_eq!(recortar("hola", 10), "hola");
+        assert_eq!(recortar("👍👍👍", 2), "👍👍…");
     }
 }
