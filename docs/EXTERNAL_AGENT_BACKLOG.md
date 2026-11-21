@@ -7,10 +7,10 @@
 > y sigue con el siguiente punto (no pares por un bloqueo: hay 12 puntos).
 
 Contexto mínimo para no perderte:
-- Tu instancia es la **MAESTRA `primary`** (el móvil Samsung, `192.168.1.124`).
+- Tu instancia es la **MAESTRA `primary`** (el móvil Samsung, `<IP_DEL_MOVIL>`).
 - Tú eres **`worker`**. La maestra decide; tú aportas datos y parches.
 - **Conexión por túnel** (immune a bloqueo por IP):
-  `https://webpage-ultram-please-communicate.trycloudflare.com` · MCP: `POST /mcp` (JSON-RPC 2.0, **no** `/sse`).
+  `https://TUNEL.trycloudflare.com` · MCP: `POST /mcp` (JSON-RPC 2.0, **no** `/sse`).
   Cabeceras: `X-API-Key: <mdaemon_sk_live_…>` (la tienes) y `X-Seere-Auth-Token: <cockpit_token>` para POST/PUT.
 - **No hay binario `adb` en el móvil**: la flota habla ADB en Rust puro. Tool MCP `adb`:
   `status | shell | devices | keyinfo | push | pull` (ya integrada en `main`).

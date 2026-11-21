@@ -9,6 +9,11 @@
 //!   * si el entorno no permite la reproducción (p.ej. no hay `su`), el test
 //!     se marca como "skip" explícito en vez de pasar en falso;
 //!   * nada de esto modifica ficheros que no sean de `/tmp`.
+//!
+//! NOTA 2026-11-20: los tests de **ADV-A-01** y **ADV-A-02** estaban
+//! INVERTIDOS (afirmaban que el RCE se reproducía).  Al arreglar el defecto
+//! en `android.rs` se han invertido: ahora PASSAN con el código correcto y
+//! FALLARÍAN si volviese el RCE.
 
 use megadaemon_core::api_key::{self, ApiKeyConfig, Decision, RateLimiter};
 use megadaemon_core::cockpit_server;
@@ -128,14 +133,22 @@ fn adv_a01_fs_write_inyecta_comandos_por_el_heredoc() {
     );
     // ¡OJO! el marcador se comprueba ANTES de borrarlo.
     let pwned = marker.exists();
+    let written = std::fs::read_to_string(&target).unwrap_or_default();
     let _ = std::fs::remove_file(&target);
     let _ = std::fs::remove_file(&marker);
 
+    // INVERTIDO (fix de ADV-A-01 en `android.rs`): este test ya no demuestra
+    // el defecto, lo GARANTIZA: el contenido NO puede ejecutarse como shell
+    // root y debe llegar intacto al fichero.
     assert!(
-        pwned,
-        "el contenido NO se ejecutó como comando: el heredoc de fs_write es un vector de \
-         RCE root.  resp={:?}",
+        !pwned,
+        "el contenido de fs_write se ejecutó como comando root (heredoc): RCE.  resp={:?}",
         res
+    );
+    assert!(
+        written.contains("__MD_EOF__") && written.contains("contenido legitimo"),
+        "el contenido no llegó intacto al fichero (fs_write lo alteró): {:?}",
+        written
     );
 }
 
@@ -165,8 +178,10 @@ fn adv_a02_find_duplicates_inyecta_comandos_por_el_nombre_de_fichero() {
     let _ = std::fs::remove_file(&nasty);
     let _ = std::fs::remove_dir_all(&dir);
 
+    // INVERTIDO (fix de ADV-A-02 en `android.rs`): el nombre del fichero NO
+    // puede ejecutarse como shell root (escapado POSIX con comillas simples).
     assert!(
-        pwned,
+        !pwned,
         "el nombre del fichero se ejecutó como comando: find_duplicates es RCE root.  resp={}",
         res
     );
@@ -185,9 +200,12 @@ fn adv_a03_la_politica_destructiva_se_esquiva() {
         "reboot bootloader",                       // deja el móvil en el bootloader
         "mv /data/local/tmp/megadaemon /data/local/tmp/megadaemon.bak",
     ];
+    // INVERTIDO (fix de ADV-A-03 en `android.rs`): la politica destructiva ya
+    // NO se esquiva con espacios de mas, opciones largas ni otras formas de
+    // borrar => todos estos comandos DEBEN clasificarse como destructivos.
     for cmd in bypasses {
         assert!(
-            !megadaemon_core::android::is_destructive(cmd),
+            megadaemon_core::android::is_destructive(cmd),
             "«{}» NO se clasifica como destructivo: la política confirm es evadible",
             cmd
         );

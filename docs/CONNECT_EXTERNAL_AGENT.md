@@ -12,7 +12,7 @@
 
 | Dato | Dónde está | Valor para tu caso |
 |---|---|---|
-| **URL base del cockpit** | Fichero `megadaemon.env` de la instancia | `https://webpage-ultram-please-communicate.trycloudflare.com` |
+| **URL base del cockpit** | Fichero `megadaemon.env` de la instancia | `https://TUNEL.trycloudflare.com` |
 | **Ruta del MCP** | Mismo host | `POST /mcp` (JSON-RPC 2.0) — **usa esta, no `/sse`** |
 | **API key remota** | `state/megadaemon_api.key` (0600) | `mdaemon_sk_live_…` (la que ya tienes) |
 | **Token de escritura** | `state/cockpit_token` (0600) | `X-Seere-Auth-Token` — **sólo** para POST/PUT |
@@ -40,7 +40,7 @@ reimplementar nada.
 ═══════════════════════════════════════════════════════════════════
 Endpoint MCP (JSON-RPC 2.0 sobre HTTP POST):
 
-    POST https://webpage-ultram-please-communicate.trycloudflare.com/mcp
+    POST https://TUNEL.trycloudflare.com/mcp
     X-API-Key: <META_LA_API_KEY_AQUI>
     X-Seere-Auth-Token: <META_EL_TOKEN_AQUI>
 
@@ -157,7 +157,7 @@ Copia `rust-core/tools/mdmcp.py` a la máquina del agente y dale las dos
 credenciales por variable de entorno (**nunca** en el prompt ni en el repo):
 
 ```bash
-export MEGADAEMON_URL="https://webpage-ultram-please-communicate.trycloudflare.com"
+export MEGADAEMON_URL="https://TUNEL.trycloudflare.com"
 export MEGADAEMON_API_KEY="mdaemon_sk_live_…"
 export MEGADAEMON_AUTH_TOKEN="…"     # sólo si va a escribir
 ```

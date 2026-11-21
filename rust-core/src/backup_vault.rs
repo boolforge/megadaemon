@@ -116,6 +116,157 @@ pub struct VaultManifest {
     pub entries: Vec<VaultEntry>,
     /// Total de bytes en claro.
     pub total_plain_bytes: u64,
+    /// Cifrado del **origen** de la boveda: `EFS` | `CLARO` | `DESCONOCIDO`.
+    ///
+    /// Importa porque en Android el cifrado por fichero (FBE/EFS) vive **por
+    /// debajo** del sistema de ficheros: el texto plano de un backup puede
+    /// estar ya cifrado por hardware aunque `/proc/mounts` no lo diga => con
+    /// `DESCONOCIDO` la boveda no promete una restauracion en claro.
+    #[serde(default)]
+    pub source_encryption: String,
+}
+
+// ---------------------------------------------------------------------------
+// EFS / mundo seguro
+// ---------------------------------------------------------------------------
+
+/// Estado del cifrado del almacenamiento (EFS / FBE) y del mundo seguro.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecureStorageState {
+    /// Hay algun montaje con cifrado explicito (`f2fs.crypto`, `encrypt`, ...).
+    pub efs_present: bool,
+    /// Montajes detectados como cifrados (`punto tipo opciones`).
+    pub encrypted_mounts: Vec<String>,
+    /// `/data` o `/mnt/efs` aparecen cifrados.
+    pub data_encrypted: bool,
+    /// Indicador de keystore hardware-backed (Some(true) si se vio un nodo
+    /// TEE/SE). Es un **indicador**, no una prueba.
+    pub keystore_hardware_backed: Option<bool>,
+    /// `EFS+HW` | `EFS` | `DESCONOCIDO`.
+    pub verdict: String,
+    pub notes: Vec<String>,
+}
+
+/// Extrae de un `/proc/mounts` los montajes **con cifrado explicito**.
+///
+/// Cuenta como cifrado si el tipo de fs es `*.crypto`, si las opciones
+/// contienen `encrypt`, o si el punto de montaje acaba en `.crypto`.
+pub fn parse_encrypted_mounts(mounts: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in mounts.lines() {
+        let mut it = line.split_whitespace();
+        let _src = it.next();
+        // OJO: en /proc/mounts el orden es `dispositivo punto_de_montaje tipo_fs
+        // opciones` => el punto de montaje va en 2o y el tipo en 3o (invertirlos
+        // hace que no se detecte NINGUN montaje cifrado).
+        let mountpoint = match it.next() {
+            Some(v) => v,
+            None => continue,
+        };
+        let fstype = match it.next() {
+            Some(v) => v,
+            None => continue,
+        };
+        let opts = it.collect::<Vec<_>>().join(",");
+        if fstype.contains(".crypto") || opts.contains("encrypt") || mountpoint.ends_with(".crypto") {
+            out.push(format!("{} {} {}", mountpoint, fstype, opts));
+        }
+    }
+    out
+}
+
+/// Tipos de fs que **no** pueden estar cifrados por fichero.
+const FS_SIEMPRE_EN_CLARO: &[&str] = &["tmpfs", "vfat", "sdcardfs", "fuse", "overlay", "ramfs"];
+
+/// Clasifica el cifrado del almacenamiento de un origen: `EFS` | `CLARO` |
+/// `DESCONOCIDO`.
+///
+/// `DESCONOCIDO` es un valor de verdad, no un atajo: en Android el cifrado por
+/// fichero se aplica **por debajo** del fs, asi que un `f2fs` normal puede
+/// estar cifrado sin que `/proc/mounts` lo diga => prefiero no mentir.
+pub fn classify_source_encryption(src: &str, mounts: &str) -> String {
+    let s = src.trim_end_matches('/');
+    for e in parse_encrypted_mounts(mounts) {
+        let mp = e.split_whitespace().next().unwrap_or("");
+        if !mp.is_empty() && (s == mp || s.starts_with(&format!("{}/", mp))) {
+            return "EFS".to_string();
+        }
+    }
+    for line in mounts.lines() {
+        let mut it = line.split_whitespace();
+        let _src = it.next();
+        let mp = it.next();
+        let fstype = it.next();
+        if let (Some(fstype), Some(mp)) = (fstype, mp) {
+            let mp = mp.trim_end_matches('/');
+            if !mp.is_empty() && (s == mp || s.starts_with(&format!("{}/", mp))) {
+                return if FS_SIEMPRE_EN_CLARO.contains(&fstype) {
+                    "CLARO".to_string()
+                } else {
+                    "DESCONOCIDO".to_string()
+                };
+            }
+        }
+    }
+    "DESCONOCIDO".to_string()
+}
+
+/// Igual que [`classify_source_encryption`] pero leyendo el `/proc/mounts` real.
+pub fn classify_source_encryption_live(src: &str) -> String {
+    match std::fs::read_to_string("/proc/mounts") {
+        Ok(m) if !m.is_empty() => classify_source_encryption(src, &m),
+        _ => "DESCONOCIDO".to_string(),
+    }
+}
+
+/// Estado real del almacenamiento cifrado y del mundo seguro.
+pub fn efs_state() -> SecureStorageState {
+    let mut notes: Vec<String> = Vec::new();
+    let mounts = std::fs::read_to_string("/proc/mounts").unwrap_or_default();
+    if mounts.is_empty() {
+        notes.push("no se pudo leer /proc/mounts (permisos?) => estado DESCONOCIDO".into());
+        return SecureStorageState {
+            efs_present: false,
+            encrypted_mounts: Vec::new(),
+            data_encrypted: false,
+            keystore_hardware_backed: None,
+            verdict: "DESCONOCIDO".into(),
+            notes,
+        };
+    }
+    let enc = parse_encrypted_mounts(&mounts);
+    let data_encrypted = enc.iter().any(|m| {
+        let mp = m.split_whitespace().next().unwrap_or("");
+        mp == "/data" || mp.starts_with("/data/") || mp.starts_with("/mnt/efs")
+    });
+    // Indicador (no prueba) de keystore hardware-backed: nodo TEE/SE.
+    let tee = ["/dev/tee", "/dev/fkeymaster", "/dev/qseecom", "/dev/hardware_keymaster"]
+        .iter()
+        .any(|p| std::path::Path::new(p).exists());
+    let verdict = if !enc.is_empty() && tee {
+        "EFS+HW".to_string()
+    } else if !enc.is_empty() {
+        "EFS".to_string()
+    } else {
+        "DESCONOCIDO".to_string()
+    };
+    if enc.is_empty() {
+        notes.push(
+            "ningun montaje con cifrado explicito: el FBE de Android es invisible en              /proc/mounts => no se puede afirmar que /data este en claro"
+                .into(),
+        );
+    }
+    if !tee {
+        notes.push("sin nodo TEE/SE visible => no se puede afirmar keystore hardware-backed".into());
+    }
+    SecureStorageState {
+        efs_present: !enc.is_empty(),
+        encrypted_mounts: enc,
+        data_encrypted,
+        keystore_hardware_backed: Some(tee),
+        verdict,
+        notes,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -295,6 +446,24 @@ const RCON: [u8; 11] = [
 /// Multiplica por x en GF(2^8) (polinomio mónico 0x11b).
 fn xtime(x: u8) -> u8 {
     (x << 1) ^ if x & 0x80 != 0 { 0x1b } else { 0x00 }
+}
+
+/// Ronda AES tal y como la usa AEGIS (RFC 10032, seccion 3.2):
+/// `MixColumns(ShiftRows(SubBytes(in))) XOR rk`.
+///
+/// Se expone aqui porque AEGIS necesita **la ronda**, no el cifrado
+/// completo (AEGIS es "inverse-free": no existe AEGIS con la ronda final).
+pub fn aes_round(input: &[u8; 16], round_key: &[u8; 16]) -> [u8; 16] {
+    let mut s = *input;
+    for b in s.iter_mut() {
+        *b = SBOX[*b as usize];
+    }
+    shift_rows(&mut s);
+    mix_columns(&mut s);
+    for i in 0..16 {
+        s[i] ^= round_key[i];
+    }
+    s
 }
 
 /// Cifrador de bloque AES-256.
@@ -699,6 +868,7 @@ pub fn seal_with_iterations(
         kdf: KDF_NAME.to_string(),
         entries,
         total_plain_bytes,
+        source_encryption: classify_source_encryption_live(dir),
     };
     let manifest_bytes =
         serde_json::to_vec(&manifest).map_err(|e| format!("serialización del manifiesto: {}", e))?;
@@ -1210,6 +1380,7 @@ pub fn seal_dir_streaming(
         kdf: KDF_NAME.to_string(),
         entries,
         total_plain_bytes,
+        source_encryption: classify_source_encryption_live(dir),
     };
     let manifest_bytes =
         serde_json::to_vec(&manifest).map_err(|e| format!("serialización del manifiesto: {}", e))?;
@@ -1817,6 +1988,7 @@ mod tests {
                 },
             ],
             total_plain_bytes: 20_000_010,
+            source_encryption: String::new(),
         };
         let plan = drive_upload_plan(&manifest, "/MegaDaemon/backup");
         assert_eq!(plan.len(), 2);
@@ -2007,5 +2179,47 @@ mod tests {
         assert!(cmd.contains("https://example/session"));
         let _ = fs::remove_dir_all(&src);
         let _ = fs::remove_dir_all(&dst);
+    }
+
+    // ---- EFS / mundo seguro -------------------------------------------
+
+    fn mounts_sample() -> String {
+        [
+            "/dev/block/dm-4 / f2fs ro,seclabel,relatime 0 0",
+            "/dev/block/dm-5 /data f2fs ro,seclabel,relatime 0 0",
+            "/dev/block/dm-6 /data/media/0 f2fs.crypto rw,seclabel,relatime 0 0",
+            "/dev/block/dm-7 /mnt/efs ext4.crypto rw,seclabel 0 0",
+            "tmpfs /dev tmpfs rw,nosuid 0 0",
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn test_parse_encrypted_mounts() {
+        let enc = parse_encrypted_mounts(&mounts_sample());
+        assert_eq!(enc.len(), 2, "{:?}", enc);
+        assert!(enc[0].starts_with("/data/media/0 "), "{:?}", enc);
+        assert!(enc[1].starts_with("/mnt/efs "), "{:?}", enc);
+    }
+
+    #[test]
+    fn test_classify_source_encryption() {
+        let m = mounts_sample();
+        assert_eq!(classify_source_encryption("/data/media/0/DCIM/a.jpg", &m), "EFS");
+        assert_eq!(classify_source_encryption("/mnt/efs/keystore", &m), "EFS");
+        // f2fs sin cifrado explicito => DESCONOCIDO (el FBE va por DEBAJO del fs:
+        // /proc/mounts no lo ensena y no se puede afirmar que este en claro).
+        assert_eq!(classify_source_encryption("/data/app/x", &m), "DESCONOCIDO");
+        // tmpfs => CLARO.
+        assert_eq!(classify_source_encryption("/dev/shm/x", &m), "CLARO");
+        // Ruta que no esta en ningun montaje => DESCONOCIDO.
+        assert_eq!(classify_source_encryption("/no/montado/x", &m), "DESCONOCIDO");
+    }
+
+    #[test]
+    fn test_efs_state_no_rompe() {
+        let st = efs_state();
+        assert!(!st.verdict.is_empty());
+        assert!(st.notes.len() >= 1 || st.encrypted_mounts.len() >= 1);
     }
 }

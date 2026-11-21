@@ -354,8 +354,19 @@ impl Message {
         // calcular) y el cliente de referencia tampoco lo comprueba ahi.
         // Cuando si se valida, aceptamos las DOS variantes de CRC-32: la de
         // AOSP (`adb_crc32`, JAMCRC) y la IEEE/zlib.
+        // AOSP **no rellena** `data_crc32` en el protocolo de socket: el
+        // campo queda a cero (ver `docs/aosp_ref/README.md`, fuentes
+        // oficiales) y tampoco lo verifica => solo se puede exigir cuando
+        // venga informado.  El "checksum" clasico de AOSP es una suma aditiva
+        // del protocolo *sync* heredado => hay que tolerar JAMCRC e IEEE/zlib.
+        let crc_informado = crc != 0;
         let es_handshake = matches!(command, CMD_CNXN | CMD_AUTH);
-        if !es_handshake && !payload.is_empty() && crc32(&payload) != crc && crc32_zlib(&payload) != crc {
+        if !es_handshake
+            && crc_informado
+            && !payload.is_empty()
+            && crc32(&payload) != crc
+            && crc32_zlib(&payload) != crc
+        {
             return Err(AdbError::Protocol("crc32 incorrecto".into()));
         }
         Ok(Message { command, arg0, arg1, payload })

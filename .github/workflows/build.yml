@@ -20,7 +20,9 @@ on:
 
 concurrency:
   group: megadaemon-${{ github.ref }}
-  cancel-in-progress: true
+  # NO cancelar el build en curso: cada push cancelaba el run anterior y el
+  # binario ARM64 no se publicaba nunca.
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -70,7 +72,7 @@ jobs:
           env -u MEGADAEMON_API_KEY -u MEGADAEMON_TOKEN -u SEERE_AUTH_TOKEN \
             cargo test --release --all-targets \
             || echo "::warning::hay tests rojos (no bloquea la release)"
-      - name: Gate (BLOQUEA): autenticacion y politica del harness
+      - name: "Gate (BLOQUEA): autenticacion y politica del harness"
         working-directory: rust-core
         # Este gate SI bloquea el job `quality`: protege el dispositivo.
         # - `api_key::`  = el gate de acceso (401/403/429) del cockpit.
@@ -111,6 +113,15 @@ jobs:
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
           CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          # El NDK r26c NO trae 'aarch64-linux-android-ar' ni su ranlib =>
+          # cc-rs aborta si no se le pasan llvm-ar/llvm-ranlib.
+          RANLIB_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
+          # El perfil release por defecto (lto=true, codegen-units=1) MATA al
+          # rustc por OOM (SIGKILL) en el runner: el crate es grande.  Con
+          # estos overrides entra (mismo perfil que usan los agentes en local).
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
         run: |
           cargo build --release --target aarch64-linux-android
           mkdir -p dist
@@ -164,6 +175,12 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
           AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+          RANLIB_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ranlib
+          # Perfil release sin LTO: con lto=true, codegen-units=1 el rustc
+          # muere por OOM en el runner (SIGKILL) y el build aarch64 cae.
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
         run: |
           cargo build --release --target ${{ matrix.target }}
           mkdir -p dist
@@ -189,7 +206,13 @@ jobs:
     # Publica en CUALQUIER rama (main y v14-coordination): el tag es v<sha>, así
     # que no chocan entre ramas y el binario ARM64 sale siempre con nombre
     # versionado.
-    if: github.event_name == 'push'
+    #
+    # v16 · `always()` + `needs.build-android.result == 'success'`: el móvil
+    # es la instancia MAESTRA y su binario es el que se despliega; una pata
+    # Linux rota (aarch64 en un runner x86, p.ej. por el RANLIB) NO puede
+    # tumbar la release del ARM64.  Medido: el job ARM64编译aba bien y la
+    # release se saltaba porque `needs` exigia las dos patas.
+    if: always() && github.event_name == 'push' && needs.build-android.result == 'success'
     permissions:
       contents: write
     steps:

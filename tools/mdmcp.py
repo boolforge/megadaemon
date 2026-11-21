@@ -52,7 +52,7 @@ def _secrets_dir() -> str:
 SECRETS_DIR = _secrets_dir()
 SECRETS = os.path.join(SECRETS_DIR, "instance.env")
 TUNNEL = os.path.join(SECRETS_DIR, "tunnel.url")
-LEGACY = "https://webpage-ultram-please-communicate.trycloudflare.com/mcp"
+LEGACY = os.environ.get("MEGADAEMON_MCP_LEGACY", "https://TUNEL.trycloudflare.com/mcp")
 
 
 def _sha16(v: str) -> str:

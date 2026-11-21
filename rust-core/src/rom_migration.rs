@@ -2477,8 +2477,37 @@ pub fn omc_feature_patch_plan(
 /// La bandera que habilita la grabación nativa de llamadas.
 pub const RECORDING_FEATURE: &str = "CscFeature_VoiceCall_ConfigRecording";
 
-/// Valor que usan los CSC con grabación nativa sin diálogo de aviso.
+/// Valor que usan los CSC con grabación nativa **sin** diálogo de aviso.
+///
+/// ⚠️ **Medido en los 126 CSC**: lo usan 14 (THL, ILO, XXV, BKD, BTC, CAL,
+/// EGY, ILP, LYS, MYM, NPL, SEK, SLK, TUN) ⇒ la grabación queda
+/// **automática y sin avisar a la otra parte**. En España eso es un
+/// **delito** (art. 197 CP) y vulnera el GDPR ⇒ **no lo usamos**.
 pub const RECORDING_VALUE_ALLOWED: &str = "RecordingAllowed";
+
+/// Valor con **aviso** (diálogo y locución) — el que corresponde a Europa.
+///
+/// Lo usan CHO, EON, GTO y TPA (`disclaimer_latin`) e INU (`disclaimer_india`).
+/// La grabación **no** es automática: aparece en el menú y **avisa por voz**
+/// a la otra parte, que es lo legal en España.
+pub const RECORDING_VALUE_ALLOWED_WITH_DISCLAIMER: &str = "RecordingAllowedByMenu,disclaimer_latin";
+
+/// Variante para la India (mismo sentido, texto del aviso distinto).
+pub const RECORDING_VALUE_ALLOWED_WITH_DISCLAIMER_INDIA: &str =
+    "RecordingAllowedByMenu,disclaimer_india";
+
+/// ¿Este valor de la feature **incluye aviso** a la otra parte?
+///
+/// `true` ⇒ la grabadora nativa avisa (legal en España).
+/// `false` ⇒ grabación automática y silenciosa (delito en España).
+pub fn recording_value_has_disclaimer(value: &str) -> bool {
+    value.contains("disclaimer")
+}
+
+/// Valor recomendado en España: con aviso, y **no** automático.
+pub fn recording_value_recommended() -> &'static str {
+    RECORDING_VALUE_ALLOWED_WITH_DISCLAIMER
+}
 
 /// Un fichero del módulo Magisk (systemless) que activa la grabación nativa.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2517,7 +2546,7 @@ pub fn csc_recording_module_files(csc: &str) -> Vec<CscModuleFile> {
          {f}={v}. Desactivar el modulo = volver al estado original.\n",
         csc = csc,
         f = RECORDING_FEATURE,
-        v = RECORDING_VALUE_ALLOWED
+        v = RECORDING_VALUE_ALLOWED_WITH_DISCLAIMER
     );
     let script = format!(
         "#!/system/bin/sh\n\
@@ -2547,3 +2576,101 @@ pub fn csc_recording_module_files(csc: &str) -> Vec<CscModuleFile> {
         },
     ]
 }
+
+// ===========================================================================
+// Preconfig: qué es y cómo se pone
+// ===========================================================================
+
+/// Paquete de la app de preconfiguración de Samsung.
+///
+/// En los firmwares antiguos venía como `/system/app/Preconfig/Preconfig.apk`.
+/// **En este firmware (One UI 6, SM-G998B) no existe**: ni instalado, ni en la
+/// imagen de sistema, ni en la lista de APKs OMC de `/prism/etc`.
+pub const PRECONFIG_PACKAGE: &str = "com.sec.android.Preconfig";
+
+/// Actividad principal de Preconfig.
+pub const PRECONFIG_ACTIVITY: &str = "com.sec.android.Preconfig/.Preconfig";
+
+/// Código USSD de Preconfig (marcado desde el teclado).
+pub const PRECONFIG_USSD: &str = "*#272*<IMEI>#*";
+
+/// Estado de Preconfig en el dispositivo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PreconfigState {
+    /// Paquete.
+    pub package: String,
+    /// ¿Está instalado para el usuario actual?
+    pub installed: bool,
+    /// ¿Está en la imagen de sistema aunque no esté instalado?
+    pub in_system_image: bool,
+    /// Actividad a lanzar.
+    pub activity: String,
+    /// Código USSD equivalente.
+    pub ussd: String,
+}
+
+impl PreconfigState {
+    /// ¿Se puede lanzar tal cual?
+    pub fn usable(&self) -> bool {
+        self.installed
+    }
+}
+
+/// Construye el estado de Preconfig a partir de lo observado.
+pub fn preconfig_state(installed: bool, in_system_image: bool) -> PreconfigState {
+    PreconfigState {
+        package: PRECONFIG_PACKAGE.to_string(),
+        installed,
+        in_system_image,
+        activity: PRECONFIG_ACTIVITY.to_string(),
+        ussd: PRECONFIG_USSD.to_string(),
+    }
+}
+
+/// Plan de instalación de Preconfig, con las vías ordenadas de menos a más
+/// invasiva.
+///
+/// 1. Si el paquete está en la imagen de sistema pero desinstalado para el
+///    usuario: `cmd package install-existing` (lo restaura sin tocar nada).
+/// 2. Si no está en la imagen: extraer `Preconfig.apk` de un firmware Samsung
+///    que lo traiga e instalarlo como app de sistema (priv-app), porque pide
+///    permisos de plataforma.
+/// 3. Si ninguna de las dos: **reimplementar su función** (leer el CSC con
+///    `AT+PRECONFG=1,0` y escribirlo con `AT+PRECONFG=2,<CSC>`, o editar
+///    `mps_code.dat` con root), que es lo que ya hace `csc_swap_via_mps_code`.
+pub fn preconfig_install_plan(state: &PreconfigState) -> Vec<String> {
+    let mut plan = Vec::new();
+    if state.installed {
+        plan.push(format!(
+            "Ya está instalado: lanzar con `am start -n {}` (o marcar {})",
+            state.activity, state.ussd
+        ));
+        return plan;
+    }
+    if state.in_system_image {
+        plan.push(format!(
+            "Está en la imagen de sistema: restaurarlo con `cmd package install-existing {}`",
+            state.package
+        ));
+    } else {
+        plan.push(
+            "No está en la imagen de sistema: sacar `Preconfig.apk` de un \
+             firmware Samsung que lo incluya (p. ej. `/system/app/Preconfig/Preconfig.apk` \
+             en firmware antiguos) e instalarlo como app de sistema, porque usa \
+             permisos de plataforma."
+                .to_string(),
+        );
+    }
+    plan.push(format!(
+        "Comprobar: `cmd package list packages -u | grep -i preconfig` y \
+         `pm path {}`"
+    , state.package));
+    plan.push(
+        "Alternativa sin Preconfig (la que funciona aquí): cambiar el CSC con \
+         `AT+PRECONFG=2,<CSC>` desde un PC o con `mps_code.dat` desde root \
+         (ver `csc_swap_via_mps_code`), que es justo la función de Preconfig."
+            .to_string(),
+    );
+    plan
+}
+

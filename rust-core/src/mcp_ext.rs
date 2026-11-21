@@ -10,10 +10,28 @@
 //! sin `confirm: true`**.
 
 use serde_json::{json, Value};
+use crate::csc_verify;
+use crate::npu_vs4l;
 
 /// Definiciones de las herramientas nuevas.
 pub fn tool_definitions() -> Value {
     json!([
+        {
+            "name": "channel_publish",
+            "description": "Publica el estado del canal del movil (URL del quick tunnel y la del canal estable DuckDNS) FUERA del movil: escribe state/channel.json y lo publica en un paste publico, para que el sandbox redescubra la URL aunque el tunel este caido. Publicar expone una URL del dispositivo en un sitio publico: por eso exige confirm=true.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "quick": { "type": "string", "description": "URL del quick tunnel vigente (opcional)" },
+                    "duckdns": { "type": "string", "description": "URL estable de DuckDNS (opcional)" },
+                    "ip_publica": { "type": "string", "description": "IP publica que ve el host (opcional)" },
+                    "cloudflared_pids": { "type": "string", "description": "pids de cloudflared (opcional)" },
+                    "confirm": { "type": "boolean", "default": false }
+                },
+                "required": ["confirm"]
+            }
+        },
+
         {
             "name": "capabilities",
             "description": "Catálogo de capacidades de MegaDaemon con verificación REAL de dependencias en el dispositivo (binarios, rutas, módulos). Devuelve también la huella del catálogo para detectar deriva entre versiones.",
@@ -301,8 +319,26 @@ pub fn tool_definitions() -> Value {
                     "confirm": { "type": "boolean", "default": false }
                 }
             }
-        }
-    ])
+        },
+        {
+            "name": "npu_vs4l_probe",
+            "description": "Sondea el driver VS4L/NPU del Exynos 2100 (/dev/vertex10) con el metodo correcto: ioctl SIN argumento => el driver devuelve el TAMANO de datos que espera. Distingue EINVAL (reconocido, argumento invalido) de ENOTTY (no existe). No escribe nada y no necesita root (nodo 0644).",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "csc_verify",
+            "description": "Verificador post-parche del CSC: lee el CSC activo (mps_code.dat), descifra el cscfeature.xml OMC del movil, comprueba el valor de CscFeature_VoiceCall_ConfigRecording, lo contrasta con el fileSize de contents.db, busca copias en claro del framework y devuelve el mapa vivo de los CSC con la feature. Con expect_value exige un valor EXACTO (p.ej. 'RecordingAllowed' o 'RecordingAllowedByMenu,disclaimer_latin'): si el valor presente difiere devuelve verdict MISMATCH, y siempre indica la variante (sin-disclaimer / con-disclaimer / apagado).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "expect_value": {
+                        "type": "string",
+                        "description": "Valor exacto que se espera para CscFeature_VoiceCall_ConfigRecording (opcional)."
+                    }
+                }
+            }
+        },
+])
 }
 
 /// Despacha las herramientas nuevas. `None` = no es de este grupo.
@@ -319,6 +355,41 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
     };
 
     let r = match name {
+        "channel_publish" => {
+            // Publicar la URL del dispositivo fuera del movil. NO es
+            // destructivo, pero SI expone una URL publica: por eso exige
+            // `confirm: true` (misma politica que el resto de tools).
+            if !b("confirm") {
+                json!({ "content": [{ "type": "text", "text": "channel_publish exige confirm=true (publica la URL del dispositivo en un paste publico)" }] })
+            } else {
+                let out = crate::channel::publish(
+                    None,
+                    Some(s("quick")).filter(|x| !x.is_empty()).as_deref(),
+                    Some(s("duckdns")).filter(|x| !x.is_empty()).as_deref(),
+                    Some(s("ip_publica")).filter(|x| !x.is_empty()).as_deref(),
+                    Some(s("cloudflared_pids")).filter(|x| !x.is_empty()).as_deref(),
+                );
+                let txt = serde_json::to_string_pretty(&out).unwrap_or_default();
+                json!({ "content": [{ "type": "text", "text": txt }] })
+            }
+        }
+        "npu_vs4l_probe" => {
+            let rep = crate::npu_vs4l::probe();
+            let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
+            json!({ "content": [{ "type": "text", "text": txt }] })
+        }
+        "csc_verify" => {
+            // `expect_value` exige un valor EXACTO de la feature: el verificador
+            // NO presupone cual de las dos variantes del CSC es la legal.
+            let exp = s("expect_value");
+            let rep = crate::csc_verify::verify_expecting(if exp.is_empty() {
+                None
+            } else {
+                Some(exp.as_str())
+            });
+            let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
+            json!({ "content": [{ "type": "text", "text": txt }] })
+        }
         "capabilities" => match s("action").as_str() {
             "manifest" => crate::capability::manifest(),
             "summary" => crate::capability::summary_by_kind(),

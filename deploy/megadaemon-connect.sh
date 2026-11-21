@@ -13,7 +13,7 @@
 # =============================================================================
 set -u
 
-MEGADAEMON_URL="${MEGADAEMON_URL:-https://webpage-ultram-please-communicate.trycloudflare.com}"
+MEGADAEMON_URL="${MEGADAEMON_URL:-https://TUNEL.trycloudflare.com}"  # valor real fuera del repo (ver instance.env)
 MEGADAEMON_MCP="${MEGADAEMON_MCP:-$MEGADAEMON_URL/mcp}"
 MEGADAEMON_AGENT_ID="${MEGADAEMON_AGENT_ID:-agent-android-re-01}"
 MEGADAEMON_AGENT_ROLE="${MEGADAEMON_AGENT_ROLE:-worker}"
@@ -43,7 +43,7 @@ _mc() {
   python3 - "$1" "$2" <<'PY'
 import json, os, sys, urllib.request, urllib.error
 method, params = sys.argv[1], sys.argv[2]
-url = os.environ.get("MEGADAEMON_MCP", "https://webpage-ultram-please-communicate.trycloudflare.com/mcp")
+url = os.environ.get("MEGADAEMON_MCP", "https://TUNEL.trycloudflare.com/mcp")
 body = json.dumps({"jsonrpc":"2.0","id":1,"method":method,"params":json.loads(params or "{}")}).encode()
 h = {"Content-Type":"application/json"}
 k = os.environ.get("MEGADAEMON_API_KEY","")

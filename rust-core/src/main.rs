@@ -32,6 +32,8 @@ fn print_usage() {
     eprintln!("  power                                        Show battery/charging/thermal state and the active policy");
     eprintln!("  seere-selftest                              Run SEERE v12 Assertion Suites & Export Shared GBNF/Prompts");
     eprintln!("  npu-probe                                   Probe Exynos 2100 NPU (/dev/vertex10, EDEN, KleidiAI) & Pin Cores 4-7");
+    eprintln!("  npu-probe --vs4l                            Sondea el driver VS4L/NPU (ioctl SIN argumento => devuelve el tamano que espera)");
+    eprintln!("  csc-verify                                Verifica en el movil si la feature de grabacion nativa (CSC) esta activa");
     eprintln!("  locate-roms [refresh]                       Native Multi-Platform ROM & Binary Auto-Discovery");
     eprintln!("  disasm <plat> <file> [offset] [count]       Native Multi-Arch Disassembler");
     eprintln!("  hex <file> [offset] [length]                Native Hex & ASCII Inspector");
@@ -45,7 +47,32 @@ fn print_usage() {
     eprintln!("  shm-frame-bmp                               Render Live 24-bit BMP Frame from SHM");
 }
 
+/// D-10 (P0): hook de panic con backtrace.
+///
+/// El release usa `panic = "unwind"` (v15), asi que un panic en un hilo de
+/// peticion lo captura `catch_unwind` (=> la peticion responde 500 y el
+/// daemon sigue) pero un panic en un hilo de fondo **mata el proceso**
+/// (=> el "134" que se vio en el movil, que NO puede ser un panic Rust).
+/// Con este hook cada panic deja rastro real: mensaje, hilo y backtrace.
+///
+/// El backtrace se captura SIEMPRE (no solo con RUST_BACKTRACE=1): en el
+/// movil nadie pone esa variable y sin esto el 134 es indescifrable.
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let hilo = std::thread::current()
+            .name()
+            .unwrap_or("<sin nombre>")
+            .to_string();
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        eprintln!(
+            "[megadaemon][PANIC] hilo={} panic={}\n{}",
+            hilo, info, backtrace
+        );
+    }));
+}
+
 fn main() {
+    install_panic_hook();
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         print_usage();
@@ -316,7 +343,27 @@ fn main() {
         },
 
         "npu-probe" => {
-            let rep = npu_bridge::probe_exynos_npu();
+            // v15: `--vs4l` sondea el driver NPU con el metodo correcto
+            // (ioctl SIN argumento => el driver devuelve el tamano que espera).
+            if args.iter().any(|a| a == "--vs4l" || a == "-v") {
+                let rep = npu_vs4l::probe();
+                println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+            } else {
+                let rep = npu_bridge::probe_exynos_npu();
+                println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+            }
+        }
+
+        "csc-verify" => {
+            // Verificador post-parche del CSC: la feature de grabacion nativa
+            // esta realmente activa en el movil? (no "deberia estarlo").
+            // `csc-verify --expect <valor>` exige un valor EXACTO (p.ej.
+            // "RecordingAllowed" o "RecordingAllowedByMenu,disclaimer_latin").
+            let expect = args
+                .windows(2)
+                .find(|w| w[0] == "--expect")
+                .map(|w| w[1].to_string());
+            let rep = csc_verify::verify_expecting(expect.as_deref());
             println!("{}", serde_json::to_string_pretty(&rep).unwrap());
         }
 

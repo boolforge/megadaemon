@@ -366,7 +366,7 @@ túnel los sirve:
 {"status":"ok","uptime":…,"version":"…","web":{"bind":"0.0.0.0","primary_port":9090,
  "ports_open":[…],"token_materialized":true,
  "token_path":"/data/local/tmp/megadaemon/state/cockpit_token",
- "state_dir":"/data/local/tmp/megadaemon/state","local_ips":["192.168.1.124"],"urls":[…]}}
+ "state_dir":"/data/local/tmp/megadaemon/state","local_ips":["<IP_DEL_MOVIL>"],"urls":[…]}}
 ```
 
 No filtra el **valor** del token ni de la API key, pero sí la ruta del cofre de credenciales y el
@@ -400,7 +400,7 @@ Medido en el Samsung:
 Verificación post-parche (móvil, sin `Origin` = navegación normal):
 
 ```
-A_TUNEL  (Origin == Host):  HTTP/1.1 200 OK + Access-Control-Allow-Origin: https://webpage-ultram-please-communicate.trycloudflare.com
+A_TUNEL  (Origin == Host):  HTTP/1.1 200 OK + Access-Control-Allow-Origin: https://TUNEL.trycloudflare.com
 B_LOCAL  (Origin == Host):  HTTP/1.1 200 OK + Access-Control-Allow-Origin: http://127.0.0.1:3000
 C_POST    (UI con token):   HTTP/1.1 200 OK
 D_SIN_ORIGIN:               HTTP/1.1 200 OK

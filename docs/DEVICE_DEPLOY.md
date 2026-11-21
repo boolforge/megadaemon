@@ -45,7 +45,7 @@ No había supervisor de arranque, ni health-check, ni exposure remota.
 ### 2.2 Verificación desde Internet (no desde el móvil)
 
 ```
-GET https://webpage-ultram-please-communicate.trycloudflare.com/health
+GET https://TUNEL.trycloudflare.com/health
   sin key            -> HTTP 401  {"error":"unauthorized",...}
   con key válida     -> HTTP 200  {"status":"ok","uptime":26,...}
   con key incorrecta  -> HTTP 403  {"error":"forbidden",...}

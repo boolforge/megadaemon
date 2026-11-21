@@ -45,7 +45,7 @@ import urllib.request
 BASE = "/data/local/tmp/megadaemon"
 ENV = os.path.join(BASE, "megadaemon.env")
 STATE_DIRS = (os.path.join(BASE, "state"),
-              "/data/user/0/com.agy/files/megadaemon/state")
+              "<STATE_DIR>")
 
 
 def _read_file(path):
