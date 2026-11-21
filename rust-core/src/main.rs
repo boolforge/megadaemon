@@ -216,33 +216,71 @@ fn main() {
 
         "daad" => {
             let sub = args.get(2).map(|s| s.as_str()).unwrap_or("scan");
-            let target_path = args.get(3).cloned().unwrap_or_default();
-            if target_path.is_empty() {
-                eprintln!("Uso: megadaemon daad <scan|embedded> <fichero>");
-                std::process::exit(1);
-            }
-            let data = match std::fs::read(&target_path) {
-                Ok(d) => d,
-                Err(e) => {
-                    eprintln!("Error leyendo {}: {}", target_path, e);
-                    std::process::exit(1);
-                }
-            };
-            match sub {
-                "scan" => {
-                    let analysis = megadaemon_core::daad::DAADBytecodeParser::parse_ddb(&data, &target_path);
-                    println!("{}", serde_json::to_string_pretty(&analysis).unwrap_or_default());
-                }
-                "embedded" => {
-                    if let Some((offset, size, analysis)) = megadaemon_core::daad::DAADBytecodeParser::find_embedded_ddb(&data) {
-                        println!("Encontrado DDB embebido en offset 0x{:08X} ({} bytes):", offset, size);
-                        println!("{}", serde_json::to_string_pretty(&analysis).unwrap_or_default());
-                    } else {
-                        println!("No se encontró DDB embebido.");
+            if sub == "catalog" {
+                let platform = args.get(3).map(|s| s.as_str()).filter(|s| !s.is_empty());
+                let query = args.get(4).map(|s| s.as_str()).filter(|s| !s.is_empty());
+                match megadaemon_core::daad::DAADCatalog::open_default() {
+                    Ok(cat) => {
+                        let stats = cat.get_stats().ok();
+                        let games = cat.query_games(platform, query).unwrap_or_default();
+                        let out = serde_json::json!({
+                            "ok": true,
+                            "stats": stats,
+                            "count": games.len(),
+                            "games": games,
+                        });
+                        println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+                    }
+                    Err(e) => {
+                        eprintln!("Error abriendo catalogo DAAD: {}", e);
+                        std::process::exit(1);
                     }
                 }
-                _ => {
-                    eprintln!("Comando daad desconocido: {}", sub);
+            } else {
+                let target_path = args.get(3).cloned().unwrap_or_default();
+                if target_path.is_empty() {
+                    eprintln!("Uso: megadaemon daad <scan|embedded|media|disasm|catalog> [fichero|plataforma] [filtro]");
+                    std::process::exit(1);
+                }
+                let data = match std::fs::read(&target_path) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        eprintln!("Error leyendo {}: {}", target_path, e);
+                        std::process::exit(1);
+                    }
+                };
+                match sub {
+                    "scan" => {
+                        let analysis = megadaemon_core::daad::DAADBytecodeParser::parse_ddb(&data, &target_path);
+                        println!("{}", serde_json::to_string_pretty(&analysis).unwrap_or_default());
+                    }
+                    "embedded" => {
+                        if let Some((offset, size, analysis)) = megadaemon_core::daad::DAADBytecodeParser::find_embedded_ddb(&data) {
+                            println!("Encontrado DDB embebido en offset 0x{:08X} ({} bytes):", offset, size);
+                            println!("{}", serde_json::to_string_pretty(&analysis).unwrap_or_default());
+                        } else {
+                            println!("No se encontró DDB embebido.");
+                        }
+                    }
+                    "media" => {
+                        let media = megadaemon_core::daad::MediaInspector::inspect_media(&data, &target_path);
+                        println!("{}", serde_json::to_string_pretty(&media).unwrap_or_default());
+                    }
+                    "disasm" => {
+                        let dialect = args.get(4).map(|s| s.as_str()).unwrap_or("v2");
+                        let (condacts, next_offset) = megadaemon_core::daad::CondActDisassembler::disassemble_stream(&data, 0, dialect);
+                        let out = serde_json::json!({
+                            "dialect": dialect,
+                            "count": condacts.len(),
+                            "next_offset": next_offset,
+                            "condacts": condacts,
+                        });
+                        println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+                    }
+                    _ => {
+                        eprintln!("Comando daad desconocido: {}", sub);
+                        std::process::exit(1);
+                    }
                 }
             }
         }

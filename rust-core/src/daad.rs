@@ -7,7 +7,10 @@
 //! Fully compliant with the DAAD Harvester specification (DRC v2/v3 and historical
 //! legacy v1/v2 layouts derived from MSX2DAAD).
 
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
 
 /// Machine target definition: platform, memory base address, pointer endianness.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -668,78 +671,789 @@ impl DAADBytecodeParser {
     }
 }
 
-/// Disassembled CondAct instruction.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CondActInst {
+/// Opcode specification: opcode byte (0..127), canonical mnemonic name, and parameter arity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpcodeDef {
     pub opcode: u8,
-    pub name: String,
-    pub params: Vec<u8>,
+    pub name: &'static str,
+    pub arity: u8,
+}
+
+// Full V1 Opcode Table (ADP DDB_VERSION1_CONDACTS)
+pub const V1_OPCODES: &[OpcodeDef] = &[
+    OpcodeDef { opcode: 0, name: "AT", arity: 1 },
+    OpcodeDef { opcode: 1, name: "NOTAT", arity: 1 },
+    OpcodeDef { opcode: 2, name: "ATGT", arity: 1 },
+    OpcodeDef { opcode: 3, name: "ATLT", arity: 1 },
+    OpcodeDef { opcode: 4, name: "PRESENT", arity: 1 },
+    OpcodeDef { opcode: 5, name: "ABSENT", arity: 1 },
+    OpcodeDef { opcode: 6, name: "WORN", arity: 1 },
+    OpcodeDef { opcode: 7, name: "NOTWORN", arity: 1 },
+    OpcodeDef { opcode: 8, name: "CARRIED", arity: 1 },
+    OpcodeDef { opcode: 9, name: "NOTCARR", arity: 1 },
+    OpcodeDef { opcode: 10, name: "CHANCE", arity: 1 },
+    OpcodeDef { opcode: 11, name: "ZERO", arity: 1 },
+    OpcodeDef { opcode: 12, name: "NOTZERO", arity: 1 },
+    OpcodeDef { opcode: 13, name: "EQ", arity: 2 },
+    OpcodeDef { opcode: 14, name: "GT", arity: 2 },
+    OpcodeDef { opcode: 15, name: "LT", arity: 2 },
+    OpcodeDef { opcode: 16, name: "ADJECT1", arity: 1 },
+    OpcodeDef { opcode: 17, name: "ADVERB", arity: 1 },
+    OpcodeDef { opcode: 18, name: "SFX", arity: 2 },
+    OpcodeDef { opcode: 19, name: "DESC", arity: 0 },
+    OpcodeDef { opcode: 20, name: "QUIT", arity: 0 },
+    OpcodeDef { opcode: 21, name: "END", arity: 0 },
+    OpcodeDef { opcode: 22, name: "DONE", arity: 0 },
+    OpcodeDef { opcode: 23, name: "OK", arity: 0 },
+    OpcodeDef { opcode: 24, name: "ANYKEY", arity: 0 },
+    OpcodeDef { opcode: 25, name: "SAVE", arity: 0 },
+    OpcodeDef { opcode: 26, name: "LOAD", arity: 0 },
+    OpcodeDef { opcode: 27, name: "TURNS", arity: 0 },
+    OpcodeDef { opcode: 28, name: "DISPLAY", arity: 1 },
+    OpcodeDef { opcode: 29, name: "CLS", arity: 0 },
+    OpcodeDef { opcode: 30, name: "DROPALL", arity: 0 },
+    OpcodeDef { opcode: 31, name: "AUTOG", arity: 0 },
+    OpcodeDef { opcode: 32, name: "AUTOD", arity: 0 },
+    OpcodeDef { opcode: 33, name: "AUTOW", arity: 0 },
+    OpcodeDef { opcode: 34, name: "AUTOR", arity: 0 },
+    OpcodeDef { opcode: 35, name: "PAUSE", arity: 1 },
+    OpcodeDef { opcode: 36, name: "TIMEOUT", arity: 0 },
+    OpcodeDef { opcode: 37, name: "GOTO", arity: 1 },
+    OpcodeDef { opcode: 38, name: "MESSAGE", arity: 1 },
+    OpcodeDef { opcode: 39, name: "REMOVE", arity: 1 },
+    OpcodeDef { opcode: 40, name: "GET", arity: 1 },
+    OpcodeDef { opcode: 41, name: "DROP", arity: 1 },
+    OpcodeDef { opcode: 42, name: "WEAR", arity: 1 },
+    OpcodeDef { opcode: 43, name: "DESTROY", arity: 1 },
+    OpcodeDef { opcode: 44, name: "CREATE", arity: 1 },
+    OpcodeDef { opcode: 45, name: "SWAP", arity: 2 },
+    OpcodeDef { opcode: 46, name: "PLACE", arity: 2 },
+    OpcodeDef { opcode: 47, name: "SET", arity: 1 },
+    OpcodeDef { opcode: 48, name: "CLEAR", arity: 1 },
+    OpcodeDef { opcode: 49, name: "PLUS", arity: 2 },
+    OpcodeDef { opcode: 50, name: "MINUS", arity: 2 },
+    OpcodeDef { opcode: 51, name: "LET", arity: 2 },
+    OpcodeDef { opcode: 52, name: "NEWLINE", arity: 0 },
+    OpcodeDef { opcode: 53, name: "PRINT", arity: 1 },
+    OpcodeDef { opcode: 54, name: "SYSMESS", arity: 1 },
+    OpcodeDef { opcode: 55, name: "ISAT", arity: 2 },
+    OpcodeDef { opcode: 56, name: "COPYOF", arity: 2 },
+    OpcodeDef { opcode: 57, name: "COPYOO", arity: 2 },
+    OpcodeDef { opcode: 58, name: "COPYFO", arity: 2 },
+    OpcodeDef { opcode: 59, name: "COPYFF", arity: 2 },
+    OpcodeDef { opcode: 60, name: "LISTOBJ", arity: 0 },
+    OpcodeDef { opcode: 61, name: "EXTERN", arity: 2 },
+    OpcodeDef { opcode: 62, name: "RAMSAVE", arity: 0 },
+    OpcodeDef { opcode: 63, name: "RAMLOAD", arity: 1 },
+    OpcodeDef { opcode: 64, name: "BEEP", arity: 2 },
+    OpcodeDef { opcode: 65, name: "PAPER", arity: 1 },
+    OpcodeDef { opcode: 66, name: "INK", arity: 1 },
+    OpcodeDef { opcode: 67, name: "BORDER", arity: 1 },
+    OpcodeDef { opcode: 68, name: "PREP", arity: 1 },
+    OpcodeDef { opcode: 69, name: "NOUN2", arity: 1 },
+    OpcodeDef { opcode: 70, name: "ADJECT2", arity: 1 },
+    OpcodeDef { opcode: 71, name: "ADD", arity: 2 },
+    OpcodeDef { opcode: 72, name: "SUB", arity: 2 },
+    OpcodeDef { opcode: 73, name: "PARSE", arity: 0 },
+    OpcodeDef { opcode: 74, name: "LISTAT", arity: 1 },
+    OpcodeDef { opcode: 75, name: "PROCESS", arity: 1 },
+    OpcodeDef { opcode: 76, name: "SAME", arity: 2 },
+    OpcodeDef { opcode: 77, name: "MES", arity: 1 },
+    OpcodeDef { opcode: 78, name: "WINDOW", arity: 1 },
+    OpcodeDef { opcode: 79, name: "NOTEQ", arity: 2 },
+    OpcodeDef { opcode: 80, name: "NOTSAME", arity: 2 },
+    OpcodeDef { opcode: 81, name: "MODE", arity: 1 },
+    OpcodeDef { opcode: 82, name: "WINAT", arity: 2 },
+    OpcodeDef { opcode: 83, name: "TIME", arity: 2 },
+    OpcodeDef { opcode: 84, name: "PICTURE", arity: 1 },
+    OpcodeDef { opcode: 85, name: "DOALL", arity: 1 },
+    OpcodeDef { opcode: 86, name: "PROMPT", arity: 1 },
+    OpcodeDef { opcode: 87, name: "GRAPHIC", arity: 2 },
+    OpcodeDef { opcode: 88, name: "ISNOTAT", arity: 2 },
+    OpcodeDef { opcode: 89, name: "WEIGH", arity: 2 },
+    OpcodeDef { opcode: 90, name: "PUTIN", arity: 2 },
+    OpcodeDef { opcode: 91, name: "TAKEOUT", arity: 2 },
+    OpcodeDef { opcode: 92, name: "NEWTEXT", arity: 0 },
+    OpcodeDef { opcode: 93, name: "ABILITY", arity: 2 },
+    OpcodeDef { opcode: 94, name: "WEIGHT", arity: 1 },
+    OpcodeDef { opcode: 95, name: "RANDOM", arity: 1 },
+    OpcodeDef { opcode: 96, name: "INPUT", arity: 2 },
+    OpcodeDef { opcode: 97, name: "SAVEAT", arity: 0 },
+    OpcodeDef { opcode: 98, name: "BACKAT", arity: 0 },
+    OpcodeDef { opcode: 99, name: "PRINTAT", arity: 2 },
+    OpcodeDef { opcode: 100, name: "WHATO", arity: 0 },
+    OpcodeDef { opcode: 101, name: "RESET", arity: 1 },
+    OpcodeDef { opcode: 102, name: "PUTO", arity: 1 },
+    OpcodeDef { opcode: 103, name: "NOTDONE", arity: 0 },
+    OpcodeDef { opcode: 104, name: "AUTOP", arity: 1 },
+    OpcodeDef { opcode: 105, name: "AUTOT", arity: 1 },
+    OpcodeDef { opcode: 106, name: "MOVE", arity: 1 },
+    OpcodeDef { opcode: 107, name: "WINSIZE", arity: 2 },
+    OpcodeDef { opcode: 108, name: "REDO", arity: 0 },
+];
+
+// Full V2 Opcode Table (ADP DDB_VERSION2_CONDACTS)
+pub const V2_OPCODES: &[OpcodeDef] = &[
+    OpcodeDef { opcode: 0, name: "AT", arity: 1 },
+    OpcodeDef { opcode: 1, name: "NOTAT", arity: 1 },
+    OpcodeDef { opcode: 2, name: "ATGT", arity: 1 },
+    OpcodeDef { opcode: 3, name: "ATLT", arity: 1 },
+    OpcodeDef { opcode: 4, name: "PRESENT", arity: 1 },
+    OpcodeDef { opcode: 5, name: "ABSENT", arity: 1 },
+    OpcodeDef { opcode: 6, name: "WORN", arity: 1 },
+    OpcodeDef { opcode: 7, name: "NOTWORN", arity: 1 },
+    OpcodeDef { opcode: 8, name: "CARRIED", arity: 1 },
+    OpcodeDef { opcode: 9, name: "NOTCARR", arity: 1 },
+    OpcodeDef { opcode: 10, name: "CHANCE", arity: 1 },
+    OpcodeDef { opcode: 11, name: "ZERO", arity: 1 },
+    OpcodeDef { opcode: 12, name: "NOTZERO", arity: 1 },
+    OpcodeDef { opcode: 13, name: "EQ", arity: 2 },
+    OpcodeDef { opcode: 14, name: "GT", arity: 2 },
+    OpcodeDef { opcode: 15, name: "LT", arity: 2 },
+    OpcodeDef { opcode: 16, name: "ADJECT1", arity: 1 },
+    OpcodeDef { opcode: 17, name: "ADVERB", arity: 1 },
+    OpcodeDef { opcode: 18, name: "SFX", arity: 2 },
+    OpcodeDef { opcode: 19, name: "DESC", arity: 1 },
+    OpcodeDef { opcode: 20, name: "QUIT", arity: 0 },
+    OpcodeDef { opcode: 21, name: "END", arity: 0 },
+    OpcodeDef { opcode: 22, name: "DONE", arity: 0 },
+    OpcodeDef { opcode: 23, name: "OK", arity: 0 },
+    OpcodeDef { opcode: 24, name: "ANYKEY", arity: 0 },
+    OpcodeDef { opcode: 25, name: "SAVE", arity: 1 },
+    OpcodeDef { opcode: 26, name: "LOAD", arity: 1 },
+    OpcodeDef { opcode: 27, name: "DPRINT", arity: 1 },
+    OpcodeDef { opcode: 28, name: "DISPLAY", arity: 1 },
+    OpcodeDef { opcode: 29, name: "CLS", arity: 0 },
+    OpcodeDef { opcode: 30, name: "DROPALL", arity: 0 },
+    OpcodeDef { opcode: 31, name: "AUTOG", arity: 0 },
+    OpcodeDef { opcode: 32, name: "AUTOD", arity: 0 },
+    OpcodeDef { opcode: 33, name: "AUTOW", arity: 0 },
+    OpcodeDef { opcode: 34, name: "AUTOR", arity: 0 },
+    OpcodeDef { opcode: 35, name: "PAUSE", arity: 1 },
+    OpcodeDef { opcode: 36, name: "SYNONYM", arity: 2 },
+    OpcodeDef { opcode: 37, name: "GOTO", arity: 1 },
+    OpcodeDef { opcode: 38, name: "MESSAGE", arity: 1 },
+    OpcodeDef { opcode: 39, name: "REMOVE", arity: 1 },
+    OpcodeDef { opcode: 40, name: "GET", arity: 1 },
+    OpcodeDef { opcode: 41, name: "DROP", arity: 1 },
+    OpcodeDef { opcode: 42, name: "WEAR", arity: 1 },
+    OpcodeDef { opcode: 43, name: "DESTROY", arity: 1 },
+    OpcodeDef { opcode: 44, name: "CREATE", arity: 1 },
+    OpcodeDef { opcode: 45, name: "SWAP", arity: 2 },
+    OpcodeDef { opcode: 46, name: "PLACE", arity: 2 },
+    OpcodeDef { opcode: 47, name: "SET", arity: 1 },
+    OpcodeDef { opcode: 48, name: "CLEAR", arity: 1 },
+    OpcodeDef { opcode: 49, name: "PLUS", arity: 2 },
+    OpcodeDef { opcode: 50, name: "MINUS", arity: 2 },
+    OpcodeDef { opcode: 51, name: "LET", arity: 2 },
+    OpcodeDef { opcode: 52, name: "NEWLINE", arity: 0 },
+    OpcodeDef { opcode: 53, name: "PRINT", arity: 1 },
+    OpcodeDef { opcode: 54, name: "SYSMESS", arity: 1 },
+    OpcodeDef { opcode: 55, name: "ISAT", arity: 2 },
+    OpcodeDef { opcode: 56, name: "SETCO", arity: 1 },
+    OpcodeDef { opcode: 57, name: "SPACE", arity: 0 },
+    OpcodeDef { opcode: 58, name: "HASAT", arity: 1 },
+    OpcodeDef { opcode: 59, name: "HASNAT", arity: 1 },
+    OpcodeDef { opcode: 60, name: "LISTOBJ", arity: 0 },
+    OpcodeDef { opcode: 61, name: "EXTERN", arity: 2 },
+    OpcodeDef { opcode: 62, name: "RAMSAVE", arity: 0 },
+    OpcodeDef { opcode: 63, name: "RAMLOAD", arity: 1 },
+    OpcodeDef { opcode: 64, name: "BEEP", arity: 2 },
+    OpcodeDef { opcode: 65, name: "PAPER", arity: 1 },
+    OpcodeDef { opcode: 66, name: "INK", arity: 1 },
+    OpcodeDef { opcode: 67, name: "BORDER", arity: 1 },
+    OpcodeDef { opcode: 68, name: "PREP", arity: 1 },
+    OpcodeDef { opcode: 69, name: "NOUN2", arity: 1 },
+    OpcodeDef { opcode: 70, name: "ADJECT2", arity: 1 },
+    OpcodeDef { opcode: 71, name: "ADD", arity: 2 },
+    OpcodeDef { opcode: 72, name: "SUB", arity: 2 },
+    OpcodeDef { opcode: 73, name: "PARSE", arity: 1 },
+    OpcodeDef { opcode: 74, name: "LISTAT", arity: 1 },
+    OpcodeDef { opcode: 75, name: "PROCESS", arity: 1 },
+    OpcodeDef { opcode: 76, name: "SAME", arity: 2 },
+    OpcodeDef { opcode: 77, name: "MES", arity: 1 },
+    OpcodeDef { opcode: 78, name: "WINDOW", arity: 1 },
+    OpcodeDef { opcode: 79, name: "NOTEQ", arity: 2 },
+    OpcodeDef { opcode: 80, name: "NOTSAME", arity: 2 },
+    OpcodeDef { opcode: 81, name: "MODE", arity: 1 },
+    OpcodeDef { opcode: 82, name: "WINAT", arity: 2 },
+    OpcodeDef { opcode: 83, name: "TIME", arity: 2 },
+    OpcodeDef { opcode: 84, name: "PICTURE", arity: 1 },
+    OpcodeDef { opcode: 85, name: "DOALL", arity: 1 },
+    OpcodeDef { opcode: 86, name: "MOUSE", arity: 2 },
+    OpcodeDef { opcode: 87, name: "GFX", arity: 2 },
+    OpcodeDef { opcode: 88, name: "ISNOTAT", arity: 2 },
+    OpcodeDef { opcode: 89, name: "WEIGH", arity: 2 },
+    OpcodeDef { opcode: 90, name: "PUTIN", arity: 2 },
+    OpcodeDef { opcode: 91, name: "TAKEOUT", arity: 2 },
+    OpcodeDef { opcode: 92, name: "NEWTEXT", arity: 0 },
+    OpcodeDef { opcode: 93, name: "ABILITY", arity: 2 },
+    OpcodeDef { opcode: 94, name: "WEIGHT", arity: 1 },
+    OpcodeDef { opcode: 95, name: "RANDOM", arity: 1 },
+    OpcodeDef { opcode: 96, name: "INPUT", arity: 2 },
+    OpcodeDef { opcode: 97, name: "SAVEAT", arity: 0 },
+    OpcodeDef { opcode: 98, name: "BACKAT", arity: 0 },
+    OpcodeDef { opcode: 99, name: "PRINTAT", arity: 2 },
+    OpcodeDef { opcode: 100, name: "WHATO", arity: 0 },
+    OpcodeDef { opcode: 101, name: "CALL", arity: 1 },
+    OpcodeDef { opcode: 102, name: "PUTO", arity: 1 },
+    OpcodeDef { opcode: 103, name: "NOTDONE", arity: 0 },
+    OpcodeDef { opcode: 104, name: "AUTOP", arity: 1 },
+    OpcodeDef { opcode: 105, name: "AUTOT", arity: 1 },
+    OpcodeDef { opcode: 106, name: "MOVE", arity: 1 },
+    OpcodeDef { opcode: 107, name: "WINSIZE", arity: 2 },
+    OpcodeDef { opcode: 108, name: "REDO", arity: 0 },
+    OpcodeDef { opcode: 109, name: "CENTRE", arity: 0 },
+    OpcodeDef { opcode: 110, name: "EXIT", arity: 1 },
+    OpcodeDef { opcode: 111, name: "INKEY", arity: 0 },
+    OpcodeDef { opcode: 112, name: "BIGGER", arity: 2 },
+    OpcodeDef { opcode: 113, name: "SMALLER", arity: 2 },
+    OpcodeDef { opcode: 114, name: "ISDONE", arity: 0 },
+    OpcodeDef { opcode: 115, name: "ISNDONE", arity: 0 },
+    OpcodeDef { opcode: 116, name: "SKIP", arity: 1 },
+    OpcodeDef { opcode: 117, name: "RESTART", arity: 0 },
+    OpcodeDef { opcode: 118, name: "TAB", arity: 1 },
+    OpcodeDef { opcode: 119, name: "COPYOF", arity: 2 },
+    OpcodeDef { opcode: 120, name: "XMESSAGE", arity: 2 },
+    OpcodeDef { opcode: 121, name: "COPYOO", arity: 2 },
+    OpcodeDef { opcode: 122, name: "INDIR", arity: 1 },
+    OpcodeDef { opcode: 123, name: "COPYFO", arity: 2 },
+    OpcodeDef { opcode: 124, name: "SETAT", arity: 2 },
+    OpcodeDef { opcode: 125, name: "COPYFF", arity: 2 },
+    OpcodeDef { opcode: 126, name: "COPYBF", arity: 2 },
+    OpcodeDef { opcode: 127, name: "RESET", arity: 0 },
+];
+
+pub fn get_opcode_def(opcode: u8, dialect: &str) -> Option<OpcodeDef> {
+    let raw = opcode & 0x7F;
+    let table = match dialect {
+        "v1" => V1_OPCODES,
+        _ => V2_OPCODES,
+    };
+    table.iter().copied().find(|d| d.opcode == raw)
 }
 
 pub fn condact_name(opcode: u8, version: u8) -> &'static str {
-    match opcode {
-        0 => "AT",
-        1 => "NOTAT",
-        2 => "ATGT",
-        3 => "ATLT",
-        4 => "PRESENT",
-        5 => "ABSENT",
-        6 => "WORN",
-        7 => "NOTWORN",
-        8 => "CARRIED",
-        9 => "NOTCARR",
-        10 => "CHANCE",
-        11 => "ZERO",
-        12 => "NOTZERO",
-        13 => "EQ",
-        14 => "GT",
-        15 => "LT",
-        16 => "ADJECT1",
-        17 => "ADJECT2",
-        18 => "NOUN2",
-        19 => "ADVERB",
-        20 => "SFX",
-        21 => "DESC",
-        22 => "QUIT",
-        23 => "END",
-        24 => "DONE",
-        25 => "OK",
-        26 => "ANYKEY",
-        27 => "SAVE",
-        28 => "LOAD",
-        29 => "TURNS",
-        30 => "SCORE",
-        31 => "CLS",
-        32 => "DROP",
-        33 => "WEAR",
-        34 => "REMOVE",
-        35 => "CREATE",
-        36 => "DESTROY",
-        37 => "SWAP",
-        38 => "PLACE",
-        39 => "SET",
-        40 => "CLEAR",
-        41 => "PLUS",
-        42 => "MINUS",
-        43 => "LET",
-        44 => "NEWLINE",
-        45 => "MES",
-        46 => "SYSMESS",
-        47 => "GOTO",
-        48 => "RESET",
-        49 => "AUTOG",
-        50 => "AUTOD",
-        51 => "AUTOW",
-        52 => "AUTOR",
-        53 => "PAUSE",
-        54 => "SYNONYM",
-        55 => "GOSUB",
-        56 => "RETURN",
-        57 => "PRINT",
-        58 => "PROCESS",
-        59 => "PARSE",
-        60 => "EXTERN",
-        _ => "CONDACT",
+    let dialect = if version == 1 { "v1" } else { "v2" };
+    get_opcode_def(opcode, dialect).map(|d| d.name).unwrap_or("CONDACT")
+}
+
+/// Disassembled CondAct instruction with source offsets and parameter formatting.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DisassembledCondAct {
+    pub offset: usize,
+    pub opcode: u8,
+    pub name: String,
+    pub parameters: Vec<u8>,
+    pub first_param_indirect: bool,
+    pub second_param_indirect: bool,
+    pub display: String,
+}
+
+pub struct CondActDisassembler;
+
+impl CondActDisassembler {
+    /// Disassembles a stream of condacts until STREAM_TERMINATOR (0xFF).
+    pub fn disassemble_stream(data: &[u8], offset: usize, dialect: &str) -> (Vec<DisassembledCondAct>, usize) {
+        let mut results = Vec::new();
+        let mut pos = offset;
+        let mut next_second_indirect = false;
+
+        while pos < data.len() {
+            let b = data[pos];
+            if b == STREAM_TERMINATOR {
+                pos += 1;
+                break;
+            }
+            let raw_opcode = b & 0x7F;
+            let first_indirect = (b & 0x80) != 0;
+            let second_indirect = next_second_indirect;
+            next_second_indirect = false;
+
+            let def = get_opcode_def(raw_opcode, dialect);
+            let name = def.map(|d| d.name).unwrap_or("UNKNOWN").to_string();
+            let arity = def.map(|d| d.arity as usize).unwrap_or(0);
+
+            pos += 1;
+            let mut params = Vec::new();
+            for _ in 0..arity {
+                if pos < data.len() {
+                    params.push(data[pos]);
+                    pos += 1;
+                }
+            }
+
+            // In V2, INDIR (opcode 122) applies indirection to the following instruction's 2nd parameter
+            if dialect == "v2" && raw_opcode == 122 {
+                next_second_indirect = true;
+            }
+
+            let mut display = name.clone();
+            if !params.is_empty() {
+                let p_strs: Vec<String> = params.iter().enumerate().map(|(idx, &p)| {
+                    let ind = if idx == 0 && first_indirect { "@" } else if idx == 1 && second_indirect { "@" } else { "" };
+                    format!("{}{}", ind, p)
+                }).collect();
+                display.push(' ');
+                display.push_str(&p_strs.join(", "));
+            }
+
+            results.push(DisassembledCondAct {
+                offset: pos.saturating_sub(1 + params.len()),
+                opcode: raw_opcode,
+                name,
+                parameters: params,
+                first_param_indirect: first_indirect,
+                second_param_indirect: second_indirect,
+                display,
+            });
+        }
+        (results, pos)
+    }
+}
+
+/// Structural retro-computing media inspection result.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MediaInspection {
+    pub parser: String,
+    pub status: String,     // "recognized_evidence", "rejected", "partial"
+    pub validation: String, // e.g. "validated_tzx_v1_block_stream", "valid_cpc_dsk"
+    pub details: Value,
+}
+
+pub struct MediaInspector;
+
+impl MediaInspector {
+    /// Inspect Commodore 64 / C16 raw tape containers (.tap).
+    pub fn inspect_cbm_tap(data: &[u8]) -> MediaInspection {
+        if data.len() < 20 {
+            return MediaInspection {
+                parser: "cbm-tap".into(),
+                status: "rejected".into(),
+                validation: "truncated_header".into(),
+                details: json!({ "size": data.len() }),
+            };
+        }
+        let sig = &data[..12];
+        let is_c64 = sig == b"C64-TAPE-RAW";
+        let is_c16 = sig == b"C16-TAPE-RAW";
+        if !is_c64 && !is_c16 {
+            return MediaInspection {
+                parser: "cbm-tap".into(),
+                status: "rejected".into(),
+                validation: "signature_mismatch".into(),
+                details: json!({}),
+            };
+        }
+        let version = data[12];
+        let platform_code = data[13];
+        let declared_size = u32::from_le_bytes([data[16], data[17], data[18], data[19]]) as usize;
+        let actual_size = data.len().saturating_sub(20);
+        let valid = declared_size == actual_size && (version <= 2);
+
+        MediaInspection {
+            parser: "cbm-tap".into(),
+            status: if valid { "recognized_evidence".into() } else { "rejected".into() },
+            validation: if valid { "valid_pulse_stream".into() } else { "length_mismatch".into() },
+            details: json!({
+                "version": version,
+                "platform_code": platform_code,
+                "declared_size": declared_size,
+                "pulse_bytes": actual_size,
+                "system": if is_c64 { "c64" } else { "c16" },
+            }),
+        }
+    }
+
+    /// Inspect Commodore 64 P00 container files.
+    pub fn inspect_cbm_p00(data: &[u8]) -> MediaInspection {
+        if data.len() < 26 || &data[..8] != b"C64File\0" {
+            return MediaInspection {
+                parser: "cbm-p00".into(),
+                status: "rejected".into(),
+                validation: "signature_mismatch".into(),
+                details: json!({}),
+            };
+        }
+        let name_bytes = &data[8..24];
+        let name = String::from_utf8_lossy(name_bytes).trim_matches(|c| c == ' ' || c == '\0').to_string();
+        MediaInspection {
+            parser: "cbm-p00".into(),
+            status: "recognized_evidence".into(),
+            validation: "valid_wrapper".into(),
+            details: json!({
+                "name": name,
+                "payload_size": data.len().saturating_sub(26),
+            }),
+        }
+    }
+
+    /// Inspect C64 BASIC SYS program launcher stub.
+    pub fn inspect_c64_basic_sys(data: &[u8]) -> MediaInspection {
+        if data.len() < 15 {
+            return MediaInspection {
+                parser: "c64-basic-sys-prg".into(),
+                status: "rejected".into(),
+                validation: "truncated_basic_sys_stub".into(),
+                details: json!({}),
+            };
+        }
+        let load_address = u16::from_le_bytes([data[0], data[1]]);
+        if load_address != 0x0801 {
+            return MediaInspection {
+                parser: "c64-basic-sys-prg".into(),
+                status: "rejected".into(),
+                validation: "unexpected_basic_load_address".into(),
+                details: json!({ "load_address": format!("0x{:04X}", load_address) }),
+            };
+        }
+        if data[6] != 0x9E { // SYS token
+            return MediaInspection {
+                parser: "c64-basic-sys-prg".into(),
+                status: "rejected".into(),
+                validation: "missing_basic_sys_token".into(),
+                details: json!({}),
+            };
+        }
+        MediaInspection {
+            parser: "c64-basic-sys-prg".into(),
+            status: "recognized_evidence".into(),
+            validation: "validated_c64_basic_sys_launcher".into(),
+            details: json!({ "load_address": 0x0801 }),
+        }
+    }
+
+    /// Inspect ZX Spectrum / Amstrad CPC TZX / CDT tape files.
+    pub fn inspect_tzx(data: &[u8]) -> MediaInspection {
+        if data.len() < 10 || &data[..8] != b"ZXTape!\x1a" {
+            return MediaInspection {
+                parser: "tzx-cdt".into(),
+                status: "rejected".into(),
+                validation: "signature_mismatch".into(),
+                details: json!({}),
+            };
+        }
+        let major = data[8];
+        let minor = data[9];
+        let mut pos = 10;
+        let mut blocks = 0;
+
+        while pos < data.len() {
+            let block_id = data[pos];
+            pos += 1;
+            blocks += 1;
+            match block_id {
+                0x10 => { // Standard Speed Data Block
+                    if pos + 4 > data.len() { break; }
+                    let len = u16::from_le_bytes([data[pos + 2], data[pos + 3]]) as usize;
+                    pos += 4 + len;
+                }
+                0x11 => { // Turbo Speed Data Block
+                    if pos + 0x12 > data.len() { break; }
+                    let len = (data[pos + 15] as usize) | ((data[pos + 16] as usize) << 8) | ((data[pos + 17] as usize) << 16);
+                    pos += 0x12 + len;
+                }
+                0x12 => { // Pure Tone
+                    pos += 4;
+                }
+                0x13 => { // Pulse sequence
+                    if pos >= data.len() { break; }
+                    let count = data[pos] as usize;
+                    pos += 1 + count * 2;
+                }
+                0x14 => { // Pure Data Block
+                    if pos + 10 > data.len() { break; }
+                    let len = (data[pos + 7] as usize) | ((data[pos + 8] as usize) << 8) | ((data[pos + 9] as usize) << 16);
+                    pos += 10 + len;
+                }
+                0x20 => { // Pause or Stop the Tape command
+                    pos += 2;
+                }
+                0x30 => { // Text Description
+                    if pos >= data.len() { break; }
+                    let len = data[pos] as usize;
+                    pos += 1 + len;
+                }
+                0x32 => { // Archive Info
+                    if pos + 2 > data.len() { break; }
+                    let len = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
+                    pos += 2 + len;
+                }
+                _ => { // Unknown or unsupported block length, break safely
+                    break;
+                }
+            }
+        }
+
+        MediaInspection {
+            parser: "tzx-cdt".into(),
+            status: "recognized_evidence".into(),
+            validation: "validated_tzx_block_stream".into(),
+            details: json!({
+                "major": major,
+                "minor": minor,
+                "blocks_parsed": blocks,
+            }),
+        }
+    }
+
+    /// Inspect Amstrad CPC DSK floppy disk images.
+    pub fn inspect_cpc_dsk(data: &[u8]) -> MediaInspection {
+        let is_std = data.starts_with(b"MV - CPCEMU Disk-File");
+        let is_ext = data.starts_with(b"EXTENDED CPC DSK File");
+        if data.len() < 0x100 || (!is_std && !is_ext) {
+            return MediaInspection {
+                parser: "cpc-dsk".into(),
+                status: "rejected".into(),
+                validation: "signature_mismatch".into(),
+                details: json!({}),
+            };
+        }
+        let tracks = data[0x30];
+        let sides = data[0x31];
+        let valid_geom = tracks > 0 && tracks <= 84 && (sides == 1 || sides == 2);
+
+        MediaInspection {
+            parser: "cpc-dsk".into(),
+            status: if valid_geom { "recognized_evidence".into() } else { "rejected".into() },
+            validation: if valid_geom { "validated_cpc_dsk".into() } else { "invalid_geometry".into() },
+            details: json!({
+                "variant": if is_ext { "extended" } else { "standard" },
+                "tracks": tracks,
+                "sides": sides,
+                "total_tracks": tracks as u16 * sides as u16,
+            }),
+        }
+    }
+
+    /// Inspect Amiga ADF floppy disk images (AmigaDOS OFS/FFS).
+    pub fn inspect_amiga_adf(data: &[u8]) -> MediaInspection {
+        if data.len() < 2048 || data.len() % 512 != 0 || !data.starts_with(b"DOS") {
+            return MediaInspection {
+                parser: "amiga-adf".into(),
+                status: "rejected".into(),
+                validation: "signature_mismatch".into(),
+                details: json!({}),
+            };
+        }
+        let dos_flags = data[3];
+        let ffs = (dos_flags & 0x01) != 0;
+        let intl = (dos_flags & 0x02) != 0;
+        let dircache = (dos_flags & 0x04) != 0;
+        let num_blocks = data.len() / 512;
+
+        MediaInspection {
+            parser: "amiga-adf".into(),
+            status: "recognized_evidence".into(),
+            validation: "validated_amigados_adf".into(),
+            details: json!({
+                "blocks": num_blocks,
+                "dos_type": format!("DOS\\{}", dos_flags),
+                "is_ffs": ffs,
+                "international_mode": intl,
+                "directory_cache": dircache,
+            }),
+        }
+    }
+
+    /// Automatic format inspection dispatcher.
+    pub fn inspect_media(data: &[u8], filename: &str) -> MediaInspection {
+        let ext = Path::new(filename).extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+        match ext.as_str() {
+            "tap" => Self::inspect_cbm_tap(data),
+            "p00" => Self::inspect_cbm_p00(data),
+            "tzx" | "cdt" => Self::inspect_tzx(data),
+            "dsk" => Self::inspect_cpc_dsk(data),
+            "adf" => Self::inspect_amiga_adf(data),
+            "prg" => {
+                let basic = Self::inspect_c64_basic_sys(data);
+                if basic.status == "recognized_evidence" {
+                    basic
+                } else {
+                    MediaInspection {
+                        parser: "cbm-prg".into(),
+                        status: "recognized_evidence".into(),
+                        validation: "generic_cbm_prg".into(),
+                        details: json!({ "size": data.len() }),
+                    }
+                }
+            }
+            _ => {
+                if data.starts_with(b"ZXTape!\x1a") {
+                    Self::inspect_tzx(data)
+                } else if data.starts_with(b"MV - CPCEMU") || data.starts_with(b"EXTENDED CPC DSK") {
+                    Self::inspect_cpc_dsk(data)
+                } else if data.starts_with(b"DOS") && data.len() >= 512 * 80 * 11 * 2 {
+                    Self::inspect_amiga_adf(data)
+                } else if data.starts_with(b"C64File\0") {
+                    Self::inspect_cbm_p00(data)
+                } else if data.starts_with(b"C64-TAPE-RAW") || data.starts_with(b"C16-TAPE-RAW") {
+                    Self::inspect_cbm_tap(data)
+                } else {
+                    MediaInspection {
+                        parser: "unknown".into(),
+                        status: "rejected".into(),
+                        validation: "unrecognized_media_signature".into(),
+                        details: json!({ "size": data.len() }),
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Statistics from the DAAD preservation SQLite catalog (`state.db`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CatalogStats {
+    pub total_sources: i64,
+    pub total_artifacts: i64,
+    pub total_daad_payloads: i64,
+    pub total_games: i64,
+    pub unique_platforms: Vec<String>,
+}
+
+/// Game entry from DAAD preservation catalog.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CatalogGame {
+    pub id: i64,
+    pub game_id: String,
+    pub title: String,
+    pub platform: String,
+    pub language: String,
+    pub year: Option<i64>,
+    pub publisher: Option<String>,
+    pub author: Option<String>,
+}
+
+/// Artifact entry from DAAD preservation catalog.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CatalogArtifact {
+    pub id: i64,
+    pub original_filename: String,
+    pub extracted_path: Option<String>,
+    pub file_size: i64,
+    pub sha256: String,
+    pub is_daad_payload: bool,
+    pub ddb_format: Option<String>,
+    pub ddb_major_version: Option<i64>,
+    pub measured_platform: Option<String>,
+}
+
+/// Native Rust SQLite preservation catalog database interface.
+pub struct DAADCatalog {
+    db_path: PathBuf,
+}
+
+impl DAADCatalog {
+    /// Attempts to open the preservation database at default location.
+    pub fn open_default() -> Result<Self, String> {
+        let candidates = [
+            "daad/preservation_corpus/state.db",
+            "/data/user/0/com.agy/files/megadaemon/daad/preservation_corpus/state.db",
+            "../daad/preservation_corpus/state.db",
+        ];
+        for candidate in &candidates {
+            let p = PathBuf::from(candidate);
+            if p.exists() {
+                return Self::open(p);
+            }
+        }
+        Err("state.db not found in standard preservation paths".into())
+    }
+
+    /// Opens SQLite catalog at specified path with read-only flags.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, String> {
+        let p = path.as_ref().to_path_buf();
+        if !p.exists() {
+            return Err(format!("Database file not found: {}", p.display()));
+        }
+        // Verify database can be opened
+        let _ = Connection::open_with_flags(&p, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| format!("Failed to open SQLite database: {}", e))?;
+        Ok(Self { db_path: p })
+    }
+
+    fn conn(&self) -> Result<Connection, String> {
+        Connection::open_with_flags(&self.db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| format!("SQLite connection error: {}", e))
+    }
+
+    /// Retrieve catalog summary statistics.
+    pub fn get_stats(&self) -> Result<CatalogStats, String> {
+        let conn = self.conn()?;
+        let total_sources: i64 = conn.query_row("SELECT count(*) FROM sources", [], |r| r.get(0)).unwrap_or(0);
+        let total_artifacts: i64 = conn.query_row("SELECT count(*) FROM artifacts", [], |r| r.get(0)).unwrap_or(0);
+        let total_daad_payloads: i64 = conn.query_row("SELECT count(*) FROM artifacts WHERE is_daad_payload = 1", [], |r| r.get(0)).unwrap_or(0);
+        let total_games: i64 = conn.query_row("SELECT count(*) FROM games", [], |r| r.get(0)).unwrap_or(0);
+
+        let mut stmt = conn.prepare("SELECT DISTINCT platform FROM games WHERE platform IS NOT NULL ORDER BY platform")
+            .map_err(|e| e.to_string())?;
+        let platforms = stmt.query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(CatalogStats {
+            total_sources,
+            total_artifacts,
+            total_daad_payloads,
+            total_games,
+            unique_platforms: platforms,
+        })
+    }
+
+    /// Query preserved games with optional platform and title filter.
+    pub fn query_games(&self, platform: Option<&str>, query: Option<&str>) -> Result<Vec<CatalogGame>, String> {
+        let conn = self.conn()?;
+        let mut sql = "SELECT id, game_id, title, platform, language, year, publisher, author FROM games WHERE 1=1".to_string();
+        if platform.is_some() {
+            sql.push_str(" AND platform = ?");
+        }
+        if query.is_some() {
+            sql.push_str(" AND (title LIKE ? OR game_id LIKE ?)");
+        }
+        sql.push_str(" ORDER BY title LIMIT 200");
+
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let mut games = Vec::new();
+
+        let mapper = Self::map_game_row;
+        let rows = match (platform, query) {
+            (Some(p), Some(q)) => {
+                let pattern = format!("%{}%", q);
+                stmt.query_map(rusqlite::params![p, pattern, pattern], mapper)
+            }
+            (Some(p), None) => {
+                stmt.query_map(rusqlite::params![p], mapper)
+            }
+            (None, Some(q)) => {
+                let pattern = format!("%{}%", q);
+                stmt.query_map(rusqlite::params![pattern, pattern], mapper)
+            }
+            (None, None) => {
+                stmt.query_map([], mapper)
+            }
+        }.map_err(|e| e.to_string())?;
+
+        for g in rows {
+            if let Ok(game) = g {
+                games.push(game);
+            }
+        }
+        Ok(games)
+    }
+
+    fn map_game_row(r: &rusqlite::Row) -> rusqlite::Result<CatalogGame> {
+        Ok(CatalogGame {
+            id: r.get(0)?,
+            game_id: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            title: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+            platform: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+            language: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+            year: r.get(5)?,
+            publisher: r.get(6)?,
+            author: r.get(7)?,
+        })
     }
 }
 

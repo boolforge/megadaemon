@@ -50,14 +50,15 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "daad_harvester",
-            "description": "Evidence-led DAAD (Diseñador de Aventuras AD) database recognizer and extractor. Validates target-aware DRC v2/v3 and historical legacy v1/v2 DDB structures (ZX Spectrum, Commodore 64, Amstrad CPC, MSX, Atari ST, Amiga, PC/DOS, PCW, Plus/4), condact streams, and embedded databases.",
+            "description": "Evidence-led DAAD database recognizer, disassembler, retro media inspector (TAP, TZX, DSK, ADF, P00) and SQLite preservation catalog interface.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Ruta absoluta al fichero o imagen de disco a analizar" },
-                    "action": { "type": "string", "enum": ["scan", "embedded"], "default": "scan" }
-                },
-                "required": ["path"]
+                    "path": { "type": "string", "description": "Ruta al fichero, imagen de disco, o base de datos state.db" },
+                    "action": { "type": "string", "enum": ["scan", "embedded", "media", "disasm", "catalog"], "default": "scan" },
+                    "platform": { "type": "string", "description": "Filtro de plataforma para catalog o dialecto (v1/v2)" },
+                    "query": { "type": "string", "description": "Filtro de busqueda para catalog (titulo o id)" }
+                }
             }
         },
 
@@ -553,21 +554,62 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         }
         "daad_harvester" => {
             let path = s("path");
-            let action = s("action");
-            if path.is_empty() {
+            let action = {
+                let a = s("action");
+                if a.is_empty() { "scan".to_string() } else { a }
+            };
+            if action == "catalog" {
+                let cat = if path.is_empty() {
+                    crate::daad::DAADCatalog::open_default()
+                } else {
+                    crate::daad::DAADCatalog::open(&path)
+                };
+                match cat {
+                    Ok(catalog) => {
+                        let platform = if s("platform").is_empty() { None } else { Some(s("platform")) };
+                        let query = if s("query").is_empty() { None } else { Some(s("query")) };
+                        let stats = catalog.get_stats().ok();
+                        let games = catalog.query_games(platform.as_deref(), query.as_deref()).unwrap_or_default();
+                        let res = json!({
+                            "ok": true,
+                            "stats": stats,
+                            "count": games.len(),
+                            "games": games,
+                        });
+                        let txt = serde_json::to_string_pretty(&res).unwrap_or_default();
+                        json!({ "content": [{ "type": "text", "text": txt }] })
+                    }
+                    Err(e) => {
+                        let txt = serde_json::to_string_pretty(&json!({ "ok": false, "error": e })).unwrap_or_default();
+                        json!({ "content": [{ "type": "text", "text": txt }], "isError": true })
+                    }
+                }
+            } else if path.is_empty() {
                 json!({ "content": [{ "type": "text", "text": "{\"ok\":false,\"error\":\"missing_path\"}" }], "isError": true })
             } else {
                 match std::fs::read(&path) {
                     Ok(data) => {
-                        let res = if action == "embedded" {
-                            if let Some((offset, size, analysis)) = crate::daad::DAADBytecodeParser::find_embedded_ddb(&data) {
-                                json!({ "ok": true, "embedded": true, "offset": offset, "size": size, "analysis": analysis })
-                            } else {
-                                json!({ "ok": true, "embedded": false, "message": "no embedded DDB found" })
+                        let res = match action.as_str() {
+                            "embedded" => {
+                                if let Some((offset, size, analysis)) = crate::daad::DAADBytecodeParser::find_embedded_ddb(&data) {
+                                    json!({ "ok": true, "embedded": true, "offset": offset, "size": size, "analysis": analysis })
+                                } else {
+                                    json!({ "ok": true, "embedded": false, "message": "no embedded DDB found" })
+                                }
                             }
-                        } else {
-                            let analysis = crate::daad::DAADBytecodeParser::parse_ddb(&data, &path);
-                            json!({ "ok": true, "analysis": analysis })
+                            "media" => {
+                                let media = crate::daad::MediaInspector::inspect_media(&data, &path);
+                                json!({ "ok": true, "media": media })
+                            }
+                            "disasm" => {
+                                let dialect = if s("platform") == "v1" { "v1" } else { "v2" };
+                                let (condacts, next_offset) = crate::daad::CondActDisassembler::disassemble_stream(&data, 0, dialect);
+                                json!({ "ok": true, "count": condacts.len(), "next_offset": next_offset, "condacts": condacts })
+                            }
+                            _ => {
+                                let analysis = crate::daad::DAADBytecodeParser::parse_ddb(&data, &path);
+                                json!({ "ok": true, "analysis": analysis })
+                            }
                         };
                         let txt = serde_json::to_string_pretty(&res).unwrap_or_default();
                         json!({ "content": [{ "type": "text", "text": txt }] })
