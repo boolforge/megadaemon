@@ -7,30 +7,23 @@
 //! cliente HTTP del agente local.
 
 pub mod accelerator_policy;
-/// Adquiere un mutex sin dejar que un panic previo lo envenene.
-///
-/// Por que existe: `lock().unwrap()` convierte cualquier panic ajeno en un
-/// fallo PERMANENTE. El mutex queda envenenado y todas las peticiones
-/// posteriores vuelven a hacer panic al intentar tomar el lock. En un
-/// servidor eso significa: proceso vivo, watchdog contento, y 502 en cada
-/// peticion (el tunel ve la conexion cortada a medias). El daemon se
-/// quedaba asi, en 502 permanente, sin que nada lo reiniciara.
-///
-/// Con `lock_ok` el servidor sigue sirviendo: se pierde el estado de ese
-/// mutex concreto, no el servicio.
-pub fn lock_ok<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    match m.lock() {
-        Ok(g) => g,
-        Err(poisoned) => poisoned.into_inner(),
-    }
-}
-
 pub mod adb_client;
-pub mod adb_tool;
 pub mod agent_core;
-pub mod agent_voice;
-pub mod aegis;
 pub mod alerts;
+pub mod apk_inventory;
+pub mod capability;
+pub mod coordination;
+pub mod messaging;
+pub mod profile_analysis;
+pub mod repo_updates;
+pub mod root_stealth;
+pub mod service_identity;
+pub mod sshd;
+pub mod task_scheduler;
+pub mod battery_saver;
+pub mod bookmarks;
+pub mod git_ops;
+pub mod mcp_ext;
 pub mod android;
 pub mod antigravity_intel;
 pub mod meta_agent;
@@ -129,13 +122,6 @@ pub mod tile_vram;
 pub mod unifier;
 pub mod util_fs;
 pub mod util_text;
-pub mod webui;
-pub mod zstd;
-pub mod backup_crypto;
-pub mod backup_engine;
 pub mod backup_full;
+pub mod backup_vault;
 pub mod call_recorder;
-pub mod lab_kit;
-pub mod peers;
-pub mod google_auth;
-pub mod drive_native;

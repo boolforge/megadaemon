@@ -9,20 +9,14 @@ name: megadaemon-build
 
 on:
   push:
-    # `main` y `v14-coordination`: la rama v14 lleva el fix de autenticación
-    # del navegador local (exención por Host + token incrustado + multi-clave),
-    # que es el que hace que la UI del móvil funcione sola. El binario ARM64
-    # que se despliega en el Samsung se saca de ahí.
-    branches: [main, v14-coordination]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
 
 concurrency:
   group: megadaemon-${{ github.ref }}
-  # NO cancelar el build en curso: cada push cancelaba el run anterior y el
-  # binario ARM64 no se publicaba nunca.
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -51,37 +45,14 @@ jobs:
       - name: Clippy (advertencias como aviso, no bloquea)
         working-directory: rust-core
         run: cargo clippy --release --all-targets -- -D warnings || echo "::warning::clippy reportó avisos"
-      - name: "Tests: la suite completa (los rojos CONOCIDOS no bloquean; los demás, sí)"
-        # AUDIT-CI-02 (medido el 2026-11-21): antes esto era
-        # `cargo test --all-targets || echo warning`, es decir, `continue-on-error`
-        # => el job salía VERDE con cualquier test roto.  Llevaba tiempo así:
-        # tres tests de `agent_loop` estaban rojos (contradecían a la
-        # implementación) y nadie se enteró.
-        #
-        # Ahora `tools/ci-suite.sh` ejecuta la suite completa y falla si hay
-        # un binario rojo que NO esté en `tools/ci-known-red.txt`.  Sólo
-        # `audit_adversarial_v15` está en esa lista: son auditorías que
-        # fallan a propósito mientras el defecto que vigilan exista.
-        run: tools/ci-suite.sh rust-core
-      - name: "Gate (BLOQUEA): autenticacion y politica del harness"
+      - name: Tests
         working-directory: rust-core
-        # Este gate SI bloquea el job `quality`: protege el dispositivo.
-        # - `api_key::`  = el gate de acceso (401/403/429) del cockpit.
-        # - `harness_policy` = que exige `confirm` una escritura peligrosa.
-        # Los tests de la auditoria adversarial (audit_adversarial_v15) NO
-        # bloquean a proposito: fallan mientras el defecto exista, y su red
-        # es la que manda el orden de trabajo.
-        run: |
-          env -u MEGADAEMON_API_KEY -u MEGADAEMON_TOKEN -u SEERE_AUTH_TOKEN \
-            cargo test --release --lib api_key::
-          env -u MEGADAEMON_API_KEY -u MEGADAEMON_TOKEN -u SEERE_AUTH_TOKEN \
-            cargo test --release --test harness_policy
+        run: cargo test --release --all-targets
 
   build-android:
     name: build ARM64 (Android / NDK)
     runs-on: ubuntu-latest
-    # Sin `needs: quality`: un test rojo de otro módulo NO debe bloquear el
-    # artefacto ARM64 que usa la instancia maestra. La calidad se informa aparte.
+    needs: quality
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -104,40 +75,11 @@ jobs:
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
           CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
-          # El NDK r26c NO trae 'aarch64-linux-android-ar' ni su ranlib =>
-          # cc-rs aborta si no se le pasan llvm-ar/llvm-ranlib.
-          RANLIB_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
-          # El perfil release por defecto (lto=true, codegen-units=1) MATA al
-          # rustc por OOM (SIGKILL) en el runner: el crate es grande.  Con
-          # estos overrides entra (mismo perfil que usan los agentes en local).
-          CARGO_PROFILE_RELEASE_LTO: "false"
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
-          CARGO_PROFILE_RELEASE_DEBUG: "0"
         run: |
           cargo build --release --target aarch64-linux-android
           mkdir -p dist
           cp target/aarch64-linux-android/release/megadaemon-core dist/megadaemon-core-android-arm64
           sha256sum dist/megadaemon-core-android-arm64 > dist/megadaemon-core-android-arm64.sha256
-          # Copia VERSIONADA (mismo motivo que en el build de Linux): en el
-          # móvil el binario se identifies por su sha corto, no por un
-          # "megadaemon-core" sobrescrito a pelo.
-          cp dist/megadaemon-core-android-arm64 dist/megadaemon-core-android-arm64-${GITHUB_SHA::7}
-          sha256sum dist/megadaemon-core-android-arm64-${GITHUB_SHA::7} > dist/megadaemon-core-android-arm64-${GITHUB_SHA::7}.sha256
-          # Binarios AUXILIARES del movil.  `cargo build` sin --bin ya los
-          # compila todos; faltaba publicarlos.  Son imprescindible para la
-          # autocuracion: `channel-publish` es el que SONDEA el tunel (el
-          # movil no tiene curl) y el que publica el estado del canal; sin
-          # el, la recuperacion se queda a medias.
-          # `md-clipboard` (portapapeles) y `md-dict` (diccionarios) son
-          # CLIs que se ejecutan en el movil: sin publicarlos no llegan al
-          # dispositivo.
-          for aux in channel-publish duckdns-updater md-lan-listen npu-probe md-clipboard md-dict; do
-            if [ -f "target/aarch64-linux-android/release/$aux" ]; then
-              cp "target/aarch64-linux-android/release/$aux" "dist/$aux-arm64"
-              sha256sum "dist/$aux-arm64" > "dist/$aux-arm64.sha256"
-              echo "  dist/$aux-arm64"
-            fi
-          done
       - name: Subir artefacto
         uses: actions/upload-artifact@v4
         with:
@@ -148,8 +90,7 @@ jobs:
   build-linux:
     name: build Linux (${{ matrix.target }})
     runs-on: ubuntu-latest
-    # Igual que build-android: los binarios de los workers no dependen del verde
-    # de los tests de la rama.
+    needs: quality
     strategy:
       fail-fast: false
       matrix:
@@ -181,23 +122,11 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
           AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
-          RANLIB_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ranlib
-          # Perfil release sin LTO: con lto=true, codegen-units=1 el rustc
-          # muere por OOM en el runner (SIGKILL) y el build aarch64 cae.
-          CARGO_PROFILE_RELEASE_LTO: "false"
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
-          CARGO_PROFILE_RELEASE_DEBUG: "0"
         run: |
           cargo build --release --target ${{ matrix.target }}
           mkdir -p dist
           cp target/${{ matrix.target }}/release/megadaemon-core dist/${{ matrix.asset }}
           sha256sum dist/${{ matrix.asset }} > dist/${{ matrix.asset }}.sha256
-          # Copia VERSIONADA: al desplegar en el móvil el binario no debe
-          # sobrescribir "megadaemon-core" a pelo (los .bak han confundido a
-          # dos agentes). Con el nombre versionado se sabe de un vistazo qué
-          # build está en el dispositivo.
-          cp dist/${{ matrix.asset }} dist/${{ matrix.asset }}-${GITHUB_SHA::7}
-          sha256sum dist/${{ matrix.asset }}-${GITHUB_SHA::7} > dist/${{ matrix.asset }}-${GITHUB_SHA::7}.sha256
       - name: Subir artefacto
         uses: actions/upload-artifact@v4
         with:
@@ -209,16 +138,7 @@ jobs:
     name: release (auto-actualización de las instancias)
     runs-on: ubuntu-latest
     needs: [build-android, build-linux]
-    # Publica en CUALQUIER rama (main y v14-coordination): el tag es v<sha>, así
-    # que no chocan entre ramas y el binario ARM64 sale siempre con nombre
-    # versionado.
-    #
-    # v16 · `always()` + `needs.build-android.result == 'success'`: el móvil
-    # es la instancia MAESTRA y su binario es el que se despliega; una pata
-    # Linux rota (aarch64 en un runner x86, p.ej. por el RANLIB) NO puede
-    # tumbar la release del ARM64.  Medido: el job ARM64 compilaba bien y la
-    # release se saltaba porque `needs` exigia las dos patas.
-    if: always() && github.event_name == 'push' && needs.build-android.result == 'success'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
       contents: write
     steps:
@@ -227,27 +147,6 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Publicar el estado del release (para que la instancia lo detecte)
-        run: |
-          mkdir -p dist/state
-          cat > dist/state/latest.json <<EOF
-          {
-            "version": "${{ github.sha }}",
-            "short": "${GITHUB_SHA::7}",
-            "ref": "${{ github.ref_name }}",
-            "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "assets": {
-              "android-arm64": "megadaemon-core-android-arm64",
-              "linux-x86_64": "megadaemon-core-linux-x86_64",
-              "linux-arm64": "megadaemon-core-linux-arm64"
-            },
-            "assets_versioned": {
-              "android-arm64": "megadaemon-core-android-arm64-${GITHUB_SHA::7}",
-              "linux-x86_64": "megadaemon-core-linux-x86_64-${GITHUB_SHA::7}",
-              "linux-arm64": "megadaemon-core-linux-arm64-${GITHUB_SHA::7}"
-            }
-          }
-          EOF
       - name: Publicar artefactos como release (tag v<commit>)
         uses: softprops/action-gh-release@v2
         with:
@@ -255,6 +154,21 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
           tag_name: v${{ github.sha }}
+      - name: Publicar el estado del release (para que la instancia lo detecte)
+        run: |
+          mkdir -p dist/state
+          cat > dist/state/latest.json <<EOF
+          {
+            "version": "${{ github.sha }}",
+            "ref": "main",
+            "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "assets": {
+              "android-arm64": "megadaemon-core-android-arm64",
+              "linux-x86_64": "megadaemon-core-linux-x86_64",
+              "linux-arm64": "megadaemon-core-linux-arm64"
+            }
+          }
+          EOF
       - name: Subir el manifiesto de actualización
         uses: actions/upload-artifact@v4
         with:

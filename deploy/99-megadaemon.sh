@@ -41,6 +41,26 @@ KEEP=5
 # Puerto del cockpit.  Configurable por MEGADAEMON_COCKPIT_PORT (se lee del
 # fichero de entorno); el valor por defecto es el que usa el despliegue actual.
 PORT=9090
+URL_FILE=/sdcard/megadaemon.url
+STATE_FILE=/sdcard/megadaemon.state
+# Fallos de arranque seguidos => se considera fallo de código y el supervisor
+# para (antes reintentaba en bucle infinito y se comía la batería).
+MAX_FAST_FAILS=3
+fast_fails=0
+
+# Estado del daemon para el usuario: un fichero con la última línea conocida.
+write_state() {
+    printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" > "$STATE_FILE" 2>/dev/null
+}
+
+# URL real del cockpit: el usuario no tiene que adivinar el puerto.
+write_url() {
+    {
+        echo "# MegaDaemon - cockpit (generado por 99-megadaemon.sh)"
+        echo "URL=http://localhost:$PORT/"
+        echo "HEALTH=http://localhost:$PORT/health"
+    } > "$URL_FILE" 2>/dev/null
+}
 
 # Intérprete python3 del sistema (Termux o el sandbox de Antigravity): lo
 # usan el puente web y la sincronización del puente MCP de Antigravity.
@@ -179,23 +199,6 @@ ensure_web_template() {
     return 1
 }
 
-# --- deteccion de puertos alias ya servidos ------------------------------
-# El binario nuevo (v13.4+) escucha el cockpit en 0.0.0.0 y ademas en los
-# puertos alias 3000/3030/8090/8080.  Si el daemon ya los sirve, el puente
-# web sobra y arrancarlo seria pelear por el bind (EADDRINUSE), lo que puede
-# tumbar al daemon nuevo al arrancar.  Se lee /proc/net/tcp{,6}: sin forks y
-# sin procesos extra (el movil va justo de RAM).
-#   80=0050  3000=0BB8  3030=0BC6  8080=1F90  8090=1F9A   (hex)
-alias_ports_listening() {
-    for hp in 0050 0BB8 0BC6 1F90 1F9A; do
-        # <local>:<puerto> <remoto> 0A   (0A = estado LISTEN)
-        if grep -qiE ":$hp [0-9a-f]{8}:[0-9a-f]{4} 0A" /proc/net/tcp /proc/net/tcp6 2>/dev/null; then
-            return 0
-        fi
-    done
-    return 1
-}
-
 # --- puente web (binarios antiguos sin puertos alias) ---------------------
 # Hasta que se despliegue un binario que escuche en 3000/3030/8090 (alias),
 # el cockpit real sólo escucha en 9090 y el navegador recibe 401 (el gate de
@@ -204,342 +207,23 @@ alias_ports_listening() {
 # dispositivo, de modo que la UI carga igual en el móvil.
 BRIDGE="$PREFIX/web_bridge.py"
 
-# Puertos alias que el puente puede coger.  El daemon nuevo sirve 3000/3030/
-# 8090 (y 9090); el puente solo debe quedarse con los que el daemon NO
-# sirve (80 y 8080).  Menos puertos = menos hilos = menos RAM en el movil.
-BRIDGE_CANDIDATES="80 3000 3030 8090 8080"
-
-# Puertos alias que NADIE esta sirviendo todavia: son los que el puente debe
-# coger.  Si el daemon los sirve ya, se los cede (si no, EADDRINUSE y el
-# daemon nuevo se cae al arrancar).
-alias_ports_free() {
-    out=""
-    for p in $BRIDGE_CANDIDATES; do
-        hp=$(printf '%04X' "$p")
-        if ! grep -qiE ":$hp [0-9a-f]{8}:[0-9a-f]{4} 0A" /proc/net/tcp /proc/net/tcp6 2>/dev/null; then
-            if [ -z "$out" ]; then out="$p"; else out="$out,$p"; fi
-        fi
-    done
-    echo "$out"
-}
-
 ensure_web_bridge() {
     [ -f "$BRIDGE" ] || return 0
     if pgrep -f "web_bridge.py" > /dev/null 2>&1; then
         return 0
     fi
-    # Si el daemon YA escucha en los puertos alias (binario v13.4+: 3000/3030/
-    # 8090), el puente sobra y ademas choca con el (EADDRINUSE).  Se comprueba
-    # con ss y, si no existe, con un connect() de toybox.
-    if ss -ltn 2>/dev/null | grep -q ":3000"; then
-        return 0
-    fi
-    if printf '' | timeout 1 toybox nc -w 1 127.0.0.1 3000 > /dev/null 2>&1; then
-        return 0
-    fi
-    # El daemon ya sirve los alias (binario nuevo): el puente sobra y solo
-    # provocaria un EADDRINUSE que tumba al daemon.
-    if alias_ports_listening; then
-        free=$(alias_ports_free)
-        if [ -z "$free" ]; then
-            log "el daemon sirve TODOS los puertos alias: no hace falta puente web (ahorra RAM)"
-            return 0
-        fi
-        # La lista del puente va separada por COMAS (ver read_ports()).
-        export MEGADAEMON_BRIDGE_PORTS="$free"
-        log "el daemon ya escucha los puertos alias: el puente solo cogera $MEGADAEMON_BRIDGE_PORTS"
-    fi
-    py="$PY_BIN"
-    if [ -z "$py" ]; then
-        for cand in /data/data/com.termux/files/usr/bin/python3 \
-                    /data/data/com.agy/files/usr/bin/python3 \
-                    /system/bin/python3; do
-            [ -x "$cand" ] && { py="$cand"; break; }
-        done
-    fi
+    py=""
+    for cand in /data/data/com.termux/files/usr/bin/python3 \
+                /data/data/com.agy/files/usr/bin/python3 \
+                /system/bin/python3; do
+        [ -x "$cand" ] && { py="$cand"; break; }
+    done
     if [ -z "$py" ]; then
         log "AVISO: sin python3 no se puede arrancar el puente web ($BRIDGE)"
         return 1
     fi
-    # Keeper: si el puente muere (lo mata una shell de agente, un OOM o un
-    # reinicio), vuelve a levantarse en 5 s.  Antes tardaba hasta 60 s y el
-    # usuario veia ERR_CONNECTION_REFUSED en el navegador.
-    setsid nohup sh -c "while true; do '$py' '$BRIDGE' >>'$PREFIX/bridge.log' 2>&1; sleep 5; done" >/dev/null 2>&1 </dev/null &
-    log "puente web arrancado (con keeper): 3000/3030/8090/8080/80 -> 127.0.0.1:$PORT (python3: $py)"
-    return 0
-}
-
-# --- túneles públicos (cloudflared) ---------------------------------------
-# La URL de un túnel rápido de trycloudflare es EFÍMERA: cambia en cada
-# arranque.  Si el móvil se queda sin túnel, TODOS los que tienen la URL
-# hardcodeada caen a 530.  Por eso:
-#   * el supervisor mantiene el túnel vivo (watchdog),
-#   * la URL vigente se escribe SIEMPRE en $PREFIX/tunnel.url (y en
-#     /sdcard/megadaemon.url), que es la fuente de verdad,
-#   * el protocolo es el de por defecto (QUIC): MEDIDO en este movil, el
-#     tunel legacy 8765 lleva 9 h con QUIC y 0 cortes, mientras que con
-#     --protocol http2 el de 9090 perdia la conexion con el edge cada
-#     ~50 s (=> 530 para la flota).  Los fallos de QUIC que se vieron eran
-#     del incidente de OOM (184 MB libres), no de la red.
-# CLOUDFLARED: PRIMERO el prefijo propio (independiente de Termux).
-#
-# MEDIDO el 2026-11-21: `cloudflared` vivia en el directorio PRIVADO de
-# Termux.  Termux es una app: cuando el usuario la cierra, la matan; cuando
-# la reinstala, se pierde.  Con el tunel dentro de Termux, el movil se
-# queda sin canal PUBLICO en cuanto se toca Termux.
-#
-# Ahora el binario se COPIA al prefijo (root lo puede leer) y a partir de ahi
-# ya no depende de ninguna app.  Termux queda como ultimo recurso.
-CLOUDFLARED=""
-for cand in "$PREFIX/cloudflared" \
-            /data/local/tmp/megadaemon/cloudflared; do
-    [ -x "$cand" ] && { CLOUDFLARED="$cand"; break; }
-done
-if [ -z "$CLOUDFLARED" ]; then
-    for cand in /data/data/com.termux/files/usr/bin/cloudflared \
-                /data/data/com.agy/files/usr/bin/cloudflared; do
-        if [ -x "$cand" ]; then
-            # MIGRACION: se copia al prefijo y se usa la copia.  A partir de
-            # aqui, aunque Termux muera, el tunel sigue.
-            if cp -f "$cand" "$PREFIX/cloudflared.new" 2>/dev/null; then
-                chmod 755 "$PREFIX/cloudflared.new" 2>/dev/null
-                mv -f "$PREFIX/cloudflared.new" "$PREFIX/cloudflared" 2>/dev/null \
-                    && log "cloudflared MIGRADO al prefijo (ya no depende de Termux)" \
-                    || rm -f "$PREFIX/cloudflared.new" 2>/dev/null
-            fi
-            [ -x "$PREFIX/cloudflared" ] && { CLOUDFLARED="$PREFIX/cloudflared"; break; }
-            CLOUDFLARED="$cand"
-            break
-        fi
-    done
-fi
-TUNNEL_CURL=""
-for cand in /data/data/com.termux/files/usr/bin/curl \
-            /data/data/com.agy/files/usr/bin/curl; do
-    [ -x "$cand" ] && { TUNNEL_CURL="$cand"; break; }
-done
-WEB_TUNNEL_LOG=$PREFIX/tunnel.log
-WEB_TUNNEL_URL_FILE=$PREFIX/tunnel.url
-MCP_TUNNEL_LOG=$PREFIX/mcp_tunnel.log
-MCP_TUNNEL_URL_FILE=$PREFIX/mcp_tunnel.url
-
-tunnel_url_from_log() {
-    grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' "$1" 2>/dev/null | tail -1
-}
-
-# URL del log principal y, si no aparece, del log de respaldo (el túnel
-# legacy lo escribe en el home de Termux, no en $PREFIX).
-tunnel_url_any() {
-    u=$(tunnel_url_from_log "$1")
-    [ -n "$u" ] || u=$(tunnel_url_from_log "$2")
-    echo "$u"
-}
-
-# El proceso puede estar vivo y el túnel CAÍDO (530): el proceso solo no
-# basta.  Se comprueba el túnel de verdad (hairpin desde el propio móvil).
-# MUY importante: en este móvil la red hacia Cloudflare es INESTABLE
-# (timeouts de DNS y de UDP).  Por eso SOLO se reinicia el túnel cuando la
-# respuesta es un error EXPLICITO de túnel (530/502/503/504): un timeout o
-# un DNS fallido NO se tocan (si no, cada micro-corte de red cambiaría la
-# URL y dejaría a toda la flota con un 530).
-tunnel_status() {
-    url=$1
-    [ -n "$url" ] || { echo "sin-url"; return; }
-    [ -x "$TUNNEL_CURL" ] || { echo "sin-curl"; return; }
-    code=$("$TUNNEL_CURL" -s -m 15 -o /dev/null -w '%{http_code}' "$url/health" 2>/dev/null)
-    [ -n "$code" ] || code="000"
-    echo "$code"
-}
-
-# Un tunel CAIDO devuelve 530.  Un 502/503/504 significa otra cosa: el
-# tunel esta bien pero el ORIGEN (el daemon) no responde -> no hay que
-# tocar el tunel (el supervisor ya relanza el daemon).  Reiniciar el tunel
-# por eso cambia la URL publica y deja a toda la flota con un 530.
-tunnel_is_dead() {
-    case "$1" in
-        530|521|522) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
-# Conexiones activas con el edge segun las metricas de cloudflared.  Es la
-# SENAL FIABLE: el proceso puede seguir vivo sin ninguna conexion (eso es
-# exactamente lo que pasaba y devolvia 530 a toda la flota).  El puerto de
-# metricas lo anuncia cloudflared en su propio log.
-tunnel_ha_connections() {
-    t_mlog=$1
-    t_mport=$(grep -ao "Starting metrics server on 127.0.0.1:[0-9]*" "$t_mlog" 2>/dev/null | tail -1 | cut -d: -f2)
-    [ -n "$t_mport" ] || return 1
-    [ -x "$TUNNEL_CURL" ] || return 1
-    t_mval=$("$TUNNEL_CURL" -s -m 6 "http://127.0.0.1:$t_mport/metrics" 2>/dev/null | awk "/^cloudflared_tunnel_ha_connections /{print \$2}")
-    [ -n "$t_mval" ] || return 1
-    echo "$t_mval"
-    return 0
-}
-
-# ensure_tunnel <puerto_origen> <log> <fichero_url> <etiqueta> <dedup>
-tunnel_strikes=0
-
-ensure_tunnel() {
-    t_port=$1; t_log=$2; t_urlfile=$3; t_tag=$4; t_dedup=${5:-1}; t_fallback=${6:-}
-    [ -x "$CLOUDFLARED" ] || return 0
-    t_url=$(cat "$t_urlfile" 2>/dev/null)
-    t_pids=$(pgrep -f "cloudflared tunnel .*127.0.0.1:$t_port" 2>/dev/null)
-    t_n=0
-    for p in $t_pids; do t_n=$((t_n + 1)); done
-
-    if [ "$t_n" -eq 0 ]; then
-        log "tunel $t_tag caido: arrancando cloudflared (quic) -> 127.0.0.1:$t_port"
-        setsid nohup "$CLOUDFLARED" tunnel --no-autoupdate \
-            --url "http://127.0.0.1:$t_port" >>"$t_log" 2>&1 </dev/null &
-        sleep 6
-    elif [ "$t_dedup" -eq 1 ] && [ "$t_n" -gt 1 ]; then
-        # Varias instancias para el MISMO origen: sobra una y cada una
-        # consume RAM en un movil que va justo.  Se queda la mas antigua.
-        keep=$(echo "$t_pids" | head -1)
-        for p in $t_pids; do
-            [ "$p" = "$keep" ] && continue
-            kill "$p" 2>/dev/null && log "tunel $t_tag: instance duplicada PID $p eliminada"
-        done
-    fi
-
-    # La URL vigente: del log si acaba de arrancar, si no del fichero.
-    # Tras arrancar se espera a que cloudflared la publique (tarda ~10 s).
-    t_wait=0
-    while [ "$t_wait" -lt 6 ]; do
-        t_new=$(tunnel_url_any "$t_log" "$t_fallback")
-        [ -n "$t_new" ] && break
-        sleep 4
-        t_wait=$((t_wait + 1))
-    done
-    if [ -n "$t_new" ] && [ "$t_new" != "$t_url" ]; then
-        printf '%s\n' "$t_new" > "$t_urlfile" 2>/dev/null
-        log "tunel $t_tag URL VIGENTE: $t_new  (guardada en $t_urlfile)"
-    fi
-    t_url=$(cat "$t_urlfile" 2>/dev/null)
-
-    # Vivo el proceso pero túnel caido (530 explicito): se reinicia, pero
-    # solo tras DOS comprobaciones seguidas: con la red del movil
-    # inestable, un unico fallo puede ser un falso positivo y reiniciar el
-    # túnel cambia la URL publica (y deja a la flota con un 530).
-    if [ "$t_n" -gt 0 ]; then
-        t_code=$(tunnel_status "$t_url")
-        t_ha=$(tunnel_ha_connections "$t_log")
-        if [ -n "$t_ha" ] && [ "$t_ha" -gt 0 ] 2>/dev/null; then
-            # Hay conexion con el edge: el tunel esta VIVO.  Un 530 aqui
-            # puede ser un falso positivo del propio hairpin (el tunel
-            # acaba de arrancar y aun no se propagó) -> no se toca nada.
-            tunnel_strikes=0
-            t_code="edge-ok"
-        elif [ -n "$t_ha" ]; then
-            # 0 conexiones con el edge: el tunel esta CAIDO de verdad.
-            t_code="0-edge"
-        fi
-        if tunnel_is_dead "$t_code" || [ "$t_code" = "0-edge" ]; then
-            tunnel_strikes=$((tunnel_strikes + 1))
-            log "tunel $t_tag sin conexion (HTTP $t_code) [$tunnel_strikes/2]"
-            if [ "$tunnel_strikes" -ge 2 ]; then
-                tunnel_strikes=0
-                log "tunel $t_tag caido de verdad: reiniciando"
-                for p in $t_pids; do kill "$p" 2>/dev/null; done
-                sleep 2
-                setsid nohup "$CLOUDFLARED" tunnel --no-autoupdate \
-                    --url "http://127.0.0.1:$t_port" >>"$t_log" 2>&1 </dev/null &
-                sleep 8
-                t_new=$(tunnel_url_any "$t_log" "$t_fallback")
-                if [ -n "$t_new" ]; then
-                    printf '%s\n' "$t_new" > "$t_urlfile" 2>/dev/null
-                    log "tunel $t_tag URL VIGENTE: $t_new  (guardada en $t_urlfile)"
-                fi
-            fi
-        else
-            [ "$tunnel_strikes" -gt 0 ] && log "tunel $t_tag recuperado (HTTP $t_code)"
-            tunnel_strikes=0
-        fi
-    fi
-}
-
-# --- puente con Antigravity (cliente MCP) ---------------------------------
-# Antigravity (paquete com.agy) es un CLIENTE MCP: su config
-# .gemini/config/mcp_config.json puede apuntar a un servidor Streamable HTTP
-# con cabeceras.  El daemon expone POST /mcp y acepta el TOKEN DE SESION
-# (X-Seere-Auth-Token); la API key sola NO abre /mcp (medido: 403).
-#
-# El token de sesion se materializa al arrancar el daemon => en cada
-# reinicio el valor que hay en la config de Antigravity queda caduco y el
-# puente se rompe en silencio.  Por eso, tras cada arranque del daemon, se
-# re-sincroniza la config con el token vigente.  Es IDEMPOTENTE: no se
-# duplica nada, se reescribe solo la cabecera del servidor HTTP local, y
-# se respetan el resto de la config (providers, otros servidores).
-ANTIGRAVITY_PKG=com.agy
-ANTIGRAVITY_CFG=/data/user/0/$ANTIGRAVITY_PKG/files/.gemini/config/mcp_config.json
-
-sync_antigravity_bridge() {
-    [ -f "$ANTIGRAVITY_CFG" ] || return 0
-    [ -x "$PY_BIN" ] || return 0
-    tok=$(cat "$PREFIX/state/cockpit_token" 2>/dev/null)
-    [ -n "$tok" ] || return 0
-    # Solo se lanza python cuando puede hacer falta: si el token cambio O si
-    # el fichero de config se modifico por fuera (otra herramienta, el IDE,
-    # un despliegue).  Asi el movil no arrastra un python por minuto y el
-    # puente se autorepara igualmente.
-    cur=$(printf "%s" "$tok" | sha256sum 2>/dev/null | cut -c1-16)
-    prev=$(cat "$PREFIX/state/agy_bridge.sha16" 2>/dev/null)
-    cfg_mtime=$(stat -c %Y "$ANTIGRAVITY_CFG" 2>/dev/null)
-    prev_mtime=$(cat "$PREFIX/state/agy_bridge.mtime" 2>/dev/null)
-    if [ -n "$cur" ] && [ "$cur" = "$prev" ] && [ -n "$cfg_mtime" ] && [ "$cfg_mtime" = "$prev_mtime" ]; then
-        return 0
-    fi
-    "$PY_BIN" - "$ANTIGRAVITY_CFG" "$tok" <<'PYEOF' 2>/dev/null
-import json, os, sys
-cfg, tok = sys.argv[1], sys.argv[2]
-try:
-    with open(cfg, "r", encoding="utf-8") as f:
-        data = json.load(f)
-except Exception:
-    sys.exit(0)
-servers = data.get("mcpServers")
-if not isinstance(servers, dict):
-    sys.exit(0)
-changed = False
-for name, spec in servers.items():
-    if not isinstance(spec, dict):
-        continue
-    url = str(spec.get("url", ""))
-    if "127.0.0.1:9090/mcp" not in url and "localhost:9090/mcp" not in url:
-        continue
-    headers = spec.setdefault("headers", {})
-    if headers.get("X-Seere-Auth-Token") != tok:
-        headers["X-Seere-Auth-Token"] = tok
-        changed = True
-if not changed:
-    # El token ya estaba bien, pero el fichero puede tener el modo o el
-    # propietario equivocados (lo escribe root): la app debe poder leerlo
-    # y gestionarlo.
-    try:
-        st = os.stat("/data/user/0/com.agy")
-        os.chown(cfg, st.st_uid, st.st_gid)
-    except Exception:
-        pass
-    try:
-        os.chmod(cfg, 0o600)
-    except Exception:
-        pass
-    sys.exit(0)
-tmp = cfg + ".tmp"
-with open(tmp, "w", encoding="utf-8") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
-os.replace(tmp, cfg)
-try:
-    st = os.stat("/data/user/0/com.agy")
-    os.chown(cfg, st.st_uid, st.st_gid)
-except Exception:
-    pass
-os.chmod(cfg, 0o600)
-PYEOF
-    [ -n "$cur" ] && printf "%s" "$cur" > "$PREFIX/state/agy_bridge.sha16" 2>/dev/null
-    stat -c %Y "$ANTIGRAVITY_CFG" 2>/dev/null > "$PREFIX/state/agy_bridge.mtime" 2>/dev/null
+    setsid nohup "$py" "$BRIDGE" >> "$PREFIX/bridge.log" 2>&1 < /dev/null &
+    log "puente web arrancado: 3000/3030/8090/8080 -> 127.0.0.1:$PORT (python3: $py)"
     return 0
 }
 
@@ -732,33 +416,9 @@ start_daemon() {
         log "----- últimas líneas del log -----"
         tail -n 25 "$LOG" 2>/dev/null | while IFS= read -r l; do log "  | $l"; done
         log "-------------------------------"
-        write_state "FALLO_ARRANQUE: el binario muere al arrancar (fallo #$fast_fails/$MAX_FAST_FAILS)"
-        # v15 · AUTO-ROLLBACK: antes, tras MAX_FAST_FAILS el supervisor hacia
-        # `exit 0` => el movil se quedaba SIN daemon Y SIN supervisor y NADIE
-        # volvia a lanzarlo (el canal del enjambre moria para siempre).
-        # Ahora, si hay un binario anterior conocido-bueno, se restaura y se
-        # sigue; el supervisor NUNCA se rinde (ver el `rc -eq 2` del bucle).
-        if [ "$fast_fails" -ge "$MAX_FAST_FAILS" ] && [ -f "$PREV_BIN" ]; then
-            log "AUTO-ROLLBACK: restaurando el binario anterior ($PREV_BIN)"
-            cp -a "$BIN" "$BIN.bad-$(date +%s)" 2>/dev/null || true
-            # MEDIDO el 2026-11-21: estos `.bad-*` se acumulaban SIN
-            # limite (12 ficheros, 104 MB en el movil).  El rollback solo
-            # necesita el ULTIMO: se podan todos menos el mas reciente.
-            _nbad=$(ls -1t "$BIN".bad-* 2>/dev/null | tail -n +3)
-            [ -n "$_nbad" ] && echo "$_nbad" | xargs rm -f 2>/dev/null
-            cp -a "$PREV_BIN" "$BIN.restore" 2>/dev/null || true
-            if [ -f "$BIN.restore" ]; then
-                mv "$BIN.restore" "$BIN"
-                log "AUTO-ROLLBACK: binario restaurado (sha16 $(sha256sum "$BIN" 2>/dev/null | cut -c1-16))"
-                write_state "AUTO-ROLLBACK: binario restaurado; reintentando"
-                fast_fails=0
-                return 1
-            fi
-            log "AUTO-ROLLBACK: no se pudo restaurar $PREV_BIN"
-        fi
         if [ "$fast_fails" -ge "$MAX_FAST_FAILS" ]; then
-            write_state "FALLO_CODIGO: el binario muere al arrancar; se reintentara cada 5 min"
-            log "ERROR: $MAX_FAST_FAILS fallos de arranque seguidos => el supervisor NO se rinde (reintenta cada 5 min)."
+            write_state "FALLO_CODIGO: el binario muere al arrancar; el supervisor NO insiste mas"
+            log "ERROR: $MAX_FAST_FAILS fallos de arranque seguidos => se para el supervisor (fallo de codigo, no transitorio)."
             log "       Estado en $STATE_FILE ; log en $LOG ; URL en $URL_FILE"
             return 2
         fi
@@ -767,173 +427,10 @@ start_daemon() {
     fi
     fast_fails=0
     ensure_web_bridge
-    sync_antigravity_bridge
     write_state "OK: cockpit vivo en http://localhost:$PORT/"
     write_url
     log "cockpit verificado vivo -> http://localhost:$PORT/ (URL guardada en $URL_FILE)"
     return 0
-}
-
-
-# --- v15: política de energía + guardas de RAM/disco ------------------------
-#
-# UMBRALES (medidos en este SM-G998B el 2026-11-20; configurables por entorno
-# para no tener que recompilar el daemon en el móvil):
-#   carga 80 % | aviso térmico 45 °C | crítico 55 °C | techo duro 80 °C
-#   batería < 20 % => SELLAR | brillo máx 60 | suelo de RAM 512 MB
-#   suelo de disco 1 GB | RSS máx del daemon 200 MB | se guardan 2 instantáneas
-#
-# NOTA HONESTA: este kernel NO expone `charge_control_end_threshold`
-# (comprobado el 2026-11-20), así que el límite de carga NO se puede forzar
-# por sysfs.  Se registra como NO SOPORTADO en vez de fingir que se aplica.
-ENERGY_CHARGE_LIMIT=${MEGADAEMON_CHARGE_LIMIT_PCT:-80}
-ENERGY_THERMAL_WARN=${MEGADAEMON_THERMAL_WARN_C:-45}
-ENERGY_THERMAL_CRIT=${MEGADAEMON_THERMAL_CRIT_C:-55}
-ENERGY_THERMAL_HARD=${MEGADAEMON_THERMAL_HARD_C:-80}
-ENERGY_SEAL_BELOW=${MEGADAEMON_SEAL_BELOW_PCT:-20}
-ENERGY_BRIGHTNESS_MAX=${MEGADAEMON_BRIGHTNESS_MAX:-60}
-ENERGY_RAM_FLOOR_KB=${MEGADAEMON_RAM_FLOOR_KB:-524288}
-ENERGY_DISK_FLOOR_KB=${MEGADAEMON_DISK_FLOOR_KB:-1048576}
-ENERGY_DAEMON_RSS_MAX_KB=${MEGADAEMON_DAEMON_RSS_MAX_KB:-204800}
-ENERGY_STATE_KEEP=${MEGADAEMON_STATE_KEEP:-2}
-ENERGY_STATE_FILE="$PREFIX/energy_state"
-ENERGY_BRIGHT_SAVED="$PREFIX/brightness_saved"
-
-# Interface de sondeo: 127.0.0.3 para que el watchdog tenga SU PROPIO cubo
-# del rate limit (el del túnel es 127.0.0.1 y el del navegador 127.0.0.2).
-# Antes, el sondeo del watchdog competía con el de los agentes remotos.
-PROBE_IFACE=""
-
-energy_battery_pct() {
-    v=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null | tr -dc '0-9')
-    [ -n "$v" ] && echo "$v" || echo ""
-}
-energy_battery_status() {
-    cat /sys/class/power_supply/battery/status 2>/dev/null | tr -d '\r\n'
-}
-energy_battery_temp_c() {
-    v=$(cat /sys/class/power_supply/battery/temp 2>/dev/null | tr -dc '0-9')
-    [ -n "$v" ] || return 1
-    if [ "$v" -gt 1000 ]; then echo $((v / 1000)); else echo "$v"; fi
-}
-# Temperatura máxima del sistema (°C) entre todas las zonas térmicas.
-energy_max_temp_c() {
-    max=0
-    for z in /sys/class/thermal/thermal_zone*/temp; do
-        [ -r "$z" ] || continue
-        v=$(cat "$z" 2>/dev/null | tr -dc '0-9')
-        [ -n "$v" ] || continue
-        [ "$v" -gt "$max" ] && max=$v
-    done
-    [ "$max" -gt 0 ] && echo $((max / 1000)) || echo ""
-}
-energy_ram_available_kb() {
-    awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null
-}
-energy_disk_free_kb() {
-    df -k /storage/emulated/0 2>/dev/null | awk 'NR==2 {print $4}'
-}
-energy_daemon_rss_kb() {
-    pid=$(pgrep -f "megadaemon-core cockpit" 2>/dev/null | head -1)
-    [ -n "$pid" ] || return 1
-    awk '/^VmRSS:/ {print $2}' "/proc/$pid/status" 2>/dev/null
-}
-
-# Clasifica el estado: normal | conserve | thermal | seal
-energy_classify() {   # $1=pct $2=temp_c $3=ram_kb $4=charging
-    [ -n "$1" ] || return 0
-    if [ "$1" -lt "$ENERGY_SEAL_BELOW" ]; then echo seal; return 0; fi
-    if [ -n "$2" ] && [ "$2" -ge "$ENERGY_THERMAL_HARD" ]; then echo seal; return 0; fi
-    if [ -n "$2" ] && [ "$2" -ge "$ENERGY_THERMAL_CRIT" ]; then echo thermal; return 0; fi
-    if [ -n "$2" ] && [ "$2" -ge "$ENERGY_THERMAL_WARN" ]; then echo thermal; return 0; fi
-    if [ -n "$3" ] && [ "$3" -gt 0 ] && [ "$3" -lt "$ENERGY_RAM_FLOOR_KB" ]; then echo conserve; return 0; fi
-    if [ "$4" != "Charging" ] && [ "$1" -lt 35 ]; then echo conserve; return 0; fi
-    echo normal
-}
-
-# Aplica la política.  Cada acción se VERIFICA y se registra con números.
-apply_energy_policy() {
-    pct=$(energy_battery_pct)
-    [ -n "$pct" ] || pct=100
-    status=$(energy_battery_status)
-    temp=$(energy_max_temp_c)
-    btemp=$(energy_battery_temp_c)
-    ram=$(energy_ram_available_kb)
-    disk=$(energy_disk_free_kb)
-    cls=$(energy_classify "$pct" "$temp" "$ram" "$status")
-    prev=""
-    [ -f "$ENERGY_STATE_FILE" ] && prev=$(cat "$ENERGY_STATE_FILE" 2>/dev/null)
-
-    # --- acciones (sólo si la clase ha cambiado: no se martillea el sistema) ---
-    if [ "$cls" != "$prev" ]; then
-        case "$cls" in
-            seal|thermal)
-                cmd appops set com.google.android.youtube RUN_ANY_IN_BACKGROUND ignore >/dev/null 2>&1
-                cmd appops set com.android.chrome RUN_ANY_IN_BACKGROUND ignore >/dev/null 2>&1
-                settings put global low_power 1 >/dev/null 2>&1
-                for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-                    [ -w "$g" ] && echo powersave > "$g" 2>/dev/null
-                done
-                ;;
-            conserve)
-                cmd appops set com.google.android.youtube RUN_ANY_IN_BACKGROUND ignore >/dev/null 2>&1
-                ;;
-            normal)
-                settings put global low_power 0 >/dev/null 2>&1
-                # restaurar el brillo que tenía el usuario, si lo guardamos
-                if [ -f "$ENERGY_BRIGHT_SAVED" ]; then
-                    settings put system screen_brightness "$(cat "$ENERGY_BRIGHT_SAVED" 2>/dev/null)" >/dev/null 2>&1
-                    rm -f "$ENERGY_BRIGHT_SAVED"
-                fi
-                ;;
-        esac
-        echo "$cls" > "$ENERGY_STATE_FILE" 2>/dev/null
-    fi
-
-    # --- brillo (sólo si el de ahora supera el techo) ---
-    if [ "$cls" != "normal" ]; then
-        cap=$ENERGY_BRIGHTNESS_MAX
-        [ "$cls" = "seal" ] && cap=$((ENERGY_BRIGHTNESS_MAX - 20))
-        cur=$(settings get system screen_brightness 2>/dev/null | tr -dc '0-9')
-        if [ -n "$cur" ] && [ "$cur" -gt "$cap" ]; then
-            [ -f "$ENERGY_BRIGHT_SAVED" ] || echo "$cur" > "$ENERGY_BRIGHT_SAVED" 2>/dev/null
-            settings put system screen_brightness "$cap" >/dev/null 2>&1
-        fi
-    fi
-
-    # --- disco: si estamos por debajo del suelo, podamos nuestro estado ---
-    if [ -n "$disk" ] && [ "$disk" -gt 0 ] && [ "$disk" -lt "$ENERGY_DISK_FLOOR_KB" ]; then
-        prune_state
-    fi
-
-    # --- registro con NÚMEROS (no adjetivos) ---
-    charge_lim="NO_SOPORTADO"
-    [ -r /sys/class/power_supply/battery/charge_control_end_threshold ] && \
-        charge_lim="leido=$(cat /sys/class/power_supply/battery/charge_control_end_threshold 2>/dev/null)"
-    log "energia: clase=$cls (antes=$prev) bateria=${pct}% estado=$status temp_sistema=${temp:-?}C temp_bat=${btemp:-?}C ram_disponible=${ram:-?}kB disco_libre=${disk:-?}kB rss_daemon=$(energy_daemon_rss_kb || echo ?)kB carga80=$charge_lim brillo=$(settings get system screen_brightness 2>/dev/null | tr -dc '0-9')"
-}
-
-# Poda el estado del daemon para que NO crezca sin límite (medido: sync_snap
-# 59.860 kB + state/inventory 11.170 kB con instantáneas de 9.104 kB).
-prune_state() {
-    kept=$ENERGY_STATE_KEEP
-    for d in "$PREFIX/state/inventory" "$PREFIX/sync_snap"; do
-        [ -d "$d" ] || continue
-        tmp="$PREFIX/.prune.$$"
-        ls -1 "$d" 2>/dev/null | sort > "$tmp"
-        total=$(wc -l < "$tmp" 2>/dev/null)
-        total=$(echo "$total" | tr -dc '0-9')
-        [ -n "$total" ] || continue
-        i=0
-        while IFS= read -r f; do
-            [ -n "$f" ] || continue
-            i=$((i + 1))
-            if [ "$i" -le "$((total - kept))" ]; then
-                rm -f "$d/$f" 2>/dev/null
-            fi
-        done < "$tmp"
-        rm -f "$tmp"
-    done
 }
 
 # --- loop del supervisor --------------------------------------------------
@@ -942,56 +439,26 @@ last_update=0
 # crítico: si falla, el daemon sigue sirviendo la versión anterior.
 UPDATE_EVERY=${MEGADAEMON_UPDATE_EVERY:-21600}
 
-# AUTO-ACTUALIZACION (v17).
-#
-# MEDIDO el 2026-11-21: esta funcion pedia `$PREFIX/auto-update.sh`, que NO
-# EXISTE en el repo => el auto-update no habia hecho NUNDA nada.  Y aunque
-# existiera, no podria descargar nada: el movil no tiene curl ni wget.
-#
-# Ahora el propio binario del daemon se actualiza (`megadaemon-core update`):
-#   * `--check` -> 1 peticion pequena; codigo 10 = "hay version nueva";
-#   * sin `--check` -> descarga, VERIFICA el SHA-256 e instala de forma
-#     atomica (el anterior queda en .prev).
-#
-# Coste en reposo: UNA peticion HTTP cada UPDATE_EVERY segundos.
 try_update() {
     now=$(date +%s)
     [ $((now - last_update)) -lt "$UPDATE_EVERY" ] && return 0
     last_update=$now
-    [ -x "$BIN" ] || return 0
-    out=$("$BIN" update --check 2>&1 | head -2)
-    case "$out" in
-        *actualizable*)
-            log "auto-update: version nueva disponible -> instalando"
-            "$BIN" update >>"$LOG" 2>&1
-            rc=$?
-            if [ "$rc" = "10" ]; then
-                log "auto-update: version nueva INSTALADA -> reiniciando el daemon"
-                # El binario nuevo se carga al reiniciar el proceso.
-                pkill -f "megadaemon-core cockpit" 2>/dev/null
-                sleep 3
-            else
-                log "auto-update: fallo (se mantiene la version actual)"
-            fi
-            ;;
-        *actual*)
-            : # ya al dia: no se hace nada (0 peticiones de peso)
-            ;;
-        *)
-            log "auto-update: no se pudo comprobar ($out)"
-            ;;
-    esac
+    upd="$PREFIX/auto-update.sh"
+    if [ ! -f "$upd" ]; then
+        # Se intenta traer el script desde el propio repo (el móvil tiene git).
+        if [ -d "$PREFIX/repo/.git" ]; then
+            (cd "$PREFIX/repo" && git pull --ff-only origin main >>"$LOG" 2>&1)
+            cp -f "$PREFIX/repo/deploy/auto-update.sh" "$upd" 2>/dev/null && chmod 755 "$upd"
+        fi
+    fi
+    [ -f "$upd" ] || { log "auto-update: script no disponible"; return 0; }
+    log "auto-update: comprobando releases..."
+    "$upd" >>"$LOG" 2>&1 || log "auto-update: fallo (se mantiene la version actual)"
 }
 
 i=0
 last_update=0
 write_state "ARRANCANDO: supervisor activo, puerto $PORT"
-# Los túneles se levantan ANTES de arrancar el daemon: la URL pública (y la
-# del MCP legacy) no dependen de que el cockpit esté listo, y así el túnel
-# ya está cuando el daemon tarda unos segundos.
-ensure_tunnel "$PORT" "$WEB_TUNNEL_LOG" "$WEB_TUNNEL_URL_FILE" "web" 1
-ensure_tunnel 8765 "$MCP_TUNNEL_LOG" "$MCP_TUNNEL_URL_FILE" "mcp-legacy" 0 \
-    /data/data/com.termux/files/home/android-mcp/cloudflared.log
 while true; do
     rotate
     prune_caches
@@ -1000,14 +467,8 @@ while true; do
         start_daemon
         rc=$?
         if [ "$rc" -eq 2 ]; then
-            # v15: el supervisor NO se detiene nunca.  Antes `exit 0` dejaba el
-            # movil sin daemon y sin supervisor => nadie relanzaba nunca.
-            # Ahora espera 5 min y reintenta (1 intento/5 min = coste nulo en
-            # un movil con 390 MB libres) y asi el canal vuelve solo cuando se
-            # instale un binario bueno.
-            log "fallo de codigo al arrancar: el supervisor espera 5 min y reintenta (ver $LOG y $STATE_FILE)"
-            i=0
-            sleep 300
+            log "supervisor detenido: fallo de codigo al arrancar (ver $LOG y $STATE_FILE)"
+            exit 0
         fi
         i=$((i + 1))
         # backoff: 10s, 20s, 40s ... hasta 300s
@@ -1016,61 +477,8 @@ while true; do
         sleep "$s"
     else
         i=0
-        # v15: vivo != funcional (mutex envenenado => 502 con el proceso
-        # vivo).  Dos fallos seguidos de /health => se reinicia.
-        probe_iface_init
-        check_daemon_responsive "$PORT" || true
-        apply_energy_policy
         ensure_web_bridge
-        sync_antigravity_bridge
-        ensure_tunnel "$PORT" "$WEB_TUNNEL_LOG" "$WEB_TUNNEL_URL_FILE" "web" 1
-        ensure_tunnel 8765 "$MCP_TUNNEL_LOG" "$MCP_TUNNEL_URL_FILE" "mcp-legacy" 0 \
-    /data/data/com.termux/files/home/android-mcp/cloudflared.log
-        write_url
         try_update
-        # Vigilancia cada 5 s en vez de cada 60 s: si el daemon o el puente
-        # mueren, se relanzan casi al instante (antes el usuario podia verse
-        # ERR_CONNECTION_REFUSED durante un minuto entero).
-        k=0
-        while [ $k -lt 12 ]; do
-            sleep 5
-            k=$((k + 1))
-            ensure_web_bridge
-            if ! pgrep -f "megadaemon-core cockpit" > /dev/null 2>&1; then
-                break
-            fi
-        done
-        # ROBUSTEZ: vigilar RESPONSIVIDAD, no solo la EXISTENCIA del proceso.
-        # Un daemon vivo pero envenenado (mutex envenenado por un panic) o
-        # colgado seguia dando 502 desde el tunel mientras el watchdog, que
-        # solo miraba pgrep, lo daba por bueno. Ahora se le pregunta de
-        # verdad: si /health no responde, se reinicia.
-        py2="$PY_BIN"
-        if [ -z "$py2" ]; then
-            for cand in /data/data/com.termux/files/usr/bin/python3 \
-                        /data/data/com.agy/files/usr/bin/python3 \
-                        /system/bin/python3; do
-                [ -x "$cand" ] && { py2="$cand"; break; }
-            done
-        fi
-        miss=0
-        i=0
-        while [ $i -lt 3 ]; do
-            i=$((i + 1))
-            if [ -n "$py2" ] && "$py2" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:$PORT/health',timeout=4)" >/dev/null 2>&1; then
-                miss=0
-                break
-            fi
-            miss=$((miss + 1))
-            log "daemon sin responder en /health (intento $miss/3)"
-            sleep 2
-        done
-        if [ "$miss" -ge 3 ] && [ -n "$py2" ]; then
-            log "daemon VIVO pero NO RESPONDE: se reinicia (antes se quedaba en 502 para siempre)"
-            for p in $(pgrep -f "megadaemon-core cockpit" 2>/dev/null); do
-                kill "$p" 2>/dev/null
-            done
-            sleep 3
-        fi
+        sleep 60
     fi
 done

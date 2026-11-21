@@ -27,22 +27,17 @@ serde_json = "1.0"
 sha1 = { version = "0.10", features = ["oid"] }  # feature oid: AssociatedOid para RSA PKCS#1 v1.5
 sha2 = "0.10"          # SHA-256 nativo (inventario de APK, dedup, firmados)
 ureq = { version = "3.5.2", features = ["rustls", "json"] }
+# --- v13.4: capacidades nuevas (todo Rust, sin runtime externo) ---
+sha2 = "0.10"          # SHA-256 nativo (inventario de APK, dedup, firmados)
+flate2 = "1"           # inflate (entradas deflate de los ZIP/APK)
 zip = { version = "2.2", default-features = false, features = ["deflate"] }  # lectura de APK/DEX
-# zstd: contenedor TAR+zstd (el interior de Swift Backup) y el nuestro.
-#
-# `default-features = false` + `arrays` => **NO** se activan `bindgen` (exige
-# libclang en el NDK) ni `pkg-config` (exige libzstd del sistema). El crate
-# `zstd-sys` compila el **C de zstd embebido** y lo enlaza estático ⇒ el
-# binario ARM64 no depende de ninguna libzstd del sistema (Android no trae
-# ninguna). Mismo mecanismo que el SQLite `bundled` de arriba.
-zstd = { version = "0.13", default-features = false, features = ["arrays"] }
+rusqlite = { version = "0.32", features = ["bundled"] }  # SQLite nativo: navegadores, gestores, Telegram, SMS
 
 [features]
-
 default = []
 # Servidor SSH nativo (russh). Sólo Linux/Android-ARM64: el PC Linux es su
 # destino natural; en el móvil queda opcional por peso de compilación.
-ssh = ["dep:russh", "dep:tokio", "dep:tokio-rustls"]
+ssh = ["dep:russh", "dep:tokio", "dep:tokio-rustls", "dep:rustls"]
 
 [dependencies.russh]
 version = "0.49"
@@ -57,6 +52,12 @@ optional = true
 version = "0.26"
 optional = true
 features = ["ring"]
+
+[dependencies.rustls]
+version = "0.23"
+optional = true
+default-features = false
+features = ["ring", "std", "tls12"]
 
 [profile.release]
 opt-level = 3

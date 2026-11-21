@@ -35,7 +35,7 @@
 | 1 | El chat hacía de cola: sin *claims*, sin estados, sin auditoría, contexto quemado | Tablero SQLite por instancia (`src/coordination.rs`): `add → claim (lease) → report (3 líneas)`, con eventos auditados |
 | 2 | Nadie era dueño de nada | Mapa de propiedad en `docs/COORDINATION.md` + regla "un fichero = un agente"; tocar otro ⇒ acuerdo previo por `communicate` |
 | 3 | Dependencias reimplementadas (un ZIP propio) | Política **reutiliza o mufla**: `zip 2.2` + `flate2` (ZIP/DEFLATE), `sha2` (hash), `rusqlite` (estado), `ureq` (HTTP), `serde_json` (datos). Nada de crypto propio si el crate está en el árbol |
-| 4 | **`/workspace` está en NFS** (`nfs v3, nolock, hard`): el chorro de artefactos de build no aguanta ⇒ **cero `.rlib`** tras horas de build, `database is locked` del registro de crates (SQLite sobre NFS), `failed to copy bitcode` / `rust-lld: cannot open ...rcgu.o`, y load 28-39 que es **E/S bloqueada**, no CPU | **Regla v14-bis**: `CARGO_TARGET_DIR` en **disco LOCAL** (`/run/agent-runtime/md/target`, ext4, 26 GB) + builds **serializados con `flock`** (`tools/build-queue.sh`, 2 slots, `CARGO_INCREMENTAL=0`, `-j 2`) + guardia de RAM. El código fuente sigue en NFS (se lee una vez); los artefactos van a local |
+| 4 | Un único `target/` con 15+ procesos `cargo` | `CARGO_TARGET_DIR=/workspace/md-t-<agente>` **obligatorio**; el compartido corrompe builds y da errores falsos |
 | 5 | Faltaba el criterio de "fin" | Definition of Done por tarea (§7) y por ola (§4) |
 
 ---
@@ -49,11 +49,7 @@
 3. **`git add <ruta exacta>`**, un commit por ámbito, nunca `-A`, nunca
    `--force`, nunca el token en el código.
 4. **Reutilizar, no reescribir.** Zip/flate2/sha2/rusqlite/ureq/serde_json.
-5. **Builds: target LOCAL + cola `flock`**. `/workspace` es NFS y el build
-   no puede vivir ahí (cero `.rlib`, `database is locked`, `.rcgu.o` que no
-   aparece). Regla: `CARGO_TARGET_DIR=/run/agent-runtime/md/target` (ext4
-   local) y builds serializados con `tools/build-queue.sh`. Nada de `cargo
-   build` a pelo con el target en el NFS.
+5. **`CARGO_TARGET_DIR` aislado por agente.**
 6. **Informe de 3 líneas**: qué hice / qué toca / qué bloquea. Nada de
    mensajes largos al principal (el usuario tiene una cola de 20).
 7. **Una línea de estado al final del tablón** al commitear; no se editan
@@ -101,7 +97,7 @@
 | P2.3 | Adjuntos binarios de las apps (WhatsApp media, imágenes de Claude) | `src/attachments.rs` | |
 | P2.4 | Actualizaciones de Play Store | — | **limitado**: no hay API pública |
 | P2.5 | Plan de migración a ROM nueva + parches Magisk/KernelSU | `docs/` + `deploy/` | |
-| P2.6 | Rendimiento: profiling del cockpit, backend de SQLite, caché | por módulo | "si le falta algo, se mejora" |
+| P2.6 | Rendimiento: profiling del cockpit,后的 de SQLite, caché | por módulo | "si le falta algo, se mejora" |
 
 ### P3 — Bloqueos honestos (del sistema, no del código)
 
@@ -124,18 +120,6 @@
 ## 4. Olas de ejecución
 
 ### Ola 0 — "Que no haya otra complaint" (hoy)
-
-- **Gate de cableado**: los 9 módulos v14 (`delegate`, `signing`,
-  `dex_decompile`, `root_hide`, `app_intel`, `magisk_module`,
-  `battery_advanced`, `mesh`, `cockpit_doctor`) se cablean en `lib.rs` y
-  **compilan**: código sin cablear es código que no existe.
-- **Gate de commit**: ficheros sin commitear son pérdida de trabajo si el
-  workspace muere ⇒ **cada agente commitea los suyos** (`git add <ruta
-  exacta>`, nunca `-A`).
-- **Gate de merge**: tras cada merge, `git diff main <rama> -- <fichero>`
-  para comprobar que no se ha quedado una copia VIEJA de un fichero (ya
-  pasó con `cockpit_server.rs`: `main` perdió la plantilla embebida, los
-  alias de puerto y el bind 0.0.0.0).
 - Salida: `/health` = 200 desde el PC contra el Samsung; daemon corriendo;
   tablero con una línea por agente; `cargo build --release` verde con
   target aislado; plan publicado.
@@ -261,10 +245,7 @@ sistema**, la UI es un cliente, y el plan/coordinación viven en el daemon
 
 Una tarea está terminada cuando **todo** esto es cierto:
 
-0. **Cableado**: el módulo está declarado en `rust-core/src/lib.rs` y
-   **compila** (si no está cableado, su código no existe: 9 módulos v14,
-   ~22.000 líneas, dormían sin cablear).
-1. `tools/build-queue.sh build --release` en verde (target compartido).
+1. `cargo build --release` verde con `CARGO_TARGET_DIR` propio.
 2. Test del módulo en verde (`cargo test --release`).
 3. `git add <ruta exacta>` + un commit con `Co-Authored-By: Mavis` + push
    sin `--force` (si no es fast-forward ⇒ avisar, no machacar).

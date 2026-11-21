@@ -50,25 +50,8 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
     let cmd = args[1].clone();
-    // v14: el state_dir por defecto debe ser el MISMO que usa el daemon
-    // (`MEGADAEMON_STATE_DIR` en megadaemon.env = <PREFIX>/state).  Antes el
-    // CLI caía en <PREFIX> y abría OTRO tablero (board.sqlite vacío) mientras
-    // el daemon escribía en <PREFIX>/state/board.sqlite ⇒ el CLI veía 0
-    // tareas y 0 instancias.  Ahora: env > <PREFIX>/state > ~/.megadaemon.
     let state = arg("--state").unwrap_or_else(|| {
-        std::env::var("MEGADAEMON_STATE_DIR")
-            .ok()
-            .filter(|d| !d.trim().is_empty())
-            .unwrap_or_else(|| {
-                if megadaemon_core::mesh::platform_is_android() {
-                    "/data/local/tmp/megadaemon/state".into()
-                } else {
-                    match std::env::var("HOME") {
-                        Ok(h) if !h.trim().is_empty() => format!("{}/.megadaemon", h.trim()),
-                        _ => "/tmp/megadaemon".into(),
-                    }
-                }
-            })
+        std::env::var("MEGADAEMON_STATE_DIR").unwrap_or_else(|_| "/data/local/tmp/megadaemon".into())
     });
     let board_path = format!("{}/board.sqlite", state);
 
@@ -143,23 +126,10 @@ fn main() -> ExitCode {
                 let task_id = args.get(2).cloned().unwrap_or_default();
                 let owner = arg("--owner").ok_or("falta --owner")?;
                 let ok = has("--ok");
-                // El informe de 3 líneas puede venir de varias formas:
-                //   --text "..." | --report "..." | --ok "..." | --ok (bandera)
-                //   o posicional: report <id> "..." --owner x --ok
-                // OJO: `args.get(3)` NO vale (con banderas detrás, la
-                // posición 3 es "--owner" y el informe se perdía).
-                let report = arg("--text")
+                let report = args
+                    .get(3)
+                    .cloned()
                     .or_else(|| arg("--report"))
-                    .or_else(|| arg("--ok-text"))
-                    .or_else(|| {
-                        // `--ok` puede actuar como bandera o portar el texto.
-                        arg("--ok").filter(|v| !v.starts_with("--"))
-                    })
-                    .or_else(|| {
-                        args.get(3)
-                            .cloned()
-                            .filter(|v| !v.starts_with("--"))
-                    })
                     .unwrap_or_else(|| "sin informe".into());
                 let board = TaskBoard::open(&board_path)?;
                 board.report_task(&task_id, &owner, ok, &report)?;

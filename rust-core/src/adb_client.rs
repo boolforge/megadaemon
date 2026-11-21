@@ -32,14 +32,8 @@
 
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-
-use rsa::pkcs1v15::SigningKey as RsaSigningKey;
-use rsa::signature::{SignatureEncoding, Signer};
-use rsa::RsaPrivateKey;
-use sha1::Sha1;
 
 pub const CMD_CNXN: u32 = u32::from_le_bytes(*b"CNXN");
 pub const CMD_AUTH: u32 = u32::from_le_bytes(*b"AUTH");
@@ -60,22 +54,6 @@ pub const DEFAULT_MAX_BYTES: usize = 1024 * 1024;
 /// Banner que identifica al host ante `adbd`.
 pub const HOST_BANNER: &str =
     "host::features=shell_v2,cmd,stat_v2,abb_exec,fixed_push_mkdir,sendrecv_v2,brotli_v2,openssl_v2";
-
-// --- Protocolo SYNC de ADB (servicio `sync:`): push/pull de ficheros ---
-/// Petición de envío de fichero al dispositivo.
-pub const SYNC_SEND: u32 = u32::from_le_bytes(*b"SEND");
-/// Petición de recepción de fichero del dispositivo.
-pub const SYNC_RECV: u32 = u32::from_le_bytes(*b"RECV");
-/// Fin de una transferencia (lleva el mtime).
-pub const SYNC_DONE: u32 = u32::from_le_bytes(*b"DONE");
-/// Bloque de datos.
-pub const SYNC_DATA: u32 = u32::from_le_bytes(*b"DATA");
-/// Respuesta correcta.
-pub const SYNC_OKAY: u32 = u32::from_le_bytes(*b"OKAY");
-/// Respuesta de error (lleva longitud + mensaje).
-pub const SYNC_FAIL: u32 = u32::from_le_bytes(*b"FAIL");
-/// Tamaño máximo de bloque en una transferencia.
-pub const SYNC_CHUNK: usize = 64 * 1024;
 
 /// Error del cliente ADB (con mensaje legible, sin secretos).
 #[derive(Debug)]
@@ -107,139 +85,6 @@ impl From<io::Error> for AdbError {
 
 pub type Result<T> = std::result::Result<T, AdbError>;
 
-/// Cómo se hashea el token `AUTH` antes de firmarlo.
-///
-/// AOSP genera el token con bytes aleatorios y lo NUL-termina, y tanto `adbd`
-/// (`EVP_DigestVerifyUpdate(ctx, token, strlen(token))`) como platform-tools
-/// (`EVP_DigestSignUpdate`) lo hashean con **semántica C**: hasta el primer
-/// NUL.  Hay implementaciones que hashean los 20 bytes completos, así que el
-/// cliente prueba las dos variantes: si el dispositivo rechaza la primera
-/// firma, reintenta el handshake con la segunda.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TokenHash {
-    /// Semántica C: se hashea hasta el primer NUL (comportamiento de AOSP).
-    CStr,
-    /// Se hashean los bytes tal cual llegan.
-    Full,
-}
-
-/// Clave de host ADB (RSA-2048 en PEM).
-///
-/// `adbd` con `ro.adb.secure=1` manda un token `AUTH` de 20 bytes y espera
-/// una firma RSASSA-PKCS1-v1_5 sobre SHA-1 de ese token.  Sin una clave
-/// registrada en `/data/misc/adb/adb_keys` el dispositivo se queda en
-/// `unauthorized` para siempre.  Por eso la clave **nunca** está en el repo:
-/// vive en `<state_dir>/adb_host_key.pem` (0600) o en el directorio privado de
-/// la app en el móvil; sólo su parte pública se registra en el dispositivo.
-#[derive(Clone)]
-pub struct HostKey {
-    key: RsaPrivateKey,
-}
-
-impl HostKey {
-    /// Carga una clave de host desde PEM (PKCS#1 `RSA PRIVATE KEY` o PKCS#8
-    /// `PRIVATE KEY`).
-    pub fn from_pem(text: &str) -> Result<HostKey> {
-        use rsa::pkcs1::DecodeRsaPrivateKey;
-        use rsa::pkcs8::DecodePrivateKey;
-        let key = RsaPrivateKey::from_pkcs1_pem(text)
-            .or_else(|_| RsaPrivateKey::from_pkcs8_pem(text))
-            .map_err(|e| AdbError::Protocol(format!("clave de host ADB ilegible: {e}")))?;
-        Ok(HostKey { key })
-    }
-
-    /// Carga la clave de host de un fichero PEM.
-    pub fn from_pem_file(path: &std::path::Path) -> Result<HostKey> {
-        let text = std::fs::read_to_string(path).map_err(|e| {
-            AdbError::Io(io::Error::new(e.kind(), format!("{}: {e}", path.display())))
-        })?;
-        HostKey::from_pem(&text)
-    }
-
-    /// Firma el token `AUTH` (RSASSA-PKCS1-v1_5 sobre SHA-1), exactamente
-    /// como hace `EVP_DigestSign` con `EVP_sha1()` en AOSP.
-    pub fn sign_token(&self, token: &[u8], mode: TokenHash) -> Result<Vec<u8>> {
-        let msg: &[u8] = match mode {
-            TokenHash::CStr => {
-                let end = token.iter().position(|&b| b == 0).unwrap_or(token.len());
-                if end == 0 {
-                    // Token con NUL al inicio: AOSP firmaría la cadena vacía,
-                    // pero un DigestInfo degenerado no sirve.  Se firma al
-                    // menos 1 byte.
-                    &token[..token.len().min(1)]
-                } else {
-                    &token[..end]
-                }
-            }
-            TokenHash::Full => token,
-        };
-        let signer = RsaSigningKey::<Sha1>::new(self.key.clone());
-        // `signature` 2.x: `sign()` devuelve la firma directamente y hace
-        // panic si falla; `try_sign()` devuelve Result.
-        let sig = signer.try_sign(msg).map_err(|e| {
-            AdbError::Protocol(format!("fallo al firmar el token AUTH: {e}"))
-        })?;
-        Ok(sig.to_vec())
-    }
-
-    /// Parte pública en base64, tal y como va en `/data/misc/adb/adb_keys`
-    /// (`usuario@host <base64 SPKI>`).
-    pub fn public_key_b64(&self) -> Result<String> {
-        use rsa::pkcs8::EncodePublicKey;
-        let der = self
-            .key
-            .to_public_key()
-            .to_public_key_der()
-            .map_err(|e| AdbError::Protocol(format!("no se pudo derivar la clave pública: {e}")))?;
-        use base64ct::Encoding;
-        Ok(base64ct::Base64::encode_string(der.as_bytes()))
-    }
-
-    /// Tamaño del módulo en bits (2048 de serie).
-    pub fn bits(&self) -> usize {
-        use rsa::traits::PublicKeyParts;
-        self.key.n().bits()
-    }
-}
-
-/// Rutas donde puede estar la clave de host ADB, en orden de prioridad.
-pub fn host_key_candidates() -> Vec<PathBuf> {
-    let mut v = Vec::new();
-    if let Ok(p) = std::env::var("MEGADAEMON_ADB_KEY") {
-        if !p.is_empty() {
-            v.push(PathBuf::from(p));
-        }
-    }
-    v.push(PathBuf::from(format!(
-        "{}/adb_host_key.pem",
-        crate::cockpit_server::state_dir()
-    )));
-    v.push(PathBuf::from("/data/local/tmp/megadaemon/adb_host_key.pem"));
-    v.push(PathBuf::from("/data/adb/megadaemon/adb_host_key.pem"));
-    v
-}
-
-/// Ruta de la clave de host que se usaría (o se usaría si existiera).
-pub fn active_host_key_path() -> Option<PathBuf> {
-    host_key_candidates().into_iter().find(|p| p.exists())
-}
-
-/// Carga (y cachea) la clave de host ADB.  `None` si no hay ninguna.
-pub fn host_key() -> Option<HostKey> {
-    static KEY: OnceLock<Option<HostKey>> = OnceLock::new();
-    KEY.get_or_init(|| {
-        for p in host_key_candidates() {
-            if p.exists() {
-                if let Ok(k) = HostKey::from_pem_file(&p) {
-                    return Some(k);
-                }
-            }
-        }
-        None
-    })
-    .clone()
-}
-
 /// CRC-32 (IEEE 802.3, el mismo que `zlib.crc32`) con tabla compartida.
 fn crc32_table() -> &'static [u32; 256] {
     static TABLE: OnceLock<[u32; 256]> = OnceLock::new();
@@ -257,41 +102,13 @@ fn crc32_table() -> &'static [u32; 256] {
 }
 
 /// CRC-32 del payload de un mensaje ADB.
-///
-/// OJO: **no** es el `zlib.crc32`.  AOSP usa `adb_crc32()`, que empieza con
-/// `crc = 0` y **no hace el XOR final**: es el CRC-32 "JAMCRC".
-/// Usar el de zlib hace que adbd rechace el mensaje con
-/// `protocolo: crc32 incorrecto` (fue el bug real que rompi�� la tool `adb`).
-/// CRC-32 IEEE con la convencion estandar (la de `zlib.crc32`): init
-/// 0xFFFF_FFFF y XOR final.  AOSP usa `adb_crc32` (JAMCRC) pero el campo CRC
-/// puede venir calculado con cualquiera de las dos, asi que aceptamos ambas.
-pub fn crc32_zlib(data: &[u8]) -> u32 {
-    let table = crc32_table();
-    let mut crc: u32 = 0xFFFF_FFFF;
-    for &b in data {
-        crc = (crc >> 8) ^ table[((crc ^ b as u32) & 0xFF) as usize];
-    }
-    crc ^ 0xFFFF_FFFF
-}
-
 pub fn crc32(data: &[u8]) -> u32 {
-    static TABLE: OnceLock<[u32; 256]> = OnceLock::new();
-    let table = TABLE.get_or_init(|| {
-        let mut t = [0u32; 256];
-        for (i, e) in t.iter_mut().enumerate() {
-            let mut c = i as u32;
-            for _ in 0..8 {
-                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
-            }
-            *e = c;
-        }
-        t
-    });
-    let mut crc: u32 = 0;
+    let table = crc32_table();
+    let mut c: u32 = 0xFFFF_FFFF;
     for &b in data {
-        crc = (crc >> 8) ^ table[((crc ^ b as u32) & 0xFF) as usize];
+        c = table[((c ^ b as u32) & 0xFF) as usize] ^ (c >> 8);
     }
-    crc
+    c ^ 0xFFFF_FFFF
 }
 
 /// Mensaje ADB: cabecera + payload.
@@ -349,24 +166,7 @@ impl Message {
             )));
         }
         let payload = buf[HEADER_LEN..HEADER_LEN + len].to_vec();
-        // El CRC se valida **salvo en el handshake** (CNXN/AUTH): ahi AOSP
-        // puede no informar el campo (su `send_auth` deja el checksum sin
-        // calcular) y el cliente de referencia tampoco lo comprueba ahi.
-        // Cuando si se valida, aceptamos las DOS variantes de CRC-32: la de
-        // AOSP (`adb_crc32`, JAMCRC) y la IEEE/zlib.
-        // AOSP **no rellena** `data_crc32` en el protocolo de socket: el
-        // campo queda a cero (ver `docs/aosp_ref/README.md`, fuentes
-        // oficiales) y tampoco lo verifica => solo se puede exigir cuando
-        // venga informado.  El "checksum" clasico de AOSP es una suma aditiva
-        // del protocolo *sync* heredado => hay que tolerar JAMCRC e IEEE/zlib.
-        let crc_informado = crc != 0;
-        let es_handshake = matches!(command, CMD_CNXN | CMD_AUTH);
-        if !es_handshake
-            && crc_informado
-            && !payload.is_empty()
-            && crc32(&payload) != crc
-            && crc32_zlib(&payload) != crc
-        {
+        if crc32(&payload) != crc {
             return Err(AdbError::Protocol("crc32 incorrecto".into()));
         }
         Ok(Message { command, arg0, arg1, payload })
@@ -590,80 +390,48 @@ impl Adbd {
         Adbd { addr: format!("{host}:{port}"), timeout }
     }
 
-    /// Conecta y completa el handshake `CNXN`, **autenticando** si el
-    /// dispositivo lo pide (`ro.adb.secure=1`).
-    ///
-    /// Si `adbd` manda `AUTH`, se firma el token con la clave de host y se
-    /// responde `AUTH`.  Si el dispositivo rechaza la firma (vuelve a mandar
-    /// `AUTH`), se reintenta el mismo handshake con la otra variante de hash
-    /// del token (semántica C frente a bytes completos).
-    ///
-    /// Devuelve el cliente ya conectado y el banner del dispositivo.
-    pub fn connect_authenticated(&self, key: Option<&HostKey>) -> Result<(AdbClient, String)> {
-        let mut c = AdbClient::connect(&self.addr, self.timeout)?;
-        let mut banner = HOST_BANNER.as_bytes().to_vec();
-        banner.push(0);
-        c.send(&Message::new(CMD_CNXN, ADB_VERSION, MAX_PAYLOAD, banner))?;
-        let mut m = c.recv()?;
-        if m.command == CMD_AUTH {
-            let key = key.ok_or_else(|| {
-                AdbError::Protocol(
-                    "adbd pide autenticacion (AUTH) y no hay clave de host cargada: ponla en \
-                     <state_dir>/adb_host_key.pem (0600) y registra su parte publica en \
-                     /data/misc/adb/adb_keys"
-                        .into(),
-                )
-            })?;
-            for mode in [TokenHash::CStr, TokenHash::Full] {
-                let sig = key.sign_token(&m.payload, mode)?;
-                c.send(&Message::new(CMD_AUTH, m.arg0, 0, sig))?;
-                m = c.recv()?;
-                match m.command {
-                    CMD_CNXN => {
-                        let dev_banner = String::from_utf8_lossy(&m.payload)
-                            .trim_end_matches('\0')
-                            .to_string();
-                        return Ok((c, dev_banner));
-                    }
-                    CMD_AUTH => continue,
-                    other => {
-                        return Err(AdbError::Protocol(format!(
-                            "respuesta inesperada a AUTH: {}",
-                            Message::new(other, 0, 0, Vec::new()).command_name()
-                        )));
-                    }
-                }
-            }
-            return Err(AdbError::Protocol(
-                "adbd rechazo la firma de la clave de host (public key no registrada o clave distinta)".into(),
-            ));
-        }
-        if m.command != CMD_CNXN {
-            return Err(AdbError::Protocol(format!(
-                "respuesta inesperada a CNXN: {}",
-                m.command_name()
-            )));
-        }
-        let dev_banner = String::from_utf8_lossy(&m.payload)
-            .trim_end_matches('\0')
-            .to_string();
-        Ok((c, dev_banner))
-    }
-
     /// Handshake `CNXN`: devuelve el banner del dispositivo.
     pub fn banner(&self) -> Result<String> {
-        let key = host_key();
-        let (mut c, banner) = self.connect_authenticated(key.as_ref())?;
+        let mut c = AdbClient::connect(&self.addr, self.timeout)?;
+        let res = (|| -> Result<String> {
+            let mut banner = HOST_BANNER.as_bytes().to_vec();
+            banner.push(0);
+            c.send(&Message::new(CMD_CNXN, ADB_VERSION, MAX_PAYLOAD, banner))?;
+            let m = c.recv()?;
+            if m.command == CMD_AUTH {
+                return Err(AdbError::Protocol(
+                    "adbd pide autenticacion (AUTH): la depuracion USB no esta autorizada".into(),
+                ));
+            }
+            if m.command != CMD_CNXN {
+                return Err(AdbError::Protocol(format!(
+                    "respuesta inesperada a CNXN: {}",
+                    m.command_name()
+                )));
+            }
+            Ok(String::from_utf8_lossy(&m.payload)
+                .trim_end_matches('\0')
+                .to_string())
+        })();
         c.close();
-        Ok(banner)
+        res
     }
 
     /// Ejecuta `cmd` en el dispositivo (`shell:<cmd>`) y devuelve la salida.
     pub fn shell(&self, cmd: &str, max_bytes: usize) -> Result<ShellOutput> {
         let t0 = Instant::now();
-        let key = host_key();
-        let (mut c, _banner) = self.connect_authenticated(key.as_ref())?;
+        let mut c = AdbClient::connect(&self.addr, self.timeout)?;
         let res = (|| -> Result<ShellOutput> {
+            let mut banner = HOST_BANNER.as_bytes().to_vec();
+            banner.push(0);
+            c.send(&Message::new(CMD_CNXN, ADB_VERSION, MAX_PAYLOAD, banner))?;
+            let hello = c.recv()?;
+            if hello.command != CMD_CNXN {
+                return Err(AdbError::Protocol(format!(
+                    "respuesta inesperada a CNXN: {}",
+                    hello.command_name()
+                )));
+            }
             let stream_id = 1u32;
             c.send(&Message::new(
                 CMD_OPEN,
@@ -711,227 +479,6 @@ impl Adbd {
         })();
         c.close();
         res
-    }
-
-    /// Sube un fichero al dispositivo (servicio `sync:` de ADB).
-    ///
-    /// `dst` es la ruta **en el dispositivo**.  El protocolo es el SYNC v1 de
-    /// AOSP: `SEND <ruta>` → bloques `DATA` → `DONE`, y el dispositivo
-    /// responde `OKAY` o `FAIL <len> <mensaje>`.
-    pub fn push_file(&self, dst: &str, data: &[u8]) -> Result<usize> {
-        let key = host_key();
-        let (mut c, _) = self.connect_authenticated(key.as_ref())?;
-        let stream_id = 1u32;
-        c.send(&Message::new(
-            CMD_OPEN,
-            stream_id,
-            0,
-            b"sync:".to_vec(),
-        ))?;
-        // El daemon responde OKAY al OPEN.
-        let mut opened = false;
-        loop {
-            let m = c.recv()?;
-            if m.command == CMD_OKAY && m.arg0 == stream_id {
-                opened = true;
-                break;
-            }
-            if m.command == CMD_CLSE {
-                break;
-            }
-        }
-        if !opened {
-            c.close();
-            return Err(AdbError::Protocol(
-                "adbd no abrio el stream sync (push)".into(),
-            ));
-        }
-
-        let res = (|| -> Result<usize> {
-            // SEND <ruta>\0
-            let mut req = Vec::with_capacity(dst.len() + 5);
-            req.extend_from_slice(&SYNC_SEND.to_le_bytes());
-            req.extend_from_slice(dst.as_bytes());
-            req.push(0);
-            c.send(&Message::new(CMD_WRTE, stream_id, 0, req))?;
-
-            // Bloques DATA
-            let mut sent = 0usize;
-            for chunk in data.chunks(SYNC_CHUNK) {
-                let mut blk = Vec::with_capacity(8 + chunk.len());
-                blk.extend_from_slice(&SYNC_DATA.to_le_bytes());
-                blk.extend_from_slice(&(chunk.len() as u32).to_le_bytes());
-                blk.extend_from_slice(chunk);
-                c.send(&Message::new(CMD_WRTE, stream_id, 0, blk))?;
-                sent += chunk.len();
-            }
-
-            // DONE + mtime (0 = ahora)
-            let mut done = Vec::with_capacity(8);
-            done.extend_from_slice(&SYNC_DONE.to_le_bytes());
-            done.extend_from_slice(&0u32.to_le_bytes());
-            c.send(&Message::new(CMD_WRTE, stream_id, 0, done))?;
-
-            // Respuesta final: OKAY o FAIL.
-            let (id, payload) = read_sync_packet(&mut c, stream_id)?;
-            match id {
-                SYNC_OKAY => Ok(sent),
-                SYNC_FAIL => Err(AdbError::Protocol(format!(
-                    "adbd rechazo el push: {}",
-                    String::from_utf8_lossy(&payload)
-                ))),
-                other => Err(AdbError::Protocol(format!(
-                    "respuesta inesperada al push: id={:#x}",
-                    other
-                ))),
-            }
-        })();
-        c.close();
-        res
-    }
-
-    /// Baja un fichero del dispositivo (servicio `sync:` de ADB).
-    ///
-    /// `src` es la ruta **en el dispositivo**.  El tamaño devuelto está
-    /// limitado por `max_bytes`: si el fichero es mayor, se trunca.
-    pub fn pull_file(&self, src: &str, max_bytes: usize) -> Result<Vec<u8>> {
-        let key = host_key();
-        let (mut c, _) = self.connect_authenticated(key.as_ref())?;
-        let stream_id = 1u32;
-        c.send(&Message::new(
-            CMD_OPEN,
-            stream_id,
-            0,
-            b"sync:".to_vec(),
-        ))?;
-        let mut opened = false;
-        loop {
-            let m = c.recv()?;
-            if m.command == CMD_OKAY && m.arg0 == stream_id {
-                opened = true;
-                break;
-            }
-            if m.command == CMD_CLSE {
-                break;
-            }
-        }
-        if !opened {
-            c.close();
-            return Err(AdbError::Protocol(
-                "adbd no abrio el stream sync (pull)".into(),
-            ));
-        }
-
-        let res = (|| -> Result<Vec<u8>> {
-            let mut req = Vec::with_capacity(src.len() + 5);
-            req.extend_from_slice(&SYNC_RECV.to_le_bytes());
-            req.extend_from_slice(src.as_bytes());
-            req.push(0);
-            c.send(&Message::new(CMD_WRTE, stream_id, 0, req))?;
-
-            let mut out: Vec<u8> = Vec::new();
-            let mut truncated = false;
-            loop {
-                let (id, payload) = read_sync_packet(&mut c, stream_id)?;
-                match id {
-                    SYNC_DATA => {
-                        if out.len() + payload.len() > max_bytes {
-                            let room = max_bytes.saturating_sub(out.len());
-                            out.extend_from_slice(&payload[..room.min(payload.len())]);
-                            truncated = true;
-                            break;
-                        }
-                        out.extend_from_slice(&payload);
-                    }
-                    SYNC_DONE => break,
-                    SYNC_FAIL => {
-                        return Err(AdbError::Protocol(format!(
-                            "adbd no pudo leer {src}: {}",
-                            String::from_utf8_lossy(&payload)
-                        )))
-                    }
-                    SYNC_OKAY => continue,
-                    other => {
-                        return Err(AdbError::Protocol(format!(
-                            "respuesta inesperada al pull: id={:#x}",
-                            other
-                        )))
-                    }
-                }
-            }
-            let _ = truncated;
-            Ok(out)
-        })();
-        c.close();
-        res
-    }
-}
-
-/// Lee el siguiente paquete del protocolo SYNC (4 bytes de id + payload),
-/// acumulando los mensajes `WRTE` del transporte ADB.
-fn read_sync_packet(c: &mut AdbClient, stream_id: u32) -> Result<(u32, Vec<u8>)> {
-    let mut buf: Vec<u8> = Vec::new();
-    loop {
-        if buf.len() >= 4 {
-            let id = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
-            match id {
-                SYNC_DATA => {
-                    if buf.len() >= 8 {
-                        let len =
-                            u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]) as usize;
-                        if buf.len() >= 8 + len {
-                            let payload = buf[8..8 + len].to_vec();
-                            buf.drain(..8 + len);
-                            return Ok((id, payload));
-                        }
-                    }
-                }
-                SYNC_DONE => {
-                    if buf.len() >= 8 {
-                        let payload = buf[4..8].to_vec();
-                        buf.drain(..8);
-                        return Ok((id, payload));
-                    }
-                }
-                SYNC_OKAY => {
-                    if buf.len() >= 4 {
-                        buf.drain(..4);
-                        return Ok((id, Vec::new()));
-                    }
-                }
-                SYNC_FAIL => {
-                    // FAIL <len u32> <mensaje>
-                    if buf.len() >= 8 {
-                        let len =
-                            u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]) as usize;
-                        if buf.len() >= 8 + len {
-                            let payload = buf[8..8 + len].to_vec();
-                            buf.drain(..8 + len);
-                            return Ok((id, payload));
-                        }
-                    }
-                }
-                _ => {
-                    // Id desconocido: se descarta el resto del buffer.
-                    buf.clear();
-                    return Err(AdbError::Protocol(format!(
-                        "paquete SYNC desconocido: id={:#x}",
-                        id
-                    )));
-                }
-            }
-        }
-        let m = c.recv()?;
-        match m.command {
-            CMD_WRTE => buf.extend_from_slice(&m.payload),
-            CMD_OKAY => continue,
-            CMD_CLSE => {
-                return Err(AdbError::Protocol(format!(
-                    "adbd cerro el stream sync (stream {stream_id})"
-                )))
-            }
-            _ => continue,
-        }
     }
 }
 
@@ -984,34 +531,11 @@ mod tests {
     // ---- unidad ---------------------------------------------------------
 
     #[test]
-    fn crc32_usa_la_variante_de_aosp() {
-        // AOSP adb_crc32: init 0 y sin XOR final (JAMCRC), NO zlib.crc32.
-        assert_eq!(crc32(b"123456789"), 0x2DFD2D88);
-        assert_ne!(crc32(b"123456789"), 0xCBF4_3926); // el de zlib
-        assert_eq!(crc32(b""), 0);
-
-    #[test]
-    fn crc32_zlib_usa_la_convencion_estandar() {
-        // vector clasico de zlib/IEEE (distinto del JAMCRC de AOSP)
-        assert_eq!(crc32_zlib(b"123456789"), 0xCBF4_3926);
-        assert_eq!(crc32_zlib(b""), 0);
-        assert_ne!(crc32_zlib(b"123456789"), crc32(b"123456789"));
-    }
-
-    #[test]
-    fn el_handshake_no_exige_crc() {
-        // CNXN con el campo CRC sin informar (0) debe aceptarse: es lo que
-        // envia AOSP en el handshake y lo que rompia la tool `adb`.
-        let mut m = Vec::new();
-        m.extend_from_slice(&CMD_CNXN.to_le_bytes());
-        m.extend_from_slice(&0x0100_0000u32.to_le_bytes()); // version
-        m.extend_from_slice(&0u32.to_le_bytes());           // arg1
-        m.extend_from_slice(&4u32.to_le_bytes());           // data_length
-        m.extend_from_slice(&0u32.to_le_bytes());           // data_crc32 sin informar
-        m.extend_from_slice(&(CMD_CNXN ^ 0xFFFF_FFFF).to_le_bytes()); // magic
-        m.extend_from_slice(b"test");
-        assert!(Message::decode(&m).is_ok(), "un CNXN con CRC sin informar debe aceptarse");
-    }
+    fn crc32_coincide_con_zlib() {
+        // valores de referencia de zlib.crc32
+        assert_eq!(crc32(b""), 0x0000_0000);
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+        assert_eq!(crc32(b"The quick brown fox jumps over the lazy dog"), 0x414F_A339);
     }
 
     #[test]

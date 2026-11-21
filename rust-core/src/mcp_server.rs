@@ -26,15 +26,6 @@ pub fn tool_definitions() -> Value {
         if let Some(sync_arr) = crate::sync::tool_definitions().as_array().cloned() {
             arr.extend(sync_arr);
         }
-        if let Some(adb_arr) = crate::adb_tool::tool_definitions().as_array().cloned() {
-            arr.extend(adb_arr);
-        }
-        // v14: las herramientas de los módulos nuevos (capabilities, task_queue,
-        // alerts, agent, apk_inventory, dex_decompile, app_intel, root_hide,
-        // repo_updates, profile, battery, git, scrape, sshd, …) live en
-        // `mcp_ext`.  Sin esta línea el dispatcher (`/api/tool/<nombre>`)
-        // las sirve pero NO aparecen en `tools/list`, así que un agente MCP
-        // que sólo lee el catálogo no las ve.
         if let Some(ext_arr) = crate::mcp_ext::tool_definitions().as_array().cloned() {
             arr.extend(ext_arr);
         }
@@ -191,6 +182,14 @@ fn tool_definitions_core() -> Value {
 /// Despacha una herramienta. Las de dispositivo se resuelven en
 /// `crate::android::dispatch` (capa tipada con validación y auditoría).
 pub fn dispatch_tool(name: &str, args: &Value) -> Value {
+    if let Some(r) = crate::mcp_ext::dispatch(name, args) {
+        let text = serde_json::to_string_pretty(&r).unwrap_or_default();
+        return json!({
+            "content": [{ "type": "text", "text": text }],
+            "structuredContent": r,
+            "isError": r.get("ok").and_then(|v| v.as_bool()) == Some(false),
+        });
+    }
     if let Some(r) = crate::sync::dispatch(name, args) {
         let text = serde_json::to_string_pretty(&r).unwrap_or_default();
         return json!({

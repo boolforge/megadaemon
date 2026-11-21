@@ -209,6 +209,108 @@ fn main() {
             println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
         }
 
+        // v13.4 — capacidades nuevas
+        "capabilities" => {
+            let r = megadaemon_core::capability::verify();
+            println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+        }
+        "tasks" => {
+            let action = args.get(2).cloned().unwrap_or_else(|| "list".into());
+            let r = match action.as_str() {
+                "run" => serde_json::json!({ "executed": megadaemon_core::task_scheduler::run_due(5) }),
+                "stats" => megadaemon_core::task_scheduler::stats(),
+                "journal" => megadaemon_core::task_scheduler::journal_json(50),
+                _ => megadaemon_core::task_scheduler::list_json(),
+            };
+            println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+        }
+        "alerts" => {
+            let action = args.get(2).cloned().unwrap_or_else(|| "list".into());
+            let r = match action.as_str() {
+                "check" => megadaemon_core::alerts::check_rules(),
+                "status" => megadaemon_core::alerts::status(),
+                _ => megadaemon_core::alerts::list(None, false, 50),
+            };
+            println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+        }
+        "agent" => {
+            let goal = args.get(2).cloned().unwrap_or_default();
+            let r = megadaemon_core::agent_core::run(&goal, true, 5);
+            println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+        }
+        "profile" => {
+            let action = args.get(2).cloned().unwrap_or_else(|| "analyze".into());
+            let r = match action.as_str() {
+                "briefing" => megadaemon_core::profile_analysis::briefing(true),
+                "drift" => megadaemon_core::profile_analysis::topic_drift(30),
+                "digest" => megadaemon_core::profile_analysis::daily_digest(14),
+                _ => megadaemon_core::profile_analysis::analyze(),
+            };
+            println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+        }
+        "apk" => {
+            let action = args.get(2).cloned().unwrap_or_else(|| "inventory".into());
+            let r = match action.as_str() {
+                "analyze" => megadaemon_core::apk_inventory::analyze_apk(args.get(3).map(|s| s.as_str()).unwrap_or("")),
+                "dump" => megadaemon_core::apk_inventory::dump_all(args.get(3).map(|s| s.as_str()).unwrap_or("/data/local/tmp/apks")),
+                _ => megadaemon_core::apk_inventory::inventory(50),
+            };
+            println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+        }
+        "repos" => {
+            let action = args.get(2).cloned().unwrap_or_else(|| "status".into());
+            let r = match action.as_str() {
+                "plan" => megadaemon_core::repo_updates::plan(None),
+                "watch" => megadaemon_core::repo_updates::watch_once(),
+                "repos" => megadaemon_core::repo_updates::repos(),
+                _ => megadaemon_core::repo_updates::status(),
+            };
+            println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+        }
+        "bookmarks" => {
+            let action = args.get(2).cloned().unwrap_or_else(|| "inventory".into());
+            let r = match action.as_str() {
+                "export" => megadaemon_core::bookmarks::export_all(args.get(3).map(|s| s.as_str()).unwrap_or("/data/local/tmp/bookmarks.html")),
+                "passkeys" => megadaemon_core::bookmarks::passkey_inventory(),
+                _ => megadaemon_core::bookmarks::inventory(),
+            };
+            println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+        }
+        "battery" => {
+            let action = args.get(2).cloned().unwrap_or_else(|| "status".into());
+            let r = match action.as_str() {
+                "apply" => megadaemon_core::battery_saver::apply(true, false, None),
+                "xbs" => megadaemon_core::battery_saver::xbs_config(),
+                _ => megadaemon_core::battery_saver::status(),
+            };
+            println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+        }
+        "git" => {
+            let action = args.get(2).cloned().unwrap_or_else(|| "status".into());
+            let r = match action.as_str() {
+                "identity" => megadaemon_core::git_ops::identity(),
+                "log" => megadaemon_core::git_ops::log(10),
+                _ => megadaemon_core::git_ops::status(),
+            };
+            println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+        }
+        "scrape" => {
+            let url = args.get(2).cloned().unwrap_or_default();
+            let r = megadaemon_core::service_identity::scrape(&url, "browser.mobile", true, 512 * 1024);
+            println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+        }
+        "sshd" => {
+            let port = args.get(2).and_then(|s| s.parse::<u16>().ok()).unwrap_or(2222);
+            #[cfg(feature = "ssh")]
+            {
+                megadaemon_core::sshd::run_sync(port, "0.0.0.0");
+            }
+            #[cfg(not(feature = "ssh"))]
+            {
+                eprintln!("Este binario se compiló sin la feature `ssh`. Reconstruye con: --features ssh");
+                std::process::exit(2);
+            }
+        }
         "conv-stats" => {
             let r = megadaemon_core::sync::status();
             println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
