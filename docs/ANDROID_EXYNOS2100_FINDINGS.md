@@ -438,7 +438,7 @@ en UTF-16LE y UTF-8. **3** APKs contienen la cadena; al comprobar si está en el
 ⇒ **Implicación (alta)**: los únicos que **declaran** el permiso son dos apps de **Microsoft**
 (continuidad PC-teléfono). **Samsung no trae ninguna app con `CAPTURE_AUDIO_OUTPUT`**, y el
 grabador tampoco está en los jars de `/system/framework` (comprobado por el agente RE).
-⇒ **CORREGIDO (medido en vivo el 2026-11-21 con `csc_verify`)**: en este firmware (CSC **AMO**) la grabación nativa **SÍ está implementada** y con **aviso**: el valor de `CscFeature_VoiceCall_ConfigRecording` es `RecordingAllowedByMenu,disclaimer_latin` ⇒ ⇒ **no hay que parchar nada** para tenerla ⇒ ⇒ y si se quisiera quitar el aviso, eso sería una decisión **del usuario** (grabar en silencio a un tercero es delito en España, art. 197 CP), no un detalle técnico.
+⇒ **Aclaración (medido en vivo el 2026-11-21)**: en el firmware **de fábrica** de AMO la grabación nativa **NO está implementada** (1109 B, sin la feature). Lo que se midió en el móvil (1143 B, `RecordingAllowedByMenu,disclaimer_latin`) es el **parche** del módulo Magisk `megadaemon_csc_recording` ⇒ ⇒ **la función está disponible y AVISA** (parcheado), **no de fábrica** ⇒ ⇒ quitar el aviso sería una decisión **del usuario** (grabar en silencio a un tercero es delito en España, art. 197 CP), nunca un detalle técnico.
 ninguna app**: o la activa el framework por CSC (y aquí no está), o hay que cambiar de CSC.
 **Cómo se comprueba**:
 ```bash
@@ -600,7 +600,7 @@ python3 tools/omc_codec.py encode <plano.xml> -o out.omc
 
 ### 10.2 Qué CSC traen grabación nativa de llamadas (medido en los 126 CSC del móvil)
 
-`CscFeature_VoiceCall_ConfigRecording` **existe en 20 de 126** CSCs (medido en vivo con `csc_verify` el 2026-11-21):
+`CscFeature_VoiceCall_ConfigRecording` **existe en 19 de 126** CSCs **de fábrica** (el móvil medido el 2026-11-21 da 20 porque AMO entra **por el parche Magisk** `megadaemon_csc_recording`, no de fábrica):
 
 | Valor | CSCs |
 |---|---|
