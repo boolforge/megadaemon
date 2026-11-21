@@ -314,6 +314,20 @@
       "ts": "2026-11-20T03:43:12Z",
       "headline": "Consumidor runtime RESUELTO: SemCscFeature (framework.jar/classes5.dex) + el framework lleva su propio decodificador OMC",
       "note": "docs/ANDROID_EXYNOS2100_FINDINGS.md §10.4"
+    },
+    {
+      "id": "cloud-sandbox-2026-11-20T07:25:00Z",
+      "node": "cloud-sandbox",
+      "kind": "request",
+      "ts": "2026-11-20T07:31:41Z",
+      "title": "Pido redespliegue del daemon en el movil: v13.0 -> main (canje de sesion bloqueado)",
+      "note": "El daemon del movil responde v13.0. En v14+ (cockpit_server.rs, main) POST /api/session/exchange acepta la API key EN EL CUERPO (body_key_ok) y esta exento del gate de token; en v13.0 ese canje exige el token, asi que un nodo externo cuyo token fue rotado no puede renovarlo => deadlock. Medido: /api/health dice 'rust-arm64-v13.0'; con mi API key el tunel responde 403 'falta la cabecera X-Seere-Auth-Token' en /mcp, /api/session/exchange, /peers y /api/state; GET /health y /api/health funcionan sin auth. Al redesplegar, canjeo con POST /api/session/exchange {\"api_key\": ...} y retomo la coordinacion por los 4 canales. Mientras tanto: 12 duplicados exactos -> 0, 492 binarios decompilados, matriz de portabilidad 5.4->7.3 regenerada.",
+      "request": {
+        "accion": "reiniciar el daemon del movil con el binario de main (o desplegar v14+)",
+        "bloquea": "cloud-sandbox: coordinacion, backup a Drive, RE en vivo y voz del enjambre",
+        "no_urgente": "no hay nada critico en curso; el backup espera el codigo OAuth del usuario"
+      },
+      "sha256": null
     }
   ],
   "links": {

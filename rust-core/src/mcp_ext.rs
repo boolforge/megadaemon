@@ -182,6 +182,48 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "store_manager",
+            "description": "Gestor de tiendas/repos universal: registra tiendas (repo, modulo Magisk, APK, payload, herramienta), descarga y cachea su indice, lo verifica (sha256 por entrada y firma RSA opcional del indice), busca entradas y las instala con verificacion de hash. Sin SDK de terceros ni binarios externos. Acciones: list, add, remove, refresh, search, plan, install, stats.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["list", "add", "remove", "refresh", "search", "plan", "install", "stats"], "default": "list" },
+                    "id": { "type": "string", "description": "Identificador de la tienda" },
+                    "name": { "type": "string" },
+                    "kind": { "type": "string", "enum": ["repo", "magisk", "apk", "payload", "tool"], "default": "repo" },
+                    "base_url": { "type": "string" },
+                    "index_path": { "type": "string" },
+                    "public_key": { "type": "string", "description": "Clave publica RSA en base64 con el formato n:e" },
+                    "trust": { "type": "string", "enum": ["sha256", "signed"], "default": "sha256" },
+                    "query": { "type": "string" },
+                    "entry": { "type": "string", "description": "id de la entrada a instalar" },
+                    "confirm": { "type": "boolean", "default": false }
+                }
+            }
+        },
+        {
+            "name": "root_detectors",
+            "description": "Apps que DETECTAN root, medido en el dispositivo: extrae la tabla de cadenas real del DEX de cada APK, busca firmas de deteccion (rutas de su, Magisk, props, Xposed/Frida, Play Integrity, emulador, Knox) y anade la evidencia dinamica vista en logcat. Cada hallazgo lleva la cadena exacta y el fichero de la que salio.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["scan", "summary"], "default": "scan" },
+                    "limit": { "type": "integer", "default": 40 },
+                    "scope": { "type": "string", "enum": ["third_party", "all"], "default": "third_party" }
+                }
+            }
+        },
+        {
+            "name": "root_consumers",
+            "description": "Apps que USAN root, medido en el dispositivo: politicas reales de Magisk (deny list y allow list leidas de la base de datos de la app Magisk o de `magisk --sqlite`), gestores de root instalados y eventos de `su` observados en logcat con la app que los pidio.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["scan", "summary"], "default": "scan" }
+                }
+            }
+        },
+        {
             "name": "repo_updates",
             "description": "Actualización automática de apps desde repositorios (F-Droid, Obtainium). Calcula el plan de actualización comparando versiones; descargar e instalar exige confirmación explícita.",
             "inputSchema": {
@@ -654,16 +696,41 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 "hint": "acciones: profiles | profile | scan | exchange | notes",
             }),
         },
+        "root_detectors" => {
+            let limit = n("limit").max(1) as usize;
+            let scope = s("scope");
+            let third = scope != "all";
+            crate::root_intel::detectors(limit, third)
+        }
+        "root_consumers" => crate::root_intel::consumers(),
         "root_hide" => match s("action").as_str() {
             "audit" => {
                 let pkgs = sa("packages");
-                let env = crate::root_hide::DeviceEnv::clean();
+                // MEDIDO: el entorno se sondea en el dispositivo real, no se
+                // simula. Antes usaba DeviceEnv::clean() y devolvia
+                // "clean (simulado)" con un 100 de score falso.
+                let env = crate::root_intel::probe_env(&pkgs);
                 let audits = crate::root_hide::audit_all(&pkgs, &env);
-                json!({ "ok": true, "audits": audits, "env": "clean (simulado)" })
+                json!({
+                    "ok": true,
+                    "audits": audits,
+                    "env": "medido en el dispositivo",
+                    "ficheros_presentes": env.files_present,
+                    "props": env.props,
+                    "magisk_version": env.magisk_version,
+                    "zygisk": env.zygisk,
+                    "denylist_apps": env.denylist_apps,
+                    "shamiko": env.shamiko,
+                    "trickystore": env.trickystore,
+                    "play_integrity_fix": env.play_integrity_fix,
+                    "hide_my_applist": env.hide_my_applist,
+                    "zygisk_next": env.zygisk_next,
+                    "procesos_detectados": env.processes.len(),
+                })
             }
             "plan" => {
                 let pkgs = sa("packages");
-                let env = crate::root_hide::DeviceEnv::clean();
+                let env = crate::root_intel::probe_env(&pkgs);
                 let audits = crate::root_hide::audit_all(&pkgs, &env);
                 let remeds: Vec<crate::root_hide::Remediation> = audits
                     .iter()
@@ -963,6 +1030,14 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 }),
                 _ => json!({ "ok": false, "error": "unknown_action", "hint": "repos|issues|prs|publish|bridge" }),
             }
+        }
+        // v15: gestor de tiendas/repos universal ("mega store manager").
+        // Sin SDK de terceros ni binarios externos: todo en Rust, con
+        // sha256 por entrada y firma RSA opcional del índice.
+        "store_manager" => {
+            let action = s("action");
+            let dir = std::path::PathBuf::from(crate::mesh::default_state_dir());
+            crate::store_manager::handle_action(&action, args, &dir)
         }
         _ => return None,
     };
