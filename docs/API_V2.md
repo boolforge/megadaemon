@@ -60,6 +60,34 @@ pub mod webui;
 `webui::dispatch` devuelve `None` para cualquier ruta que no sea `/api/v2/*`,
 así que **no interfiere** con el flujo actual.
 
+### La UI v2 se puede actualizar **sin recompilar**
+
+`GET /v2` (y `/ui`) y `GET /webui_v2.css` se sirven así:
+
+1. si existe `<base_dir>/web/cockpit_v2.html` (o `webui_v2.css`), **manda el
+   fichero de disco**;
+2. si no existe, se sirve la copia **embebida** en el binario
+   (`include_str!`), que siempre está.
+
+`<base_dir>` es el padre de `state_dir()` ⇒ en el móvil
+`/data/local/tmp/megadaemon/web/` (el mismo directorio donde el instalador
+deja `cockpit_template.html`).
+
+**Por qué**: antes la UI v2 iba siempre embebida ⇒ cualquier arreglo de CSS o
+HTML exigía **recompilar el binario** para que llegara al móvil.  Ahora basta
+con desplegar los dos ficheros en ese directorio ⇒ la interfaz se actualiza en
+el sitio, sin build y sin reiniciar.
+
+**Para que funcione**, el instalador tiene que subir los dos ficheros:
+
+```sh
+cp -f "$REPO_ROOT/web/cockpit_v2.html" "$WEB_DIR/cockpit_v2.html"
+cp -f "$REPO_ROOT/web/webui_v2.css"  "$WEB_DIR/webui_v2.css"
+```
+
+Si no están, el daemon sirve la versión embebida (sin errores: la UI siempre
+funciona).
+
 ---
 
 ## 3. Política de autenticación

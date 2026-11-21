@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -370,6 +370,32 @@ pub const EMBEDDED_TEMPLATE: &str = include_str!("../../web/cockpit_template.htm
 /// para que el binario sea autosuficiente como la v1 (el móvil no tiene assets).
 pub const EMBEDDED_V2_HTML: &str = include_str!("../../web/cockpit_v2.html");
 pub const EMBEDDED_V2_CSS: &str = include_str!("../../web/webui_v2.css");
+
+/// Ruta del HTML de la UI v2 **desplegado en disco** (si existe).
+///
+/// La UI v2 iba embebida ⇒ llegar al móvil exigía **recompilar** el binario
+/// (cualquier arreglo de CSS/HTML se quedaba en el repo hasta la siguiente
+/// build).  Con esto, desplegar `web/cockpit_v2.html` y `web/webui_v2.css`
+/// en `<base_dir>/web/` actualiza la interfaz **sin tocar el binario**, igual
+/// que la plantilla v1, que ya se sirve desde disco.
+pub fn v2_html_path(base: &str) -> PathBuf {
+    Path::new(base).join("web").join("cockpit_v2.html")
+}
+
+/// Ruta de la hoja de estilos de la UI v2 **desplegada en disco** (si existe).
+pub fn v2_css_path(base: &str) -> PathBuf {
+    Path::new(base).join("web").join("webui_v2.css")
+}
+
+/// Devuelve el fichero de disco si existe; si no, la copia embebida.
+fn asset_or_embedded(path: &Path, embedded: &str) -> String {
+    fs::read_to_string(path).unwrap_or_else(|_| embedded.to_string())
+}
+
+/// Igual que [`asset_or_embedded`] pero en bytes (para el CSS).
+fn asset_bytes_or_embedded(path: &Path, embedded: &[u8]) -> Vec<u8> {
+    fs::read(path).unwrap_or_else(|_| embedded.to_vec())
+}
 
 /// Ruta con query, como la espera `webui::dispatch` (que hace `split_query`).
 fn with_query(path: &str, query: &str) -> String {
@@ -1080,7 +1106,9 @@ fn handle_client(mut stream: TcpStream) {
                 // el navegador no dependa del canje (el token de la pagina
                 // publica SOLO se entrega al navegador local; el resto usa el
                 // canje API key -> token).
-                let html = EMBEDDED_V2_HTML.to_string();
+                // v15 (W1): primero el fichero desplegado (actualizar la UI
+                // sin recompilar); si no está, la copia embebida.
+                let html = asset_or_embedded(&v2_html_path(&base_dir()), EMBEDDED_V2_HTML);
                 // Igual que en "/": el token de sesion se incrusta SOLO al
                 // navegador LOCAL del dispositivo (su JS lo adjunta a cada
                 // llamada => lecturas y escrituras sin pedir nada).  La pagina
@@ -1107,12 +1135,10 @@ fn handle_client(mut stream: TcpStream) {
                 return;
             }
             "/webui_v2.css" => {
-                send_http_response(
-                    &mut stream,
-                    200,
-                    "text/css; charset=utf-8",
-                    EMBEDDED_V2_CSS.as_bytes(),
-                );
+                // v15 (W1): el CSS desplegado en disco manda sobre el embebido
+                // ⇒ actualizar la interfaz no exige recompilar.
+                let css = asset_bytes_or_embedded(&v2_css_path(&base_dir()), EMBEDDED_V2_CSS.as_bytes());
+                send_http_response(&mut stream, 200, "text/css; charset=utf-8", &css);
                 return;
             }
             // v15 (W1): estado del canal, PÚBLICO y con payload MÍNIMO.
@@ -2614,6 +2640,33 @@ pub fn run_server(port: u16) -> Result<(), String> {
 /// romper ningún acceso existente (bookmarks, túnel, scripts).  Todos sirven
 /// la MISMA instancia y comparten token, estado y cola de tareas.
 pub const ALIAS_PORTS: &[u16] = &[3000, 3030, 8090, 9090];
+
+#[cfg(test)]
+mod v2_asset_tests {
+    use super::*;
+
+    /// La UI v2 se toma de disco si el fichero existe; si no, la embebida.
+    #[test]
+    fn la_ui_v2_se_toma_de_disco_si_existe() {
+        let base = std::env::temp_dir().join(format!("md-v2asset-{}", std::process::id()));
+        let web = base.join("web");
+        std::fs::create_dir_all(&web).expect("dir");
+        let base_s = base.to_string_lossy().to_string();
+        let html = v2_html_path(&base_s);
+        let css = v2_css_path(&base_s);
+        assert_eq!(html, web.join("cockpit_v2.html"));
+        assert_eq!(css, web.join("webui_v2.css"));
+        // Sin ficheros: embebida.
+        assert_eq!(asset_or_embedded(&html, "EMB"), "EMB");
+        assert_eq!(asset_bytes_or_embedded(&css, b"EMB"), b"EMB".to_vec());
+        // Con ficheros: los de disco.
+        std::fs::write(&html, "DISCO").expect("html");
+        std::fs::write(&css, b"DISCO").expect("css");
+        assert_eq!(asset_or_embedded(&html, "EMB"), "DISCO");
+        assert_eq!(asset_bytes_or_embedded(&css, b"EMB"), b"DISCO".to_vec());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
 
 #[cfg(test)]
 mod channel_json_tests {
