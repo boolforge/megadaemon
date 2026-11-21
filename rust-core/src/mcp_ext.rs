@@ -33,6 +33,22 @@ pub fn tool_definitions() -> Value {
         },
 
         {
+            "name": "clipboard",
+            "description": "Portapapeles distribuido: historial con deduplicacion y caducidad, busqueda, clasificacion (url/telefono/codigo) y sincronizacion entre nodos. Lo que parece un secreto (clave, token, OTP) se marca como SENSIBLE y NO se persiste en el historial ni se propaga por la malla. Acciones: list, put, get, copy, clear, search, status.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["list", "put", "get", "copy", "clear", "search", "status"], "default": "list" },
+                    "text": { "type": "string", "description": "texto a guardar (accion put)" },
+                    "query": { "type": "string", "description": "texto a buscar (accion search)" },
+                    "id": { "type": "string", "description": "id de un item concreto (acciones get/copy)" },
+                    "origin": { "type": "string", "description": "origen del item (paquete de la app)" },
+                    "limit": { "type": "number", "description": "maximo de resultados" }
+                }
+            }
+        },
+
+        {
             "name": "capabilities",
             "description": "Catálogo de capacidades de MegaDaemon con verificación REAL de dependencias en el dispositivo (binarios, rutas, módulos). Devuelve también la huella del catálogo para detectar deriva entre versiones.",
             "inputSchema": {
@@ -388,6 +404,24 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 Some(exp.as_str())
             });
             let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
+            json!({ "content": [{ "type": "text", "text": txt }] })
+        }
+        "clipboard" => {
+            let dir = crate::cockpit_server::state_dir();
+            let accion = {
+                let a = s("action");
+                if a.is_empty() { "list".to_string() } else { a }
+            };
+            let cuerpo = json!({
+                "action": accion,
+                "text": s("text"),
+                "query": s("query"),
+                "id": s("id"),
+                "origin": s("origin"),
+                "limit": n("limit"),
+            });
+            let r = crate::clipboard::handle_action(&accion, &cuerpo, &dir);
+            let txt = serde_json::to_string_pretty(&r).unwrap_or_default();
             json!({ "content": [{ "type": "text", "text": txt }] })
         }
         "capabilities" => match s("action").as_str() {

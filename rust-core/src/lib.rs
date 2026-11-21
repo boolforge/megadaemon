@@ -34,6 +34,7 @@ pub mod binwalk_die;
 pub mod bookmarks;
 pub mod capability;
 pub mod channel;
+pub mod clipboard;
 pub mod cfg_lifter;
 pub mod cirx_rtl;
 pub mod cockpit_doctor;

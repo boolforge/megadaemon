@@ -158,7 +158,9 @@ deploy_files() {
 # cloudflared, independiente del daemon).
 install_extras() {
     src_dir=$(dirname "$SRC_BIN")
-    for b in channel-publish duckdns-updater npu-probe md-lan-listen; do
+    # `md-clipboard` (portapapeles) y `md-dict` (diccionarios del teclado)
+    # son CLIs que se usan directamente en el movil.
+    for b in channel-publish duckdns-updater npu-probe md-lan-listen md-clipboard md-dict; do
         [ -f "$src_dir/$b" ] || continue
         if [ "$ON_PHONE" = "1" ]; then
             cp -f "$src_dir/$b" "$PREFIX/$b" 2>/dev/null && chmod 755 "$PREFIX/$b" 2>/dev/null

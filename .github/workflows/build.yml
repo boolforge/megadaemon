@@ -137,7 +137,10 @@ jobs:
           # autocuracion: `channel-publish` es el que SONDEA el tunel (el
           # movil no tiene curl) y el que publica el estado del canal; sin
           # el, la recuperacion se queda a medias.
-          for aux in channel-publish duckdns-updater md-lan-listen npu-probe; do
+          # `md-clipboard` (portapapeles) y `md-dict` (diccionarios) son
+          # CLIs que se ejecutan en el movil: sin publicarlos no llegan al
+          # dispositivo.
+          for aux in channel-publish duckdns-updater md-lan-listen npu-probe md-clipboard md-dict; do
             if [ -f "target/aarch64-linux-android/release/$aux" ]; then
               cp "target/aarch64-linux-android/release/$aux" "dist/$aux-arm64"
               sha256sum "dist/$aux-arm64" > "dist/$aux-arm64.sha256"

@@ -1778,6 +1778,41 @@ fn handle_client(mut stream: TcpStream) {
                 ),
             }
         }
+        // v17 — Gestor de portapapeles distribuido.
+        //
+        // GET  /api/clipboard[?q=...&limit=N]  -> listar / buscar
+        // POST /api/clipboard {"action":"put"|"get"|"copy"|"clear"|"status", ...}
+        //
+        // El contenido del portapapeles puede contener secretos: por eso cae
+        // dentro del gate de autenticacion (API key + token de sesion) y el
+        // modulo marca como "sensible" lo que parece una clave/OTP y no lo
+        // persiste en el historial.
+        "/api/clipboard" => {
+            let mut b = body_json.clone();
+            let action = b
+                .get("action")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| {
+                    if qp.get("q").is_some() {
+                        "search".to_string()
+                    } else {
+                        "list".to_string()
+                    }
+                });
+            if b.get("query").is_none() {
+                if let Some(q) = qp.get("q") {
+                    b["query"] = json!(q);
+                }
+            }
+            if b.get("limit").is_none() {
+                if let Some(l) = qp.get("limit").and_then(|v| v.parse::<u64>().ok()) {
+                    b["limit"] = json!(l);
+                }
+            }
+            let r = crate::clipboard::handle_action(&action, &b, &state_dir());
+            send_json(&mut stream, &r);
+        }
         "/api/capabilities" => {
             send_json(&mut stream, &crate::capability::verify());
         }
