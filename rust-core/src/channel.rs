@@ -193,7 +193,37 @@ pub fn channel_path(state_dir: Option<&str>, name: &str) -> PathBuf {
 /// Lee `channel.json` (tolerante: si no existe o está corrupto, `None`).
 pub fn read_channel_json(state_dir: Option<&str>) -> Option<Value> {
     let raw = fs::read_to_string(channel_path(state_dir, CHANNEL_JSON)).ok()?;
-    serde_json::from_str(&raw).ok()
+    let mut v: Value = serde_json::from_str(&raw).ok()?;
+    // El *quick tunnel* se REGENERA en cada reinicio ⇒ `tunnel.url` (lo
+    // escribe `98-cloudflared.sh`) es la **fuente de verdad** del `quick` ⇒
+    // si el estado aún no lo tiene fusionado, se rellena al leer ⇒ el
+    // endpoint público /channel.json lleva siempre la URL viva del túnel
+    // (sin esperar a ninguna publicación).
+    let quick = v
+        .get("quick")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if quick.is_empty() {
+        if let Some(u) = read_url_file(state_dir, TUNNEL_URL) {
+            if let Some(o) = v.as_object_mut() {
+                o.insert("quick".to_string(), json!(u));
+            }
+        }
+    }
+    Some(v)
+}
+
+/// Lee un fichero de URL (`tunnel.url` o `channel.url`).
+pub fn read_url_file(state_dir: Option<&str>, name: &str) -> Option<String> {
+    let raw = fs::read_to_string(channel_path(state_dir, name)).ok()?;
+    let t = raw.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
 }
 
 /// Escribe `channel.json` (best effort; crea el directorio si hace falta).

@@ -22,10 +22,33 @@
 # Variables:    CFT_TARGET (por defecto http://127.0.0.1:9090)
 #               MAX_LOAD  (por defecto 8: con el móvil saturado NO relanza)
 # ---------------------------------------------------------------------------
-LOG_DIR=/data/local/tmp/megadaemon
+PREFIX="${MEGADAEMON_PREFIX:-/data/local/tmp/megadaemon}"
+LOG_DIR="$PREFIX"
 CF="${CF:-/data/data/com.termux/files/usr/bin/cloudflared}"
 TARGET="${CFT_TARGET:-http://127.0.0.1:9090}"
 URL_FILE="$LOG_DIR/tunnel.url"
+# ⚠️ El daemon lee su estado de AQUÍ (cockpit_server::state_dir()) ⇒ la URL
+# del túnel tiene que estar en el MISMO directorio o el `quick` del
+# /channel.json nunca se rellena (medido: el script escribía en el log_dir
+# y el daemon leía en otro sitio ⇒ el `quick` salía vacío siempre).
+# ⚠️ Este script lo ejecuta **Magisk** (service.d) => es HERMANO del
+# supervisor, no hijo suyo => NO hereda su entorno => hay que leer el env
+# aquí (sin `set -a`: la API key no se exporta a cloudflared ni al watchdog).
+ENV_FILE="${MEGADAEMON_ENV:-$PREFIX/megadaemon.env}"
+if [ -f "$ENV_FILE" ]; then
+    . "$ENV_FILE" 2>/dev/null
+fi
+# Ni la key ni el token de sesión viajan a cloudflared/watchdog: este
+# script no los necesita (y una variable que ya estaba exportada en el
+# entorno mantiene su atributo de exportación al reasignarla).
+unset MEGADAEMON_API_KEY MEGADAEMON_COCKPIT_TOKEN 2>/dev/null
+# El valor por defecto es el del despliegue (`install-phone.sh`): en el móvil
+# el estado vive en /data/local/tmp/megadaemon/state.
+STATE_DIR="${MEGADAEMON_STATE_DIR:-/data/local/tmp/megadaemon/state}"
+STATE_URL_FILE="$STATE_DIR/tunnel.url"
+# Publicador del canal (opcional): al subir el túnel, se publica el estado
+# para que el enjambre conozca la URL nueva sin intervención manual.
+PUBLISH="${MEGADAEMON_PUBLISH:-/data/local/tmp/megadaemon/channel-publish}"
 TUNNEL_LOG="$LOG_DIR/tunnel.log"
 WATCHDOG="$LOG_DIR/tunnel-watchdog.sh"
 MAX_LOAD="${MAX_LOAD:-8}"
@@ -81,12 +104,28 @@ while [ "$i" -lt 24 ]; do
     url=$(extraer_url)
     if [ -n "$url" ]; then
         echo "$url" > "$URL_FILE"
-        log "URL vigente: $url"
+        # y en el directorio de estado del daemon (el que lee el canal)
+        mkdir -p "$STATE_DIR" 2>/dev/null
+        if echo "$url" > "$STATE_URL_FILE" 2>/dev/null; then
+            log "URL vigente: $url (también en $STATE_URL_FILE)"
+        else
+            log "URL vigente: $url (NO se pudo escribir $STATE_URL_FILE)"
+        fi
         break
     fi
     sleep 5
     i=$((i + 1))
 done
+
+# --- publica el canal (para que el enjambre vea la URL nueva) -------------
+# Best effort y en segundo plano: el túnel NO depende de esto (además el
+# móvil no lleva PAT ⇒ se publica en un paste, no en el repo).
+if [ -x "$PUBLISH" ] && [ -r "$STATE_URL_FILE" ]; then
+    setsid nohup sh -c "'$PUBLISH' --state-dir '$STATE_DIR'" >>"$LOG_DIR/publish.log" 2>&1 &
+    log "publicación del canal lanzada (paste; sin PAT no se publica en el repo)"
+else
+    log "sin publicador ($PUBLISH) o sin URL: no se publica (el /channel.json del daemon sigue siendo la vía principal)"
+fi
 
 # --- watchdog (sondeo + relanzado + publicación) ---------------------------
 if [ -r "$WATCHDOG" ]; then
