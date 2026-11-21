@@ -147,54 +147,79 @@ TAR con el formato público, Argon2id con la RFC 9106). Ver
 | `0x6b140` | **append de bytes** (sin prefijo) | `memcpy` de `x4` bytes |
 | `0x6b524` | **append de bloque** (longitud + bytes) | `mov x21,x2` (longitud) · `mov x22,x3` (puntero) |
 
-### 6.3 La tabla: los 27 campos, en orden
+### 6.3 La tabla: los campos, con su offset y su ancho
 
-| # | Bytes | Tipo | Contenido | Origen en el escritor |
-|---|-------|------|-----------|----------------------|
-| 1 | 4 | ASCII | `SBA1` | `adrp/add` → `bl 0x6ae10` (`x2=0x11b35`, `w4=4`) |
-| 2 | 2 | **u16 BE** | `flags` | `ldr w1,[x20]` → `bl 0x6aa00` |
-| 3 | 2 | **u16 BE** | `headerSize` = **0x60 (96)** ó **0x90 (144)** | `mov w8,#0x60` + `csel w23,w9,w8,eq` → `bl 0x6aa00` |
-| 4 | **1..3** | **var BE** | `encryptionMethodId` | `ldr w8,[x20,#4]` + `csel w1,w10,w9,eq` → `bl 0x6ab6c` |
-| 5 | 8 | **u64 BE** | `createdAtEpochMs` = `time(NULL)*1000` | `bl time@plt`; `mul x28,x0,#1000`; escrito **byte a byte** con `lsr x20,x28,x21` empezando por `>>56` ⇒ **MSB primero** |
-| 6 | 2 | u16 BE | campo A (sin nombre confirmado) | `ldr w1,[sp,#20]` → `bl 0x6aa00` |
-| 7 | 2 | u16 BE | campo B (sin nombre confirmado) | `ldr w1,[sp,#16]` → `bl 0x6aa00` |
-| 8 | 2 | u16 BE | `struct[0x04]` | `ldr w1,[x20,#4]` → `bl 0x6aa00` |
-| 9 | 2 | u16 BE | `struct[0x08]` | `ldr w1,[x20,#8]` → `bl 0x6aa00` |
-| 10 | 2 | u16 BE | `struct[0x0c]` | `ldr w1,[x20,#12]` → `bl 0x6aa00` |
-| 11 | 2 | u16 BE | **longitud del bloque 1** | `ldr w8,[x20,#72]` − `ldr w9,[x20,#64]` → `bl 0x6aa00` |
-| 12 | 2 | u16 BE | **longitud del bloque 2** | `ldr w8,[x20,#96]` − `ldr w9,[x20,#88]` → `bl 0x6aa00` |
-| 13 | 2 | u16 BE | **longitud del bloque 3** | `ldr w8,[x20,#120]` − `ldr w9,[x20,#112]` → `bl 0x6aa00` |
-| 14 | 4 | u32 BE | longitud del bloque 1 | `bl 0x6b140`/`0x6b524` |
-| 15 | N | bytes | **bloque 1** | `ldp x2,x3,[x20,#64]` → `sub x4,x3,x2` |
-| 16 | 4 | u32 BE | longitud del bloque 2 | |
-| 17 | M | bytes | **bloque 2** | `ldp x2,x3,[x20,#88]` |
-| 18 | 4 | u32 BE | longitud del bloque 3 | |
-| 19 | P | bytes | **bloque 3** | `ldp x2,x3,[x20,#112]` |
-| 20 | 2 | u16 BE | `0` | `mov w1,wzr` → `bl 0x6aa00` |
-| 21 | 2 | u16 BE | `0` | `mov w1,wzr` → `bl 0x6aa00` |
-| 22 | **1..3** | **var BE** | `struct[0x18]` | `ldr w1,[x20,#24]` → `bl 0x6ab6c` |
-| 23 | **1..3** | **var BE** | `struct[0x10]` — **sólo si `flags == 2`** | `cmp w8,#2` → `ldr w1,[x20,#16]` → `bl 0x6ab6c` |
-| 24 | 2 | u16 BE | `struct[0x14]` | `ldr w1,[x20,#20]` → `bl 0x6aa00` |
-| 25 | 2 | u16 BE | `struct[0x1c]` | `ldr w1,[x20,#28]` → `bl 0x6aa00` |
-| 26 | 2 | u16 BE | `struct[0x20]` | `ldr w1,[x20,#32]` → `bl 0x6aa00` |
-| 27 | 2 | u16 BE | `struct[0x04]` (última escritura) | `ldr w8,[x20,#4]` → `bl 0x6aa00` |
+> **Tabla canónica**: `rust-core/src/swift_archive.rs::sba1_layout(formato)`
+> (fuente de verdad de la flota) y `docs/SWIFT_SBA1_HEADER_ARM64.md`.
+> Este módulo **no la duplica**: la pide a `swift_archive` ⇒ el lector y el
+> escritor no pueden divergir de ella.
+
+⚠️ **Corrección** (detectada por el principal y verificada por mí):
+los `csel` del escritor **eligen el VALOR** de un campo, **no su ancho**.
+El helper `0x6ab6c` escribe **4 bytes fijos** big-endian
+(`lsr w20,#24` → `#16` → `#8` → byte bajo, **sin ninguna rama de ancho**) ⇒
+**u32 fijo**, no "1..3 bytes".  Los 27 *append* coinciden con la medición del
+escritor x86_64 ⇒ ⇒ **una sola tabla sirve para las dos arquitecturas**.
+
+#### Variante corta (formato ≠ 2) — `headerSize` = 96
+
+| Offset | Bytes | Tipo | Campo |
+|--------|-------|------|-------|
+| 0 | 4 | ASCII | `SBA1` (magic) |
+| 4 | 2 | u16 BE | `formato` |
+| 6 | 2 | u16 BE | `headerSize` (96) |
+| 8 | **4** | **u32 BE** | `compression` (= id del método de cifrado: 0, 2 ó 3) |
+| 12 | 8 | u64 BE | `createdAtEpochMs` |
+| 20 | 2 | u16 BE | `flags` |
+| 22 | 2 | u16 BE | `flags2` |
+| 24 | 2 | u16 BE | `campo3` |
+| 26 | 2 | u16 BE | `campo4` |
+| 28 | 2 | u16 BE | `campo5` |
+| 30 | 2 | u16 BE | `lenBloque1` |
+| 32 | 2 | u16 BE | `lenBloque2` |
+| 34 | 2 | u16 BE | `lenBloque3` |
+| 36 | 16 | bytes | `bloque1` (fijo, rellenado con ceros) |
+| 52 | 16 | bytes | `bloque2` |
+| 68 | 16 | bytes | `bloque3` |
+| 84 | 2 | u16 BE | `campo10` |
+| 86 | 2 | u16 BE | `campo11` |
+| 88 | **4** | **u32 BE** | `campo12` |
+| 92 | 4 | bytes | `reservado4` |
+
+⇒ **96 exactos.**
+
+#### Variante extendida (formato == 2) — `headerSize` = 144
+
+Todo lo anterior igual hasta el offset 88, y a partir de ahí:
+
+| Offset | Bytes | Tipo | Campo |
+|--------|-------|------|-------|
+| 92 | **4** | **u32 BE** | `campo13` |
+| 96 | 2 | u16 BE | `campo14` |
+| 98 | 2 | u16 BE | `campo15` |
+| 100 | 2 | u16 BE | `campo16` |
+| 102 | 2 | u16 BE | `campo17` |
+| 104 | 32 | bytes | `reservado32` |
+| 136 | 8 | bytes | `reservado8` |
+
+⇒ **144 exactos.**
 
 ### 6.4 Los tres bloques de bytes
 
-El struct nativo (`x20`) tiene **tres arrays**, leídos como
-`(inicio, fin)` en los offsets:
+Cada bloque son **16 bytes fijos** (rellenados con ceros por la derecha),
+precedidos de su longitud en `u16 BE`:
 
-| Bloque | Inicio | Fin | Tamaño máximo observado |
-|---|---|---|---|
-| 1 | `struct[0x40]` | `struct[0x48]` | 32 B (candidato: **key-check** = SHA-256) |
-| 2 | `struct[0x58]` | `struct[0x60]` | 16 B (candidato: **sal**) |
-| 3 | `struct[0x70]` | `struct[0x78]` | 8 B (candidato: **id/nonce**) |
+| Bloque | Longitud en | Datos en | Tamaño fijo |
+|--------|-------------|----------|-------------|
+| `bloque1` | offset 30 (u16 BE) | offset 36 | 16 B |
+| `bloque2` | offset 32 (u16 BE) | offset 52 | 16 B |
+| `bloque3` | offset 34 (u16 BE) | offset 68 | 16 B |
 
-⇒ Los candidatos a `salt`, `kdf` y `keyCheck` del modelo Kotlin de 12
-campos (`headerSize, flags, createdAtEpochMs, compression,
-compressionMethodId, compressionLevel, encryption, encryptionMethodId,
-kdfMethodId, kdfIterations, payloadChunkSize, kdf`) están **entre estos
-tres**, pero **cuál es cuál no está confirmado** ⇒ no se les pone nombre.
+⇒ Los tres candidatos del modelo Kotlin de 12 campos (`salt`, `kdf`,
+`keyCheck`) están **entre** estos tres, pero **cuál es cuál no está
+confirmado** ⇒ no se les pone nombre.  El lector de la flota
+(`KeyCheckSpec::probar_permutaciones`) **descubre el orden probando las 6
+permutaciones**, así que con un `.dat` real se cierra solo.
 
 ### 6.5 Reglas del formato que sí quedan **cerradas**
 
@@ -211,19 +236,20 @@ tres**, pero **cuál es cuál no está confirmado** ⇒ no se les pone nombre.
 
 ### 6.6 El lector y el escritor (`rust-core/src/swift_sba1_header.rs`)
 
-Módulo nuevo, con **9 tests** (round-trip, big-endian, truncados, magic
-inválido, tamaño desconocido):
+Módulo propio, con **16 tests** (round-trip contra la tabla canónica,
+big-endian, bloques en su offset, truncados, magic inválido, extracción
+completa y saneado de rutas):
 
 | API | Qué hace |
 |---|---|
-| `Cabecera::escribir(&self, perfil)` | escribe la cabecera **exactamente** como el nativo |
-| `Cabecera::leer(bytes, perfil)` | la lee; devuelve la cabecera y los bytes consumidos |
-| `leer_auto(bytes)` | prueba los dos perfiles (con/sin cifrado) y se queda con el que cuadra |
-| `Perfil` | los **anchos** de los campos de ancho variable (1..3 bytes) |
+| `Cabecera::escribir()` | escribe la cabecera **exactamente** como la tabla medida (deriva de `sba1_layout`, no la duplica) |
+| `Cabecera::leer(bytes)` | la lee con `sba1_detectar` + `parse_header` (la tabla canónica) |
+| `leer_tar(bytes)` | índice del TAR interior (POSIX/GNU, nombres largos) |
+| `sanear_ruta(nombre)` | rechaza rutas absolutas, `..` y `:` ⇒ **nada se escribe fuera del destino** |
+| `informar_contenedor` / `extraer_contenedor` | cabecera + payload + zstd + TAR ⇒ **el extractor de un backup real** |
 
-⇒ El perfil es explícito **a propósito**: hasta que haya un `.dat` real,
-**no se congela** el layout.  Cuando llegue, se casa el perfil con los
-bytes y *entonces* se fija en un test (misma regla que §3.2).
+⇒ **No hay `Perfil`**: los anchos son fijos y salen de la tabla canónica;
+así el lector **no puede desalinear** la cabecera real.
 
 ### 6.7 Lo que **sigue** sin poder cerrarse
 

@@ -77,9 +77,21 @@ fn read_u8(bytes: &[u8], off: usize) -> Result<u8, String> {
 
 /// Lee un `u16` little-endian.
 fn read_u16(bytes: &[u8], off: usize) -> Result<u16, String> {
-    let hi = read_u8(bytes, off)? as u16;
-    let lo = read_u8(bytes, off + 1)? as u16;
-    Ok(hi | (lo << 8))
+    // OJO: el formato DEX es **little-endian** en TODOS sus campos de 16
+    // bits (los u32 ya se leian bien).  Leerlos big-endian byte-swapeaba:
+    //   - los indices de `field_ids`/`method_ids` (class_idx, type_idx,
+    //     proto_idx) => cada metodo se atribuia a la clase equivocada;
+    //   - las entradas de `type_list` (parametros e interfaces);
+    //   - los `registers_size`/`ins_size`/`outs_size`/`tries_size` del
+    //     `code_item` y los `insn_count`/`handler_off` del `try_item`;
+    //   - y las unidades de instruccion: con el opcode en el byte BAJO
+    //     (como exige ART), el code unit tiene que estar en little-endian
+    //     o el desensamblado es basura.
+    // MEDIDO: en un DEX real, el 92,2 % de los metodos termina en
+    // `return*` con el opcode en el byte bajo, frente al 0,0 % en el alto.
+    let lo = read_u8(bytes, off)? as u16;
+    let hi = read_u8(bytes, off + 1)? as u16;
+    Ok(lo | (hi << 8))
 }
 
 /// Lee un `u32` little-endian.
