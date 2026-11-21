@@ -580,6 +580,6 @@ mod tests {
             KdfParams { iterations: 1, memory_kib: 16384, parallelism: 1, out_len: 32 },
         );
         assert_eq!(r2.status, "key_check_mismatch");
-        assert!(r2.notes.iter().any(|n| n.contains("no se extrae")));
+        assert!(r2.notes.iter().any(|n| n.contains("NO se extrae")));
     }
 }
