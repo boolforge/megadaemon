@@ -40,6 +40,8 @@ BIN="$PREFIX/megadaemon-core"
 WEB_DIR="$PREFIX/web"
 TEMPLATE="$WEB_DIR/cockpit_template.html"
 SERVICE="/data/adb/service.d/99-megadaemon.sh"
+# Canal: cloudflared UNICO e independiente del daemon (Magisk service.d).
+CFT_SERVICE="/data/adb/service.d/98-cloudflared.sh"
 LOG=/sdcard/megadaemon.log
 # El cockpit escucha en el puerto pedido + alias (AUDIT-WEB-04).
 PORTS="9090 3000 3030 8090 8080"
@@ -146,7 +148,43 @@ deploy_files() {
             adb shell "chmod 755 $SERVICE" || true
         fi
     fi
+    install_extras
     say "ficheros copiados"
+}
+
+# ── 3b. Canal: watchdog + publicación + sonda VS4L ───────────────────────────
+# El watchdog necesita `channel-publish` (el móvil NO tiene curl: el sondeo y
+# la publicación los hace ese binario) y `98-cloudflared.sh` (un solo
+# cloudflared, independiente del daemon).
+install_extras() {
+    src_dir=$(dirname "$SRC_BIN")
+    for b in channel-publish duckdns-updater npu-probe; do
+        [ -f "$src_dir/$b" ] || continue
+        if [ "$ON_PHONE" = "1" ]; then
+            cp -f "$src_dir/$b" "$PREFIX/$b" 2>/dev/null && chmod 755 "$PREFIX/$b" 2>/dev/null
+        else
+            adb push "$src_dir/$b" "$PREFIX/$b" >/dev/null 2>&1 && adb shell "chmod 755 $PREFIX/$b" >/dev/null 2>&1
+        fi
+    done
+    if [ -f "$REPO_ROOT/deploy/tunnel-watchdog.sh" ]; then
+        if [ "$ON_PHONE" = "1" ]; then
+            cp -f "$REPO_ROOT/deploy/tunnel-watchdog.sh" "$PREFIX/tunnel-watchdog.sh" 2>/dev/null \
+                && chmod 755 "$PREFIX/tunnel-watchdog.sh" 2>/dev/null
+        else
+            adb push "$REPO_ROOT/deploy/tunnel-watchdog.sh" "$PREFIX/tunnel-watchdog.sh" >/dev/null 2>&1 \
+                && adb shell "chmod 755 $PREFIX/tunnel-watchdog.sh" >/dev/null 2>&1
+        fi
+    fi
+    if [ -f "$REPO_ROOT/deploy/98-cloudflared.sh" ]; then
+        if [ "$ON_PHONE" = "1" ]; then
+            cp -f "$REPO_ROOT/deploy/98-cloudflared.sh" "$CFT_SERVICE" 2>/dev/null \
+                && chmod 755 "$CFT_SERVICE" 2>/dev/null
+        else
+            adb push "$REPO_ROOT/deploy/98-cloudflared.sh" "$CFT_SERVICE" >/dev/null 2>&1 \
+                && adb shell "chmod 755 $CFT_SERVICE" >/dev/null 2>&1
+        fi
+    fi
+    say "extras del canal instalados (watchdog + channel-publish + 98-cloudflared)"
 }
 
 # ── 4. Reinicio ──────────────────────────────────────────────────────────────
