@@ -47,6 +47,25 @@ http_code() {  # 000 si no hay respuesta (curl imprime 000 Y sale con error)
     echo "$code"
 }
 
+
+# Cuerpo + código de una URL (para leer el JSON del 403 del daemon).
+http_cuerpo() {
+    curl -s -m "$TIMEOUT" -w '\n%{http_code}' "$1" 2>/dev/null
+}
+
+# Extrae un campo del JSON del daemon (sin depender de jq).
+json_campo() {  # $1 = json, $2 = campo
+    printf '%s' "$1" | python3 -c "
+import json,sys
+try:
+    d=json.loads(sys.stdin.read() or '{}')
+except Exception:
+    sys.exit(0)
+v=d.get('$2')
+print('' if v is None else v)
+" 2>/dev/null
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --dominio)  DOMAIN="$2"; shift 2 ;;
@@ -78,16 +97,64 @@ else
     ok "relay"; info "http=$CODE80  https=$CODE443"
 fi
 
-# 3) El canónico ------------------------------------------------------------
+# 3) El daemon: aquí se decide 000 vs 530 vs 403-JSON vs 403-sin-JSON ------
+# Criterio el MISMO que docs/RUNBOOK_PRODUCCION.md §2.2 y §5.
+SALIDA="$(http_cuerpo "https://$DOMAIN/api/status")"
+CODE_DAEMON="$(printf '%s' "$SALIDA" | tail -1)"
+CUERPO="$(printf '%s' "$SALIDA" | sed '$d')"
+case "$CODE_DAEMON" in
+    200)
+        ok "daemon"; info "GET /api/status -> 200 (el daemon vive y la credencial vale)"
+        ;;
+    530)
+        ko "daemon"
+        rem "daemon" "530 = el relay/vpn esta VIVO pero el ORIGEN (movil) esta caido => reinicia el movil (o 'sudo ./deploy/relay-pc.sh --diagnostico')"
+        ;;
+    403)
+        RAZON="$(json_campo "$CUERPO" reason)"
+        SENT="$(json_campo "$CUERPO" sent_key_fp)"
+        ROTADO="$(json_campo "$CUERPO" key_rotated_at)"
+        KEYPATH="$(json_campo "$CUERPO" key_path)"
+        SDIR="$(json_campo "$CUERPO" state_dir)"
+        if [ -n "$RAZON" ]; then
+            ko "daemon"; info "403 con JSON del daemon: reason='$RAZON' sent_key_fp=$SENT key_rotated_at=$ROTADO"
+            case "$RAZON" in
+                *"no tiene ninguna key configurada"*)
+                    rem "daemon" "El daemon NO tiene key (NO es key caducada): su state_dir esta vacio. Copia el fichero a $KEYPATH (sin reiniciar) => deploy/phone_finalize.sh (paso 0). state_dir=$SDIR"
+                    ;;
+                *)
+                    rem "daemon" "La credencial no coincide con la vigente (key rotada). Copia la vigente al $KEYPATH y publica SOLO su sha16 (nunca la key). sent_key_fp=$SENT key_rotated_at=$ROTADO"
+                    ;;
+            esac
+        else
+            ko "daemon"
+            rem "daemon" "403 SIN JSON del daemon => no es el daemon: es un proxy/relay que corta (runbook §5). Revisa: sudo ./deploy/relay-pc.sh --diagnostico"
+        fi
+        ;;
+    401)
+        ko "daemon"
+        rem "daemon" "401 = la ruta pide TOKEN DE SESION, no API key: abre la UI en el movil, no desde el PC (runbook §5)"
+        ;;
+    000)
+        ko "daemon"
+        rem "daemon" "000 = no hay ruta: no resuelve o el relay no escucha. Mira el DNS y el relay (pasos anteriores)"
+        ;;
+    *)
+        ko "daemon"; info "GET /api/status -> $CODE_DAEMON"
+        rem "daemon" "Codigo inesperado ($CODE_DAEMON): mira la respuesta cruda con 'curl -s -i https://$DOMAIN/api/status'"
+        ;;
+esac
+
+# 4) El canónico (lo que lee el enjambre) ------------------------------------
 CODE_CANAL="$(http_code "https://$DOMAIN/channel.json")"
 if [ "$CODE_CANAL" = "200" ]; then
     ok "canal"
 else
     ko "canal"
-    rem "canal" "El canónico /channel.json no responde 200 (code=$CODE_CANAL): el proxy no tiene el upstream (el móvil) o la ruta está mal. Revisa: sudo ./deploy/relay-pc.sh --diagnostico"
+    rem "canal" "El canonico /channel.json no responde 200 (code=$CODE_CANAL): el proxy no tiene el upstream (el movil) o la ruta esta mal. Revisa: sudo ./deploy/relay-pc.sh --diagnostico"
 fi
 
-# 4) El móvil en la LAN (el upstream del relay) -----------------------------
+# 5) El móvil en la LAN (el upstream del relay) -----------------------------
 CODE_MOVIL="$(http_code "http://$PHONE_IP:$PHONE_PORT/health")"
 if [ "$CODE_MOVIL" = "200" ]; then
     ok "movil_lan"; info "$PHONE_IP:$PHONE_PORT/health -> 200"
@@ -96,7 +163,7 @@ else
     rem "movil_lan" "El móvil no responde en $PHONE_IP:$PHONE_PORT/health (code=$CODE_MOVIL): está en otra red o cambió de IP por DHCP. El beacon LAN lo publica: tools/phone_url.py; o fija MEGADAEMON_PHONE_IP"
 fi
 
-# 5) El móvil tiene SU key (el 403 NO es key caducada) -----------------------
+# 6) El movil tiene SU key (el 403 NO es key caducada) -----------------------
 # El daemon lee la key de SU state_dir; si el fichero no está ahí, TODA key
 # da 403 y parece que "la clave caducó".
 KEY_PATH_LISTA=0
@@ -124,7 +191,7 @@ else
     info "adb no está instalado: no se puede comprobar la key del móvil"
 fi
 
-# 6) El relay en ESTA máquina (si estamos en el PC del usuario) --------------
+# 7) El relay en ESTA maquina (si estamos en el PC del usuario) --------------
 if command -v systemctl >/dev/null 2>&1; then
     for svc in caddy nginx megadaemon-relay; do
         if systemctl list-unit-files 2>/dev/null | grep -q "^${svc}"; then

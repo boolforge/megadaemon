@@ -192,6 +192,20 @@ estático.
 | binario instalado pero el daemon no arranca | **sin permiso de ejecución** (`chmod 755` DESPUÉS del `mv`) | `ls -l` | re-hacer el `mv` + `chmod 755` + reiniciar |
 | el móvil va JUSTO de RAM (10,2/10,5 GB) | polling agresivo o procesos extra | `dumpsys meminfo` | nada de bucles de polling: todo lo pesado va a `tools/` del PC |
 
+**Una sola fuente de verdad del diagnóstico**: la tabla de arriba la
+implementa `tools/megadaemon_local_doctor.sh` (mismos criterios: 000 vs 530 vs
+403-con-JSON vs 403-sin-JSON vs 401) y **imprime el remedio exacto de cada
+fallo**, con el mismo criterio de §2.2 para el 403 (`reason`, `sent_key_fp`,
+`key_rotated_at`).  Es de sólo lectura y de la key sólo saca el `sha16`:
+
+```bash
+tools/megadaemon_local_doctor.sh            # diagnóstico
+tools/megadaemon_local_doctor.sh --json     # sólo el resumen
+```
+
+Si el doctor y esta tabla discrepanen, **manda la tabla**: actualiza el
+doctor (es el que se ejecuta).
+
 ---
 
 ## 6. Rollback
