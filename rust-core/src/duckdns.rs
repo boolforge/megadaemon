@@ -100,6 +100,11 @@ pub fn domain_from_instance(instance_json: &str) -> Option<String> {
 /// causa: `duckdns.org/update` se había llamado desde el sandbox, y ese
 /// endpoint pone el A record a la IP de **quien llama**.
 ///
+///
+/// Y un **`OK` de la API no prueba que el dominio exista**: DuckDNS sólo
+/// crea los subdominios **registrados en la cuenta** => hay que **verificar
+/// el DNS** despues (DoH: `Status 0` + Answer = existe; `Status 3` = no
+/// existe, y el mensaje de "OK" sale igual).
 /// De ahí la regla: **un SOLO escritor** del A record canónico = el relay
 /// del PC (`deploy/relay-pc.sh`, que se ejecuta en casa).  El móvil (o el
 /// sandbox) no lo tocan salvo que se pida explícitamente.
