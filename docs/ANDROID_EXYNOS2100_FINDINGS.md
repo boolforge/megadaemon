@@ -366,7 +366,7 @@ actualizar `contents.db` (su `fileSize`) y el CRC/formato que el sistema comprue
 **Hallazgo**: el **CSC es `AMO`** (América) y vive en `mps_code.dat` (3 bytes exactos) ⇒
 cambiarlo con root es la vía **más limpia y reversible** (3 bytes) y **no triangular el Knox**.
 **Implicación**: `CscFeature_VoiceCall_ConfigRecording` decide si el firmware graba llamadas
-nativamente ⇒ con CSC `AMO` está apagada; con CSC de Asia (`THL`/`INS`) el sistema graba solo.
+nativamente ⇒ **CORREGIDO (medido en vivo el 2026-11-21 con `csc_verify`)**: el CSC `AMO` **SÍ trae la feature**, con el valor `RecordingAllowedByMenu,disclaimer_latin` ⇒ **la grabación nativa está DISPONIBLE y AVISA** ⇒ **no hace falta parchar el CSC** ⇒ (lo que decía antes —«AMO no la tiene»— estaba mal: salió de una lista de CSC incompleta, no del móvil).
 
 **Cómo se comprueba**:
 ```bash
@@ -438,7 +438,7 @@ en UTF-16LE y UTF-8. **3** APKs contienen la cadena; al comprobar si está en el
 ⇒ **Implicación (alta)**: los únicos que **declaran** el permiso son dos apps de **Microsoft**
 (continuidad PC-teléfono). **Samsung no trae ninguna app con `CAPTURE_AUDIO_OUTPUT`**, y el
 grabador tampoco está en los jars de `/system/framework` (comprobado por el agente RE).
-⇒ En este firmware (CSC **AMO**) **la grabación nativa de llamadas no está implementada por
+⇒ **CORREGIDO (medido en vivo el 2026-11-21 con `csc_verify`)**: en este firmware (CSC **AMO**) la grabación nativa **SÍ está implementada** y con **aviso**: el valor de `CscFeature_VoiceCall_ConfigRecording` es `RecordingAllowedByMenu,disclaimer_latin` ⇒ ⇒ **no hay que parchar nada** para tenerla ⇒ ⇒ y si se quisiera quitar el aviso, eso sería una decisión **del usuario** (grabar en silencio a un tercero es delito en España, art. 197 CP), no un detalle técnico.
 ninguna app**: o la activa el framework por CSC (y aquí no está), o hay que cambiar de CSC.
 **Cómo se comprueba**:
 ```bash
@@ -600,7 +600,7 @@ python3 tools/omc_codec.py encode <plano.xml> -o out.omc
 
 ### 10.2 Qué CSC traen grabación nativa de llamadas (medido en los 126 CSC del móvil)
 
-`CscFeature_VoiceCall_ConfigRecording` **sólo existe en 19 de 126** CSCs:
+`CscFeature_VoiceCall_ConfigRecording` **existe en 20 de 126** CSCs (medido en vivo con `csc_verify` el 2026-11-21):
 
 | Valor | CSCs |
 |---|---|
