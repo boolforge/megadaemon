@@ -120,14 +120,10 @@ publicar() {
         log "publicado (daemon): $url (pids: $pids)"
         return
     fi
-    if [ -x "$PUBLISH" ]; then
-        # --state-dir explícito: si no, el binario usaría su valor por defecto
-        # (otra ruta) => el estado se escribiría donde el daemon no lo lee.
-        "$PUBLISH" --state-dir "$STATE_DIR" --quick "$url" --pids "$pids" >>"$LOG" 2>&1
-        log "publicado: $url (pids: $pids)"
-        return
-    fi
-    log "sin binario de publicacion: no puedo publicar (channel.json + paste)"
+    # --state-dir explícito: si no, el binario usaría su valor por defecto
+    # (otra ruta) => el estado se escribiría donde el daemon no lo lee.
+    "$PUBLISH" --state-dir "$STATE_DIR" --quick "$url" --pids "$pids" >>"$LOG" 2>&1
+    log "publicado: $url (pids: $pids)"
 }
 
 log "watchdog arrancado (interval=${INTERVAL}s max_load=${MAX_LOAD})"

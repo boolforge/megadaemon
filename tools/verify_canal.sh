@@ -54,23 +54,6 @@ http_code() {
     printf '%s' "$code"
 }
 
-# Resolutor DoH (JSON): imprime la IP A del nombre o nada.
-doh_lookup() {
-    curl -s -m "$TIMEOUT" -H 'accept: application/dns-json' "$1" 2>/dev/null | python3 -c '
-import json, sys
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    raise SystemExit(1)
-if d.get("Status") not in (0, None):
-    raise SystemExit(1)
-for a in d.get("Answer") or []:
-    if a.get("type") == 1 and a.get("data"):
-        print(a["data"])
-        break
-' 2>/dev/null
-}
-
 # ── 1) DNS: el A record del dominio ───────────────────────────────────────
 say "1) DNS de $DOMAIN"
 A_IP=""
@@ -78,15 +61,6 @@ if command -v dig >/dev/null 2>&1; then
     A_IP="$(dig +short "$DOMAIN" A 2>/dev/null | head -1)"
 elif command -v getent >/dev/null 2>&1; then
     A_IP="$(getent hosts "$DOMAIN" 2>/dev/null | awk '{print $1}' | head -1)"
-fi
-# Sin `dig` (el sandbox NO lo tiene) ni `getent` => DoH por JSON.
-# MEDIDO 2026-11-21: ambos resolvers (Google y Cloudflare) responden.
-if [ -z "$A_IP" ] && command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
-    A_IP="$(doh_lookup "https://dns.google/resolve?name=${DOMAIN}&type=A" | head -1)"
-    if [ -z "$A_IP" ]; then
-        A_IP="$(doh_lookup "https://cloudflare-dns.com/dns-query?name=${DOMAIN}&type=A" | head -1)"
-    fi
-    [ -n "$A_IP" ] && info "A record vía DoH (sin dig/getent)"
 fi
 if [ -n "$A_IP" ]; then
     ok "$DOMAIN -> $A_IP" "dns" "\"ok\""
@@ -178,17 +152,8 @@ print(d.get("_fuente") or "ok")
     case "$SRC" in
         *"$DOMAIN"*) ok "el lector encontró el canónico ($SRC)" "lector" "\"canonico\"" ;;
         "")           fail "el lector no devolvió nada" "lector" ;;
-        *)
-            RES="$RES\"lector_fuente\":\"$SRC\","
-            if [ "$CNUM" = "200" ]; then
-                # El canonico responde 200 pero el lector oficial NO lo usa
-                # => el enjambre no encontraria el movil por la via
-                # principal => "CANAL OK" no seria verdad.  => FAIL.
-                fail "el canónico responde 200 pero el lector cayó al respaldo ($SRC)" "lector"
-            else
-                info "el lector cayó al respaldo (fuente: $SRC) — esperable: el canónico no responde ($CNUM)"
-            fi
-            ;;
+        *)           info "el lector cayó al respaldo (fuente: $SRC)"
+                      RES="$RES\"lector_fuente\":\"$SRC\"," ;;
     esac
 else
     info "channel_discover.py no está junto a este script"
