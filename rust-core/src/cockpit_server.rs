@@ -285,7 +285,7 @@ fn requires_auth(path: &str, method: &str, local_browser: bool) -> bool {
     // v14: el navegador LOCAL (ver `local_browser_request`) lee sin token de
     // sesión: el token se lo inyectamos en la página.  Las ESCRITURAS
     // (POST/PUT/DELETE) siguen exigiendo token ⇒ una web maliciosa que
-    //借 el puerto del móvil sigue sin poder ejecutar comandos.
+    // Con el puerto del móvil sigue sin poder ejecutar comandos.
     // v15 (A-18 · resto, P1): la exención de "local" se queda **SÓLO en la
     // PÁGINA** (ya exenta más arriba) y en las sondas de sólo lectura.
     //

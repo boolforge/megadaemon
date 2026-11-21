@@ -106,7 +106,7 @@ como meta-agente** que decide, llama tools, evalúa el resultado y se corrige
 | Bucle de decisión: *plan → tool → evalúa → corrige*, con presupuesto por hora | infraestructura | Un test con un proveedor simulado: 3 iteraciones, para al cambiar de plan |
 | **Memoria de fallos**: libro `failures.ndjson` (acción, error, lo que funcionó) | infraestructura | El mismo error no se repite en el siguiente ciclo |
 | Degradación honesta: si el modelo no responde ⇒ criterio fijo, **no inventar** | ya existe (`RuleBrain`) | Test: respuesta basura ⇒ `Action::Idle`, no una acción inventada |
-| **El prompt NUNCA lleva la API key ni el token** | ya 测试 ✓ | Test que lo comprueba (ya existe) |
+| **El prompt NUNCA lleva la API key ni el token** | ya verificado ✓ | Test que lo comprueba (ya existe) |
 | Coste real: tokens + latencia + precio con **fuente citada** | W6 | `NO VERIFICADO` si no hay fuente |
 | Circuit breaker de 3 estados para que el enjambre **nunca** se quede sin voz | W6 | Si cae el proveedor barato, cae al siguiente y SEERE local es el último |
 

@@ -89,7 +89,7 @@ MODELS_URL = LLAMA + "/v1/models"
 ALLOW_EXEC = os.environ.get("SEERE_ALLOW_EXEC", "0") not in ("0", "", "false", "no")
 ALLOW_EXTERNAL = os.environ.get("SEERE_ALLOW_EXTERNAL", "0") not in ("0", "", "false", "no")
 # El atajo ">380 chars -> swarm externo" de v10 se desactiva por defecto:
-#滤波 los datos del usuario fuera del dispositivo no debe ser implícito.
+# filtrar los datos del usuario fuera del dispositivo no debe ser implícito.
 DELEGATE_LONG_PROMPT = os.environ.get("SEERE_DELEGATE_LONG", "0") not in ("0", "", "false", "no")
 
 # --- endpoints externos (carrera en paralelo) ------------------------------ #
@@ -921,7 +921,7 @@ class Arsenal:
         try:
             if fn is None:
                 return f"ERR_UNKNOWN_TOOL:{tool}"
-            # Política: acciones 富costosas bloqueadas por defecto.
+            # Política: acciones costosas bloqueadas por defecto.
             if tool == "ROOT_EXEC" and not self.allow_exec:
                 return "ERR_POLICY:ROOT_EXEC disabled (set SEERE_ALLOW_EXEC=1)"
             if tool == "DELEGATE_LLM" and not self.allow_external:
@@ -1277,7 +1277,7 @@ class Arsenal:
 
 
 def shutil_which(cmd: str) -> bool:
-    """是否存在可执行文件（避免 PATH 探测带来的进程开销）。"""
+    """Si existe un ejecutable (evita el sondeo del PATH, que tiene coste de procesos)."""
     import shutil as _sh
     return _sh.which(cmd) is not None
 

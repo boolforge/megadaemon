@@ -337,7 +337,7 @@ def seere_conformance() -> Tuple[int, int, List[str]]:
         (True, V.GBNF_REACT, "A: ASK which file?"),
         (True, V.GBNF_REACT, "A: NONE nothing to do"),
         (True, V.GBNF_REACT, "R: uptime is 22 [SRC:1]"),
-        # ---必须在不可能的地方失败 ---
+        # --- debe fallar en los sitios imposibles ---
         (False, V.GBNF_REACT, "A: C /data/x 0"),          # el índice exige '#'
         (False, V.GBNF_REACT, "A: G pattern /data/x"),    # exige '#'
         (False, V.GBNF_REACT, "A: M hello!"),             # 'math' no admite letras sueltas

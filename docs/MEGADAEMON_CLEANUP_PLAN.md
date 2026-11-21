@@ -79,7 +79,7 @@ funciones con cuerpo DUPLICADO EXACTO: 12 (en 5 grupos)
    ¿siguen invocados por `mcp_ext.rs`? Si no, se archivan en `legacy/` con su test.
 6. **Tool registry declarativa**: hoy cada tool se cablea a mano en `mcp_ext.rs` (53 tools). Con un
    macro/tabla única, añadir una tool = una entrada, y "lo que hace más cosas" deja de ser un
-  接线 manual de 50 líneas por tool.
+  cableado manual de 50 líneas por tool.
 
 ## 3. "Mega repo / store manager universal" (la idea, con diseño)
 

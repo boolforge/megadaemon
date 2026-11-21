@@ -21,3 +21,13 @@ docs/NPU_REAL.md:opines
 # --- citas intencionadas de texto corrupto (el informe de auditoría) ---
 docs/COORDINATION.md:de una命令" → "
 docs/COORDINATION.md:*El CI检测ó al 
+rust-core/src/antispam.rs:alinear
+rust-core/src/apk_deobfuscator.rs:allocating
+rust-core/src/voice_runtime.rs:unydployer
+docs/CERTIFICADOS_Y_SEDES_ELECTRONICAS.md:odont
+docs/CLIPBOARD.md:contextual
+docs/CLIPBOARD.md:unsaved
+docs/CONCURRENCY_PLAN_V15.md:nobarrier
+docs/EXTERNAL_AGENT_PROMPT_FINAL.md:unpackers
+docs/F3_PRECIOS.md:enumerado
+docs/QA_SECURITY_HARNESS_SPEC.md:layouts

@@ -4426,7 +4426,7 @@ pub const LP_MODULE_MARKERS: &[(&str, &str, &str)] = &[
 ];
 
 /// Hallazgos de tipo `lp_module`: la APK analizada **es** Lucky Patcher
-/// (o embebe su módulo). Sirve para普查ar el móvil y saber qué otras apps
+/// (o embebe su módulo). Sirve para inventariar el móvil y saber qué otras apps
 /// arrastran el módulo.
 pub fn lp_module_findings(dex: &DexFile) -> Vec<Finding> {
     let ts = now_ts();

@@ -121,7 +121,7 @@ un backup del *estado del usuario* del móvil ni un restore probado.
 ni del protocolo de su MCP.
 **DoD**:
 1. Inventario del cliente Antigravity: binario, plugins, servidores MCP que configura, hooks, permisos, storages.
-2. **Qué protocolo habla**: si habla MCP,則 puede ser **cliente de MegaDaemon** al revés (MegaDaemon como
+2. **Qué protocolo habla**: si habla MCP, entonces puede ser **cliente de MegaDaemon** al revés (MegaDaemon como
    servidor MCP ya lo es: `/mcp` con 45 tools) ⇒ el objetivo real es que **Antigravity use el `/mcp` del móvil**.
 3. Extracción de sus credenciales de proveedor (solo estructura) y **re-uso de los proveedores ya existentes**
    de `providers.rs` (13 proveedores) para no duplicar.

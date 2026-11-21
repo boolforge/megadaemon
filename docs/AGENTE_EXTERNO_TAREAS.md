@@ -31,13 +31,13 @@
 > (Samsung) y son justos los que el enjambre no puede resolver desde dentro.
 
 **ENCARGO 1 — Validar el fix del 502 del maestro (tú estás fuera: vantage point ideal)**
-El maestro，返回 502 de forma intermitente. Causa raíz ya diagnosticada:
+El maestro devuelve 502 de forma intermitente. Causa raíz ya diagnosticada:
 `ensure_live_shm()` entra en pánico mientras se mantiene el `Mutex<GlobalCockpitState>`
 global del cockpit → ese panic **envenena el mutex para siempre** → los `lock().unwrap()`
 muerden otra vez → sin `catch_unwind` la conexión se corta a medias → Cloudflare ve
 respuesta incompleta → 502. El watchdog sólo miraba `pgrep` (proceso vivo) → nunca reiniciaba.
 Entregable: **20 peticiones seguidas** al endpoint del maestro con las cabeceras de
-conexión, mediendo código y latencia, y un veredicto: ¿502稳定, intermitente o cero?
+conexión, mediendo código y latencia, y un veredicto: ¿502 estable, intermitente o cero?
 Si aparece un 502, captura el cuerpo exacto y el `logcat` del móvil (`logcat -d -t 200 | grep -i adbd`)
 en el mismo instante. Sin ese par de datos no se arregla nada.
 

@@ -9,7 +9,7 @@
 //!    `C_Initialize`, `C_OpenSession`, `C_Login`, `C_FindObjects`,
 //!    `C_Sign` (CKM_RSA_PKCS y CKM_ECDSA) y `C_CloseSession`.  La capa de
 //!    hardware se abstrae tras el trait [`Pkcs11Token`]; para tests (y para
-//!   获悉 keystores software) existe una implementación software que usa las
+//!   (keystores software descubiertos) existe una implementación software que usa las
 //!    primitivas nativas de este mismo fichero.
 //!
 //! 2. **CMS / CAdES** — construcción y verificación de `SignedData`

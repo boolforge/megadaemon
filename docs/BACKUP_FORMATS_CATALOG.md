@@ -57,7 +57,7 @@
 |---|---|
 | Licencia | **AGPL-3.0** (Neo Backup; fork de OAndBackup) · `oandbackup` (F-Droid) **GPL** |
 | Formato | Un `.tar` por app + `ab`-style: `<pkg>.tar` con las partes `app`, `dat`, `ext`, `media` |
-| **Riesgo legal** | **Medio-alto**: AGPL ⇒義務 de ofrecer el código completo de cualquier servicio que lo use por red. ⇒ **sólo ideas y formatos**, jamás linkear ni embeber |
+| **Riesgo legal** | **Medio-alto**: AGPL ⇒ obligación de ofrecer el código completo de cualquier servicio que lo use por red. ⇒ **sólo ideas y formatos**, jamás linkear ni embeber |
 
 **Qué reimplementar**: el **modelo de partes por app** (`app/dat/ext/media`) y el **formato tar por paquete**, que es el más interoperable de todos.
 

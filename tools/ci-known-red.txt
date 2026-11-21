@@ -10,3 +10,7 @@
 # Auditoría adversarial v15: 3 auditorías vivas sobre la exención local y el
 # token root, y una sobre la colisión del conversor de señal.
 audit_adversarial_v15
+# Auditorias adversariales AUDIT_SCOUT_UI: fallan mientras el defecto exista.
+audit_scout_ui
+# Auditorias adversariales AUDIT_SCOUT_VOICE: fallan mientras el defecto exista.
+audit_scout_voice

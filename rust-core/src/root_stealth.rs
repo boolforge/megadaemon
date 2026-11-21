@@ -32,7 +32,7 @@ pub const TARGETS: &[&str] = &[
     "com.aeat.sede",          // AEAT (sede electrónica)
     "es.aeat.mobile",
     "com.abc.bbva.contigo",
-    "com.termux",             // algunos 构建
+    "com.termux",             // algunos construidos
     "com.notifica.app",
 ];
 

@@ -149,7 +149,7 @@ fuente de verdad y funciona sin root (el nodo es 0644) y sin desensamblar.
 | Hallazgo | Evidencia | Confianza |
 |---|---|---|
 | `/dev/vertex10` existe, es **char device**, modo **0644**, **uid 1000 / gid 1000** | `stat` en vivo ⇒ `crw-r--r-- 1 system system 10, 119` | **high** |
-| **Cualquier app puede leer y escribir en el nodo NPU** (0644, no 0600) |同上 + ausencia de ACL | **high** — **finding de seguridad de primer nivel**: el NPU (y sus colas de comandos) es accesible a apps sin privilegios |
+| **Cualquier app puede leer y escribir en el nodo NPU** (0644, no 0600) | igual que el caso anterior + ausencia de ACL | **high** — **finding de seguridad de primer nivel**: el NPU (y sus colas de comandos) es accesible a apps sin privilegios |
 | `/dev/vertex10_test` **no existe** | barrido de `/dev` | **high** |
 | `/sys/class/misc/vertex10` **no existe** ⇒ el driver **no se registra en misc** | barrido | **high** (implica que no hay entrada en `/sys/class/misc` que leer para el NPU) |
 
@@ -504,7 +504,7 @@ es texto ⇒ el envoltorio OMC es **un formato binario propio con cabecera**, no
 ⇒ el algoritmo hay que sacarlo del repo de referencia (`soulr344/OMCDecoder`) o de un APK de
 OMC en `/optics`.
 
-### P5 · Swift Backup — **sin respuesta aún** (no he恍dedicado su formato)
+### P5 · Swift Backup — **sin respuesta aún** (no he dedicado tiempo a su formato)
 
 Pendiente: derivación de clave AEGIS-256, formato `.splits`/`.dat`/`.med`, esquema JSON de
 `Config`/`Blacklist`, proveedores cloud y el caso Chrome. Los DEX están **en el móvil**

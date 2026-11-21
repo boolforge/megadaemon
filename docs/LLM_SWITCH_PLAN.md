@@ -92,7 +92,7 @@ guardadas (`reanalyze.py`), y las comparaciones de *modelo* se leen con ese marg
 1. **El prompt en español gana en los cuatro modelos.** Es la palanca más fuerte y es gratuita.
    Con Qwen2.5-0.5B la diferencia es **8/12 vs 0/12** (el prompt EN provoca *prompt echo*:
    el modelo copia las reglas en vez de ejecutarlas). Con SmolLM2 y Llama 1B la diferencia se reduce
-   (8-11/12 vs 12/12) ⇒ **el colapso por idioma es unaницы de Qwen2.5-0.5B, no una ley**.
+   (8-11/12 vs 12/12) ⇒ **el colapso por idioma es una caracteristica de Qwen2.5-0.5B, no una ley**.
    Por eso v11 trae `--lang auto`: con un modelo distinto, el idioma optimum puede cambiar, y hay que
    **volver a medir**.
 2. **Enrutar no es resolver.** SmolLM2 enruta 12/12 en ES/ES pero sólo acierta 7/12 comandos:

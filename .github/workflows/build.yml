@@ -216,7 +216,7 @@ jobs:
     # v16 · `always()` + `needs.build-android.result == 'success'`: el móvil
     # es la instancia MAESTRA y su binario es el que se despliega; una pata
     # Linux rota (aarch64 en un runner x86, p.ej. por el RANLIB) NO puede
-    # tumbar la release del ARM64.  Medido: el job ARM64编译aba bien y la
+    # tumbar la release del ARM64.  Medido: el job ARM64 compilaba bien y la
     # release se saltaba porque `needs` exigia las dos patas.
     if: always() && github.event_name == 'push' && needs.build-android.result == 'success'
     permissions:

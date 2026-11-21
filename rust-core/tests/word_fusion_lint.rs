@@ -492,7 +492,7 @@ fn no_word_fusions_in_comments_and_docs() {
     if !nuevos.is_empty() {
         let mut msg = String::from(
             "\n fusiones de palabras detectadas (P2-13).\n Si el hallazgo es un falso positivo, añade \
-             la clave `ruta:linea:token` a rust-core/tests/data/fusion_baseline.txt\n",
+             la clave `ruta:token` a rust-core/tests/data/fusion_baseline.txt\n",
         );
         for f in nuevos.iter().take(40) {
             msg.push_str(&format!("  - {}\n", f));

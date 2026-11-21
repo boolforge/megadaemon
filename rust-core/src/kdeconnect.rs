@@ -1984,10 +1984,32 @@ fn check_pin(
 /// Lee un paquete (con framing) del flujo TLS.
 fn read_packet(secure: &mut Secure, decoder: &mut FrameDecoder) -> Result<Vec<u8>, String> {
     let mut buf = [0u8; 16 * 1024];
+    let limite = std::time::Instant::now() + Duration::from_secs(15);
     loop {
-        let n = secure
-            .read(&mut buf)
-            .map_err(|e| format!("error de lectura: {e}"))?;
+        let n = match secure.read(&mut buf) {
+            Ok(n) => n,
+            // MEDIDO el 2026-11-21 (test `dos_nodos_hacen_ping_por_el_canal_
+            // cifrado`): con un timeout de lectura configurado, Rust devuelve
+            // `WouldBlock` (os error 11) cuando todavia no han llegado bytes.
+            // Antes eso se traducía a un error y el test fallaba segun el
+            // ritmo (mas rapido en release que en debug).
+            //
+            // Ahora se ESPERA: un timeout a mitad de trama no mata la
+            // sesion, se reintenta hasta el plazo.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                if std::time::Instant::now() >= limite {
+                    return Err("timeout esperando datos del peer".into());
+                }
+                std::thread::sleep(Duration::from_millis(5));
+                continue;
+            }
+            Err(e) => return Err(format!("error de lectura: {e}")),
+        };
         if n == 0 {
             return Err("el peer cerró la conexión".into());
         }

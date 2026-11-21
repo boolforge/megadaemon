@@ -31,7 +31,7 @@
 Hechos verificados:
 - La lista oficial de kernels de NetHunter cubre **126 modelos**; el S21 Exynos **no está**. Los
   Samsung Exynos que sí están son de gama anterior (p. ej. Note20 Ultra Exynos, kernel 4.19).
-- El rootfs oficial son 3urin형 versiones. **Tamaños medidos (HEAD, 2026-11-20)**:
+- El rootfs oficial son 3 variantes de kernel (NetHunter). **Tamaños medidos (HEAD, 2026-11-20)**:
   | variante | tarball | uso en disco | veredicto |
   |---|---|---|---|
   | `nano` | 169,95 MB | ~450 MB | cabe |
@@ -108,7 +108,7 @@ imagen flasheable.
 | Rootfs de pentesting | ❌ | ✅ | **adoptar** |
 | NFC (Host Card Emulation, secure element) | ❌ | ❌ | el NFC del 2100 es el **PN553** y **no tiene HCE útil**; el TEE lo expone como `secure_element_hal_service` |
 
-**关于 NFC**: medido en el móvil ⇒ `init.svc.vendor.secure_element_hal_service` corre (pid 4409) y el
+**Sobre NFC**: medido en el móvil ⇒ `init.svc.vendor.secure_element_hal_service` corre (pid 4409) y el
 `secure_element_hal_service` de AOSP existe; el chip es PN553 (`/vendor/bin/hw/secure_element`). Lo
 que **no** hay es HCE de usuario: el NFC va por el secure element del TEE y las apps lo usan vía
 `NfcAdapter` + `TagManager`, no con `HostApduService`. Para pruebas de NFC con tarjeta real hace
