@@ -152,6 +152,13 @@ deploy_files() {
         [ -f "$REPO_ROOT/web/cockpit_template.html" ] && cp -f "$REPO_ROOT/web/cockpit_template.html" "$TEMPLATE"
         mkdir -p "$APP_TEMPLATE_DIR" 2>/dev/null
         [ -f "$REPO_ROOT/web/cockpit_template.html" ] && cp -f "$REPO_ROOT/web/cockpit_template.html" "$APP_TEMPLATE_DIR/cockpit_template.html" 2>/dev/null
+        # La UI v2 (/v2 y /webui_v2.css) se sirve de disco si existe (y si no,
+        # el daemon sirve la copia embebida) => se puede actualizar en el
+        # movil SIN recompilar el binario (como la v1).
+        # OJO: van al MISMO directorio que la v1 ($APP_TEMPLATE_DIR = el
+        # <base_dir>/web que busca el daemon), NO a $WEB_DIR.
+        [ -f "$REPO_ROOT/web/cockpit_v2.html" ] && cp -f "$REPO_ROOT/web/cockpit_v2.html" "$APP_TEMPLATE_DIR/cockpit_v2.html" 2>/dev/null
+        [ -f "$REPO_ROOT/web/webui_v2.css" ]  && cp -f "$REPO_ROOT/web/webui_v2.css"  "$APP_TEMPLATE_DIR/webui_v2.css" 2>/dev/null
         [ -f "$REPO_ROOT/deploy/99-megadaemon.sh" ] && { cp -f "$REPO_ROOT/deploy/99-megadaemon.sh" "$SERVICE"; chmod 755 "$SERVICE"; }
     else
         have adb || die "adb no está instalado en este PC"
@@ -164,6 +171,18 @@ deploy_files() {
             adb_ shell "mkdir -p $APP_TEMPLATE_DIR" >/dev/null 2>&1 || true
             adb_ push "$REPO_ROOT/web/cockpit_template.html" "$APP_TEMPLATE_DIR/cockpit_template.html" >/dev/null 2>&1 || true
         fi
+        # UI v2 desde disco (sin recompilar): si no estan, el daemon usa la
+        # copia embebida => no se rompe nada.
+        if [ -f "$REPO_ROOT/web/cockpit_v2.html" ]; then
+            adb_ shell "mkdir -p $APP_TEMPLATE_DIR" >/dev/null 2>&1 || true
+            adb_ push "$REPO_ROOT/web/cockpit_v2.html" "$APP_TEMPLATE_DIR/cockpit_v2.html" >/dev/null 2>&1 || true
+        fi
+        if [ -f "$REPO_ROOT/web/webui_v2.css" ]; then
+            adb_ shell "mkdir -p $APP_TEMPLATE_DIR" >/dev/null 2>&1 || true
+            adb_ push "$REPO_ROOT/web/webui_v2.css" "$APP_TEMPLATE_DIR/webui_v2.css" >/dev/null 2>&1 || true
+        fi
+        # UI v2 desde disco (sin recompilar): si no estan, el daemon usa la
+        # copia embebida => no se rompe nada.
         if [ -f "$REPO_ROOT/deploy/99-megadaemon.sh" ]; then
             adb_ push "$REPO_ROOT/deploy/99-megadaemon.sh" "$SERVICE" >/dev/null || true
             adb_ shell "chmod 755 $SERVICE" || true
