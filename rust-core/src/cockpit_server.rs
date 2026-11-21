@@ -9,7 +9,7 @@ use crate::{
     bindiff, binwalk_die, cfg_lifter, cirx_rtl, crypto_scan, deobfuscate, disasm, entropy,
     freezer, frida_dbi, hw_mapper, kaitai_imhex, npu_bridge, npu_cv, pattern, pointers, providers,
     rea_assistant, rom_locator, seere_v11, shm, snapshot, tile_vram, unifier, power_policy,
-    accelerator_policy, npu_nnapi, mcp_server, sync, sync_web,
+    accelerator_policy, npu_nnapi, mcp_server, peers, sync, sync_web,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1235,6 +1235,14 @@ fn handle_client(mut stream: TcpStream) {
                         "engine": "100%-pure-rust-arm64"
                     }),
                 );
+            }
+            "/peers" | "/api/peers" => {
+                // Descubrimiento de las instancias interconectadas: la
+                // instancia local primero, despues las declaradas en
+                // MEGADAEMON_PEERS o en <STATE_DIR>/peers.json. Cada par
+                // lleva el contrato {id, url, api_key_alias,
+                // capabilities, last_seen}; las claves NUNCA salen de aqui.
+                send_json(&mut stream, &peers::peers_snapshot());
             }
             "/api/providers" => send_json(&mut stream, &providers::list_providers_redacted()),
             // v15 (W6): catálogo unificado de MODELOS y AGENTES/SERVICIOS.
