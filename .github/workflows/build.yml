@@ -240,27 +240,55 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Publicar el estado del release (para que la instancia lo detecte)
+      - name: "Verificar assets (el ARM64 es OBLIGATORIO: es la instancia maestra)"
+        # Sin esta puerta, un build de Linux roto publicaba una release SIN el
+        # binario de Android (medido: releases con `adbonly-arm64` y nada más)
+        # y el manifiesto `latest.json` prometía assets inexistentes => la
+        # instancia se quedaba sin poder actualizar.  Aquí: si falta el ARM64
+        # => NO hay release y NO hay manifiesto.
+        run: |
+          set -u
+          falta=0
+          for a in megadaemon-core-android-arm64 \
+                   megadaemon-core-android-arm64.sha256 \
+                   "megadaemon-core-android-arm64-${GITHUB_SHA::7}" \
+                   "megadaemon-core-android-arm64-${GITHUB_SHA::7}.sha256"; do
+            if [ ! -f "dist/$a" ]; then echo "::error::FALTA el asset obligatorio dist/$a"; falta=1; fi
+          done
+          if [ "$falta" = 1 ]; then
+            echo "::error::sin release: la instancia maestra se quedaria sin binario"
+            exit 1
+          fi
+          file dist/megadaemon-core-android-arm64 | grep -q "ELF 64-bit LSB.*ARM aarch64" || {
+            echo "::error::dist/megadaemon-core-android-arm64 no es un ELF aarch64"; exit 1; }
+          ( cd dist && sha256sum -c megadaemon-core-android-arm64.sha256 ) || exit 1
+          echo "assets ARM64 verificados ✓"
+      - name: Publicar el estado del release (manifiesto con SÓLO los assets que existen)
+        # El manifiesto se genera DINÁMICO: si una pata de Linux falló, su
+        # asset NO aparece en `latest.json` (antes siempre aparecía => la
+        # instancia pedía un fichero inexistente).
         run: |
           mkdir -p dist/state
-          cat > dist/state/latest.json <<EOF
-          {
-            "version": "${{ github.sha }}",
-            "short": "${GITHUB_SHA::7}",
-            "ref": "${{ github.ref_name }}",
-            "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "assets": {
-              "android-arm64": "megadaemon-core-android-arm64",
-              "linux-x86_64": "megadaemon-core-linux-x86_64",
-              "linux-arm64": "megadaemon-core-linux-arm64"
-            },
-            "assets_versioned": {
-              "android-arm64": "megadaemon-core-android-arm64-${GITHUB_SHA::7}",
-              "linux-x86_64": "megadaemon-core-linux-x86_64-${GITHUB_SHA::7}",
-              "linux-arm64": "megadaemon-core-linux-arm64-${GITHUB_SHA::7}"
-            }
-          }
-          EOF
+          python3 - <<'PY'
+          import json, os, datetime
+          sha = os.environ["GITHUB_SHA"]; short = sha[:7]
+          def has(n): return os.path.isfile(os.path.join("dist", n))
+          assets, versioned = {}, {}
+          for key, base in (("android-arm64", "megadaemon-core-android-arm64"),
+                            ("linux-x86_64", "megadaemon-core-linux-x86_64"),
+                            ("linux-arm64", "megadaemon-core-linux-arm64")):
+              if has(base):
+                  assets[key] = base
+                  v = f"{base}-{short}"
+                  if has(v): versioned[key] = v
+          man = {"version": sha, "short": short,
+                 "ref": os.environ.get("GITHUB_REF_NAME", ""),
+                 "released_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                 "assets": assets, "assets_versioned": versioned}
+          with open("dist/state/latest.json", "w") as fh:
+              json.dump(man, fh, indent=2)
+          print(json.dumps(man, indent=2))
+          PY
       - name: Publicar artefactos como release (tag v<commit>)
         uses: softprops/action-gh-release@v2
         with:
