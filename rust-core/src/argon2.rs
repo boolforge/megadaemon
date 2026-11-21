@@ -239,6 +239,45 @@ pub fn h0(
     out
 }
 
+/// **API canónica del repo** (dueño único del KDF Argon2id).
+///
+/// Deriva una clave con Argon2id a partir de una frase de paso. El `secret`
+/// es la propia frase de paso en UTF-8 y los datos asociados van vacíos, que
+/// es la convención que usa Swift Backup.
+///
+/// `iterations` son los pases (`t_cost`), `memory_kib` la memoria en KiB
+/// (`m_cost`, múltiplo de 8·`parallelism`), `parallelism` los carriles y
+/// `out_len` el tamaño de la clave derivada (16..=128 bytes en Swift).
+pub fn derive_key(
+    passphrase: &str,
+    salt: &[u8],
+    iterations: u32,
+    memory_kib: u32,
+    parallelism: u32,
+    out_len: usize,
+) -> Result<Vec<u8>, String> {
+    if out_len == 0 || out_len > 1024 {
+        return Err(format!("longitud de clave fuera de rango: {out_len}"));
+    }
+    if iterations == 0 {
+        return Err("iterations debe ser >= 1".to_string());
+    }
+    let params = Argon2Params {
+        t_cost: iterations,
+        m_cost: memory_kib,
+        parallelism,
+        output_len: out_len,
+    };
+    argon2_hash(
+        Argon2Type::Id,
+        passphrase.as_bytes(),
+        salt,
+        b"",
+        b"",
+        &params,
+    )
+}
+
 /// Calcula el hash Argon2 (d/i/id).
 ///
 /// `m_cost` es la memoria en KiB (mínimo 8·p), `t_cost` los pases y

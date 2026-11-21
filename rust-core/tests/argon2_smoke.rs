@@ -112,3 +112,118 @@ fn los_parametros_invalidos_se_rechazan() {
     let corta = vec![0x02u8; 4];
     assert!(argon2_hash(Argon2Type::Id, pwd, &corta, b"", b"", &params()).is_err());
 }
+
+/// Vectores congelados generados con la implementación C de referencia
+/// (`phc-winner-argon2`, tag 20190702) para parámetros **fuera** de los de la
+/// RFC 9106: son los que usa Swift Backup (salt 16 B, iter 1..100,
+/// memKiB 16384..65536, par 1..8, salida 16..128 B).
+///
+/// Sin esta tabla, un fallo en `index_alpha` o en el área de referencia sólo se
+/// vería con los tres vectores de la RFC, que comparten `m_cost = 32`.
+#[test]
+fn argon2id_coincide_con_el_oraculo_c_en_el_rango_de_swift() {
+    // iter 3, 16 MiB, 4 carriles, salida 32
+    let k = derive_key(
+        "aaaaaaaaaaaaaaaa",
+        &h("02020202020202020202020202020202"),
+        3,
+        16384,
+        4,
+        32,
+    )
+    .unwrap();
+    assert_eq!(
+        hex(&k),
+        "c7f25bb92e59b63b36f9c1577069ad17d1ac8a232133008212ffaf56ddba03be"
+    );
+
+    // mínimo de Swift: iter 1, 1 carril, salida 16
+    let k = derive_key("abcd", &h("02020202020202020202020202020202"), 1, 16384, 1, 16).unwrap();
+    assert_eq!(hex(&k), "1f045638d19142ba796b5066c968d919");
+
+    // iter 100, 8 carriles, salt de 16 B no uniforme
+    let k = derive_key(
+        "passward!",
+        &h("0a0b0c0d0e0f1011121314151617"),
+        100,
+        32768,
+        8,
+        32,
+    )
+    .unwrap();
+    assert_eq!(
+        hex(&k),
+        "0a63b6d2c7e48cc6689dc2e544bb142f17cba1b0efc97c946c999e475acb664b"
+    );
+
+    // salida de 128 bytes (máximo de Swift)
+    let k = derive_key(
+        "clave-de prueba",
+        &h("11111111111111111111111111111111"),
+        2,
+        65536,
+        2,
+        128,
+    )
+    .unwrap();
+    assert_eq!(
+        hex(&k),
+        "0dd848e5906933fba2c61881d3274163861cf174710eee5c49158e405d1ba1d486352e256af02c13f1476e56001aef00f11973763ee654396b01416d37123791949f2b9e08b0ab2f0119dfdd77054d68ce02cb95e6807a958ad2cd22a2a6797ae9c52a01e4293e654d3705d97ab79fa34803729330ee7e57f94d1b0161b810d9"
+    );
+
+    // clave larga (>64 bytes de frase de paso)
+    let k = derive_key(
+        "metadata-metadata-metadata-metadata",
+        &h("aabbccddeeff00112233445566778899"),
+        4,
+        16384,
+        4,
+        32,
+    )
+    .unwrap();
+    assert_eq!(
+        hex(&k),
+        "1164de0f89573ed05d90c4bd09a9d4e5b01d555c71ce385d98e6afc55ed33b11"
+    );
+}
+
+#[test]
+fn derive_key_es_determinista_y_sensible_a_cada_entrada() {
+    let salt = h("02020202020202020202020202020202");
+    let a = derive_key("clave", &salt, 3, 16384, 2, 32).unwrap();
+    let b = derive_key("clave", &salt, 3, 16384, 2, 32).unwrap();
+    assert_eq!(a, b, "la derivación debe ser determinista");
+    assert_eq!(a.len(), 32);
+
+    let otra_clave = derive_key("clave!", &salt, 3, 16384, 2, 32).unwrap();
+    assert_ne!(a, otra_clave, "la frase de paso debe cambiar la clave");
+    let otra_sal = derive_key("clave", &h("03030303030303030303030303030303"), 3, 16384, 2, 32).unwrap();
+    assert_ne!(a, otra_sal, "la sal debe cambiar la clave");
+    let otras_iter = derive_key("clave", &salt, 4, 16384, 2, 32).unwrap();
+    assert_ne!(a, otras_iter, "las iteraciones deben cambiar la clave");
+    let otra_mem = derive_key("clave", &salt, 3, 32768, 2, 32).unwrap();
+    assert_ne!(a, otra_mem, "la memoria debe cambiar la clave");
+    let otro_par = derive_key("clave", &salt, 3, 16384, 4, 32).unwrap();
+    assert_ne!(a, otro_par, "el paralelismo debe cambiar la clave");
+}
+
+#[test]
+fn derive_key_rechaza_parametros_invalidos() {
+    let salt = h("02020202020202020202020202020202");
+    assert!(derive_key("clave", &salt, 0, 16384, 1, 32).is_err(), "iter 0");
+    assert!(derive_key("clave", &salt, 3, 16384, 1, 0).is_err(), "salida vacía");
+    assert!(derive_key("clave", &salt, 3, 16384, 1, 2048).is_err(), "salida enorme");
+    assert!(derive_key("clave", &salt, 3, 4, 1, 32).is_err(), "memoria < 8*p");
+    assert!(derive_key("clave", &[0x02u8; 4], 3, 16384, 1, 32).is_err(), "sal corta");
+}
+
+#[test]
+fn el_rango_de_memoria_de_swift_se_respeta() {
+    // Swift usa memKiB 16384..65536: ambos extremos deben derivar sin error.
+    let salt = h("02020202020202020202020202020202");
+    let bajo = derive_key("clave", &salt, 1, 16384, 1, 32).unwrap();
+    let alto = derive_key("clave", &salt, 1, 65536, 1, 32).unwrap();
+    assert_eq!(bajo.len(), 32);
+    assert_eq!(alto.len(), 32);
+    assert_ne!(bajo, alto);
+}
