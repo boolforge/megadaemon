@@ -96,6 +96,71 @@ fn main() {
             mcp_server::run_stdio_mcp_server();
         }
 
+        // v17 — auto-actualizacion SIN curl ni wget (el movil no los tiene).
+        //
+        // `megadaemon-core update`         -> comprueba e instala
+        // `megadaemon-core update --check` -> solo comprueba (1 peticion)
+        //
+        // Codigo de salida 10 = "se instalo una version nueva" => el
+        // supervisor reinicia el daemon con el binario nuevo.
+        "update" => {
+            let solo_comprobar = args.iter().any(|a| a == "--check");
+            let ruta = std::env::var("MEGADAEMON_BIN")
+                .ok()
+                .unwrap_or_else(|| "/data/local/tmp/megadaemon/megadaemon-core".to_string());
+            let rc = megadaemon_core::self_update::cli(std::path::Path::new(&ruta), solo_comprobar);
+            std::process::exit(rc);
+        }
+
+        // v17 — `probe` y `channel` en el binario PRINCIPAL.
+        //
+        // MEDIDO el 2026-11-21: el móvil NO tiene curl, NO tiene wget
+        // (`toybox wget` -> "Unknown command", rc=127) y `channel-publish`
+        // no se podía instalar (su descarga también usaba wget).  Resultado:
+        // el sondeo de salud del script de recuperación daba SIEMPRE 0 y el
+        // canal nunca se publicaba => el móvil parecía muerto estando vivo.
+        //
+        // Ahora el propio binario del daemon hace de sonda y de publicador:
+        // cero dependencias externas en el móvil.
+        "probe" => {
+            // `megadaemon-core probe <url>`  -> imprime el codigo HTTP.
+            let url = args.get(2).map(|s| s.as_str()).unwrap_or("");
+            if url.is_empty() {
+                eprintln!("uso: megadaemon-core probe <url>");
+                std::process::exit(2);
+            }
+            let (code, es_daemon, detalle) = megadaemon_core::channel::probe_url_detalle(url);
+            // En stdout, SOLO el numero: es lo que leen los scripts.
+            println!("{code}");
+            if !detalle.is_null() {
+                eprintln!("{}", serde_json::to_string(&detalle).unwrap_or_default());
+            }
+            std::process::exit(if es_daemon { 0 } else { 1 });
+        }
+
+        "channel" => {
+            // `megadaemon-core channel publish`  -> publica el estado del canal.
+            // `megadaemon-core channel probe <url>` -> alias de `probe`.
+            let sub = args.get(2).map(|s| s.as_str()).unwrap_or("publish");
+            match sub {
+                "probe" => {
+                    let url = args.get(3).map(|s| s.as_str()).unwrap_or("");
+                    let (code, es_daemon, _) = megadaemon_core::channel::probe_url_detalle(url);
+                    println!("{code}");
+                    std::process::exit(if es_daemon { 0 } else { 1 });
+                }
+                "publish" => {
+                    let sd = std::env::var("MEGADAEMON_STATE_DIR").ok();
+                    let out = megadaemon_core::channel::publish(sd.as_deref(), None, None, None, None);
+                    println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+                }
+                _ => {
+                    eprintln!("uso: megadaemon-core channel [publish|probe <url>]");
+                    std::process::exit(2);
+                }
+            }
+        }
+
         // v15 (W0): la voz a mano (status | plan | act | whoami | catalog).
         // Útil para depurar el bucle autónomo sin esperar al siguiente tick.
         "voice" => {
