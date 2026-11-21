@@ -38,14 +38,50 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust-core/target
-          key: cargo-${{ runner.os }}-${{ hashFiles('rust-core/Cargo.lock') }}
+          # Clave PROPIA del job de calidad: la de los jobs build-* guarda el
+          # release con LTO y no sirve para los tests (y al revés: guardar
+          # aqui los 40 binarios de test llenaba el disco del runner).
+          key: cargo-test-${{ runner.os }}-${{ hashFiles('rust-core/Cargo.lock') }}
+          restore-keys: |
+            cargo-test-${{ runner.os }}-
+            cargo-${{ runner.os }}-
       - name: Formato
         working-directory: rust-core
         run: cargo fmt --check || echo "::warning::cargo fmt --check falló (no bloquea)"
       - name: Clippy (advertencias como aviso, no bloquea)
         working-directory: rust-core
+        env:
+          # MEDIDO el 2026-11-21: el perfil release del repo lleva
+          # `lto = true` + `codegen-units = 1`.  En el runner eso dispara el
+          # OOM killer sobre rustc (`signal: 9, SIGKILL: kill`) y el job
+          # muere con "rojo sin binario identificable".  Los artefactos con
+          # LTO COMPLETO los construyen los jobs build-* (eso sí es lo que
+          # se despliega); aqui (clippy y tests) no hace falta LTO.
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
+          CARGO_INCREMENTAL: "0"
         run: cargo clippy --release --all-targets -- -D warnings || echo "::warning::clippy reportó avisos"
-      - name: Tests
+      - name: "Tests: la suite completa (los rojos CONOCIDOS no bloquean; los demás, sí)"
+        # AUDIT-CI-02 (medido el 2026-11-21): antes esto era
+        # `cargo test --all-targets || echo warning`, es decir, `continue-on-error`
+        # => el job salía VERDE con cualquier test roto.  Llevaba tiempo así:
+        # tres tests de `agent_loop` estaban rojos (contradecían a la
+        # implementación) y nadie se enteró.
+        #
+        # Ahora `tools/ci-suite.sh` ejecuta la suite completa y falla si hay
+        # un binario rojo que NO esté en `tools/ci-known-red.txt`.  Sólo
+        # `audit_adversarial_v15` está en esa lista: son auditorías que
+        # fallan a propósito mientras el defecto que vigilan exista.
+        env:
+          # Ver la nota del paso de Clippy: sin LTO el OOM killer deja de
+          # matar a rustc.  Los tests se ejecutan igual de bien.
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
+          CARGO_INCREMENTAL: "0"
+        run: tools/ci-suite.sh rust-core
+      - name: "Gate (BLOQUEA): autenticacion y politica del harness"
         working-directory: rust-core
         run: cargo test --release --all-targets
 

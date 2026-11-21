@@ -10,6 +10,12 @@
 
 #[path = "../src/call_recorder.rs"]
 mod call_recorder;
+// `util_fs` es el helper canonico de `walk_files` (MEDIDO el 2026-11-21: al
+// fusionar `fix/robustness-20261120` los tres consumidores pasaron a usarlo y
+// los arneses autocontenidos dejaron de compilar: E0432).  Solo usa `std`.
+#[path = "../src/util_fs.rs"]
+#[allow(dead_code, unused_imports, unused_mut)]
+mod util_fs;
 
 use call_recorder::*;
 use std::path::PathBuf;
