@@ -37,6 +37,54 @@ entre arquitecturas.
   aparece en el propio `.so`) ⇒ ⇒ **no se escribe a ciegas**: la etiqueta
   `SBA1-AEGIS256-entry-chunk-nonce-v1` es una *etiqueta*, no el algoritmo.
 
+## Segunda pasada (2026-11-21): el helper de enteros y el BIG-ENDIAN
+
+* El helper `0x6aa00` **no es un append de ancho fijo**: tiene **varias rutas** de
+  escritura ⇒ el **ancho se recibe como argumento** (`x2`/`w2`).
+* **BIG-ENDIAN confirmado en dos anchos**: en la ruta de 2 bytes se storea
+  `valor>>8` y luego `valor` (`0x6aa2c`/`0x6aac8`); en la de 4 bytes se storean
+  los desplazamientos **24, 16, 8, 0** (`0x6ab98`, `0x6ac34`, …) ⇒ ⇒ **el byte
+  más alto va primero en todos los anchos** ⇒ coherente con `DataOutputStream`
+  de Java/Kotlin ⇒ ⇒ ⇒ **no es Little-Endian**: un lector que lo asumiera leería
+  los campos al revés.
+* El argumento de ancho que se usa en la tanda de campos **no es una constante**
+  sino un valor calculado (`x25 = x22 - x23`, `0x656cc`) ⇒ ⇒ **de aquí no sale
+  el ancho exacto de cada campo**.
+
+### Offsets del struct nativo leídos por el escritor
+
+`x20` es el struct que Kotlin rellena y pasa a la nativa. El escritor lee:
+
+| Offset | Lectura | Tipo probable |
+|--------|---------|----------------|
+| `+0x00` | `ldr w1,[x20]` | entero (flags) |
+| `+0x04`, `+0x08`, `+0x0c` | `ldr w1,[x20,#..]` | enteros |
+| `+0x10`, `+0x14` | `ldr w1,[x20,#..]` | enteros |
+| `+0x18`, `+0x1c`, `+0x20` | `ldr w1,[x20,#..]` | enteros |
+| `+0x40`/`+0x48` | puntero y longitud | **byte array 1** |
+| `+0x58`/`+0x60` | puntero y longitud | **byte array 2** |
+| `+0x70`/`+0x78` | puntero y longitud | **byte array 3** |
+
+⇒ tres arrays de bytes (los candidatos son `salt`, `kdf` y `keyCheck` del modelo
+Kotlin de 12 campos: `headerSize, flags, createdAtEpochMs, compression,
+compressionMethodId, compressionLevel, encryption, encryptionMethodId,
+kdfMethodId, kdfIterations, payloadChunkSize, kdf` — modelo medido por el agente
+DEX en `docs/SWIFT_BACKUP_FORMAT.md`).
+
+### Por qué el ancho exacto sigue ABIERTO (y no lo voy a inventar)
+
+El escritor **calcula** el ancho en runtime ⇒ ⇒ el mapeo definitivo campo↔nombre
+y ancho↔bytes **no se puede extraer sólo del `.so`**. Sale de una de estas dos
+fuentes, y ambas son externas a mi carril:
+
+1. **El marshalling en Kotlin/DEX**: el orden real de los argumentos con los que
+   Kotlin llama a `SbaArchiveNative.createArchive` ⇒ es el modelo del agente DEX.
+2. **El export real del usuario**: contrastar los primeros bytes con la tabla.
+
+⇒ ⇒ **hasta entonces el lector debe vivir con el layout en tabla versionada y
+responder `status:"layout_no_verificado"`**, y **nunca** congelar estos offsets
+en tests.
+
 ## Regla de honestidad (no se congela en tests)
 
 Todo lo de arriba sale del **escritor** ⇒ es el *stream que se escribe* ⇒ ⇒ **un lector debe
