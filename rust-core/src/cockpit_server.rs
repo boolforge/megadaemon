@@ -2319,6 +2319,100 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
+/// Publica el estado del canal cada X segundos, SOLO si hace falta.
+///
+/// Publica cuando:
+///   * la URL del quick tunel ha cambiado (tunel nuevo), o
+///   * no hay paste, o el paste tiene mas de 5 h (caduca a las 6 h).
+///
+/// En reposo no hace NADA: ni red, ni CPU, ni procesos nuevos.
+fn spawn_channel_publisher(state_dir: String) {
+    let intervalo = std::env::var("MEGADAEMON_CHANNEL_INTERVAL_S")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(300)
+        .max(60);
+    std::thread::spawn(move || {
+        // Espera a que el tunel haya escrito su URL (no hay nada que
+        // publicar antes de eso) y da margen al arranque.
+        std::thread::sleep(Duration::from_secs(15));
+        loop {
+            let quick = crate::channel::read_url_file(Some(&state_dir), crate::channel::TUNNEL_URL);
+            let duckdns = crate::channel::read_url_file(Some(&state_dir), crate::channel::CHANNEL_URL);
+            let estado = crate::channel::read_channel_json(Some(&state_dir)).unwrap_or(Value::Null);
+            let quick_previa = estado
+                .get("quick")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let paste_previo = estado
+                .get("paste")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let ts_previo = estado
+                .get("ts")
+                .and_then(|v| v.as_str())
+                .and_then(|s| crate::mesh::iso_to_epoch(s))
+                .unwrap_or(0);
+            let ahora = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let caduca = ahora.saturating_sub(ts_previo.max(0) as u64) > 5 * 3600;
+            let cambio = quick.is_some() && quick.as_deref() != Some(quick_previa.as_str());
+            if !cambio && !(paste_previo.is_empty() || caduca) {
+                std::thread::sleep(Duration::from_secs(intervalo));
+                continue;
+            }
+            let _ = crate::channel::publish(
+                Some(&state_dir),
+                quick.as_deref(),
+                duckdns.as_deref(),
+                None,
+                None,
+            );
+            std::thread::sleep(Duration::from_secs(intervalo));
+        }
+    });
+}
+
+/// Relanza el supervisor si muere, mientras el daemon siga vivo.
+///
+/// Coste en reposo: un `pgrep` por minuto (un solo proceso, ~1 ms).
+fn spawn_supervisor_keeper(_state_dir: String) {
+    let intervalo = std::env::var("MEGADAEMON_KEEPER_INTERVAL_S")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(60)
+        .max(20);
+    let supervisor = std::env::var("MEGADAEMON_SUPERVISOR")
+        .unwrap_or_else(|_| "/data/adb/service.d/99-megadaemon.sh".to_string());
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(30));
+        loop {
+            // ¿Existe el supervisor?  `pgrep -f` sobre el nombre del script.
+            let vivo = std::process::Command::new("pgrep")
+                .args(["-f", "99-megadaemon.sh"])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if !vivo {
+                // Se relanza bajo `su -mm` (contexto Magisk): así NO cuelga
+                // de la app que lo lanzó y sobrevive a que se cierre.
+                let _ = std::process::Command::new("su")
+                    .args([
+                        "-mm",
+                        "-c",
+                        &format!("setsid nohup sh '{supervisor}' >/dev/null 2>&1 </dev/null &"),
+                    ])
+                    .spawn();
+            }
+            std::thread::sleep(Duration::from_secs(intervalo));
+        }
+    });
+}
+
 pub fn run_server(port: u16) -> Result<(), String> {
     let _ = seere_v11::export_shared_ssot_files();
     let _ = npu_bridge::pin_performance_cluster();
@@ -2408,6 +2502,30 @@ pub fn run_server(port: u16) -> Result<(), String> {
             .unwrap_or(port);
         crate::lan::spawn_beacon(inst, canonico, Some(sd));
     }
+
+    // v17 — Watchdog BIDIRECCIONAL: el daemon vigila al supervisor.
+    //
+    // MEDIDO el 2026-11-21: el supervisor se lanzaba desde Termux (hijo de
+    // la app).  Al cerrar Termux, Android mato el grupo de procesos: el
+    // supervisor murio, luego el daemon, luego el tunel => el movil quedo
+    // inalcanzable (0 puertos abiertos) sin que nadie se enterase.
+    //
+    // Con esto, si el daemon vive pero el supervisor no, el daemon lo
+    // relanza.  Y si el supervisor vive pero el daemon no, el supervisor lo
+    // relanza (ya lo hacia).  Los dos se curan solos.
+    spawn_supervisor_keeper(state_dir());
+
+    // v17 — Publicacion AUTOMATICA del canal, DENTRO del daemon.
+    //
+    // MEDIDO el 2026-11-21: el canal lo publicaba el binario externo
+    // `channel-publish`, que en el movil no se podia instalar (el movil no
+    // tiene curl ni wget) => la URL del quick tunnel nunca se publicaba y
+    // el movil era inalcanzable desde fuera sin intervencion manual.
+    //
+    // Ahora el propio daemon publica.  Es IDEMPOTENTE y BARATO: solo
+    // publica cuando la URL del tunel ha CAMBIADO o el paste vigente ha
+    // caducado (6 h).  En reposo: 0 peticiones de red.
+    spawn_channel_publisher(state_dir());
 
     // Publica el estado real del listener para /health.
     let open: Vec<u16> = listeners.iter().map(|(p, _)| *p).collect();

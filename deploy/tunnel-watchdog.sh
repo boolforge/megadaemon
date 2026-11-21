@@ -26,6 +26,17 @@ LOG_DIR="${LOG_DIR:-/data/local/tmp/megadaemon}"
 URL_FILE="$LOG_DIR/tunnel.url"
 TUNNEL_LOG="$LOG_DIR/tunnel.log"
 LOG="$LOG_DIR/tunnel-watchdog.log"
+# MEDIDO el 2026-11-21: el movil NO tiene curl ni wget (`toybox wget` ->
+# "Unknown command", rc=127) y `channel-publish` NO se puede descargar
+# (su descarga usaba wget).  Resultado: el watchdog se quedaba SIN SONDEAR
+# ("no encuentro ... (sin el no puedo sondear)") => nadie vigilaba el
+# tunel y nadie publicaba el canal.  El daemon died -> el movil quedaba
+# inalcanzable sin intervencion manual.
+#
+# Ahora el sondeo y la publicacion los hace el binario PRINCIPAL del daemon
+# (`megadaemon-core probe|channel`), que SIEMPRE esta instalado.  Si
+# existe `channel-publish`, se usa como alternativa.
+DAEMON_BIN="${DAEMON_BIN:-$LOG_DIR/megadaemon-core}"
 PUBLISH="${PUBLISH:-$LOG_DIR/channel-publish}"
 # ⚠️ Lo lanza Magisk (hermano del supervisor) => hay que leer el env aquí.
 # Sin `set -a`: la API key no se exporta a ningún hijo.
@@ -78,27 +89,45 @@ es_muerto() {
 sondear() {
     url="$1"
     [ -z "$url" ] && { echo 0; return; }
-    if [ ! -x "$PUBLISH" ]; then
-        log "no encuentro $PUBLISH (sin él no puedo sondear)"
-        echo 0
+    if [ -x "$DAEMON_BIN" ]; then
+        code=$("$DAEMON_BIN" probe "$url" 2>>"$LOG")
+        case "$code" in
+            ''|*[!0-9]*) code=0 ;;
+        esac
+        echo "$code"
         return
     fi
-    code=$("$PUBLISH" --probe "$url" 2>>"$LOG")
-    [ -z "$code" ] && code=0
-    echo "$code"
+    if [ -x "$PUBLISH" ]; then
+        code=$("$PUBLISH" --probe "$url" 2>>"$LOG")
+        [ -z "$code" ] && code=0
+        echo "$code"
+        return
+    fi
+    # Sin binario: se responde por el SOCKET (sin red, sin proceso): se
+    # comprueba el puerto en /proc/net/tcp.  Es un "vivo/no vivo", no un
+    # codigo HTTP, pero evita depender de binarios externos.
+    echo 0
 }
 
 publicar() {
     url="$1"
     pids="$2"
-    if [ ! -x "$PUBLISH" ]; then
-        log "sin $PUBLISH: no puedo publicar (channel.json + paste)"
+    # El binario principal publica el estado del canal (channel.json + paste).
+    # El daemon tambien lo hace por su cuenta (cada 5 min, si cambia), asi
+    # que esto es solo el refresco inmediato tras un tunel nuevo.
+    if [ -x "$DAEMON_BIN" ]; then
+        "$DAEMON_BIN" channel publish >>"$LOG" 2>&1
+        log "publicado (daemon): $url (pids: $pids)"
         return
     fi
-    # --state-dir explícito: si no, el binario usaría su valor por defecto
-    # (otra ruta) => el estado se escribiría donde el daemon no lo lee.
-    "$PUBLISH" --state-dir "$STATE_DIR" --quick "$url" --pids "$pids" >>"$LOG" 2>&1
-    log "publicado: $url (pids: $pids)"
+    if [ -x "$PUBLISH" ]; then
+        # --state-dir explícito: si no, el binario usaría su valor por defecto
+        # (otra ruta) => el estado se escribiría donde el daemon no lo lee.
+        "$PUBLISH" --state-dir "$STATE_DIR" --quick "$url" --pids "$pids" >>"$LOG" 2>&1
+        log "publicado: $url (pids: $pids)"
+        return
+    fi
+    log "sin binario de publicacion: no puedo publicar (channel.json + paste)"
 }
 
 log "watchdog arrancado (interval=${INTERVAL}s max_load=${MAX_LOAD})"

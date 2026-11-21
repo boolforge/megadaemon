@@ -120,6 +120,42 @@ rotate() {
     log "log rotado (tamaño máximo $MAX_BYTES bytes)"
 }
 
+# --- PODA DE CACHES (v17) --------------------------------------------------
+# MEDIDO el 2026-11-21 en el movil: /data/local/tmp/megadaemon ocupaba 257 MB,
+# de los que 90 MB eran caches REGENERABLES:
+#   * dex/       (29 MB) -> DEX decompilados: se regeneran al vuelo;
+#   * sync_snap/ (60 MB) -> snapshots de conversaciones sincronizadas: se
+#     regeneran, y los antiguos no aportan nada.
+#
+# Se podan por ANTIGUEDAD (no se toca lo reciente) y una sola vez al dia:
+# en reposo no cuesta NADA.
+PRUNE_DIAS_DEX=${MEGADAEMON_PRUNE_DIAS_DEX:-7}
+PRUNE_DIAS_SNAP=${MEGADAEMON_PRUNE_DIAS_SNAP:-14}
+last_prune=0
+prune_caches() {
+    now=$(date +%s)
+    [ $((now - last_prune)) -lt 86400 ] && return 0
+    last_prune=$now
+    _liberado=0
+    for d in "$PREFIX/dex" "$PREFIX/sync_snap"; do
+        [ -d "$d" ] || continue
+        case "$d" in
+            *dex) dias=$PRUNE_DIAS_DEX ;;
+            *)     dias=$PRUNE_DIAS_SNAP ;;
+        esac
+        _antes=$(du -sk "$d" 2>/dev/null | cut -f1)
+        # ficheros con mas de $dias de antiguedad
+        find "$d" -type f -mtime "+$dias" -delete 2>/dev/null
+        _despues=$(du -sk "$d" 2>/dev/null | cut -f1)
+        if [ -n "$_antes" ] && [ -n "$_despues" ] && [ "$_antes" -gt "$_despues" ]; then
+            log "poda: $d ${_antes}KB -> ${_despues}KB (ficheros de mas de ${dias} dias)"
+        fi
+    done
+    # Directorios vacios que quedan tras la poda
+    find "$PREFIX/dex" "$PREFIX/sync_snap" -type d -empty -delete 2>/dev/null
+    return 0
+}
+
 # --- interfaz web: la plantilla tiene que existir ANTES de arrancar -------
 # El cockpit busca la plantilla en $MEGADAEMON_WEB_TEMPLATE, <bin>/web/,
 # ./web/ y en el path privado de la app.  En el móvil el binario vive en
@@ -711,6 +747,11 @@ start_daemon() {
         if [ "$fast_fails" -ge "$MAX_FAST_FAILS" ] && [ -f "$PREV_BIN" ]; then
             log "AUTO-ROLLBACK: restaurando el binario anterior ($PREV_BIN)"
             cp -a "$BIN" "$BIN.bad-$(date +%s)" 2>/dev/null || true
+            # MEDIDO el 2026-11-21: estos `.bad-*` se acumulaban SIN
+            # limite (12 ficheros, 104 MB en el movil).  El rollback solo
+            # necesita el ULTIMO: se podan todos menos el mas reciente.
+            _nbad=$(ls -1t "$BIN".bad-* 2>/dev/null | tail -n +3)
+            [ -n "$_nbad" ] && echo "$_nbad" | xargs rm -f 2>/dev/null
             cp -a "$PREV_BIN" "$BIN.restore" 2>/dev/null || true
             if [ -f "$BIN.restore" ]; then
                 mv "$BIN.restore" "$BIN"
@@ -907,21 +948,45 @@ last_update=0
 # crítico: si falla, el daemon sigue sirviendo la versión anterior.
 UPDATE_EVERY=${MEGADAEMON_UPDATE_EVERY:-21600}
 
+# AUTO-ACTUALIZACION (v17).
+#
+# MEDIDO el 2026-11-21: esta funcion pedia `$PREFIX/auto-update.sh`, que NO
+# EXISTE en el repo => el auto-update no habia hecho NUNDA nada.  Y aunque
+# existiera, no podria descargar nada: el movil no tiene curl ni wget.
+#
+# Ahora el propio binario del daemon se actualiza (`megadaemon-core update`):
+#   * `--check` -> 1 peticion pequena; codigo 10 = "hay version nueva";
+#   * sin `--check` -> descarga, VERIFICA el SHA-256 e instala de forma
+#     atomica (el anterior queda en .prev).
+#
+# Coste en reposo: UNA peticion HTTP cada UPDATE_EVERY segundos.
 try_update() {
     now=$(date +%s)
     [ $((now - last_update)) -lt "$UPDATE_EVERY" ] && return 0
     last_update=$now
-    upd="$PREFIX/auto-update.sh"
-    if [ ! -f "$upd" ]; then
-        # Se intenta traer el script desde el propio repo (el móvil tiene git).
-        if [ -d "$PREFIX/repo/.git" ]; then
-            (cd "$PREFIX/repo" && git pull --ff-only origin main >>"$LOG" 2>&1)
-            cp -f "$PREFIX/repo/deploy/auto-update.sh" "$upd" 2>/dev/null && chmod 755 "$upd"
-        fi
-    fi
-    [ -f "$upd" ] || { log "auto-update: script no disponible"; return 0; }
-    log "auto-update: comprobando releases..."
-    "$upd" >>"$LOG" 2>&1 || log "auto-update: fallo (se mantiene la version actual)"
+    [ -x "$BIN" ] || return 0
+    out=$("$BIN" update --check 2>&1 | head -2)
+    case "$out" in
+        *actualizable*)
+            log "auto-update: version nueva disponible -> instalando"
+            "$BIN" update >>"$LOG" 2>&1
+            rc=$?
+            if [ "$rc" = "10" ]; then
+                log "auto-update: version nueva INSTALADA -> reiniciando el daemon"
+                # El binario nuevo se carga al reiniciar el proceso.
+                pkill -f "megadaemon-core cockpit" 2>/dev/null
+                sleep 3
+            else
+                log "auto-update: fallo (se mantiene la version actual)"
+            fi
+            ;;
+        *actual*)
+            : # ya al dia: no se hace nada (0 peticiones de peso)
+            ;;
+        *)
+            log "auto-update: no se pudo comprobar ($out)"
+            ;;
+    esac
 }
 
 i=0
@@ -935,6 +1000,7 @@ ensure_tunnel 8765 "$MCP_TUNNEL_LOG" "$MCP_TUNNEL_URL_FILE" "mcp-legacy" 0 \
     /data/data/com.termux/files/home/android-mcp/cloudflared.log
 while true; do
     rotate
+    prune_caches
     if ! pgrep -f "megadaemon-core cockpit" > /dev/null 2>&1; then
         log "megadaemon no está corriendo: relanzando (intento $i)"
         start_daemon

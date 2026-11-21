@@ -45,18 +45,30 @@ PUB="$PREFIX/channel-publish"
 # El móvil NO tiene curl (medido).  El sondeo fiable es el propio binario
 # (`channel-publish --probe` imprime el código HTTP en stdout); como
 # respaldo, `toybox wget` (que sí trae Android) y `curl` si estuviera.
+# MEDIDO el 2026-11-21 en el S21 (Android 14):
+#   * `toybox wget` -> "Unknown command" (rc=127).  El movil NO tiene wget.
+#   * `curl` tampoco esta (salvo en Termux, y no como root).
+#   * `channel-publish` NO se puede descargar (su descarga usaba wget).
+# Resultado: el sondeo daba SIEMPRE 0 y el script daba por muerto un daemon
+# que estaba vivo -> "el daemon sigue sin responder" con el daemon sano.
+#
+# Ahora el sondeo lo hace el binario PRINCIPAL del daemon (siempre
+# instalado): `megadaemon-core probe <url>` imprime el codigo HTTP.
 http_code() {
     _u="$1"
+    if [ -x "$BIN" ]; then
+        _c=$("$BIN" probe "$_u" 2>/dev/null | head -1)
+        case "$_c" in
+            ''|*[!0-9]*) : ;;
+            *) echo "$_c"; return ;;
+        esac
+    fi
     if [ -x "$PUB" ]; then
         _c=$("$PUB" --probe "$_u" 2>/dev/null | head -1)
         case "$_c" in
             ''|*[!0-9]*) : ;;
             *) echo "$_c"; return ;;
         esac
-    fi
-    if command -v toybox >/dev/null 2>&1; then
-        if toybox wget -q -O /dev/null "$_u" 2>/dev/null; then echo 200; return; fi
-        echo 0; return
     fi
     if command -v curl >/dev/null 2>&1; then
         _c=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$_u" 2>/dev/null)
@@ -354,11 +366,25 @@ else
     else
         log "daemon muerto o mudo -> relanzando el supervisor"
         [ -f "$SERVICE_D/99-megadaemon.sh" ] && {
-            setsid nohup sh "$SERVICE_D/99-megadaemon.sh" >/sdcard/megadaemon.log 2>&1 &
-            sleep 18
+            # MEDIDO el 2026-11-21: el daemon tarda hasta ~90 s en responder
+            # cuando el movil va saturado (load 18-21) o hace el arranque
+            # completo.  Los 18 s fijos de antes daran un falso "sigue sin
+            # responder" con el daemon sano.
+            #
+            # Se lanza bajo `su -mm` (Magisk) y NO como hijo de esta shell:
+            # si el supervisor cuelga de Termux, al cerrar Termux se lo lleva
+            # el sistema y el movil se queda sin daemon.
+            su -mm -c "setsid nohup sh '$SERVICE_D/99-megadaemon.sh' >/sdcard/megadaemon.log 2>&1 </dev/null &" 2>/dev/null \
+                || setsid nohup sh "$SERVICE_D/99-megadaemon.sh" >/sdcard/megadaemon.log 2>&1 </dev/null &
+            _i=0
+            while [ "$_i" -lt 30 ]; do
+                sleep 5
+                _i=$((_i + 1))
+                daemon_ok && break
+            done
         }
         daemon_ok && log "daemon arriba (pid $(pidof megadaemon-core 2>/dev/null))" \
-                    || log "AVISO: el daemon sigue sin responder (mira /sdcard/megadaemon.log)"
+                    || log "AVISO: el daemon sigue sin responder tras 150 s (mira /sdcard/megadaemon.log)"
     fi
 fi
 
