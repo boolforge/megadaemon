@@ -153,21 +153,11 @@ deploy_files() {
         [ -f "$REPO_ROOT/web/cockpit_template.html" ] && cp -f "$REPO_ROOT/web/cockpit_template.html" "$APP_TEMPLATE_DIR/cockpit_template.html" 2>/dev/null
         [ -f "$REPO_ROOT/deploy/99-megadaemon.sh" ] && { cp -f "$REPO_ROOT/deploy/99-megadaemon.sh" "$SERVICE"; chmod 755 "$SERVICE"; }
     else
-        have adb || { fail "adb no está instalado en este PC"; return 1; }
-        adb_ wait-for-device || { fail "no hay ningún móvil conectado por adb"; return 1; }
-        adb_ shell "mkdir -p $PREFIX $WEB_DIR $STATE" || true
-        [ -f "$BIN" ] && adb_ shell "cp -f $BIN $BIN.bak" 2>/dev/null
-        adb_ push "$SRC_BIN" "$BIN" >/dev/null || { fail "adb push del binario falló"; return 1; }
-        adb_ shell "chmod 755 $BIN" || true
-        # --- VERIFICACIÓN del SHA-256 en el móvil ---
-        REMOTE_SHA=$(remote_sha256 "$BIN")
-        say "sha-256 en el móvil: $REMOTE_SHA"
-        if [ "$REMOTE_SHA" != "$SRC_SHA" ]; then
-            fail "SHA-256 MISMATCH: el binario copiado está corrupto; se restaura el anterior"
-            as_root "[ -f $BIN.bak ] && cp -f $BIN.bak $BIN" 2>/dev/null
-            return 1
-        fi
-        say "sha-256 verificado OK"
+        have adb || die "adb no está instalado en este PC"
+        adb wait-for-device || die "no hay ningún móvil conectado por adb"
+        adb shell "mkdir -p $PREFIX $WEB_DIR $STATE" || true
+        adb push "$SRC_BIN" "$BIN" >/dev/null || die "adb push del binario falló"
+        adb shell "chmod 755 $BIN" || true
         if [ -f "$REPO_ROOT/web/cockpit_template.html" ]; then
             adb_ push "$REPO_ROOT/web/cockpit_template.html" "$TEMPLATE" >/dev/null || true
             adb_ shell "mkdir -p $APP_TEMPLATE_DIR" >/dev/null 2>&1 || true

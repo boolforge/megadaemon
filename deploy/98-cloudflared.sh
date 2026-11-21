@@ -24,27 +24,7 @@
 # ---------------------------------------------------------------------------
 PREFIX="${MEGADAEMON_PREFIX:-/data/local/tmp/megadaemon}"
 LOG_DIR="$PREFIX"
-# El tunel NO puede depender de Termux (es una app: si el usuario la cierra
-# o la reinstala, el tunel se cae y el movil se queda sin canal publico).
-# Ver MEDIDO el 2026-11-21.  Orden: prefijo propio -> copia migrada desde
-# Termux -> Termux como ultimo recurso.
-CF="${CF:-}"
-if [ -z "$CF" ]; then
-    for cand in /data/local/tmp/megadaemon/cloudflared \
-                /data/data/com.termux/files/usr/bin/cloudflared \
-                /data/data/com.agy/files/usr/bin/cloudflared; do
-        [ -x "$cand" ] && { CF="$cand"; break; }
-    done
-fi
-# Si solo esta en Termux, se copia al prefijo (root puede leerlo).
-if [ -n "$CF" ] && [ "$CF" != "/data/local/tmp/megadaemon/cloudflared" ] \
-   && [ -x "$CF" ] && [ ! -x /data/local/tmp/megadaemon/cloudflared ]; then
-    cp -f "$CF" /data/local/tmp/megadaemon/cloudflared.new 2>/dev/null \
-        && chmod 755 /data/local/tmp/megadaemon/cloudflared.new 2>/dev/null \
-        && mv -f /data/local/tmp/megadaemon/cloudflared.new /data/local/tmp/megadaemon/cloudflared 2>/dev/null \
-        && CF=/data/local/tmp/megadaemon/cloudflared
-fi
-[ -n "$CF" ] || CF=/data/data/com.termux/files/usr/bin/cloudflared
+CF="${CF:-/data/data/com.termux/files/usr/bin/cloudflared}"
 TARGET="${CFT_TARGET:-http://127.0.0.1:9090}"
 URL_FILE="$LOG_DIR/tunnel.url"
 # ⚠️ El daemon lee su estado de AQUÍ (cockpit_server::state_dir()) ⇒ la URL
