@@ -141,7 +141,7 @@ abierto nadie externo puede leerla).
 
 Además, en esta ronda:
 * `state_dir()` es configurable con `MEGADAEMON_STATE_DIR` (el cockpit escribía
-  **siempre** en `/data/user/0/com.agy/files/megadaemon/state`, impracticable
+  **siempre** en `<STATE_DIR>`, impracticable
   fuera de Android y en CI);
 * el token se materializa **al arrancar** (antes era perezoso: el fichero
   `cockpit_token` no existía hasta la primera petición);

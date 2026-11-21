@@ -21,8 +21,8 @@
 | Supervisor | `/data/adb/service.d/99-megadaemon.sh` (chmod 755) |
 | Puente | `/data/local/tmp/megadaemon/web_bridge.py` (python3 de Termux) |
 | Tablero | `/data/local/tmp/megadaemon/state/board.sqlite` (0600) |
-| UI | `http://localhost:3000` (móvil) · `http://192.168.1.124:3000` (LAN) |
-| Túnel | `https://webpage-ultram-please-communicate.trycloudflare.com` |
+| UI | `http://localhost:3000` (móvil) · `http://<IP_DEL_MOVIL>:3000` (LAN) |
+| Túnel | `https://TUNEL.trycloudflare.com` |
 
 ---
 
@@ -149,7 +149,7 @@ que el proceso no existe (me costó dos rondas de diagnóstico).
 
 ```sh
 # en el móvil (python3 de Termux; NO hay curl ni toybox wget)
-for u in http://127.0.0.1:3000/ http://[::1]:3000/ http://192.168.1.124:3000/ \
+for u in http://127.0.0.1:3000/ http://[::1]:3000/ http://<IP_DEL_MOVIL>:3000/ \
          http://127.0.0.1:3030/ http://127.0.0.1:8090/ http://127.0.0.1:8080/ \
          http://127.0.0.1:80/ http://localhost/ http://127.0.0.1:9090/ ; do
   python3 -c "import urllib.request,sys; r=urllib.request.urlopen(sys.argv[1],timeout=8); print(sys.argv[1],r.status,len(r.read()))" "$u"
@@ -218,3 +218,5 @@ el puente.
 
 *Runbook del agente de coordinación y dispositivo. Medido, no supuesto: cada
 punto tiene su comando de comprobación.*
+
+> **Nota de privacidad (B-03/B-04, 2026-07-20)**: este repositorio es **público** ⇒ la IP del móvil, la URL del túnel y la ruta del cofre de la key **no se publican aquí** (sustituidos por `<IP_DEL_MOVIL>`, `TUNEL.trycloudflare.com` y `<STATE_DIR>`). Los valores reales están **fuera del repo**: `/workspace/md-secrets/instance.env` (0600) y, en el móvil, `<STATE_DIR>/megadaemon_api.key` y `<STATE_DIR>/tunnel.url` ⇒ **nunca pegues la key ni la URL viva en un commit**.

@@ -10,6 +10,8 @@
 //! sin `confirm: true`**.
 
 use serde_json::{json, Value};
+use crate::csc_verify;
+use crate::npu_vs4l;
 
 /// Definiciones de las herramientas nuevas.
 pub fn tool_definitions() -> Value {
@@ -289,6 +291,19 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "delegate",
+            "description": "Delegación parasitaria a cuentas gratuitas cloud: breaker de 3 estados POR CUENTA, presupuesto por hora (global y por modelo), coste MEDIDO (tokens y latencia reales de providers::execute_chat) con la fuente del precio (NO VERIFICADO si no hay fuente) y anuncio al bus SIN credenciales (sólo modo de auth y ruta del fichero). Con el circuito abierto, la voz local (SEERE) sigue disponible: el enjambre nunca se queda mudo.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["accounts", "status", "announce", "execute"], "default": "status" },
+                    "prompt": { "type": "string", "description": "encargo a delegar (para execute)" },
+                    "account": { "type": "string", "description": "cuenta concreta (para execute); vacío = la que elija el enrutado" },
+                    "kind": { "type": "string", "default": "research", "description": "tipo de tarea (plantilla de prompt)" }
+                }
+            }
+        },
+        {
             "name": "api_keys",
             "description": "Gestiona el registro de API keys por agente: acuña una clave nueva y revocable sin tocar la clave principal, revoca una existente o lista el registro. La revocacion es destructiva y exige confirm=true.",
             "inputSchema": {
@@ -301,8 +316,26 @@ pub fn tool_definitions() -> Value {
                     "confirm": { "type": "boolean", "default": false }
                 }
             }
-        }
-    ])
+        },
+        {
+            "name": "npu_vs4l_probe",
+            "description": "Sondea el driver VS4L/NPU del Exynos 2100 (/dev/vertex10) con el metodo correcto: ioctl SIN argumento => el driver devuelve el TAMANO de datos que espera. Distingue EINVAL (reconocido, argumento invalido) de ENOTTY (no existe). No escribe nada y no necesita root (nodo 0644).",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "csc_verify",
+            "description": "Verificador post-parche del CSC: lee el CSC activo (mps_code.dat), descifra el cscfeature.xml OMC del movil, comprueba el valor de CscFeature_VoiceCall_ConfigRecording, lo contrasta con el fileSize de contents.db, busca copias en claro del framework y devuelve el mapa vivo de los CSC con la feature. Con expect_value exige un valor EXACTO (p.ej. 'RecordingAllowed' o 'RecordingAllowedByMenu,disclaimer_latin'): si el valor presente difiere devuelve verdict MISMATCH, y siempre indica la variante (sin-disclaimer / con-disclaimer / apagado).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "expect_value": {
+                        "type": "string",
+                        "description": "Valor exacto que se espera para CscFeature_VoiceCall_ConfigRecording (opcional)."
+                    }
+                }
+            }
+        },
+])
 }
 
 /// Despacha las herramientas nuevas. `None` = no es de este grupo.
@@ -319,6 +352,23 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
     };
 
     let r = match name {
+        "npu_vs4l_probe" => {
+            let rep = crate::npu_vs4l::probe();
+            let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
+            json!({ "content": [{ "type": "text", "text": txt }] })
+        }
+        "csc_verify" => {
+            // `expect_value` exige un valor EXACTO de la feature: el verificador
+            // NO presupone cual de las dos variantes del CSC es la legal.
+            let exp = s("expect_value");
+            let rep = crate::csc_verify::verify_expecting(if exp.is_empty() {
+                None
+            } else {
+                Some(exp.as_str())
+            });
+            let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
+            json!({ "content": [{ "type": "text", "text": txt }] })
+        }
         "capabilities" => match s("action").as_str() {
             "manifest" => crate::capability::manifest(),
             "summary" => crate::capability::summary_by_kind(),
@@ -712,6 +762,107 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     }
                 }
                 _ => bus.catalog_json(),
+            }
+        }
+        // v15 (W6): delegación parasitaria (breaker por cuenta, presupuesto
+        // por hora y por modelo, coste medido, anuncio al bus sin credenciales).
+        "delegate" => {
+            let redacted = crate::providers::list_providers_redacted();
+            let accounts = crate::delegate::accounts_from_redacted(
+                &redacted,
+                crate::providers::PROVIDERS_PATH,
+            );
+            let mut engine = crate::delegate::DelegateEngine::new(accounts);
+            match s("action").as_str() {
+                "accounts" => json!({ "ok": true, "accounts": engine.account_statuses() }),
+                "status" => {
+                    let now = crate::service_bus::now_epoch();
+                    json!({
+                        "ok": true,
+                        "budget": engine.budget_status(now),
+                        "breakers": engine.breaker_states().into_iter().map(|(id, state, fails)| json!({"id": id, "state": state, "failures": fails})).collect::<Vec<_>>(),
+                        "measured_calls": engine.measured_calls().len(),
+                    })
+                }
+                "announce" => {
+                    let dir = crate::mesh::default_state_dir();
+                    let snapshot = match crate::mesh::Mesh::open(&dir) {
+                        Ok(m) => m.snapshot(),
+                        Err(e) => json!({ "peers": [], "error": e.to_string() }),
+                    };
+                    let mut bus = crate::service_bus::bus_from_runtime(
+                        &redacted,
+                        crate::providers::PROVIDERS_PATH,
+                        &snapshot,
+                        300,
+                        "http://127.0.0.1:9090/mcp",
+                    );
+                    let n = bus.announce_delegate(&engine);
+                    json!({ "ok": true, "announced": n, "catalog": bus.catalog_json() })
+                }
+                "execute" => {
+                    let prompt = s("prompt");
+                    if prompt.trim().is_empty() {
+                        json!({ "ok": false, "error": "falta el prompt" })
+                    } else {
+                        let mut runner = |model: &str, p: &str, max: u32| {
+                            let r = crate::providers::execute_chat(p, Some(model), None, None, max);
+                            crate::delegate::ProviderReply {
+                                reply: r.reply,
+                                model_id: r.model_id,
+                                tokens_used: r.tokens_used,
+                                latency_ms: r.latency_ms,
+                                fallback_used: r.fallback_used,
+                            }
+                        };
+                        let mut task = crate::delegate::DelegationTask {
+                            id: String::new(),
+                            prompt: prompt.clone(),
+                            kind: s("kind"),
+                            required_capabilities: Vec::new(),
+                            max_tokens: 1024,
+                            deadline: None,
+                            status: "queued".to_string(),
+                            attempts: Vec::new(),
+                            assigned_account: None,
+                        };
+                        if task.kind.trim().is_empty() {
+                            task.kind = "research".to_string();
+                        }
+                        let task_id = engine.submit(task);
+                        let cuenta = if !s("account").is_empty() {
+                            s("account")
+                        } else {
+                            engine
+                                .task(&task_id)
+                                .and_then(|t| t.assigned_account.clone())
+                                .unwrap_or_default()
+                        };
+                        if cuenta.is_empty() {
+                            json!({ "ok": false, "error": "no hay cuenta que pueda atender la tarea" })
+                        } else {
+                            match engine.execute_measured_with(&task_id, &cuenta, &prompt, &mut runner) {
+                                Ok(m) => json!({
+                                    "ok": true,
+                                    "account": m.account_id,
+                                    "model": m.model,
+                                    "served_by": m.served_by,
+                                    "llamada_ok": m.ok,
+                                    "tokens": m.tokens_total,
+                                    "tokens_in": m.tokens_in,
+                                    "tokens_out": m.tokens_out,
+                                    "latency_ms": m.latency_ms,
+                                    "coste_usd": m.cost.usd,
+                                    "coste_fuente": m.cost.source,
+                                    "coste_nota": m.cost.note,
+                                    "error": m.error,
+                                }),
+                                Err(e) => json!({ "ok": false, "error": e }),
+                            }
+                        }
+                    }
+                }
+                _ => json!({ "ok": false, "error": "acción desconocida" }),
             }
         }
         // v15 (W6): conector de GitHub (repos, issues/PRs, publicar estado).

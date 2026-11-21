@@ -10,6 +10,12 @@
 //! necesitan el módulo como externos (coste real, cuota agotada y
 //! procedencia de precios).
 
+// El bloque de delegación parasitaria REUSA el breaker, el presupuesto por
+// hora y el libro de precios del meta-agente (`crate::agent_loop`), así que el
+// módulo también se incluye aquí: sin esto el harness no compila.
+#[path = "../src/agent_loop.rs"]
+mod agent_loop;
+
 #[path = "../src/delegate.rs"]
 mod delegate;
 
@@ -27,6 +33,8 @@ fn cuenta(id: &str, tier: &str, model: &str, caps: &[&str], cuota: Option<u32>) 
         priority: 0,
         enabled: true,
         notes: String::new(),
+        auth_kind: String::new(),
+        auth_ref: String::new(),
     }
 }
 

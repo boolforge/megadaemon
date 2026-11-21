@@ -21,6 +21,19 @@ BIN="$PREFIX/megadaemon-core"
 # v15: binario anterior conocido-bueno (para auto-rollback si el nuevo no arranca).
 PREV_BIN="$PREFIX/megadaemon-core.prev"
 ENV_FILE="$PREFIX/megadaemon.env"
+# ⚠️ El entorno se lee AQUÍ, en la cabecera, y no justo antes de arrancar el
+# daemon: los scripts hermanos que se lanzan por separado (Magisk service.d:
+# 98-cloudflared.sh y su watchdog) son hermanos del supervisor, NO hijos =>
+# no heredan su entorno => leen el env por su cuenta. Y todo hijo del
+# supervisor necesita `MEGADAEMON_STATE_DIR` (tunnel.url, channel.json,
+# peers.json, audit.ndjson, board.sqlite y la key: TODO en el mismo sitio).
+if [ -f "$ENV_FILE" ]; then
+    . "$ENV_FILE" 2>/dev/null
+    # Sólo las variables NO secretas se exportan a los hijos: la API key se
+    # exporta más abajo, sólo al daemon (igual que antes).
+    export MEGADAEMON_STATE_DIR="${MEGADAEMON_STATE_DIR:-/data/local/tmp/megadaemon/state}"
+    export MEGADAEMON_LISTEN="${MEGADAEMON_LISTEN:-127.0.0.1:9090}"
+fi
 LOG=/sdcard/megadaemon.log
 LOG_DIR=/sdcard/megadaemon-logs
 MAX_BYTES=$((10 * 1024 * 1024))

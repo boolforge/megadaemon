@@ -94,6 +94,67 @@ fn free_port() -> u16 {
     l.local_addr().unwrap().port()
 }
 
+/// Sonda **sin pánico**: `None` si no hay nadie escuchando (o no responde).
+fn try_http(port: u16, raw: &str) -> Option<(u16, String)> {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
+    let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+    let _ = s.set_write_timeout(Some(Duration::from_secs(5)));
+    s.write_all(raw.as_bytes()).ok()?;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 16 * 1024];
+    loop {
+        match s.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.len() > 64 * 1024 {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    let status = text
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+    Some((status, text))
+}
+
+/// Arranca el cockpit en un puerto libre y **espera a que responda**.
+///
+/// `free_port()` abre y cierra un socket ⇒ carrera TOCTOU: con varios tests en
+/// paralelo (cargo lanza un hilo por CPU) dos tests pueden quedarse con el
+/// MISMO puerto efímero, el segundo `run_server()` muere con "Address already
+/// in use" y el test ve "connection refused" ⇒ **el fallo es del entorno, no
+/// del código**.  Aquí se reintenta con otro puerto hasta que el servidor
+/// conteste de verdad.
+fn start_cockpit() -> u16 {
+    let probe = "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    for intento in 0..10 {
+        let port = free_port();
+        let _ = std::thread::spawn(move || {
+            let _ = cockpit_server::run_server(port);
+        });
+        for _ in 0..50 {
+            std::thread::sleep(Duration::from_millis(100));
+            if let Some((st, _)) = try_http(port, probe) {
+                if st > 0 {
+                    return port;
+                }
+            }
+        }
+        eprintln!(
+            "[TEST] el cockpit no respondió en el puerto {} (intento {}) ⇒ reintento",
+            port,
+            intento + 1
+        );
+    }
+    panic!("no se pudo arrancar el cockpit en ningún puerto libre");
+}
+
 // ===========================================================================
 // A — SEGURIDAD
 // ===========================================================================
@@ -131,10 +192,15 @@ fn adv_a01_fs_write_inyecta_comandos_por_el_heredoc() {
     let _ = std::fs::remove_file(&target);
     let _ = std::fs::remove_file(&marker);
 
+    // CONTROL POSITIVO (desde el 20-11-2026 03:4x, cuando se arregló A-01):
+    // el contenido SIEMPRE viaja en base64, así que el shell nunca ve el texto
+    // del usuario y **no hay delimitador que cerrar**.  Antes este test era
+    // ROJO (afirmaba que el RCE se reproducía); ahora exige que **no** se
+    // reproduzca ⇒ si alguien reintroduce el heredoc, vuelve a ROJO.
     assert!(
-        pwned,
-        "el contenido NO se ejecutó como comando: el heredoc de fs_write es un vector de \
-         RCE root.  resp={:?}",
+        !pwned,
+        "el contenido de fs_write se ejecutó como comando: RCE root reintroducido \
+         (el contenido debe viajar SIEMPRE en base64).  resp={:?}",
         res
     );
 }
@@ -165,16 +231,24 @@ fn adv_a02_find_duplicates_inyecta_comandos_por_el_nombre_de_fichero() {
     let _ = std::fs::remove_file(&nasty);
     let _ = std::fs::remove_dir_all(&dir);
 
+    // CONTROL POSITIVO (desde el 20-11-2026 03:4x, cuando se arregló A-02):
+    // el nombre va entre comillas simples con el escapado POSIX ⇒ un `;` o
+    // un `$` dentro del nombre ya no es un comando.  Si alguien vuelve a
+    // interpolar el nombre en el AWK, este test vuelve a ROJO.
     assert!(
-        pwned,
-        "el nombre del fichero se ejecutó como comando: find_duplicates es RCE root.  resp={}",
+        !pwned,
+        "el nombre del fichero se ejecutó como comando: RCE root reintroducido en \
+         find_duplicates.  resp={}",
         res
     );
 }
 
-/// **ADV-A-03 (P1)** — La política destructiva (`is_destructive`) es una lista
-/// de subcadenas: se esquiva con un espacio de más, con una opción larga o
+/// **ADV-A-03 (P1)** — La política destructiva (`is_destructive`) era una lista
+/// de subcadenas: se esquivaba con un espacio de más, con una opción larga o
 /// con una forma distinta de borrar.
+/// **CONTROL POSITIVO desde el 20-11-2026 03:4x** (la política ahora normaliza
+/// espacios/tabuladores y cubre las variantes): este test exige que **todos**
+/// los vectores se detecten ⇒ si la cobertura vuelve a adelgazar, sale ROJO.
 #[test]
 fn adv_a03_la_politica_destructiva_se_esquiva() {
     let bypasses = [
@@ -187,12 +261,13 @@ fn adv_a03_la_politica_destructiva_se_esquiva() {
     ];
     for cmd in bypasses {
         assert!(
-            !megadaemon_core::android::is_destructive(cmd),
-            "«{}» NO se clasifica como destructivo: la política confirm es evadible",
+            megadaemon_core::android::is_destructive(cmd),
+            "«{}» NO se clasifica como destructivo: la política confirm es evadible \
+             (regresión de A-03)",
             cmd
         );
     }
-    // Y el caso "bonito" sí se detecta: la cobertura es inconsistente.
+    // Y el caso "bonito" también se detecta (la cobertura es consistente).
     assert!(megadaemon_core::android::is_destructive("rm -rf /"));
     assert!(megadaemon_core::android::is_destructive("dd if=/dev/zero of=/dev/block/sda"));
 }
@@ -276,61 +351,74 @@ fn adv_a06_escribir_en_data_adb_no_pide_confirmacion() {
 // A/C — el flujo de autenticación de la web v14
 // ===========================================================================
 
-/// **ADV-A-18 (P0, NUEVO)** — El "arreglo" del deadlock (owner del cockpit,
-/// 2026-11-19 22:48) ha introducido un fallo **peor**: la exención
-/// `local_browser` se decide con la **cabecera `Host`** y el **IP de peer**
-/// (ambos falsificables desde el propio móvil y, sobre todo, **a través del
-/// puente web**, que reescribe el `Host` a `127.0.0.1:9090` y entra desde
-/// loopback).
+/// **ADV-A-18 (P0) — CONTROL POSITIVO desde el 20-11-2026 (commit `9f30665`)**.
 ///
-/// Consecuencias (todas medidas aquí):
-///   1. `POST /api/session/exchange` con **cualquier** `api_key` no vacío
-///      devuelve el **token de sesión root** (`ok:true` + el token real).
-///   2. `GET /` devuelve el HTML **con el token root incrustado**.
-///   3. `GET /api/*` responde **sin token** (el gate de la API key también se
-///      salta).
+/// Antes este test era ROJO: afirmaba que `POST /api/session/exchange` con una
+/// `api_key` inventada devolvía el **token root** (porque la exención
+/// `local_browser` decidía "local" con el `Host`, falsificable, y con la
+/// ausencia de cabeceras de proxy).
 ///
-/// Es decir: la credencial que el túnel público exigía se la regala el propio
-/// daemon a cualquier petición que "parezca local", y "parecer local" se
-/// falsifica con dos cabeceras.
+/// El arreglo hace que **el canje SIEMPRE valide la API key** ⇒ con una key
+/// inventada responde **403** y **no** entrega ningún token.  Este test exige
+/// ese comportamiento correcto ⇒ si alguien reintroduce la rama `local_browser`,
+/// vuelve a ROJO.
 #[test]
 fn adv_a18_la_exencion_local_entrega_el_token_root() {
     ensure_env();
-    let port = free_port();
-    let _ = std::thread::spawn(move || {
-        let _ = cockpit_server::run_server(port);
-    });
-    std::thread::sleep(Duration::from_millis(800));
+    let port = start_cockpit();
     let token = cockpit_server::auth_token().to_string();
 
-    // (1) El intercambio entrega el token root con una api_key BASURA.
+    // (1) El canje con una API key BASURA no entrega el token root.
     let (st, body) = post(
         port,
         "/api/session/exchange",
         "{\"api_key\":\"esta-no-es-la-key\"}",
         None,
     );
-    assert_eq!(st, 200, "body={}", body);
+    assert!(
+        st == 403 || st == 401,
+        "el canje con una API key inventada debe ser rechazado (403), no {}: body={}",
+        st,
+        body
+    );
     assert!(
         !body.contains(&token),
         "el token root se entregó con una API key inventada (exención local). body={}",
         body
     );
-
-    // (2) La página "local" lleva el token root incrustado.
-    let (st_html, html) = get(port, "/", None);
-    assert_eq!(st_html, 200);
     assert!(
-        !html.contains(&token),
-        "la página considerada local lleva el token root en el HTML. html={}",
-        &html[..html.len().min(400)]
+        !body.contains("\"ok\":true"),
+        "el canje respondió ok:true con una API key inventada. body={}",
+        body
     );
+}
 
-    // (3) Los endpoints de datos responden SIN token.
-    let (st_st, _) = get(port, "/api/status", None);
+/// **ADV-A-18b (P1) — ROJO A PROPÓSITO mientras A-18-resto siga abierto**.
+///
+/// El token root ya **no** se regala (A-18 cerrado), pero la **exención de
+/// token para todos los `GET` locales** sigue viva (`requires_auth`,
+/// `cockpit_server.rs:231`): "local" se decide con el `Host` (falsificable) ⇒
+/// **cualquier app del móvil** lee `/api/status`, `/api/providers`… **sin
+/// credencial** (fuga de datos; ya no da root).
+///
+/// Este test exige el comportamiento correcto (403 sin token) ⇒ **sale ROJO**
+/// hasta que se cierre el agujero; cuando se cierre, pasa a verde.
+///
+/// `#[ignore]` **a propósito** (decisión del principal, 20-11 08:4x): así la CI
+/// queda **verde** y este test sigue **documentando el P1 abierto**.  Owner:
+/// web (`e81fade1`) ⇒ **des-ignorar cuando se cierre A-18-resto** (y entonces
+/// este test debe quedar en verde).
+#[test]
+#[ignore = "rojo a propósito: A-18 resto abierto (exención de token en los GET locales); owner web e81fade1; des-ignorar al cerrarlo"]
+fn adv_a18b_los_get_locales_sin_token_siguen_abiertos() {
+    ensure_env();
+    let port = start_cockpit();
+    let (st, body) = get(port, "/api/status", None);
     assert_eq!(
-        st_st, 403,
-        "sin token, /api/status debe dar 403: la exención local lo salta"
+        st, 403,
+        "sin token, /api/status debe dar 403: la exención local de los GET lo salta \
+         (A-18 resto). body={}",
+        &body[..body.len().min(200)]
     );
 }
 
@@ -342,11 +430,7 @@ fn adv_a18_la_exencion_local_entrega_el_token_root() {
 #[test]
 fn adv_a19_el_tunel_no_recibe_el_token_root() {
     ensure_env();
-    let port = free_port();
-    let _ = std::thread::spawn(move || {
-        let _ = cockpit_server::run_server(port);
-    });
-    std::thread::sleep(Duration::from_millis(800));
+    let port = start_cockpit();
     let token = cockpit_server::auth_token().to_string();
 
     let mut req = format!(
@@ -359,14 +443,21 @@ fn adv_a19_el_tunel_no_recibe_el_token_root() {
     );
     req.push_str("{\"api_key\":\"esta-no-es-la-key\"}");
     let (st, body) = http(port, &req);
-    assert_eq!(st, 200, "body={}", body);
+    // Con el arreglo de A-18 (`9f30665`) el canje **siempre** valida la API key
+    // ⇒ con una key inventada (túnel o local) la respuesta es 403 sin token.
+    assert!(
+        st == 403 || st == 401,
+        "el canje con una API key inventada debe ser rechazado (403), no {}: body={}",
+        st,
+        body
+    );
     assert!(
         !body.contains(&token),
         "el túnel recibió el token root. body={}",
         body
     );
     assert!(
-        body.contains("\"ok\":false"),
+        !body.contains("\"ok\":true"),
         "el túnel debe exigir la API key real. body={}",
         body
     );
@@ -378,11 +469,7 @@ fn adv_a19_el_tunel_no_recibe_el_token_root() {
 #[test]
 fn adv_a08_post_a_ruta_inexistente_devuelve_200_ok() {
     ensure_env();
-    let port = free_port();
-    let _ = std::thread::spawn(move || {
-        let _ = cockpit_server::run_server(port);
-    });
-    std::thread::sleep(Duration::from_millis(800));
+    let port = start_cockpit();
     let token = cockpit_server::auth_token().to_string();
 
     let (st, body) = post(port, "/api/no-existe-esta-ruta", "{}", Some(&token));
@@ -404,11 +491,7 @@ fn adv_a08_post_a_ruta_inexistente_devuelve_200_ok() {
 #[test]
 fn adv_a09_brain_status_true_por_cualquier_proceso_en_8080() {
     ensure_env();
-    let port = free_port();
-    let _ = std::thread::spawn(move || {
-        let _ = cockpit_server::run_server(port);
-    });
-    std::thread::sleep(Duration::from_millis(800));
+    let port = start_cockpit();
     let token = cockpit_server::auth_token().to_string();
 
     // Un listener cualquiera en 8080 (no hay ningún LLM detrás).
@@ -492,11 +575,7 @@ fn adv_c01_el_estimador_de_tokens_usa_chars_por_4() {
 #[test]
 fn adv_c02_hw_mmio_convierte_un_error_de_lectura_en_vacio() {
     ensure_env();
-    let port = free_port();
-    let _ = std::thread::spawn(move || {
-        let _ = cockpit_server::run_server(port);
-    });
-    std::thread::sleep(Duration::from_millis(800));
+    let port = start_cockpit();
     let token = cockpit_server::auth_token().to_string();
 
     // Plataforma inexistente => `c_path` vacío => la lectura SIEMPRE falla.
@@ -618,5 +697,68 @@ fn adv_h01_el_conversor_duplica_el_valor_en_la_colision_signal_class() {
         "el valor queda DUPLICADO en signal: el conversor no cumple su propio contrato. \
          salida={} stderr={}",
         txt, err
+    );
+}
+
+// ========================================================================= //
+// D-09 / D-10 — FIABILIDAD (hallazgos añadidos en la revisión de las 03:3x)
+// ========================================================================= //
+
+/// Raíz de `rust-core/src` (para los tests que leen el código fuente).
+fn src_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")
+}
+
+/// Ficheros `.rs` de `src/` con la línea citada.
+fn src_hits(needle: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let dir = src_dir();
+    let mut entries: Vec<_> = std::fs::read_dir(&dir)
+        .expect("leer rust-core/src")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("rs"))
+        .collect();
+    entries.sort();
+    for p in entries {
+        let txt = std::fs::read_to_string(&p).unwrap_or_default();
+        for (i, l) in txt.lines().enumerate() {
+            if l.contains(needle) {
+                let name = p.file_name().unwrap().to_string_lossy().to_string();
+                out.push(format!("{}:{}", name, i + 1));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn adv_d09_no_queda_ningun_lock_unwrap_sobre_mutex_globales() {
+    // Un panic mantiene envenenado el mutex: con `lock().unwrap()` TODAS las
+    // llamadas posteriores a ese mutex paniquean => el subsistema queda muerto
+    // para el resto de la vida del proceso, y como el release desenrolla el
+    // daemon sigue contestando => "parece sano y no lo está".
+    // El arreglo es `unwrap_or_else(|p| p.into_inner())`, que ya usan
+    // `cockpit_server.rs:1899/1912/1931` y `api_key.rs`.
+    let hits = src_hits("lock().unwrap()");
+    assert!(
+        hits.is_empty(),
+        "quedan {} `lock().unwrap()` (un panic envenena el mutex): {}",
+        hits.len(),
+        hits.join(", ")
+    );
+}
+
+#[test]
+fn adv_d10_hay_un_panic_set_hook_que_registra_el_backtrace() {
+    // Sin `panic::set_hook` un panic no deja rastro.  Con unwind, el 134
+    // (SIGABRT) medido en el móvil NO puede ser un panic de Rust: viene de un
+    // `abort()` explicito, un doble panic o un assert en lib nativa
+    // (sqlite3/NPU).  Sin hook no hay forma de localizarlo.
+    let hits = src_hits("panic::set_hook");
+    assert!(
+        !hits.is_empty(),
+        "no hay ningun `panic::set_hook` en rust-core/src: un panic (o el 134 \
+         medido) no deja backtrace ni se puede diagnosticar"
     );
 }

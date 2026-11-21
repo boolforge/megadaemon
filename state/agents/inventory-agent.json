@@ -1,0 +1,49 @@
+{
+  "id": "inventory-agent",
+  "name": "inventory-agent (W2 · inventario del S21 Ultra)",
+  "role": "worker",
+  "device": "primary-samsung",
+  "repo": "https://github.com/boolforge/megadaemon",
+  "branch": "main",
+  "commit": "a56b1c3",
+  "last_seen": "2026-11-20T01:38:58Z",
+  "capabilities": [
+    "device-inventory",
+    "apk-inventory",
+    "backup-plan",
+    "adb-client",
+    "coordination"
+  ],
+  "focus": [
+    "W2-inventario",
+    "W3-entrada-backup"
+  ],
+  "artifacts": [
+    {
+      "name": "inventory.json",
+      "sha256": "faf0bbdd28b0085535d87f86fc3644cf99e6f3002ab53a7772b390e586e8e038",
+      "bytes": 1244293,
+      "where": [
+        "repo:inventory/inventory.json",
+        "drive"
+      ]
+    },
+    {
+      "name": "MANIFEST.ndjson",
+      "sha256": "8825bcd0ef8319a0e1d7dd9be0512300f07508d26f164cf61f3ad9f4f76c170a",
+      "bytes": 4213,
+      "where": [
+        "repo:inventory/MANIFEST.ndjson",
+        "drive"
+      ]
+    },
+    {
+      "name": "s21_inventory_refs_20260720.tar.gz",
+      "sha256": "ce38e550fda68ecea4f731553394de3925559bb0bff18a0bcc1b0339bc1e9f3a",
+      "where": [
+        "drive (PRIVADO: contiene SSID/claves ADB en claro)"
+      ]
+    }
+  ],
+  "notas": "Sin tokens, sin claves privadas, sin material de firma. SSID/BSSID, claves ADB y nombres de cuenta hasheados (sha16) en la copia publica."
+}

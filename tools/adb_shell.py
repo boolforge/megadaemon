@@ -6,7 +6,7 @@ levantar el demonio.
 
 Por qué: el MCP del cockpit **es** el propio demonio (POST /mcp sobre el
 túnel), así que si el daemon está muerto no hay MCP.  El adbd del Samsung
-escucha por TCP (192.168.1.124:5555) y es independiente del daemon.
+escucha por TCP (<IP_DEL_MOVIL>:5555) y es independiente del daemon.
 
 Implementa lo justo: CNXN → AUTH (firma RSA-SHA1 PKCS#1 v1.5 del token con
 la clave de host) → OPEN shell:<cmd> → lectura de WRTE.
@@ -22,7 +22,7 @@ import zlib
 import sys
 import socket
 
-HOST = os.environ.get("ADB_HOST", "192.168.1.124")
+HOST = os.environ.get("ADB_HOST", "<IP_DEL_MOVIL>")
 PORT = int(os.environ.get("ADB_PORT", "5555"))
 KEY = os.environ.get("ADB_HOST_KEY", "/workspace/md-secrets/adb_host_key.pem")
 

@@ -20,7 +20,13 @@ on:
 
 concurrency:
   group: megadaemon-${{ github.ref }}
-  cancel-in-progress: true
+  # BUG v15 (CI): con `cancel-in-progress: true` y muchos pushes por minuto
+  # (la flota commitea sin parar) **ningún run llega a terminar**: cada push
+  # cancela el anterior y el artefacto ARM64 —que es el que vive en el
+  # móvil— nunca se publica.  Medido: runs encadenados en `cancelled`.
+  # En `main` NO se cancela (ahí es donde se publica el release); en las
+  # ramas de trabajo sí, para no gastar minutos de CI.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -62,14 +68,10 @@ jobs:
         # `api_key::acunar_y_revocar_una_clave_no_toca_la_principal` falla; con
         # el entorno limpio pasa. Sin este `env -u`, un rojo de entorno se
         # confunde con un rojo de codigo.
-        #
-        # AUDIT-CI-01: los tests rojos NO bloquean la release (continue-on-error),
-        # pero el GATE de seguridad SI bloquea: protege el dispositivo.
         continue-on-error: true
         run: |
           env -u MEGADAEMON_API_KEY -u MEGADAEMON_TOKEN -u SEERE_AUTH_TOKEN \
-            cargo test --release --all-targets \
-            || echo "::warning::hay tests rojos (no bloquea la release)"
+            cargo test --release --all-targets
       - name: Gate (BLOQUEA): autenticacion y politica del harness
         working-directory: rust-core
         # Este gate SI bloquea el job `quality`: protege el dispositivo.
@@ -111,6 +113,15 @@ jobs:
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
           CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          # El perfil [profile.release] del repo usa lto=true +
+          # codegen-units=1: con un crate de este tamaño el rustc puede morir
+          # por OOM (SIGKILL) y entonces NO se publica el artefacto ARM64
+          # (que es justo el que vive en el móvil).  Medido en el sandbox.
+          # Sin tocar Cargo.toml: se relajan sólo LTO y las unidades de
+          # código por el entorno del job.
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
         run: |
           cargo build --release --target aarch64-linux-android
           mkdir -p dist

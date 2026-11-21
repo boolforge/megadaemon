@@ -366,7 +366,7 @@ actualizar `contents.db` (su `fileSize`) y el CRC/formato que el sistema comprue
 **Hallazgo**: el **CSC es `AMO`** (América) y vive en `mps_code.dat` (3 bytes exactos) ⇒
 cambiarlo con root es la vía **más limpia y reversible** (3 bytes) y **no triangular el Knox**.
 **Implicación**: `CscFeature_VoiceCall_ConfigRecording` decide si el firmware graba llamadas
-nativamente ⇒ con CSC `AMO` está apagada; con CSC de Asia (`THL`/`INS`) el sistema graba solo.
+nativamente ⇒ **Aclaración IMPORTANTE (medido en vivo el 2026-11-21 con `csc_verify`)**: el `cscfeature.xml` **de fábrica** de AMO son **1109 B** (sha256 `ef110140f7bb95e109e623a11b644335843c1253bceaecdcf751fc43316e4d16`) y **NO trae** la feature ⇒ ⇒ **mi conclusión original era la correcta** ⇒ el valor `RecordingAllowedByMenu,disclaimer_latin` (1143 B) medido en el móvil es el **parche Magisk systemless `megadaemon_csc_recording`** del agente de grabación (sha `d009908fa0b10aa387f9790f07eb1a593de9f47997b54853b1faa83a54bdaebb`, con `contents.db` `fileSize=1143`) ⇒ ⇒ **CON aviso** ⇒ legal en España ⇒ ⇒ **reversible** con `touch /data/adb/modules/megadaemon_csc_recording/disable` + reboot ⇒ ⇒ **y nunca con `RecordingAllowed` a secas** (silencioso = art. 197 CP + GDPR).
 
 **Cómo se comprueba**:
 ```bash
@@ -438,7 +438,7 @@ en UTF-16LE y UTF-8. **3** APKs contienen la cadena; al comprobar si está en el
 ⇒ **Implicación (alta)**: los únicos que **declaran** el permiso son dos apps de **Microsoft**
 (continuidad PC-teléfono). **Samsung no trae ninguna app con `CAPTURE_AUDIO_OUTPUT`**, y el
 grabador tampoco está en los jars de `/system/framework` (comprobado por el agente RE).
-⇒ En este firmware (CSC **AMO**) **la grabación nativa de llamadas no está implementada por
+⇒ **Aclaración (medido en vivo el 2026-11-21)**: en el firmware **de fábrica** de AMO la grabación nativa **NO está implementada** (1109 B, sin la feature). Lo que se midió en el móvil (1143 B, `RecordingAllowedByMenu,disclaimer_latin`) es el **parche** del módulo Magisk `megadaemon_csc_recording` ⇒ ⇒ **la función está disponible y AVISA** (parcheado), **no de fábrica** ⇒ ⇒ quitar el aviso sería una decisión **del usuario** (grabar en silencio a un tercero es delito en España, art. 197 CP), nunca un detalle técnico.
 ninguna app**: o la activa el framework por CSC (y aquí no está), o hay que cambiar de CSC.
 **Cómo se comprueba**:
 ```bash
@@ -600,7 +600,7 @@ python3 tools/omc_codec.py encode <plano.xml> -o out.omc
 
 ### 10.2 Qué CSC traen grabación nativa de llamadas (medido en los 126 CSC del móvil)
 
-`CscFeature_VoiceCall_ConfigRecording` **sólo existe en 19 de 126** CSCs:
+`CscFeature_VoiceCall_ConfigRecording` **existe en 19 de 126** CSCs **de fábrica** (el móvil medido el 2026-11-21 da 20 porque AMO entra **por el parche Magisk** `megadaemon_csc_recording`, no de fábrica):
 
 | Valor | CSCs |
 |---|---|
@@ -633,7 +633,6 @@ va por una imagen de sistema (o `remount`), no escribiendo en vivo.
   están en el móvil (`/data/local/tmp/swift/classes.dex` 9.273.900 B / 50.772 cadenas).
   El agente DEX ya arregló el parser DEX (`VALUE_NULL`/`VALUE_BOOLEAN`) ⇒ su CLI
   `megadaemon-core dex` sirve de punto de partida.
-<<<<<<< HEAD
 
 ### 10.4 El consumidor en runtime (RESUELTO): `com.samsung.android.feature.SemCscFeature`
 
@@ -673,5 +672,3 @@ python3 tools/omc_codec.py decode /optics/configs/carriers/single/AMO/conf/syste
 unzip -p /system/framework/framework.jar classes5.dex > /data/local/tmp/classes5.dex
 strings /data/local/tmp/classes5.dex | grep -E "SemCscFeature|cscfeature.xml"
 ```
-=======
->>>>>>> main
