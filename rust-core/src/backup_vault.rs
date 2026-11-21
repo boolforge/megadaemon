@@ -124,6 +124,12 @@ pub struct VaultManifest {
     /// `DESCONOCIDO` la boveda no promete una restauracion en claro.
     #[serde(default)]
     pub source_encryption: String,
+    /// Cobertura del **mundo seguro** (7 particiones + rutas criticas + keystore2).
+    ///
+    /// Si `completo` es `false`, el manifiesto **avisa** de que el backup no
+    /// basta para restaurar en otro dispositivo (falta `keystore2`/TEE).
+    #[serde(default)]
+    pub secure_world: Option<SecureWorldCoverage>,
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +223,171 @@ pub fn classify_source_encryption_live(src: &str) -> String {
         Ok(m) if !m.is_empty() => classify_source_encryption(src, &m),
         _ => "DESCONOCIDO".to_string(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Cobertura del mundo seguro (las 7 particiones + las rutas criticas del EFS)
+// ---------------------------------------------------------------------------
+
+/// Las **7 particiones del mundo seguro** medidas en el móvil (P2-TEE,
+/// `docs/RE_SECURE_WORLD_INVENTORY.md`).
+///
+/// No todas hacen falta para un backup: `prism` es contenido (256 MiB), las
+/// otras seis son material de claves/configuración que el arranque y el
+/// desbloqueo **sí** necesitan.
+pub const SECURE_WORLD_PARTITIONS: &[(&str, &str)] = &[
+    ("keystorage", "almacen de claves del bootloader"),
+    ("keyrefuge", "refugio de claves"),
+    ("sec_efs", "EFS seguro de Samsung"),
+    ("uh", "unified health"),
+    ("uhcfg", "configuracion de unified health"),
+    ("spu", "almacen de la SPU (sensor processing unit)"),
+    ("prism", "contenido (256 MiB), NO es material de claves"),
+];
+
+/// Rutas del EFS cuyo material **no** se puede re-construir con el backup
+/// solo (medidas en el móvil).
+pub const SECURE_WORLD_CRITICAL: &[(&str, &str)] = &[
+    (
+        "/mnt/vendor/efs/DAK",
+        "cadena de atestacion (DAK/SAK de Samsung): claves privadas + .val",
+    ),
+    (
+        "/mnt/vendor/efs/tee/srt",
+        "almacen seguro de la TEE (Keymaster/FBE): ahi viven las claves de las apps",
+    ),
+    (
+        "/mnt/vendor/efs/root/FLL.bin",
+        "rollback protection (144 B): sin el, un cambio de ROM puede dejar el movil inservible",
+    ),
+];
+
+/// Una de las 7 particiones del mundo seguro y si esta montada.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecureWorldPart {
+    pub nombre: String,
+    pub descripcion: String,
+    /// ¿Aparece en `/proc/mounts`?
+    pub montada: bool,
+}
+
+/// Una ruta critica del EFS y si se ha visto.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecureWorldPath {
+    pub ruta: String,
+    pub descripcion: String,
+    /// ¿Se ha visto en el dispositivo?
+    pub presente: bool,
+}
+
+/// Cobertura del material del mundo seguro en un backup.
+///
+/// Esto **no** es decorativo: un backup de `/data` + EFS **sin `keystore2`
+/// (ni la TEE) es un backup incompleto** ⇒ por eso el manifiesto lo dice
+/// con su propio booleano y sus avisos, en vez de dar por hecho que se
+/// puede restaurar en otro dispositivo.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SecureWorldCoverage {
+    pub particiones: Vec<SecureWorldPart>,
+    pub rutas_criticas: Vec<SecureWorldPath>,
+    /// ¿Esta `keystore2` (el motor del sistema) disponible?
+    pub keystore2_disponible: bool,
+    /// ¿Esta **completo** el material para restaurar en otro dispositivo?
+    pub completo: bool,
+    pub avisos: Vec<String>,
+}
+
+/// Calcula la cobertura del mundo seguro.
+///
+/// * `montajes`: contenido de `/proc/mounts` (para saber qué particiones
+///   están montadas);
+/// * `rutas_vistas`: rutas del EFS que se han visto realmente;
+/// * `keystore2`: si el motor `keystore2` está disponible.
+pub fn cobertura_mundo_secreto(
+    montajes: &str,
+    rutas_vistas: &[&str],
+    keystore2: bool,
+) -> SecureWorldCoverage {
+    let mut avisos: Vec<String> = Vec::new();
+    let mut particiones = Vec::new();
+    let mut faltan = 0usize;
+    for (nombre, desc) in SECURE_WORLD_PARTITIONS {
+        let montada = montajes
+            .lines()
+            .filter_map(|l| {
+                let mut it = l.split_whitespace();
+                let dev = it.next()?;
+                let mp = it.next()?;
+                Some((dev.to_string(), mp.to_string()))
+            })
+            .any(|(dev, mp)| dev.contains(nombre) || mp.contains(nombre));
+        if !montada {
+            faltan += 1;
+            avisos.push(format!(
+                "particion del mundo seguro NO montada: {} ({})",
+                nombre, desc
+            ));
+        }
+        particiones.push(SecureWorldPart {
+            nombre: (*nombre).to_string(),
+            descripcion: (*desc).to_string(),
+            montada,
+        });
+    }
+    let mut rutas_criticas = Vec::new();
+    for (ruta, desc) in SECURE_WORLD_CRITICAL {
+        let presente = rutas_vistas.iter().any(|r| r == ruta || r.starts_with(ruta));
+        if !presente {
+            avisos.push(format!("ruta critica del mundo seguro ausente: {} ({})", ruta, desc));
+        }
+        rutas_criticas.push(SecureWorldPath {
+            ruta: (*ruta).to_string(),
+            descripcion: (*desc).to_string(),
+            presente,
+        });
+    }
+    if !keystore2 {
+        avisos.push(
+            "keystore2 NO disponible => **un backup del EFS sin keystore2 es un backup incompleto**: \
+             no se pueden re-construir las claves de las apps ni el estado de desbloqueo"
+                .to_string(),
+        );
+    }
+    let completo = faltan == 0
+        && rutas_criticas.iter().all(|r| r.presente)
+        && keystore2;
+    if completo {
+        avisos.push("mundo seguro completo: 7/7 particiones + rutas criticas + keystore2".into());
+    }
+    SecureWorldCoverage {
+        particiones,
+        rutas_criticas,
+        keystore2_disponible: keystore2,
+        completo,
+        avisos,
+    }
+}
+
+/// Calcula la cobertura **en el dispositivo** (lee `/proc/mounts`, mira el
+/// EFS y busca `keystore2`).
+pub fn cobertura_mundo_secreto_live() -> SecureWorldCoverage {
+    let montajes = std::fs::read_to_string("/proc/mounts").unwrap_or_default();
+    let mut vistas: Vec<&str> = Vec::new();
+    for (ruta, _) in SECURE_WORLD_CRITICAL {
+        let p = std::path::Path::new(ruta);
+        if p.exists() {
+            vistas.push(*ruta);
+        }
+    }
+    let keystore2 = ["/system/bin/keystore2", "/system/bin/keystore2_ibd", "/vendor/bin/keystore2"]
+        .iter()
+        .any(|p| std::path::Path::new(p).exists());
+    let mut cov = cobertura_mundo_secreto(&montajes, &vistas, keystore2);
+    if montajes.is_empty() {
+        cov.avisos
+            .push("no se pudo leer /proc/mounts => la cobertura del mundo seguro es DESCONOCIDA".into());
+    }
+    cov
 }
 
 /// Estado real del almacenamiento cifrado y del mundo seguro.
@@ -869,6 +1040,7 @@ pub fn seal_with_iterations(
         entries,
         total_plain_bytes,
         source_encryption: classify_source_encryption_live(dir),
+        secure_world: Some(cobertura_mundo_secreto_live()),
     };
     let manifest_bytes =
         serde_json::to_vec(&manifest).map_err(|e| format!("serialización del manifiesto: {}", e))?;
@@ -1381,6 +1553,7 @@ pub fn seal_dir_streaming(
         entries,
         total_plain_bytes,
         source_encryption: classify_source_encryption_live(dir),
+        secure_world: Some(cobertura_mundo_secreto_live()),
     };
     let manifest_bytes =
         serde_json::to_vec(&manifest).map_err(|e| format!("serialización del manifiesto: {}", e))?;
@@ -1960,6 +2133,80 @@ mod tests {
         let _ = fs::remove_dir_all(&dst);
     }
 
+    // --- Mundo seguro --------------------------------------------------------
+
+    /// Montajes de ejemplo con las 7 particiones del mundo seguro.
+    fn montajes_mundo_seguro() -> String {
+        [
+            "/dev/block/bootdevice/by-name/keystorage /keystorage erofs ro,seclabel",
+            "/dev/block/bootdevice/by-name/keyrefuge /keyrefuge erofs ro,seclabel",
+            "/dev/block/bootdevice/by-name/sec_efs /sec_efs erofs ro,seclabel",
+            "/dev/block/bootdevice/by-name/uh /uh erofs ro,seclabel",
+            "/dev/block/bootdevice/by-name/uhcfg /uhcfg erofs ro,seclabel",
+            "/dev/block/bootdevice/by-name/spu /spu erofs ro,seclabel",
+            "/dev/block/bootdevice/by-name/prism /prism ext4 ro,seclabel",
+            "/dev/block/dm-5 / / ext4 ro,seclabel",
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn cobertura_mundo_secreto_completa_cuando_estan_todo() {
+        let cov = cobertura_mundo_secreto(
+            &montajes_mundo_seguro(),
+            &[
+                "/mnt/vendor/efs/DAK",
+                "/mnt/vendor/efs/tee/srt",
+                "/mnt/vendor/efs/root/FLL.bin",
+            ],
+            true,
+        );
+        assert_eq!(cov.particiones.len(), 7);
+        assert!(cov.particiones.iter().all(|p| p.montada));
+        assert!(cov.rutas_criticas.iter().all(|r| r.presente));
+        assert!(cov.keystore2_disponible);
+        assert!(cov.completo, "avisos: {:?}", cov.avisos);
+    }
+
+    #[test]
+    fn sin_keystore2_el_backup_se_declara_incompleto() {
+        let cov = cobertura_mundo_secreto(
+            &montajes_mundo_seguro(),
+            &[
+                "/mnt/vendor/efs/DAK",
+                "/mnt/vendor/efs/tee/srt",
+                "/mnt/vendor/efs/root/FLL.bin",
+            ],
+            false,
+        );
+        assert!(!cov.completo);
+        assert!(
+            cov.avisos.iter().any(|a| a.contains("keystore2")),
+            "avisos: {:?}",
+            cov.avisos
+        );
+    }
+
+    #[test]
+    fn falta_de_particiones_y_de_rutas_criticas_se_reporta() {
+        let cov = cobertura_mundo_secreto("", &[], false);
+        assert!(!cov.completo);
+        assert_eq!(cov.particiones.len(), 7);
+        assert!(cov.particiones.iter().all(|p| !p.montada));
+        assert!(cov.rutas_criticas.iter().all(|r| !r.presente));
+        // 7 avisos de particiones + 3 de rutas + 1 de keystore2
+        assert!(cov.avisos.len() >= 11, "avisos: {:?}", cov.avisos);
+    }
+
+    #[test]
+    fn la_particion_prism_no_es_material_de_claves() {
+        let prism = SECURE_WORLD_PARTITIONS
+            .iter()
+            .find(|(n, _)| *n == "prism")
+            .expect("prism debe estar en la lista");
+        assert!(prism.1.contains("NO es material de claves"));
+    }
+
     // --- Drive --------------------------------------------------------------
 
     #[test]
@@ -1989,6 +2236,7 @@ mod tests {
             ],
             total_plain_bytes: 20_000_010,
             source_encryption: String::new(),
+            secure_world: None,
         };
         let plan = drive_upload_plan(&manifest, "/MegaDaemon/backup");
         assert_eq!(plan.len(), 2);
