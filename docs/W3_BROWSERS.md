@@ -91,11 +91,11 @@ perfil + exportación a HTML.
 
 ---
 
-## 3. RE de Swift Backup (instalada en el móvil)
+## 3. RE de Swift Backup (v5.1.1, instalada en el móvil)
 
 `org.swiftapps.swiftbackup` **está instalada** en este móvil (`pm path` →
 `/data/app/~~pbwhtiYXFh4xDN_dToeH5A==/org.swiftapps.swiftbackup-rmFvjZ4wVP1zY_fpVoXM3A==/base.apk`,
-15,4 MB, `versionName=5.1.1` en el APK instalado (el catálogo de Play lo lista como 16.0.2 / 153.7.0esr), actualizado 2026-11-15).
+15,4 MB, `versionName=5.1.1`, actualizado 2026-11-15).
 
 Se descomprimió el DEX en el propio móvil (`classes.dex` 9,27 MB +
 `classes2.dex` 2,84 MB) y se parseó la **tabla de strings del DEX** con un
@@ -119,6 +119,17 @@ script propio (`dexstr.py`) para sacar las constantes y las clases.
 que cifra con *Facebook Conceal*; la versión instalada (5.1.1) usa **AEGIS-256
 propio** (Conceal era de versiones anteriores). Se ha medido, no supuesto.
 
+### El formato, al detalle (medido en la nativa)
+
+El APK trae `libsba_archive.so`, que exporta **el algoritmo exacto**:
+**AEGIS-256** (y AEGIS-128X2) por trozos, **Argon2id** para derivar la clave
+(rangos: iteraciones 1..100, memoria 16–64 MiB, paralelismo 1..8, salida
+16–128 B) y el contenido en **TAR comprimido con ZSTD** (magics `SBA1` /
+`SBA_SWIFTTAR`, AAD/nonce por trozo con las etiquetas
+`SBA1-AEGIS256-entry-chunk-aad-v1` / `-nonce-v1`). El detalle completo, con
+el método (los **DEX del mirror son idénticos a los del móvil** ⇒ el RE se
+hace entero en local) está en **`docs/SWIFT_BACKUP_FORMAT.md`**.
+
 ### Lo bueno que se reimplementa en MegaDaemon
 
 1. **Partes explícitas por app** (APP / DATA / EXTDATA / EXPANSION / MEDIA):
@@ -136,13 +147,7 @@ propio** (Conceal era de versiones anteriores). Se ha medido, no supuesto.
 5. **Etiquetas de "protegido" y notas** por backup: útil para distinguir
    "copia verificada" de "copia parcial".
 6. **Reintento de subida reanudable por rangos** (ya implementado:
-   `drive_chunk_plan()` + `drive_chunk_command()`; y el cliente nuevo
-   `drive_client.rs` con subida resumible + reanudación por sesión).
-7. **AEGIS-256, ya implementado en Rust puro** (`rust-core/src/aegis.rs`,
-   RFC 10032, validado con los vectores oficiales de la RFC: AESRound,
-   Update, TV1, TV2, TV3) ⇒ es la pieza que faltaba para poder *leer* un
-   `.dat` de Swift Backup. Falta la **derivación de la clave** (P5) y un
-   `.dat` real para cerrar el round-trip.
+   `drive_chunk_plan()` + `drive_chunk_command()`).
 
 ### Otras herramientas open source revisadas
 
