@@ -1,10 +1,7 @@
 {
   "canonical": "https://raw.githubusercontent.com/boolforge/megadaemon/main/state/channel.json",
-  "cloudflared_pids": "9999",
   "duckdns": "https://mdtmfnc-s21.duckdns.org",
-  "ip_publica": "IP-PRUEBA",
-  "paste": "https://paste.rs/w80KO",
-  "prev_paste": "",
-  "quick": "https://tunel-PRUEBA.trycloudflare.com",
-  "ts": "2026-11-21T04:06:01Z"
+  "nota": "estado provisional escrito desde el sandbox; el movil lo sobrescribe al publicar (tool MCP channel_publish o channel-publish --repo-publish)",
+  "quick": "",
+  "ts": "2026-11-21T04:07:00Z"
 }
