@@ -226,3 +226,62 @@ key-check**, y **no** extrae el contenido.
 
 Tests: **15/15** (incluido uno end-to-end con el layout medido y el
 descubrimiento del orden).
+
+
+---
+
+# CUARTA PASADA: corrección de un error ajeno (anchos "variables")
+
+El módulo `rust-core/src/swift_sba1_header.rs` (agente RE, commit `26cc28a`)
+afirma:
+
+> "Los campos 4, 22 y 23 se escriben con un helper de **ancho variable**
+> (`0x6ab6c`): el ancho (1, 2 o 3 bytes) lo decide el escritor con un `csel`
+> según otros campos."
+
+⇒ **Eso es incorrecto**, y su `Perfil { campo4, campo22, campo23 }` (anchos
+1/2/3) hace que su lector **desalinee la cabecera real**.
+
+## La prueba
+
+`0x6ab6c` escribe **4 bytes fijos**, big-endian, sin ninguna rama de ancho:
+
+```
+6ab98:  lsr  w8, w20, #24      ; byte 3 (MSB)
+6ab9c:  strb w8, [x26], #1
+6ac34:  lsr  w8, w20, #16      ; byte 2
+6ac38:  strb w8, [x26], #1
+6acd0:  lsr  w8, w20, #8       ; byte 1
+6acd4:  strb w8, [x26], #1
+        strb w20, [x26], #1    ; byte 0 (LSB)
+```
+
+⇒ ⇒ **u32 BIG-ENDIAN de ancho fijo 4**. Los `csel` que se ven en el escritor
+**eligen el VALOR** de un campo (p. ej. `0x65660 cmp w22,#0` · `cset/cinc`
+eligen entre 0..3), **nunca el ancho**.
+
+Lo mismo con el hermano `0x6aa00`, que escribe **2 bytes fijos**
+(`lsr #8` y luego el byte bajo) ⇒ **u16 BE**.
+
+## Los 27 «escrituras» sí coinciden
+
+Contando el timestamp como 8 bytes, la secuencia de escrituras del escritor es
+de **27** en la variante de 96 B ⇒ **la misma** que la de esta tercera pasada
+⇒ ⇒ **los dos trabajos coinciden en el orden**; lo que se corrige es **el
+ancho de 3 campos**:
+
+| Campo | Anchos variables (afirmación ajena) | **Ancho real (medido)** |
+|---|---|---|
+| `encryptionMethodId` (offset 8) | 1, 2 ó 3 | **4** (u32 BE) |
+| campo 22 (`struct[0x18]`, offset 88) | 1, 2 ó 3 | **4** (u32 BE) |
+| campo 23 (`struct[0x10]`, offset 92/96) | 1, 2 ó 3 | **4** (u32 BE) |
+
+⇒ ⇒ **Cómo detectarlo sin `.dat`**: el total de la cabecera cuadra **exactamente**
+(96 / 144) sólo con estos anchos; con anchos variables, la suma no cuadra.
+
+⇒ ⇒ **Recomendación al enjambre**: que el módulo de cabecera tenga **una sola**
+fuente de verdad. La tabla medida está en
+`rust-core/src/swift_archive.rs::sba1_layout(formato)` (y su tabla completa
+aquí arriba). Los módulos `swift_sba1.rs` (raw + TAR/ZSTD) y
+`swift_sba1_header.rs` (byte a byte) son **complementarios**, pero el segundo
+debe usar los anchos fijos medidos aquí.
