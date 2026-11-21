@@ -1833,7 +1833,7 @@ pub fn classify_method(
             }
         }
     }
-    let (rule, suggested, mut confidence) = best?;
+    let (_rule, suggested, mut confidence) = best?;
     if looks_obfuscated(&method.method_name) {
         confidence = confidence.saturating_add(6);
     } else {
