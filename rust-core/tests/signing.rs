@@ -4,5 +4,4 @@
 //! aquí directamente con `#[path]`.  En cuanto se añada `pub mod signing;`
 //! a `src/lib.rs`, este arnés puede borrarse sin tocar los tests.
 
-#[path = "../src/signing.rs"]
-mod signing;
+use megadaemon_core::signing;

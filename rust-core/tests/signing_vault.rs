@@ -10,11 +10,10 @@
 //! instancias, que es la parte que el bus necesita para poder replicar el
 //! vault a toda la flota.
 
-#[path = "../src/signing_vault.rs"]
-mod signing_vault;
+use megadaemon_core::signing_vault;
 
 use base64ct::Encoding;
-use signing_vault::{sha256_hex, SigningVault, Zone};
+use megadaemon_core::signing_vault::{sha256_hex, SigningVault, Zone};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};

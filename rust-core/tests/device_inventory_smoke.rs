@@ -1,16 +1,16 @@
 //! W2 · Tests del inventario del dispositivo (`device_inventory`).
 //!
-//! El módulo se incluye por ruta para poder testearlo **sin el resto del
-//! crate** (que ahora mismo no compila sus tests por errores de otros
-//! módulos) y **sin dispositivo**: todo pasa por un `Source` doble con
-//! salidas canned.
+//! El módulo se usa desde la libreria (`use megadaemon_core::...`).
+//! MEDIDO el 2026-11-21: antes se copiaba con `#[path = "../src/x.rs"]`; dentro de
+//! un arnés `crate::` es la raíz del ARNÉS, así que un módulo copiado que usa
+//! `crate::otro_modulo` no resolvía (E0433) y **el target de test no compilaba**
+//! => la suite entera moría sin ejecutar ni un test.
 
 use serde_json::Value;
 
-#[path = "../src/device_inventory.rs"]
-mod device_inventory;
+use megadaemon_core::device_inventory;
 
-use device_inventory::{
+use megadaemon_core::device_inventory::{
     collect, manifest_ndjson, parse_accounts, parse_adb_keys, parse_cpuinfo, parse_df,
     parse_meminfo, parse_partitions, parse_pm_packages, parse_pm_versions, parse_props,
     parse_wifi_saved, risky_permissions, sha16, sha256_hex, FileDigest, Options, Source,

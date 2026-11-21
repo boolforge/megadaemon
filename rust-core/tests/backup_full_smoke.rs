@@ -10,10 +10,9 @@
 //! la zona pública se replica a todas las instancias y la zona privada
 //! **nunca sale del dispositivo**.
 
-#[path = "../src/backup_full.rs"]
-mod backup_full;
+use megadaemon_core::backup_full;
 
-use backup_full::{
+use megadaemon_core::backup_full::{
     build_pack, chunk_sha256, classify_zone, level_specs, not_recoverable, plan_chunks,
     sha256_file, verify_at_destination, Level, PackItem, Zone, EFS_NON_EXISTENT,
     EFS_SAFE_WORLD,

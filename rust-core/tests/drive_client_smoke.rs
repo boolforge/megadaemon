@@ -1,9 +1,8 @@
 //! Arnés de pruebas del cliente de Drive en streaming.
 
-#[path = "../src/drive_client.rs"]
-mod drive_client;
+use megadaemon_core::drive_client;
 
-use drive_client::*;
+use megadaemon_core::drive_client::*;
 
 fn creds() -> DriveCredentials {
     DriveCredentials {

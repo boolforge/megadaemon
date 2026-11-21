@@ -1,19 +1,14 @@
 //! Humo de la VOZ del daemon (`src/agent_voice.rs`).
 //!
-//! El módulo se compila AQUÍ por `#[path]`, sin tocar `lib.rs` (que es del
-//! principal): así los tests corren aunque `pub mod agent_voice;` todavía no
-//! esté cableado. Cuando el principal cablee el módulo, estos mismos tests
-//! siguen valiendo (el módulo se compila dos veces, con y sin `lib.rs`).
-//!
-//! Objetivo: que la voz (a) decida con criterio, (b) no repita acciones,
-//! (c) ejecute por la registry de tools, (d) difunda por los canales del
-//! enjambre sin filtrar secretos, y (e) degrade a criterio fijo si el LLM
-//! devuelve basura.
+//! El módulo se usa desde la libreria (`use megadaemon_core::...`).
+//! MEDIDO el 2026-11-21: antes se copiaba con `#[path = "../src/x.rs"]`; dentro de
+//! un arnés `crate::` es la raíz del ARNÉS, así que un módulo copiado que usa
+//! `crate::otro_modulo` no resolvía (E0433) y **el target de test no compilaba**
+//! => la suite entera moría sin ejecutar ni un test.
 
-#[path = "../src/agent_voice.rs"]
-mod agent_voice;
+use megadaemon_core::agent_voice;
 
-use agent_voice::*;
+use megadaemon_core::agent_voice::*;
 use serde_json::{json, Value};
 use std::cell::RefCell;
 

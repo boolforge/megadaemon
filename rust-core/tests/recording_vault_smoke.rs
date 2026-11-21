@@ -1,11 +1,9 @@
 //! Arnés de pruebas del gestor de grabaciones (estilo BCR-GUI).
 
-#[path = "../src/drive_client.rs"]
-mod drive_client;
-#[path = "../src/recording_vault.rs"]
-mod recording_vault;
+use megadaemon_core::drive_client;
+use megadaemon_core::recording_vault;
 
-use recording_vault::*;
+use megadaemon_core::recording_vault::*;
 
 fn árbol(dir: &str, name: &str, contenido: &[u8]) {
     let p = std::path::Path::new(dir).join(name);

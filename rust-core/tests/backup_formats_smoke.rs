@@ -1,9 +1,8 @@
 //! Arnés de pruebas de los lectores de formatos externos (tar / zip / Swift).
 
-#[path = "../src/backup_formats.rs"]
-mod backup_formats;
+use megadaemon_core::backup_formats;
 
-use backup_formats::*;
+use megadaemon_core::backup_formats::*;
 use flate2::write::DeflateEncoder;
 use flate2::Compression;
 use std::hash::Hasher;

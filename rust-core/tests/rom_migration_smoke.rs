@@ -11,10 +11,9 @@
 //! lo que importa en una migración de ROM: un plan que no aborta cuando debe
 //! acaba en un ladrillo.
 
-#[path = "../src/rom_migration.rs"]
-mod rom_migration;
+use megadaemon_core::rom_migration;
 
-use rom_migration::{compare_inventories, dry_run_report, efs_backup_plan, flash_plan, mark_efs_verified, plan_json, preflight, select_rom, AvbState, DeviceFacts, EfsBackupPlan, EFS_SAFE_WORLD, FlashStage, RomPackage, SelectionCriteria, UnlockState, omc_decode, omc_encode, omc_decode_gzip, omc_encode_gzip, csc_feature_get, csc_features, csc_feature_set, omc_feature_patch_plan, RECORDING_FEATURE, RECORDING_VALUE_ALLOWED, csc_recording_module_files, recording_value_recommended, recording_value_has_disclaimer, RECORDING_VALUE_ALLOWED_WITH_DISCLAIMER, RECORDING_VALUE_ALLOWED_WITH_DISCLAIMER_INDIA};
+use megadaemon_core::rom_migration::{compare_inventories, dry_run_report, efs_backup_plan, flash_plan, mark_efs_verified, plan_json, preflight, select_rom, AvbState, DeviceFacts, EfsBackupPlan, EFS_SAFE_WORLD, FlashStage, RomPackage, SelectionCriteria, UnlockState, omc_decode, omc_encode, omc_decode_gzip, omc_encode_gzip, csc_feature_get, csc_features, csc_feature_set, omc_feature_patch_plan, RECORDING_FEATURE, RECORDING_VALUE_ALLOWED, csc_recording_module_files, recording_value_recommended, recording_value_has_disclaimer, RECORDING_VALUE_ALLOWED_WITH_DISCLAIMER, RECORDING_VALUE_ALLOWED_WITH_DISCLAIMER_INDIA};
 use std::collections::BTreeMap;
 
 fn device_ready() -> DeviceFacts {

@@ -3,14 +3,12 @@
 //! `src/lib.rs` es intocable en esta tarea: el módulo se incluye con
 //! `#[path]` para poder compilar este arnés de forma aislada.
 
-#[path = "../src/call_recorder.rs"]
-mod call_recorder;
+use megadaemon_core::call_recorder;
 
-#[path = "../src/rom_migration.rs"]
-mod rom_migration;
+use megadaemon_core::rom_migration;
 
-use call_recorder::*;
-use rom_migration::{preconfig_install_plan, preconfig_state};
+use megadaemon_core::call_recorder::*;
+use megadaemon_core::rom_migration::{preconfig_install_plan, preconfig_state};
 
 #[test]
 fn las_fuentes_de_captura_declaran_bien_el_permiso() {

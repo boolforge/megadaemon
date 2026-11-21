@@ -8,10 +8,9 @@
 //! de feature *con disclaimer* el supervisor **se niega a armar** (en España,
 //! grabar a un tercero en silencio es delito: art. 197 CP, y además RGPD).
 
-#[path = "../src/call_recorder.rs"]
-mod call_recorder;
+use megadaemon_core::call_recorder;
 
-use call_recorder::*;
+use megadaemon_core::call_recorder::*;
 use std::path::PathBuf;
 
 fn tmpdir(nombre: &str) -> PathBuf {

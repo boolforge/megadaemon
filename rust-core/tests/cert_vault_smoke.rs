@@ -9,20 +9,12 @@
 //! `tests/argon2_smoke.rs`): `cert_vault` sólo depende de `crate::argon2` y
 //! `crate::aegis` de la biblioteca.
 
-#[path = "../src/aegis.rs"]
-#[allow(dead_code, unused_imports, unused_mut)]
-mod aegis;
-#[path = "../src/argon2.rs"]
-#[allow(dead_code, unused_imports, unused_mut)]
-mod argon2;
-#[path = "../src/backup_vault.rs"]
-#[allow(dead_code, unused_imports, unused_mut)]
-mod backup_vault;
-#[path = "../src/cert_vault.rs"]
-#[allow(dead_code, unused_imports, unused_mut)]
-mod cert_vault;
+use megadaemon_core::aegis;
+use megadaemon_core::argon2;
+use megadaemon_core::backup_vault;
+use megadaemon_core::cert_vault;
 
-use cert_vault::*;
+use megadaemon_core::cert_vault::*;
 use std::fs;
 use std::path::Path;
 

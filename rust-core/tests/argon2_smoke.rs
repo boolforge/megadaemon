@@ -1,9 +1,8 @@
 //! Arnés de pruebas de Argon2 (RFC 9106) contra los vectores oficiales.
 
-#[path = "../src/argon2.rs"]
-mod argon2;
+use megadaemon_core::argon2;
 
-use argon2::*;
+use megadaemon_core::argon2::*;
 
 fn h(s: &str) -> Vec<u8> {
     (0..s.len())

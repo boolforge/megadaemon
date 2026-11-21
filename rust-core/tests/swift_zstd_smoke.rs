@@ -3,10 +3,8 @@
 //! El frame ZSTD del test lo generó `libzstd` del sistema (nivel 3) ⇒ el
 //! productor del fixture es **independiente** del código que lo descomprime.
 
-#[path = "../src/zstd.rs"]
-mod zstd;
-#[path = "../src/swift_sba1.rs"]
-mod swift_sba1;
+use megadaemon_core::zstd;
+use megadaemon_core::swift_sba1;
 
 use std::path::Path;
 

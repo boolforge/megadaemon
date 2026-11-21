@@ -1,18 +1,15 @@
 //! Smoke test del inventario de Antigravity (`antigravity_intel`).
 //!
-//! Se incluye el módulo por ruta (`#[path]`) para **no tocar `lib.rs`**
-//! (regla del repo: `lib.rs`/`Cargo.toml` sólo con acuerdo). El wiring
-//! (`pub mod antigravity_intel;`) lo hace el principal.
-//!
-//! El test monta un árbol `.gemini` sintético y comprueba, sobre todo, que
-//! **ningún valor de credencial sale del módulo**: sólo nombres de campo y
-//! sha16.
+//! El módulo se usa desde la libreria (`use megadaemon_core::...`).
+//! MEDIDO el 2026-11-21: antes se copiaba con `#[path = "../src/x.rs"]`; dentro de
+//! un arnés `crate::` es la raíz del ARNÉS, así que un módulo copiado que usa
+//! `crate::otro_modulo` no resolvía (E0433) y **el target de test no compilaba**
+//! => la suite entera moría sin ejecutar ni un test.
 
 use std::fs;
 use std::path::PathBuf;
 
-#[path = "../src/antigravity_intel.rs"]
-mod antigravity_intel;
+use megadaemon_core::antigravity_intel;
 
 use self::antigravity_intel::*;
 

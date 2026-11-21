@@ -11,10 +11,9 @@
 //! real. El módulo tiene 11 tests propios; este arnés añade la comprobación
 //! de extremo a extremo con la forma exacta de la salida de `dumpsys audio`.
 
-#[path = "../src/call_recorder.rs"]
-mod call_recorder;
+use megadaemon_core::call_recorder;
 
-use call_recorder::{
+use megadaemon_core::call_recorder::{
     detect_active_call, detect_media_projection, detect_source, list_recordings, plan_capture,
     plan_video_capture, CallSession, CallSource, RecorderConfig,
 };

@@ -7,18 +7,15 @@
 //!   escuchaba en ningún puerto.  Este test fija ese estado como
 //!   `not_operational` y comprueba que el doctor lo dice en claro.
 //!
-//! El módulo se incluye por ruta (`#[path]`) para no tocar `lib.rs`, que es
-//! del agente principal; el principal lo cablea cuando quiera.
-//!
-//! Ejecutar:
-//!   export PATH="$HOME/.cargo/bin:$PATH"
-//!   cd /workspace/megadaemon/rust-core
-//!   CARGO_TARGET_DIR=/workspace/md-t-cockpit cargo test --test cockpit_doctor_smoke -- --nocapture
+//! El módulo se usa desde la libreria (`use megadaemon_core::...`).
+//! MEDIDO el 2026-11-21: antes se copiaba con `#[path = "../src/x.rs"]`; dentro de
+//! un arnés `crate::` es la raíz del ARNÉS, así que un módulo copiado que usa
+//! `crate::otro_modulo` no resolvía (E0433) y **el target de test no compilaba**
+//! => la suite entera moría sin ejecutar ni un test.
 
-#[path = "../src/cockpit_doctor.rs"]
-mod cockpit_doctor;
+use megadaemon_core::cockpit_doctor;
 
-use cockpit_doctor::{diagnose, DoctorEnv, Health, Probe};
+use megadaemon_core::cockpit_doctor::{diagnose, DoctorEnv, Health, Probe};
 use std::collections::BTreeMap;
 
 /// Sonda falsa: el doctor no toca el sistema, así que el test decide el mundo.

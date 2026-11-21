@@ -10,10 +10,9 @@
 //! necesitan el módulo como externos (coste real, cuota agotada y
 //! procedencia de precios).
 
-#[path = "../src/delegate.rs"]
-mod delegate;
+use megadaemon_core::delegate;
 
-use delegate::{price_provenance, pricing_ledger, pricing_report, pricing_stale, DelegateEngine};
+use megadaemon_core::delegate::{price_provenance, pricing_ledger, pricing_report, pricing_stale, DelegateEngine};
 
 fn cuenta(id: &str, tier: &str, model: &str, caps: &[&str], cuota: Option<u32>) -> delegate::ProviderAccount {
     delegate::ProviderAccount {

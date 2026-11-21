@@ -1,11 +1,9 @@
 //! Arnés de pruebas de AEGIS-256 contra los vectores de la RFC 10032.
 
-#[path = "../src/backup_vault.rs"]
-mod backup_vault;
-#[path = "../src/aegis.rs"]
-mod aegis;
+use megadaemon_core::backup_vault;
+use megadaemon_core::aegis;
 
-use aegis::*;
+use megadaemon_core::aegis::*;
 
 fn h(s: &str) -> Vec<u8> {
     (0..s.len())

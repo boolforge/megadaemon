@@ -119,11 +119,28 @@ fn cada_pub_mod_de_lib_rs_tiene_su_fichero() {
     );
 }
 
+/// MEDIDO el 2026-11-21: los arneses ya NO copian los módulos de la libreria
+/// con `#[path] = "../src/x.rs"`.
+///
+/// Por qué era un bug (no sólo estilo): dentro de un **arnés**,
+/// `crate::` es la raíz del ARNÉS, no de la libreria ⇒ un módulo copiado que
+/// usa `crate::util_fs` (o `crate::cockpit_server`, …) **no resolvía** ⇒
+/// `error[E0433]` ⇒ **el target de test no compilaba** ⇒ `cargo test` moría
+/// con rc=101 **sin ejecutar ni un test** ⇒ el job "calidad" del CI quedaba
+/// en rojo sin que nadie supiera por qué (y sin binario identificable).
+///
+/// Ahora los arneses usan `use megadaemon_core::<modulo>;` ⇒ (a) compilan,
+/// (b) no hay copias que se queden viejas, (c) el `crate::` del módulo
+/// resuelve contra la libreria de verdad.
+///
+/// Este test vigila que **no vuelva** el patrón roto: si un arnés vuelve a
+/// copiar un módulo de `src/`, el fichero incluido tiene que existir Y el
+/// módulo copiado no debe usar `crate::` (si lo usa, no compila).
 #[test]
-fn cada_path_de_los_arnes_tiene_su_fichero() {
+fn los_arnes_usan_la_libreria_y_no_copian_modulos() {
     let dir = raiz().join("tests");
-    let mut rotos = Vec::new();
-    let mut revisados = 0usize;
+    let mut copias = Vec::new();
+    let mut incluidos = 0usize;
     if let Ok(entradas) = std::fs::read_dir(&dir) {
         for e in entradas.flatten() {
             let p = e.path();
@@ -138,21 +155,31 @@ fn cada_path_de_los_arnes_tiene_su_fichero() {
                     let resto = &l[inicio + PRE.len()..];
                     if let Some(fin) = resto.find('"') {
                         let rel = &resto[..fin];
-                        revisados += 1;
-                        if !raiz().join("src").join(rel).is_file() {
-                            rotos.push(format!("{} -> src/{rel}", p.display()));
+                        incluidos += 1;
+                        let f = raiz().join("src").join(format!("{rel}.rs"));
+                        if !f.is_file() {
+                            copias.push(format!("{} -> src/{rel}.rs (NO EXISTE)", p.display()));
+                            continue;
+                        }
+                        // si el módulo copiado usa `crate::`, no va a compilar
+                        let cuerpo = leer(&f);
+                        if cuerpo.contains("crate::") {
+                            copias.push(format!(
+                                "{} copia src/{rel}.rs y ese módulo usa `crate::` (no compila en un arnés)",
+                                p.display()
+                            ));
                         }
                     }
                 }
             }
         }
     }
-    assert!(revisados > 0, "no se encontró ningún #[path] en los arneses");
     assert!(
-        rotos.is_empty(),
-        "arneses con #[path] a ficheros inexistentes: {}",
-        rotos.join(", ")
+        copias.is_empty(),
+        "arneses que copian módulos de la libreria (usa `use megadaemon_core::`): {}",
+        copias.join(", ")
     );
+    let _ = incluidos;
 }
 
 #[test]
