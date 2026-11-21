@@ -452,7 +452,7 @@ mod tests {
             fields: vec![
                 HeaderField { name: "flags".into(), offset: 4, width: 2, big_endian: true },
                 HeaderField { name: "headerSize".into(), offset: 6, width: 2, big_endian: true },
-                HeaderField { name: "kdfIterations".into(), offset: 18, width: 2, big_endian: true },
+                HeaderField { name: "kdfIterations".into(), offset: 30, width: 2, big_endian: true },
             ],
             byte_blocks: vec![ByteBlock {
                 name: "salt".into(),
@@ -476,7 +476,7 @@ mod tests {
         v[6..8].copy_from_slice(&96u16.to_be_bytes()); // headerSize
         v[10..12].copy_from_slice(&16u16.to_be_bytes()); // len del bloque
         v[12..28].copy_from_slice(&[7u8; 16]); // salt
-        v[18..20].copy_from_slice(&42u16.to_be_bytes()); // kdfIterations
+        v[30..32].copy_from_slice(&42u16.to_be_bytes()); // kdfIterations (fuera del salt)
         v
     }
 
