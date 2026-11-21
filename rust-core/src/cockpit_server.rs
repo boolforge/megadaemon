@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -371,6 +371,34 @@ pub const EMBEDDED_TEMPLATE: &str = include_str!("../../web/cockpit_template.htm
 pub const EMBEDDED_V2_HTML: &str = include_str!("../../web/cockpit_v2.html");
 pub const EMBEDDED_V2_CSS: &str = include_str!("../../web/webui_v2.css");
 
+/// Ruta del HTML de la UI v2 **desplegado en disco** (si existe).
+///
+/// La UI v2 iba embebida => llegar al movil exigia **recompilar** el binario
+/// (cualquier arreglo de CSS/HTML se quedaba en el repo hasta la siguiente
+/// build).  Con esto, desplegar `web/cockpit_v2.html` y `web/webui_v2.css` en
+/// `<base_dir>/web/` actualiza la interfaz **sin tocar el binario**, igual que
+/// la plantilla v1, que ya se sirve desde disco.
+pub fn v2_html_path(base: &str) -> PathBuf {
+    Path::new(base).join("web").join("cockpit_v2.html")
+}
+
+/// Ruta de la hoja de estilos de la UI v2 **desplegada en disco** (si existe).
+pub fn v2_css_path(base: &str) -> PathBuf {
+    Path::new(base).join("web").join("webui_v2.css")
+}
+
+/// Etiqueta de procedencia de un asset de la UI: `disk` (fichero desplegado)
+/// o `embedded` (copia dentro del binario).  Viaja en la cabecera
+/// `X-Megadaemon-UI-Source` => el bootstrap del PC puede comprobar **sin
+/// adivinar** que la UI que se sirve es la del disco.
+fn ui_source_tag(from_disk: bool) -> &'static str {
+    if from_disk {
+        "disk"
+    } else {
+        "embedded"
+    }
+}
+
 /// Ruta con query, como la espera `webui::dispatch` (que hace `split_query`).
 fn with_query(path: &str, query: &str) -> String {
     if query.is_empty() {
@@ -675,6 +703,17 @@ fn cors_allowed(origin: &str, host: &str) -> bool {
 }
 
 fn send_http_response(stream: &mut TcpStream, status: u16, content_type: &str, body: &[u8]) {
+    send_http_response_with(stream, status, content_type, body, "")
+}
+
+/// Como [`send_http_response`] pero con una cabecera extra.
+fn send_http_response_with(
+    stream: &mut TcpStream,
+    status: u16,
+    content_type: &str,
+    body: &[u8],
+    extra_header: &str,
+) {
     let status_text = match status {
         200 => "OK",
         400 => "Bad Request",
@@ -688,6 +727,7 @@ fn send_http_response(stream: &mut TcpStream, status: u16, content_type: &str, b
         "HTTP/1.1 {} {}\r\n\
          Content-Type: {}\r\n\
          Content-Length: {}\r\n\
+         {extra_header}\
          Access-Control-Allow-Origin: {cors}\r\n\
          Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
          Access-Control-Allow-Headers: Content-Type, X-Seere-Auth-Token\r\n\
@@ -817,6 +857,16 @@ const MAX_CLIENT_THREADS: usize = 64;
 /// Clientes concurrentes en curso.
 static ACTIVE_CLIENTS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
+
+/// Respuesta que se envía cuando un handler hace panic.
+///
+/// AUDIT (C-07): un panic **no** puede cortar la conexión: el túnel
+/// traducía el corte en 502 y el cliente veía "el daemon está muerto".
+/// Ahora la petición que falla responde **500** y el resto del cockpit
+/// sigue sirviendo.
+fn panic_response_bytes() -> &'static [u8] {
+    b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+}
 
 fn handle_client(mut stream: TcpStream) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
@@ -1080,7 +1130,12 @@ fn handle_client(mut stream: TcpStream) {
                 // el navegador no dependa del canje (el token de la pagina
                 // publica SOLO se entrega al navegador local; el resto usa el
                 // canje API key -> token).
-                let html = EMBEDDED_V2_HTML.to_string();
+                // v15 (W1): primero el fichero desplegado (actualizar la UI
+                // sin recompilar); si no esta, la copia embebida.
+                let (html, from_disk) = match fs::read_to_string(v2_html_path(&base_dir())) {
+                    Ok(h) => (h, true),
+                    Err(_) => (EMBEDDED_V2_HTML.to_string(), false),
+                };
                 // Igual que en "/": el token de sesion se incrusta SOLO al
                 // navegador LOCAL del dispositivo (su JS lo adjunta a cada
                 // llamada => lecturas y escrituras sin pedir nada).  La pagina
@@ -1098,20 +1153,28 @@ fn handle_client(mut stream: TcpStream) {
                     Some(i) => format!("{}{}{}", &html[..i], inject, &html[i..]),
                     None => format!("{}{}", inject, html),
                 };
-                send_http_response(
+                send_http_response_with(
                     &mut stream,
                     200,
                     "text/html; charset=utf-8",
                     html.as_bytes(),
+                    &format!("X-Megadaemon-UI-Source: {}\r\n", ui_source_tag(from_disk)),
                 );
                 return;
             }
             "/webui_v2.css" => {
-                send_http_response(
+                // v15 (W1): el CSS desplegado en disco manda sobre el embebido
+                // => actualizar la interfaz no exige recompilar.
+                let (css, from_disk) = match fs::read(v2_css_path(&base_dir())) {
+                    Ok(c) => (c, true),
+                    Err(_) => (EMBEDDED_V2_CSS.as_bytes().to_vec(), false),
+                };
+                send_http_response_with(
                     &mut stream,
                     200,
                     "text/css; charset=utf-8",
-                    EMBEDDED_V2_CSS.as_bytes(),
+                    &css,
+                    &format!("X-Megadaemon-UI-Source: {}\r\n", ui_source_tag(from_disk)),
                 );
                 return;
             }
@@ -2650,11 +2713,19 @@ pub fn run_server(port: u16) -> Result<(), String> {
                     // panic queda contenido aquí y el resto del cockpit sigue
                     // sirviendo.  Antes moría el proceso entero y el túnel
                     // veía 502 aunque el daemon "estuviera vivo".
+                    // Se clona el socket ANTES de consumirlo: si el handler
+                    // hace panic, la misma conexión recibe un 500 en vez de
+                    // cerrarse a medias (el túnel lo traducía en 502).
+                    let dup = stream.try_clone().ok();
                     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         handle_client(stream);
                     }));
                     if r.is_err() {
-                        eprintln!("cockpit: panic capturado en una conexión (aislado; el servicio sigue)");
+                        eprintln!("cockpit: panic capturado en una conexión (se responde 500; el servicio sigue)");
+                        if let Some(mut s) = dup {
+                            let _ = s.write_all(panic_response_bytes());
+                            let _ = s.flush();
+                        }
                     }
                     ACTIVE_CLIENTS.fetch_sub(1, Ordering::Relaxed);
                 });
@@ -2674,6 +2745,44 @@ pub fn run_server(port: u16) -> Result<(), String> {
 /// romper ningún acceso existente (bookmarks, túnel, scripts).  Todos sirven
 /// la MISMA instancia y comparten token, estado y cola de tareas.
 pub const ALIAS_PORTS: &[u16] = &[3000, 3030, 8090, 9090];
+
+#[cfg(test)]
+mod v2_asset_tests {
+    use super::*;
+
+    /// La UI v2 se toma de disco si el fichero existe; si no, la embebida.
+    #[test]
+    fn la_ui_v2_se_toma_de_disco_si_existe() {
+        let base = std::env::temp_dir().join(format!("md-v2asset-{}", std::process::id()));
+        let web = base.join("web");
+        std::fs::create_dir_all(&web).expect("dir");
+        let base_s = base.to_string_lossy().to_string();
+        let html = v2_html_path(&base_s);
+        let css = v2_css_path(&base_s);
+        assert_eq!(html, web.join("cockpit_v2.html"));
+        assert_eq!(css, web.join("webui_v2.css"));
+        // La cabecera dice de donde sale la UI.
+        assert_eq!(ui_source_tag(false), "embedded");
+        assert_eq!(ui_source_tag(true), "disk");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod panic_response_tests {
+    use super::*;
+
+    /// Un panic debe producir un 500 en la MISMA conexión (no un corte):
+    /// el túnel traducía el corte en 502.
+    #[test]
+    fn un_panic_responde_500_y_no_corta_la_conexion() {
+        let b = panic_response_bytes();
+        let s = String::from_utf8_lossy(b);
+        assert!(s.starts_with("HTTP/1.1 500 Internal Server Error"), "cabeza: {}", s);
+        assert!(s.contains("Content-Length: 0"));
+        assert!(s.ends_with("\r\n\r\n"), "debe cerrar la cabecera HTTP");
+    }
+}
 
 #[cfg(test)]
 mod channel_json_tests {
