@@ -144,19 +144,24 @@ pub fn errno_name(e: i32) -> &'static str {
 // Sondeo
 // --------------------------------------------------------------------------
 
-/// `libc::ioctl` cambia el tipo del *request* segun la arquitectura: en
-/// x86/x86_64 es `c_ulong` (u64) y en el resto (aarch64-android) es `c_int`
-/// (i32).  Sin este envoltorio el crate **no compila para ARM64**:
-/// `E0308: expected i32, found u64`.
+/// `libc::ioctl` cambia el tipo del *request* segun el **sistema operativo**,
+/// no segun la arquitectura:
+///
+/// * **Linux** (x86_64, aarch64-linux-gnu, ...): el request es `c_ulong`.
+/// * **Android** (aarch64-android, x86-android, ...): el request es `c_int`.
+///
+/// Decidir por la arquitectura rompia el build de
+/// `aarch64-unknown-linux-gnu` (`E0308: expected u64, found i32`): aarch64 en
+/// Linux usa `c_ulong`, pero el mismo aarch64 en Android usa `c_int`.
 #[inline]
 unsafe fn ioctl_raw(fd: RawFd, code: u32, arg: *mut libc::c_void) -> libc::c_int {
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    {
-        libc::ioctl(fd, code as libc::c_ulong, arg)
-    }
-    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    #[cfg(target_os = "android")]
     {
         libc::ioctl(fd, code as libc::c_int, arg)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        libc::ioctl(fd, code as libc::c_ulong, arg)
     }
 }
 
