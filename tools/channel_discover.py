@@ -2,24 +2,28 @@
 # -*- coding: utf-8 -*-
 """Redescubre el canal del móvil (instancia maestra) desde el sandbox.
 
-El móvil publica su estado en un **paste público** (lo hace `channel-publish`,
-que es el mismo código Rust que la tool MCP `channel_publish`). El contenido
-del paste incluye la URL del paste anterior ⇒ la cadena es **auto-renovable**:
-el sandbox que conoce **un** paste aprende el siguiente.
+⚠️ **Por qué el paste NO basta** (medido): cada publicación crea un paste
+**nuevo** ⇒ el sandbox que conoce el paste P1 **no puede descubrir P2**
+(el campo `prev_paste` sólo apunta hacia atrás). Por eso el punto canónico
+es el **repo**: el `raw` de `state/channel.json` **siempre** sirve la última
+versión ⇒ el sandbox la puede pollar y ve el cambio de hostname sin que
+nadie le copie una URL a mano.
 
 Orden de descubrimiento:
-  1. `--paste <url>`  : paste conocido (arranca la cadena).
-  2. el último paste guardado en `--state` (por defecto `~/.mavis/channel.json`).
-  3. el dominio estable de DuckDNS (`--duckdns <dominio>`), si el usuario
-     abrió el puerto en el router.
+  1. **canónico** (`--canonical`, por defecto el `raw` del repo): estado
+     actual, siempre.
+  2. **paste** (`--paste`): el último paste conocido (y su cadena hacia
+     atrás, como respaldo si el repo no está accesible).
+  3. **dominio estable** (`--duckdns`): si el usuario abrió el puerto.
 
 Uso:
+    tools/channel_discover.py                       # canónico + respaldo
+    tools/channel_discover.py --canonical https://raw.githubusercontent.com/.../channel.json
     tools/channel_discover.py --paste https://paste.rs/abcd
     tools/channel_discover.py --duckdns mdtmfnc-s21.duckdns.org
-    tools/channel_discover.py            # usa el último guardado
 
-Imprime el estado del canal (JSON) y la URL viva del quick tunnel.
-NO contiene secretos: la key del MCP va aparte (ficheros 0600).
+Imprime el estado del canal en JSON. NO contiene secretos: la key del MCP va
+en ficheros 0600 aparte.
 """
 import argparse
 import json
@@ -30,6 +34,8 @@ import urllib.request
 
 TIMEOUT = 20
 UA = "MegaDaemon-channel-discover"
+CANONICAL_DEF = ("https://raw.githubusercontent.com/boolforge/megadaemon/"
+                 "main/state/channel.json")
 
 
 def fetch(url, timeout=TIMEOUT):
@@ -38,16 +44,35 @@ def fetch(url, timeout=TIMEOUT):
         return r.read().decode("utf-8", errors="replace")
 
 
-def desde_paste(url):
-    """El paste contiene el JSON del canal (o texto plano con la URL)."""
-    texto = fetch(url).strip()
+def desde_json(texto):
+    """El contenido puede ser JSON o texto plano con la URL."""
+    texto = texto.strip()
     try:
         return json.loads(texto)
     except json.JSONDecodeError:
-        # Paste de texto plano: se asume que es la URL del túnel.
         if texto.startswith("http"):
             return {"quick": texto.splitlines()[0].strip()}
         raise
+
+
+def desde_canonico(url):
+    """El `raw` del repo: SIEMPRE la última versión del estado."""
+    v = desde_json(fetch(url))
+    if not isinstance(v, dict):
+        return None
+    if not (v.get("quick") or v.get("duckdns")):
+        return None
+    v["_fuente"] = url
+    return v
+
+
+def desde_paste(url):
+    v = desde_json(fetch(url))
+    if not isinstance(v, dict):
+        return None
+    v["_fuente"] = url
+    v.setdefault("canonical", CANONICAL_DEF)
+    return v
 
 
 def desde_duckdns(dominio):
@@ -59,11 +84,12 @@ def desde_duckdns(dominio):
         headers={"User-Agent": UA, "Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            cuerpo = r.read().decode("utf-8", errors="replace")
-            return {"duckdns": base, "http_status": r.status, "cuerpo": cuerpo[:400]}
+            return {"duckdns": base, "http_status": r.status,
+                    "cuerpo": r.read().decode("utf-8", errors="replace")[:400]}
     except urllib.error.HTTPError as e:
         # 401/403 = el daemon respondió: el canal estable FUNCIONA.
-        return {"duckdns": base, "http_status": e.code, "cuerpo": e.read().decode()[:200]}
+        return {"duckdns": base, "http_status": e.code,
+                "cuerpo": e.read().decode(errors="replace")[:200]}
     except Exception as e:
         return {"duckdns": base, "error": f"{type(e).__name__}: {e}"}
 
@@ -76,41 +102,62 @@ def guardar(estado, ruta):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--paste", help="URL de un paste conocido")
+    ap.add_argument("--canonical", default=CANONICAL_DEF,
+                    help="URL estable del estado (raw del repo)")
+    ap.add_argument("--paste", help="URL de un paste conocido (respaldo)")
     ap.add_argument("--duckdns", help="dominio estable (p.ej. mdtmfnc-s21.duckdns.org)")
     ap.add_argument("--state", default="~/.mavis/channel.json",
                     help="fichero local donde se guarda el último estado")
     ap.add_argument("--no-guardar", action="store_true")
+    ap.add_argument("--sin-canonico", action="store_true",
+                    help="ignorar el punto canónico (sólo paste/duckdns)")
     args = ap.parse_args()
 
-    estado = {}
-    if args.paste:
+    estado = None
+    avisos = []
+
+    # 1) canónico: el que de verdad manda
+    if not args.sin_canonico:
         try:
-            estado = desde_paste(args.paste)
-            print(f"paste {args.paste} -> OK", file=sys.stderr)
+            estado = desde_canonico(args.canonical)
+            if estado:
+                print(f"canónico {args.canonical} -> OK", file=sys.stderr)
         except Exception as e:
-            print(f"ERROR leyendo el paste: {type(e).__name__}: {e}", file=sys.stderr)
-            return 2
-    else:
-        ruta = os.path.expanduser(args.state)
-        if os.path.exists(ruta):
+            avisos.append(f"canónico no accesible: {type(e).__name__}: {e}")
+
+    # 2) paste (el conocido, o el último guardado) + cadena hacia atrás
+    if estado is None:
+        url_paste = args.paste
+        if not url_paste:
+            ruta = os.path.expanduser(args.state)
+            if os.path.exists(ruta):
+                try:
+                    url_paste = json.load(open(ruta)).get("paste")
+                except Exception:
+                    url_paste = None
+        if url_paste:
             try:
-                previo = json.load(open(ruta))
-                url = previo.get("paste")
-                if url:
-                    estado = desde_paste(url)
-                    print(f"paste anterior {url} -> OK", file=sys.stderr)
+                estado = desde_paste(url_paste)
+                print(f"paste {url_paste} -> OK", file=sys.stderr)
             except Exception as e:
-                print(f"ERROR con el estado previo: {e}", file=sys.stderr)
-                return 2
-        if not estado:
-            print("sin paste conocido: usa --paste o --duckdns", file=sys.stderr)
-            return 1
+                avisos.append(f"paste no accesible: {type(e).__name__}: {e}")
 
+    # 3) dominio estable
     if args.duckdns:
-        estado["duckdns_estado"] = desde_duckdns(args.duckdns)
+        d = desde_duckdns(args.duckdns)
+        if estado is None:
+            estado = d
+        else:
+            estado["duckdns_estado"] = d
 
-    # El paste encadena al siguiente: se guarda para la próxima vez.
+    if estado is None:
+        for a in avisos:
+            print(a, file=sys.stderr)
+        print("sin canal: usa --canonical, --paste o --duckdns", file=sys.stderr)
+        return 1
+
+    if avisos:
+        estado["_avisos"] = avisos
     if not args.no_guardar:
         try:
             guardar(estado, args.state)

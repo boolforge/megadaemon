@@ -89,6 +89,51 @@ fn main() -> ExitCode {
         return ExitCode::from(0);
     }
 
+    // ── Publicación en el REPO (URL canónica y estable) ──────────────────────
+    // El paste rota en cada publicación ⇒ el sandbox no puede descubrir el
+    // siguiente. El `raw` del repo **siempre** sirve la última versión ⇒ es el
+    // punto canónico de descubrimiento. El token va de un fichero 0600 o del
+    // entorno: nunca se imprime.
+    if flag("--repo-publish") {
+        let repo = arg("--repo").unwrap_or_else(|| "boolforge/megadaemon".to_string());
+        let (owner, name) = repo.split_once('/').unwrap_or(("boolforge", "megadaemon"));
+        let path = arg("--path").unwrap_or_else(|| "state/channel.json".to_string());
+        let token = match arg("--token-file") {
+            Some(p) => std::fs::read_to_string(p).ok().map(|s| s.trim().to_string()),
+            None => std::env::var("MEGADAEMON_GITHUB_TOKEN").ok(),
+        }
+        .filter(|t| !t.is_empty());
+        let Some(token) = token else {
+            let msg = json!({
+                "ok": false,
+                "error": "no_github_token",
+                "hint": "ponlo en un fichero 0600 (--token-file) o en MEGADAEMON_GITHUB_TOKEN",
+            });
+            println!("{}", serde_json::to_string_pretty(&msg).unwrap_or_default());
+            return ExitCode::from(1);
+        };
+        let estado = channel::read_channel_json(state_dir.as_deref()).unwrap_or_else(|| json!({}));
+        let texto = serde_json::to_string_pretty(&estado).unwrap_or_default();
+        // El `match` produce el código de salida (no puede ser una sentencia
+        // whose arms devuelven ExitCode: eso no compila).
+        let codigo = match channel::publish_to_repo(owner, name, &path, &token, &texto) {
+            Some(out) => {
+                println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+                if out.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+                    ExitCode::from(0)
+                } else {
+                    ExitCode::from(1)
+                }
+            }
+            None => {
+                let msg = json!({ "ok": false, "error": "no_se_pudo_publicar_en_el_repo" });
+                println!("{}", serde_json::to_string_pretty(&msg).unwrap_or_default());
+                ExitCode::from(1)
+            }
+        };
+        return codigo;
+    }
+
     let out = channel::publish(
         state_dir.as_deref(),
         quick.as_deref(),

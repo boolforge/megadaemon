@@ -40,6 +40,74 @@ pub const PASTE_URL: &str = "https://paste.rs";
 /// Respaldo: si paste.rs no responde, se prueba éste.
 pub const PASTE_URL_ALT: &str = "https://paste.c-net.org/";
 
+/// **URL canónica y estable** del estado del canal: el fichero del **repo**.
+///
+/// ⚠️ Por qué hace falta: el paste **rota** en cada publicación ⇒ una cadena
+/// de pastes sólo se puede seguir **hacia atrás** (`prev_paste`), así que el
+/// sandbox que conoce un paste **no puede descubrir el siguiente**. El *raw*
+/// del repo **siempre sirve la última versión** ⇒ el sandbox la puede pollar
+/// y.descubrir el cambio de URL sin que nadie le copie nada a mano.
+pub const CANONICAL_URL: &str =
+    "https://raw.githubusercontent.com/boolforge/megadaemon/main/state/channel.json";
+
+/// Publica un fichero en el repo con la **Contents API** de GitHub ⇒ la URL
+/// `raw` de ese fichero es estable y siempre sirve la última versión.
+///
+/// El token se lee fuera (fichero 0600 o entorno) y **nunca** se registra.
+pub fn publish_to_repo(
+    owner: &str,
+    repo: &str,
+    path: &str,
+    token: &str,
+    text: &str,
+) -> Option<Value> {
+    use base64ct::Encoding;
+    let b64 = base64ct::Base64::encode_string(text.as_bytes());
+    let url = format!("https://api.github.com/repos/{owner}/{repo}/contents/{path}");
+    let body = json!({
+        "message": "canal: estado del canal (quick tunnel + canal estable)",
+        "content": b64,
+        "branch": "main",
+    })
+    .to_string();
+
+    let cfg = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(20)))
+        .timeout_connect(Some(Duration::from_secs(6)))
+        .http_status_as_error(false)
+        .build();
+    let agent = ureq::Agent::new_with_config(cfg);
+    let resp = agent
+        .put(&url)
+        .header("Authorization", &format!("Bearer {token}"))
+        .header("User-Agent", "MegaDaemon-channel")
+        .header("Accept", "application/vnd.github+json")
+        .send(body.as_bytes())
+        .ok()?;
+    let status = resp.status().as_u16();
+    let texto = resp.into_body().read_to_string().unwrap_or_default();
+    // 200 = creado, 201 = actualizado.
+    if !(status == 200 || status == 201) {
+        return Some(json!({
+            "ok": false,
+            "http_status": status,
+            "detail": "la Contents API no acepto la publicacion",
+        }));
+    }
+    let v: Value = serde_json::from_str(&texto).unwrap_or(Value::Null);
+    Some(json!({
+        "ok": true,
+        "http_status": status,
+        "canonical": canonical_url(owner, repo, path),
+        "commit": v.get("content").and_then(|c| c.get("sha")).and_then(|s| s.as_str()),
+    }))
+}
+
+/// URL `raw` canónica para un fichero del repo.
+pub fn canonical_url(owner: &str, repo: &str, path: &str) -> String {
+    format!("https://raw.githubusercontent.com/{owner}/{repo}/main/{path}")
+}
+
 /// Nombre del fichero de estado del canal.
 pub const CHANNEL_JSON: &str = "channel.json";
 
@@ -243,9 +311,11 @@ pub fn publish(
         .unwrap_or("")
         .to_string();
 
-    // 2) el paste lleva la URL del paste anterior (cadena auto-renovable)
+    // 2) el paste lleva la URL del paste anterior (cadena auto-renovable) y
+    //    **la URL canónica** (que es la que de verdad sirve lo último).
     if let Some(o) = estado.as_object_mut() {
         o.insert("prev_paste".to_string(), json!(paste_previo));
+        o.insert("canonical".to_string(), json!(CANONICAL_URL));
         o.insert("ts".to_string(), json!(now_iso()));
     }
     let texto = serde_json::to_string_pretty(&estado).unwrap_or_default();
