@@ -18,7 +18,8 @@ LIMITACIONES CONOCIDAS (medidas sobre un DEX real de 6 MB, 38.816 cadenas):
   * Una cadena puede estar en la tabla y NO referenciada desde el codigo
     (p.ej. una URL de un campo estatico no inicializado en el sitio esperado):
     para eso hay que cruzarla con `resources.arsc` (los recursos SI llevan URLs).
-  * El opcode de una instruccion DEX va en el BYTE ALTO del primer halfword
+  * El opcode de una instruccion DEX va en el BYTE BAJO del primer halfword
+    (los code units son little-endian: `op | AA<<8`), como en ART.
     (`AA|op`); tomar el byte bajo escanea basura. Ojo con esto.
 """
 import struct, sys, zipfile, os, re
@@ -63,15 +64,19 @@ class Dex:
         units = struct.unpack_from("<%dH" % ins, b, code_off + 16)
         out = []
         nstr = len(self.strs)
-        # OJO 1: en DEX el opcode va en el BYTE ALTO del primer halfword
-        #        (formato "AA|op BBBB"), no en el bajo. Tomar u & 0xFF escanea basura.
+        # OJO 1: en un DEX los code units se guardan en LITTLE-ENDIAN y el
+        #        primer BYTE de la instruccion es el opcode => con el halfword
+        #        leido como u16 el opcode esta en el byte BAJO (`op | AA<<8`),
+        #        igual que ART (`inst & 0xff`).  Tomar el byte ALTO escanea
+        #        basura (el comentario anterior decia lo contrario: estaba
+        #        equivocado y hacia que este tool no encontrara NADA).
         # OJO 2: el INDICE de la cadena NO esta en la unidad del opcode: en
         #        const-string (21c) esta en la UNIDAD SIGUIENTE; en
         #        const-string/jumbo (31c) en las DOS siguientes.
         #        (Antes se leia el propio halfword del opcode => indices basura
         #         => 0 coincidencias en TODO el DEX.)
         for i in range(len(units) - 1):
-            op = units[i] >> 8
+            op = units[i] & 0xFF
             if op == 0x1a:                            # const-string
                 idx = units[i + 1]
                 if idx < nstr:
@@ -107,47 +112,47 @@ class Dex:
         return out
 
     def _value(self, o):
-        """Devuelve (posicion_siguiente, [idx_cadena]) de un encoded_value."""
+        """Devuelve (posicion_siguiente, [idx_cadena]) de un encoded_value.
+
+        ANCHO REAL (medido el 2026-11-21 en los DEX de Swift Backup, 0 tipos
+        desconocidos y el ultimo blob justo en el limite de la seccion): el
+        payload **no** tiene ancho fijo por tipo => vale `value_arg + 1` bytes.
+        El tipo dice COMO interpretar; `value_arg` dice CUANTOS bytes hay.
+        NULL (0x1e) y BOOLEAN (0x1f) NO tienen payload (el booleano va en
+        `value_arg`); ARRAY (0x1c) y ANNOTATION (0x1d) son estructurados.
+        Antes se usaba un ancho fijo (2 bytes para todo indice) => el parseo se
+        desincronizaba en cuanto un indice ocupaba 1, 3 o 4 bytes.
+        """
         b = self.b
         head = b[o]; o += 1
         typ = head & 0x1F; arg = head >> 5
+        n = arg + 1
         if typ == 0x17:      # STRING
-            idx = struct.unpack_from("<H", b, o)[0]
-            return o + 2, [idx]
-        if typ == 0x18:      # TYPE
-            return o + 2 + arg * 2, []
-        if typ in (0x19, 0x1a, 0x1b):   # FIELD/METHOD/ENUM
-            return o + 2 + arg * 4, []
-        if typ == 0x15 or typ == 0x16:  # METHOD_TYPE / METHOD_HANDLE
-            return o + 2, []
+            idx = int.from_bytes(b[o:o+n], "little")
+            return o + n, [idx]
+        if typ in (0x15, 0x16, 0x18, 0x19, 0x1a, 0x1b):
+            # METHOD_TYPE / METHOD_HANDLE / TYPE / FIELD / METHOD / ENUM
+            return o + n, []
         if typ == 0x1c:      # ARRAY
-            n = struct.unpack_from("<I", b, o)[0]
-            o += 4
+            cnt, o = uleb(o)
             idxs = []
-            for _ in range(n):
+            for _ in range(cnt):
                 o, got = self._value(o)
                 idxs.extend(got)
             return o, idxs
         if typ == 0x1d:      # ANNOTATION
-            o += 1  # type_idx
-            n = struct.unpack_from("<I", b, o)[0]; o += 4
-            for _ in range(n):
-                o += 2  # name_idx
+            _, o = uleb(o)          # type_idx
+            cnt, o = uleb(o)        # numero de elementos
+            for _ in range(cnt):
+                _, o = uleb(o)      # name_idx
                 o, _g = self._value(o)
             return o, []
         if typ == 0x1e:      # NULL
             return o, []
-        if typ == 0x1f:      # BOOLEAN
-            return o + 1, []
-        if typ == 0x00:      # BYTE
-            return o + 1, []
-        if typ == 0x02 or typ == 0x03:
-            return o + 2, []
-        if typ == 0x04 or typ == 0x10:
-            return o + 4, []
-        if typ == 0x06 or typ == 0x11:
-            return o + 8, []
-        return o, []
+        if typ == 0x1f:      # BOOLEAN (el valor va en `arg`)
+            return o, []
+        # numericos: BYTE/SHORT/CHAR/INT/LONG/FLOAT/DOUBLE
+        return o + n, []
 
     def walk(self):
         """(clase, metodo, [idx_cadena]) por cada metodo con codigo."""

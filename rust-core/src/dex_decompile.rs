@@ -1219,92 +1219,99 @@ fn read_encoded_value(bytes: &[u8], pos: &mut usize) -> Result<String, String> {
     *pos += 1;
     let value_type = header & 0x1f;
     let value_arg = (header >> 5) as usize;
+    let start = *pos;
 
-    // Los anchos son FIJOS por tipo (ver dalvik/libdex/InstrUtils.h):
-    // no dependen de `value_arg` (que sólo se usa en BOOLEAN).
-    let read_int = |pos: &mut usize, size: usize| -> Result<u64, String> {
+    // **ANCHO REAL DEL PAYLOAD (medido el 2026-11-21 en los DEX de Swift
+    // Backup, con 0 tipos desconocidos y el ultimo blob justo en el limite
+    // de la seccion):** el payload **NO** tiene ancho fijo por tipo => vale
+    // `value_arg + 1` bytes.  El tipo dice COMO interpretar; `value_arg` dice
+    // CUANTOS bytes hay.
+    //   * un INT se codifica `0x64` => value_arg=3 => 4 bytes de payload;
+    //   * un indice de tipo `0x37` => value_arg=1 => indice de 2 bytes;
+    //   * NULL (0x1e) y BOOLEAN (0x1f) NO tienen payload (el booleano va
+    //     en `value_arg`); ARRAY (0x1c) y ANNOTATION (0x1d) son estructurados.
+    // ANTES esta funcion usaba anchos FIJOS (2 bytes para todo indice), lo
+    // que desincronizaba el parseo en cuanto un indice ocupaba 1, 3 o 4
+    // bytes => "tipo desconocido 0x07" y valores basura.
+    let payload = value_arg + 1;
+
+    // OJO: `read_u8` recibe el offset POR VALOR => hay que avanzar el `pos`
+    // a mano.  Sin este `*pos += n` el parseo NUNCA consumia el payload => se
+    // quedaba atascado en el mismo byte y la siguiente instruccion leia basura
+    // ("tipo desconocido 0x07/0x01").  Medido el 2026-11-21.
+    let read_bytes = |pos: &mut usize, n: usize| -> Result<u64, String> {
         let mut v: u64 = 0;
-        for i in 0..size {
-            let b = read_u8(bytes, *pos)? as u64;
+        for i in 0..n {
+            let b = read_u8(bytes, *pos + i)? as u64;
             v |= b << (8 * i);
         }
+        *pos += n;
         Ok(v)
     };
-    // Referencias (string/type/field/method/enum/proto): indice u16.
-    let read_idx = |pos: &mut usize| -> Result<u16, String> {
-        Ok(read_int(pos, 2)? as u16)
+    // Sign-extend desde n bytes (el valor ocupa los bytes menos significativos).
+    let sext = |v: u64, n: usize| -> i64 {
+        if n == 0 {
+            return 0;
+        }
+        if n >= 8 {
+            return v as i64;
+        }
+        let shift = 64 - 8 * n;
+        (((v << shift) as i64) >> shift) as i64
     };
 
     let value = match value_type {
         0x00 => {
-            // VALUE_BYTE (1 byte)
-            let v = read_int(pos, 1)? as u8;
-            format!("{}", v as i8)
+            // VALUE_BYTE
+            let n = payload.min(1);
+            format!("{}", sext(read_bytes(pos, n)?, n) as i8)
         }
         0x02 => {
-            // VALUE_SHORT (2 bytes)
-            let v = read_int(pos, 2)? as u16;
-            format!("{}", v as i16)
+            // VALUE_SHORT
+            let n = payload.min(2);
+            format!("{}", sext(read_bytes(pos, n)?, n) as i16)
         }
         0x03 => {
-            // VALUE_CHAR (2 bytes)
-            let v = read_int(pos, 2)? as u16;
-            format!("'{}'", char::from_u32(v as u32).unwrap_or('?'))
+            // VALUE_CHAR
+            let n = payload.min(2);
+            let v = read_bytes(pos, n)? as u32;
+            format!("'{}'", char::from_u32(v).unwrap_or('?'))
         }
         0x04 => {
-            // VALUE_INT (4 bytes)
-            let v = read_int(pos, 4)? as u32;
-            format!("{}", v as i32)
+            // VALUE_INT
+            let n = payload.min(4);
+            format!("{}", sext(read_bytes(pos, n)?, n) as i32)
         }
         0x06 => {
-            // VALUE_LONG (8 bytes)
-            let v = read_int(pos, 8)?;
-            format!("{}", v as i64)
+            // VALUE_LONG
+            let n = payload.min(8);
+            format!("{}", sext(read_bytes(pos, n)?, n))
         }
         0x10 => {
-            // VALUE_FLOAT (4 bytes)
-            let v = read_int(pos, 4)? as u32;
+            // VALUE_FLOAT
+            let n = payload.min(4);
+            let v = read_bytes(pos, n)? as u32;
             format!("{}", f32::from_bits(v))
         }
         0x11 => {
-            // VALUE_DOUBLE (8 bytes)
-            let v = read_int(pos, 8)?;
+            // VALUE_DOUBLE
+            let n = payload.min(8);
+            let v = read_bytes(pos, n)?;
             format!("{}", f64::from_bits(v))
         }
-        0x15 => {
-            // VALUE_METHOD_TYPE (u16)
-            let v = read_idx(pos)?;
-            format!("<proto#{}>", v)
-        }
-        0x16 => {
-            // VALUE_METHOD_HANDLE (u16)
-            let v = read_idx(pos)?;
-            format!("<method_handle#{}>", v)
-        }
-        0x17 => {
-            // VALUE_STRING (u16) -- indice SIEMPRE de 2 bytes
-            let v = read_idx(pos)?;
-            format!("\"<string#{}>\"", v)
-        }
-        0x18 => {
-            // VALUE_TYPE (u16)
-            let v = read_idx(pos)?;
-            format!("<type#{}>", v)
-        }
-        0x19 => {
-            // VALUE_FIELD (u16)
-            let v = read_idx(pos)?;
-            format!("<field#{}>", v)
-        }
-        0x1a => {
-            // VALUE_METHOD (u16)
-            let v = read_idx(pos)?;
-            format!("<method#{}>", v)
-        }
-        0x1b => {
-            // VALUE_ENUM (u16)
-            let v = read_idx(pos)?;
-            format!("<enum#{}>", v)
+        0x15 | 0x16 | 0x17 | 0x18 | 0x19 | 0x1a | 0x1b => {
+            // Referencias: indice de `value_arg + 1` bytes (1..4).
+            let n = payload.min(4);
+            let idx = read_bytes(pos, n)?;
+            match value_type {
+                0x15 => format!("<proto#{}>", idx),
+                0x16 => format!("<method_handle#{}>", idx),
+                0x17 => format!("\"<string#{}>\"", idx),
+                0x18 => format!("<type#{}>", idx),
+                0x19 => format!("<field#{}>", idx),
+                0x1a => format!("<method#{}>", idx),
+                _ => format!("<enum#{}>", idx),
+            }
         }
         0x1c => {
             // VALUE_ARRAY: uleb128 count + values
@@ -1336,7 +1343,8 @@ fn read_encoded_value(bytes: &[u8], pos: &mut usize) -> Result<String, String> {
             format!("{}", value_arg != 0)
         }
         other => {
-            return Err(format!("encoded_value con tipo desconocido 0x{:02x}", other));
+            let ctx: Vec<String> = bytes[start.saturating_sub(8).min(bytes.len())..(start+8).min(bytes.len())].iter().map(|b| format!("{:02x}", b)).collect();
+            return Err(format!("encoded_value con tipo desconocido 0x{:02x} en pos {} (ctx {})", other, start, ctx.join(" ")));
         }
     };
     Ok(value)
@@ -1397,6 +1405,10 @@ fn parse_annotation_set(
 ) -> Result<Vec<DexAnnotation>, String> {
     let size = read_u32(bytes, off)? as usize;
     let mut out = Vec::with_capacity(size.min(1024));
+    // `annotation_off_item`: en los DEX reales (R8, p.ej. Swift Backup) son
+    // **u32 ABSOLUTOS** (no uleb128 relativos como dice el texto del formato):
+    // medido en classes2.dex => los valores caen justo en la seccion
+    // `annotation_item` del `map_list`.  Se leen absolutos.
     for i in 0..size.min(4096) {
         let item_off = read_u32(bytes, off + 4 + i * 4)? as usize;
         if item_off == 0 {
@@ -1426,7 +1438,8 @@ fn parse_annotation_item(
     let mut elements = Vec::with_capacity(size.min(1024));
     for _ in 0..size.min(4096) {
         let name_idx = read_uleb128(bytes, &mut pos)?;
-        let value = read_encoded_value(bytes, &mut pos)?;
+        let value = read_encoded_value(bytes, &mut pos)
+            .map_err(|e| format!("annotation_item@{} elem#{}: {}", off, name_idx, e))?;
         elements.push(DexAnnotationElement {
             name: format!("<string#{}>", name_idx),
             value,
@@ -1885,9 +1898,14 @@ fn payload_info(insns: &[u16], offset: usize, ident: u16) -> (&'static str, usiz
 /// Decodifica una instrucción a partir de su offset en el array de código.
 fn decode_insn(dex: &DexFile, insns: &[u16], offset: usize) -> (DalvikInsn, usize) {
     let unit0 = insns.get(offset).copied().unwrap_or(0);
-    // OJO: en DEX el opcode va en el BYTE ALTO del primer code unit
-    // (formato "AA|op"); tomar el byte bajo decodifica basura.
-    let opcode = ((unit0 >> 8) & 0xff) as u8;
+    // OJO: en un DEX los code units se guardan en LITTLE-ENDIAN y el primer
+    // BYTE de la instruccion es el opcode => con el unit leido como u16 el
+    // opcode esta en el byte **BAJO** (`op | AA<<8`), igual que hace ART
+    // (`inst & 0xff`).  Tomar el byte ALTO decodifica basura (casi todo
+    // "nop") => desensamblados sin sentido.  Medido el 2026-11-21 sobre
+    // classes.dex de Swift Backup: con el byte bajo las instrucciones salen
+    // limpias (move-object/from16, if-eqz, iget-boolean, invoke-virtual...).
+    let opcode = (unit0 & 0xff) as u8;
     let (mnemonic, format) = opcode_info(opcode);
     let width = instruction_width(opcode).max(1);
     let raw: Vec<u16> = insns
@@ -2969,8 +2987,8 @@ fn find_encrypted_strings(dex: &DexFile) -> Vec<EncryptedString> {
                 .unwrap_or_default();
             let mut offset = 0usize;
             while offset < code.insns.len() {
-                // opcode = byte ALTO del code unit (ver decode_insn).
-                let opcode = ((code.insns[offset] >> 8) & 0xff) as u8;
+                // opcode = byte BAJO del code unit (ver decode_insn).
+                let opcode = (code.insns[offset] & 0xff) as u8;
                 let width = instruction_width(opcode).max(1);
                 if opcode == 0x26 && offset + 2 < code.insns.len() {
                     let delta = ((code.insns[offset + 2] as i32) << 16) | code.insns[offset + 1] as i32;
@@ -4898,8 +4916,8 @@ mod tests {
                     ins: 1,
                     outs: 0,
                     // const-string v0, "hello" ; return-void
-                    // (formato 21c: unit0 = (op<<8)|AA, unit1 = BBBB = indice)
-                    insns: vec![0x1a00, 0x0002, 0x0e00],
+                    // (formato 21c: unit0 = op | (AA<<8), unit1 = BBBB = indice)
+                    insns: vec![0x001a, 0x0002, 0x000e],
                 },
                 TestMethod {
                     method_idx: m_a_obf as u32,
@@ -4908,7 +4926,7 @@ mod tests {
                     ins: 2,
                     outs: 0,
                     // const/4 v0, #1 (11n: op 0x12, B=1,A=0) ; return v0 (11x: op 0x0f)
-                    insns: vec![0x1210, 0x0f00],
+                    insns: vec![0x1012, 0x000f],
                 },
             ],
             virtual_methods: vec![],
@@ -4926,7 +4944,7 @@ mod tests {
                     registers: 1,
                     ins: 1,
                     outs: 0,
-                    insns: vec![0x0e00],
+                    insns: vec![0x000e],
                 },
                 TestMethod {
                     method_idx: m_b_a as u32,
@@ -4941,17 +4959,17 @@ mod tests {
                     // 0006: return-void
                     // 0007: nop (alineación)
                     // 0008: payload fill-array-data (ident 0x0300)
-                    // Layout REAL de las instrucciones (opcode en el byte alto):
+                    // Layout REAL de las instrucciones (opcode en el byte bajo):
                     //   fill-array-data (31t) = 3 unidades
                     //   goto (10t)            = 2 unidades
                     //   return-void (10x)     = 1 unidad
                     //   el payload arranca en un offset alineado a 4 bytes.
                     insns: vec![
-                        0x2600, 0x0008, 0x0000, // fill-array-data v0, +8
-                        0x2800, 0x0002, // goto +2 (x3, codigo basura): salta a la siguiente
-                        0x2800, 0x0002,
-                        0x2800, 0x0002,
-                        0x0e00, // return-void
+                        0x0026, 0x0008, 0x0000, // fill-array-data v0, +8
+                        0x0028, 0x0002, // goto +2 (x3, codigo basura): salta a la siguiente
+                        0x0028, 0x0002,
+                        0x0028, 0x0002,
+                        0x000e, // return-void
                         0x0000, 0x0000, // nops de relleno (alineacion)
                         0x0300, 0x0001, 0x0004, 0x0000, // payload: ident, width=1, size=4
                         0xadde, 0xefbe, // datos: de ad be ef
@@ -4980,16 +4998,18 @@ mod tests {
         assert_eq!(opcode_info(0x00), ("nop", "10x"));
         assert_eq!(opcode_info(0x1a), ("const-string", "21c"));
 
-        // REGRESION (v15): el opcode de una instruccion DEX va en el BYTE
-        // ALTO del primer code unit (formato "AA|op").  Tomar el byte bajo
-        // decodificaba basura: los vectores de test estaban construidos con
-        // el mismo error, asi que pasaban igual.  Ahora los vectores son
-        // reales y este test ata el comportamiento.
-        assert_eq!(0x1a00u16 >> 8, 0x1a, "const-string: opcode en el byte alto");
-        assert_eq!(0x1a00u16 & 0xff, 0x00, "AA (registro destino) en el byte bajo");
-        assert_eq!(0x0e00u16 >> 8, 0x0e, "return-void");
-        assert_eq!(0x0f00u16 >> 8, 0x0f, "return v0");
-        assert_eq!(0x1210u16 >> 8, 0x12, "const/4 v0, #1");
+        // REGRESION (corregida el 2026-11-21): en un DEX los code units se
+        // guardan en LITTLE-ENDIAN y el primer BYTE de la instruccion es el
+        // opcode => leido el unit como u16, el opcode esta en el byte BAJO
+        // (`op | AA<<8`), igual que hace ART (`inst & 0xff`).
+        // El comentario anterior ("opcode en el byte ALTO") estaba
+        // EQUIVOCADO: hacia que el desensamblado fuera casi todo "nop" y que
+        // los vectores de test (construidos con el mismo error) pasaran.
+        assert_eq!(0x001au16 & 0xff, 0x1a, "const-string: opcode en el byte bajo");
+        assert_eq!(0x001au16 >> 8, 0x00, "AA (registro destino) en el byte alto");
+        assert_eq!(0x000eu16 & 0xff, 0x0e, "return-void");
+        assert_eq!(0x000fu16 & 0xff, 0x0f, "return v0");
+        assert_eq!(0x1012u16 & 0xff, 0x12, "const/4 v0, #1");
         assert_eq!(opcode_info(0x6e), ("invoke-virtual", "35c"));
         assert_eq!(opcode_info(0x74), ("invoke-virtual/range", "3rc"));
         assert_eq!(opcode_info(0xfa), ("invoke-polymorphic", "45cc"));
@@ -5341,7 +5361,7 @@ mod tests {
                 registers: 1,
                 ins: 1,
                 outs: 0,
-                insns: vec![0x1a00, 0x0001, 0x0e00],
+                insns: vec![0x001a, 0x0001, 0x000e],
             }],
             virtual_methods: vec![],
         });
