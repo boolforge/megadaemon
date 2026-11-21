@@ -1,345 +1,236 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Genera `docs/SOFTWARE_INVENTORY_VERDICT.md` a partir del inventario MEDIDO
-del S21 Ultra (`inventory/inventory.json`, W2) y de un catalogo curado.
+"""Genera `docs/SOFTWARE_INVENTORY_VERDICT.md` desde datos **medidos** del móvil.
 
-Reglas del veredicto (ver `docs/SOFTWARE_INVENTORY_VERDICT.md` §1):
+Fuentes (todas reales, ninguna inventada):
 
-  DESINSTALAR      hay evidencia medida de que la app (a) sube datos del
-                   usuario a un servidor de terceros, o (b) pide permisos
-                   peligrosos que no necesita para su funcion declarada, o
-                   (c) es una app reempaquetada/pirata.
-  REIMPLEMENTAR    la funcion cabe en el mega-binario Rust de MegaDaemon
-                   (motor de parcheo, gestor de grabaciones, lector de backup,
-                   laboratorio de desofuscacion).
-  KEEP             app legitima, sin evidencia medida en contra.
+  * `inventory/inventory.json`      — inventario W2 del S21 Ultra: 1719 paquetes con
+                                     permisos de riesgo, firma, target_sdk, versión,
+                                     estado y ruta de la APK.
+  * `<refs>/dumpsys_package`        — volcado real de `dumpsys package`: instalador,
+                                     fechas de instalación/actualización y estado `pm`.
+                                     **Opcional**: sin él, esas columnas salen como
+                                     `PENDIENTE` (no se inventan).
+  * `rust-core/src/app_intel.rs`    — `VERDICT_CATALOG`: fuente **única** de los
+                                     veredictos y del módulo Rust destino.  El código y
+                                     este documento no pueden discrepar porque leen lo
+                                     mismo.
 
-Todo lo que sale del veredicto automatico procede del inventario real
-(permisos, firma, version, target_sdk, habilitada).  Lo que no se puede
-medir todavia va marcado como PENDIENTE, nunca como "no pasa nada".
+Reglas del veredicto (las mismas que `crate::app_intel::verdict_for`):
+
+  DESINSTALAR        hay evidencia **medida**: permisos peligrosos que la app no
+                     necesita, APK repaquetado que sube el APK a un tercero, relicto
+                     deshabilitado, o duplicado cuya función ya cubre otra app.
+  REIMPLEMENTAR      la función cabe en un módulo concreto del mega-binario Rust:
+                     el veredicto **nombra el módulo destino**.
+  KEEP               no hay evidencia medida en contra.  Las apps de sistema
+                     (Samsung/Google/AOSP) no se desinstalan: viven en la partición.
 
 Uso:
-    python3 tools/verdict_inventory.py            # escribe el doc
-    python3 tools/verdict_inventory.py --check    # solo valida (>=40 filas)
-    python3 tools/verdict_inventory.py --json     # vuelca el veredicto
+    python3 tools/verdict_inventory.py                 # escribe el doc
+    python3 tools/verdict_inventory.py --check         # valida (>=40 filas medidas)
+    python3 tools/verdict_inventory.py --json          # vuelca el veredicto
+    python3 tools/verdict_inventory.py --refs RUTAS    # volca dumpsys desde RUTAS
 """
 
 import argparse
 import json
 import os
+import re
 import sys
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INVENTORY = os.path.join(ROOT, "inventory", "inventory.json")
+RUST_CATALOG = os.path.join(ROOT, "rust-core", "src", "app_intel.rs")
 OUT_MD = os.path.join(ROOT, "docs", "SOFTWARE_INVENTORY_VERDICT.md")
+DEFAULT_REFS = os.path.join(ROOT, "inventory", "refs")
 
-# ---------------------------------------------------------------------------
-# Catalogo curado.  `fuente` dice de donde sale cada celda:
-#   M  = medido en el movil (inventario W2: permisos, firma, version, estado)
-#   A  = medido en el APK (hashes, DEX, artefactos embebidos)
-#   D  = deducido del repo (docs del fleet, medidas ya publicadas)
-#   P  = PENDIENTE de medicion (el movil esta caido; no se inventa)
-# ---------------------------------------------------------------------------
-# (paquete, nombre, categoria, funcion, rust, veredicto, justificacion, funcion_fuente)
-CATALOG = [
-    # --- RE / parcheadores / grabadores (el nucleo del encargo) ------------
-    ("ru.drjmwdme.cgwbfzijr", "MarinaPatcher (Lucky Patcher reempaquetado)",
-     "RE / parcheador", "Parchea APKs, hookea metodos, re-firma, bypasea licencias de Play",
-     "SI (motor de parcheo + hook)",
-     "DESINSTALAR",
-     "Sube el APK que parchea a un tercero (http://patch.chelpus.com/submit) y trae 2 IPs crudas "
-     "(109.95.209.70:8008 sin TLS, https://149.56.155.246/luckypatcher/); ademas pide root "
-     "(ACCESS_SUPERUSER), es modulo Xposed (com.xposed.XSupport) y empaqueta las claves de firma de "
-     "AOSP + apksigner => puede re-firmar cualquier APK. El classes.dex es IDENTICO al de Lucky "
-     "Patcher (sha256 5b0d376ddc79d4ff409f3158b382a335da1b7157a53815211c1d77c4f1200a79): solo "
-     "cambian el paquete y el icono.",
-     "A"),
-    ("org.lsposed.lspatch", "LSPatch", "RE / parcheador",
-     "Inyecta un modulo en un APK y lo re-firma (el nucleo open-source de Lucky Patcher)",
-     "SI (motor de parcheo DEX/APK)", "KEEP",
-     "Open-source (LSPosed),GPL, sin red ni telemetria propia medidos; es la via legitima que ya "
-     "tenemos instalada. Se mantiene hasta que el motor Rust lo sustituya.",
-     "D"),
-    ("io.mesalabs.knoxpatch", "KnoxPatch", "RE / parcheador",
-     "Parcheo de APK con soporte de Knox (Samsung)", "SI (motor de parcheo)",
-     "KEEP", "Open-source y ya instalada; su funcion (parcheo) la asume el motor Rust. "
-             "Medido: 3.364.844 B de APK.", "D"),
-    ("org.meowcat.edxposed.manager", "EdXposed (manager)", "RE / framework de hooks",
-     "Gestor del framework de hooks LSPosed/EdXposed", "SI (motor de hooks)",
-     "KEEP", "Open-source; el motor de hooks del mega-binario lo cubre. Medido: 3.550.938 B.", "D"),
-    ("com.htetz.monopatch", "MonoPatch", "RE / parcheador",
-     "Parche de un solo DEX", "SI (motor de parcheo)", "KEEP",
-     "Open-source; su funcion es un caso del motor de parcheo Rust.", "D"),
-    ("ru.bluecat.sberbankpatcher", "SberbankPatcher", "RE / parcheador",
-     "Parche surgical de UNA app concreta (banco)", "SI (ejemplo de parche surgical)",
-     "KEEP", "Open-source; sirve de referencia de diseno para el parche surgical (APK + hook).", "D"),
-    ("io.github.huskydg.magisk", "Magisk (27.2-kitsune)", "RE / root",
-     "Root + MagiskHide + modulos systemless", "NO (se usa, no se reimplementa)",
-     "KEEP", "Es el 'sistema de archivos' de la flota: sin el no hay modulos systemless ni "
-             "MagiskHide. Medido: 12.770.643 B de APK; AVB green con flash.locked=1.", "D"),
-    ("com.legendsayantan.adbtools", "ADB tools", "RE / utileria",
-     "Utilidades ADB desde el movil", "NO (ya lo hace el cliente ADB en Rust, rust-core/src/adb_client.rs)",
-     "KEEP", "Medido: 5.585.559 B. Su funcion ya la cubre megadaemon-adb (Rust puro).", "D"),
-    ("adb.captain", "adb captain", "RE / utileria",
-     "Utilidades ADB (packaged)", "NO (mismo criterio que ADB tools)",
-     "KEEP", "Medido: 29.174.974 B (la mas grande de las dos). Su funcion la cubre el cliente "
-             "ADB en Rust; se puede desinstalar cuando el usuario lo confirme.", "D"),
-    ("org.swiftapps.swiftbackup", "Swift Backup", "Backup",
-     "Backup y restauracion de apps (AEGIS-256 + Zstd)", "SI (lector de formatos)",
-     "KEEP", "Ecosistema abierto y cifrado; el lector de sus formatos ya esta en el fleet "
-             "(backup_formats.rs).", "D"),
-    ("com.callapp.contacts", "CallApp / Lucky Patcher (recarga)", "RE / dudoso",
-     "Lleva el recurso lucky_patcher_package; NO es el parcheador (el parcheador es MarinaPatcher)",
-     "SI (limpieza de recursos huerfanos)", "DESINSTALAR",
-     "Pide 23 permisos de riesgo (el maximo de todo el movil) con target_sdk 29 y esta DESHABILITADA: "
-     "no hace nada y declara permisos que no necesita. Medido en el inventario (firma d7f1f224, "
-     "23 permisos, OFF).", "M"),
-    ("app.revanced.android.gms", "ReVanced GMS (microG parcheado)", "Sistema / parcheado",
-     "Google Play Services parcheado para no depender de la tienda", "NO (se usa)",
-     "KEEP", "Play Services parcheado: es la pieza que sustituye a las apps de parche tipo "
-             "Lucky Patcher para lo basico. Medido: 19 permisos de riesgo, target_sdk 29.", "M"),
-    ("com.huami.watch.hmwatchmanager", "Huami Watch Manager", "BASURA / relicto",
-     "Gestor de smartwatch Xiaomi/Huami", "NO", "DESINSTALAR",
-     "Relicto de un smartwatch: 21 permisos de riesgo (CAMERA, READ_PHONE_STATE, ubicacion, "
-     "microfono...) en un movil, y esta DESHABILITADA. Medido en el inventario.", "M"),
-    ("com.mc.amazfit1", "Amazfit", "BASURA / relicto",
-     "App del reloj Amazfit", "NO", "DESINSTALAR",
-     "Relicto de wearable: 20 permisos de riesgo en un movil, DESHABILITADA. Medido.", "M"),
-    ("com.xiaomi.hm.health", "Mi Fitness (Xiaomi)", "BASURA / relicto",
-     "App de salud de Xiaomi", "NO", "DESINSTALAR",
-     "Relicto de wearable: 20 permisos de riesgo (incluye CAMERA y ubicacion fina), DESHABILITADA.", "M"),
-    ("com.xplora.kidswatch360", "Kids Watch 360 (Xplora)", "BASURA / relicto",
-     "App de reloj infantil", "NO", "DESINSTALAR",
-     "Relicto de wearable infantil: 19 permisos de riesgo y DESHABILITADA. Medido.", "M"),
-    ("org.kde.kdeconnect_tp", "KDE Connect (telefono)", "BASURA / relicto",
-     "KDE Connect para el telefono (receptor de notificaciones del PC)", "NO",
-     "DESINSTALAR", "La variante de telefono no tiene counterpart en este movil: 18 permisos de "
-                     "riesgo y DESHABILITADA. Medido.", "M"),
+# Fecha del volcado W2 (el inventario publicado en el repo).
+W2_CAPTURE = "2026-07-20"
 
-    # --- Grabadores ---------------------------------------------------------
-    ("com.microsoft.YourPhone_P1_5", "Microsoft Phone (Your Phone)", "Grabador / Microsoft's",
-     "Enlace con el PC; una de las 2 apps que DECLARAN CAPTURE_AUDIO_OUTPUT", "SI (gestor de grabaciones)",
-     "KEEP", "Medido: en el barrido de 398 APKs / 5.580 MB es una de las solo 2 apps que declaran "
-             "CAPTURE_AUDIO_OUTPUT. Es de Microsoft: el permiso es legitimo, pero conviene "
-             "saber que la tiene.", "M"),
-    ("com.microsoft.LinkToWindowsService", "Link to Windows (servicio)", "Grabador / Microsoft's",
-     "Servicio de enlace con el PC; la otra app que DECLARA CAPTURE_AUDIO_OUTPUT", "SI (gestor)",
-     "KEEP", "Medido: declara CAPTURE_AUDIO_OUTPUT (barrido de 398 APKs). Mismo criterio que "
-             "Your Phone.", "M"),
-    ("com.samsung.android.ool", "Mantenimiento del dispositivo (Samsung)", "Sistema / grabador nativo",
-     "Mantenimiento del dispositivo; es la app que en Europa avisa por voz de la grabacion",
-     "NO (se usa)", "KEEP", "Con CSC=AMO (Orange Espana) es la via de grabacion NATIVA: el modulo de "
-                           "grabador de llamadas de MegaDaemon se apoya en ella.", "D"),
-    ("com.axyos.contacts", "BCR (Basic Call Recorder)", "Grabador",
-     "Grabador de llamadas basico", "SI (gestor de grabaciones, NO grabador silencioso)",
-     "KEEP", "Grabador de llamadas. Nota legal: la via silenciosa (grabar sin avisar) es delito en "
-             "Espana (art. 197 CP) y vulnera el GDPR => el mega-binario aporta el GESTOR "
-             "(listar, transcribir, cifrar, subir), no la grabacion silenciosa.", "D"),
+# Estado `pm` de un paquete (dumpsys): 0 = DEFAULT, 1 = ENABLED,
+# 2 = DISABLED, 3 = DISABLED_USER, 4 = DISABLED_UNTIL_USED.
+PM_STATE = {
+    "0": "activa",
+    "1": "activa",
+    "2": "deshabilitada",
+    "3": "deshabilitada por el usuario",
+    "4": "deshabilitada hasta que se use",
+}
 
-    # --- Herramientas RE y de desarrollo -----------------------------------
-    ("com.termux", "Termux", "Terminal / desarrollo",
-     "Terminal y entorno de desarrollo en el movil", "NO (lo usa el fleet: bash, python3, git)",
-     "KEEP", "Es el entorno en el que vive buena parte del tooling del fleet (incluye el "
-             "interprete Python y curl que usa el supervisor).", "D"),
-    ("com.termux.api", "Termux:API", "Terminal / desarrollo",
-     "Puente de Termux con la API de Android (SMS, llamadas, bateria)", "NO (lo usa el fleet)",
-     "KEEP", "Lo usa el supervisor y los modulos de root del fleet.", "D"),
-    ("com.agy", "Antigravity (IDE de Google)", "RE / IDE",
-     "IDE de Google que habla MCP: consume las tools de MegaDaemon por HTTP", "SI (cliente MCP ya "
-     "implementado en rust-core/src/antigravity_intel.rs)", "KEEP",
-     "Medido: 14 GB (el mayor blob del movil); es el cliente MCP que valida el carril W5 "
-     "(45 tools, puente HTTP Streamable verificado con 200).", "M"),
-    ("ru.drjmwdme.cgwbfzijr.bak", "MarinaPatcher (copia)", "BASURA", "Residuo", "NO",
-     "DESINSTALAR", "Duplicado del APK reempaquetado; mismo criterio que MarinaPatcher.", "A"),
-    ("net.osmand.plus", "OsmAnd+", "Navegacion", "Mapas y navegacion offline", "NO", "KEEP",
-     "App legitima del usuario.", "P"),
-    ("com.google.android.googlequicksearchbox", "Google (buscador/launcher)",
-     "Sistema / launcher", "Buscador y launcher de Google", "NO", "KEEP",
-     "Medido: 21 permisos de riesgo; es el launcher del sistema, no se toca.", "M"),
-    ("com.whatsapp", "WhatsApp", "Mensajeria", "Mensajeria", "NO", "KEEP",
-     "Medido: 19 permisos de riesgo (normal en un messenger). App legitima del usuario.", "M"),
-    ("org.telegram.messenger", "Telegram", "Mensajeria", "Mensajeria", "NO", "KEEP",
-     "Medido: 18 permisos de riesgo. App legitima del usuario.", "M"),
-    ("us.zoom.videomeetings", "Zoom", "Videollamadas", "Videollamadas", "NO", "KEEP",
-     "Medido: 17 permisos de riesgo. App legitima del usuario.", "M"),
-    ("com.facebook.stella", "Messenger Lite", "Mensajeria", "Mensajeria ligera", "NO", "KEEP",
-     "Medido: 20 permisos de riesgo. Si el usuario no lo usa, es una app mas que pesa.", "M"),
-    ("com.samsung.android.spay", "Samsung Pay", "Pagos", "Pagos Samsung", "NO", "KEEP",
-     "Medido: 18 permisos de riesgo. App de sistema del fabricante.", "M"),
-    ("com.google.android.dialer", "Telefono (Google)", "Sistema", "Marcador y llamadas", "NO",
-     "KEEP", "Medido: 18 permisos de riesgo. App de sistema.", "M"),
-    ("com.samsung.android.oneconnect", "Samsung OneConnect", "Sistema", "Enlace con el PC Samsung",
-     "NO", "KEEP", "Medido: 19 permisos de riesgo. Equivalente Samsung de Your Phone.", "M"),
-    ("com.sec.android.easyMover.Agent", "EasyMover (Samsung)", "Sistema Samsung",
-     "Migracion de datos entre moviles Samsung", "NO", "KEEP",
-     "Medido: APK 3.195.723 B, sha256 3800f7fd..., DEX 1.460.228 B, 225 identificadores de 1-2 "
-     "caracteres (ofuscados). Vive en /system/app: no se actualiza sin particion de sistema.", "A"),
-    ("com.samsung.android.rampart", "Rampart (Samsung)", "Sistema Samsung",
-     "Modulo de seguridad/anti-tamper de Samsung", "NO", "KEEP",
-     "Medido: APK 4.681.780 B, sha256 fee09706..., DEX 2.265.340 B.", "A"),
-    ("com.samsung.android.ipsgeofence", "IP Geofence (Samsung)", "Sistema Samsung",
-     "Geofencing por IP (redes WiFi)", "NO", "KEEP",
-     "Medido: APK 7.300.848 B, sha256 1b70519c..., DEX 5.673.768 B, 28.757 strings.", "A"),
-    ("com.samsung.android.carkey", "CarKey (Samsung)", "Sistema Samsung",
-     "Llaves de coche digitales; trae deteccion de manipulacion propia", "NO", "KEEP",
-     "Medido: APK 7.708.419 B, sha256 e5def9f2..., DEX 8.378.044 B. Strings "
-     "HiddenToOvercomeSignatureClash / TAMPER_FUSE_FAIL => sirve de REFERENCIA para el modulo "
-     "anti-tamper del fleet.", "A"),
-    ("com.samsung.android.knox.attestation", "Knox Attestation (Samsung)", "Sistema Samsung",
-     "Cliente de Enhanced Attestation: enlaza con la cadena /DAK/ de la TEE", "NO", "KEEP",
-     "Medido (P5): version 1.4.01.5, clase EnhancedAttestationAgent. Es el cliente del mundo "
-     "seguro: no se toca.", "D"),
-    ("com.samsung.android.smartcallprovider", "SmartCall (Samsung)", "Sistema Samsung",
-     "Proveedor de llamadas inteligente (spam/identificacion)", "NO", "KEEP",
-     "Medido (P5): version 15.0.01.5.", "D"),
-    ("com.samsung.android.vtcamerasettings", "Camaras (Samsung)", "Sistema Samsung",
-     "Ajustes de camara", "NO", "KEEP", "Medido (P5): version 4.0.04.16.", "D"),
-    ("com.samsung.android.peripheral.framework", "Peripheral framework (Samsung)", "Sistema Samsung",
-     "Marco de periféricos (BD, perfil)", "NO", "KEEP", "Medido (P5): version 2.5.01.0.", "D"),
-    ("com.aura.oobe.samsung", "Manual Selector (OOBE del operador)", "Sistema / operador",
-     "OOBE del operador: el CSC decide出厂 la configuracion regional", "NO", "KEEP",
-     "Medido: sus ficheros cuelgan de /prism/etc/carriers/single/AMO/ con CSC "
-     "com.orange.update => AMO = Orange Espana (ver docs/ANDROID_EXYNOS2100_FINDINGS.md 5.1).", "D"),
-    ("com.samsung.android.app.contacts", "Contactos (Samsung)", "Sistema Samsung", "Contactos",
-     "NO", "KEEP", "Medido (P5): version 15.1.87.", "D"),
-    ("com.google.android.gms", "Google Play Services", "Sistema", "Servicios de Google",
-     "NO", "KEEP", "Es el nucleo del movil; ademas hay una variante parcheada (ReVanced GMS).", "M"),
-    ("com.android.chrome", "Chrome", "Navegador", "Navegador", "NO", "KEEP",
-     "App legitima del usuario.", "P"),
-    ("com.samsung.android.app.notes", "Samsung Notes", "Productividad", "Notas", "NO", "KEEP",
-     "App de sistema.", "P"),
-    ("com.acc.weather", "Samsung Weather", "Productividad", "Meteorologia", "NO", "KEEP",
-     "App de sistema.", "P"),
-    ("com.sec.android.gallery3d", "Galeria (Samsung)", "Productividad", "Galeria/fotos", "NO",
-     "KEEP", "App de sistema.", "P"),
-    ("com.samsung.android.dialer", "Telefono (Samsung)", "Sistema", "Marcador", "NO", "KEEP",
-     "App de sistema.", "P"),
-    ("com.google.android.apps.maps", "Maps (Google)", "Navegacion", "Mapas", "NO", "KEEP",
-     "App legitima del usuario.", "P"),
-    ("net.gsantner.markor", "Markor", "Notas", "Editor de notas (Markdown)", "NO", "KEEP",
-     "Visible en el inventario real del movil (captura Apk Extractor).", "P"),
-    ("gpyn.fi", "Marina", "RE / parcheador",
-     "Marina: motor de parcheo ART en runtime con descarga de parches de terceros", "SI (motor de parcheo)",
-     "DESINSTALAR",
-     "Es el motor de parcheo PROPIETARIO de la familia Lucky Patcher: descarga parches de "
-     "servidores de terceros y parchea ART en runtime (docs/SAMSUNG_APK_DEOBFUSCATION.md 2.2). "
-     "Ademas pide root. Su funcion legitima la cubren LSPatch/KnoxPatch (open-source) y el motor "
-     "Rust del fleet.", "D"),
-    ("ru.drjmwdme.cgwbfzijr.x", "MarinaPatcher (variante)", "BASURA", "Variante del mismo APK",
-     "NO", "DESINSTALAR", "Mismo binario reempaquetado; mismo criterio.", "A"),
-    ("com.kitsumed.shizucallrecorder", "Shizuku Call Recorder", "Grabador (open-source)",
-     "Grabador de llamadas sobre Shizuku, con codigo abierto", "SI (gestor de grabaciones)",
-     "KEEP", "Open-source y sin cuenta: es la base natural del gestor de grabaciones del "
-             "mega-binario (lista, metadatos, transcripcion, cifrado con el vault, subida).", "M"),
-    ("com.github.axet.audiorecorder", "Audio Recorder (open-source)", "Grabador (open-source)",
-     "Grabador de audio open-source", "SI (gestor de grabaciones)", "KEEP",
-     "Open-source; el gestor del mega-binario lo sustituye cuando este.", "M"),
-    ("com.digipom.easyvoicerecorder.pro", "Easy Voice Recorder Pro", "Grabador",
-     "Grabador de voz comercial", "SI (gestor de grabaciones)", "KEEP",
-     "Comercial; su funcion la cubre el gestor.", "M"),
-    ("com.samsung.android.incallui", "InCallUI (Samsung)", "Sistema Samsung",
-     "App de llamada en curso (la que dibuja el HUD de llamada)", "NO", "KEEP",
-     "Medido por el carril DEX (el DEX sano de SamsungInCallUI fue el caso que destapo el bug "
-     "del parser de tipos de valor).", "M"),
-    ("com.samsung.android.game.gametools", "Game Booster (Samsung)", "Sistema Samsung",
-     "Optimizacion de juegos (GPU/CPU)", "NO", "KEEP", "App de sistema del fabricante.", "M"),
-]
 
-# Reglas de veredicto (texto de §1 del doc)
-REGLAS = [
-    ("DESINSTALAR",
-     "hay evidencia **medida** de que la app (a) sube datos del usuario a un servidor de "
-     "terceros, (b) pide permisos peligrosos que no necesita para su funcion declarada, o "
-     "(c) es una reempaquetada/pirata.  **Una app que sube datos del usuario a un servidor "
-     "desconocido es DESINSTALAR, salvo que el usuario lo diga expresamente.**"),
-    ("REIMPLEMENTAR EN RUST",
-     "la funcion cabe en el mega-binario Rust de MegaDaemon (motor de parcheo DEX/APK, gestor "
-     "de grabaciones, lector de backup, laboratorio de desofuscacion).  La app se puede quitar "
-     "cuando el motor este."),
-    ("KEEP",
-     "no hay evidencia medida en contra: app legitima, o de sistema, o su funcion ya la "
-     "necesitamos pero todavia no esta reimplementada."),
-]
+# Etiquetas de veredicto (las mismas que `crate::app_intel`).
+VERDICT_LABEL = {
+    "VERDICT_KEEP": "KEEP",
+    "VERDICT_REIMPLEMENTAR": "REIMPLEMENTAR EN RUST",
+    "VERDICT_DESINSTALAR": "DESINSTALAR",
+}
+
+
+def parse_rust_catalog():
+    """Lee `VERDICT_CATALOG` del módulo Rust (fuente única de veredictos)."""
+    with open(RUST_CATALOG, encoding="utf-8") as f:
+        src = f.read()
+    i = src.find("pub const VERDICT_CATALOG")
+    if i < 0:
+        sys.exit("FALTA VERDICT_CATALOG en %s" % RUST_CATALOG)
+    j = src.find("\n];\n", i)
+    bloque = src[i:j]
+    patron = re.compile(
+        r'    \(\n        "([^"]*)",\n        "([^"]*)",\n        "([^"]*)",\n'
+        r"        (VERDICT_[A-Z_ ]+),\n        \"([^\"]*)\",\n        \"([^\"]*)\",\n    \),\n"
+    )
+    filas = []
+    for m in patron.finditer(bloque):
+        pkg, nombre, cat, verdict, modulo, motivo = m.groups()
+        filas.append(
+            OrderedDict(
+                [
+                    ("paquete", pkg),
+                    ("nombre", nombre),
+                    ("categoria", cat),
+                    ("veredicto", VERDICT_LABEL.get(verdict, verdict)),
+                    ("modulo", modulo),
+                    ("motivo", motivo),
+                ]
+            )
+        )
+    if not filas:
+        sys.exit("no se pudo leer VERDICT_CATALOG (cambio el formato?)")
+    return filas
+
+
+def parse_dumpsys(refs_dir):
+    """Parsea `dumpsys package` (volcado real) -> {paquete: ficha}."""
+    path = os.path.join(refs_dir, "dumpsys_packages")
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    out = {}
+    cur = None
+    mode = None
+    for raw in text.splitlines():
+        t = raw.strip()
+        m = re.match(r"^Package \[([^\]]+)\]", t)
+        if m:
+            cur = {
+                "package": m.group(1),
+                "installer": None,
+                "first_install": None,
+                "last_update": None,
+                "enabled": None,
+            }
+            out[cur["package"]] = cur
+            mode = None
+            continue
+        if cur is None:
+            continue
+        if t.startswith("User ") and "installed=" in t:
+            mode = "user"
+            e = re.search(r"enabled=(\d+)", t)
+            if e:
+                cur["enabled"] = e.group(1)
+            continue
+        if mode == "user":
+            if t.startswith("firstInstallTime="):
+                cur["first_install"] = t.split("=", 1)[1].strip()
+            elif t.startswith("lastUpdateTime="):
+                cur["last_update"] = t.split("=", 1)[1].strip()
+            continue
+        if t.startswith("installerPackageName="):
+            cur["installer"] = t.split("=", 1)[1].strip()
+    return out
 
 
 def load_inventory():
     if not os.path.exists(INVENTORY):
-        sys.exit("FALTA %s (recuperable del historial: git show a56b1c3:inventory/inventory.json)"
-                 % INVENTORY)
+        sys.exit("FALTA %s" % INVENTORY)
     with open(INVENTORY, encoding="utf-8") as f:
         return json.load(f)
 
 
-def inv_index(inv):
-    return {a["paquete"]: a for a in inv["apps"]["paquetes"]}
-
-
-def risk_summary(app):
-    """Riesgo MEDIDO de una app del inventario."""
-    if not app:
-        return "PENDIENTE (no esta en el inventario)"
-    bits = []
-    perms = app.get("permisos_riesgo") or []
-    n = app.get("n_permisos_pedidos", len(perms))
-    bits.append("%d permisos de riesgo" % len(perms))
-    bits.append("%d pedidos" % n)
-    if not app.get("habilitada", True):
-        bits.append("DESHABILITADA")
+def tipo_de_app(app):
+    """Sistema o instalada por el usuario (de verdad, por la ruta)."""
+    ruta = app.get("ruta_apk") or ""
+    sistema_ruta = ruta.startswith(("/system/", "/product/", "/vendor/", "/apex/", "/prism/", "/odm/"))
     if app.get("es_sistema"):
-        bits.append("sistema")
-    else:
-        bits.append("tercera")
+        return "sistema" if sistema_ruta else "sistema actualizada"
+    return "usuario"
+
+
+def medir(app, dump):
+    """Columna 'medido': sólo hechos del inventario y del volcado."""
+    bits = []
+    riesgo = app.get("permisos_riesgo") or []
+    bits.append("%d permisos (%d de riesgo)" % (app.get("n_permisos_pedidos") or 0, len(riesgo)))
+    if riesgo:
+        bits.append("riesgo: " + ", ".join(sorted(p.split(".")[-1] for p in riesgo)))
     ts = app.get("target_sdk")
     if ts:
-        bits.append("target_sdk %d" % ts)
-    bits.append("firma %s" % app.get("firma_sha256_corto"))
-    return ", ".join(bits)
+        bits.append("targetSdk %s" % ts)
+    firma = app.get("firma_sha256_corto")
+    if firma:
+        bits.append("firma %s" % firma)
+    ver = app.get("version_name")
+    if ver:
+        bits.append("v%s" % ver)
+    if dump:
+        est = dump.get("enabled")
+        if est:
+            bits.append(PM_STATE.get(est, "estado pm %s" % est))
+        inst = dump.get("installer")
+        if inst:
+            if inst == "null":
+                bits.append("sideload (sin instalador)")
+            else:
+                bits.append("instalada por %s" % inst)
+        if dump.get("first_install"):
+            bits.append("instalada %s" % dump["first_install"][:10])
+    return "; ".join(bits)
 
 
-def dangerous_perms(app):
-    if not app:
-        return []
+def build(inv, dumps):
+    idx = {a["paquete"]: a for a in inv["apps"]["paquetes"]}
+    filas = []
+    sin_medir = []
+    for cat in parse_rust_catalog():
+        app = idx.get(cat["paquete"])
+        dump = dumps.get(cat["paquete"]) if dumps else None
+        fila = OrderedDict(cat)
+        fila["medido"] = medir(app, dump) if app else "PENDIENTE (no esta en el inventario)"
+        fila["tipo"] = tipo_de_app(app) if app else "?"
+        fila["instalada"] = bool(app)
+        if app:
+            fila["riesgo_n"] = len(app.get("permisos_riesgo") or [])
+            fila["pedidos_n"] = app.get("n_permisos_pedidos") or 0
+        else:
+            fila["riesgo_n"] = 0
+            fila["pedidos_n"] = 0
+        if not app:
+            sin_medir.append(cat["paquete"])
+        filas.append(fila)
+    return filas, sin_medir
+
+
+def md_table(filas):
     out = []
-    for p in app.get("permisos_riesgo") or []:
-        short = p.split(".")[-1]
-        if short in ("RECORD_AUDIO", "READ_PHONE_STATE", "CAMERA", "ACCESS_FINE_LOCATION",
-                     "ACCESS_COARSE_LOCATION", "SYSTEM_ALERT_WINDOW", "GET_ACCOUNTS",
-                     "READ_CONTACTS", "READ_CALENDAR", "READ_SMS", "READ_CALL_LOG"):
-            out.append(short)
-    return out
-
-
-def build(inv):
-    idx = inv_index(inv)
-    rows = []
-    for (pkg, nombre, cat, func, rust, verdict, just, func_fuente) in CATALOG:
-        app = idx.get(pkg)
-        rows.append(OrderedDict([
-            ("nombre", nombre),
-            ("paquete", pkg),
-            ("categoria", cat),
-            ("funcion", func),
-            ("rust", rust),
-            ("veredicto", verdict),
-            ("riesgo", risk_summary(app)),
-            ("perm_peligrosos", ", ".join(dangerous_perms(app)) or "-"),
-            ("justificacion", just),
-            ("fuente", func_fuente),
-            ("medida", bool(app)),
-        ]))
-    return rows
-
-
-def md_table(rows):
-    out = []
-    out.append("| App | Paquete | Categoría | Qué aporta | ¿Reimplementar en Rust? | "
-               "Riesgo **medido** | Veredicto |")
+    out.append("| App | Paquete | Tipo | Qué aporta | Medido | Veredicto | Módulo Rust destino |")
     out.append("|---|---|---|---|---|---|---|")
-    for r in rows:
-        out.append("| %s | `%s` | %s | %s | %s | %s | **%s** |" % (
-            r["nombre"], r["paquete"], r["categoria"], r["funcion"], r["rust"],
-            r["riesgo"], r["veredicto"]))
+    for f in filas:
+        out.append(
+            "| %s | `%s` | %s | %s | %s | **%s** | %s |"
+            % (
+                f["nombre"],
+                f["paquete"],
+                f["tipo"],
+                f["motivo"],
+                f["medido"],
+                f["veredicto"],
+                ("`%s`" % f["modulo"]) if f["modulo"] else "—",
+            )
+        )
     return "\n".join(out)
 
 
@@ -347,103 +238,201 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--refs", default=DEFAULT_REFS)
     a = ap.parse_args()
 
     inv = load_inventory()
-    rows = build(inv)
-    n_med = sum(1 for r in rows if r["medida"])
+    dumps = parse_dumpsys(a.refs)
+    filas, sin_medir = build(inv, dumps)
+    medidas = [f for f in filas if f["instalada"]]
 
     if a.json:
-        print(json.dumps(rows, ensure_ascii=False, indent=1))
+        print(json.dumps(filas, ensure_ascii=False, indent=1))
         return 0
 
     if a.check:
-        if len(rows) < 40:
-            print("FALLO: solo %d filas (se exigen >=40)" % len(rows))
+        if len(medidas) < 40:
+            print("FALLO: solo %d filas con datos medidos (se exigen >=40)" % len(medidas))
             return 1
-        sin_med = [r["paquete"] for r in rows if not r["medida"]]
-        print("OK: %d filas (%d con datos medidos del inventario)" % (len(rows), n_med))
-        if sin_med:
-            print("sin medir (PENDIENTE): %s" % ", ".join(sin_med))
+        print("OK: %d filas en el catalogo, %d con datos medidos" % (len(filas), len(medidas)))
+        if sin_medir:
+            print("sin medir: %s" % ", ".join(sin_medir))
         return 0
 
-    a_ = inv["apps"]
+    conteo = Counter(f["veredicto"] for f in medidas)
     doc = []
-    doc.append("# Inventario de software del S21 Ultra con veredicto\n")
-    doc.append("> Generado por `tools/verdict_inventory.py` desde el inventario **medido** del "
-               "móvil (`inventory/inventory.json`, W2) + el análisis de APKs del fleet "
-               "(W5/C2).  Regenerable: `python3 tools/verdict_inventory.py`.\n")
-    doc.append("## 0. Qué es este documento y de dónde sale cada celda\n")
-    doc.append("El móvil tiene **%d apps** (%d de usuario, %d de sistema, %d deshabilitadas) y "
-               "**%d piden permisos de riesgo**.  El inventario guarda por app: versión, "
-               "`firma_sha256` (truncado a 4 bytes por Android 14), permisos de riesgo, "
-               "`target_sdk`, estado y ruta del APK.\n"
-               % (len(a_["paquetes"]), a_["de_usuario"], a_["de_sistema"],
-                  a_["deshabilitadas_total"], a_["con_permisos_de_riesgo"]))
-    doc.append("Cada fila mezcla **dato medido** y **juicio**:\n")
-    doc.append("| Marca | Significado |")
-    doc.append("|---|---|")
-    doc.append("| **M** | Medido en el móvil (inventario W2) o en el APK (hashes, DEX, "
-               "artefactos embebidos) |")
-    doc.append("| **D** | Deducido del repo: medidas ya publicadas por el fleet |")
-    doc.append("| **P** | **PENDIENTE de medición**: el móvil lleva caído desde las 03:37 UTC "
-               "(túneles 530) ⇒ no se inventa el dato, se marca |")
-    doc.append("")
-    doc.append("En la columna *Riesgo* sólo hay **hechos** del inventario (permisos, firma, "
-               "`target_sdk`, estado).  Cuando el riesgo real depende de algo que aún no se ha "
-               "medido (red, telemetría, uploading), la fila lo dice explícitamente en la "
-               "justificación.\n")
-    doc.append("## 1. Reglas de veredicto\n")
-    for name, txt in REGLAS:
-        doc.append("- **%s** — %s\n" % (name, txt))
-    doc.append("## 2. Veredicto por app (%d filas; %d con datos medidos del inventario)\n"
-               % (len(rows), n_med))
-    doc.append(md_table(rows))
-    doc.append("")
-    doc.append("## 3. Los casos que necesitan una decisión **del usuario**\n")
-    doc.append("1. **MarinaPatcher** (`ru.drjmwdme.cgwbfzijr`): *DESINSTALAR*.  Es Lucky "
-               "Patcher con otro nombre y otro icono, y **sube el APK que parchea a un "
-               "servidor de terceros** (`patch.chelpus.com/submit`) con IPs crudas y sin TLS.  "
-               "Además pide root y es un módulo Xposed.  Si el usuario dice que lo quiere, se "
-               "queda; si no, se va.")
-    doc.append("2. **Marina** (`g.pyn.fi`): *DESINSTALAR* (su función la cubren LSPatch/KnoxPatch "
-               "open-source y el motor Rust del fleet).")
-    doc.append("3. **Relictos de smartwatch** (Huami/Amazfit/Mi Fitness/Kids Watch/KDE Connect "
-               "teléfono): *DESINSTALAR* — están deshabilitados y piden 18-21 permisos de riesgo "
-               "en un móvil sin reloj conectado.")
-    doc.append("4. **Microsoft Your Phone / Link to Windows**: *KEEP*, pero son las **únicas 2 "
-               "apps que declaran `CAPTURE_AUDIO_OUTPUT`** en el móvil (medido sobre 398 APKs / "
-               "5.580 MB).  Si el usuario quierePrivacy al grabador, estas son las que hay que "
-               "mirar.\n")
-    doc.append("## 4. Ahorro\n")
-    doc.append("Lo que se puede quitar sin perder nada de lo propio del móvil: **5 relictos "
-               "de wearable** + **Marina** + **MarinaPatcher** + **ADB tools/adb captain** "
-               "(su función ya está en `megadaemon-adb`, Rust puro).  Los dos APK de ADB solos "
-               "son ~35 MB.  El resto son apps del usuario: la decisión es suya, no nuestra.\n")
-    doc.append("## 5. Lo que falta por medir (móvil caído)\n")
-    doc.append("Sin canal al móvil no se puede cerrar el inventario.  En cuanto vuelva:\n")
-    doc.append("1. `pm list packages -3 -U` + `dumpsys package <pkg> | grep -A40 permissions` "
-               "para los paquetes marcados **P**.")
-    doc.append("2. Tamaño real por APK (`stat -c %s <ruta_apk>`) — el inventario guarda la ruta, "
-               "no el tamaño.")
-    doc.append("3. `CAPTURE_AUDIO_OUTPUT` y `REQUEST_INSTALL_PACKAGES` no están en la lista de "
-               "27 permisos del inventario: barrido de APKs como el que ya se hizo (398 APKs / "
-               "5.580 MB) para cerrarlos.")
-    doc.append("4. Confirmar qué wearables/relactos quiere conservar el usuario.\n")
-    doc.append("## 6. Reproducir\n")
-    doc.append("```bash")
-    doc.append("# regenerar este documento")
-    doc.append("python3 tools/verdict_inventory.py")
-    doc.append("# solo validar (>=40 filas)")
-    doc.append("python3 tools/verdict_inventory.py --check")
-    doc.append("# el inventario medido (recuperado del historial si lo perdio un reset)")
-    doc.append("git show a56b1c3:inventory/inventory.json > inventory/inventory.json")
-    doc.append("```\n")
+
+    def add(text):
+        doc.append(text.strip("\n"))
+
+    add("# Inventario de software del S21 Ultra — veredicto por app\n")
+    add(
+        "> Generado por `tools/verdict_inventory.py` desde el inventario **medido** de este\n"
+        "> móvil (`inventory/inventory.json`, captura W2 del %s) y el volcado real de\n"
+        "> `dumpsys package`.  El catálogo de veredictos vive en el código\n"
+        "> (`rust-core/src/app_intel.rs`, `VERDICT_CATALOG`): el documento y el escáner\n"
+        "> leen la misma lista, así que no pueden discrepar.\n"
+        "> Regenerable: `python3 tools/verdict_inventory.py`.\n" % W2_CAPTURE
+    )
+
+    add("## 0. Qué es este documento y de dónde sale cada celda\n")
+    add(
+        "El móvil tiene **%d paquetes** (%d de usuario, %d de sistema) y **%d piden permisos de\n"
+        "riesgo**; %d están deshabilitados por el usuario (`pm list packages -d`).\n"
+        % (
+            inv["apps"]["total"],
+            inv["apps"]["de_usuario"],
+            inv["apps"]["de_sistema"],
+            inv["apps"]["con_permisos_de_riesgo"],
+            inv["apps"]["deshabilitadas_pm"],
+        )
+    )
+    add("| Marca | Significado |\n|---|---|\n")
+    add(
+        "| **Medido** | Dato del inventario W2 (permisos, firma, target_sdk, versión, ruta) o del\n"
+        "volcado real de `dumpsys package` (instalador, fechas, estado `pm`) |\n"
+        "| **Deducido** | Conclusión que sale de los datos medidos (p. ej. «firma distinta de la\n"
+        "oficial ⇒ no es el cliente oficial») |\n"
+        "| **PENDIENTE** | Lo que **no** se ha podido medir (el canal con el móvil está caído): se\n"
+        "dice, no se inventa |\n"
+    )
+    add(
+        "Las **cifras** de la tabla son todas medidas.  La columna *Medido* no lleva juicios:\n"
+        "sólo hechos.  El juicio va en *Veredicto* y su motivo es el texto de la app.\n"
+    )
+
+    add("## 1. Reglas de veredicto\n")
+    add(
+        "- **DESINSTALAR** — hay evidencia **medida**: la app pide permisos peligrosos que no\n"
+        "  necesita para su función, es un APK repaquetado que sube el APK a un tercero, es un\n"
+        "  relicto de un dispositivo que no está, o duplica exactamente a otra app instalada.\n"
+        "- **REIMPLEMENTAR EN RUST** — la función cabe en un módulo concreto del mega-binario.\n"
+        "  La fila **nombra el módulo destino**: es la lista de trabajo, no una opinión.\n"
+        "- **KEEP** — no hay evidencia medida en contra.  **Las apps de sistema no se\n"
+        "  desinstalan**: viven en `/system`, `/product`, `/vendor` o `/apex` (o las actualiza el\n"
+        "  firmware) ⇒ como mucho se **deshabilitan**.\n"
+    )
+
+    add("## 2. Estado medido del móvil\n")
+    add("| Métrica | Valor medido |\n|---|---|\n")
+    add("| Paquetes instalados | %d (%d de usuario, %d de sistema) |"
+               % (inv["apps"]["total"], inv["apps"]["de_usuario"], inv["apps"]["de_sistema"]))
+    add("| Apps que piden permisos de riesgo | %d |" % inv["apps"]["con_permisos_de_riesgo"])
+    add("| Apps deshabilitadas (`pm list packages -d`) | %d |" % inv["apps"]["deshabilitadas_pm"])
+    add("| Dispositivo | Samsung S21 Ultra (SM-G998B), Android 14, CSC `AMO` (Orange España) |")
+    add("| Espacio en `/data` | 230.442.752 KiB usados de 235.730.924 (**98 %**), 5.288.172 KiB libres |")
+    add("| `/data/app` (todas las APK) | 88.492.320 KiB (**84,4 GiB**) |")
+    add("| `/data/media` (fotos, descargas) | 83.485.227 KiB (**79,6 GiB**); `Download` = 44.346.358 KiB (**42,3 GiB**) |")
+    add("| `/data/user` (datos de las apps) | 48.119.462 KiB (**45,9 GiB**) |")
+    add("| `/data/data` | 48.069.225 KiB (**45,8 GiB**) |")
+    add("")
+    add(
+        "Los números de espacio son del volcado real (`du` + `df`): el móvil está **al 98 %** y\n"
+        "el mayor bloque es `/data/app` (84,4 GiB de APK), seguido de `Download` (42,3 GiB).\n"
+        "Quitar las apps que no se usan es la palanca más rápida.\n"
+    )
+
+    add("## 3. Veredicto por app (%d filas; %d con datos medidos)\n"
+               % (len(filas), len(medidas)))
+    add("Reparto: **%d KEEP** · **%d REIMPLEMENTAR EN RUST** · **%d DESINSTALAR**.\n"
+               % (conteo.get("KEEP", 0), conteo.get("REIMPLEMENTAR EN RUST", 0),
+                  conteo.get("DESINSTALAR", 0)))
+    add(md_table(filas))
+    add("")
+
+    add("## 4. Lo que se va (limpieza) y lo que cuesta\n")
+    add("| Paquete | Motivo medido | Ahorro esperado |\n|---|---|---|\n")
+    for f in filas:
+        if f["veredicto"] != "DESINSTALAR" or not f["instalada"]:
+            continue
+        add("| `%s` | %s | APK + datos en `/data/user/0/<pkg>` + entrada en el launcher |"
+                   % (f["paquete"], f["motivo"]))
+    add("")
+    add(
+        "El tamaño **exacto** en MB de cada APK no está medido en este volcado (el inventario\n"
+        "guarda la ruta, no el `stat`): queda como **PENDIENTE** en §7.  Lo que sí está medido es\n"
+        "el bloque total que ocupan (`/data/app` = 84,4 GiB) y el de los datos de las apps\n"
+        "(`/data/user` = 45,9 GiB), así que la limpieza se nota aunque el ahorro por app se\n"
+        "midió en barridos anteriores del fleet (p. ej. `adb captain` = 29.174.974 B,\n"
+        "`Magisk` = 12.770.643 B, `CarKey` = 7.708.419 B).\n"
+    )
+
+    add("## 5. Lo que hay que reimplementar en Rust (accionable)\n")
+    add("| Módulo destino | Qué pone | Apps que cubre |\n|---|---|---|\n")
+    modulos = OrderedDict()
+    for f in filas:
+        if f["veredicto"] != "REIMPLEMENTAR EN RUST" or not f["modulo"]:
+            continue
+        modulos.setdefault(f["modulo"], []).append(f["nombre"])
+    for modulo, apps in modulos.items():
+        add("| `%s` | %s | %s |" % (modulo, DESCRIPCION_MODULOS.get(modulo, "—"), ", ".join(apps)))
+    add("")
+    add(
+        "Los módulos marcados **(nuevo)** en `RUST_TARGETS` (`rust-core/src/app_intel.rs`) son\n"
+        "la pieza que **todavía no existe**: sin ellos, el veredicto «REIMPLEMENTAR» no se puede\n"
+        "cerrar.\n"
+    )
+
+    add("## 6. Decisiones que son del usuario (no del escáner)\n")
+    add(
+        "1. **MarinaPatcher / Marina** (`ru.drjmwdme.cgwbfzijr`, `gpyn.fi`): el APK reempaquetado\n"
+        "   sube el APK que parchea a `patch.chelpus.com` con IPs crudas y sin TLS.  El veredicto\n"
+        "   técnico es DESINSTALAR; si el usuario lo quiere, se queda y se documenta.\n"
+        "2. **NagramX** (`fork.risin42.nagramx`): fork con firma distinta de la oficial.  Si es el\n"
+        "   único cliente de Telegram que usa, se queda y se acepta el riesgo.\n"
+        "3. **Maps de Google** frente a **OsmAnd+**: los dos están instalados; decidir uno.\n"
+        "4. **Relictos de wearable** (Huami, Amazfit, Mi Fitness, Kids Watch 360, KDE Connect): si\n"
+        "   el usuario no tiene el reloj, fuera; si lo tiene, se reactivan.\n"
+    )
+
+    add("## 7. Lo que falta por medir (no se inventa)\n")
+    add(
+        "El canal con el móvil está caído (`530`), así que **no** se ha podido ejecutar el\n"
+        "barrido en vivo (`apk_inventory::scan_installed`).  Cuando vuelva:\n"
+        "\n"
+        "1. **Tamaño real por APK** (`stat -c %s <ruta>`): el inventario guarda la ruta.\n"
+        "2. **Permisos runtime concedidos** ahora mismo (el volcado mezcla instalación y\n"
+        "   runtime): `dumpsys package <pkg> | grep -A40 'runtime permissions'`.\n"
+        "3. **Telemetría por app**: endpoints y a quién llama cada APK (lo da el escáner:\n"
+        "   `endpoints` + `native_libraries` + `signature`).\n"
+        "4. **Componentes exportados sin permiso** por app (lo da `exported_without_permission`).\n"
+        "\n"
+        "El comando es uno: `apk_inventory::scan_installed(0)` (ranking de riesgo) y\n"
+        "`apk_inventory::verdict_installed(0)` (veredicto por app, con el módulo destino).\n"
+    )
+    if sin_medir:
+        add("\nFilas del catálogo **sin** datos medidos en este volcado: %s.\n"
+                   % ", ".join("`%s`" % p for p in sin_medir))
+
+    add("## 8. Reproducir\n")
+    add(
+        "```bash\n"
+        "# regenerar el documento (usa el inventario del repo)\n"
+        "python3 tools/verdict_inventory.py\n"
+        "# validar que hay >=40 filas con datos medidos\n"
+        "python3 tools/verdict_inventory.py --check\n"
+        "# volcar el veredicto como JSON\n"
+        "python3 tools/verdict_inventory.py --json | jq '.[0:3]'\n"
+        "# con el volcado de dumpsys (siesta disponible)\n"
+        "python3 tools/verdict_inventory.py --refs /ruta/al/volcado/refs\n"
+        "```\n"
+    )
 
     with open(OUT_MD, "w", encoding="utf-8") as f:
-        f.write("\n".join(doc))
-    print("escrito %s (%d filas, %d medidas)" % (OUT_MD, len(rows), n_med))
+        f.write("\n".join(doc) + "\n")
+    print("escrito:", OUT_MD, "(%d filas, %d medidas)" % (len(filas), len(medidas)))
     return 0
+
+
+DESCRIPCION_MODULOS = {
+    "rust-core/src/recording_vault.rs": "bóveda cifrada de grabaciones: lista, metadatos, transcripción, subida",
+    "rust-core/src/backup_formats.rs": "lector/escritor de formatos de backup (Swift Backup, AEGIS, Zstd, AB)",
+    "rust-core/src/dex_decompile.rs": "motor DEX: parcheo, re-firma, inyección de módulos y hook",
+    "rust-core/src/adb_client.rs": "cliente ADB nativo (push, pull, shell, logcat)",
+    "rust-core/src/bookmarks.rs": "gestor de notas y marcadores",
+    "rust-core/src/magisk_module.rs": "instalación y verificación de módulos Magisk systemless",
+    "rust-core/src/antigravity_intel.rs": "cliente MCP que habla con el IDE de Google",
+}
 
 
 if __name__ == "__main__":
