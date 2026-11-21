@@ -127,24 +127,25 @@ interop real, no un "casi".
 
 | Pieza | Estado | Por qué |
 |---|---|---|
-| **Offset y ancho** de cada campo dentro de la cabecera | ❌ | el escritor nativo **calcula el ancho en runtime** (`x25 = x22 - x23`): no sale del `.so` estático |
-| **Orden** de los 3 bloques de bytes dentro de la cabecera | ❌ | el `.so` los escribe en orden pero sin nombres; el mapeo a `salt`/`keyCheck`/`nonce2` es por posición |
-| Los 10 `int` del marshalling ↔ campos del modelo | 🟡 | hay constantes y ramas; falta el desensamblado del ofuscado de R8 |
+| **Offset y ancho** de cada campo de la cabecera | ✅ **MEDIDO** | el escritor nativo se desensambló instrucción a instrucción (`0x655b8..0x65920`) y los helpers de append están identificados: `0x6aa00`=u16 BE, `0x6ab6c`=u32 BE, `0x6b524`=relleno de ceros. Tabla completa en `docs/SWIFT_SBA1_HEADER_ARM64.md` |
+| **Orden** de los 3 bloques de bytes dentro de la cabecera | 🟡 | los `byte[]` llegan por orden JNI y el escritor los vuelca en el orden del struct, pero el struct no dice cuál es cuál ⇒ el lector **prueba las 6 permutaciones** y la que cuadra **descubre el orden** |
+| Los 10 `int` del marshalling ↔ campos del modelo | 🟡 | hay constantes y ramas; el lector no los necesita para verificar el key-check |
 | **Nonce/AAD por trozo** | ❌ **no replicado** | es **nativo** (`SBA1-AEGIS256-entry-chunk-nonce-v1` es una *etiqueta*, no el algoritmo) |
 
-⇒ ⇒ El lector **sigue con la tabla versionada** (`HeaderLayout`) y contesta
-`status:"layout_no_verificado"` mientras los offsets no estén medidos;
-**nunca congela suposiciones**. Lo que ya es exacto (KDF + key-check) está en
-el código, no en un test Vector con números inventados.
+⇒ ⇒ El lector **ya tiene la tabla versionada y medida** (`sba1_layout(formato)`
+en `rust-core/src/swift_archive.rs`): 96 B (formato ≠ 2) o 144 B (formato = 2),
+con u16/u32/u64 big-endian donde toca. Lo que ya es exacto (KDF + key-check +
+offsets) está en el **código y en tests**, no en vectores con números inventados.
 
 ## 6. Cómo se cierra lo que falta
 
-1. **Un `.dat` real** del usuario (export de Swift Backup) ⇒ se leen los
-   primeros bytes y se casa el layout ⇒ se congela la tabla y se contrasta
-   el key-check de verdad.
-2. O el **orden de escritura** del `.so` + los tipos del modelo Kotlin
-   (Int=4 B, Long=8 B, Short=2 B) para calcular los offsets sin fichero real
-   ⇒ ⇒ y aun así, contrastado contra un `.dat` antes de congelarlo.
+1. **Un `.dat` real** del usuario (export de Swift Backup) ⇒ se contrasta el
+   key-check de verdad y **el orden de los 3 bloques se descubre solo**
+   (el lector prueba las 6 permutaciones y dice cuál cuadra).
+2. Los offsets **ya están medidos** (tercera pasada del desensamblado) ⇒ lo
+   que queda por confirmar con un fichero real es el **nombre** de los campos
+   `campo3..campo17` y el orden de los bloques ⇒ nada de eso impide
+   **verificar la passphrase**.
 
 ## 7. Los tres bugs del lector DEX (arreglados el 2026-11-21)
 

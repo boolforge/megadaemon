@@ -194,6 +194,16 @@ pub struct KeyCheckSpec {
     pub salt_block: String,
     #[serde(default)]
     pub nonce_block: String,
+    /// Si está a true, el lector **prueba todas las permutaciones** de los
+    /// bloques de la cabecera para (key-check, salt, nonce2) y se queda con
+    /// la que cuadra.
+    ///
+    /// Hace falta porque el **orden de los 3 bloques** dentro de la cabecera
+    /// no se pudo cerrar en el `.so` (los tres `byte[]` llegan por orden JNI
+    /// y el escritor los vuelca en el orden del struct).  Probando se
+    /// **descubre** el orden, que es justo lo que hay que documentar.
+    #[serde(default)]
+    pub probar_permutaciones: bool,
 }
 
 impl Default for KeyCheckSpec {
@@ -207,6 +217,7 @@ impl Default for KeyCheckSpec {
             tag: String::new(),
             salt_block: "salt".to_string(),
             nonce_block: "nonce2".to_string(),
+            probar_permutaciones: false,
         }
     }
 }
@@ -222,6 +233,87 @@ pub struct HeaderLayout {
     pub fields: Vec<HeaderField>,
     pub byte_blocks: Vec<ByteBlock>,
     pub key_check: Option<KeyCheckSpec>,
+}
+
+/// **Layout MEDIDO** de la cabecera `SBA1`.
+///
+/// Fuente: el escritor nativo ARM64 de `libsba_archive.so`
+/// (sha16 `798750abd220a8ae`), función `createArchive+0x2cac`
+/// (0x655b8..0x65920), desensamblado instrucción a instrucción.
+///
+/// Los enteros se escriben con dos helpers distintos:
+/// * `0x6aa00` ⇒ **u16 BIG-ENDIAN** (`lsr w20,#8` y luego el byte bajo);
+/// * `0x6ab6c` ⇒ **u32 BIG-ENDIAN** (`lsr w20,#24`, `#16`, `#8` y el bajo).
+///
+/// Los tres bloques de bytes se escriben con su **longitud (u16 BE) delante**
+/// y se **rellenan con ceros hasta 16 bytes** (`0x6b524` = "append n copias
+/// del byte 0", con `n = 16 - longitud`).
+///
+/// `formato` = 2 ⇒ cabecera de **144** B; cualquier otro ⇒ **96** B.
+pub fn sba1_layout(formato: u16) -> HeaderLayout {
+    let ext = formato == 2;
+    let header_size = if ext { 144u64 } else { 96u64 };
+    let mut fields = vec![
+        HeaderField { name: "formato".into(), offset: 4, width: 2, big_endian: true },
+        HeaderField { name: "headerSize".into(), offset: 6, width: 2, big_endian: true },
+        HeaderField { name: "compression".into(), offset: 8, width: 4, big_endian: true },
+        HeaderField { name: "createdAtEpochMs".into(), offset: 12, width: 8, big_endian: true },
+        HeaderField { name: "flags".into(), offset: 20, width: 2, big_endian: true },
+        HeaderField { name: "flags2".into(), offset: 22, width: 2, big_endian: true },
+        HeaderField { name: "campo3".into(), offset: 24, width: 2, big_endian: true },
+        HeaderField { name: "campo4".into(), offset: 26, width: 2, big_endian: true },
+        HeaderField { name: "campo5".into(), offset: 28, width: 2, big_endian: true },
+        HeaderField { name: "lenBloque1".into(), offset: 30, width: 2, big_endian: true },
+        HeaderField { name: "lenBloque2".into(), offset: 32, width: 2, big_endian: true },
+        HeaderField { name: "lenBloque3".into(), offset: 34, width: 2, big_endian: true },
+        HeaderField { name: "campo10".into(), offset: 84, width: 2, big_endian: true },
+        HeaderField { name: "campo11".into(), offset: 86, width: 2, big_endian: true },
+        HeaderField { name: "campo12".into(), offset: 88, width: 4, big_endian: true },
+    ];
+    if ext {
+        fields.push(HeaderField { name: "campo13".into(), offset: 92, width: 4, big_endian: true });
+        fields.push(HeaderField { name: "campo14".into(), offset: 96, width: 2, big_endian: true });
+        fields.push(HeaderField { name: "campo15".into(), offset: 98, width: 2, big_endian: true });
+        fields.push(HeaderField { name: "campo16".into(), offset: 100, width: 2, big_endian: true });
+        fields.push(HeaderField { name: "campo17".into(), offset: 102, width: 2, big_endian: true });
+        fields.push(HeaderField { name: "reservado32".into(), offset: 104, width: 32, big_endian: true });
+        fields.push(HeaderField { name: "reservado8".into(), offset: 136, width: 8, big_endian: true });
+    } else {
+        fields.push(HeaderField { name: "reservado4".into(), offset: 92, width: 4, big_endian: true });
+    }
+    HeaderLayout {
+        magic: Some("SBA1".into()),
+        header_size: Some(header_size),
+        fields,
+        byte_blocks: vec![
+            // Los 3 bloques van followed de su longitud (u16 BE) y ocupan 16 B
+            // fijos (rellenados con ceros por la derecha).
+            ByteBlock { name: "bloque1".into(), len_offset: 30, len_width: 2, data_offset: 36 },
+            ByteBlock { name: "bloque2".into(), len_offset: 32, len_width: 2, data_offset: 52 },
+            ByteBlock { name: "bloque3".into(), len_offset: 34, len_width: 2, data_offset: 68 },
+        ],
+        key_check: Some(KeyCheckSpec {
+            offset: 0,
+            width: 16,
+            method_ordinal: 0,
+            include_ordinal: false,
+            composition: KeyCheckComposition::SwiftTagged,
+            tag: String::new(),
+            salt_block: "bloque1".into(),
+            nonce_block: "bloque2".into(),
+            probar_permutaciones: true,
+        }),
+    }
+}
+
+/// Lee el campo `formato` (offset 4, u16 BE) y devuelve el layout medido
+/// que corresponde.  Si el magic no es `SBA1`, devuelve `None`.
+pub fn sba1_detectar(bytes: &[u8]) -> Option<HeaderLayout> {
+    if bytes.len() < 8 || &bytes[..4] != b"SBA1" {
+        return None;
+    }
+    let formato = read_uint(&bytes[4..6], true) as u16;
+    Some(sba1_layout(formato))
 }
 
 impl HeaderLayout {
@@ -458,130 +550,190 @@ pub fn verify_key_check(
                 .to_string(),
         ),
     };
-    let salt = bloque_named(&header, bytes, "salt").unwrap_or_default();
-    if salt.is_empty() {
-        notes.push("salt no localizada en la cabecera => el layout no dice donde esta => no se deriva la clave".into());
-        return SwiftArchiveReport {
-            status: "layout_no_verificado".into(),
-            header: Some(header),
-            key_check: None,
-            kdf: None,
-            notes,
-        };
-    }
-    // Los rangos del KDF los impone la propia app (medidos en el DEX).
-    if let Err(e) = params.validate(salt.len()) {
-        notes.push(format!("parametros del KDF fuera de lo que acepta la app: {}", e));
-        return SwiftArchiveReport {
-            status: "kdf_error".into(),
-            header: Some(header),
-            key_check: None,
-            kdf: None,
-            notes,
-        };
-    }
-    let kdf_info = KdfInfo {
-        algoritmo: if kdf_verificada {
-            "argon2id".into()
-        } else {
-            "inyectado".into()
-        },
-        verificada: kdf_verificada,
-        source: kdf_source,
-        iterations: params.iterations,
-        memory_kib: params.memory_kib,
-        parallelism: params.parallelism,
-        out_len: params.out_len,
-        salt_len: salt.len(),
-    };
-    notes.push(if kdf_verificada {
-        "KDF: Argon2id VERIFICADA del repo (una sola implementacion; crates.io fuera)".into()
+    // ---- Candidatos (key-check, salt, nonce2) ------------------------------
+    //
+    // El orden de los 3 bloques de bytes dentro de la cabecera **no** se pudo
+    // cerrar en el `.so` (los tres arrays llegan por orden JNI y el escritor
+    // los vuelca en el orden del struct).  Por eso el lector puede **probar
+    // todas las permutaciones**: la que cuadra es la buena, y de paso
+    // **descubre** el orden real (que es lo que hay que documentar).
+    let nombres: Vec<String> = header.blocks.iter().map(|b| b.name.clone()).collect();
+    let bytes_de = |nombre: &str| bloque_named(&header, bytes, nombre).unwrap_or_default();
+
+    let mut candidatos: Vec<(String, String, String)> = Vec::new();
+    if spec.probar_permutaciones {
+        for i in 0..nombres.len() {
+            for j in 0..nombres.len() {
+                if i == j {
+                    continue;
+                }
+                for k in 0..nombres.len() {
+                    if k == i || k == j {
+                        continue;
+                    }
+                    candidatos.push((nombres[i].clone(), nombres[j].clone(), nombres[k].clone()));
+                }
+            }
+        }
+        notes.push(format!(
+            "modo permutaciones: {} candidatos (el orden de los bloques no esta cerrado)",
+            candidatos.len()
+        ));
     } else {
-        "KDF inyectado: NO es la implementacion verificada del repo".into()
-    });
-    let key = match kdf_fn(passphrase, &salt, params.iterations, params.memory_kib, params.parallelism, params.out_len) {
-        Ok(k) => k,
-        Err(e) => {
-            notes.push(format!("el KDF fallo: {}", e));
+        candidatos.push((String::new(), spec.salt_block.clone(), spec.nonce_block.clone()));
+    }
+
+    let mut ultimo_error: Option<String> = None;
+    let mut ultimo_kdf: Option<KdfInfo> = None;
+    for (nombre_kc, nombre_salt, nombre_nonce) in &candidatos {
+        let salt = bytes_de(nombre_salt);
+        if salt.is_empty() {
+            ultimo_error = Some(format!("bloque '{}' vacio o inexistente", nombre_salt));
+            continue;
+        }
+        // Los rangos del KDF los impone la propia app (medidos en el DEX).
+        if let Err(e) = params.validate(salt.len()) {
+            ultimo_error = Some(format!("parametros del KDF fuera de lo que acepta la app: {}", e));
+            continue;
+        }
+        let kdf_info = KdfInfo {
+            algoritmo: if kdf_verificada { "argon2id".into() } else { "inyectado".into() },
+            verificada: kdf_verificada,
+            source: kdf_source.clone(),
+            iterations: params.iterations,
+            memory_kib: params.memory_kib,
+            parallelism: params.parallelism,
+            out_len: params.out_len,
+            salt_len: salt.len(),
+        };
+        ultimo_kdf = Some(kdf_info.clone());
+        let key = match kdf_fn(
+            passphrase,
+            &salt,
+            params.iterations,
+            params.memory_kib,
+            params.parallelism,
+            params.out_len,
+        ) {
+            Ok(k) => k,
+            Err(e) => {
+                ultimo_error = Some(format!("el KDF fallo: {}", e));
+                continue;
+            }
+        };
+        // La COMPOSICION del key-check la fija la tabla (medida en el DEX), no
+        // el codigo:
+        //   * `Sha256KeyOnly`: SHA-256(clave[||ordinal])
+        //   * `SwiftTagged`:   SHA-256(etiqueta || salt || nonce2 || clave)
+        //                      truncado al ancho (16 B en Swift Backup)
+        let mut buf: Vec<u8> = Vec::new();
+        match spec.composition {
+            KeyCheckComposition::Sha256KeyOnly => {
+                buf.extend_from_slice(&key);
+            }
+            KeyCheckComposition::SwiftTagged => {
+                if !spec.tag.is_empty() {
+                    buf.extend_from_slice(spec.tag.as_bytes());
+                }
+                buf.extend_from_slice(&salt);
+                let nonce = bytes_de(nombre_nonce);
+                if nonce.is_empty() {
+                    ultimo_error = Some(format!("bloque '{}' vacio o inexistente", nombre_nonce));
+                    continue;
+                }
+                buf.extend_from_slice(&nonce);
+                buf.extend_from_slice(&key);
+            }
+        }
+        if spec.include_ordinal {
+            buf.extend_from_slice(&spec.method_ordinal.to_be_bytes());
+        }
+        let expected = sha256(&buf);
+
+        // El key-check esperado, ya sea en un offset fijo o dentro de un bloque.
+        let found: Vec<u8> = if nombre_kc.is_empty() {
+            let off = spec.offset as usize;
+            let end = off + spec.width as usize;
+            if end > bytes.len() {
+                ultimo_error = Some("el key-check se sale del fichero".into());
+                continue;
+            }
+            bytes[off..end].to_vec()
+        } else {
+            let b = bytes_de(nombre_kc);
+            if b.is_empty() {
+                ultimo_error = Some(format!("bloque '{}' vacio o inexistente", nombre_kc));
+                continue;
+            }
+            b
+        };
+        let width = found.len().min(expected.len());
+        let matched = width > 0 && expected[..width] == found[..width];
+
+        if matched {
+            notes.push(if kdf_verificada {
+                "KDF: Argon2id VERIFICADA del repo (una sola implementacion; crates.io fuera)".into()
+            } else {
+                "KDF inyectado: NO es la implementacion verificada del repo".into()
+            });
+            notes.push(if nombre_kc.is_empty() {
+                "key-check coincide => la passphrase es correcta".into()
+            } else {
+                format!(
+                    "key-check coincide => la passphrase es correcta. ORDEN DE BLOQUES: key-check={}, salt={}, nonce2={}",
+                    nombre_kc, nombre_salt, nombre_nonce
+                )
+            });
+            notes.push(
+                "el contenido (AEAD por trozos) NO se extrae: la derivacion de nonce/AAD es nativa, no replicada"
+                    .into(),
+            );
             return SwiftArchiveReport {
-                status: "kdf_error".into(),
+                status: "ok".into(),
                 header: Some(header),
-                key_check: None,
+                key_check: Some(KeyCheckReport {
+                    matched,
+                    expected_hex: expected.iter().map(|b| format!("{:02x}", b)).collect(),
+                    method_ordinal: spec.method_ordinal,
+                }),
                 kdf: Some(kdf_info),
                 notes,
             };
         }
-    };
-    let off = spec.offset as usize;
-    let end = off + spec.width as usize;
-    if end > bytes.len() {
-        notes.push("el key-check se sale del fichero".into());
-        return SwiftArchiveReport {
-            status: "layout_no_verificado".into(),
-            header: Some(header),
-            key_check: None,
-            kdf: Some(kdf_info),
-            notes,
-        };
+        ultimo_error = Some("el key-check no coincide con esta disposicion".into());
     }
-    // La COMPOSICION del key-check la fija la tabla (medida en el DEX), no el
-    // codigo:
-    //   * `Sha256KeyOnly`: SHA-256(clave[||ordinal])
-    //   * `SwiftTagged`:   SHA-256(etiqueta || salt || nonce2 || clave)
-    //                      truncado al ancho (16 B en Swift Backup)
-    let mut buf: Vec<u8> = Vec::new();
-    match spec.composition {
-        KeyCheckComposition::Sha256KeyOnly => {
-            buf.extend_from_slice(&key);
-        }
-        KeyCheckComposition::SwiftTagged => {
-            if !spec.tag.is_empty() {
-                buf.extend_from_slice(spec.tag.as_bytes());
-            }
-            buf.extend_from_slice(&salt);
-            match bloque_named(&header, bytes, &spec.nonce_block) {
-                Some(nonce) => buf.extend_from_slice(&nonce),
-                None => {
-                    notes.push(format!(
-                        "bloque '{}' no localizado en la cabecera => no se puede componer el key-check",
-                        spec.nonce_block
-                    ));
-                    return SwiftArchiveReport {
-                        status: "layout_no_verificado".into(),
-                        header: Some(header),
-                        key_check: None,
-                        kdf: Some(kdf_info),
-                        notes,
-                    };
-                }
-            }
-            buf.extend_from_slice(&key);
-        }
-    }
-    if spec.include_ordinal {
-        buf.extend_from_slice(&spec.method_ordinal.to_be_bytes());
-    }
-    let expected = sha256(&buf);
-    let found = &bytes[off..end];
-    let matched = expected.len() >= found.len() && &expected[..found.len()] == found;
-    notes.push(if matched {
-        "key-check coincide => la passphrase es correcta".into()
+
+    // Ninguna disposicion cuadro.
+    let status = if ultimo_error
+        .as_deref()
+        .map(|e| e.contains("el KDF fallo") || e.contains("fuera de lo que acepta la app"))
+        .unwrap_or(false)
+    {
+        "kdf_error"
     } else {
-        "key-check NO coincide => passphrase incorrecta o fichero manipulado".into()
+        "key_check_mismatch"
+    };
+    notes.push(if status == "kdf_error" {
+        ultimo_error.clone().unwrap_or_else(|| "el KDF fallo".into())
+    } else {
+        format!(
+            "key-check NO coincide en ninguna disposicion probada => passphrase incorrecta o fichero manipulado{}",
+            ultimo_error.map(|e| format!(" ({})", e)).unwrap_or_default()
+        )
     });
     notes.push(
         "el contenido (AEAD por trozos) NO se extrae: la derivacion de nonce/AAD es nativa, no replicada"
             .into(),
     );
     SwiftArchiveReport {
-        status: if matched { "ok".into() } else { "key_check_mismatch".into() },
+        status: status.into(),
         header: Some(header),
         key_check: Some(KeyCheckReport {
-            matched,
-            expected_hex: expected.iter().map(|b| format!("{:02x}", b)).collect(),
+            matched: false,
+            expected_hex: String::new(),
             method_ordinal: spec.method_ordinal,
         }),
-        kdf: Some(kdf_info),
+        kdf: ultimo_kdf,
         notes,
     }
 }
@@ -881,6 +1033,7 @@ mod tests {
                 tag: "SBA1-AEGIS256-key-check-v1".into(),
                 salt_block: "salt".into(),
                 nonce_block: "nonce2".into(),
+                probar_permutaciones: false,
             }),
         }
     }
@@ -956,6 +1109,79 @@ mod tests {
             KdfParams { iterations: 0, memory_kib: 16384, parallelism: 1, out_len: 32 },
         );
         assert_eq!(r.status, "kdf_error");
+    }
+
+    /// Construye una cabecera **con el layout medido** (`sba1_layout`) y
+    /// comprueba que el lector la parsea y **descubre el orden de los
+    /// bloques** probando permutaciones.
+    #[test]
+    fn layout_medido_se_parsea_y_el_orden_se_descubre() {
+        let params = KdfParams { iterations: 3, memory_kib: 16384, parallelism: 4, out_len: 32 };
+        let salt = [0x11u8; 16];
+        let nonce2 = [0x22u8; 16];
+        let clave = kdf_argon2id("secreto", &salt, params.iterations, params.memory_kib, params.parallelism, params.out_len)
+            .unwrap();
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"SBA1-AEGIS256-key-check-v1");
+        buf.extend_from_slice(&salt);
+        buf.extend_from_slice(&nonce2);
+        buf.extend_from_slice(&clave);
+        let keycheck = sha256(&buf);
+
+        // Layout medido, variante de 96 B (formato != 2).
+        let layout = sba1_layout(0);
+        assert_eq!(layout.header_size, Some(96));
+        let mut cab = vec![0u8; 96];
+        cab[..4].copy_from_slice(b"SBA1");
+        cab[4..6].copy_from_slice(&0u16.to_be_bytes()); // formato
+        cab[6..8].copy_from_slice(&96u16.to_be_bytes()); // headerSize
+        cab[8..12].copy_from_slice(&2u32.to_be_bytes()); // compression
+        cab[12..20].copy_from_slice(&1_700_000_000_000u64.to_be_bytes());
+        cab[30..32].copy_from_slice(&16u16.to_be_bytes()); // len bloque1
+        cab[32..34].copy_from_slice(&16u16.to_be_bytes()); // len bloque2
+        cab[34..36].copy_from_slice(&16u16.to_be_bytes()); // len bloque3
+        // Orden **deliberadamente invertido** respecto al orden JNI:
+        // bloque1 = key-check, bloque2 = salt, bloque3 = nonce2.
+        cab[36..52].copy_from_slice(&keycheck[..16]);
+        cab[52..68].copy_from_slice(&salt);
+        cab[68..84].copy_from_slice(&nonce2);
+
+        // La deteccion automatica lee el formato y da el layout.
+        let detectada = sba1_detectar(&cab).expect("debe detectar el magic SBA1");
+        assert_eq!(detectada.header_size, Some(96));
+
+        // El key-check lleva su propia etiqueta => se la ponemos al layout.
+        let mut layout = layout;
+        layout.key_check.as_mut().unwrap().tag = "SBA1-AEGIS256-key-check-v1".into();
+        let r = verificar(&cab, &layout, "secreto", params);
+        assert_eq!(r.status, "ok", "notas: {:?}", r.notes);
+        assert!(
+            r.notes.iter().any(|n| n.contains("ORDEN DE BLOQUES")),
+            "debe descubrir el orden: {:?}",
+            r.notes
+        );
+
+        // Con otra passphrase => mismatch (no "ok").
+        let r2 = verificar(&cab, &layout, "otra", params);
+        assert_eq!(r2.status, "key_check_mismatch");
+    }
+
+    /// La variante de 144 B (formato == 2) tiene los campos extra al final.
+    #[test]
+    fn layout_medido_de_144_bytes() {
+        let layout = sba1_layout(2);
+        assert_eq!(layout.header_size, Some(144));
+        let mut cab = vec![0u8; 144];
+        cab[..4].copy_from_slice(b"SBA1");
+        cab[4..6].copy_from_slice(&2u16.to_be_bytes());
+        cab[6..8].copy_from_slice(&144u16.to_be_bytes());
+        cab[30..32].copy_from_slice(&16u16.to_be_bytes());
+        cab[32..34].copy_from_slice(&16u16.to_be_bytes());
+        cab[34..36].copy_from_slice(&16u16.to_be_bytes());
+        let detectada = sba1_detectar(&cab).expect("magic");
+        assert_eq!(detectada.header_size, Some(144));
+        let h = parse_header(&cab, &detectada).expect("parsea");
+        assert_eq!(h.fields.len(), 22);
     }
 
     #[test]

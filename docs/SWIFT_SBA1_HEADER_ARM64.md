@@ -118,3 +118,111 @@ contrastarlo con un export real antes de darlo por bueno**, y el orden de campos
 en una **tabla de offsets versionada** (no en constantes incrustadas) para poder corregirlo
 sin reescribir el lector. Hasta ese momento, el lector debe responder
 `status: "kdf_no_verificado"` / `"layout_no_verificado"` en vez de affirmar.
+
+
+---
+
+# TERCERA PASADA (2026-11-21): layout **completo**,offsets exactos incluidos
+
+El escritor de la cabecera se Analizó **instrucción a instrucción**
+(`createArchive+0x2cac` = `0x655b8..0x65920`) y los **helpers de append**
+(`0x6aa00`, `0x6ab6c`, `0x6b140`, `0x6b524`, `0x6ae10`) se identificaron por
+su código. ⇒ ⇒ **Ya no hay "NO DETERMINADO" en los offsets ni en los anchos.**
+
+## Los helpers (la clave de todo)
+
+| Helper | Qué hace | Evidencia |
+|---|---|---|
+| `0x6ae10` | append de **bytes** (`src`, `len`) | `x2`=puntero, `w4`=longitud |
+| `0x6aa00` | append de **u16 BIG-ENDIAN** | `0x6aa2c: lsr w8,w20,#8` + `strb` ⇒ byte alto primero; luego `0x6aac8: strb w20` ⇒ byte bajo. **2 bytes** |
+| `0x6ab6c` | append de **u32 BIG-ENDIAN** | `0x6ab98: lsr w8,w20,#24` → `#16` → `#8` → byte bajo. **4 bytes** |
+| `0x6b140` | append de bytes con crecimiento del buffer | `memcpy` + realoc |
+| `0x6b524` | append de **N copias de un byte** (aquí: ceros de relleno) | `0x6b5b8: ldrb w1,[x22]` + `memset(dst, w1, n)`; el byte se pone a 0 antes (`strb wzr`) |
+
+⇒ ⇒ **Los enteros de la cabecera NO son todos del mismo ancho**: hay u16 y u32
+mezclados (y un u64 para la fecha). Por eso "el ancho se calcula en runtime"
+era una lectura equivocada: **cada campo tiene su helper fijo**.
+
+## La cabecera, campo a campo
+
+Tamaño: **96 bytes** (`formato != 2`) o **144 bytes** (`formato == 2`).
+El byte 4..6 (u16 BE) es el `formato`, y **el propio `formato` decide el
+tamaño** (`0x65608: cmp w8,#2` · `csel w23,w9,w8,eq` con `w9=0x90=144`,
+`w8=0x60=96`).
+
+| Offset | Ancho | Tipo | Contenido | Evidencia (instrucción) |
+|---|---|---|---|---|
+| 0 | 4 | ASCII | `"SBA1"` | `0x65640 bl 0x6ae10` (x2=`0x11b35`, w4=4) |
+| 4 | 2 | u16 BE | `formato` (2 ⇒ cabecera de 144 B) | `0x65644 ldr w1,[x20]` → `0x6564c bl 0x6aa00` |
+| 6 | 2 | u16 BE | `headerSize` (96 ó 144) | `0x65654 mov w1,w23` → `0x65658 bl 0x6aa00` |
+| 8 | 4 | u32 BE | enum 0..3 (compresión/cifrado) | `0x65660 cmp w22,#0` · `cset/cinc` → `0x65680 bl 0x6ab6c` |
+| 12 | 8 | u64 BE | `createdAtEpochMs` (`time(NULL)*1000`) | `0x65688 bl time@plt` · `0x65698 mul x28,x0,#1000` · bucle de 8 `strb` |
+| 20 | 2 | u16 BE | flags (`arg0` del marshalling) | `0x65748 ldr w1,[sp,#20]` → `0x65750 bl 0x6aa00` |
+| 22 | 2 | u16 BE | flags2 (`arg1`) | `0x65758 ldr w1,[sp,#16]` → `0x65760 bl 0x6aa00` |
+| 24 | 2 | u16 BE | campo 3 (`[x20+4]`) | `0x65764` → `0x6576c bl 0x6aa00` |
+| 26 | 2 | u16 BE | campo 4 (`[x20+8]`) | `0x65770` → `0x65778 bl 0x6aa00` |
+| 28 | 2 | u16 BE | campo 5 (`[x20+12]`) | `0x6577c` → `0x65784 bl 0x6aa00` |
+| 30 | 2 | u16 BE | **longitud del bloque 1** | `0x65788 ldr w8,[x20,#72]` · `ldr w9,[x20,#64]` · `sub` → `0x65798 bl 0x6aa00` |
+| 32 | 2 | u16 BE | **longitud del bloque 2** | `0x6579c…657ac` |
+| 34 | 2 | u16 BE | **longitud del bloque 3** | `0x657b0…657c0` |
+| 36 | 16 | bytes | **bloque 1** (rellenado con ceros hasta 16) | `0x657d4 bl 0x6b140` (bytes) + `0x657f4 bl 0x6b524` (`n = 16 - len`, ceros) |
+| 52 | 16 | bytes | **bloque 2** | `0x65808` + `0x65828` |
+| 68 | 16 | bytes | **bloque 3** | `0x6583c` + `0x6585c` |
+| 84 | 2 | u16 BE | 0 | `0x65860 mov w1,wzr` → `0x65868 bl 0x6aa00` |
+| 86 | 2 | u16 BE | 0 | `0x6586c` → `0x65874 bl 0x6aa00` |
+| 88 | 4 | u32 BE | campo 12 (`[x20+24]`) | `0x65878 ldr w1,[x20,#24]` → `0x65880 bl 0x6ab6c` |
+| **formato == 2 (144 B)** | | | | |
+| 92 | 4 | u32 BE | campo 13 (`[x20+16]`) | `0x65890` → `0x65898 bl 0x6ab6c` |
+| 96 | 2 | u16 BE | campo 14 (`[x20+20]`) | `0x6589c` → `0x658a4 bl 0x6aa00` |
+| 98 | 2 | u16 BE | campo 15 (`[x20+28]`) | `0x658a8` → `0x658b0 bl 0x6aa00` |
+| 100 | 2 | u16 BE | campo 16 (`[x20+32]`) | `0x658b4` → `0x658bc bl 0x6aa00` |
+| 102 | 2 | u16 BE | campo 17 (`[x20+4] != 0 ? 1 : 0`) | `0x658c0…658d0 bl 0x6aa00` |
+| 104 | 32 | ceros | reservado | `0x658e4 mov w2,#0x20` → `0x658e8 bl 0x6b524` |
+| 136 | 8 | ceros | reservado | `0x658fc mov w2,#8` → `0x65900 bl 0x6b524` |
+| **formato != 2 (96 B)** | | | | |
+| 92 | 4 | ceros | reservado | `0x65918 mov w2,#4` → `0x6591c bl 0x6b524` |
+
+**Cuadre exacto**: 4+2+2+4+8+2+2+2+2+2+2+2+2+16+16+16+2+2+4 = **92**, y luego
++4 (variante 96) ó +4+2+2+2+2+32+8 (variante 144) ⇒ **96 / 144 exactos**. ✔
+
+## Qué es cada bloque
+
+Los tres `byte[]` del marshalling (`createArchive` args 19..22 =
+claveArgon2id, keyCheck, salt, nonce2) se vuelcan en la cabecera **tres**:
+la clave derivada **no** va en la cabecera (se usa para el AEAD). Los tres
+bloques van con su longitud delante (30/32/34) y se rellenan con ceros hasta
+16 bytes.
+
+* El **key-check** es `SHA-256(etiqueta || salt || nonce2 || clave)[:16]`
+  (medido en el DEX, ver `docs/SWIFT_KOTLIN_MARSHALLING.md`) ⇒ son 16 bytes ⇒
+  ocupa el bloque entero.
+* El **salt** son 16 bytes exactos (la app lo exige).
+* El **nonce2** son 16 bytes (`SecureRandom.nextBytes`).
+
+⇒ ⇒ **Lo que NO se pudo cerrar**: el **orden** de los tres bloques (los
+`byte[]` llegan por orden JNI y el escritor los vuelca en el orden del struct,
+pero el struct no dice cuál es cuál). ⇒ ⇒ el lector **prueba las 6
+permutaciones** y se queda con la que cuadra ⇒ **el orden se descubre solo**
+cuando llegue un `.dat` real (y así queda documentado).
+
+## Lo que sí queda nativo (no replicado)
+
+La derivación del **nonce/AAD por trozo** del AEAD es **nativa**
+(`SbaLibaegisCryptoNative_decryptAegis*ChunkedEntryFdRaw`): las etiquetas
+`SBA1-AEGIS256-entry-chunk-nonce-v1` / `-aad-v1` son *etiquetas*, no el
+algoritmo. ⇒ el lector Rust **parsea + deriva la clave + verifica el
+key-check**, y **no** extrae el contenido.
+
+## Implementación en el repo
+
+`rust-core/src/swift_archive.rs`:
+* `sba1_layout(formato)` ⇒ la tabla **medida** (96/144 B) con sus campos,
+  anchos y endianess;
+* `sba1_detectar(bytes)` ⇒ lee el `formato` y devuelve la variante;
+* `KeyCheckComposition::SwiftTagged` + `key_check_tag()` ⇒ la composición
+  exacta del key-check;
+* `KeyCheckSpec.probar_permutaciones` ⇒ descubre el orden de los bloques;
+* `KdfParams::validate()` ⇒ los rangos que impone la app.
+
+Tests: **15/15** (incluido uno end-to-end con el layout medido y el
+descubrimiento del orden).
