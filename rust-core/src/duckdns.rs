@@ -92,6 +92,29 @@ pub fn domain_from_instance(instance_json: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// ¿Este dominio es el **CANÓNICO**?
+///
+/// MEDIDO (2026-11-21): el canónico `mdtmfnc.duckdns.org` apuntaba a
+/// `47.253.152.120` = la IP pública del **sandbox** (NAT del datacenter), no
+/// la del PC de casa => el relay, que vive en el PC, era inalcanzable.  La
+/// causa: `duckdns.org/update` se había llamado desde el sandbox, y ese
+/// endpoint pone el A record a la IP de **quien llama**.
+///
+/// De ahí la regla: **un SOLO escritor** del A record canónico = el relay
+/// del PC (`deploy/relay-pc.sh`, que se ejecuta en casa).  El móvil (o el
+/// sandbox) no lo tocan salvo que se pida explícitamente.
+pub fn es_canonico(domain: &str) -> bool {
+    domain.trim().eq_ignore_ascii_case(DEFAULT_DOMAIN)
+}
+
+/// ¿Se puede actualizar el A record de este dominio?
+///
+/// Todo salvo el canónico.  El canónico requiere `permitir_canonico`
+/// explícito (`--allow-canonical` o `MEGADAEMON_ALLOW_CANONICAL_DNS=1`).
+pub fn puede_actualizar(domain: &str, permitir_canonico: bool) -> bool {
+    !es_canonico(domain) || permitir_canonico
+}
+
 /// Construye la URL de actualización. Es una función **pura** (testeable sin
 /// red): el token va en la query porque así lo define la API de DuckDNS.
 pub fn update_url(domain: &str, token: &str, ip: &str) -> String {
@@ -310,6 +333,20 @@ mod tests {
         );
         assert!(domain_from_instance("no es json").is_none());
         assert!(domain_from_instance("{}").is_none());
+    }
+
+    /// El canónico lo escribe el relay del PC: un solo escritor.
+    #[test]
+    fn el_canonico_necesita_permiso_explicito() {
+        assert!(es_canonico("mdtmfnc.duckdns.org"));
+        assert!(es_canonico("  MDTMFNC.DUCKDNS.ORG  "));
+        assert!(!es_canonico("otro.duckdns.org"));
+        // sin permiso => NO se puede actualizar el canónico
+        assert!(!puede_actualizar("mdtmfnc.duckdns.org", false));
+        // con permiso explícito => sí
+        assert!(puede_actualizar("mdtmfnc.duckdns.org", true));
+        // un dominio NO canónico se puede siempre
+        assert!(puede_actualizar("otro.duckdns.org", false));
     }
 
     #[test]

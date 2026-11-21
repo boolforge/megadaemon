@@ -4,6 +4,14 @@
 //!
 //! ```text
 //! duckdns-updater --once                 # una actualización y salir
+//!
+//! OJO: el A record del dominio CANÓNICO (`mdtmfnc.duckdns.org`) lo escribe
+//! el relay del PC (`deploy/relay-pc.sh`), que corre en casa.  Este binario
+//! NO lo toca salvo que se pase `--allow-canonical` (o
+//! `MEGADAEMON_ALLOW_CANONICAL_DNS=1`): `duckdns.org/update` pone el
+//! registro a la IP de quien llama, así que un update desde el móvil con
+//! datos o desde el sandbox dejaría el dominio apuntando a la IP
+//! equivocada y el relay inalcanzable.
 //! duckdns-updater --interval 300         # bucle cada 5 minutos
 //! duckdns-updater --status                # sólo informa del estado
 //! ```
@@ -93,6 +101,36 @@ fn main() -> std::process::ExitCode {
 
     let una_vez = flag("--once");
     let state_dir = arg("--state-dir");
+
+    // ── Un solo escritor del A record canónico ──────────────────────────
+    // El A record de `mdtmfnc.duckdns.org` lo escribe el RELAY DEL PC
+    // (deploy/relay-pc.sh, que corre en casa).  `duckdns.org/update` pone
+    // el registro a la IP de QUIEN LLAMA, así que si el móvil lo actualiza
+    // desde la red móvil (o si lo hace el sandbox) el dominio se va a la
+    // IP equivocada y el relay deja de ser alcanzable.
+    // MEDIDO (2026-11-21): el canónico apuntaba a 47.253.152.120, que es
+    // la IP pública del sandbox, no la del PC de casa.
+    //
+    // Por defecto este actualizador SÓLO INFORMA del canónico; para
+    // tocarlo hay que pedirlo explícitamente.
+    let permitir_canonico = flag("--allow-canonical")
+        || std::env::var("MEGADAEMON_ALLOW_CANONICAL_DNS")
+            .map(|v| v.trim() == "1")
+            .unwrap_or(false);
+    let es_can = duckdns::es_canonico(&domain);
+    if es_can && !permitir_canonico {
+        println!(
+            "{}",
+            json!({
+                "ok": false,
+                "skipped": true,
+                "reason": "canonical_domain_owned_by_relay",
+                "domain": domain,
+                "hint": "el A record del canónico lo escribe el relay del PC (deploy/relay-pc.sh). Para tocarlo desde aquí hace falta --allow-canonical (o MEGADAEMON_ALLOW_CANONICAL_DNS=1).",
+            })
+        );
+        return std::process::ExitCode::from(1);
+    }
     loop {
         let ip = match ip_explicita.clone() {
             Some(i) => Some(i),
