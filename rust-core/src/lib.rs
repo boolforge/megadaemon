@@ -20,6 +20,7 @@ pub mod alerts;
 pub mod android;
 pub mod antigravity_intel;
 pub mod meta_agent;
+pub mod backup_ab;
 pub mod api_key;
 pub mod apk_deobfuscator;
 pub mod apk_inventory;
