@@ -56,6 +56,21 @@ const GUARDADOS: &[(&str, &[&str])] = &[
     ),
     ("recording_vault", &["pub fn scan_recordings", "pub fn vault_pack"]),
     ("backup_vault", &["pub fn aes_round", "pub fn seal_dir_streaming"]),
+    (
+        "argon2",
+        &[
+            "pub fn derive_key",
+            "pub fn argon2_hash",
+            "pub fn blake2b",
+            "pub fn h_prime",
+            "pub fn h0",
+        ],
+    ),
+    ("zstd", &["pub fn descomprimir", "pub fn comprimir", "pub fn disponible"]),
+    (
+        "swift_sba1",
+        &["pub fn leer_cabecera", "pub fn leer_tar_zstd", "pub fn es_sba1"],
+    ),
 ];
 
 fn raiz() -> PathBuf {
