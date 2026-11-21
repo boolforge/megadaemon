@@ -31,6 +31,7 @@
 //! Si algún día se le pide firmar, el signer va en `signing.rs` y aquí sólo
 //! se guarda el resultado.
 
+pub use crate::util_text::hex;
 use base64ct::Encoding;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -128,15 +129,6 @@ pub struct ImportReport {
 }
 
 /// Bytes a hexadecimal en minúsculas.
-pub fn hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0f) as usize] as char);
-    }
-    out
-}
 
 /// SHA-256 en hexadecimal.
 pub fn sha256_hex(data: &[u8]) -> String {

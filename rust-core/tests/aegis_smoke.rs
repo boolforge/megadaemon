@@ -4,6 +4,12 @@
 mod backup_vault;
 #[path = "../src/aegis.rs"]
 mod aegis;
+// `backup_vault` usa `crate::util_fs` (MEDIDO el 2026-11-21: al fusionar
+// `fix/robustness-20261120` ese modulo paso a usar el helper canonico y el
+// arnes autocontenido dejo de compilar).  `util_fs` solo depende de `std`.
+#[path = "../src/util_fs.rs"]
+#[allow(dead_code, unused_imports)]
+mod util_fs;
 
 use aegis::*;
 

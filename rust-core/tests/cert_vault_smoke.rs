@@ -18,6 +18,11 @@ mod argon2;
 #[path = "../src/backup_vault.rs"]
 #[allow(dead_code, unused_imports, unused_mut)]
 mod backup_vault;
+// `backup_vault` usa `crate::util_fs` (MEDIDO el 2026-11-21): sin este modulo
+// en el arnes autocontenido, el test no compila (E0432).
+#[path = "../src/util_fs.rs"]
+#[allow(dead_code, unused_imports)]
+mod util_fs;
 #[path = "../src/cert_vault.rs"]
 #[allow(dead_code, unused_imports, unused_mut)]
 mod cert_vault;
@@ -653,3 +658,18 @@ fn mode_of(p: &Path) -> u32 {
 fn mode_of(_p: &Path) -> u32 {
     0
 }
+
+// Modulo auxiliar del que depende el modulo incluido por `#[path]` (MEDIDO el
+// 2026-11-21: al fusionar `fix/robustness-20261120` varios modulos pasaron a
+// usar los helpers canonicos `util_text`/`util_fs` y los arneses
+// autocontenidos dejaron de compilar: E0432).
+#[path = "../src/signing.rs"]
+#[allow(dead_code, unused_imports, unused_mut)]
+mod signing;
+// Modulo auxiliar del que depende el modulo incluido por `#[path]` (MEDIDO el
+// 2026-11-21: al fusionar `fix/robustness-20261120` varios modulos pasaron a
+// usar los helpers canonicos `util_text`/`util_fs` y los arneses
+// autocontenidos dejaron de compilar: E0432).
+#[path = "../src/util_text.rs"]
+#[allow(dead_code, unused_imports, unused_mut)]
+mod util_text;
