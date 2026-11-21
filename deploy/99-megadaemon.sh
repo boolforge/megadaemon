@@ -287,11 +287,38 @@ ensure_web_bridge() {
 #     --protocol http2 el de 9090 perdia la conexion con el edge cada
 #     ~50 s (=> 530 para la flota).  Los fallos de QUIC que se vieron eran
 #     del incidente de OOM (184 MB libres), no de la red.
+# CLOUDFLARED: PRIMERO el prefijo propio (independiente de Termux).
+#
+# MEDIDO el 2026-11-21: `cloudflared` vivia en el directorio PRIVADO de
+# Termux.  Termux es una app: cuando el usuario la cierra, la matan; cuando
+# la reinstala, se pierde.  Con el tunel dentro de Termux, el movil se
+# queda sin canal PUBLICO en cuanto se toca Termux.
+#
+# Ahora el binario se COPIA al prefijo (root lo puede leer) y a partir de ahi
+# ya no depende de ninguna app.  Termux queda como ultimo recurso.
 CLOUDFLARED=""
-for cand in /data/data/com.termux/files/usr/bin/cloudflared \
-            /data/data/com.agy/files/usr/bin/cloudflared; do
+for cand in "$PREFIX/cloudflared" \
+            /data/local/tmp/megadaemon/cloudflared; do
     [ -x "$cand" ] && { CLOUDFLARED="$cand"; break; }
 done
+if [ -z "$CLOUDFLARED" ]; then
+    for cand in /data/data/com.termux/files/usr/bin/cloudflared \
+                /data/data/com.agy/files/usr/bin/cloudflared; do
+        if [ -x "$cand" ]; then
+            # MIGRACION: se copia al prefijo y se usa la copia.  A partir de
+            # aqui, aunque Termux muera, el tunel sigue.
+            if cp -f "$cand" "$PREFIX/cloudflared.new" 2>/dev/null; then
+                chmod 755 "$PREFIX/cloudflared.new" 2>/dev/null
+                mv -f "$PREFIX/cloudflared.new" "$PREFIX/cloudflared" 2>/dev/null \
+                    && log "cloudflared MIGRADO al prefijo (ya no depende de Termux)" \
+                    || rm -f "$PREFIX/cloudflared.new" 2>/dev/null
+            fi
+            [ -x "$PREFIX/cloudflared" ] && { CLOUDFLARED="$PREFIX/cloudflared"; break; }
+            CLOUDFLARED="$cand"
+            break
+        fi
+    done
+fi
 TUNNEL_CURL=""
 for cand in /data/data/com.termux/files/usr/bin/curl \
             /data/data/com.agy/files/usr/bin/curl; do
