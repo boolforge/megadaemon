@@ -28,6 +28,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 // MEDIDO el 2026-11-21: la copia con `#[path]` se quedaba VIEJA respecto a la
 // librería (mismo fallo que `md-recordings`, que sí rompía la compilación:
 // una copia con `use crate::<mod>` no resuelve dentro de un binario).
+use megadaemon_core::device_inventory;
 use megadaemon_core::device_inventory::{
     capture_plan, copy_plan, manifest_ndjson, sha256_hex, FileDigest, Options, Source,
 };

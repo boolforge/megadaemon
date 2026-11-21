@@ -321,17 +321,32 @@ fn adv_a18_la_exencion_local_entrega_el_token_root() {
     std::thread::sleep(Duration::from_millis(800));
     let token = cockpit_server::auth_token().to_string();
 
-    // (1) El intercambio entrega el token root con una api_key BASURA.
+    // (1) El intercambio con una api_key BASURA NO entrega el token root.
+    //
+    // MEDIDO el 2026-11-21 contra `main`: el canje es FAIL-CLOSED
+    // (`cockpit_server.rs:1751`): `ok = !provided.is_empty() && cfg.enabled &&
+    // cfg.accepts(&provided)` => con una key inventada responde **403** con el
+    // diagnostico (`sent_key_fp` = huella de la key PRESENTADA), no 200.
+    // (Antes este test pedia 200: describia el COMPORTAMIENTO DEFECTUOSO.)
     let (st, body) = post(
         port,
         "/api/session/exchange",
         "{\"api_key\":\"esta-no-es-la-key\"}",
         None,
     );
-    assert_eq!(st, 200, "body={}", body);
+    assert_eq!(
+        st, 403,
+        "con una API key inventada el canje debe ser 403 (fail-closed). body={}",
+        body
+    );
     assert!(
         !body.contains(&token),
         "el token root se entregó con una API key inventada (exención local). body={}",
+        body
+    );
+    assert!(
+        body.contains("sent_key_fp"),
+        "el 403 del canje debe traer la huella de la key presentada. body={}",
         body
     );
 
@@ -377,15 +392,17 @@ fn adv_a19_el_tunel_no_recibe_el_token_root() {
     );
     req.push_str("{\"api_key\":\"esta-no-es-la-key\"}");
     let (st, body) = http(port, &req);
-    assert_eq!(st, 200, "body={}", body);
+    // El túnel exige la API key real: con una key inventada, 403 (fail-closed)
+    // y el diagnostico (nunca el token root).
+    assert_eq!(st, 403, "body={}", body);
     assert!(
         !body.contains(&token),
         "el túnel recibió el token root. body={}",
         body
     );
     assert!(
-        body.contains("\"ok\":false"),
-        "el túnel debe exigir la API key real. body={}",
+        body.contains("sent_key_fp"),
+        "el 403 debe traer la huella de la key presentada. body={}",
         body
     );
 }
