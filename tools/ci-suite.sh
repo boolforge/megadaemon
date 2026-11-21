@@ -92,7 +92,11 @@ if [ -z "$FALLANOS" ]; then
         fi
         # SIEMPRE se publica el final del log: es lo único que se puede leer
         # sin permisos de admin (las anotaciones del check run).
-        echo "::error::final del log ($(wc -l < "$LOG") lineas):$(tail -40 "$LOG" | head -c 2400)"
+        # Las anotaciones de GitHub son de UNA LINEA: los saltos de linea
+        # reales cortan el mensaje.  Se codifican como %0A (MEDIDO el
+        # 2026-11-21: sin esto solo se leia la primera linea del log).
+        TAIL="$(tail -60 "$LOG" | head -c 2400 | sed -e 's/%/%25/g' -e 's/\r/%0D/g' -e 's/\n/%0A/g')"
+        echo "::error::final del log ($(wc -l < "$LOG") lineas):$TAIL"
         tail -40 "$LOG"
         exit 1
     fi
