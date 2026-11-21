@@ -33,18 +33,16 @@
 //! se cableen en `lib.rs`, estas tres líneas pueden sustituirse por
 //! `use megadaemon_core::{call_recorder, recordings};`.
 
-// Los módulos se copian aquí (`#[path]`) porque todavía no están registrados
-// en `lib.rs`. Se silencian los avisos de código no usado: en la librería el
-// módulo es público y no da problemas, pero aquí es una copia privada.
-#[allow(dead_code)]
-#[path = "../call_recorder.rs"]
-mod call_recorder;
-#[allow(dead_code)]
-#[path = "../drive_client.rs"]
-mod drive_client;
-#[allow(dead_code)]
-#[path = "../recordings.rs"]
-mod recordings;
+// Los módulos YA están registrados en `lib.rs` (v15), así que se usan los de
+// la librería en vez de copiarlos con `#[path]`.
+//
+// MEDIDO el 2026-11-21: la copia con `#[path]` rompía la compilación de los
+// binarios: `call_recorder.rs` hace `use crate::util_fs::walk_files` y, dentro
+// de un binario, `crate::` es la raíz del BINARIO (que no tiene `util_fs`)
+// => `error[E0432]: unresolved import crate::util_fs` y el binario
+// `md-recordings` no compilaba (build Linux x86_64 y ARM64 en rojo).
+// La copia además se quedaba VIEJA respecto a la librería.
+use megadaemon_core::{call_recorder, drive_client, recordings};
 
 use recordings::{Informe, Recording, RecordingState};
 use serde_json::{json, Value};

@@ -24,10 +24,11 @@ use std::fs;
 use std::io::Write;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-#[path = "../device_inventory.rs"]
-mod device_inventory;
-
-use device_inventory::{
+// El módulo YA está registrado en `lib.rs` (v15) ⇒ se usa el de la librería.
+// MEDIDO el 2026-11-21: la copia con `#[path]` se quedaba VIEJA respecto a la
+// librería (mismo fallo que `md-recordings`, que sí rompía la compilación:
+// una copia con `use crate::<mod>` no resuelve dentro de un binario).
+use megadaemon_core::device_inventory::{
     capture_plan, copy_plan, manifest_ndjson, sha256_hex, FileDigest, Options, Source,
 };
 
