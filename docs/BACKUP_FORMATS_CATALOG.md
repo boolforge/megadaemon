@@ -156,6 +156,23 @@
 
 **Nunca**: portar código de Swift Backup, Titanium, Neo Backup (AGPL) ni O&O.
 
+### 2.1. Estado real (2026-11-21) — lo que ya está en el repo
+
+| Pieza | Módulo | Estado |
+|---|---|---|
+| Lectores **TAR** (ustar + GNU longname + pax) y **ZIP** (stored + deflate) | `rust-core/src/backup_formats.rs` | ✅ verde |
+| **AEGIS-256** (RFC 10032, vectores oficiales) | `rust-core/src/aegis.rs` | ✅ verde |
+| **Argon2id** (RFC 9106 d/i/id) + API `derive_key` | `rust-core/src/argon2.rs` | ✅ verde (3 vectores de la RFC + 36/36 contra el oráculo C) |
+| **ZSTD** (FFI `dlopen` a `libzstd` + fallback al binario `zstd`) | `rust-core/src/zstd.rs` | ✅ verde (fixture real congelado) |
+| Contenedor **SBA1** (magic, cabecera **inspeccionada** —no congelada—, payload TAR+ZSTD) | `rust-core/src/swift_sba1.rs` | ✅ verde (14/14) |
+| **Cifrado por trozos** de Swift (AEGIS-256, nonce/AAD nativos) | — | ❌ falta: exige `.dat` real |
+| **Layout exacto** de la cabecera `SBA1` | — | ❌ falta: se inspecciona, no se congela (a propósito) |
+
+⇒ **formatos externos que el repo ya sabe leer**: TAR, ZIP y el payload
+TAR+ZSTD del contenedor de Swift. Lo que **no** se puede todavía es abrir un
+`.dat` cifrado de punta a punta (falta la derivación nativa de nonce/AAD y el
+layout de la cabecera) ⇒ **sigue haciendo falta un `.dat` real**.
+
 ## 3. Fuentes
 
 - Seedvault (Apache-2.0): https://github.com/seedvault-app/seedvault
