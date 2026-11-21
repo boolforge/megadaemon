@@ -27,6 +27,7 @@
 #     phone-recover.sh                 # recuperar y verificar
 #     phone-recover.sh --diagnostico   # sólo informe, no cambia nada
 #     phone-recover.sh --install /sdcard/Download/megadaemon-core
+#     phone-recover.sh --auto-update   # baja la última release y verifica su SHA-256
 #     phone-recover.sh --no-tunnel     # recuperación sin internet
 # =====================================================================
 
@@ -67,6 +68,7 @@ http_code() {
 MODE=recuperar
 NO_TUNNEL=0
 INSTALL_BIN=""
+AUTO_UPDATE=0
 
 # El directorio de este script: aquí se buscan los ficheros a desplegar.
 SELF_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
@@ -77,18 +79,50 @@ log() {
 }
 step() { log "── $* ──"; }
 
-for a in "$@"; do
-    case "$a" in
+# Parser con `while` (un `for` con `shift` dentro no es fiable).
+while [ $# -gt 0 ]; do
+    case "$1" in
         --diagnostico) MODE=diagnostico ;;
         --no-tunnel)   NO_TUNNEL=1 ;;
-        --install)     shift; INSTALL_BIN="${1:-}" ;;
-        -h|--help)     sed -n '2,40p' "$0"; exit 0 ;;
+        --auto-update) AUTO_UPDATE=1 ;;
+        --install)
+            shift
+            INSTALL_BIN="${1:-}"
+            [ -n "$INSTALL_BIN" ] || { echo "Falta la ruta tras --install" >&2; exit 2; }
+            ;;
+        -h|--help)     sed -n '2,44p' "$0"; exit 0 ;;
+        *)             echo "opción desconocida: $1" >&2; exit 2 ;;
     esac
     shift
 done
 
 mkdir -p "$PREFIX" "$STATE" 2>/dev/null
 [ -f "$LOG" ] || : > "$LOG"
+
+# ── Descarga (el móvil NO tiene curl; sí toybox wget) ──────────────────
+REPO_RAW=https://raw.githubusercontent.com/boolforge/megadaemon/main
+REPO_API=https://api.github.com/repos/boolforge/megadaemon
+
+fetch() {
+    # $1 = url  $2 = destino.  Devuelve 0 si se descargó.
+    _u="$1"; _d="$2"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL -m 120 -o "$_d" "$_u" 2>/dev/null && return 0
+    fi
+    if command -v toybox >/dev/null 2>&1; then
+        toybox wget -q -O "$_d" "$_u" 2>/dev/null && return 0
+    fi
+    return 1
+}
+
+sha256_de() {
+    # $1 = fichero.  Imprime el sha256 o nada.
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" 2>/dev/null | awk '{print $1}'
+    elif command -v toybox >/dev/null 2>&1; then
+        toybox sha256sum "$1" 2>/dev/null | awk '{print $1}'
+    fi
+}
 
 # ─────────────────────────────────────────────────────────────────────
 # 0) Preflight
@@ -146,15 +180,31 @@ deploy() {
     chmod "$3" "$2" 2>/dev/null
     return 0
 }
+PAYLOAD_MISSING=0
 for pair in "99-megadaemon.sh:$SERVICE_D/99-megadaemon.sh" \
             "98-cloudflared.sh:$SERVICE_D/98-cloudflared.sh" \
             "tunnel-watchdog.sh:$PREFIX/tunnel-watchdog.sh"; do
     src="$SELF_DIR/${pair%%:*}"
     dst="${pair#*:}"
     if deploy "$src" "$dst" 755; then
-        log "desplegado $(basename "$dst")"
+        log "desplegado $(basename "$dst") (local)"
+        continue
+    fi
+    # No está al lado: se descarga del repo (el móvil tiene toybox wget).
+    base="${pair%%:*}"
+    if fetch "$REPO_RAW/deploy/$base" "$dst.tmp"; then
+        if [ -s "$dst.tmp" ] && head -1 "$dst.tmp" | grep -q '#!'; then
+            mv -f "$dst.tmp" "$dst"; chmod 755 "$dst"
+            log "desplegado $base (descargado del repo)"
+        else
+            rm -f "$dst.tmp"
+            log "AVISO: la descarga de $base no parece válida"
+            PAYLOAD_MISSING=1
+        fi
     else
-        log "AVISO: no encuentro $(basename "$src") en $SELF_DIR (se usa lo que ya haya en el móvil)"
+        rm -f "$dst.tmp" 2>/dev/null
+        log "AVISO: no encuentro $base y no se pudo descargar"
+        PAYLOAD_MISSING=1
     fi
 done
 # El watchdog se lanza desde 98-cloudflared.sh con esta ruta:
@@ -166,6 +216,50 @@ done
 # ─────────────────────────────────────────────────────────────────────
 # 3) Binario (opcional)
 # ─────────────────────────────────────────────────────────────────────
+if [ "$AUTO_UPDATE" = "1" ] && [ "$MODE" != "diagnostico" ]; then
+    step "Auto-actualización del binario"
+    auto_update
+fi
+# Auto-actualización: baja la última release de GitHub, VERIFICA el SHA-256
+# y sólo entonces cambia el binario (guardando el anterior para rollback).
+auto_update() {
+    log "buscando la última release..."
+    _json="$PREFIX/.release.json"
+    if ! fetch "$REPO_API/releases/latest" "$_json"; then
+        log "AVISO: no se pudo consultar la release (¿sin internet?)"
+        return 1
+    fi
+    _tag=$(grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' "$_json" 2>/dev/null | head -1 | sed -E 's/.*"([^"]*)".*/\1/')
+    [ -n "$_tag" ] || { log "AVISO: no se pudo leer el tag de la release"; return 1; }
+    log "release: $_tag"
+    _base="$REPO_API/releases/download/$_tag"
+    _asset="$PREFIX/megadaemon-core.new"
+    if ! fetch "$_base/megadaemon-core-android-arm64" "$_asset"; then
+        log "AVISO: no se pudo bajar el binario"
+        return 1
+    fi
+    # SHA-256 esperado: del asset .sha256 del propio release.
+    _sha_file="$PREFIX/.asset.sha256"
+    if fetch "$_base/megadaemon-core-android-arm64.sha256" "$_sha_file"; then
+        _esperado=$(awk '{print $1}' "$_sha_file" 2>/dev/null | head -1)
+        _real=$(sha256_de "$_asset")
+        if [ -n "$_esperado" ] && [ "$_esperado" != "$_real" ]; then
+            log "ERROR: SHA-256 no coincide (esperado ${_esperado:0:16}… real ${_real:0:16}…) => NO se instala"
+            rm -f "$_asset"
+            return 1
+        fi
+        log "SHA-256 verificado: ${_real:0:16}…"
+    else
+        log "AVISO: no hay .sha256 en el release (se instala sin verificar)"
+    fi
+    # Instalación con rollback: el binario actual se conserva como .prev.
+    if [ -f "$BIN" ]; then cp -f "$BIN" "$PREFIX/megadaemon-core.prev" 2>/dev/null; fi
+    mv -f "$_asset" "$BIN" 2>/dev/null || { log "ERROR: no se pudo instalar el binario"; return 1; }
+    chmod 755 "$BIN" 2>/dev/null
+    log "binario instalado: $(sha256_de "$BIN" | cut -c1-16)… ($(stat -c %s "$BIN" 2>/dev/null) B)"
+    return 0
+}
+
 if [ -n "$INSTALL_BIN" ] && [ -f "$INSTALL_BIN" ]; then
     step "Instalando binario desde $INSTALL_BIN"
     cp -f "$INSTALL_BIN" "$BIN.new" 2>/dev/null
