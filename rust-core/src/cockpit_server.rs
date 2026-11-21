@@ -2346,15 +2346,6 @@ pub fn run_server(port: u16) -> Result<(), String> {
     ports.sort_unstable();
     ports.dedup();
 
-    // Canal LAN: beacon UDP de descubrimiento (mismo modo de fallo que el
-    // móvil, sin internet y sin terceros).  Best-effort: si no hay red, el
-    // daemon sigue igual.
-    {
-        let inst = std::env::var("MEGADAEMON_INSTANCE_ID").unwrap_or_else(|_| "megadaemon".into());
-        let sd = state_dir();
-        crate::lan::spawn_beacon(inst, port, Some(sd));
-    }
-
     let mut listeners: Vec<(u16, TcpListener)> = Vec::new();
     for p in &ports {
         let addr = format!("0.0.0.0:{}", p);
@@ -2393,6 +2384,29 @@ pub fn run_server(port: u16) -> Result<(), String> {
              ni plantilla embebida. La UI no puede servirse."
                 .to_string(),
         );
+    }
+
+    // Canal LAN: beacon UDP de descubrimiento (mismo modo de fallo que el
+    // móvil, sin internet y sin terceros).  Best-effort: si no hay red, el
+    // daemon sigue igual.
+    //
+    // BUG LAN-01 (medido el 2026-11-21 en el S21): el beacon publicaba el
+    // puerto PRIMARIO, que en el móvil es efímero (lo elige el SO) y CAMBIA
+    // en cada arranque.  El descubrimiento por LAN se quedaba con URLs
+    // muertas: se vio el beacon anunciando 42127, 42671, 34331 y 46043 en
+    // cuatro reinicios seguidos.  Ahora publica el puerto CANÓNICO (el
+    // primero de los alias que de verdad ha quedado abierto), que es fijo
+    // entre arranques; el efímero se publica aparte como `primary_port`.
+    {
+        let inst = std::env::var("MEGADAEMON_INSTANCE_ID").unwrap_or_else(|_| "megadaemon".into());
+        let sd = state_dir();
+        let abiertos: Vec<u16> = listeners.iter().map(|(p, _)| *p).collect();
+        let canonico = ALIAS_PORTS
+            .iter()
+            .copied()
+            .find(|p| abiertos.contains(p))
+            .unwrap_or(port);
+        crate::lan::spawn_beacon(inst, canonico, Some(sd));
     }
 
     // Publica el estado real del listener para /health.

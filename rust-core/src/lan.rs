@@ -132,6 +132,10 @@ pub fn beacon_payload(instance_id: &str, http_port: u16) -> serde_json::Value {
         "id": instance_id,
         "ips": ips,
         "ip": primary,
+        // `port` es el puerto CANÓNICO (fijo entre arranques): el que el
+        // descubrimiento debe usar.  `primary_port` es el efímero que
+        // eligió el SO, que cambia en cada reinicio: informativo, nunca
+        // para construir una URL.
         "port": http_port,
         "url": primary.as_deref().map(|ip| lan_url(ip, http_port)),
         "ts": now_epoch(),
