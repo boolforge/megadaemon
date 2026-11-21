@@ -7,6 +7,24 @@
 //! cliente HTTP del agente local.
 
 pub mod accelerator_policy;
+/// Adquiere un mutex sin dejar que un panic previo lo envenene.
+///
+/// Por que existe: `lock().unwrap()` convierte cualquier panic ajeno en un
+/// fallo PERMANENTE. El mutex queda envenenado y todas las peticiones
+/// posteriores vuelven a hacer panic al intentar tomar el lock. En un
+/// servidor eso significa: proceso vivo, watchdog contento, y 502 en cada
+/// peticion (el tunel ve la conexion cortada a medias). El daemon se
+/// quedaba asi, en 502 permanente, sin que nada lo reiniciara.
+///
+/// Con `lock_ok` el servidor sigue sirviendo: se pierde el estado de ese
+/// mutex concreto, no el servicio.
+pub fn lock_ok<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match m.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 pub mod adb_client;
 pub mod adb_tool;
 pub mod agent_core;
@@ -81,6 +99,7 @@ pub mod npu_vs4l;
 pub mod csc_verify;
 pub mod rom_migration;
 pub mod npu_cv;
+pub mod peers;
 pub mod npu_nnapi;
 pub mod pattern;
 pub mod pointers;
@@ -93,6 +112,8 @@ pub mod recording_vault;
 pub mod repo_updates;
 pub mod rom_locator;
 pub mod root_hide;
+pub mod sqlite_probe;
+pub mod root_intel;
 pub mod root_stealth;
 pub mod seere_v11;
 pub mod service_bus;
@@ -106,11 +127,13 @@ pub mod sshd;
 pub mod swift_archive;
 pub mod swift_sba1;
 pub mod swift_sba1_header;
+pub mod store_manager;
 pub mod sync;
 pub mod sync_web;
 pub mod task_scheduler;
 pub mod tile_vram;
 pub mod unifier;
+pub mod util_fs;
 pub mod util_text;
 pub mod webui;
 pub mod zstd;

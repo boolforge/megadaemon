@@ -1237,6 +1237,20 @@ fn handle_client(mut stream: TcpStream) {
                 );
             }
             "/api/providers" => send_json(&mut stream, &providers::list_providers_redacted()),
+            // v15: gestor de tiendas/repos universal (store manager).
+            // Todo en Rust: sin SDK de terceros ni binarios externos.  Las
+            // acciones que escriben (add/remove/refresh/install) exigen la
+            // doble auth habitual; `install` además exige `confirm:true`.
+            "/api/stores" => {
+                let action = qs
+                    .get("action")
+                    .cloned()
+                    .unwrap_or_else(|| "list".to_string());
+                let args: Value = serde_json::from_slice(body_slice).unwrap_or_else(|_| json!({}));
+                let dir = std::path::PathBuf::from(crate::mesh::default_state_dir());
+                let out = crate::store_manager::handle_action(&action, &args, &dir);
+                send_json(&mut stream, &out);
+            }
             // v15 (W6): catálogo unificado de MODELOS y AGENTES/SERVICIOS.
             // La UI (vista "Reparto"/"Sistema") lo pinta tal cual.  La salud
             // sale **medida**, nunca inventada: sin `?probe=1` las entradas
