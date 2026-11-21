@@ -366,20 +366,6 @@ pub fn resolve_template() -> Option<String> {
 /// teniendo prioridad para poder parchear la UI sin recompilar.
 pub const EMBEDDED_TEMPLATE: &str = include_str!("../../web/cockpit_template.html");
 
-/// v15 (W1): la UI v2 (`web/cockpit_v2.html` + `web/webui_v2.css`) embebida,
-/// para que el binario sea autosuficiente como la v1 (el móvil no tiene assets).
-pub const EMBEDDED_V2_HTML: &str = include_str!("../../web/cockpit_v2.html");
-pub const EMBEDDED_V2_CSS: &str = include_str!("../../web/webui_v2.css");
-
-/// Ruta con query, como la espera `webui::dispatch` (que hace `split_query`).
-fn with_query(path: &str, query: &str) -> String {
-    if query.is_empty() {
-        path.to_string()
-    } else {
-        format!("{}?{}", path, query)
-    }
-}
-
 /// Puertos realmente enlazados (los alias son best-effort).
 static OPEN_PORTS: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
 /// Puerto principal del cockpit.
@@ -950,40 +936,11 @@ fn handle_client(mut stream: TcpStream) {
     // diagnóstico era invisible justo cuando hacía falta. Ahora son públicos
     // (no exponen datos de usuario: versión, uptime, puertos y contadores),
     // igual que ya se documentaba en el commit 4771277.
-    // v15 (W1): `/v2` y su CSS son públicos (HTML/CSS); los datos de la v2 no.
-    // v15 (W1): `/channel.json` es PÚBLICO y con payload MÍNIMO (URLs del
-    // canal + ts): es el punto canónico estable que sirve el relay del PC
-    // (`https://<dominio>/channel.json`) para que el sandbox redescubra el
-    // canal **sin que el móvil necesite un PAT de GitHub** (ninguna
-    // credencial de escritura en el dispositivo).
-    let is_public_page = path == "/" || path == "/index.html"
-        || path == "/v2"
-        || path == "/ui"
-        || path == "/webui_v2.css"
-        || path == "/channel.json";
+    let is_public_page = path == "/" || path == "/index.html";
     let is_public_probe = matches!(
         path,
         "/health" | "/api/health" | "/metrics" | "/api/metrics" | "/api/ping"
     );
-    // v14: el navegador local del dispositivo se exime de la API key
-    // (decisión por Host + veto de cabeceras de proxy; ver el comentario de
-    // `local_browser_request`).  El túnel público NO se exime.
-    let local_browser = local_browser_request(&peer_ip, &header_str);
-    // v14: el canje remoto `POST /api/session/exchange` lleva la API key en
-    // el CUERPO (así lo hace el JS de la UI) pero el gate sólo miraba la
-    // cabecera => el cliente remoto se comía un 401 ANTES de llegar al
-    // handler y nunca conseguía token.  Para ESA ruta se acepta también la
-    // key del cuerpo (cabecera + cuerpo siguen siendo válidos).
-    let body_key_ok = path == "/api/session/exchange"
-        && serde_json::from_slice::<Value>(body_slice)
-            .ok()
-            .and_then(|v| {
-                v.get("api_key")
-                    .and_then(|k| k.as_str())
-                    .map(|s| s.trim().to_string())
-            })
-            .map(|k| cfg.enabled && !k.is_empty() && cfg.accepts(&k))
-            .unwrap_or(false);
     match api_key::decide(
         &cfg,
         &RATE_LIMITER,
@@ -992,8 +949,7 @@ fn handle_client(mut stream: TcpStream) {
         std::time::Instant::now(),
     ) {
         api_key::Decision::Allow => {}
-        api_key::Decision::Unauthorized
-            if is_public_page || is_public_probe || local_browser || body_key_ok => {
+        api_key::Decision::Unauthorized if is_public_page || is_public_probe => {
             // Se permite la página/sonda; el resto de endpoints siguen protegidos.
             REQ_REJECTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
@@ -1168,20 +1124,7 @@ fn handle_client(mut stream: TcpStream) {
                 //   * `GET /api/*`          → exige API key (o loopback).
                 //   * `POST /api/*`         → exige API key + token de sesión.
                 let html = String::from_utf8_lossy(&html).into_owned();
-                //
-                // v14: al navegador LOCAL del dispositivo sí se le incrusta el
-                // token de sesión (su JS lo adjunta a cada llamada → lecturas
-                // Y escrituras funcionan en :3000 sin puente y sin pedir nada
-                // al usuario).  La página PÚBLICA (túnel, LAN) sigue SIN
-                // token: ahí el cliente pide la API key y la canjea.
-                let inject = if local_browser {
-                    format!(
-                        "<script>window.MEGADAEMON_TOKEN=\"{}\";window.MEGADAEMON_TOKEN_ISSUED=true;</script>",
-                        auth_token()
-                    )
-                } else {
-                    "<script>window.MEGADAEMON_TOKEN=\"\";window.MEGADAEMON_TOKEN_ISSUED=false;</script>".to_string()
-                };
+                let inject = "<script>window.MEGADAEMON_TOKEN=\"\";window.MEGADAEMON_TOKEN_ISSUED=false;</script>";
                 let html = match html.find("<script>") {
                     Some(i) => format!("{}{}{}", &html[..i], inject, &html[i..]),
                     None => format!("{}{}", inject, html),
@@ -1192,6 +1135,44 @@ fn handle_client(mut stream: TcpStream) {
                     "text/html; charset=utf-8",
                     html.as_bytes(),
                 );
+            }
+            // Intercambio: API key válida → token de sesión para el navegador.
+            //
+            // POST /api/session/exchange   body: {"api_key": "..."}
+            // → 200 {"ok":true,"token":"..."}  (el token va al navegador, no al
+            //   HTML público).  Con la API key incorrecta → 403.
+            "/api/session/exchange" => {
+                let body: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);
+                let provided = body
+                    .get("api_key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let ok = !provided.is_empty()
+                    && cfg.enabled
+                    && provided == cfg.key
+                    && !cfg.key.is_empty();
+                if ok {
+                    send_json(
+                        &mut stream,
+                        &json!({
+                            "ok": true,
+                            "token": auth_token(),
+                            "expires_hint": "el token es de la instancia; rotarlo reinicia la sesión",
+                        }),
+                    );
+                } else {
+                    REQ_REJECTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    send_json(
+                        &mut stream,
+                        &json!({
+                            "ok": false,
+                            "error": "invalid_api_key",
+                            "hint": "la API key no coincide con la configurada en la instancia",
+                        }),
+                    );
+                }
             }
             "/health" | "/api/health" => {
                 // Fase 3: endpoint de salud del demonio (monitorizable por
@@ -1769,23 +1750,6 @@ fn handle_client(mut stream: TcpStream) {
             let r = sync::run_sync(services, cookies);
             send_json(&mut stream, &r);
         }
-        // v13.4 — Vault de firma electronica: material criptografico con zona
-        // publica (replicable) y zona privada (nunca sale del dispositivo).
-        // Cae dentro del gate de autenticacion: todo lo que no sea `GET /`
-        // exige API key + token de sesion.
-        "/api/signing_vault" => {
-            let action = body_json
-                .get("action")
-                .and_then(|v| v.as_str())
-                .unwrap_or("list")
-                .to_string();
-            let r = crate::signing_vault::handle_action(
-                &action,
-                &body_json,
-                std::path::Path::new(&state_dir()),
-            );
-            send_json(&mut stream, &r);
-        }
         // v13.4 — genérico: cualquier herramienta del catálogo extendido
         // accesible como POST /api/tool/<nombre> con el cuerpo como args.
         _ if path.starts_with("/api/tool/") => {
@@ -1799,41 +1763,6 @@ fn handle_client(mut stream: TcpStream) {
                     b"{\"error\":\"unknown_tool\"}",
                 ),
             }
-        }
-        // v17 — Gestor de portapapeles distribuido.
-        //
-        // GET  /api/clipboard[?q=...&limit=N]  -> listar / buscar
-        // POST /api/clipboard {"action":"put"|"get"|"copy"|"clear"|"status", ...}
-        //
-        // El contenido del portapapeles puede contener secretos: por eso cae
-        // dentro del gate de autenticacion (API key + token de sesion) y el
-        // modulo marca como "sensible" lo que parece una clave/OTP y no lo
-        // persiste en el historial.
-        "/api/clipboard" => {
-            let mut b = body_json.clone();
-            let action = b
-                .get("action")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| {
-                    if qp.get("q").is_some() {
-                        "search".to_string()
-                    } else {
-                        "list".to_string()
-                    }
-                });
-            if b.get("query").is_none() {
-                if let Some(q) = qp.get("q") {
-                    b["query"] = json!(q);
-                }
-            }
-            if b.get("limit").is_none() {
-                if let Some(l) = qp.get("limit").and_then(|v| v.parse::<u64>().ok()) {
-                    b["limit"] = json!(l);
-                }
-            }
-            let r = crate::clipboard::handle_action(&action, &b, &state_dir());
-            send_json(&mut stream, &r);
         }
         "/api/capabilities" => {
             send_json(&mut stream, &crate::capability::verify());
@@ -2476,16 +2405,6 @@ pub fn run_server(port: u16) -> Result<(), String> {
                 eprintln!("cockpit: puerto alias {} no disponible ({})", p, e);
             }
         }
-        // DUAL-STACK (v14): Chrome en Android resuelve "localhost" a ::1
-        // PRIMERO (net::DnsConfigServiceAndroid::GetLocalhostAddresses ->
-        // [::1, 127.0.0.1]).  Si solo escuchamos en IPv4, el navegador recibe
-        // RST en ::1 y muestra ERR_CONNECTION_REFUSED aunque 127.0.0.1 este
-        // vivo.  Por eso abrimos tambien el loopback IPv6.
-        let v6 = format!("[::1]:{}", p);
-        match TcpListener::bind(&v6) {
-            Ok(l) => listeners.push((*p, l)),
-            Err(e) => eprintln!("cockpit: loopback IPv6 {} no disponible ({})", v6, e),
-        }
     }
     if listeners.is_empty() {
         return Err("no se pudo enlazar ningún puerto".to_string());
@@ -2502,53 +2421,6 @@ pub fn run_server(port: u16) -> Result<(), String> {
         );
     }
 
-    // Canal LAN: beacon UDP de descubrimiento (mismo modo de fallo que el
-    // móvil, sin internet y sin terceros).  Best-effort: si no hay red, el
-    // daemon sigue igual.
-    //
-    // BUG LAN-01 (medido el 2026-11-21 en el S21): el beacon publicaba el
-    // puerto PRIMARIO, que en el móvil es efímero (lo elige el SO) y CAMBIA
-    // en cada arranque.  El descubrimiento por LAN se quedaba con URLs
-    // muertas: se vio el beacon anunciando 42127, 42671, 34331 y 46043 en
-    // cuatro reinicios seguidos.  Ahora publica el puerto CANÓNICO (el
-    // primero de los alias que de verdad ha quedado abierto), que es fijo
-    // entre arranques; el efímero se publica aparte como `primary_port`.
-    {
-        let inst = std::env::var("MEGADAEMON_INSTANCE_ID").unwrap_or_else(|_| "megadaemon".into());
-        let sd = state_dir();
-        let abiertos: Vec<u16> = listeners.iter().map(|(p, _)| *p).collect();
-        let canonico = ALIAS_PORTS
-            .iter()
-            .copied()
-            .find(|p| abiertos.contains(p))
-            .unwrap_or(port);
-        crate::lan::spawn_beacon(inst, canonico, Some(sd));
-    }
-
-    // v17 — Watchdog BIDIRECCIONAL: el daemon vigila al supervisor.
-    //
-    // MEDIDO el 2026-11-21: el supervisor se lanzaba desde Termux (hijo de
-    // la app).  Al cerrar Termux, Android mato el grupo de procesos: el
-    // supervisor murio, luego el daemon, luego el tunel => el movil quedo
-    // inalcanzable (0 puertos abiertos) sin que nadie se enterase.
-    //
-    // Con esto, si el daemon vive pero el supervisor no, el daemon lo
-    // relanza.  Y si el supervisor vive pero el daemon no, el supervisor lo
-    // relanza (ya lo hacia).  Los dos se curan solos.
-    spawn_supervisor_keeper(state_dir());
-
-    // v17 — Publicacion AUTOMATICA del canal, DENTRO del daemon.
-    //
-    // MEDIDO el 2026-11-21: el canal lo publicaba el binario externo
-    // `channel-publish`, que en el movil no se podia instalar (el movil no
-    // tiene curl ni wget) => la URL del quick tunnel nunca se publicaba y
-    // el movil era inalcanzable desde fuera sin intervencion manual.
-    //
-    // Ahora el propio daemon publica.  Es IDEMPOTENTE y BARATO: solo
-    // publica cuando la URL del tunel ha CAMBIADO o el paste vigente ha
-    // caducado (6 h).  En reposo: 0 peticiones de red.
-    spawn_channel_publisher(state_dir());
-
     // Publica el estado real del listener para /health.
     let open: Vec<u16> = listeners.iter().map(|(p, _)| *p).collect();
     let _ = PRIMARY_PORT.set(port);
@@ -2557,25 +2429,8 @@ pub fn run_server(port: u16) -> Result<(), String> {
 
     println!("==================================================================");
     println!("MEGADAEMON v14 ZENITH — 100% PURE RUST COCKPIT SERVER ONLINE");
-    // BUG v14 (AUDIT-WEB-06): el banner imprimía SIEMPRE "127.0.0.1" aunque el
-    // bind real es 0.0.0.0, y repetía la misma línea por cada listener (IPv4 +
-    // IPv6 del mismo puerto). Eso hacía leer "no trae bind 0.0.0.0 ni alias"
-    // en un binario que SÍ los traía, yprovocaba recompilarlo sin motivo.
-    // Ahora: un puerto por línea, con los binds reales.
-    {
-        let mut seen: Vec<u16> = Vec::new();
-        for (p, _) in &listeners {
-            if !seen.contains(p) {
-                seen.push(*p);
-            }
-        }
-        seen.sort_unstable();
-        for p in &seen {
-            println!(
-                "  Listen:    http://0.0.0.0:{}  ·  http://[::1]:{}  (LAN: http://<ip-de-la-maquina>:{})",
-                p, p, p
-            );
-        }
+    for (p, _) in &listeners {
+        println!("  Listen:    http://127.0.0.1:{}  (LAN: http://<ip-de-la-maquina>:{})", p, p);
     }
     for ip in local_ips() {
         println!("  URL LAN:   http://{}:{}", ip, port);
@@ -2590,35 +2445,8 @@ pub fn run_server(port: u16) -> Result<(), String> {
     for (_, listener) in listeners {
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                // Techo de clientes concurrentes: el móvil va JUSTO de RAM
-                // (10,2/10,5 GB) y un hilo por conexión puede multiplicarse
-                // (cada hilo reserva pila virtual).  Por encima del techo se
-                // responde 503 en vez de crear otro hilo.  No se pierde
-                // ninguna capacidad: por debajo del techo el comportamiento
-                // es idéntico.
-                let prev = ACTIVE_CLIENTS.fetch_add(1, Ordering::Relaxed);
-                if prev >= MAX_CLIENT_THREADS {
-                    ACTIVE_CLIENTS.fetch_sub(1, Ordering::Relaxed);
-                    let mut s = stream;
-                    let _ = s.set_write_timeout(Some(Duration::from_secs(2)));
-                    let _ = s.write_all(
-                        b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                    );
-                    continue;
-                }
                 thread::spawn(move || {
-                    // Un panic en UNA conexión no puede tumbar el daemon: con el
-                    // perfil release desenrollando (sin panic="abort") el
-                    // panic queda contenido aquí y el resto del cockpit sigue
-                    // sirviendo.  Antes moría el proceso entero y el túnel
-                    // veía 502 aunque el daemon "estuviera vivo".
-                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        handle_client(stream);
-                    }));
-                    if r.is_err() {
-                        eprintln!("cockpit: panic capturado en una conexión (aislado; el servicio sigue)");
-                    }
-                    ACTIVE_CLIENTS.fetch_sub(1, Ordering::Relaxed);
+                    handle_client(stream);
                 });
             }
         });
@@ -2636,88 +2464,3 @@ pub fn run_server(port: u16) -> Result<(), String> {
 /// romper ningún acceso existente (bookmarks, túnel, scripts).  Todos sirven
 /// la MISMA instancia y comparten token, estado y cola de tareas.
 pub const ALIAS_PORTS: &[u16] = &[3000, 3030, 8090, 9090];
-
-#[cfg(test)]
-mod channel_json_tests {
-    use super::*;
-    use serde_json::json;
-
-    /// El payload público del canal NO puede llevar la huella del móvil.
-    #[test]
-    fn el_payload_publico_del_canal_es_minimo() {
-        let full = json!({
-            "quick": "https://abc.trycloudflare.com",
-            "duckdns": "https://mdtmfnc-s21.duckdns.org",
-            "canonical": "https://mdtmfnc-s21.duckdns.org/channel.json",
-            "ts": 1732000000,
-            "ip_publica": "47.253.4.207",
-            "cloudflared_pids": "123,456",
-            "api_key": "mdaemon_sk_live_secreto"
-        });
-        let out = channel_public_payload(&full);
-        assert_eq!(out["quick"], json!("https://abc.trycloudflare.com"));
-        assert_eq!(out["duckdns"], json!("https://mdtmfnc-s21.duckdns.org"));
-        assert_eq!(out["canonical"], json!("https://mdtmfnc-s21.duckdns.org/channel.json"));
-        assert_eq!(out["ts"], json!(1732000000));
-        // Lo que NO puede salir por HTTP:
-        assert!(out.get("ip_publica").is_none(), "la IP pública no sale");
-        assert!(out.get("cloudflared_pids").is_none(), "los pids no salen");
-        assert!(out.get("api_key").is_none(), "ninguna credencial sale");
-        // Y el número de claves es como máximo 4.
-        assert!(out.as_object().unwrap().len() <= 4);
-    }
-
-    /// Un canal vacío no inventa campos.
-    #[test]
-    fn el_payload_publico_ignora_lo_que_falte() {
-        let out = channel_public_payload(&json!({ "quick": null, "ts": 1 }));
-        assert!(out.get("quick").is_none());
-        assert_eq!(out["ts"], json!(1));
-    }
-}
-
-#[cfg(test)]
-mod rutas_derivadas_tests {
-    use super::*;
-
-    /// MEDIDO 2026-11-21: en el móvil el estado vive en
-    /// /data/local/tmp/megadaemon/state, pero `uploads`, `extracted` y `web`
-    /// tenían rutas fijas a /data/user/0/com.agy/... (que NO existen) =>
-    /// la plantilla desplegada nunca se usaba.
-    #[test]
-    fn las_rutas_cuelgan_del_state_dir() {
-        assert_eq!(
-            base_dir_of("/data/local/tmp/megadaemon/state"),
-            "/data/local/tmp/megadaemon"
-        );
-        assert_eq!(
-            base_dir_of("/data/user/0/com.agy/files/megadaemon/state"),
-            "/data/user/0/com.agy/files/megadaemon"
-        );
-    }
-
-    /// Un state_dir en la raiz no puede dejar un padre degenerado.
-    #[test]
-    fn un_state_dir_en_la_raiz_no_rompe_la_ruta() {
-        assert_eq!(base_dir_of("/state"), "/state");
-        assert_eq!(base_dir_of("/"), "/");
-    }
-
-    /// Con el env del móvil, TODO cuelga del prefijo del despliegue.
-    #[test]
-    fn en_el_movil_todo_cuelga_del_prefijo() {
-        let sd = "/data/local/tmp/megadaemon/state";
-        let b = base_dir_of(sd);
-        assert_eq!(format!("{}/uploads", b), "/data/local/tmp/megadaemon/uploads");
-        assert_eq!(
-            format!("{}/extracted", b),
-            "/data/local/tmp/megadaemon/extracted"
-        );
-        assert_eq!(
-            format!("{}/web/cockpit_template.html", b),
-            "/data/local/tmp/megadaemon/web/cockpit_template.html"
-        );
-        // y NINGUNA ruta fija a /data/user/0/com.agy
-        assert!(!format!("{}/uploads", b).contains("com.agy"));
-    }
-}

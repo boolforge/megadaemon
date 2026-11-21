@@ -263,14 +263,7 @@ impl TaskBoard {
         self.conn
             .execute_batch(
                 r#"
-                -- v14: el tablero es el SUBSTRATO de coordinación: si sus filas
-                -- viven en un -wal que se pierde (reinicio del daemon, limpieza
-                -- del state_dir, fallo de E/S), el plan desaparece.  Por eso:
-                -- journal_mode=DELETE (rollback journal: cada commit queda en el
-                -- fichero principal, sin ficheros -wal/-shm que perder) y
-                -- synchronous=FULL (durable frente a corte de luz).
-                PRAGMA journal_mode=DELETE;
-                PRAGMA synchronous=FULL;
+                PRAGMA journal_mode=WAL;
                 PRAGMA foreign_keys=ON;
 
                 CREATE TABLE IF NOT EXISTS instances (
@@ -646,15 +639,6 @@ impl TaskBoard {
     }
 
     /// Escribe un evento en la auditoría.
-    /// Publica un evento en el tablón (queda en `events` y se sincroniza).
-    ///
-    /// Lo usa la voz (W0) para difundir su acción por el canal del tablón.
-    /// **El payload va sin secretos**: la voz sólo publica textos, ids y
-    /// hashes (`agent_voice::redact` limpia lo que un modelo devolvió).
-    pub fn publish_event(&self, kind: &str, actor: &str, payload: &Value) -> Result<(), String> {
-        self.log_event(kind, actor, payload)
-    }
-
     fn log_event(&self, kind: &str, actor: &str, payload: &Value) -> Result<(), String> {
         self.conn
             .execute(
@@ -1079,6 +1063,51 @@ mod tests {
         assert_eq!(snap["tasks_by_status"]["claimed"], json!(1));
         assert_eq!(snap["instances"].as_array().unwrap().len(), 1);
         assert!(snap["events"].as_array().unwrap().len() >= 3);
+    }
+
+    #[test]
+    fn fusionar_es_idempotente_y_convergente() {
+        let a = TaskBoard::open_in_memory().unwrap();
+        let b = TaskBoard::open_in_memory().unwrap();
+        a.register_instance(&inst("pc", InstanceRole::Worker)).unwrap();
+        b.register_instance(&inst("movil", InstanceRole::Primary)).unwrap();
+        let id = a.add_task("tarea compartida", 1, None).unwrap();
+
+        let snap_a = a.export_for_sync().unwrap();
+        let out1 = b.merge_remote(&snap_a).unwrap();
+        assert_eq!(out1.tasks_new, 1);
+        assert_eq!(out1.instances_upserted, 1);
+
+        // Segunda fusión: no duplica nada.
+        let out2 = b.merge_remote(&snap_a).unwrap();
+        assert_eq!(out2.tasks_new, 0);
+        assert_eq!(b.list_tasks(None).unwrap().len(), 1);
+
+        // Y la vuelta: `a` ve la tarea de `b`.
+        let snap_b = b.export_for_sync().unwrap();
+        a.merge_remote(&snap_b).unwrap();
+        assert_eq!(a.list_tasks(None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn un_estado_terminal_no_se_degrada() {
+        let a = TaskBoard::open_in_memory().unwrap();
+        let b = TaskBoard::open_in_memory().unwrap();
+        let id = a.add_task("tarea", 1, None).unwrap();
+        a.claim_task(&id, "pc", 60).unwrap();
+        a.report_task(&id, "pc", true, "hecho / nada / nada").unwrap();
+
+        // `b` todavía la tiene en curso: al fusionar, gana el terminal.
+        b.add_task(&format!("tarea"), 1, None).ok();
+        let mut remote = b.export_for_sync().unwrap();
+        // Forzamos el caso: en `b` la tarea está en curso y con fecha vieja.
+        remote["tasks"] = json!([{
+            "id": id, "title": "tarea", "owner": "pc", "status": "claimed",
+            "priority": 1, "created_at": 1, "updated_at": 1, "lease_expires_at": 0
+        }]);
+        let out = a.merge_remote(&remote).unwrap();
+        assert_eq!(out.conflicts, 1);
+        assert_eq!(a.list_tasks(None).unwrap()[0].status, TaskStatus::Done);
     }
 
     #[test]

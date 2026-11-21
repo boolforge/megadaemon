@@ -792,22 +792,18 @@ document.addEventListener("click", function (e) {
   if (b) { testProviderById(b.getAttribute("data-test-provider")); }
 });
 
-// =============================================================================
-// v14 · BOOTSTRAP DE SESIÓN (decisión (b) del equipo, cierra el bug UI-16)
+// v13.4 (AUDIT-WEB-03/06): los endpoints de DATOS exigen la API key cuando la
+// petición no viene de loopback, y los de ESCRITURA exigen además el token de
+// sesión.  El navegador no puede mandar cabeceras al abrir la URL, así que:
+//   1. el usuario pega su API key (una vez, queda en localStorage);
+//   2. el cliente la intercambia por un token de sesión en
+//      POST /api/session/exchange;
+//   3. a partir de ahí, todas las llamadas llevan ambas credenciales.
 //
-// La página pública `GET /` NO lleva el token de sesión incrustado: si lo
-// llevara, cualquiera que alcanzase el puerto obtendría el control del
-// daemon (RCE root).  Pero sin token, todas las llamadas de datos devuelven
-// 403 y los paneles salen con "Failed to fetch".
-//
-// Solución: el navegador pide al usuario su API key UNA vez, la canjea por un
-// token de sesión en `POST /api/session/exchange` (que exige la API key, no
-// el token) y guarda ambos en localStorage.  A partir de ahí la UI funciona
-// nativa, sin puente Python y sin que el token viaje en el HTML.
-// =============================================================================
+// La página HTML pública NO lleva ningún token incrustado: si lo llevara,
+// cualquiera que llegase al puerto obtendría el control del daemon.
 const MD_KEY_STORE = "megadaemon_api_key";
 const MD_TOKEN_STORE = "megadaemon_session_token";
-
 function storedApiKey() {
   try { return window.localStorage.getItem(MD_KEY_STORE) || ""; } catch (e) { return ""; }
 }
@@ -820,12 +816,11 @@ function storedToken() {
 function setToken(t) {
   try { window.localStorage.setItem(MD_TOKEN_STORE, t || ""); } catch (e) {}
 }
-
 function askApiKey() {
   const k = window.prompt(
-    "MegaDaemon — pega la API key de la instancia\n" +
-    "(fichero state/megadaemon_api.key en el dispositivo)\n" +
-    "Se guarda en el localStorage de este navegador."
+    "MegaDaemon: pega la API key de la instancia\n" +
+    "(fichero state/megadaemon_api.key)\n" +
+    "Se guarda en localStorage de este navegador."
   );
   if (k) { setApiKey(k.trim()); }
   return k ? k.trim() : "";
@@ -833,26 +828,22 @@ function askApiKey() {
 
 // Canjea la API key por un token de sesión.
 async function exchangeSession(apiKey) {
-  try {
-    const res = await fetch("/api/session/exchange", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
-      body: JSON.stringify({ api_key: apiKey })
-    });
-    if (!res.ok) return false;
-    const j = await res.json();
-    if (j && j.ok && j.token) {
-      setToken(j.token);
-      window.MEGADAEMON_TOKEN = j.token;
-      window.MEGADAEMON_TOKEN_ISSUED = true;
-      return true;
-    }
-  } catch (e) { /* sin red o CORS */ }
+  const res = await fetch("/api/session/exchange", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: apiKey })
+  });
+  let j = null;
+  try { j = await res.json(); } catch (e) { j = null; }
+  if (res.ok && j && j.ok && j.token) {
+    setToken(j.token);
+    window.MEGADAEMON_TOKEN = j.token;
+    window.MEGADAEMON_TOKEN_ISSUED = true;
+    return true;
+  }
   return false;
 }
 
-// v13.2 (S08): el cockpit exige `X-Seere-Auth-Token` en los endpoints que
-// ejecutan o modifican estado, y `X-API-Key` para el acceso remoto.
 function authHeaders(extra) {
   const h = Object.assign({}, extra || {});
   const t = storedToken() || (window.MEGADAEMON_TOKEN || "");
@@ -865,7 +856,7 @@ function authHeaders(extra) {
 // Reintenta una vez pidiendo la API key si el daemon responde 401.
 async function mdFetch(url, opts) {
   let res = await fetch(url, Object.assign({ cache: "no-store" }, opts || {}));
-  if (res.status === 401 && !window.__mdKeyAsked && !storedToken()) {
+  if (res.status === 401 && !window.__mdKeyAsked) {
     window.__mdKeyAsked = true;
     const k = askApiKey();
     if (k && await exchangeSession(k)) {
@@ -893,7 +884,8 @@ async function apiPost(url, payload) {
   return await res.json();
 }
 
-// Al cargar: si ya hay API key guardada, se pide el token en segundo plano.
+// Al cargar la página: si ya hay API key guardada, se pide el token de
+// sesión en segundo plano para que la UI funcione sin intervención.
 (async function mdBootstrapSession() {
   const k = storedApiKey();
   if (k) { await exchangeSession(k); }

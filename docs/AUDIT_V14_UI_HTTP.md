@@ -1,412 +1,87 @@
-# Auditoría v14 · UI / HTTP / MCP / proveedores (3ª tanda, sin solape con HW-01..16 ni S01..S14b)
+# MegaDaemon v14 — TERCERA auditoría adversarial: capa HTTP, proveedores, MCP y UI web
 
-*Fecha: 2026-11-19 · Alcance: `rust-core/src/cockpit_server.rs`, `rust-core/src/providers.rs`,
-`rust-core/src/mcp_server.rs`, `rust-core/src/shm.rs`, `rust-core/src/freezer.rs`,
-`web/cockpit_template.html`, `deploy/web_bridge.py` · **No se ha tocado `src/` de producción**:
-todo lo que hay aquí son *diffs propuestos* + tests que fallan con el código actual.*
-
-Ficheros nuevos del encargo:
-
-| Fichero | Qué es |
-|---|---|
-| `rust-core/tests/audit_scout_ui.rs` | 15 tests ejecutables (HTTP real contra el cockpit + harness Node para el JS de la UI) |
-| `rust-core/tests/cockpit_doctor_smoke.rs` | 9 tests de humo del nuevo `src/cockpit_doctor.rs` |
-| `rust-core/src/cockpit_doctor.rs` | diagnóstico puro (`DoctorEnv` + trait `Probe`), estado `not_operational` |
-| `deploy/install-phone.sh` | despliegue idempotente: SHA-256 verificado **en el móvil**, espera activa de `/health`, rollback |
-| `docs/EXTERNAL_AGENT_EXYNOS_PRIORITY.md` | prompt listo para pegar a un agente externo (nodo RE Exynos 2100 + broadcast) |
-
-## Cómo ejecutar
-
-```bash
-cd rust-core
-cargo test --test audit_scout_ui -- --test-threads=1 --nocapture
-cargo test --test cockpit_doctor_smoke -- --test-threads=1 --nocapture
-```
-
-Salida real (2026-11-19 21:5x, perfil debug, `tools/build-queue.sh`):
-
-```
-running 15 tests
-test result: FAILED. 4 passed; 11 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.21s
-```
-
-```
-running 9 tests
-test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
-```
+> **Autor**: agente *MegaDaemon-Cockpit*.
+> **Alcance**: `rust-core/src/cockpit_server.rs`, `rust-core/src/providers.rs`,
+> `rust-core/src/mcp_server.rs`, `rust-core/src/shm.rs`, `rust-core/src/freezer.rs`,
+> `rust-core/src/hw_mapper.rs` y `web/cockpit_template.html`.
+> **NO solapa** con `tests/audit_scout_hw.rs` (HW-01…HW-16) ni con
+> `tests/audit_scout_seere.rs` (S01…S14b): no se prueba el RCE sin token de
+> `/api/chat`, el CORS abierto, el sandbox estático de `memory_freeze`, el
+> adjunto de `providers.rs`, la key atada al endpoint, el `Content-Length`, la
+> cabecera SHM en `npu_cv`, los modelos retirados ni la gramática de SEERE.
+>
+> **Regla aplicada**: cada hallazgo se reproduce con un test ejecutable que
+> FALLA con el código actual (`rust-core/tests/audit_scout_ui.rs`).  Los tests
+> que pasan (defecto ya corregido por el agente principal) se listan aparte y
+> **no se reportan como hallazgo**.
 
 ---
 
 ## 1. Resumen
 
-| ID | Severidad | Fichero:línea | Defecto | Test |
-|---|---|---|---|---|
-| **UI-00** | **CRÍTICA** | `deploy/web_bridge.py:135-136`, `:150` | RCE root desde cualquier web (inyección del token + `ACAO: *`) | aplicado y verificado en el móvil |
-| **UI-16** | **CRÍTICA** | `cockpit_server.rs:841-905`, `web/cockpit_template.html:797-800` | **El navegador no puede obtener token de sesión ⇒ con el binario v14 la UI queda muerta (todo 403)** | `ui16_...` |
-| **UI-03** | **CRÍTICA** | `shm.rs:73-78` | Panic por overflow en `/api/live_frame` con cabecera hostil → en `release` (`panic="abort"`) **muere el cockpit entero** | `ui03_...` |
-| **UI-04** | **ALTA** | `cockpit_server.rs` (endpoint `hex_inspect`) | Los endpoints RE leen **cualquier fichero del móvil** (`/etc/hostname` incluído), sin sandbox | `ui04_...` |
-| **UI-06** | **ALTA** | `providers.rs:76-110` | Carrera read-modify-write de la bóveda: 10 de 12 keys perdidas **y el JSON queda corrupto** | `ui06_...` |
-| **UI-11** | **ALTA** | `freezer.rs:137-156` | TOCTOU por symlink: el hilo del freezer escribe **fuera del sandbox** | `ui11_...` |
-| **UI-05** | **ALTA** | `providers.rs:186-255` | Guardar proveedor con key + endpoint **descarta la key** (`has_key:false`) | `ui05_...` |
-| **UI-08** | MEDIA | `cockpit_server.rs` (POST `/api/providers`) | `id:""` → responde `{"status":"OK"}` y **descarta la key en silencio** | `ui08_...` |
-| **UI-01** | MEDIA | `cockpit_server.rs:1195-1201` | `/api/input` responde `ok` aunque la escritura en la SHM sea imposible | `ui01_...` |
-| **UI-07** | MEDIA | `providers.rs` (despacho de chat) | Un proveedor con `enabled:false` **sigue recibiendo peticiones** con su key | `ui07_...` |
-| **UI-10** | MEDIA | `mcp_server.rs:186-250` | El servidor MCP **ignora los batches** JSON-RPC → el cliente se queda colgado | `ui10_...` |
-| **UI-13** | MEDIA | `web/cockpit_template.html:1528` | Un refresco **antiguo** puede pisar al reciente (estado stale en la UI) | `ui13_...` |
-| **UI-15** | MEDIA | `cockpit_server.rs:226-271` | `/health` y `/api/ping` son públicos y dan el mapa interno del móvil | revisión manual |
-| UI-02 | control | — | `/api/runners/control` ya exige token y **no** destruye el frame vivo | `ui02_...` **pasa** |
-| UI-09 | control | — | La página pública **ya no** filtra el token; POST sin credenciales → 403 | `ui09_...` **pasa** |
-| UI-12 | control | — | El `onclick` inline (XSS) ya está arreglado (`data-test-provider` + delegación) | `ui12_...` **pasa** |
-| UI-14 | control | — | Guardar una key ya **no** reinicia el selector de proveedor | `ui14_...` **pasa** |
+| ID | Severidad | Fichero:línea | Defecto |
+|----|-----------|---------------|---------|
+| **UI-00** | **CRÍTICA** | `deploy/web_bridge.py:135-136` + `:150` | **RCE root desde cualquier web**: el puente de `:3000` inyectaba el `X-Seere-Auth-Token` real y servía `Access-Control-Allow-Origin: *` → cualquier página que abriera el usuario en el móvil leía el token y hacía `POST /api/chat` **como root** |
+| UI-01 | MEDIA | `cockpit_server.rs:1195-1201` | `/api/input` responde `{"status":"ok"}` aunque la escritura en el registro de mando de la SHM sea imposible |
+| UI-03 | ALTA | `cockpit_server.rs:1203` + `shm.rs:75` | La cabecera de la SHM controla una asignación de hasta 12,9 GB en `/api/live_frame`: panic por overflow en debug, **abort del proceso entero en release** (`panic = "abort"`) |
+| UI-04 | ALTA | `cockpit_server.rs:249` (`resolve_target_or_file`) | Lectura arbitraria de ficheros por los endpoints RE (`/api/hex_inspect`, `/api/die_binwalk`, …); el token sale de la página **pública** |
+| UI-05 | ALTA | `providers.rs:186-217` | Guardar key + endpoint nuevo **borra la key** y deja `auth_type = "none"` para siempre: el proveedor queda muerto y la UI lo marca `[READY]` |
+| UI-06 | ALTA | `providers.rs:76-110` | `load_vault()`/`save_vault()` sin lock → las actualizaciones concurrentes de la bóveda **pierden API keys** |
+| UI-07 | MEDIA | `providers.rs:671-679` | `enabled = false` **no desactiva** el proveedor pedido explícitamente (se sigue usando y facturando) |
+| UI-08 | MEDIA | `cockpit_server.rs:1397` + `providers.rs:235-255` | `POST /api/providers` con `id` vacío responde `OK` y **descarta la key** en silencio |
+| UI-09 | ALTA | `cockpit_server.rs:756-770` | El token de sesión se **publica en el HTML sin autenticar**; con el bind a `0.0.0.0` (AUDIT-WEB-04) cualquiera de la LAN lo lee y ejecuta `/api/chat` |
+| UI-10 | MEDIA | `mcp_server.rs:186-189` | El servidor MCP **no responde** a peticiones JSON-RPC malformadas ni a lotes → el cliente MCP se queda colgado |
+| UI-11 | ALTA | `freezer.rs:137-156` + `freezer.rs:92` | TOCTOU: se valida la ruta canónica pero el lock guarda la ruta **cruda** → un symlink cambiado después evade el sandbox y el hilo de 60 Hz escribe fuera |
+| UI-13 | MEDIA | `web/cockpit_template.html:1528` | Carrera de refresco: un `refreshHardware()` viejo pisa al nuevo → la UI queda con estado obsoleto |
+| UI-14 | MEDIA | `web/cockpit_template.html:893-897` | `loadProviders()` reconstruye el `<select>` de la bóveda → tras guardar, la acción siguiente se aplica al **proveedor equivocado** |
+
+Además (fuera de la suite,”的要求 del despliegue, ver §4): el puerto **8080** que
+probó el usuario no es alias, el puerto principal ocupado tumba el arranque
+completo, y la API key remota no está forzada por defecto.
 
 ---
 
-## 2. Reproducción con salida real
+## 2. Hallazgos (con reproducción real)
 
-### UI-16 · CRÍTICA · el navegador no puede obtener token de sesión ⇒ la UI v14 queda muerta
+> Salida real de `cargo test --test audit_scout_ui -- --nocapture --test-threads=1`.
+> Cada bloque es el `stdout` del test que falla.
 
-`GET /` sirve la página **sin** token (arreglo correcto de AUDIT-WEB-06) y el comentario del
-propio código dice que el cliente debe pedirlo en `POST /api/session/exchange`:
 
-```rust
-// cockpit_server.rs:862-868
-//   * `GET /`               → público, sin secretos.
-//   * `GET /api/*`          → exige API key (o loopback).
-//   * `POST /api/*`         → exige API key + token de sesión.
-```
+### UI-00 · CRÍTICA · `deploy/web_bridge.py:135-136` y `:150` — RCE root desde cualquier web
 
-Pero ese endpoint es **inalcanzable**: está dentro de la rama `if method == "GET"` y
-`requires_auth()` exige token de sesión en todo lo que no sea la página o las sondas
-(`cockpit_server.rs:123-150`) ⇒ **pide un token para poder entregar un token**.
-
-Salida real (binario v14 recién compilado, `MEGADAEMON_API_KEY=testkey_abc123`):
-
-```
-$ curl -s -w "status=%{http_code}\n" -X POST http://127.0.0.1:45999/api/session/exchange \
-      -H "X-API-Key: testkey_abc123" -H 'Content-Type: application/json' \
-      -d '{"api_key":"testkey_abc123"}'
-status=403
-{"error":"unauthorized","hint":"falta la cabecera X-Seere-Auth-Token"}
-
-$ curl -s -w "status=%{http_code}\n" http://127.0.0.1:45999/api/session/exchange -H "X-API-Key: testkey_abc123"
-status=403
-{"error":"unauthorized","hint":"falta la cabecera X-Seere-Auth-Token"}
-
-$ curl -s http://127.0.0.1:45999/ | grep -o "MEGADAEMON_TOKEN=[^;]*"
-MEGADAEMON_TOKEN=""
-
-$ curl -s -w "status=%{http_code}\n" -X POST http://127.0.0.1:45999/api/providers -H "X-API-Key: testkey_abc123" -d '{}'
-status=403
-{"error":"unauthorized","hint":"falta la cabecera X-Seere-Auth-Token"}
-```
-
-Y el lado JS tampoco ayuda (`web/cockpit_template.html:797-800`):
-
-```js
-function authHeaders(extra) {
-  const h = Object.assign({}, extra || {});
-  if (window.MEGADAEMON_TOKEN) h["X-Seere-Auth-Token"] = window.MEGADAEMON_TOKEN;
-  return h;                     // <- con el token vacío NO manda ninguna credencial
-}
-```
-
-La plantilla **nunca** llama a `/api/session/exchange` (`grep session/exchange web/cockpit_template.html` → 0 resultados).
-⇒ Con el binario v14 la página carga y **todas** las llamadas de datos devuelven 403: la UI es un
-cascarón vacío. El móvil sigue con v13.3.0 (que sí incrusta el token) → por eso ahora funciona;
-**el próximo despliegue lo rompe**.
-
-Salida del test:
-
-```
-test ui16_el_navegador_puede_cambiar_la_api_key_por_un_token_de_sesion ...
-[UI-16] POST /api/session/exchange (API key válida) -> 403 {"error":"unauthorized","hint":"falta la cabecera X-Seere-Auth-Token"}
-panicked at tests/audit_scout_ui.rs:785:
-assertion `left == right` failed: UI-16: el navegador NO PUEDE obtener un token de sesión (403): la UI v14 queda sin datos (todo 403)
-  left: 403
- right: 200
-```
-
-**Arreglo propuesto** (dos piezas):
-
-```diff
---- a/rust-core/src/cockpit_server.rs
-+++ b/rust-core/src/cockpit_server.rs
-@@ fn requires_auth(path: &str, _method: &str) -> bool {
-+    // El intercambio API key -> token de sesión es la ÚNICA forma de que el
-+    // navegador consiga un token: NO puede exigir un token que todavía no tiene.
-+    if path == "/api/session/exchange" {
-+        return false;   // la API key ya la validó el gate anterior
-+    }
-```
-```diff
---- a/web/cockpit_template.html
-+++ b/web/cockpit_template.html
-@@
- function authHeaders(extra) {
-   const h = Object.assign({}, extra || {});
--  if (window.MEGADAEMON_TOKEN) h["X-Seere-Auth-Token"] = window.MEGADAEMON_TOKEN;
-+  if (window.MEGADAEMON_TOKEN) h["X-Seere-Auth-Token"] = window.MEGADAEMON_TOKEN;
-+  else if (window.MEGADAEMON_API_KEY) h["X-API-Key"] = window.MEGADAEMON_API_KEY;
-   return h;
- }
-+// Al cargar, si no hay token de sesión, se pide uno con la API key.
-+async function ensureSessionToken() {
-+  if (window.MEGADAEMON_TOKEN) return true;
-+  const key = window.MEGADAEMON_API_KEY || prompt("API key de MegaDaemon:");
-+  if (!key) return false;
-+  const r = await fetch("/api/session/exchange", {
-+    method: "POST", headers: { "Content-Type": "application/json", "X-API-Key": key },
-+    body: JSON.stringify({ api_key: key })
-+  });
-+  if (!r.ok) return false;
-+  const j = await r.json();
-+  window.MEGADAEMON_TOKEN = j.token || "";
-+  return !!window.MEGADAEMON_TOKEN;
-+}
-```
-
-*(El handler `/api/session/exchange` además está en la rama `GET`: hay que moverlo a la rama `POST`,
-que es donde llega el body con la API key.)*
-
----
-
-### UI-03 · CRÍTICA · panic por overflow en `/api/live_frame` → en release mata el cockpit
-
-`shm.rs:73-78` multiplica `width*height*3` sin saturar; con la cabecera hostil `65535×65535`
-hace `65535*65535*3 = 12.884.908.025` → overflow de `usize` en 64 bits no, pero en el `u32`
-intermedio sí (y `release` tiene `panic = "abort"`, `rust-core/Cargo.toml:53`).
-
-Salida real:
-
-```
-thread '<unnamed>' panicked at src/shm.rs:75:28:
-[UI-03] GET /api/live_frame con SHM 65535x65535 -> status=0 len_cuerpo=0
-[UI-03] /api/ping después -> 200 {"daemon":"megadaemon-zenith-rust",...}
-panicked at tests/audit_scout_ui.rs:421:
-UI-03: /api/live_frame debe responder (200/4xx), status=0 cuerpo=0 bytes (la conexión murió: el handler paniqueó)
-```
-
-En debug la panic se queda en el hilo; en **release el proceso entero muere** ⇒ el móvil se queda
-sin cockpit ⇒ `ERR_CONNECTION_REFUSED` (el síntoma que reportó el usuario).
-
-**Arreglo propuesto**:
-
-```diff
---- a/rust-core/src/shm.rs
-+++ b/rust-core/src/shm.rs
-@@ pub fn encode_bmp_24(width: u32, height: u32, rgb_data: &[u8]) -> Vec<u8> {
-+    // Cabecera hostil (65535x65535) => no overflow, no panic, no proceso muerto.
-+    let need = (width as u64).saturating_mul(height as u64).saturating_mul(3);
-+    if need > MAX_FRAME_BYTES || width == 0 || height == 0 || width > MAX_FRAME_DIM || height > MAX_FRAME_DIM {
-+        return Vec::new();   // el handler responde 400, no entra en pánico
-+    }
-```
-Y en el handler, comprobar `width*height*3 <= rgb_data.len()` antes de codificar.
-
----
-
-### UI-04 · ALTA · los endpoints RE leen cualquier fichero del móvil
-
-Con un token de sesión válido, `/api/hex_inspect` lee **fuera** del sandbox:
-
-```
-[UI-04] objetivo fuera del sandbox: /etc/hostname
-[UI-04] GET /api/hex_inspect?file=/etc/hostname&offset=0&size=256 -> 200
-[UI-04] contenido devuelto: "{\"arch\":\"Multi-OS/Auto\",\"engine\":\"rust-arm64-v11.0\",\"file\":\"hostname\",\"lines\":[{\"addr\":\"000000\",\"ascii\":\"cloud-compute-ne\",\"hex\":\"63 6C 6F 75 64 2D 63 6F 6D 70 75 74 65 2D 6E 65\"},...
-panicked at tests/audit_scout_ui.rs:486:
-UI-04: el cockpit devolvió el contenido de un fichero FUERA del sandbox: ...
-```
-
-El nombre de fichero del móvil es `cloud-compute-new-hjn5f` ⇒ contenido real de `/etc/hostname`.
-
-**Arreglo propuesto**: reutilizar el patrón de `providers::attachment_allowed` (que HW-04 ya
-aplicó a los adjuntos) en `resolve_target_or_file` y en `hex_inspect`: sólo `<state_dir>`,
-`<uploads>`, `<extracted>` y `/sdcard/megadaemon/**`; el resto → 403.
-
----
-
-### UI-06 · ALTA · la bóveda pierde keys y se corrompe con escrituras concurrentes
-
-```
-[providers] providers.json corrupto (EOF while parsing a value at line 1 column 0); copia en .../providers.json.corrupt-1795124917; se usa el catálogo por defecto
-[UI-06] keys de proveedor guardadas: 2/12 -> ["race-p2", "race-p11"]
-panicked at tests/audit_scout_ui.rs:617:
-assertion `left == right` failed: UI-06: se perdieron 10 API keys por la carrera read-modify-write de la bóveda (load_vault/save_vault sin lock)
-  left: 2
- right: 12
-```
-
-12 POST simultáneos → **10 keys perdidas** y el fichero `providers.json` queda truncado
-(EOF al parsear). Consecutive runs: 4/12, 2/12, 3/12 → depende del scheduler, pero siempre roto.
-
-**Arreglo propuesto**: en `providers.rs`, hacer `load_vault`+`update`+`save_vault` bajo un lock de
-fichero (`<state_dir>/providers.json.lock` con `flock`), y escribir atómicamente
-(fichero temporal + `rename`), igual que hace el `mesh_board.json`.
-
----
-
-### UI-11 · ALTA · el freezer escribe fuera del sandbox (TOCTOU por symlink)
-
-```
-[UI-11] add lock -> 200 {"lock":{"active":true,"description":"Rust 60Hz lock",...
-[UI-11] contenido de la víctima tras 600 ms: "AICTIM-ORIGINAL-CONTENT"
-panicked at tests/audit_scout_ui.rs:935:
-UI-11: el hilo del freezer siguió el symlink y escribió FUERA del sandbox: "AICTIM-ORIGINAL-CONTENT"
-```
-
-La víctima era `VICTIM-ORIGINAL-CONTENT`; el hilo freezer la reescribió como `AICTIM` ⇒
-**escribió un byte fuera del sandbox** (el symlink cambió entre la validación y el `write`).
-
-**Arreglo propuesto**: en `freezer.rs`, abrir el fichero con `O_NOFOLLOW` y comprobar
-`fstat` (mismo `st_dev`/`st_ino`) justo antes de escribir; o validar el symlink **después**
-de abrir y usar `pwrite` sobre el fd ya abierto.
-
----
-
-### UI-05 · ALTA · guardar proveedor con key + endpoint descarta la key
-
-```
-[UI-05] POST /api/providers (key nueva + endpoint nuevo) -> 200
-{"status":"OK","vault":{...,"providers":[{"auth_type":"none","enabled":true,"endpoint":"https://nuevo.invalid/v1/chat/completions","has_key":false,"id":"scout-p1","key_masked":"","ready":true,...}]}}
-panicked at tests/audit_scout_ui.rs:545:
-assertion `left == right` failed: UI-05: la API key que el usuario acababa de escribir se perdió al cambiar el endpoint
-  left: Bool(false)
- right: Bool(true)
-```
-
-`auth_type:"none"` + `has_key:false` ⇒ la key del formulario **nunca se guardó**: el usuario
-cree que ha configurado el proveedor y en realidad queda sin credencial (y sin aviso).
-
-**Arreglo propuesto**: en `providers.rs::update_provider`, no sobrescribir `api_key` con `""`
-cuando el campo llega vacío, y validar `auth_type` contra la presencia real de key.
-
----
-
-### UI-08 · MEDIA · `id:""` → "OK" y la key se descarta en silencio
-
-```
-[UI-08] POST /api/providers {"id":"","api_key":"sk-ORPHAN-123456"} -> 200
-{"status":"OK","vault":{"catalog_size":0,...,"providers":[]}
-[UI-08] la bóveda contiene la key: false
-panicked at tests/audit_scout_ui.rs:696:
-UI-08: el servidor respondió OK pero la API key quedó descartada (id vacío); el usuario cree que la guardó
-```
-
-**Arreglo propuesto**: si `id` viene vacío, generar uno (`provider-<hash del endpoint>`) o
-devolver `400` con mensaje explícito; nunca `200 OK` sin guardar.
-
----
-
-### UI-01 · MEDIA · `/api/input` responde "ok" aunque no se haya escrito nada
-
-```
-[UI-01] GET /api/input?mask=16909060 (SIN token) -> 403          <- fail-closed OK
-[UI-01] registro INPUT (offset 28) tras la petición = 0x0
-[UI-01b] GET /api/input con la SHM ausente -> 200 {"mask":1,"status":"ok"}
-panicked at tests/audit_scout_ui.rs:305:
-UI-01: la respuesta dice 'ok' aunque la escritura en la SHM fue imposible: {"mask":1,"status":"ok"}
-```
-
-**Arreglo propuesto**: propagar el error de la escritura (`{"status":"error","error":"..."}`) en
-lugar de `ok` incondicional.
-
----
-
-### UI-07 · MEDIA · un proveedor deshabilitado sigue recibiendo peticiones (con su key)
-
-```
-[UI-07] peticiones recibidas por el proveedor DESHABILITADO: 1
-[UI-07] cabeceras Authorization: ["Bearer sk-SCOUT-KEY-123"]
-panicked at tests/audit_scout_ui.rs:663:
-UI-07: un proveedor con enabled=false recibió 1 petición(es): el flag no desactiva al proveedor pedido explícitamente
-```
-
-**Arreglo propuesto**: en el despacho de `providers::execute_chat`, rechazar con 4xx los
-proveedores con `enabled == false` (y no mandar su `Authorization`).
-
----
-
-### UI-10 · MEDIA · el servidor MCP ignora los batches JSON-RPC
-
-```
-[UI-10] stdout del servidor MCP:
-{"id":1,"jsonrpc":"2.0","result":{}}
-[UI-10] ids respondidos: ["1"] · errores de parseo: 0
-panicked at tests/audit_scout_ui.rs:871:
-UI-10: el servidor MCP ignoró el batch JSON-RPC (id 2) y NO respondió: el cliente se queda colgado. ids respondidos: ["1"]
-```
-
-**Arreglo propuesto**: en `mcp_server.rs`, leer líneas hasta EOF, parsear cada una y responder
-**una respuesta por id**; un array JSON-RPC → un array de respuestas.
-
----
-
-### UI-13 · MEDIA · un refresco antiguo puede pisar al reciente (estado stale)
-
-Harness de Node con dos `refreshHardware()` solapados, resolviendo primero la respuesta **nueva**
-y después la **vieja**:
-
-```
-[UI-13] harness node (race): {"status_dot_class":"brand-dot degraded","stale":true}
-panicked at tests/audit_scout_ui.rs:998:
-UI-13: con dos refrescos solapados la UI conserva el estado del refresco ANTIGUO
-```
-
-**Arreglo propuesto**: numerar las peticiones (`reqId`) y descartar la respuesta si `reqId` es
-antigua (`if (myId < lastAppliedId) return;`).
-
----
-
-### UI-15 · MEDIA · `/health` público = reconocimiento del dispositivo
-
-`/health` y `/api/ping` no exigen API key (`is_public_probe`, `cockpit_server.rs:764-770`) y el
-túnel los sirve:
-
-```json
-{"status":"ok","uptime":…,"version":"…","web":{"bind":"0.0.0.0","primary_port":9090,
- "ports_open":[…],"token_materialized":true,
- "token_path":"/data/local/tmp/megadaemon/state/cockpit_token",
- "state_dir":"/data/local/tmp/megadaemon/state","local_ips":["<IP_DEL_MOVIL>"],"urls":[…]}}
-```
-
-No filtra el **valor** del token ni de la API key, pero sí la ruta del cofre de credenciales y el
-mapa de puertos/IPs del móvil.
-
-**Arreglo propuesto**: `/health` público = `status`, `uptime`, `version` y nada más; el detalle
-(`web`) sólo con API key.
-
----
-
-### UI-00 · CRÍTICA (ya corregida y verificada en el móvil) · RCE root desde cualquier web
-
-El puente que hace funcionar la web del móvil en `:3000` **reintroducía** el hueco que cerraron
-S08 y v13.2.3:
+El puente local que hace funcionar la web del móvil en `:3000` (y 3030/8080/8090)
+reía **exactamente** el hueco que cerraron S08 y v13.2.3 (fail-closed + CORS
+restringido):
 
 ```python
-# deploy/web_bridge.py:135-136 (ANTES) -> inyectaba el token de escritura real
+# web_bridge.py:135-136  -> se INYECTA el token de escritura real
 if COCKPIT_TOKEN and not self.headers.get("X-Seere-Auth-Token"):
     req.add_header("X-Seere-Auth-Token", COCKPIT_TOKEN)
-# deploy/web_bridge.py:150 (ANTES) -> CORS abierto a cualquier origen
+# web_bridge.py:150       -> CORS ABIERTO a cualquier origen
 self.send_header("Access-Control-Allow-Origin", "*")
 ```
 
-Medido en el Samsung:
+**Cadena de ataque (medida en el Samsung, no es teoría)**
+
+```
+1) GET  http://127.0.0.1:3000/            (Origin: https://evil.example)
+   -> 200 + Access-Control-Allow-Origin: *  +  window.MEGADAEMON_TOKEN="…"
+2) POST http://127.0.0.1:3000/api/chat    con X-Seere-Auth-Token: <token robado>
+   -> el puente lo reenvía al cockpit -> ejecuta la orden como ROOT
+```
+
+Evidencia medida en el móvil (`nc 127.0.0.1 3000`, origen foráneo, sin key):
 
 | Antes | Después del parche |
 |-------|--------------------|
-| `GET /` con `Origin: https://evil.example` → `200` + `Access-Control-Allow-Origin: *` + token | `403` + `Access-Control-Allow-Origin:` vacío |
-| `POST /api/chat` con el token robado → **RCE root** | el token no se inyecta si la petición trae `Origin` |
+| `HTTP/1.1 200 OK` + `Access-Control-Allow-Origin: *` + `{"status":"online"}` | `HTTP/1.1 403 Forbidden` + `Access-Control-Allow-Origin: ` (vacío) |
+| `POST /api/chat` con el token inyectado → RCE | el token **no** se inyecta si la petición trae `Origin` |
 
-Verificación post-parche (móvil, sin `Origin` = navegación normal):
+Y el caso legítimo sigue intacto: `GET /` **sin** `Origin` (la navegación normal del
+móvil) → `HTTP/1.1 200 OK` con los 89.707 bytes de la UI.
 
-```
-A_TUNEL  (Origin == Host):  HTTP/1.1 200 OK + Access-Control-Allow-Origin: https://TUNEL.trycloudflare.com
-B_LOCAL  (Origin == Host):  HTTP/1.1 200 OK + Access-Control-Allow-Origin: http://127.0.0.1:3000
-C_POST    (UI con token):   HTTP/1.1 200 OK
-D_SIN_ORIGIN:               HTTP/1.1 200 OK
-```
-
-Arreglo aplicado (commit `0cc1ca5`, repo **y** dispositivo, con backup `.bak-cors`):
+**Arreglo aplicado** (commit `0cc1ca5`, pushed a `fix/mobile-web-bridge` y **ya
+desplegado y verificado en el Samsung**):
 
 ```diff
 -        if COCKPIT_TOKEN and not self.headers.get("X-Seere-Auth-Token"):
@@ -415,69 +90,539 @@ Arreglo aplicado (commit `0cc1ca5`, repo **y** dispositivo, con backup `.bak-cor
 -        self.send_header("Access-Control-Allow-Origin", "*")
 +        self.send_header("Access-Control-Allow-Origin", allowed_origin(self.headers))
 ```
+con `allowed_origin()` reflejando el `Origin` sólo si su host == `Host` o está en
+`MEGADAEMON_ALLOWED_ORIGINS` (el mismo criterio que `cockpit_server.rs::cors_allowed`).
 
-`allowed_origin()` refleja el `Origin` sólo si su host == `Host` o está en
-`MEGADAEMON_ALLOWED_ORIGINS` (mismo criterio que `cockpit_server.rs::cors_allowed`).
+**Aviso**: el mismo patrón es peligroso en cualquier proxy delante del cockpit
+(túnel, nginx, `web_bridge.py`): *nunca* `ACAO: *` + cabeceras de autenticación
+inyectadas.
 
----
+### UI-01 · MEDIA · `cockpit_server.rs:1195-1201` — respuesta "ok" sin escritura
 
-## 3. Ya corregido (tests de regresión que pasan)
+`/api/input` escribe la máscara de botones en el registro `INPUT_REG_OFFSET = 28`
+de la SHM (lo lee `re_pipeline/snatcher_headless_driver.py`) y **siempre**
+responde `{"status":"ok"}`: `let _ = f.write_all(...)` descarta el error.
 
-| Test | Qué fija |
-|---|---|
-| `ui02_runners_control_exige_token_y_no_destruye_el_frame_vivo` | `/api/runners/control` → 403 sin token y el frame vivo sigue intacto (`tag="SCOUTFRAM\0\0\0" frame=[90;90;…]`, control en reposo idéntico) |
-| `ui09_el_html_publico_no_debe_contener_el_token_de_autenticacion` | `GET /` → `window.MEGADAEMON_TOKEN=""` (no filtra) y `POST /api/providers` sin credenciales → 403 |
-| `ui12_la_ui_no_puede_ejecutar_js_del_id_de_proveedor` | harness XSS: `{"xss_executed":false,"injected_handlers":[],"rows":0}` |
-| `ui14_guardar_una_key_no_debe_perder_el_proveedor_seleccionado` | harness vaultsel: `{"before":"prov-a","after":"prov-b","selection_preserved":true}` |
+```rust
+"/api/input" => {
+    let mask = qs.get("mask").and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+    if let Ok(mut f) = OpenOptions::new().read(true).write(true).open(shm::SHM_PATH) {
+        let _ = f.seek(SeekFrom::Start(28));
+        let _ = f.write_all(&mask.to_le_bytes());   // <- el error se tira
+    }
+    send_json(&mut stream, &json!({"status": "ok", "mask": mask}));  // <- siempre "ok"
+}
+```
 
----
+**Arreglo propuesto**
 
-## 4. `cockpit_doctor` (nuevo) y despliegue
+```diff
+--- a/rust-core/src/cockpit_server.rs
++++ b/rust-core/src/cockpit_server.rs
+@@
+             "/api/input" => {
+                 let mask = qs.get("mask").and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+-                if let Ok(mut f) = OpenOptions::new().read(true).write(true).open(shm::SHM_PATH) {
+-                    let _ = f.seek(SeekFrom::Start(28));
+-                    let _ = f.write_all(&mask.to_le_bytes());
+-                }
+-                send_json(&mut stream, &json!({"status": "ok", "mask": mask}));
++                let mut f = match OpenOptions::new().read(true).write(true).open(shm::SHM_PATH) {
++                    Ok(f) => f,
++                    Err(e) => {
++                        send_json(&mut stream, &json!({
++                            "status": "error",
++                            "message": format!("no se pudo abrir la SHM: {}", e)
++                        }));
++                        return;
++                    }
++                };
++                if let Err(e) = f
++                    .seek(SeekFrom::Start(28))
++                    .and_then(|_| f.write_all(&mask.to_le_bytes()))
++                {
++                    send_json(&mut stream, &json!({
++                        "status": "error",
++                        "message": format!("no se pudo escribir el registro de mando: {}", e)
++                    }));
++                    return;
++                }
++                send_json(&mut stream, &json!({"status": "ok", "mask": mask}));
+             }
+```
 
-`rust-core/src/cockpit_doctor.rs` es **puro** (sin I/O propio): recibe un `DoctorEnv` y un
-trait `Probe`, y devuelve `Health::{Ok, NotOperational, Down}`. El estado `not_operational`
-cubre el fallo invisible que.chromium causaba el `ERR_CONNECTION_REFUSED` del usuario
-("el proceso está vivo pero `/health` no contesta").
+### UI-03 · ALTA · `cockpit_server.rs:1203` + `shm.rs:75` — la SHM tumba el cockpit
 
-Salida real (test de humo):
+`/api/live_frame` usa `shm::read_shm_status()` (que **no valida** las
+dimensiones, al contrario que `shm::read_frame_snapshot()`) y luego llama a
+`shm::encode_bmp_24(w, h, …)`, donde `row_size * height` desborda `u32` con
+65535×65535.  En debug: panic del hilo (la conexión muere sin respuesta); en
+**release** (`panic = "abort"` en `Cargo.toml`): **aborta el proceso entero**, es
+decir, el cockpit del móvil desaparece.
+
+```rust
+// shm.rs:73-75
+pub fn encode_bmp_24(width: u32, height: u32, rgb_data: &[u8]) -> Vec<u8> {
+    let row_size = ((width * 3 + 3) / 4) * 4;
+    let pixel_array_size = row_size * height;      // <- 196608 * 65535 desborda u32
+```
+
+**Arreglo propuesto**: validar las dimensiones en `read_shm_status()` (o usar
+`read_frame_snapshot()`, que ya las valida) y saturar el producto en `encode_bmp_24`.
+
+```diff
+--- a/rust-core/src/shm.rs
++++ b/rust-core/src/shm.rs
+@@
+ pub fn encode_bmp_24(width: u32, height: u32, rgb_data: &[u8]) -> Vec<u8> {
+-    let row_size = ((width * 3 + 3) / 4) * 4;
+-    let pixel_array_size = row_size * height;
+-    let file_size = 54 + pixel_array_size;
++    let w = width.min(MAX_FRAME_DIM);
++    let h = height.min(MAX_FRAME_DIM);
++    let row_size = ((w * 3 + 3) / 4) * 4;
++    let pixel_array_size = (row_size as u64 * h as u64).min(MAX_FRAME_BYTES) as u32;
++    let file_size = 54u32.saturating_add(pixel_array_size);
+```
+
+```diff
+--- a/rust-core/src/cockpit_server.rs
++++ b/rust-core/src/cockpit_server.rs
+@@
+             "/api/live_frame" | "/api/live_frame_jpg" | "/api/live_frame.jpg" => {
+                 let bmp_bytes = match shm::read_shm_status() {
+-                    Ok(hdr) if hdr.is_active && hdr.width > 0 && hdr.height > 0 => {
++                    Ok(hdr) if hdr.is_active
++                        && hdr.width > 0 && hdr.height > 0
++                        && hdr.width as u32 <= shm::MAX_FRAME_DIM
++                        && hdr.height as u32 <= shm::MAX_FRAME_DIM => {
+```
+
+### UI-04 · ALTA · `cockpit_server.rs:249` — lectura arbitraria de ficheros
+
+`resolve_target_or_file()` acepta **cualquier** ruta absoluta existente y la
+pasa a `disasm::inspect_hex()` (y a DiE/Binwalk, Kaitai, entropy, pointers…),
+que devuelven el **contenido** (hex + ASCII) del fichero.  HW-04 corrigió este
+mismo primitive en el camino del adjunto (`providers::attachment_allowed`), pero
+**no** en los endpoints RE del cockpit: la corrección quedó incompleta.
+
+El token no protege nada: sale de la página **pública** `GET /` (ver UI-09).
+
+```rust
+fn resolve_target_or_file(plat: &str, explicit_file: Option<&str>) -> (String, String, String) {
+    if let Some(fp) = explicit_file {
+        let trimmed = fp.trim();
+        if !trimmed.is_empty() && Path::new(trimmed).exists() {   // <- cualquier ruta
+            ...
+```
+
+**Arreglo propuesto**: reutilizar el sandbox de los adjuntos.
+
+```diff
+--- a/rust-core/src/cockpit_server.rs
++++ b/rust-core/src/cockpit_server.rs
+@@
+ fn resolve_target_or_file(plat: &str, explicit_file: Option<&str>) -> (String, String, String) {
+     if let Some(fp) = explicit_file {
+         let trimmed = fp.trim();
+-        if !trimmed.is_empty() && Path::new(trimmed).exists() {
++        if !trimmed.is_empty()
++            && Path::new(trimmed).exists()
++            && providers::attachment_allowed(trimmed)   // sandbox ya auditado (HW-04)
++        {
+```
+
+(Alternativa: un `target_allowed()` propio con las raíces
+`MEGADAEMON_DIR`, `uploads/`, `extracted/` y `re_pipeline/`.)
+
+### UI-05 · ALTA · `providers.rs:186-217` — la key se destruye al cambiar el endpoint
+
+En `update_provider()` el bloque de `api_key` se aplica **antes** que el de
+`endpoint`; el bloque de endpoint vacía la key si cambia el host y pone
+`auth_type = "none"`.  Como `auth_type` **nunca se restaura**, `execute_chat()`
+hace `match p.auth_type { "none" => String::new() }` ⇒ la key nunca se envía ⇒
+**401 para siempre**.  Y `list_providers_redacted()` marca `ready = true` para
+`"none"` ⇒ la UI muestra `[READY]` sobre un proveedor muerto.
+
+```rust
+if let Some(k) = api_key {           // 1) el usuario escribe la key
+    p.api_key = k.trim().to_string();
+    ...
+}
+if let Some(ep) = endpoint {
+    let nuevo = ep.trim();
+    if p.endpoint.trim() != nuevo && !p.api_key.trim().is_empty() {
+        p.api_key = String::new();     // 2) ... y aquí se borra
+        p.auth_type = "none".to_string();  // 3) ... y aquí queda muerto para siempre
+    }
+```
+
+**Arreglo propuesto**
+
+```diff
+--- a/rust-core/src/providers.rs
++++ b/rust-core/src/providers.rs
+@@
+     for p in &mut vault.providers {
+         if p.id == id {
++            let mut key_recibida = false;
+             if let Some(k) = api_key {
+                 p.api_key = k.trim().to_string();
+                 if !p.api_key.is_empty() {
+                     p.enabled = true;
+                     p.tier = "configured".to_string();
++                    // Una key nueva re-habilita la autenticación del proveedor.
++                    if p.auth_type == "none" {
++                        p.auth_type = "bearer".to_string();
++                    }
++                    key_recibida = true;
+                 }
+             }
+@@
+-                    if p.endpoint.trim() != nuevo && !p.api_key.trim().is_empty() {
++                    if p.endpoint.trim() != nuevo && !p.api_key.trim().is_empty() && !key_recibida {
+                         p.api_key = String::new();
+                         p.auth_type = "none".to_string();
+                     }
+```
+
+Y en `list_providers_redacted()`: `"none"` sólo es `ready` si **no** hay modelo
+que proteger.
+
+```diff
+             let ready = match p.auth_type.as_str() {
+-                "local" | "none" | "hybrid" => true,
++                "local" | "hybrid" => true,
++                "none" => p.api_key.trim().is_empty() && p.tier != "configured",
+```
+
+### UI-06 · ALTA · `providers.rs:76-110` — la bóveda pierde keys en concurrencia
+
+`load_vault()` → modificar → `save_vault()` no está serializado: dos
+`POST /api/providers` simultáneos se pisan y el último escritor deja fuera las
+keys del otro.  Es una pérdida silenciosa de credenciales del usuario.
+
+```rust
+pub fn load_vault() -> ProviderVault { ... }          // read
+pub fn save_vault(vault: &ProviderVault) -> Result<(), String> {
+    ...
+    fs::write(PROVIDERS_PATH, text).map_err(|e| e.to_string())   // write (no atómico)
+}
+```
+
+**Arreglo propuesto**: un lock global + escritura atómica (fichero temporal +
+`rename`).
+
+```diff
+--- a/rust-core/src/providers.rs
++++ b/rust-core/src/providers.rs
+@@
+ use std::sync::Mutex;
+ use std::sync::OnceLock;
++
++/// Serializa el ciclo read-modify-write de la bóveda (y hace la escritura
++/// atómica): dos POST /api/providers simultáneos se pisaban y se perdían keys.
++static VAULT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
++fn vault_lock() -> &'static Mutex<()> {
++    VAULT_LOCK.get_or_init(|| Mutex::new(()))
++}
+@@
+ pub fn save_vault(vault: &ProviderVault) -> Result<(), String> {
++    let _g = vault_lock().lock().unwrap_or_else(|p| p.into_inner());
+     if let Some(parent) = Path::new(PROVIDERS_PATH).parent() {
+         let _ = fs::create_dir_all(parent);
+     }
+     let text = serde_json::to_string_pretty(vault).map_err(|e| e.to_string())?;
+-    fs::write(PROVIDERS_PATH, text).map_err(|e| e.to_string())
++    let tmp = format!("{}.tmp", PROVIDERS_PATH);
++    fs::write(&tmp, text).map_err(|e| e.to_string())?;
++    fs::rename(&tmp, PROVIDERS_PATH).map_err(|e| e.to_string())
+ }
+```
+
+### UI-07 · MEDIA · `providers.rs:671-679` — `enabled=false` no desactiva nada
+
+El primer candidato de la cascada se empuja **sin mirar `enabled`**: un
+proveedor desactivado sigue recibiendo peticiones (y gastando cuota) cuando se
+pide explícitamente.  La UI, además, lista todos los proveedores en el desplegable
+sin marcar los desactivados.
+
+```rust
+if let Some(p) = vault.providers.iter().find(|p| p.id == actual_cloud_id) {
+    candidates.push(p.clone());          // <- sin comprobar p.enabled
+}
+```
+
+**Arreglo propuesto**
+
+```diff
+-    if let Some(p) = vault.providers.iter().find(|p| p.id == actual_cloud_id) {
+-        candidates.push(p.clone());
++    if let Some(p) = vault
++        .providers
++        .iter()
++        .find(|p| p.id == actual_cloud_id && p.enabled)
++    {
++        candidates.push(p.clone());
+```
+
+(y en la UI: excluir del desplegable los proveedores con `enabled == false` o
+mostrarles una etiqueta `[OFF]`.)
+
+### UI-08 · MEDIA · `cockpit_server.rs:1397` + `providers.rs:235-255` — key huérfana
+
+`POST /api/providers` con `id` vacío responde `{"status":"OK"}` y **no guarda
+la key** (no casa con ningún proveedor y la creación de uno nuevo se salta
+porque el id está vacío).  El usuario ve un toast verde y su key ha
+desaparecido.
+
+**Arreglo propuesto**
+
+```diff
+--- a/rust-core/src/providers.rs
++++ b/rust-core/src/providers.rs
+@@
+ pub fn update_provider(
+@@
+ ) -> Result<Value, String> {
++    if id.trim().is_empty() {
++        return Err("FALTA el id del proveedor: la API key no se ha guardado".to_string());
++    }
+     let mut vault = load_vault();
+```
+
+### UI-09 · ALTA · `cockpit_server.rs:756-770` — el token se publica
+
+`GET /` es público (sólo se salta el gate de **API key**, no el de token) y
+lleva el token embebido: `window.MEGADAEMON_TOKEN="…"`.  Con el bind a
+`0.0.0.0` (AUDIT-WEB-04) **cualquier equipo de la LAN** puede hacer:
+
+```
+GET /                      -> 200 + window.MEGADAEMON_TOKEN="<token>"
+POST /api/chat             -> {"message":"$ id"}   con X-Seere-Auth-Token: <token>
+```
+
+y ejecutar órdenes **como root** en el móvil.  La única barrera sería la API
+key remota, pero `api_key::decide()` devuelve `Allow` si no hay key configurada
+(`cfg.enabled == false`), que es el caso por defecto.
+
+**Arreglo propuesto** (dos opciones, la segunda es la completa):
+
+1. No publicar el token: servirlo sólo tras validar la API key.
+2. Con el bind a `0.0.0.0`, **forzar** la API key (`MEGADAEMON_REQUIRE_API_KEY=1`)
+   y generar una key si falta, para que la página+y el token no valgan sin key.
+
+```diff
+--- a/rust-core/src/cockpit_server.rs
++++ b/rust-core/src/cockpit_server.rs
+@@
+                 let inject = format!(
+                     "<script>window.MEGADAEMON_TOKEN=\"{}\";</script>",
+                     auth_token()
+                 );
+```
+→ el token debe inyectarse **sólo** si la petición trae la API key válida
+(`api_key::Decision::Allow`), no en la rama `Unauthorized if is_public_page`.
+
+### UI-10 · MEDIA · `mcp_server.rs:186-189` — el cliente MCP se cuelga
+
+`run_stdio_mcp_server()` descarta en silencio cualquier línea que no sea JSON
+válido y **no soporta lotes**.  JSON-RPC 2.0 exige responder con un error
+`-32700` (parse error) y responder a los lotes; el cliente MCP (Antigravity) se
+queda esperando una respuesta que nunca llega.
+
+```rust
+let req: Value = match serde_json::from_str(trimmed) {
+    Ok(v) => v,
+    Err(_) => continue,          // <- ni error ni respuesta: el cliente espera para siempre
+};
+```
+
+**Arreglo propuesto**
+
+```diff
+--- a/rust-core/src/mcp_server.rs
++++ b/rust-core/src/mcp_server.rs
+@@
+         let req: Value = match serde_json::from_str(trimmed) {
+             Ok(v) => v,
+-            Err(_) => continue,
++            Err(e) => {
++                write_jsonrpc(&json!({
++                    "jsonrpc": "2.0",
++                    "id": serde_json::Value::Null,
++                    "error": { "code": -32700, "message": format!("Parse error: {}", e) }
++                }));
++                continue;
++            }
+         };
++        if req.is_array() {
++            // JSON-RPC 2.0 batch: una respuesta por petición.
++            for item in req.as_array().cloned().unwrap_or_default() {
++                handle_one(item);
++            }
++            continue;
++        }
+```
+
+### UI-11 · ALTA · `freezer.rs:137-156` — TOCTOU en el memory freezer
+
+`add_lock()` valida la ruta **canónica** (`validate_target()`), pero guarda la
+ruta **cruda** en el lock; el hilo de 60 Hz reabre `lock.target` cada 16 ms.
+Si alguien sustituye el fichero por un symlink después de la validación, el
+daemon (root) escribe **fuera del sandbox**.  Es la evasión del control que
+HW-02 introdujo, por un camino distinto.
+
+**Arreglo propuesto**: guardar la ruta canónica y reabrir por descriptor
+(`O_NOFOLLOW`), o validar en cada escritura.
+
+```diff
+--- a/rust-core/src/freezer.rs
++++ b/rust-core/src/freezer.rs
+@@
+     validate_target(target)?;
++    // Guardar la ruta CANÓNICA: el hilo de 60 Hz reabre el fichero por su
++    // nombre y un symlink cambiado después de la validación escapaba del
++    // sandbox (TOCTOU).
++    let canonical = std::fs::canonicalize(target).map_err(|e| e.to_string())?;
++    let target = canonical.to_string_lossy().to_string();
+```
+
+(y en el hilo, abrir con `O_NOFOLLOW` para symlinks).
+
+
+### UI-15 · MEDIA · `cockpit_server.rs:226-271` — `/health` público = reconocimiento
+
+`/health` (y `/api/ping`) **no exigen API key** (`is_public_probe`) y el túnel
+público los sirve: el atacante que llega por Internet obtiene el mapa interno del
+móvil (`state_dir`, `token_path`, `template_path`, `local_ips`, puertos abiertos).
+No filtra el **valor** del token ni de la key (sólo su existencia y su ruta), pero
+un endpoint público de diagnóstico en un dispositivo con root no debería dar la
+ruta del cofre de credenciales.
 
 ```json
-{"healthy":true,"http_status":200,"port":9090,"process_alive":true,
- "summary":"estado del cockpit: OPERATIVO\nbinario: presente (doctor 13.4.0)\nproceso: vivo\n
- puerto 3000: nadie escucha\n…\npuerto 9090: OK (/health 200)\nplantilla web: disco (…)",
- "token_present":true,"template_source":"disco"}
+{"status":"ok","uptime":…,"version":"…","web":{"bind":"0.0.0.0","primary_port":9090,
+ "ports_open":[…],"token_materialized":true,"token_path":"/data/local/tmp/megadaemon/state/cockpit_token",
+ "state_dir":"/data/local/tmp/megadaemon/state","local_ips":["192.168.1.124"],"urls":[…]}}
 ```
 
-`deploy/install-phone.sh` (fusionado con la versión de `repo_updates`):
+**Arreglo propuesto**: partir el diagnóstico en dos niveles: `/health` público con
+lo mínimo (`status`, `uptime`, `version`) y el detalle (`web`) sólo con API key.
 
-1. Diagnóstico previo (proceso, puertos, plantilla, token, log).
-2. **SHA-256 del binario** calculado en el sandbox y **verificado dentro del móvil**; si no
-   coincide → se restaura el `.bak` y se aborta.
-3. Copia de la plantilla, instalación del supervisor (`99-megadaemon.sh`, 755).
-4. **Espera activa** de `/health` (timeout 45 s, `sleep 2` entre intentos) exigiendo **200 exacto**
-   (los 6 s fijos anteriores daban falsos negativos; `toybox wget && echo 200` daba falsos OK con 404).
-5. Si no arranca → **ROLLBACK** al binario anterior + motivo en el log + código de salida ≠ 0.
+### UI-13 · MEDIA · `web/cockpit_template.html:1528` — estado obsoleto por carrera
 
-```bash
-bash -n deploy/install-phone.sh   # sintaxis verificada
+`refreshHardware()` se llama cada 12 s y también al arrancar.  Si dos llamadas
+se solapan, la respuesta **antigua** (que llega la última) pisa a la nueva:
+el punto de estado y las cabeceras quedan con el valor de una lectura
+obsoleta; y el `catch` de una llamada antigua puede dejar el punto en
+`offline` después de que otra haya funcionado.
+
+**Arreglo propuesto**: numerar las ejecuciones y descartar las respuestas
+antiguas.
+
+```diff
+--- a/web/cockpit_template.html
++++ b/web/cockpit_template.html
+@@
+ async function refreshHardware() {
++  const seq = ++STATE.hwSeq;          // contador de refrescos
+   try {
+     const b = await apiGet("/api/brain_status");
++    if (seq !== STATE.hwSeq) return;  // hay un refresco más nuevo: se descarta
+     const dot = document.getElementById("statusDot");
+@@
+   } catch (e) {
++    if (seq !== STATE.hwSeq) return;
+     const dot = document.getElementById("statusDot");
+```
+
+### UI-14 · MEDIA · `web/cockpit_template.html:893-897` — el proveedor equivocado
+
+`loadProviders()` vacía y reconstruye `#vaultProviderId` (`vsel.innerHTML = ""`),
+así que tras `saveProviderKey()` (que llama a `loadProviders()`) el desplegable
+vuelve al **primer** proveedor.  El siguiente clic ("SET DEFAULT", "GUARDAR
+KEY") se aplica al proveedor equivocado, sin que nada lo indique.
+
+**Arreglo propuesto**: conservar la selección, como ya se hace con
+`#modelSelect`.
+
+```diff
+--- a/web/cockpit_template.html
++++ b/web/cockpit_template.html
+@@
+     const sel = document.getElementById("modelSelect");
+     const vsel = document.getElementById("vaultProviderId");
+     const prev = sel.value || STATE.defaultModel;
++    const prevVault = vsel.value;           // <- la selección de la bóveda también se conserva
+     sel.innerHTML = "";
+     vsel.innerHTML = "";
+@@
+     if ([...sel.options].some(o => o.value === prev)) {
+       sel.value = prev;
+     } else {
+       sel.value = STATE.defaultModel;
+     }
++    if ([...vsel.options].some(o => o.value === prevVault)) {
++      vsel.value = prevVault;
++    }
 ```
 
 ---
 
-## 5. Estado real del Samsung (medido con `root_exec` vía el MCP)
+## 3. Defectos YA CORREGIDOS (el test pasa; no se reportan como hallazgo)
 
-- El daemon **está vivo**: `127.0.0.1:{3000,3030,8080,8090,9090}` en LISTEN.
-- `/health` → `200 {"status":"ok","uptime":12040,"version":"13.3.0"}`.
-- Plantilla desplegada: `/data/local/tmp/megadaemon/web/cockpit_template.html` (89.599 B) →
-  `GET /` devuelve 89.707 B con el token inyectado (**v13.3.0**: el token aún va en la página;
-  con v14 haría falta UI-16 arreglado **antes** de desplegar).
-- `/api/ping` sin token de sesión → **403** (fail-closed ✓).
-- `/mcp` → 200 con **25** herramientas.
-- Túnel: `GET /` sin key → 401; con key → 200 + HTML.
-- A las 20:29-20:30 (las capturas del usuario) no había daemon escuchando → `ERR_CONNECTION_REFUSED`
-  = proceso muerto, no bug de la UI. El supervisor relanza con backoff 10→300 s sin explicar el motivo:
-  por eso `cockpit_doctor` distingue `down` de `not_operational`.
+| Ref | Qué se comprobó | Estado |
+|-----|------------------|--------|
+| UI-02 | `POST /api/runners/control` sin token destruía el frame vivo de la VLA | **Corregido** (v13.2.3: `requires_auth()` es fail-closed; 403 + SHM intacta) |
+| UI-12 | XSS por el `id` de proveedor interpolado en un `onclick` inline | **Corregido** (el botón TEST usa `data-test-provider` + delegación de eventos; además se bloquean los esquemas `javascript:`) |
+| — | El token en la página / CORS / adjunto / key-atada-al-endpoint / `Content-Length` / cabecera SHM en `npu_cv` | Ya cubiertos por HW-01…HW-16 y S01…S14b (no repetidos) |
 
-> ⚠️ **Antes del próximo despliegue hay que arreglar UI-16**: el binario v14 (sin el token en la
-> página) deja la UI sin datos. Orden recomendado: (1) aplicar el arreglo de UI-16,
-> (2) `cargo build --release --target aarch64-linux-android`, (3) `deploy/install-phone.sh`.
+---
+
+## 4. Lo que NO es un bug del código (y por qué la web del móvil daba `ERR_CONNECTION_REFUSED`)
+
+1. **El daemon no estaba escuchando.**  No es un fallo de la UI: `ERR_CONNECTION_REFUSED`
+   significa que no hay proceso en ese puerto.  El supervisor (`deploy/99-megadaemon.sh`)
+   lo relanza con backoff 10→300 s, pero el motivo del fallo **no era visible**
+   en ningún sitio → de ahí `src/cockpit_doctor.rs` (estado `not_operational`).
+2. **El puerto 8080 no existe.**  El cockpit (v13.4) escucha en `0.0.0.0` en el
+   puerto pedido **y** en los alias `3000, 3030, 8090, 9090`.  El 8080 que
+   probó el usuario no está en la lista → seguirá dando `refused`.
+   *Arreglo*: añadir `8080` a `ALIAS_PORTS` (`cockpit_server.rs:1747`) o
+   documentar la URL única.
+3. **Si el puerto principal está ocupado, el cockpit no arranca.**  `run_server()`
+   devuelve `Err` si falla el bind del puerto principal, aunque 3 alias estén
+   libres (`cockpit_server.rs:1705-1707`) → el supervisor entra en bucle de
+   relanzamiento y TODOS los puertos siguen muertos.  *Arreglo*: si el puerto
+   principal falla, continuar con los alias y avisar por stderr.
+4. **La API key remota no está forzada por defecto.**  `api_key::decide()`
+   devuelve `Allow` si no hay key configurada; con el bind a `0.0.0.0` eso deja
+   el cockpit abierto a la LAN (y el token en la página pública, UI-09).
+   *Arreglo*: `MEGADAEMON_REQUIRE_API_KEY=1` en `megadaemon.env` + generar la
+   key si falta.
+5. **Estado VERIFICADO del Samsung (medido con `root_exec` vía el MCP)**:
+   - El daemon **está vivo**: `127.0.0.1:{3000,3030,8080,8090,9090}` escuchando;
+     `/health` → `200 {"status":"ok","uptime":12040,"version":"13.3.0"}`.
+   - La plantilla **está desplegada**: `/data/local/tmp/megadaemon/web/cockpit_template.html`
+     (89.599 bytes) → `GET /` devuelve los 89.707 bytes de la UI con
+     `window.MEGADAEMON_TOKEN` inyectado.
+   - Por el túnel: `GET /` **sin** key → 401; **con** key → 200 + HTML;
+     `/api/ping` sin token de sesión → 403 (fail-closed ✓); `/mcp` → 200 con 25
+     herramientas.
+   - A las 20:29-20:30 (las capturas del usuario) no había daemon escuchando:
+     `ERR_CONNECTION_REFUSED` = proceso muerto, no bug de la UI.  Por eso el
+     estado `not_operational` de `cockpit_doctor`: "proceso vivo pero /health
+     mudo" era el fallo invisible.
+   - `deploy/web_bridge.py` (el puente de `:3000`) era el que reintroducía el RCE
+     de UI-00: **ya está parcheado en el móvil y verificado**.
+
+---
+
+## 5. Ficheros
+
+| Fichero | Contenido |
+|---------|-----------|
+| `rust-core/tests/audit_scout_ui.rs` | 14 tests de integración (HTTP real contra el cockpit en un puerto libre + harness de Node para el JavaScript de la UI) |
+| `rust-core/src/cockpit_doctor.rs` | módulo de diagnóstico (puro, sondas inyectables) |
+| `rust-core/tests/cockpit_doctor_smoke.rs` | 7 tests de humo del doctor |
+| `deploy/install-phone.sh` | despliegue + reparación idempotente con SHA-256, espera activa de `/health` y rollback |
