@@ -292,6 +292,72 @@ fn main() {
             println!("{}", serde_json::to_string_pretty(&res).unwrap());
         }
 
+        "code" => {
+            let mut workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let mut model: Option<String> = None;
+            let mut session_id: Option<String> = None;
+            let mut max_turns: usize = 20;
+            let mut allow_outside = false;
+            let mut goal_parts: Vec<String> = Vec::new();
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--workspace" | "--cwd" => {
+                        if let Some(v) = args.get(i + 1) {
+                            workspace = std::path::PathBuf::from(v);
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    "--model" => {
+                        if let Some(v) = args.get(i + 1) {
+                            model = Some(v.clone());
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    "--session" => {
+                        if let Some(v) = args.get(i + 1) {
+                            session_id = Some(v.clone());
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    "--max-turns" => {
+                        if let Some(v) = args.get(i + 1).and_then(|s| s.parse::<usize>().ok()) {
+                            max_turns = v;
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    "--allow-outside" => {
+                        allow_outside = true;
+                        i += 1;
+                        continue;
+                    }
+                    other => {
+                        goal_parts.push(other.to_string());
+                    }
+                }
+                i += 1;
+            }
+            let goal = goal_parts.join(" ");
+            if goal.trim().is_empty() {
+                eprintln!("Uso: megadaemon code [--workspace <dir>] [--model <id>] [--session <id>] [--max-turns <n>] <objetivo>");
+                std::process::exit(1);
+            }
+            let cfg = megadaemon_core::agent_coding::CodingAgentConfig {
+                workspace_root: workspace,
+                max_turns,
+                max_context_chars: 120_000,
+                model,
+                session_id,
+                allow_outside_workspace: allow_outside,
+            };
+            let report = megadaemon_core::agent_coding::run_coding_session_live(&goal, &cfg);
+            println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+        }
+
         "die-binwalk" => {
             let fp = args.get(2).map(|s| s.as_str()).unwrap_or("");
             let rep = binwalk_die::analyze_binary_full(fp);
