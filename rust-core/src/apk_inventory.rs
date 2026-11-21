@@ -929,6 +929,16 @@ pub fn manifest_fingerprint(manifest: &Value) -> String {
 // ========================================================================= //
 
 
+/// Extrae las rutas de APK de la salida de `pm list packages -f`.
+fn parse_apk_paths(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("package:"))
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
 /// Extrae los nombres de paquete de la salida de `pm list packages`.
 fn parse_package_names(stdout: &str) -> Vec<String> {
     stdout

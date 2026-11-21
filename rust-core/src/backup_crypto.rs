@@ -1457,7 +1457,7 @@ mod tests {
         let key = vec![9u8; AEGIS_KEY_LEN];
         let c = ChunkCipher::own(&key).unwrap();
         let datos = b"secreto".repeat(100);
-        let frame = c.seal_chunk("payload/app.dat", 0, &datos, 1);
+        let frame = c.seal_chunk("payload/app.dat", 0, &datos);
         // mismo troce, otra posición => no descifra
         assert!(c.open_chunk("payload/app.dat", 1, &frame).is_err());
         // mismo troce, otra entrada => no descifra
