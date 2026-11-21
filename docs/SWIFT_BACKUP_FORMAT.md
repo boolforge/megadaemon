@@ -281,3 +281,34 @@ testeado: prueba que nuestro escritor reproduce la secuencia del nativo y
 que el lector la invierte.  Lo que **no** prueba (y no se afirma) es la
 interoperabilidad con la app, que necesita el `.dat` real y la derivación
 nativa de nonce/AAD.
+
+
+### 6.9 ¿Qué se puede verificar **sin** replicar el AEAD? (medido)
+
+Cadena medida de los callers de `Ly87;.b` (el **único** primitivo HMAC de
+Swift Backup) y de la tabla de imports de la nativa:
+
+| Hecho | Cómo se midió |
+|---|---|
+| `Ly87;.b([B[BJJI[B)[B` = `HmacSHA256` | `Mac.getInstance("HmacSHA256")` + `SecretKeySpec` + `Mac.update` + `Mac.doFinal`; **deriva su clave** con `Ly87;.e` leyendo el campo estático `Ly87;.g` (la etiqueta) |
+| `Ly87;.b` tiene **dos** callers, **ambos del índice** | escritor `Lg87;->f` (`CRC32.update` + `Ly87;.b` + `Os.pwrite`, strings *"SBA index CRC mismatch while writing MAC"*, *"Invalid SBA v2 index location while writing MAC: offset= size="*) · verificador `Lib7;->V` (`Ly87;.b` + `MessageDigest.isEqual`, string *"SBA encrypted index MAC mismatch"*) |
+| La **nativa no tiene HMAC** | `strings libsba_archive.so` ⇒ **0** apariciones de `HmacSHA256`/HMAC; sus únicas etiquetas son `entry-chunk-aad` y `entry-chunk-nonce` |
+| Las 8 etiquetas viven en el **DEX**, no en la nativa | `Ly87;-><clinit>` inicializa las 8; la nativa sólo trae las 2 de los chunks |
+| Los 3 bloques de 16 B + `reservado32` (32 B) + `reservado8` (8 B) + `reservado4` (4 B) | el escritor ARM64 acaba con `bl 0x6b524` con `w2 = 0x20`, `w2 = 0x8` y `w2 = 0x4` ⇒ **32 + 8 + 4 bytes** ⇒ `reservado32` = la clave HMAC del payload (32 B, sin truncar) |
+
+#### Consecuencia práctica
+
+* ✅ **Verificable sin AEAD**: el **key-check** (`SHA-256(tag‖salt‖nonce2‖clave)`)
+  y el **MAC del índice v2** (HMAC sobre el **índice cifrado** + CRC32).
+  ⇒ **tamper-evident real** sobre la cabecera y el índice, sin tocar el AEAD.
+* ❌ **NO verificable sin AEAD**: el **HMAC del payload**.  La clave
+  (`reservado32`) sí se deriva y se guarda, pero **en el DEX no hay ningún
+  consumidor** de ella (el único `Mac.doFinal` de Swift Backup es el del
+  índice) **y la nativa no implementa HMAC** ⇒ ⇒ o el HMAC del payload se
+  calcula dentro de la nativa (⇒ `aead_no_replicado`), o no se verifica
+  nunca.  En ambos casos **no aporta una verificación adicional desde
+  Rust**, y decirlo es más honesto que prometer un helper que devolvería
+  basura.
+* ⇒ El alcance honesto del lector queda: **parse + derivar clave + verificar
+  key-check + verificar el MAC del índice** ⇒ y el **AEAD por trozos**
+  (`aead_no_replicado`), que es donde vive la confidencialidad.
