@@ -37,6 +37,7 @@ pub mod cert_vault;
 pub mod channel;
 pub mod clipboard;
 pub mod self_update;
+pub mod swift_v1;
 pub mod pkgmgr;
 pub mod sync_chats;
 pub mod recordings;
