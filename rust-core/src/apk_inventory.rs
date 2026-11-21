@@ -1005,7 +1005,7 @@ fn pair_packages(names: &[String], paths: &[String]) -> Vec<(String, String)> {
 fn list_packages() -> Vec<(String, String)> {
     let with_paths =
         crate::android::root_exec("pm list packages -f 2>/dev/null", PM_TIMEOUT_MS, 512 * 1024);
-    let paths = parse_apk_paths(&with_paths.stdout);
+    let paths = parse_package_paths(&with_paths.stdout);
     let names = if paths.len() > 1 {
         let plain =
             crate::android::root_exec("pm list packages 2>/dev/null", PM_TIMEOUT_MS, 512 * 1024);
@@ -3945,7 +3945,7 @@ mod tests {
         // El formato real es "package:/ruta/app.apk" (sin '=').
         let salida =
             "package:/data/app/~~a==/com.foo-1/base.apk\npackage:/system/app/Bar/Bar.apk\n";
-        let rutas = parse_apk_paths(salida);
+        let rutas = parse_package_paths(salida);
         assert_eq!(rutas.len(), 2);
         assert_eq!(rutas[0], "/data/app/~~a==/com.foo-1/base.apk");
         assert_eq!(package_from_path(&rutas[0]).as_deref(), Some("com.foo"));
