@@ -31,3 +31,17 @@ docs/CONCURRENCY_PLAN_V15.md:nobarrier
 docs/EXTERNAL_AGENT_PROMPT_FINAL.md:unpackers
 docs/F3_PRECIOS.md:enumerado
 docs/QA_SECURITY_HARNESS_SPEC.md:layouts
+# Falsos positivos reales (MEDIDO el 2026-11-21):
+#  - "unterminated" y "unpacks" son palabras INGLESAS, no lafusion "un"+"..."
+#  - "deserializa" es "de"+"serializa" (español correcto), no una fusion.
+rust-core/src/daad_ir.rs:unterminated
+rust-core/src/daad_unpack.rs:unpacks
+docs/RE_EXYNOS2100_ROMASTERS.md:deserializa
+# CJK LEGITIMO: normalizadores de ancho completo (CJK) a proposito.
+rust-core/src/crypto_scan.rs:push('　'),
+rust-core/src/crypto_scan.rs:push('、'),
+rust-core/src/crypto_scan.rs:push('。'),
+rust-core/src/crypto_scan.rs:push('・'),
+rust-core/src/crypto_scan.rs:push('「'),
+rust-core/src/crypto_scan.rs:push('」'),
+rust-core/src/crypto_scan.rs:push('漢');

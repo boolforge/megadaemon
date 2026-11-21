@@ -30,7 +30,7 @@ compartido llega **más corto de lo esperado** —segmento recién creado,_frame
 
 ```
 ensure_live_shm()          -> panic (shm.rs: try_into().unwrap())
-   ↓ (panic dentro del临界区)
+   ↓ (panic dentro de la seccion critica)
 Mutex<GlobalCockpitState>  -> envenenado para siempre
    ↓
 lock().unwrap()            -> panic en CADA petición posterior

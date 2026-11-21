@@ -75,6 +75,7 @@ DESTINO=auto          # auto | movil | pc
 # Valor alternativo (con aviso por voz): RecordingAllowedByMenu,disclaimer_latin
 CSC_VALOR="${MD_CSC_VALOR:-RecordingAllowed}"
 CSC_ACTIVO=1
+PURGAR_AG=0
 
 for a in "$@"; do
   case "$a" in
@@ -83,6 +84,7 @@ for a in "$@"; do
     --movil)                   DESTINO=movil ;;
     --csc-valor=*)             CSC_VALOR="${a#*=}" ;;
     --sin-csc)                 CSC_ACTIVO=0 ;;
+    --purgar-antigravity)      PURGAR_AG=1 ;;
     --pc)                      DESTINO=pc ;;
     --serie=*)                 SERIAL="${a#*=}" ;;
     -h|--help)
@@ -101,9 +103,12 @@ sha16() { printf '%s' "$1" | sha256sum 2>/dev/null | cut -c1-16; }
 
 # --- detección de entorno ---------------------------------------------------
 es_android() {
+  # OJO: /data/adb existe tambien en algunos sandboxes ⇒ NO basta con eso
+  # para decir "esto es Android" (MEDIDO el 2026-11-21: con la deteccion
+  # laxa el script creia estar en el movil y ejecutaba `su` en el PC).
   [ -n "${PREFIX:-}" ] && case "$PREFIX" in *com.termux*) return 0 ;; esac
-  [ -d /data/local/tmp/megadaemon ] && return 0
-  [ -d /data/adb ] && return 0
+  [ -f /system/build.prop ] && return 0
+  command -v getprop >/dev/null 2>&1 && return 0
   case "$(uname -s 2>/dev/null)" in Android) return 0 ;; esac
   return 1
 }
@@ -137,6 +142,96 @@ fi
 
 STATE_REAL="$(root 'echo $MEGADAEMON_STATE_DIR' | tr -d '\r\n')"
 [ -z "$STATE_REAL" ] && STATE_REAL="$STATE_REAL_DEFAULT"
+
+
+# --- inventario de procesos (con RSS y linea de comandos real) -------------
+procs() {
+  root 'for p in /proc/[0-9]*; do pid=${p#/proc/}; c=$(tr "\0" " " < $p/cmdline 2>/dev/null); r=$(awk "/VmRSS/{print \$2}" $p/status 2>/dev/null); [ -n "$c" ] && echo "$pid ${r:-0} $c"; done'
+}
+
+# PID del propio script y de sus ascendientes: NUNCA se matan (matar al
+# padre deja al script a medias y puede tumbar la sesion de Termux).
+mis_ancestros() {
+  root 'p=$$; while [ -n "$p" ] && [ "$p" != "1" ] && [ "$p" != "0" ]; do echo "$p"; p=$(awk "{print \$4}" /proc/$p/stat 2>/dev/null); done'
+}
+
+# --- Antigravity: INSPECCION (no se mata nada sin evidencia) --------------
+inspeccionar_antigravity() {
+  say "--- Antigravity: instalacion y procesos (INSPECCION, no se toca nada) ---"
+  AG="$(procs | grep -i "antigravity\|language_server\|liblanguage_server" || true)"
+  if [ -n "$AG" ]; then
+    printf '%s\n' "$AG" | head -20 | while read -r pid rss cmd; do
+      say "  pid $pid  RSS ${rss:-0} kB  ${cmd}"
+    done
+  else
+    say "  no hay procesos de Antigravity en marcha"
+  fi
+  for D in /data/data/com.google.android.apps.mcp /data/user/0/com.google.android.apps.mcp \
+           "$HOME/.antigravity" "$HOME/.mcp" /sdcard/Android/data/com.google.android.apps.mcp; do
+    [ -d "$D" ] && say "  directorio: $D" && du -sh "$D" 2>/dev/null | sed 's/^/    /'
+  done
+  BACK="$(root 'ls -1 /data/local/tmp/megadaemon/antigravity 2>/dev/null | head -10')"
+  [ -n "$BACK" ] && say "  backlog local (si existe): $BACK"
+  say "  (el backlog de Antigravity se recupera con: ls -R del directorio de arriba)"
+}
+
+# --- limpieza de procesos basura (SOLO lo demostrablemente nuestro) -------
+limpiar_procesos() {
+  say "--- limpieza de procesos (solo lo demostrablemente basura) ---"
+  ANCS="$(mis_ancestros)"
+  es_mio() { case "\n$ANCS\n" in *"\n$1\n"*) return 0 ;; esac; return 1; }
+  MATADOS=0
+  # 1) our short-lived tools: si siguen vivos, estan ATASCADOS
+  for pat in md-clipboard md-dict md-lan-listen npu-probe adbonly duckdns-updater channel-publish; do
+    for pid in $(procs | grep -F "$pat" | awk '{print $1}'); do
+      es_mio "$pid" && continue
+      root "kill -9 $pid 2>/dev/null"
+      say "  muerto: $pid ($pat, tool de una sola ejecucion atascado)"
+      MATADOS=$((MATADOS + 1))
+    done
+  done
+  # 2) cloudflared duplicado: cada uno tiene su hostname y roban trafico
+  CFS="$(procs | grep -F cloudflared | awk '{print $1}')"
+  N=0
+  for pid in $CFS; do
+    N=$((N + 1))
+    if [ "$N" -gt 1 ]; then
+      es_mio "$pid" && continue
+      root "kill -9 $pid 2>/dev/null"
+      say "  muerto: $pid (cloudflared sobrante; el hostname cambia en cada uno)"
+      MATADOS=$((MATADOS + 1))
+    fi
+  done
+  [ "${N:-0}" -gt 1 ] && say "  cloudflared: $N -> queda 1"
+  # 3) megadaemon-core duplicado
+  MDS="$(procs | grep -F megadaemon-core | grep -v md-clipboard | awk '{print $1}')"
+  N=0
+  for pid in $MDS; do
+    N=$((N + 1))
+    if [ "$N" -gt 1 ]; then
+      es_mio "$pid" && continue
+      root "kill -9 $pid 2>/dev/null"
+      say "  muerto: $pid (megadaemon-core duplicado)"
+      MATADOS=$((MATADOS + 1))
+    fi
+  done
+  [ "${N:-0}" -gt 1 ] && say "  megadaemon-core: $N -> queda 1"
+  # 4) Antigravity: SÓLO con --purgar-antigravity (los workers del language
+  #    server se relanzan solos; la ventana principal NO se toca nunca)
+  if [ "$PURGAR_AG" = "1" ]; then
+    for pid in $(procs | grep -i "language_server" | awk '{print $1}'); do
+      es_mio "$pid" && continue
+      root "kill -9 $pid 2>/dev/null"
+      say "  muerto: $pid (worker de Antigravity; se relanza solo)"
+      MATADOS=$((MATADOS + 1))
+    done
+  fi
+  say "  procesos matados: $MATADOS (los ascendientes de este script NUNCA se tocan)"
+  # 5) caches nuestros en disco (medido: 95 MB liberados en una pasada)
+  root "rm -rf $MD_DIR/.bad-* $MD_DIR/dex $MD_DIR/sync_snap 2>/dev/null"
+  LIBRE="$(root "df -k $MD_DIR 2>/dev/null | tail -1 | awk '{print \$4}'")"
+  [ -n "$LIBRE" ] && say "  disco libre en $MD_DIR: $((LIBRE / 1024)) MB"
+}
 
 # --- herramientas CSC (decodificador OMC + parcheador) ----------------------
 CODEC_LOCAL=""
@@ -246,6 +341,7 @@ diagnostico() {
   CSCV="$(root "settings get secure recording_allowed_value 2>/dev/null" | tr -d '\r\n')"
   [ -n "$CSCV" ] && say "CSC (settings): $CSCV"
   say "CSC (modulo Magisk): $(root "test -f /data/adb/modules/megadaemon_csc_recording/cscfeature.xml && echo ACTIVO || echo NO")"
+  inspeccionar_antigravity
   say "--- canal ---"
   TURL="$(root 'cat /sdcard/megadaemon.url 2>/dev/null; cat /data/local/tmp/megadaemon/tunnel.url 2>/dev/null' | tr -d '\r\n' | grep -o 'https://[a-z0-9.-]*' | tail -1)"
   [ -n "$TURL" ] && say "URL vigente: $TURL (sha16 $(sha16 "$TURL"))" || say "URL vigente: NO ENCONTRADA"
@@ -328,6 +424,9 @@ if [ -z "$NEWD" ]; then
   die "el daemon no arrancó: binario anterior restaurado (no he dejado el móvil sin daemon)"
 fi
 say "daemon arrancado (pid $NEWD)"
+
+say "=== 3a) limpieza de procesos basura ==="
+limpiar_procesos
 
 say "=== 3b) arranque automatico (service.d) ==="
 # Magisk ejecuta /data/adb/service.d/* al arrancar el movil: con el trio

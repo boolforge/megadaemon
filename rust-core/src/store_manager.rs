@@ -424,7 +424,7 @@ pub fn verify_index(
 }
 
 /// DigestInfo DER de SHA-256 (RFC 8017, A.2.4) sin la parte ASN.1 de longitudes
-/// variables: prefijo fijo +摘要 de 32 bytes.
+/// variables: prefijo fijo + resumen de 32 bytes.
 const SHA256_DIGEST_INFO_PREFIX: [u8; 19] = [
     0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05,
     0x00, 0x04, 0x20,

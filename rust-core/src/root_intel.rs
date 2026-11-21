@@ -478,7 +478,7 @@ pub fn detectors(limit: usize, third_party_only: bool) -> Value {
     let started = std::time::Instant::now();
     let mut pkgs = installed_packages(third_party_only);
 
-    // Prioridad: banca, seguridad,支付,ROM apps (los que mas miran).
+    // Prioridad: banca, seguridad, pagos, ROM apps (los que mas miran).
     let priority = |p: &str| -> u32 {
         let p = p.to_lowercase();
         let mut score = 0u32;
