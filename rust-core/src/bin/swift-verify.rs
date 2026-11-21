@@ -117,6 +117,7 @@ fn main() {
         "status": report.status,
         "kdf": report.kdf,
         "key_check": report.key_check,
+        "payload_hmac_key": report.payload_hmac_key,
         "notas": report.notes,
     });
     let txt = if pretty {
