@@ -2311,6 +2311,15 @@ pub fn run_server(port: u16) -> Result<(), String> {
     ports.sort_unstable();
     ports.dedup();
 
+    // Canal LAN: beacon UDP de descubrimiento (mismo modo de fallo que el
+    // móvil, sin internet y sin terceros).  Best-effort: si no hay red, el
+    // daemon sigue igual.
+    {
+        let inst = std::env::var("MEGADAEMON_INSTANCE_ID").unwrap_or_else(|_| "megadaemon".into());
+        let sd = state_dir();
+        crate::lan::spawn_beacon(inst, port, Some(sd));
+    }
+
     let mut listeners: Vec<(u16, TcpListener)> = Vec::new();
     for p in &ports {
         let addr = format!("0.0.0.0:{}", p);
