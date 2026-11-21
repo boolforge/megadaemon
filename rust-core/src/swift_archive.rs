@@ -432,6 +432,10 @@ pub struct SwiftArchiveReport {
     /// el contenido** cuando el AEAD por trozos esté replicado.
     #[serde(default)]
     pub payload_hmac_key: Option<String>,
+    /// ¿El HMAC del payload que calcula el lector coincide con el que lleva
+    /// la cabecera?  (`None` = la variante de cabecera no lo lleva).
+    #[serde(default)]
+    pub payload_hmac_verified: Option<bool>,
     /// Lo que **no** se ha hecho (por qué).
     pub notes: Vec<String>,
 }
@@ -439,6 +443,18 @@ pub struct SwiftArchiveReport {
 /// Hex en minúsculas de un vector de bytes.
 pub fn hex_bytes(b: &[u8]) -> String {
     b.iter().map(|x| format!("{:02x}", x)).collect()
+}
+
+/// Bytes **crudos** de un campo de la cabecera por su nombre (para campos
+/// que no son enteros, como el HMAC del payload de 32 B).
+pub fn campo_named_bytes(header: &HeaderReport, bytes: &[u8], name: &str) -> Option<Vec<u8>> {
+    let f = header.fields.iter().find(|f| f.name.eq_ignore_ascii_case(name))?;
+    let off = f.offset as usize;
+    let end = off.checked_add(f.width as usize)?;
+    if end > bytes.len() {
+        return None;
+    }
+    Some(bytes[off..end].to_vec())
 }
 
 /// Devuelve los bytes de un bloque de la cabecera por su nombre (`salt`,
@@ -557,6 +573,7 @@ pub fn verify_key_check(
                 key_check: None,
                 kdf: None,
                 payload_hmac_key: None,
+                payload_hmac_verified: None,
                 notes: vec![e],
             }
         }
@@ -571,6 +588,7 @@ pub fn verify_key_check(
                 key_check: None,
                 kdf: None,
                 payload_hmac_key: None,
+                payload_hmac_verified: None,
                 notes,
             };
         }
@@ -723,6 +741,33 @@ pub fn verify_key_check(
         let width = found.len().min(expected.len());
         let matched = width > 0 && expected[..width] == found[..width];
 
+        // **Segundo check, independiente del key-check**: en la variante
+        // extendida (formato == 2) la cabecera guarda el HMAC del payload
+        // (32 B) => se compara con el que acabamos de calcular.
+        let mut payload_hmac_verified: Option<bool> = None;
+        if let (Some(calc), Some(cab)) = (
+            payload_hmac_key.as_ref(),
+            campo_named_bytes(&header, bytes, "payloadHmac"),
+        ) {
+            // `calc` es el hex del HMAC calculado; lo pasamos a bytes crudos
+            // para compararlo con los 32 B de la cabecera.
+            let calc_bytes: Vec<u8> = calc
+                .as_bytes()
+                .chunks(2)
+                .filter_map(|c| {
+                    let h = std::str::from_utf8(c).ok()?;
+                    u8::from_str_radix(h, 16).ok()
+                })
+                .collect();
+            let ok = !calc_bytes.is_empty() && calc_bytes == cab;
+            payload_hmac_verified = Some(ok);
+            notes.push(if ok {
+                "HMAC del payload: la cabecera CONTIENE el HMAC que acabamos de calcular => coherente".into()
+            } else {
+                "HMAC del payload: la cabecera NO contiene ese HMAC => cabecera manipulada o KDF distinto".into()
+            });
+        }
+
         if matched {
             notes.push(if kdf_verificada {
                 "KDF: Argon2id VERIFICADA del repo (una sola implementacion; crates.io fuera)".into()
@@ -751,6 +796,7 @@ pub fn verify_key_check(
                 }),
                 kdf: Some(kdf_info),
                 payload_hmac_key: payload_hmac_key.clone(),
+                payload_hmac_verified,
                 notes,
             };
         }
@@ -789,6 +835,7 @@ pub fn verify_key_check(
         }),
         kdf: ultimo_kdf,
         payload_hmac_key: None,
+        payload_hmac_verified: None,
         notes,
     }
 }
