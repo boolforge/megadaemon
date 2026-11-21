@@ -198,3 +198,11 @@ fn la_voz_respeta_el_cooldown_y_el_tope_por_tick() {
     assert!(exec.calls.borrow().is_empty(), "en cooldown no se ejecuta nada");
     assert!(out.broadcast.is_empty(), "un idle no se difunde");
 }
+
+// Modulo auxiliar del que depende el modulo incluido por `#[path]` (MEDIDO el
+// 2026-11-21: al fusionar `fix/robustness-20261120` varios modulos pasaron a
+// usar los helpers canonicos `util_text`/`util_fs` y los arneses
+// autocontenidos dejaron de compilar: E0432).
+#[path = "../src/util_text.rs"]
+#[allow(dead_code, unused_imports, unused_mut)]
+mod util_text;
