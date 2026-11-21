@@ -182,6 +182,79 @@ pub fn probe_code(fd: RawFd, code: u32) -> (bool, Option<i64>, Option<i32>) {
     }
 }
 
+/// Sondeo **delegado en un proceso hijo**.
+///
+/// MEDIDO (2026-11-21, S21 Ultra real): `/dev/vertex10` existe y **abre bien**
+/// desde cualquier proceso hijo del daemon (shell y python de Termux: mismo
+/// uid 0, mismo dominio SELinux `u:r:magisk:s0`, mismo namespace de montaje),
+/// pero la llamada `open()` **del propio daemon** devuelve `ENOENT` (os error 2).
+/// Como el hijo sí puede, el sondeo se delega en él: **mismo método** (ioctl
+/// sin argumento), **mismos códigos**, **mismo resultado**.
+fn probe_via_helper() -> Option<Vec<Vs4lProbe>> {
+    const PY: &str = "/data/data/com.termux/files/usr/bin/python3";
+    if !std::path::Path::new(PY).exists() {
+        return None;
+    }
+    let script = concat!(
+        "import os,fcntl,json\n",
+        "CODES=[[\"VSL_QUERY_CAP\",0x40205600],[\"VSL_CONFIG_1\",0x40105601],",
+        "[\"VSL_CONFIG_2\",0x40105602],[\"VSL_NO_4\",0x00005604],",
+        "[\"VSL_NO_5\",0x00005605],[\"VSL_SET_6\",0x40805606],",
+        "[\"VSL_SET_7\",0x40805607],[\"VSL_SET_8\",0x40805608],",
+        "[\"VSL_CONTROL_10\",0x4008560a]]\n",
+        "out=[]\n",
+        "fd=os.open('/dev/vertex10',os.O_RDWR)\n",
+        "for n,c in CODES:\n",
+        "    try:\n",
+        "        r=fcntl.ioctl(fd,c); out.append([n,c,1,r,0])\n",
+        "    except OSError as e:\n",
+        "        out.append([n,c,0,-1,e.errno])\n",
+        "os.close(fd)\n",
+        "print(json.dumps(out))"
+    );
+    let o = std::process::Command::new(PY)
+        .arg("-c")
+        .arg(script)
+        .env("LD_LIBRARY_PATH", "/data/data/com.termux/files/usr/lib")
+        .output()
+        .ok()?;
+    if !o.status.success() {
+        return None;
+    }
+    let txt = String::from_utf8_lossy(&o.stdout);
+    let arr: serde_json::Value = serde_json::from_str(txt.trim()).ok()?;
+    let arr = arr.as_array()?;
+    let mut out = Vec::new();
+    for it in arr {
+        let name = it.get(0)?.as_str()?.to_string();
+        let code = it.get(1)?.as_u64()? as u32;
+        let live = it.get(2)?.as_bool().unwrap_or(false);
+        let size = it.get(3)?.as_i64().unwrap_or(-1);
+        let errno = it.get(4)?.as_i64().unwrap_or(0) as i32;
+        let (nr, decl, note) = match VS4L_IOCTLS.iter().find(|(_, c, _, _, _)| *c == code) {
+            Some((_, _, nr, sz, note)) => (*nr, *sz, *note),
+            None => (0u8, 0u16, ""),
+        };
+        out.push(Vs4lProbe {
+            name,
+            code,
+            macro_name: ioc_macro(code),
+            nr,
+            size_in_code: decl,
+            live,
+            driver_size: if live { Some(size) } else { None },
+            errno: if live { None } else { Some(errno) },
+            errno_name: if live {
+                String::new()
+            } else {
+                errno_name(errno).to_string()
+            },
+            note: note.to_string(),
+        });
+    }
+    Some(out)
+}
+
 /// Sondea los 9 códigos contra `/dev/vertex10`.
 ///
 /// No necesita root (el nodo es 0644) y **no escribe nada** en el driver:
@@ -219,6 +292,25 @@ pub fn probe() -> Vs4lReport {
     };
     if fd < 0 {
         let e = std::io::Error::last_os_error();
+        // El nodo EXISTE (node_mode informado) pero el daemon no lo abre =>
+        // el driver devuelve ENOENT al propio daemon => se delega en un hijo,
+        // que si abre (medido en el S21 Ultra real).
+        if let Some(codes) = probe_via_helper() {
+            rep.probed = codes.len();
+            rep.live = codes.iter().filter(|c| c.live).count();
+            rep.matches_expected = rep.live == rep.expected_live as usize;
+            rep.method = format!(
+                "{} [DELEGADO en un proceso hijo: el open() del propio daemon devuelve {}]",
+                rep.method,
+                errno_name(e.raw_os_error().unwrap_or(0))
+            );
+            rep.node_error = Some(format!(
+                "open {} desde el daemon: {} (el nodo abre bien desde un proceso hijo: mismo uid, mismo dominio SELinux, mismo namespace)",
+                VERTEX10, e
+            ));
+            rep.codes = codes;
+            return rep;
+        }
         rep.node_error = Some(format!("open {}: {}", VERTEX10, e));
         return rep;
     }
