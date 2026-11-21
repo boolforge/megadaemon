@@ -1094,5 +1094,37 @@ while true; do
                 break
             fi
         done
+        # ROBUSTEZ: vigilar RESPONSIVIDAD, no solo la EXISTENCIA del proceso.
+        # Un daemon vivo pero envenenado (mutex envenenado por un panic) o
+        # colgado seguia dando 502 desde el tunel mientras el watchdog, que
+        # solo miraba pgrep, lo daba por bueno. Ahora se le pregunta de
+        # verdad: si /health no responde, se reinicia.
+        py2="$PY_BIN"
+        if [ -z "$py2" ]; then
+            for cand in /data/data/com.termux/files/usr/bin/python3 \
+                        /data/data/com.agy/files/usr/bin/python3 \
+                        /system/bin/python3; do
+                [ -x "$cand" ] && { py2="$cand"; break; }
+            done
+        fi
+        miss=0
+        i=0
+        while [ $i -lt 3 ]; do
+            i=$((i + 1))
+            if [ -n "$py2" ] && "$py2" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:$PORT/health',timeout=4)" >/dev/null 2>&1; then
+                miss=0
+                break
+            fi
+            miss=$((miss + 1))
+            log "daemon sin responder en /health (intento $miss/3)"
+            sleep 2
+        done
+        if [ "$miss" -ge 3 ] && [ -n "$py2" ]; then
+            log "daemon VIVO pero NO RESPONDE: se reinicia (antes se quedaba en 502 para siempre)"
+            for p in $(pgrep -f "megadaemon-core cockpit" 2>/dev/null); do
+                kill "$p" 2>/dev/null
+            done
+            sleep 3
+        fi
     fi
 done
