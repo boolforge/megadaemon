@@ -86,6 +86,9 @@ versión 16.0.2. Derivación **AEGIS-256** (+ Zstandard), formatos `.splits`/`.d
 | Tarea | Responsable | Criterio de aceptación |
 |---|---|---|
 | Desofuscar Swift Backup: clase que deriva la clave + salt + iteraciones | DEX + nodo RE | Un test que reproduce el derivador contra un `.dat` real |
+| **Argon2id (KDF) en Rust puro** — RFC 9106 | **signer (hecho)** | ✅ `rust-core/src/argon2.rs`: d/i/id verdes con los vectores oficiales + 36/36 contra el oráculo C; API `derive_key`; único KDF del repo (crates.io: prohibido) |
+| **ZSTD sin crates** (FFI `dlopen` a `libzstd` + CLI) | **signer (hecho)** | ✅ `rust-core/src/zstd.rs`, fixture real congelado |
+| **Lector del contenedor `SBA1`** (TAR+ZSTD) | **signer (hecho)** | ✅ `rust-core/src/swift_sba1.rs`: magic, cabecera **inspeccionada** (no congelada) y extracción del payload |
 | **Catálogo de proyectos de backup** (libres y no libres) con lo que se reimplementa | DEX | Tabla: proyecto → formato → qué reimplementamos → licencia (reimplementar **ideas**, no código) |
 | Reimplementar en Rust dentro de MegaDaemon | backup + DEX | `backup_vault` lee un backup de Swift Backup y lo restaura verificado |
 | El formato OMC ya está resuelto | nodo RE (**hecho**) | `omc_decode/encode` en Rust, round-trip 126/126 CSC |
