@@ -98,6 +98,12 @@ PYEOF
 }
 
 PHONE_PORT="${MEGADAEMON_PHONE_PORT:-3000}"
+# !! ESTE SCRIPT es el UNICO que actualiza el A record: lo hace desde el
+# PC, con la IP domestica correcta. `duckdns.org/update` pone el A record a
+# la IP de QUIEN LLAMA => llamarlo desde el movil o desde el sandbox de un
+# agente deja el dominio apuntando a la IP equivocada y rompe el relay
+# (medido: apuntaba al NAT del datacenter).
+#
 # ⚠️ El subdominio TIENE QUE ESTAR REGISTRADO en la cuenta de DuckDNS:
 # la API responde "OK" aunque no cree nada (medido: -s21 daba NXDOMAIN
 # mientras la API decia OK). Por eso, tras publicar, se VERIFICA el DNS.
