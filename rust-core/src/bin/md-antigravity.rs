@@ -140,6 +140,7 @@ fn main() -> ExitCode {
             "tasks" => cmd_tasks(json_out),
             "model" => cmd_model(&cfg, json_out),
             "env" => cmd_env(json_out),
+            "endpoint" => cmd_endpoint(json_out),
             "enqueue" => {
                 let text = argv[2..].join(" ");
                 if text.trim().is_empty() {
@@ -169,7 +170,7 @@ fn main() -> ExitCode {
 /// Mensaje de uso.
 fn usage() {
     eprintln!(
-        "uso: md-antigravity <status|catalog|conversations|search|conversation|tasks|model|env|enqueue> [args]\n\
+        "uso: md-antigravity <status|catalog|conversations|search|conversation|tasks|model|env|endpoint|enqueue> [args]\n\
          \n\
          subcomandos de asimilación:\n\
          \x20 model                       lista los modelos personalizados (BYOM) de la IDE\n\
@@ -566,6 +567,51 @@ fn cmd_enqueue(cfg: &BridgeConfig, text: &str, json_out: bool) -> Result<(), Str
                 );
             }
         }
+    });
+    Ok(())
+}
+
+
+/// **Endpoint del language server**: hace que Antigravity hable SIEMPRE con
+/// el gateway canónico del MegaDaemon (dialecto Gemini) y que el selector de
+/// la GUI ofrezca el modelo `megadaemon`.
+///
+/// * `endpoint`                 → estado de las dos palancas (sólo lectura).
+/// * `endpoint plan`            → plan del parche del binario del LS.
+/// * `endpoint plan-gate`       → plan del parche del bundle web.
+/// * `endpoint apply --confirm` → aplica el parche del binario (+ manifiesto).
+/// * `endpoint apply-gate --confirm` → aplica el parche del bundle web.
+/// * `endpoint restore --confirm`    → vuelve a los respaldos.
+fn cmd_endpoint(json_out: bool) -> Result<(), String> {
+    use megadaemon_core::antigravity_endpoint as ae;
+    let args: Vec<String> = std::env::args().collect();
+    let sub = args.get(2).cloned().unwrap_or_default().trim_start_matches('-').to_string();
+    let confirm = args.iter().any(|a| a == "--confirm");
+    let puerto: u16 = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--puerto="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(ae::PUERTO_GATEWAY);
+    let v = match sub.as_str() {
+        "plan" => ae::plan_endpoint(puerto),
+        "plan-gate" | "plan_gate" => ae::plan_gate(),
+        "apply" => match ae::aplicar_endpoint(puerto, confirm) {
+            Ok(v) => v,
+            Err(e) => json!({"ok": false, "error": e}),
+        },
+        "apply-gate" | "apply_gate" => match ae::aplicar_gate(confirm) {
+            Ok(v) => v,
+            Err(e) => json!({"ok": false, "error": e}),
+        },
+        "restore" => match ae::restaurar(confirm) {
+            Ok(v) => v,
+            Err(e) => json!({"ok": false, "error": e}),
+        },
+        "catalog" | "catalogo" => ae::catalogo_gemini(),
+        _ => ae::estado(),
+    };
+    emit(json_out, &v, |v| {
+        println!("{}", serde_json::to_string_pretty(v).unwrap_or_default());
     });
     Ok(())
 }

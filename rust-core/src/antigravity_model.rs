@@ -309,11 +309,11 @@ pub fn tool_definitions() -> Value {
     ])
 }
 
+/// El `dispatch` devuelve el **valor crudo** (`{"ok":…}`): el envoltorio MCP
+/// (`content` + `structuredContent` + `isError`) lo pone la capa que despacha
+/// (`mcp_server::dispatch_tool` / `mcp_ext`), igual que con el resto de tools.
 fn wrap(v: Value) -> Value {
-    json!({
-        "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }],
-        "structuredContent": v,
-    })
+    v
 }
 
 /// Despacha la tool MCP.  `None` = el nombre no es de este módulo.

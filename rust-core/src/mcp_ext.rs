@@ -2249,6 +2249,9 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         "antigravity_env" => {
             return crate::antigravity_env::dispatch(name, args);
         }
+        "antigravity_endpoint" => {
+            return crate::antigravity_endpoint::dispatch(name, args);
+        }
         _ => return None,
     };
     let _ = i("unused");

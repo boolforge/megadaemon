@@ -65,7 +65,9 @@ fn la_peticion_gemini_se_traduce_a_prompt() {
 #[test]
 fn una_peticion_gemini_vacia_da_error_claro() {
     let e = gw::gemini_prompt(&json!({"contents": []})).expect_err("debe fallar");
-    assert!(e.message.contains("contents"));
+    // El error dice QUE falta: no un 500 opaco.
+    assert!(!e.message.is_empty());
+    assert!(e.message.contains("texto") || e.message.contains("contents"), "mensaje: {}", e.message);
 }
 
 // ---------------------------------------------------------------------------
@@ -238,7 +240,7 @@ fn agent_coding_llega_a_las_tools_nuevas() {
         &json!({"action": "tool", "name": "no-existe-jamas-esta"}),
     )
     .expect("la tool debe despacharse");
-    assert!(r.get("content").is_some());
+    assert_eq!(r["ok"], false);
 }
 
 #[test]

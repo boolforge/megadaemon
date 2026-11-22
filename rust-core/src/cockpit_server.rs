@@ -1320,6 +1320,19 @@ fn handle_client(mut stream: TcpStream) {
                     }
                 }
             }
+            // Catalogo de modelos en dialecto GEMINI.
+            //
+            // MEDIDO (2026-11-22): cuando el LS de Antigravity apunta a un
+            // endpoint local, pide el catalogo ahi:
+            //   POST /v1internal:fetchAvailableModels        (modo gateway)
+            //   GET  /v1beta/models | /v1/models              (catalogo Gemini)
+            // El LS tambien anade el prefijo del endpoint parcheado, por eso
+            // se acepta `/v1internal/<algo>/v1internal:fetchAvailableModels`.
+            // El catalogo **sustituye** al nativo de Google => aqui sale
+            // `models/megadaemon` + los proveedores del vault.
+            p if p.ends_with(":fetchAvailableModels") || p.ends_with("/models") => {
+                send_json(&mut stream, &crate::antigravity_endpoint::catalogo_gemini());
+            }
             // Dialecto GEMINI: el idioma que habla el language server de
             // Antigravity (MEDIDO 2026-11-22 en `liblanguage_server.so`:
             // `genai.Models.generateContent` + las rutas `/v1internal:*`).
@@ -1331,7 +1344,7 @@ fn handle_client(mut stream: TcpStream) {
                 let ruta = crate::llm_gateway::gemini_route(path);
                 let stream_sse = ruta.as_ref().map(|r| r.stream).unwrap_or(false);
                 if stream_sse {
-                    match crate::llm_gateway::gemini_stream_sse(&body) {
+                    match crate::llm_gateway::gemini_stream_sse_for(path, &body) {
                         Ok(sse) => send_http_response(
                             &mut stream,
                             200,
@@ -1344,7 +1357,7 @@ fn handle_client(mut stream: TcpStream) {
                         ),
                     }
                 } else {
-                    match crate::llm_gateway::gemini_generate_content(&body) {
+                    match crate::llm_gateway::gemini_generate_content_for(path, &body) {
                         Ok(v) => send_json(&mut stream, &v),
                         Err(e) => send_json(
                             &mut stream,
