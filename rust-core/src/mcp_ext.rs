@@ -630,6 +630,29 @@ pub fn tool_definitions() -> Value {
                 }
             }
 },
+{
+            "name": "re_analyze",
+            "description": "MOTOR DE RE de MegaDaemon (punto de entrada UNICO): identifica el binario (ELF/PE/MachO/DEX/APK/Go/UPX) CON evidencia, extrae cadenas interesting (URLs, rutas, claves, magisk/root/jni), lista secciones y simbolos, y devuelve un informe uniforme. Accion catalogo lista TODAS las capacidades de RE/deofuscacion con el modulo que las implementa (~700 tokens) para que no adivines tool names. NUNCA ejecuta el binario analizado: es analisis estatico.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "accion": { "type": "string", "description": "catalogo | identify | analyze | strings | deobfuscate" },
+                    "ruta": { "type": "string", "description": "Ruta del binario (obligatoria salvo en catalogo)." },
+                    "max_cadenas": { "type": "integer", "description": "Maximo de cadenas interesting (defecto 60)." },
+                    "plat_key": { "type": "string", "description": "Clave de plataforma para descifrar strings." }
+                }
+            }
+},
+{
+            "name": "antigravity_sessions",
+            "description": "Estado de las SESIONES de Antigravity en el movil: conversaciones abiertas, sesiones muertas (con el motivo) y las tareas del daemon de Antigravity. Sirve para ver que esta vivo, que esta haciendo y para recuperar el trabajo cuando se queda sin cuota.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "accion": { "type": "string", "description": "estado (defecto) | list | dead | tasks" }
+                }
+            }
+},
         {
             "name": "phone_backup",
             "description": "Motor de backup nativo de apps (Rust puro, sin curl ni shell): inventario de apps del movil, contenedor cifrado AEGIS-256 por segmentos con manifiesto sha256 por fichero, verificacion del AEAD, restauracion (simulacro por defecto, exige confirm=true) y SUBIDA PIPELINING a Drive (sube cada segmento ya cerrado mientras se recoge el siguiente; mide MiB/s y ETA). Anti-congelacion: nice/ionice de la clase mas baja, sleep entre lotes y descanso si la carga del sistema se dispara. Acciones: inventory | create | list | verify | restore | upload. create/restore/upload escriben o publican en Drive: exigen confirm=true.",
@@ -1109,6 +1132,56 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         }
                     }
                 }
+        "antigravity_sessions" => {
+            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("estado");
+            let v = match accion {
+                "list" => crate::antigravity_sessions::sesiones().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                "dead" => crate::antigravity_sessions::muertas().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                "tasks" => crate::antigravity_sessions::tareas_daemon(),
+                _ => crate::antigravity_sessions::estado().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+            };
+            let txt = match v {
+                Ok(x) => serde_json::to_string_pretty(&x).unwrap_or_default(),
+                Err(e) => format!("ERROR: {e}"),
+            };
+            json!({ "content": [{ "type": "text", "text": txt }] })
+        }
+        "re_analyze" => {
+            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("catalogo");
+            let ruta = args.get("ruta").and_then(|v| v.as_str()).unwrap_or("");
+            let v = match accion {
+                "catalogo" => crate::re_engine::catalogo(),
+                "identify" => match crate::re_engine::identificar(std::path::Path::new(ruta)) {
+                    Ok(id) => serde_json::to_value(id).unwrap_or(Value::Null),
+                    Err(e) => json!({ "ok": false, "error": e }),
+                },
+                "strings" => match std::fs::read(ruta) {
+                    Ok(d) => json!({
+                        "ok": true,
+                        "cadenas": crate::re_engine::cadenas_interesantes(
+                            &d,
+                            args.get("max_cadenas").and_then(|v| v.as_u64()).unwrap_or(60) as usize,
+                        ),
+                    }),
+                    Err(e) => json!({ "ok": false, "error": format!("leer: {e}") }),
+                },
+                "deobfuscate" => {
+                    let key = args.get("plat_key").and_then(|v| v.as_str()).unwrap_or("");
+                    let rep = crate::deobfuscate::deobfuscate_binary(key, ruta, 500);
+                    serde_json::to_value(rep).unwrap_or(Value::Null)
+                }
+                _ => {
+                    let mut o = crate::re_engine::OpcionesAnalisis::default();
+                    o.max_cadenas = args.get("max_cadenas").and_then(|v| v.as_u64()).unwrap_or(60) as usize;
+                    match crate::re_engine::analizar(std::path::Path::new(ruta), &o) {
+                        Ok(v) => v,
+                        Err(e) => json!({ "ok": false, "error": e }),
+                    }
+                }
+            };
+            let txt = serde_json::to_string(&v).unwrap_or_default();
+            json!({ "content": [{ "type": "text", "text": txt }] })
+        }
         "antigravity_sessions" => {
             let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("estado");
             let v = match accion {
