@@ -14,9 +14,13 @@
       "go_version": {"type": ["string", "null"]},
       "text_base_va": {"type": ["string", "null"], "pattern": "^0x[0-9a-fA-F]+$"},
       "text_base_status": {"type": "string"},
-      "functions": {"type": "array", "items": {"type": "object", "required": ["index", "start_va", "end_va", "text_section_index", "entryoff", "funcoff", "nameoff", "name_status", "evidence"], "properties": {
+      "functions": {"type": "array", "items": {"type": "object", "required": ["index", "start_va", "end_va", "text_section_index", "entryoff", "funcoff", "nameoff", "name_status", "source_file", "source_line", "package", "evidence"], "properties": {
         "start_va": {"type": ["string", "null"]}, "end_va": {"type": ["string", "null"]},
-        "text_section_index": {"type": ["integer", "null"]}, "entryoff": {"type": "integer"}, "funcoff": {"type": "integer"}, "nameoff": {"type": "integer"}
+        "text_section_index": {"type": ["integer", "null"]}, "entryoff": {"type": "integer"}, "funcoff": {"type": "integer"}, "nameoff": {"type": "integer"},
+        "observed_name": {"type": ["string", "null"]},
+        "source_file": {"type": ["string", "null"], "description": "Fichero fuente resuelto con cutab/filetab del pcHeader (null si no se puede resolver)."},
+        "source_line": {"type": ["integer", "null"], "description": "Linea en la PC de entrada, resuelta con la tabla pcvalue de _func.pcln."},
+        "package": {"type": ["string", "null"], "description": "Paquete Go deducido del nombre real."}
       }}}
     }}}
   }

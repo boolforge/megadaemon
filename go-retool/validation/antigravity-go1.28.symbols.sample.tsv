@@ -1,0 +1,200 @@
+0x4d06cb8	internal/abi.(*RegArgs).Dump	third_party/go/gc/src/internal/abi/abi.go:47	0x4d06ea8	internal/abi	496	0
+0x4d06ea8	internal/abi.(*RegArgs).IntRegArgAddr	third_party/go/gc/src/internal/abi/abi.go:74	0x4d06f38	internal/abi	144	496
+0x4d06f38	internal/abi.(*IntArgRegBitmap).Set	third_party/go/gc/src/internal/abi/abi.go:90	0x4d06fb8	internal/abi	128	640
+0x4d06fb8	internal/abi.(*IntArgRegBitmap).Get	third_party/go/gc/src/internal/abi/abi.go:100	0x4d07018	internal/abi	96	768
+0x4d07018	internal/abi.BoundsDecode	third_party/go/gc/src/internal/abi/bounds.go:86	0x4d070f8	internal/abi	224	864
+0x4d070f8	internal/abi.NoEscape	third_party/go/gc/src/internal/abi/escape.go:21	0x4d07108	internal/abi	16	1088
+0x4d07108	internal/abi.(*MapType).NeedKeyUpdate	third_party/go/gc/src/internal/abi/map.go:72	0x4d07118	internal/abi	16	1104
+0x4d07118	internal/abi.(*MapType).HashMightPanic	third_party/go/gc/src/internal/abi/map.go:75	0x4d07128	internal/abi	16	1120
+0x4d07128	internal/abi.(*MapType).IndirectKey	third_party/go/gc/src/internal/abi/map.go:78	0x4d07138	internal/abi	16	1136
+0x4d07138	internal/abi.(*MapType).IndirectElem	third_party/go/gc/src/internal/abi/map.go:81	0x4d07148	internal/abi	16	1152
+0x4d07148	internal/abi.Kind.String	third_party/go/gc/src/internal/abi/type.go:144	0x4d071c8	internal/abi	128	1168
+0x4d071c8	internal/abi.TypeOf	third_party/go/gc/src/internal/abi/type.go:182	0x4d071d8	internal/abi	16	1296
+0x4d071d8	internal/abi.(*Type).Kind	third_party/go/gc/src/internal/abi/type.go:197	0x4d071e8	internal/abi	16	1312
+0x4d071e8	internal/abi.(*Type).HasName	third_party/go/gc/src/internal/abi/type.go:200	0x4d071f8	internal/abi	16	1328
+0x4d071f8	internal/abi.(*Type).Pointers	third_party/go/gc/src/internal/abi/type.go:204	0x4d07208	internal/abi	16	1344
+0x4d07208	internal/abi.(*Type).IsDirectIface	third_party/go/gc/src/internal/abi/type.go:208	0x4d07218	internal/abi	16	1360
+0x4d07218	internal/abi.(*Type).GcSlice	third_party/go/gc/src/internal/abi/type.go:211	0x4d072c8	internal/abi	176	1376
+0x4d072c8	internal/abi.(*UncommonType).Methods	third_party/go/gc/src/internal/abi/type.go:239	0x4d072f8	internal/abi	48	1552
+0x4d072f8	internal/abi.(*UncommonType).ExportedMethods	third_party/go/gc/src/internal/abi/type.go:246	0x4d07328	internal/abi	48	1600
+0x4d07328	internal/abi.(*Type).Len	third_party/go/gc/src/internal/abi/type.go:278	0x4d07348	internal/abi	32	1648
+0x4d07348	internal/abi.(*Type).Common	third_party/go/gc/src/internal/abi/type.go:286	0x4d07358	internal/abi	16	1680
+0x4d07358	internal/abi.(*Type).ChanDir	third_party/go/gc/src/internal/abi/type.go:311	0x4d07378	internal/abi	32	1696
+0x4d07378	internal/abi.(*Type).Uncommon	third_party/go/gc/src/internal/abi/type.go:321	0x4d073f8	internal/abi	128	1728
+0x4d073f8	internal/abi.(*Type).Elem	third_party/go/gc/src/internal/abi/type.go:379	0x4d07468	internal/abi	112	1856
+0x4d07468	internal/abi.(*Type).StructType	third_party/go/gc/src/internal/abi/type.go:401	0x4d07488	internal/abi	32	1968
+0x4d07488	internal/abi.(*Type).MapType	third_party/go/gc/src/internal/abi/type.go:409	0x4d074a8	internal/abi	32	2000
+0x4d074a8	internal/abi.(*Type).PointerType	third_party/go/gc/src/internal/abi/type.go:417	0x4d074c8	internal/abi	32	2032
+0x4d074c8	internal/abi.(*Type).SliceType	third_party/go/gc/src/internal/abi/type.go:425	0x4d074e8	internal/abi	32	2064
+0x4d074e8	internal/abi.(*Type).ArrayType	third_party/go/gc/src/internal/abi/type.go:433	0x4d07508	internal/abi	32	2096
+0x4d07508	internal/abi.(*Type).ChanType	third_party/go/gc/src/internal/abi/type.go:441	0x4d07528	internal/abi	32	2128
+0x4d07528	internal/abi.(*Type).FuncType	third_party/go/gc/src/internal/abi/type.go:449	0x4d07548	internal/abi	32	2160
+0x4d07548	internal/abi.(*Type).InterfaceType	third_party/go/gc/src/internal/abi/type.go:457	0x4d07568	internal/abi	32	2192
+0x4d07568	internal/abi.(*Type).Size	third_party/go/gc/src/internal/abi/type.go:465	0x4d07578	internal/abi	16	2224
+0x4d07578	internal/abi.(*Type).Align	third_party/go/gc/src/internal/abi/type.go:468	0x4d07588	internal/abi	16	2240
+0x4d07588	internal/abi.(*Type).FieldAlign	third_party/go/gc/src/internal/abi/type.go:470	0x4d07598	internal/abi	16	2256
+0x4d07598	internal/abi.(*Type).ExportedMethods	third_party/go/gc/src/internal/abi/type.go:478	0x4d07648	internal/abi	176	2272
+0x4d07648	internal/abi.(*Type).NumMethod	third_party/go/gc/src/internal/abi/type.go:486	0x4d076a8	internal/abi	96	2448
+0x4d076a8	internal/abi.(*InterfaceType).NumMethod	third_party/go/gc/src/internal/abi/type.go:495	0x4d076b8	internal/abi	16	2544
+0x4d076b8	internal/abi.(*Type).Key	third_party/go/gc/src/internal/abi/type.go:497	0x4d076d8	internal/abi	32	2560
+0x4d076d8	internal/abi.(*FuncType).In	third_party/go/gc/src/internal/abi/type.go:526	0x4d07758	internal/abi	128	2592
+0x4d07758	internal/abi.(*FuncType).NumIn	third_party/go/gc/src/internal/abi/type.go:531	0x4d07768	internal/abi	16	2720
+0x4d07768	internal/abi.(*FuncType).NumOut	third_party/go/gc/src/internal/abi/type.go:535	0x4d07778	internal/abi	16	2736
+0x4d07778	internal/abi.(*FuncType).Out	third_party/go/gc/src/internal/abi/type.go:538	0x4d07828	internal/abi	176	2752
+0x4d07828	internal/abi.(*FuncType).InSlice	third_party/go/gc/src/internal/abi/type.go:544	0x4d07868	internal/abi	64	2928
+0x4d07868	internal/abi.(*FuncType).OutSlice	third_party/go/gc/src/internal/abi/type.go:552	0x4d07918	internal/abi	176	2992
+0x4d07918	internal/abi.(*FuncType).IsVariadic	third_party/go/gc/src/internal/abi/type.go:565	0x4d07928	internal/abi	16	3168
+0x4d07928	internal/abi.(*StructField).Embedded	third_party/go/gc/src/internal/abi/type.go:580	0x4d07948	internal/abi	32	3184
+0x4d07948	internal/abi.Name.DataChecked	third_party/go/gc/src/internal/abi/type.go:621	0x4d07958	internal/abi	16	3216
+0x4d07958	internal/abi.Name.Data	third_party/go/gc/src/internal/abi/type.go:627	0x4d07968	internal/abi	16	3232
+0x4d07968	internal/abi.Name.IsExported	third_party/go/gc/src/internal/abi/type.go:633	0x4d07978	internal/abi	16	3248
+0x4d07978	internal/abi.Name.HasTag	third_party/go/gc/src/internal/abi/type.go:638	0x4d07988	internal/abi	16	3264
+0x4d07988	internal/abi.Name.IsEmbedded	third_party/go/gc/src/internal/abi/type.go:643	0x4d07998	internal/abi	16	3280
+0x4d07998	internal/abi.Name.ReadVarint	third_party/go/gc/src/internal/abi/type.go:648	0x4d07a28	internal/abi	144	3296
+0x4d07a28	internal/abi.Name.IsBlank	third_party/go/gc/src/internal/abi/type.go:660	0x4d07ae8	internal/abi	192	3440
+0x4d07ae8	internal/abi.Name.Name	third_party/go/gc/src/internal/abi/type.go:684	0x4d07bb8	internal/abi	208	3632
+0x4d07bb8	internal/abi.Name.Tag	third_party/go/gc/src/internal/abi/type.go:693	0x4d07cd8	internal/abi	288	3840
+0x4d07cd8	internal/abi.NewName	third_party/go/gc/src/internal/abi/type.go:702	0x4d08068	internal/abi	912	4128
+0x4d08068	internal/abi.(*Type).DescriptorSize	third_party/go/gc/src/internal/abi/type.go:750	0x4d08228	internal/abi	448	5040
+0x4d08228	internal/abi.(*Kind).String	<autogenerated>:1	0x4d082a8	internal/abi	128	5488
+0x4d082a8	internal/abi.(*Name).Data	<autogenerated>:1	0x4d082f8	internal/abi	80	5616
+0x4d082f8	internal/abi.(*Name).DataChecked	<autogenerated>:1	0x4d08358	internal/abi	96	5696
+0x4d08358	internal/abi.(*Name).HasTag	<autogenerated>:1	0x4d083b8	internal/abi	96	5792
+0x4d083b8	internal/abi.(*Name).IsBlank	<autogenerated>:1	0x4d08408	internal/abi	80	5888
+0x4d08408	internal/abi.(*Name).IsEmbedded	<autogenerated>:1	0x4d08468	internal/abi	96	5968
+0x4d08468	internal/abi.(*Name).IsExported	<autogenerated>:1	0x4d084c8	internal/abi	96	6064
+0x4d084c8	internal/abi.(*Name).Name	<autogenerated>:1	0x4d08518	internal/abi	80	6160
+0x4d08518	internal/abi.(*Name).ReadVarint	<autogenerated>:1	0x4d085b8	internal/abi	160	6240
+0x4d085b8	internal/abi.(*Name).Tag	<autogenerated>:1	0x4d08608	internal/abi	80	6400
+0x4d08608	internal/abi..embed.1.0.internal/abi.(*Type).Align	<autogenerated>:1	0x4d08618	internal/abi..embed.1.0.internal/abi	16	6480
+0x4d08618	internal/abi..embed.1.0.internal/abi.(*Type).ArrayType	<autogenerated>:1	0x4d08628	internal/abi..embed.1.0.internal/abi	16	6496
+0x4d08628	internal/abi..embed.1.0.internal/abi.(*Type).ChanDir	<autogenerated>:1	0x4d08648	internal/abi..embed.1.0.internal/abi	32	6512
+0x4d08648	internal/abi..embed.1.0.internal/abi.(*Type).ChanType	<autogenerated>:1	0x4d08658	internal/abi..embed.1.0.internal/abi	16	6544
+0x4d08658	internal/abi..embed.1.0.internal/abi.(*Type).Common	<autogenerated>:1	0x4d08668	internal/abi..embed.1.0.internal/abi	16	6560
+0x4d08668	internal/abi..embed.1.0.internal/abi.(*Type).DescriptorSize	<autogenerated>:1	0x4d08678	internal/abi..embed.1.0.internal/abi	16	6576
+0x4d08678	internal/abi..embed.1.0.internal/abi.(*Type).Elem	<autogenerated>:1	0x4d086e8	internal/abi..embed.1.0.internal/abi	112	6592
+0x4d086e8	internal/abi..embed.1.0.internal/abi.(*Type).ExportedMethods	<autogenerated>:1	0x4d086f8	internal/abi..embed.1.0.internal/abi	16	6704
+0x4d086f8	internal/abi..embed.1.0.internal/abi.(*Type).FieldAlign	<autogenerated>:1	0x4d08708	internal/abi..embed.1.0.internal/abi	16	6720
+0x4d08708	internal/abi..embed.1.0.internal/abi.(*Type).FuncType	<autogenerated>:1	0x4d08718	internal/abi..embed.1.0.internal/abi	16	6736
+0x4d08718	internal/abi..embed.1.0.internal/abi.(*Type).GcSlice	<autogenerated>:1	0x4d087c8	internal/abi..embed.1.0.internal/abi	176	6752
+0x4d087c8	internal/abi..embed.1.0.internal/abi.(*Type).HasName	<autogenerated>:1	0x4d087d8	internal/abi..embed.1.0.internal/abi	16	6928
+0x4d087d8	internal/abi..embed.1.0.internal/abi.(*Type).InterfaceType	<autogenerated>:1	0x4d087e8	internal/abi..embed.1.0.internal/abi	16	6944
+0x4d087e8	internal/abi..embed.1.0.internal/abi.(*Type).IsDirectIface	<autogenerated>:1	0x4d087f8	internal/abi..embed.1.0.internal/abi	16	6960
+0x4d087f8	internal/abi..embed.1.0.internal/abi.(*Type).Key	<autogenerated>:1	0x4d08818	internal/abi..embed.1.0.internal/abi	32	6976
+0x4d08818	internal/abi..embed.1.0.internal/abi.(*Type).Kind	<autogenerated>:1	0x4d08828	internal/abi..embed.1.0.internal/abi	16	7008
+0x4d08828	internal/abi..embed.1.0.internal/abi.(*Type).Len	<autogenerated>:1	0x4d08848	internal/abi..embed.1.0.internal/abi	32	7024
+0x4d08848	internal/abi..embed.1.0.internal/abi.(*Type).MapType	<autogenerated>:1	0x4d08858	internal/abi..embed.1.0.internal/abi	16	7056
+0x4d08858	internal/abi..embed.1.0.internal/abi.(*Type).NumMethod	<autogenerated>:1	0x4d08868	internal/abi..embed.1.0.internal/abi	16	7072
+0x4d08868	internal/abi..embed.1.0.internal/abi.(*Type).PointerType	<autogenerated>:1	0x4d08878	internal/abi..embed.1.0.internal/abi	16	7088
+0x4d08878	internal/abi..embed.1.0.internal/abi.(*Type).Pointers	<autogenerated>:1	0x4d08888	internal/abi..embed.1.0.internal/abi	16	7104
+0x4d08888	internal/abi..embed.1.0.internal/abi.(*Type).Size	<autogenerated>:1	0x4d08898	internal/abi..embed.1.0.internal/abi	16	7120
+0x4d08898	internal/abi..embed.1.0.internal/abi.(*Type).SliceType	<autogenerated>:1	0x4d088a8	internal/abi..embed.1.0.internal/abi	16	7136
+0x4d088a8	internal/abi..embed.1.0.internal/abi.(*Type).StructType	<autogenerated>:1	0x4d088b8	internal/abi..embed.1.0.internal/abi	16	7152
+0x4d088b8	internal/abi..embed.1.0.internal/abi.(*Type).Uncommon	<autogenerated>:1	0x4d08938	internal/abi..embed.1.0.internal/abi	128	7168
+0x4d08938	internal/cpu.Initialize	third_party/go/gc/src/internal/cpu/cpu.go:198	0x4d08998	internal/cpu	96	7296
+0x4d08998	internal/cpu.processOptions	third_party/go/gc/src/internal/cpu/cpu.go:226	0x4d08e08	internal/cpu	1136	7392
+0x4d08e08	internal/cpu.doinit	third_party/go/gc/src/internal/cpu/cpu_arm64.go:12	0x4d08f78	internal/cpu	368	8528
+0x4d08f78	internal/cpu.hwcapInit	third_party/go/gc/src/internal/cpu/cpu_arm64_hwcap.go:47	0x4d09158	internal/cpu	480	8896
+0x4d09158	internal/cpu.getMIDR	third_party/go/gc/src/internal/cpu/cpu_arm64.s:30	0x4d09168	internal/cpu	16	9376
+0x4d09168	type:.eq.SM10	<autogenerated>:1	0x4d091e8		128	9392
+0x4d091e8	type:.eq.[10SM10K6]	<autogenerated>:1	0x4d09268		128	9520
+0x4d09268	internal/runtime/sys.init	third_party/go/gc/src/internal/runtime/sys/dit_arm64.go:14	0x4d09288	internal/runtime/sys	32	9648
+0x4d09288	internal/runtime/sys.EnableDIT	third_party/go/gc/src/internal/runtime/sys/dit_arm64.s:9	0x4d092b8	internal/runtime/sys	48	9680
+0x4d092b8	internal/runtime/sys.DITEnabled	third_party/go/gc/src/internal/runtime/sys/dit_arm64.s:33	0x4d092c8	internal/runtime/sys	16	9728
+0x4d092c8	internal/runtime/sys.DisableDIT	third_party/go/gc/src/internal/runtime/sys/dit_arm64.s:39	0x4d092d8	internal/runtime/sys	16	9744
+0x4d092d8	internal/runtime/maps.cloneGroup	third_party/go/gc/src/internal/runtime/maps/group.go:346	0x4d09478	internal/runtime/maps	416	9760
+0x4d09478	internal/runtime/maps.NewMap	third_party/go/gc/src/internal/runtime/maps/map.go:283	0x4d09698	internal/runtime/maps	544	10176
+0x4d09698	internal/runtime/maps.(*Map).installTableSplit	third_party/go/gc/src/internal/runtime/maps/map.go:382	0x4d09908	internal/runtime/maps	624	10720
+0x4d09908	internal/runtime/maps.(*Map).Used	third_party/go/gc/src/internal/runtime/maps/map.go:417	0x4d09918	internal/runtime/maps	16	11344
+0x4d09918	internal/runtime/maps.(*Map).Get	third_party/go/gc/src/internal/runtime/maps/map.go:422	0x4d09968	internal/runtime/maps	80	11360
+0x4d09968	internal/runtime/maps.(*Map).getWithKey	third_party/go/gc/src/internal/runtime/maps/map.go:426	0x4d09a68	internal/runtime/maps	256	11440
+0x4d09a68	internal/runtime/maps.(*Map).getWithoutKey	third_party/go/gc/src/internal/runtime/maps/map.go:445	0x4d09b68	internal/runtime/maps	256	11696
+0x4d09b68	internal/runtime/maps.(*Map).getWithKeySmall	third_party/go/gc/src/internal/runtime/maps/map.go:465	0x4d09ca8	internal/runtime/maps	320	11952
+0x4d09ca8	internal/runtime/maps.(*Map).Put	third_party/go/gc/src/internal/runtime/maps/map.go:496	0x4d09d18	internal/runtime/maps	112	12272
+0x4d09d18	internal/runtime/maps.(*Map).PutSlot	third_party/go/gc/src/internal/runtime/maps/map.go:505	0x4d09ed8	internal/runtime/maps	448	12384
+0x4d09ed8	internal/runtime/maps.(*Map).putSlotSmall	third_party/go/gc/src/internal/runtime/maps/map.go:556	0x4d0a168	internal/runtime/maps	656	12832
+0x4d0a168	internal/runtime/maps.(*Map).growToSmall	third_party/go/gc/src/internal/runtime/maps/map.go:618	0x4d0a1e8	internal/runtime/maps	128	13488
+0x4d0a1e8	internal/runtime/maps.(*Map).growToTable	third_party/go/gc/src/internal/runtime/maps/map.go:628	0x4d0a348	internal/runtime/maps	352	13616
+0x4d0a348	internal/runtime/maps.(*Map).Delete	third_party/go/gc/src/internal/runtime/maps/map.go:668	0x4d0a4d8	internal/runtime/maps	400	13968
+0x4d0a4d8	internal/runtime/maps.(*Map).deleteSmall	third_party/go/gc/src/internal/runtime/maps/map.go:708	0x4d0a6b8	internal/runtime/maps	480	14368
+0x4d0a6b8	internal/runtime/maps.(*Map).Clear	third_party/go/gc/src/internal/runtime/maps/map.go:756	0x4d0a7f8	internal/runtime/maps	320	14848
+0x4d0a7f8	internal/runtime/maps.(*Map).clearSmall	third_party/go/gc/src/internal/runtime/maps/map.go:794	0x4d0a868	internal/runtime/maps	112	15168
+0x4d0a868	internal/runtime/maps.(*Map).Clone	third_party/go/gc/src/internal/runtime/maps/map.go:805	0x4d0aac8	internal/runtime/maps	608	15280
+0x4d0aac8	internal/runtime/maps.mapKeyError2	third_party/go/gc/src/internal/runtime/maps/map.go:849	0x4d0acf8	internal/runtime/maps	560	15888
+0x4d0acf8	internal/runtime/maps.unhashableTypeError.RuntimeError	third_party/go/gc/src/internal/runtime/maps/map.go:912	0x4d0ad08	internal/runtime/maps	16	16448
+0x4d0ad08	internal/runtime/maps.unhashableTypeError.Error	third_party/go/gc/src/internal/runtime/maps/map.go:914	0x4d0ad68	internal/runtime/maps	96	16464
+0x4d0ad68	internal/runtime/maps.MemHash	third_party/go/gc/src/internal/runtime/maps/memhash_aes.go:15	0x4d0add8	internal/runtime/maps	112	16560
+0x4d0add8	internal/runtime/maps.MemHash32	third_party/go/gc/src/internal/runtime/maps/memhash_aes.go:22	0x4d0ae78	internal/runtime/maps	160	16672
+0x4d0ae78	internal/runtime/maps.MemHash64	third_party/go/gc/src/internal/runtime/maps/memhash_aes.go:29	0x4d0af18	internal/runtime/maps	160	16832
+0x4d0af18	internal/runtime/maps.AlgInit	third_party/go/gc/src/internal/runtime/maps/runtime_alg.go:51	0x4d0afe8	internal/runtime/maps	208	16992
+0x4d0afe8	internal/runtime/maps.(*Map).putSlotSmallFast32	third_party/go/gc/src/internal/runtime/maps/runtime_fast32.go:117	0x4d0b0d8	internal/runtime/maps	240	17200
+0x4d0b0d8	internal/runtime/maps.(*table).uncheckedPutSlotForAssignFast32	third_party/go/gc/src/internal/runtime/maps/runtime_fast32.go:156	0x4d0b1e8	internal/runtime/maps	272	17440
+0x4d0b1e8	internal/runtime/maps.(*Map).putSlotSmallFast64	third_party/go/gc/src/internal/runtime/maps/runtime_fast64.go:112	0x4d0b2d8	internal/runtime/maps	240	17712
+0x4d0b2d8	internal/runtime/maps.(*table).uncheckedPutSlotForAssignFast64	third_party/go/gc/src/internal/runtime/maps/runtime_fast64.go:151	0x4d0b3e8	internal/runtime/maps	272	17952
+0x4d0b3e8	internal/runtime/maps.(*Map).putSlotSmallFastPtr	third_party/go/gc/src/internal/runtime/maps/runtime_fast64.go:326	0x4d0b548	internal/runtime/maps	352	18224
+0x4d0b548	internal/runtime/maps.(*table).uncheckedPutSlotForAssignFastPtr	third_party/go/gc/src/internal/runtime/maps/runtime_fast64.go:367	0x4d0b668	internal/runtime/maps	288	18576
+0x4d0b668	internal/runtime/maps.(*Map).getWithoutKeySmallFastStr	third_party/go/gc/src/internal/runtime/maps/runtime_faststr.go:16	0x4d0b8a8	internal/runtime/maps	576	18864
+0x4d0b8a8	internal/runtime/maps.(*Map).putSlotSmallFastStr	third_party/go/gc/src/internal/runtime/maps/runtime_faststr.go:187	0x4d0bac8	internal/runtime/maps	544	19440
+0x4d0bac8	internal/runtime/maps.(*table).uncheckedPutSlotForAssignFastStr	third_party/go/gc/src/internal/runtime/maps/runtime_faststr.go:230	0x4d0bc08	internal/runtime/maps	320	19984
+0x4d0bc08	internal/runtime/maps.memHashFallback	third_party/go/gc/src/internal/runtime/maps/runtime_hash64.go:23	0x4d0be68	internal/runtime/maps	608	20304
+0x4d0be68	internal/runtime/maps.newTable	third_party/go/gc/src/internal/runtime/maps/table.go:74	0x4d0bf38	internal/runtime/maps	208	20912
+0x4d0bf38	internal/runtime/maps.(*table).reset	third_party/go/gc/src/internal/runtime/maps/table.go:102	0x4d0c068	internal/runtime/maps	304	21120
+0x4d0c068	internal/runtime/maps.(*table).Used	third_party/go/gc/src/internal/runtime/maps/table.go:139	0x4d0c078	internal/runtime/maps	16	21424
+0x4d0c078	internal/runtime/maps.(*table).Get	third_party/go/gc/src/internal/runtime/maps/table.go:144	0x4d0c0f8	internal/runtime/maps	128	21440
+0x4d0c0f8	internal/runtime/maps.(*table).getWithKey	third_party/go/gc/src/internal/runtime/maps/table.go:165	0x4d0c2a8	internal/runtime/maps	432	21568
+0x4d0c2a8	internal/runtime/maps.(*table).getWithoutKey	third_party/go/gc/src/internal/runtime/maps/table.go:226	0x4d0c448	internal/runtime/maps	416	22000
+0x4d0c448	internal/runtime/maps.(*table).PutSlot	third_party/go/gc/src/internal/runtime/maps/table.go:267	0x4d0c7e8	internal/runtime/maps	928	22416
+0x4d0c7e8	internal/runtime/maps.(*table).uncheckedPutSlot	third_party/go/gc/src/internal/runtime/maps/table.go:383	0x4d0c9a8	internal/runtime/maps	448	23344
+0x4d0c9a8	internal/runtime/maps.(*table).uncheckedPutSlotForAssign	third_party/go/gc/src/internal/runtime/maps/table.go:436	0x4d0cb88	internal/runtime/maps	480	23792
+0x4d0cb88	internal/runtime/maps.(*table).Delete	third_party/go/gc/src/internal/runtime/maps/table.go:478	0x4d0ce38	internal/runtime/maps	688	24272
+0x4d0ce38	internal/runtime/maps.(*table).pruneTombstones	third_party/go/gc/src/internal/runtime/maps/table.go:566	0x4d0d1b8	internal/runtime/maps	896	24960
+0x4d0d1b8	internal/runtime/maps.(*table).Clear	third_party/go/gc/src/internal/runtime/maps/table.go:656	0x4d0d368	internal/runtime/maps	432	25856
+0x4d0d368	internal/runtime/maps.(*Iter).Init	third_party/go/gc/src/internal/runtime/maps/table.go:741	0x4d0d488	internal/runtime/maps	288	26288
+0x4d0d488	internal/runtime/maps.(*Iter).Initialized	third_party/go/gc/src/internal/runtime/maps/table.go:766	0x4d0d498	internal/runtime/maps	16	26576
+0x4d0d498	internal/runtime/maps.(*Iter).Map	third_party/go/gc/src/internal/runtime/maps/table.go:771	0x4d0d4a8	internal/runtime/maps	16	26592
+0x4d0d4a8	internal/runtime/maps.(*Iter).Key	third_party/go/gc/src/internal/runtime/maps/table.go:778	0x4d0d4b8	internal/runtime/maps	16	26608
+0x4d0d4b8	internal/runtime/maps.(*Iter).Elem	third_party/go/gc/src/internal/runtime/maps/table.go:786	0x4d0d4c8	internal/runtime/maps	16	26624
+0x4d0d4c8	internal/runtime/maps.(*Iter).grownKeyElem	third_party/go/gc/src/internal/runtime/maps/table.go:825	0x4d0d5b8	internal/runtime/maps	240	26640
+0x4d0d5b8	internal/runtime/maps.(*Iter).Next	third_party/go/gc/src/internal/runtime/maps/table.go:873	0x4d0dc58	internal/runtime/maps	1696	26880
+0x4d0dc58	internal/runtime/maps.(*table).rehash	third_party/go/gc/src/internal/runtime/maps/table.go:1208	0x4d0dcc8	internal/runtime/maps	112	28576
+0x4d0dcc8	internal/runtime/maps.(*table).split	third_party/go/gc/src/internal/runtime/maps/table.go:1242	0x4d0de78	internal/runtime/maps	432	28688
+0x4d0de78	internal/runtime/maps.(*table).grow	third_party/go/gc/src/internal/runtime/maps/table.go:1290	0x4d0e028	internal/runtime/maps	432	29120
+0x4d0e028	internal/runtime/maps.(*table).clone	third_party/go/gc/src/internal/runtime/maps/table.go:1357	0x4d0e148	internal/runtime/maps	288	29552
+0x4d0e148	internal/runtime/maps.(*table).Print	third_party/go/gc/src/internal/runtime/maps/table_debug.go:83	0x4d0e488	internal/runtime/maps	832	29840
+0x4d0e488	runtime.mapaccess1	third_party/go/gc/src/internal/runtime/maps/runtime.go:57	0x4d0e6f8		624	30672
+0x4d0e6f8	runtime.mapaccess2	third_party/go/gc/src/internal/runtime/maps/runtime.go:81	0x4d0e998		672	31296
+0x4d0e998	runtime.mapassign	third_party/go/gc/src/internal/runtime/maps/runtime.go:161	0x4d0ee98		1280	31968
+0x4d0ee98	runtime.mapaccess1_fast32	third_party/go/gc/src/internal/runtime/maps/runtime_fast32.go:16	0x4d0f108		624	33248
+0x4d0f108	runtime.mapaccess2_fast32	third_party/go/gc/src/internal/runtime/maps/runtime_fast32.go:22	0x4d0f3a8		672	33872
+0x4d0f3a8	runtime.mapassign_fast32	third_party/go/gc/src/internal/runtime/maps/runtime_fast32.go:187	0x4d0f798		1008	34544
+0x4d0f798	runtime.mapdelete_fast32	third_party/go/gc/src/internal/runtime/maps/runtime_fast32.go:479	0x4d0f808		112	35552
+0x4d0f808	runtime.mapaccess1_fast64	third_party/go/gc/src/internal/runtime/maps/runtime_fast64.go:16	0x4d0fa68		608	35664
+0x4d0fa68	runtime.mapaccess2_fast64	third_party/go/gc/src/internal/runtime/maps/runtime_fast64.go:22	0x4d0fd08		672	36272
+0x4d0fd08	runtime.mapassign_fast64	third_party/go/gc/src/internal/runtime/maps/runtime_fast64.go:182	0x4d100e8		992	36944
+0x4d100e8	runtime.mapassign_fast64ptr	third_party/go/gc/src/internal/runtime/maps/runtime_fast64.go:400	0x4d104e8		1024	37936
+0x4d104e8	runtime.mapdelete_fast64	third_party/go/gc/src/internal/runtime/maps/runtime_fast64.go:544	0x4d10558		112	38960
+0x4d10558	runtime.mapaccess1_faststr	third_party/go/gc/src/internal/runtime/maps/runtime_faststr.go:114	0x4d107b8		608	39072
+0x4d107b8	runtime.mapaccess2_faststr	third_party/go/gc/src/internal/runtime/maps/runtime_faststr.go:120	0x4d10a58		672	39680
+0x4d10a58	runtime.mapassign_faststr	third_party/go/gc/src/internal/runtime/maps/runtime_faststr.go:261	0x4d10f08		1200	40352
+0x4d10f08	runtime.mapdelete_faststr	third_party/go/gc/src/internal/runtime/maps/runtime_faststr.go:409	0x4d10f78		112	41552
+0x4d10f78	internal/runtime/maps.memHash32AES	third_party/go/gc/src/internal/runtime/maps/memhash_arm64.s:9	0x4d10fb8	internal/runtime/maps	64	41664
+0x4d10fb8	internal/runtime/maps.memHash64AES	third_party/go/gc/src/internal/runtime/maps/memhash_arm64.s:27	0x4d10ff8	internal/runtime/maps	64	41728
+0x4d10ff8	internal/runtime/maps.memHashAES	third_party/go/gc/src/internal/runtime/maps/memhash_arm64.s:49	0x4d11438	internal/runtime/maps	1088	41792
+0x4d11438	internal/runtime/maps.(*unhashableTypeError).Error	<autogenerated>:1	0x4d114a8	internal/runtime/maps	112	42880
+0x4d114a8	internal/runtime/maps.(*unhashableTypeError).RuntimeError	<autogenerated>:1	0x4d114f8	internal/runtime/maps	80	42992
+0x4d114f8	type:.eq.M36K4M8	<autogenerated>:1	0x4d11558		96	43072
+0x4d11558	type:.eq.M7K1M24	<autogenerated>:1	0x4d115b8		96	43168
+0x4d115b8	type:.eq.M57K7M32	<autogenerated>:1	0x4d11668		176	43264
+0x4d11668	internal/runtime/atomic.(*Int32).Load	third_party/go/gc/src/internal/runtime/atomic/types.go:21	0x4d11678	internal/runtime/atomic	16	43440
+0x4d11678	internal/runtime/atomic.(*Int32).Store	third_party/go/gc/src/internal/runtime/atomic/types.go:28	0x4d11688	internal/runtime/atomic	16	43456
+0x4d11688	internal/runtime/atomic.(*Int32).CompareAndSwap	third_party/go/gc/src/internal/runtime/atomic/types.go:37	0x4d116d8	internal/runtime/atomic	80	43472
+0x4d116d8	internal/runtime/atomic.(*Int32).Swap	third_party/go/gc/src/internal/runtime/atomic/types.go:45	0x4d11708	internal/runtime/atomic	48	43552
+0x4d11708	internal/runtime/atomic.(*Int32).Add	third_party/go/gc/src/internal/runtime/atomic/types.go:56	0x4d11748	internal/runtime/atomic	64	43600
+0x4d11748	internal/runtime/atomic.(*Int64).Load	third_party/go/gc/src/internal/runtime/atomic/types.go:74	0x4d11758	internal/runtime/atomic	16	43664
+0x4d11758	internal/runtime/atomic.(*Int64).Store	third_party/go/gc/src/internal/runtime/atomic/types.go:81	0x4d11768	internal/runtime/atomic	16	43680
+0x4d11768	internal/runtime/atomic.(*Int64).CompareAndSwap	third_party/go/gc/src/internal/runtime/atomic/types.go:90	0x4d117b8	internal/runtime/atomic	80	43696
+0x4d117b8	internal/runtime/atomic.(*Int64).Swap	third_party/go/gc/src/internal/runtime/atomic/types.go:98	0x4d117e8	internal/runtime/atomic	48	43776
+0x4d117e8	internal/runtime/atomic.(*Int64).Add	third_party/go/gc/src/internal/runtime/atomic/types.go:109	0x4d11828	internal/runtime/atomic	64	43824
+0x4d11828	internal/runtime/atomic.(*Uint8).Load	third_party/go/gc/src/internal/runtime/atomic/types.go:124	0x4d11838	internal/runtime/atomic	16	43888
+0x4d11838	internal/runtime/atomic.(*Uint8).Store	third_party/go/gc/src/internal/runtime/atomic/types.go:131	0x4d11848	internal/runtime/atomic	16	43904
+0x4d11848	internal/runtime/atomic.(*Uint8).And	third_party/go/gc/src/internal/runtime/atomic/types.go:142	0x4d11878	internal/runtime/atomic	48	43920
