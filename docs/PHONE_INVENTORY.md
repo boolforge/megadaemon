@@ -10,7 +10,7 @@
 
 | Campo | Valor medido |
 |---|---|
-| Paquetes instalados | **1.719** (`pm list packages | wc -l`) |
+| Paquetes instalados | **1.719** (`pm list packages \| wc -l`) |
 | Del sistema (`pm list packages -s`) | **457** |
 | De usuario (`pm list packages -3`) | **1.262** |
 | Deshabilitados (`pm list packages -d`) | **117** |
@@ -59,6 +59,7 @@ Cero escrituras, cero borrados, cero `pm uninstall`, cero `kill` de procesos del
 | `/apex/com.android.mediaprovider` | 3 |
 | `/apex/com.android.tethering` | 2 |
 | `/apex/com.android.permission` | 2 |
+| resto de `/apex/*` (12 más: cellbroadcast, adservices, healthfitness, ondevicepersonalization, tethering, apex.cts.shim, btservices, extservices, rkpd, appsearch, uwb, virt) | 17 |
 | **Total** | **1.719** |
 
 **1.342 APK viven en `/data/app`** (instalados o *actualizados*) y sólo **377** en particiones de

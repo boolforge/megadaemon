@@ -219,11 +219,11 @@ incluyen customizaciones que no están en ningún repositorio** ⇒ hay que copi
 | Etapa local posible | **1 sola tanda de ≤ ~9 GiB** (dejando aire) |
 | Etapa local **recomendada** | **0** — subir en streaming con `rclone copy` |
 | Libre en Drive | **3,751 TiB** |
-| Necesario en Drive | **196.08 GiB** |
-| Occupación de la cuota libre | **0,50 %** |
-| Tiempo de subida | **191.9 h = 8.0 días** a 304.742 B/s |
+| Necesario en Drive | **196,08 GiB** |
+| Ocupación de la cuota libre | **0,50 %** |
+| Tiempo de subida | **191,9 h = 8,0 días** a 304.742 B/s |
 | Tiempo de subida si el `check` repite la lectura | ×~1,5–2 (el `check --one-way` relee origen y destino) |
-| Tiempo de **bajada** (restaurar) | **10.3 h** a 5.668.249 B/s (medido) |
+| Tiempo de **bajada** (restaurar) | **10,3 h** a 5.668.249 B/s (medido) |
 
 **El cuello de botella no es Drive: es la subida.** La bajada desde Drive va a 5,41 MiB/s
 (medido), 18× más rápido que la subida (297,6 KiB/s). Subir a 5 MiB/s lo dejaría en ~11 h.
@@ -234,7 +234,7 @@ incluyen customizaciones que no están en ningún repositorio** ⇒ hay que copi
 
 Este plan **no inventa una herramienta nueva**: `rust-core/src/bin/md-backup.rs` (y
 `md-backup-perfil.rs`) ya existen en el repo y ya exponen exactamente las operaciones que
-hacen falta. La fases de abajo son *el qué*; el motor es *el cómo*.
+hacen falta. Las fases de abajo son *el qué*; el motor es *el cómo*.
 
 | Fase de este plan | Comando del motor (`md-backup`) | Perfíl de `state/backup_target.json` |
 |---|---|---|
@@ -248,7 +248,7 @@ hacen falta. La fases de abajo son *el qué*; el motor es *el cómo*.
 **El destino ya está decidido en el repo**: `state/backup_target.json` fija la carpeta **privada**
 de Drive `megadaemon-backup` (`drive_folder_id 15FRlRwDQdAicoZcfKFOTzeWqJQMjXIC0`), y
 `md-backup upload --folder <id>` sube ahí. El repo es **público**: los datos, los certificados y
-los cookies van **sólo** a esa carpeta, nunca al repo.
+las cookies van **sólo** a esa carpeta, nunca al repo.
 
 **Son dos destinos de Drive distintos, y hay que no confundirlos:**
 
@@ -267,8 +267,8 @@ privada ni a la otra.
 
 | | Swift Backup (medido en el móvil) | Lucky Patcher | Este plan |
 |---|---|---|---|
-| Espacio en el móvil | `org.swiftapps.swiftbackup/databases` = **703.072 KB (687 MiB)** | **NO VERIFICADO** (no instalado / no medido) | **0 KB** (streaming) |
-| Qué cubre | sólo lo que el usuario marque | parcheo, no respaldo | **196,08 GiB, las 1.719 apps, todos los datos** |
+| Espacio en el móvil | `org.swiftapps.swiftbackup/databases` = **703.072 KB (687 MiB)** | `ru.drjmwdme.cgwbfzijr` (MarinaPatcher/Lucky Patcher) instalado: APK **15.029.615 B (14,3 MiB)** + **444.743 KB** en `Android/data` | **0 KB** (streaming) |
+| Qué cubre | sólo lo que el usuario marque | parchea APKs, no respalda datos | **196,08 GiB, las 1.719 apps, todos los datos** |
 | Verificación | no medida | n/a | `rclone check --one-way` real ya ejecutada con éxito (34 ficheros, 0 diferencias) |
 | Datos de sistema | no | no | **457 apps del sistema** con ruta y tamaño, incl. 80 actualizadas |
 | Copia en la nube | n/a | n/a | **62,863 GiB ya en Drive**, 3,751 TiB libres |
