@@ -370,9 +370,10 @@ fn main() -> ExitCode {
         other => {
             eprintln!("accion desconocida: {}", other);
             eprintln!("{}", usage());
-            ExitCode::from(2)
+            return ExitCode::from(2);
         }
     }
+    ExitCode::SUCCESS
 }
 
 #[cfg(test)]
