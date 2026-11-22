@@ -150,6 +150,17 @@ done
 for b in $FALLANOS; do
     if printf '%s\n' "$CONOCIDOS" | grep -qx "$b"; then
         echo "::warning::test $b: rojo CONOCIDO (auditoria adversarial: falla mientras el defecto exista)"
+        # MEDIDO el 2026-11-22: los rojos CONOCIDOS eran una CAJA NEGRA: el
+        # gate sólo imprimia la salida de los inesperados => su dueño no podia
+        # ver por que seguian fallando (ni comprobar si su fix los habia
+        # arreglado).  Aqui se imprime tambien la salida de los conocidos
+        # (acotada), para que "rojo conocido" siga siendo VERIFICABLE.
+        echo "───── salida de $b (rojo conocido) ─────"
+        awk -v target="$b" '
+          $0 ~ ("^ *Running .*" target "\\.rs") { on = 1 }
+          on { print }
+          on && /^test result:/ { exit }
+        ' "$LOG" | tail -25
     fi
 done
 
