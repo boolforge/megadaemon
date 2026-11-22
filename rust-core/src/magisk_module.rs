@@ -1706,5 +1706,7 @@ pub fn shamiko_prepare(zip_path: &str, enable: bool, dry_run: bool) -> Value {
                                habilitar el modulo y reiniciar el movil.",
         });
     }
+    v["shamiko"] = shamiko_release_info();
+    v["status"] = shamiko_status();
     v
 }
