@@ -32,6 +32,7 @@ pub mod bindiff;
 pub mod binwalk_die;
 pub mod bookmarks;
 pub mod call_recorder;
+pub mod board;
 pub mod capability;
 pub mod cert_vault;
 pub mod cfg_lifter;
