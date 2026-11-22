@@ -1,0 +1,13 @@
+{
+  "drive_folder_id": "15FRlRwDQdAicoZcfKFOTzeWqJQMjXIC0",
+  "drive_folder_name": "megadaemon-backup",
+  "privada": true,
+  "perfiles": {
+    "P0-apps": "APKs + datos de las apps (con root)",
+    "P1-perfil": "configuraciones, certificados digitales, navegadores, varios",
+    "P2-sdcard": "Android/data, Android/obb, DCIM, multimedia",
+    "P3-raw": "volcado RAW de particiones (opcion B, para forense)"
+  },
+  "nota": "El repo es PUBLICO: aqui van codigo, backlog, estado y PLANES. Los respaldos (datos, certificados, cookies, raw) van a esta carpeta PRIVADA de Drive, nunca al repo.",
+  "creado": "2026-11-22"
+}
