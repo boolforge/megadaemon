@@ -761,7 +761,51 @@ pub fn save_vault(vault: &ProviderVault) -> Result<(), String> {
         let _ = fs::create_dir_all(parent);
     }
     let text = serde_json::to_string_pretty(vault).map_err(|e| e.to_string())?;
-    fs::write(&path, text).map_err(|e| e.to_string())
+    // v16 (DEFECTO-07): escritura ATÓMICA (tmp + rename).  Antes
+    // `fs::write` truncaba el fichero y escribía encima: un corte de luz
+    // (o un OOM kill) en mitad dejaba un `providers.json` truncado ⇒
+    // `load_vault` lo declaraba corrupto y el daemon se quedaba SIN las
+    // API keys del usuario (y el siguiente `save_vault` las pisaba).
+    let tmp = format!("{}.tmp-{}", path, std::process::id());
+    fs::write(&tmp, text.as_bytes()).map_err(|e| format!("no se pudo escribir {}: {}", tmp, e))?;
+    if let Err(e) = fs::rename(&tmp, &path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!("no se pudo renombrar {} -> {}: {}", tmp, path, e));
+    }
+    Ok(())
+}
+
+/// Valida el endpoint de un proveedor.
+///
+/// v16 (DEFECTO-06): `update_provider` aceptaba CUALQUIER endpoint
+/// (`file://…`, `http://169.254.169.254/…` = metadatos de la nube) y el
+/// endpoint HTTP del cockpit **no tiene autenticación** ⇒ SSRF + robo de
+/// credenciales.  Ahora sólo se admiten `http`/`https`, sin credenciales
+/// embebidas en la URL y sin el endpoint de metadatos.
+pub fn validar_endpoint(ep: &str) -> Result<String, String> {
+    let s = ep.trim();
+    if s.is_empty() {
+        return Err("endpoint vacío".to_string());
+    }
+    let lower = s.to_ascii_lowercase();
+    if !lower.starts_with("http://") && !lower.starts_with("https://") {
+        return Err(format!("endpoint no permitido (sólo http/https): {}", s));
+    }
+    // Credenciales embebidas en la URL (http://user:pass@host).
+    let rest = match lower.strip_prefix("http://") {
+        Some(r) => r,
+        None => lower.strip_prefix("https://").unwrap_or(""),
+    };
+    if let Some(at) = rest.find('@') {
+        if rest[..at].contains(':') {
+            return Err("el endpoint no puede llevar credenciales embebidas".to_string());
+        }
+    }
+    // Metadatos de la nube: no es ningún proveedor de LLM.
+    if lower.contains("169.254.169.254") || lower.contains("metadata.google.internal") {
+        return Err("endpoint de metadatos bloqueado (SSRF)".to_string());
+    }
+    Ok(s.to_string())
 }
 
 fn mask_key(k: &str) -> String {
@@ -834,6 +878,22 @@ pub fn update_provider(
     enabled: Option<bool>,
     set_default: bool,
 ) -> Result<Value, String> {
+    // v16 (DEFECTO-06): se VALIDA antes de tocar NADA.  Antes el endpoint
+    // se aceptaba tal cual y el modelo se comprobaba contra el RETIRADO
+    // por ID (no por MODELO): `update_provider(id, model="MiniMax-M2.7")`
+    // se aceptaba y el vault quedaba con un modelo muerto.
+    let nuevo_endpoint: Option<String> = match endpoint {
+        Some(ep) if !ep.trim().is_empty() => Some(validar_endpoint(ep)?),
+        _ => None,
+    };
+    if let Some(m) = model {
+        let mt = m.trim();
+        if !mt.is_empty() {
+            if let Some((rid, rmodel, rnote)) = provider_catalog::is_retired(mt) {
+                return Err(format!("MODELO RETIRADO: {} ({}) -> {}", rmodel, rid, rnote));
+            }
+        }
+    }
     let mut vault = load_vault();
     let mut found = false;
     for p in &mut vault.providers {
@@ -850,26 +910,24 @@ pub fn update_provider(
                     p.model = m.trim().to_string();
                 }
             }
-            if let Some(ep) = endpoint {
-                if !ep.trim().is_empty() {
-                    // v13.2 (HW-03): cambiar el endpoint de un proveedor que ya
-                    // tiene una key guardada enviaba esa key al host nuevo
-                    // (SSRF + robo de credenciales) sin pedir la key.
-                    // Ahora hay que re-introducir la key al cambiar de host.
-                    let nuevo = ep.trim();
-                    if p.endpoint.trim() != nuevo && !p.api_key.trim().is_empty() {
-                        // v13.2 (HW-03): la API key queda ATADA al endpoint
-                        // completo (esquema+host+ruta), no sólo al host.  El
-                        // endpoint HTTP del cockpit no tiene autenticación, así
-                        // que sin esta regla cualquiera podía re-apuntar un
-                        // proveedor con key guardada yeysar esa key (SSRF +
-                        // robo de credenciales).  Al cambiar el endpoint, la
-                        // key se vacía y hay que re-introducirla.
-                        p.api_key = String::new();
-                        p.auth_type = "none".to_string();
-                    }
-                    p.endpoint = nuevo.to_string();
+            if let Some(nuevo) = nuevo_endpoint.as_ref() {
+                // v13.2 (HW-03): cambiar el endpoint de un proveedor que ya
+                // tiene una key guardada enviaba esa key al host nuevo
+                // (SSRF + robo de credenciales) sin pedir la key.
+                // Ahora hay que re-introducir la key al cambiar de host.
+                //
+                // v13.2 (HW-03): la API key queda ATADA al endpoint
+                // completo (esquema+host+ruta), no sólo al host.  El
+                // endpoint HTTP del cockpit no tiene autenticación, así
+                // que sin esta regla cualquiera podía re-apuntar un
+                // proveedor con key guardada yeysar esa key (SSRF +
+                // robo de credenciales).  Al cambiar el endpoint, la
+                // key se vacía y hay que re-introducirla.
+                if p.endpoint.trim() != nuevo.as_str() && !p.api_key.trim().is_empty() {
+                    p.api_key = String::new();
+                    p.auth_type = "none".to_string();
                 }
+                p.endpoint = nuevo.to_string();
             }
             if let Some(en) = enabled {
                 p.enabled = en;
@@ -893,10 +951,10 @@ pub fn update_provider(
             id: id.to_string(),
             name: format!("Custom ({})", id),
             vendor: "Custom".to_string(),
-            endpoint: endpoint
-                .unwrap_or("https://openrouter.ai/api/v1/chat/completions")
-                .to_string(),
-            model: model.unwrap_or("openai/gpt-4o-mini").to_string(),
+            endpoint: nuevo_endpoint.clone().unwrap_or_else(|| {
+                "https://openrouter.ai/api/v1/chat/completions".to_string()
+            }),
+            model: model.unwrap_or("openai/gpt-4o-mini").trim().to_string(),
             api_key: api_key.unwrap_or("").trim().to_string(),
             auth_type: "bearer".to_string(),
             tier: "custom".to_string(),
@@ -996,109 +1054,33 @@ pub fn call_openai_http(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
-        "max_tokens": max_tokens,
+        "max_tokens": if max_tokens == 0 { DEFAULT_MAX_TOKENS } else { max_tokens.min(MAX_TOKENS_CAP) },
         "temperature": temperature
     });
 
-    let config = ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_secs(45)))
-        .timeout_connect(Some(std::time::Duration::from_secs(10)))
-        .build();
-    let agent = ureq::Agent::new_with_config(config);
+    // v16: el POST va por el MISMO transporte inyectable que usa la
+    // cascada (y con `http_status_as_error(false)`), así que el status
+    // HTTP llega al diagnóstico en vez de perderse en un `Err`.
+    let transport = UreqTransport::default();
+    let req = LlmRequest {
+        endpoint: endpoint.to_string(),
+        model: model.to_string(),
+        api_key: api_key.to_string(),
+        auth_type: auth_type.to_string(),
+        body: payload,
+    };
+    let resp = transport
+        .post(&req, Duration::from_secs(DEFAULT_PROVIDER_TIMEOUT_SECS))
+        .map_err(|e| e.redacted(api_key).to_string())?;
 
-    let mut req = agent.post(endpoint);
-    let key = api_key.trim();
-    match auth_type {
-        "anthropic" => {
-            if !key.is_empty() {
-                req = req.header("x-api-key", key);
-            }
-            req = req.header("anthropic-version", "2023-06-01");
-        }
-        _ => {
-            if !key.is_empty() {
-                req = req.header("Authorization", &format!("Bearer {}", key));
-            }
-        }
-    }
-    req = req
-        .header("Content-Type", "application/json")
-        .header("HTTP-Referer", "https://github.com/boolforge/megadaemon")
-        .header("X-Title", "MegaDaemon Zenith v13.1");
-
-    let body_bytes = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
-    let resp = req
-        .send(body_bytes.as_slice())
-        .map_err(|e| format!("HTTP transport error: {}", e))?;
-
-    let status = resp.status().as_u16();
-    let text = resp
-        .into_body()
-        .read_to_string()
-        .map_err(|e| format!("HTTP body read error: {}", e))?;
-
-    if status >= 400 {
+    if resp.status >= 400 {
         // Diagnóstico accionable: distinguir saldo/agota/modelo-muerto.
-        let detail = serde_json::from_str::<Value>(text.trim())
-            .ok()
-            .and_then(|v| {
-                v.get("error")
-                    .and_then(|e| {
-                        e.get("message")
-                            .and_then(|m| m.as_str())
-                            .or_else(|| e.as_str())
-                            .map(|s| s.to_string())
-                    })
-                    .or_else(|| v.get("message").and_then(|m| m.as_str()).map(|s| s.to_string()))
-            })
-            .unwrap_or_else(|| text.chars().take(200).collect());
-        let hint = match status {
-            401 | 403 => " (API key invalida o sin permisos)",
-            402 => " (sin saldo / plan agotado)",
-            404 => " (modelo inexistente o RETIRADO - mira el catalogo)",
-            429 => " (rate limit o cuota diaria agotada)",
-            _ => "",
-        };
-        return Err(format!("HTTP {}: {}{}", status, detail, hint));
+        let e = parse_provider_error(model, resp.status, &resp.body).redacted(api_key);
+        return Err(e.to_string());
     }
 
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return Err("Empty HTTP response from provider".to_string());
-    }
-
-    // Algunos endpoints zero-key devuelven texto plano.
-    if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
-        if let Some(err_obj) = v.get("error") {
-            let msg = err_obj["message"]
-                .as_str()
-                .or_else(|| err_obj.as_str())
-                .unwrap_or("API error");
-            return Err(format!("Provider API error: {}", msg));
-        }
-        let msg_node = &v["choices"][0]["message"];
-        let content = msg_node["content"].as_str().unwrap_or("");
-        let extra_reason = msg_node["reasoning_content"]
-            .as_str()
-            .or_else(|| msg_node["reasoning"].as_str())
-            .unwrap_or("");
-        let tokens = v["usage"]["total_tokens"].as_u64().unwrap_or(0);
-        let (clean, think_tag) = split_think_tags(content);
-        let final_reason = if !extra_reason.is_empty() {
-            extra_reason.to_string()
-        } else {
-            think_tag
-        };
-        if !clean.is_empty() {
-            return Ok((clean, final_reason, tokens));
-        }
-        if !final_reason.is_empty() {
-            return Ok((final_reason.clone(), String::new(), tokens));
-        }
-        return Err(format!("Unexpected JSON payload: {}", &trimmed[..trimmed.len().min(200)]));
-    }
-
-    Ok((trimmed.to_string(), String::new(), 0))
+    let parsed = parse_provider_reply(model, &resp.body).map_err(|e| e.redacted(api_key).to_string())?;
+    Ok((parsed.content, parsed.reasoning, parsed.tokens_used))
 }
 
 fn default_re_system_prompt() -> &'static str {
@@ -1239,12 +1221,39 @@ pub fn execute_chat(
     system_override: Option<&str>,
     max_tokens: u32,
 ) -> ChatResult {
-    let t0 = Instant::now();
+    // Fachada de producción: vault de disco + transporte real.
     let vault = load_vault();
-    let target_id = requested_model
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(&vault.default_model);
+    let transport = UreqTransport::default();
+    let deps = ChatDeps::new(&vault, &transport);
+    execute_chat_with(
+        prompt,
+        requested_model,
+        attachment_path,
+        system_override,
+        max_tokens,
+        &deps,
+    )
+}
+
+/// Núcleo de la cascada con TODO inyectado (vault + transporte + cuota).
+///
+/// v16: `execute_chat` leía el vault de disco y hacía el POST con `ureq`
+/// ⇒ ningún caso de la cascada era testeable.  Aquí todo es explícito y
+/// la firma pública de `execute_chat` no cambia.
+pub fn execute_chat_with(
+    prompt: &str,
+    requested_model: Option<&str>,
+    attachment_path: Option<&str>,
+    system_override: Option<&str>,
+    max_tokens: u32,
+    deps: &ChatDeps<'_>,
+) -> ChatResult {
+    let t0 = Instant::now();
+    let vault = deps.vault;
+    let target_id: &str = match requested_model.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        Some(s) => s,
+        None => vault.default_model.as_str(),
+    };
 
     // v13.2 (HW-13): pedir un modelo RETIRADO no puede terminar en otro
     // proveedor sin avisar.  Se responde con el aviso y el sustituto.
@@ -1264,6 +1273,7 @@ pub fn execute_chat(
             tools_used: Vec::new(),
             fallback_used: false,
             quota: None,
+            provider_trace: vec![format!("{} => SALTADO (modelo retirado)", rid)],
         };
     }
 
@@ -1298,6 +1308,7 @@ pub fn execute_chat(
             tools_used,
             fallback_used: false,
             quota: None,
+            provider_trace: vec!["local-seere => OK (offline)".to_string()],
         };
     }
 
@@ -1323,6 +1334,14 @@ pub fn execute_chat(
     };
 
     let sys_prompt = system_override.unwrap_or_else(|| default_re_system_prompt());
+    // v16: `max_tokens` acotado.  Un `max_tokens` absurdo hacía que el
+    // proveedor respondiera 400 y el daemon lo tomaba como un fallo del
+    // PROVEEDOR ⇒ caía al siguiente sin decir cuál era el problema.
+    let capped_max_tokens = if max_tokens == 0 {
+        DEFAULT_MAX_TOKENS
+    } else {
+        max_tokens.min(MAX_TOKENS_CAP)
+    };
 
     // Build ordered candidate cascade: requested model first -> other enabled cloud models -> local SEERE v12
     let mut candidates: Vec<ProviderEntry> = Vec::new();
@@ -1336,55 +1355,148 @@ pub fn execute_chat(
     }
 
     let mut errors: Vec<String> = Vec::new();
+    let mut trace: Vec<String> = Vec::new();
     for (idx, p) in candidates.iter().enumerate() {
+        // v16 (DEFECTO-03): un proveedor RETIRADO no puede usarse "de
+        // rebote" en la cascada.  El aviso de "modelo retirado" sólo
+        // cubría el modelo PEDIDO: el resto de la cascada lo gastaba en
+        // silencio (y con una key que el usuario ya no puede usar).
+        if let Some((_, rmodel, rnote)) = provider_catalog::is_retired(&p.id)
+            .or_else(|| provider_catalog::is_retired(&p.model))
+        {
+            trace.push(format!("{} => SALTADO (modelo retirado: {})", p.id, rmodel));
+            errors.push(format!("{}: modelo retirado ({})", p.id, rnote));
+            continue;
+        }
+
+        // v16 (DEFECTO-04): un proveedor en PAUSA por cuota no se llama:
+        // la cascada salta al siguiente.  Antes se gastaba la llamada
+        // (y el 429 no se registraba nunca, así que nadie se pausaba).
+        if (deps.quota_paused)(&p.id) {
+            trace.push(format!("{} => SALTADO (cuota en pausa)", p.id));
+            errors.push(format!("{}: cuota en pausa", p.id));
+            continue;
+        }
+
         let key = match p.auth_type.as_str() {
             "gh_cli" => match resolve_gh_token() {
                 Some(t) => t,
-                None => continue,
+                None => {
+                    trace.push(format!("{} => SALTADO (sin token de gh)", p.id));
+                    continue;
+                }
             },
-            "none" => String::new(),
+            "none" | "local" => String::new(),
             _ => {
                 if p.api_key.trim().is_empty() {
+                    trace.push(format!("{} => SALTADO (sin credencial)", p.id));
                     continue;
                 }
                 p.api_key.clone()
             }
         };
 
-        match call_openai_http(
-            &p.endpoint,
-            &p.model,
-            &key,
-            &p.auth_type,
-            sys_prompt,
-            &enriched_prompt,
-            max_tokens,
-            0.3,
-        ) {
-            Ok((reply, reasoning, tokens)) => {
-                return ChatResult {
-                    reply,
-                    reasoning,
-                    model_id: p.id.clone(),
-                    model_name: p.name.clone(),
-                    vendor: p.vendor.clone(),
-                    latency_ms: (t0.elapsed().as_secs_f64() * 1000.0).round(),
-                    tokens_used: tokens,
-                    tools_used,
-                    quota: Some(crate::quota_guard::snapshot_compacto_de(Some(&p.id))),
-                    fallback_used: idx > 0,
-                };
-            }
-            Err(e) => {
-                // Cuota/rate-limit: se REGISTRA para poder avisar al agente y
-                // PAUSAR con elegancia en vez de cortarle el flujo a mitad.
-                if let Some(st) = crate::quota_guard::status_de_error(&e) {
-                    if st == 429 || st == 402 {
-                        crate::quota_guard::registrar_error_cuota(&p.id, st, &e);
+        let payload = json!({
+            "model": p.model,
+            "messages": [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": enriched_prompt}
+            ],
+            "max_tokens": capped_max_tokens,
+            "temperature": 0.3
+        });
+        let req = LlmRequest {
+            endpoint: p.endpoint.clone(),
+            model: p.model.clone(),
+            api_key: key.clone(),
+            auth_type: p.auth_type.clone(),
+            body: payload,
+        };
+
+        // v16 (DEFECTO-05): reintentos con backoff SÓLO para lo que se
+        // puede reintentar (429, 5xx, transporte, timeout).  Un 401/404
+        // NO se reintenta: no mejora y quema el rate limit del proveedor.
+        let mut attempt: u32 = 0;
+        let mut err: Option<ProviderError> = None;
+        loop {
+            match deps.transport.post(&req, deps.timeout) {
+                Ok(resp) => {
+                    if resp.status >= 400 {
+                        let e = parse_provider_error(&p.id, resp.status, &resp.body).redacted(&key);
+                        if e.retryable() && attempt < deps.retries {
+                            attempt += 1;
+                            dormir_backoff(deps.backoff_ms, attempt);
+                            continue;
+                        }
+                        err = Some(e);
+                        break;
+                    }
+                    match parse_provider_reply(&p.id, &resp.body) {
+                        Ok(parsed) => {
+                            // v16 (DEFECTO-08): `tools_used` refleja lo
+                            // REALMENTE usado: las tool calls nativas que
+                            // pidió el proveedor (antes sólo salían las
+                            // herramientas locales de contexto RE).
+                            for tc in &parsed.tool_calls {
+                                tools_used.push(format!("provider_tool:{}", tc.name));
+                            }
+                            trace.push(format!("{} => OK", p.id));
+                            return ChatResult {
+                                reply: parsed.content,
+                                reasoning: parsed.reasoning,
+                                model_id: p.id.clone(),
+                                model_name: p.name.clone(),
+                                vendor: p.vendor.clone(),
+                                latency_ms: (t0.elapsed().as_secs_f64() * 1000.0).round(),
+                                tokens_used: parsed.tokens_used,
+                                tools_used,
+                                fallback_used: idx > 0,
+                                quota: Some(crate::quota_guard::snapshot_compacto_de(Some(&p.id))),
+                                provider_trace: trace,
+                            };
+                        }
+                        Err(e) => {
+                            err = Some(e.redacted(&key));
+                            break;
+                        }
                     }
                 }
-                errors.push(format!("{}: {}", p.id, e));
+                Err(e) => {
+                    let e = e.redacted(&key);
+                    if e.retryable() && attempt < deps.retries {
+                        attempt += 1;
+                        dormir_backoff(deps.backoff_ms, attempt);
+                        continue;
+                    }
+                    err = Some(e);
+                    break;
+                }
             }
+        }
+
+        if let Some(e) = &err {
+            // Cuota/rate-limit: se REGISTRA (con el status REAL) para que
+            // el agente lo vea y para poder PAUSAR en vez de reintentar en
+            // bucle.  v16: antes el status se perdía y esto nunca pasaba.
+            if let Some(st) = e.status() {
+                if st == 429 {
+                    crate::quota_guard::registrar_error_cuota(
+                        &p.id,
+                        st,
+                        &format!("{} rate limit", e.detail()),
+                    );
+                } else if st == 402 {
+                    crate::quota_guard::registrar_error_cuota(
+                        &p.id,
+                        st,
+                        &format!("{} insufficient credit", e.detail()),
+                    );
+                }
+            }
+            // v16 (DEFECTO-02): el error ya viene REDACTADO (la clave del
+            // proveedor no puede acabar en el `reply` que ve el cliente).
+            errors.push(format!("{}: {}", p.id, truncar(&e.to_string(), 200)));
+            trace.push(format!("{} => {}", p.id, truncar(&e.to_string(), 120)));
         }
     }
 
@@ -1397,6 +1509,7 @@ pub fn execute_chat(
     } else {
         format!("{}\n\n[Fallback offline activo — errores cloud: {}]", ans, errors.join(" | "))
     };
+    trace.push("local-seere => OK (offline, último recurso)".to_string());
     ChatResult {
         reply: note,
         reasoning: String::new(),
@@ -1408,7 +1521,17 @@ pub fn execute_chat(
         tools_used,
         fallback_used: true,
         quota: Some(crate::quota_guard::snapshot_compacto()),
+        provider_trace: trace,
     }
+}
+
+/// Espera el backoff entre reintentos (0 en tests ⇒ sin esperas).
+fn dormir_backoff(base_ms: u64, attempt: u32) {
+    if base_ms == 0 {
+        return;
+    }
+    let mult = 1u64 << attempt.min(6);
+    std::thread::sleep(Duration::from_millis(base_ms.saturating_mul(mult)));
 }
 
 pub fn test_provider_connection(id: &str) -> Value {
