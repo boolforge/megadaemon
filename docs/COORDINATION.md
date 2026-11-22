@@ -427,3 +427,20 @@ El release+LTO con `codegen-units=1` **mata el sandbox por OOM** (3 GB).
 
 <!-- merge backup-nativo-v2 -->
 - 2026-11-22 18:0x · agente backup-nativo-v2 (`0a69be1`, rama `agent/backup-nativo-v2`) · **RESCATE del motor de backup nativo de apps + primer bloque commiteado** · QUÉ: el agente anterior murió por CUOTA **sin commitear** ⇒ su trabajo estaba en el worktree sin versionar ⇒ **rescatado y commiteado** (`0a69be1`): `rust-core/src/backup_apps.rs` (motor en Rust puro: contenedor en **directorio** con `container.json`/`manifest.json`/`journal.ndjson`/`segments/`, AEGIS-256 por trozos con manifiesto SHA-256 por fichero, pipelining real productor↔consumidor vía `SegmentSink`, `DriveUploader` con N conexiones a Drive + ficha SHA-256 por trozo + borrado del segmento local tras la subida, anti-congelación con `nice`≥10/`ionice` 3/`sleep` entre lotes/**descanso si el loadavg se dispara**, CSC **prohibido siempre** y `Android/media|data` sólo con puerta explícita) + `rust-core/src/bin/md-backup.rs` (CLI `inventory|create|list|verify|restore|upload|fetch|bench-upload`) + tool MCP `phone_backup` en `rust-core/src/mcp_ext.rs` (paridad CLI↔MCP; `create`/`restore`/`upload` exigen `confirm=true`). `cargo check --bins --tests` **verde** (sólo warnings) · TOQUE: `rust-core/src/{backup_apps.rs,bin/md-backup.rs,lib.rs,mcp_ext.rs}` — **ni `backup_engine.rs` ni `drive_native.rs` ni `backup_inventory.rs`** (son míos; el agente de Titanium/migración NO los toca) · BLOQUEA: (a) falta el bloque del **plan del LLM** (`llm_gateway` `855380e` + validación en código), (b) la **cola acotada** 4–8 con backpressure, (c) la **prueba real en el móvil** con MB/s/ETA/loadavg/verificación en Drive, (d) `docs/BACKUP_NATIVO_PRUEBA.md`. Cifra de partida MEDIDA: la subida a Drive va a **297,6 KiB/s** ⇒ el cuello es la subida, no el disco.
+
+### PROTOCOLO DE FLOTA v2 (2026-11-22 20:10) — obligatorio para TODOS los agentes
+
+El sandbox tiene **3 GB** y el enlace del crate **muere por OOM**. Los 3
+agentes que compilaban a la vez se mataron entre sí y uno dejó `main` sin
+compilar. Ver `docs/PROTOCOLO_FLOCKA.md` (commit `831809d`).
+
+**CAMBIO DE REGLA:**
+- ❌ El agente **NO** compila, **NO** testea, **NO** hace push a `main`.
+- ✅ El agente escribe código en **su** rama, en **commits pequeños**
+  (una función = un commit) y entrega con:
+  `tools/agente-entrega.sh "qué hice / qué toqué / qué bloquea" <ficheros>`
+- ✅ El **root** (sesión principal) compila, testea, mergea y pushea a `main`.
+- Un solo build a la vez, con lock: `tools/build.sh cargo test --lib -j 1`.
+
+Los agentes que estaban trabajando (asimilación Antigravity, backup nativo
+v2) siguen con esta regla desde ya.
