@@ -25,9 +25,48 @@ KEY="$(head -1 "$SECRETS/master_api.key" 2>/dev/null | tr -d '\r\n')"
 [ -n "$URL" ] || { echo "ERROR: no hay MEGADAEMON_URL en $SECRETS/instance.env" >&2; exit 2; }
 [ -n "$KEY" ] || { echo "ERROR: no hay key en $SECRETS/master_api.key" >&2; exit 2; }
 
+# --- AUTO-RECUPERACION: si la URL guardada no responde, se busca la viva
+# MEDIDO el 2026-11-21: el hostname del tunel rapido CAMBIA en cada
+# reinicio del movil => la URL guardada se queda vieja y la flota cree
+# que el movil esta caido.  La fuente de verdad es state/channel.json en
+# el repo (lo publica el propio movil); se prueban sus URLs en orden.
+recuperar_url() {
+  [ "${MD_MCP_NO_REFRESH:-0}" = "1" ] && return 1
+  CH="$(curl -fsSL -m 20 "https://raw.githubusercontent.com/boolforge/megadaemon/main/state/channel.json" 2>/dev/null)" || return 1
+  CAND="$(printf '%s' "$CH" | python3 -c '
+import sys,json
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    raise SystemExit
+for k in ("quick","duckdns","public","url"):
+    v=d.get(k)
+    if isinstance(v,str) and v.startswith("http"):
+        print(v.rstrip("/")); break
+' 2>/dev/null)"
+  for C in $CAND; do
+    [ "$C" = "$URL" ] && continue
+    if curl -s -m 10 -o /dev/null "$C/api/status" 2>/dev/null; then
+      printf 'URL recuperada de state/channel.json: %s\n' "$C" >&2
+      URL="$C"
+      if [ -f "$SECRETS/instance.env" ]; then
+        sed -i "s|^MEGADAEMON_URL=.*|MEGADAEMON_URL=$C|" "$SECRETS/instance.env" 2>/dev/null || true
+      fi
+      return 0
+    fi
+  done
+  return 1
+}
+
 TOK="$(curl -s -m 25 -X POST -H 'Content-Type: application/json' \
   -d "{\"api_key\":\"$KEY\"}" "$URL/api/session/exchange" 2>/dev/null \
   | python3 -c 'import sys,json;print(json.load(sys.stdin).get("auth_token",""))' 2>/dev/null)"
+if [ -z "$TOK" ]; then
+  recuperar_url || { echo "ERROR: el movil no respondio ni con la URL guardada ni con state/channel.json" >&2; exit 3; }
+  TOK="$(curl -s -m 25 -X POST -H 'Content-Type: application/json' \
+    -d "{\"api_key\":\"$KEY\"}" "$URL/api/session/exchange" 2>/dev/null \
+    | python3 -c 'import sys,json;print(json.load(sys.stdin).get("auth_token",""))' 2>/dev/null)"
+fi
 [ -n "$TOK" ] || { echo "ERROR: el movil no acepto la credencial (403?)" >&2; exit 3; }
 
 case "${1:-}" in
