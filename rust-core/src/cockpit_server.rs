@@ -1322,6 +1322,43 @@ fn handle_client(mut stream: TcpStream) {
                 }
                 send_json(&mut stream, &snap);
             }
+            "/api/antigravity/sessions" => {
+                let mut accion = "estado".to_string();
+                let mut conv_id = String::new();
+                let mut tail: usize = 20;
+                for kv in query.split('&') {
+                    if let Some((k, v)) = kv.split_once('=') {
+                        match k {
+                            "accion" | "action" => accion = v.to_string(),
+                            "id" | "conversation_id" => conv_id = v.to_string(),
+                            "tail" => tail = v.parse().unwrap_or(20),
+                            _ => {}
+                        }
+                    }
+                }
+                let res: Result<Value, String> = match accion.as_str() {
+                    "list" => crate::antigravity_sessions::sesiones()
+                        .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                    "dead" => crate::antigravity_sessions::muertas()
+                        .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                    "stalled" => crate::antigravity_sessions::colgadas()
+                        .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                    "tree" => crate::antigravity_sessions::arbol(if conv_id.is_empty() {
+                        None
+                    } else {
+                        Some(conv_id.as_str())
+                    }),
+                    "detail" => crate::antigravity_sessions::detalle_sesion(&conv_id, tail),
+                    "log" => crate::antigravity_sessions::daemon_log(tail).map(|lines| json!({ "lines": lines })),
+                    "tasks" => crate::antigravity_sessions::tareas_daemon(),
+                    _ => crate::antigravity_sessions::estado()
+                        .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                };
+                match res {
+                    Ok(v) => send_json(&mut stream, &json!({ "ok": true, "accion": accion, "data": v })),
+                    Err(e) => send_json(&mut stream, &json!({ "ok": false, "accion": accion, "error": e })),
+                }
+            }
             "/v1/chat/completions" | "/chat/completions" => {
                 let body: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);
                 match crate::llm_gateway::chat_completions(&body) {

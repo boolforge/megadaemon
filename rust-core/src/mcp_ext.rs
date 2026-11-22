@@ -608,16 +608,19 @@ pub fn tool_definitions() -> Value {
                 }
             }
         },
-{
+        {
             "name": "antigravity_sessions",
-            "description": "Estado de las SESIONES de Antigravity en el movil: conversaciones abiertas, sesiones muertas (con el motivo) y las tareas del daemon de Antigravity. Sirve para ver que esta vivo, que esta haciendo y para recuperar el trabajo cuando se queda sin cuota.",
+            "description": "Instrumentacion completa (solo lectura) de las sesiones de Antigravity: estado agregado, lista, sub-agentes muertos/colgados, arbol padre->hijos, detalle con transcript y tasks/log del daemon.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "accion": { "type": "string", "description": "estado (defecto) | list | dead | tasks" }
+                    "accion": { "type": "string", "description": "estado (defecto) | list | dead | stalled | tree | detail | log | tasks" },
+                    "conversation_id": { "type": "string", "description": "ID de conversacion para detail o raiz opcional para tree." },
+                    "tail": { "type": "integer", "description": "Numero de lineas/pasos finales para detail o log (defecto 20)." },
+                    "app_dir": { "type": "string", "description": "Directorio alternativo de datos de Antigravity (opcional)." }
                 }
             }
-},
+        },
 {
             "name": "re_analyze",
             "description": "MOTOR DE RE de MegaDaemon (punto de entrada UNICO): identifica el binario (ELF/PE/MachO/DEX/APK/Go/UPX) CON evidencia, extrae cadenas interesting (URLs, rutas, claves, magisk/root/jni), lista secciones y simbolos, y devuelve un informe uniforme. Accion catalogo lista TODAS las capacidades de RE/deofuscacion con el modulo que las implementa (~700 tokens) para que no adivines tool names. NUNCA ejecuta el binario analizado: es analisis estatico.",
@@ -1146,11 +1149,30 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 }
         "antigravity_sessions" => {
             let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("estado");
+            let conv_id = args.get("conversation_id").and_then(|v| v.as_str()).unwrap_or("");
+            let tail = args.get("tail").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+            let dir_buf = match args.get("app_dir").and_then(|v| v.as_str()) {
+                Some(d) if !d.trim().is_empty() => std::path::PathBuf::from(d.trim()),
+                _ => crate::antigravity_sessions::default_app_dir(),
+            };
+            let dir = dir_buf.as_path();
             let v = match accion {
-                "list" => crate::antigravity_sessions::sesiones().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
-                "dead" => crate::antigravity_sessions::muertas().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
-                "tasks" => crate::antigravity_sessions::tareas_daemon(),
-                _ => crate::antigravity_sessions::estado().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                "list" => crate::antigravity_sessions::sesiones_en(dir)
+                    .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                "dead" => crate::antigravity_sessions::muertas_en(dir)
+                    .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                "stalled" => crate::antigravity_sessions::colgadas_en(dir)
+                    .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                "tree" => crate::antigravity_sessions::arbol_en(
+                    dir,
+                    if conv_id.is_empty() { None } else { Some(conv_id) },
+                ),
+                "detail" => crate::antigravity_sessions::detalle_sesion_en(dir, conv_id, tail),
+                "log" => crate::antigravity_sessions::daemon_log_en(dir, tail)
+                    .map(|lines| json!({ "lines": lines })),
+                "tasks" => crate::antigravity_sessions::tareas_daemon_en(dir),
+                _ => crate::antigravity_sessions::estado_en(dir)
+                    .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
             };
             let txt = match v {
                 Ok(x) => serde_json::to_string_pretty(&x).unwrap_or_default(),

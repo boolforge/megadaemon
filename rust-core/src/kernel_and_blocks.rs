@@ -756,11 +756,13 @@ pub fn verify_manifest(path: &str, check_live: bool) -> Value {
             continue;
         }
 
-        let got = root_exec(
-            &format!("sha256sum {} 2>/dev/null", sh_quote(file)),
-            120_000,
-        );
-        let got = parse_sha256_line(&got.stdout);
+        let got = sha256_file(std::path::Path::new(file)).or_else(|| {
+            let r = root_exec(
+                &format!("sha256sum {} 2>/dev/null", sh_quote(file)),
+                120_000,
+            );
+            parse_sha256_line(&r.stdout)
+        });
         let file_ok = got.is_some() && got.as_deref() == Some(want);
 
         let (live_sha, live_ok) = if check_live && !part.is_empty() {
