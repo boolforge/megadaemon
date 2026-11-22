@@ -117,6 +117,20 @@ pub fn parse_messages(messages: &Value) -> Result<(String, Option<String>), Gate
 /// lo soporta y, si no, la respuesta lo dice en `tools_used` (nunca se
 /// finge que se usaron).
 pub fn chat_completions(body: &Value) -> Result<Value, GatewayError> {
+    // v16: la variante de producción (vault de disco + transporte real).
+    let vault = crate::providers::load_vault();
+    let transport = crate::providers::UreqTransport::default();
+    let deps = crate::providers::ChatDeps::new(&vault, &transport);
+    chat_completions_with(body, &deps)
+}
+
+/// Variante **inyectable** de [`chat_completions`].
+///
+/// v16: el gateway se testea sin red (mismo formato, otro vault).
+pub fn chat_completions_with(
+    body: &Value,
+    deps: &crate::providers::ChatDeps<'_>,
+) -> Result<Value, GatewayError> {
     let model = body
         .get("model")
         .and_then(|m| m.as_str())
@@ -138,7 +152,14 @@ pub fn chat_completions(body: &Value) -> Result<Value, GatewayError> {
         Some(model.as_str())
     };
 
-    let res = crate::providers::execute_chat(&prompt, requested, None, system.as_deref(), max_tokens);
+    let res = crate::providers::execute_chat_with(
+        &prompt,
+        requested,
+        None,
+        system.as_deref(),
+        max_tokens,
+        deps,
+    );
 
     let usage = json!({
         // El proveedor no siempre reporta los tokens de ENTRADA; 0 = "no lo
@@ -348,8 +369,27 @@ fn gemini_partes(parts: Option<&Value>) -> String {
 /// Ejecuta una petición Gemini contra el router de MegaDaemon y devuelve
 /// la respuesta **en formato Gemini** (`candidates`/`usageMetadata`).
 pub fn gemini_generate_content(body: &Value) -> Result<Value, GatewayError> {
+    // v16: la variante de producción (vault de disco + transporte real).
+    let vault = crate::providers::load_vault();
+    let transport = crate::providers::UreqTransport::default();
+    let deps = crate::providers::ChatDeps::new(&vault, &transport);
+    gemini_generate_content_with(body, &deps)
+}
+
+/// Variante **inyectable** de [`gemini_generate_content`].
+pub fn gemini_generate_content_with(
+    body: &Value,
+    deps: &crate::providers::ChatDeps<'_>,
+) -> Result<Value, GatewayError> {
     let g = gemini_prompt(body)?;
-    let res = crate::providers::execute_chat(&g.prompt, None, None, g.system.as_deref(), g.max_tokens);
+    let res = crate::providers::execute_chat_with(
+        &g.prompt,
+        None,
+        None,
+        g.system.as_deref(),
+        g.max_tokens,
+        deps,
+    );
     Ok(gemini_response(&res, g.tools_requested))
 }
 
