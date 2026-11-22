@@ -1299,6 +1299,15 @@ fn handle_client(mut stream: TcpStream) {
                         "version": env!("CARGO_PKG_VERSION"),
                         "requests": REQ_TOTAL.load(std::sync::atomic::Ordering::Relaxed),
                         "web": web_diagnostics(),
+                        // v18: el fingerprint de la key VIGENTE (fnv1a64).
+                        // MEDIDO 2026-11-22: la flota se quedó horas sin
+                        // poder hablar con el movil porque su key local no
+                        // coincidia con la vigente, y el error decia solo
+                        // "no respondio".  Con este dato, un cliente
+                        // detecta el desajuste al instante (el fingerprint
+                        // NO es la key: no sirve para autenticarse).
+                        "key_fp": api_key::fingerprint(&cfg.key),
+                        "cuota": crate::quota_guard::snapshot_compacto(),
                     }),
                 );
             }
