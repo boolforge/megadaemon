@@ -1,5 +1,6 @@
 use crate::{Error,Result};
 use crate::model::{Analysis,ParserInfo,Module,Function};
+use crate::filetab::SourceResolver;
 use crate::reader::Reader;
 
 const MAGIC_GO120:u32=0xffff_fff1;
@@ -14,6 +15,21 @@ pub struct ParseOptions { pub module_index:u32, pub file_offset:u64, pub text_ba
  /// De donde salio el text_base ("explicit", "estimated-from-container-sections", ...). MEDIDO 2026-11-22.
  pub text_base_source:Option<&'static str> }
 impl Default for ParseOptions { fn default()->Self{Self{module_index:0,file_offset:0,text_base:None,max_functions:MAX_FUNCS,text_base_source:None}} }
+
+/// Paquete Go de un nombre de funcion.
+///
+/// Regla: el paquete es la parte anterior al primer '.' que aparece DETRAS
+/// del ultimo '/'.  Asi `internal/abi.(*RegArgs).Dump` -> `internal/abi` y
+/// `google3/third_party/jetski/gateway/gateway.ParseAdminSettings` ->
+/// `google3/third_party/jetski/gateway/gateway`.
+/// Los nombres "planos" (`main.main`, `runtime.main`) no tienen '/' y se
+/// devuelve `None` (no hay paquete que deducir).
+pub fn go_package(name:&str)->Option<String>{
+ let slash=name.rfind('/')?;
+ let dot=name[slash+1..].find('.').map(|i|slash+1+i)?;
+ if dot==0{return None;}
+ Some(name[..dot].to_owned())
+}
 
 /// Parse a Go 1.18+ (modern two-u32 functab) pclntab beginning at file offset.
 /// This is intentionally a metadata parser, not a container parser. The caller
@@ -48,12 +64,23 @@ pub fn parse_go118_plus(data:&[u8], opt:ParseOptions)->Result<Analysis>{
  let funcname_off=r.uint(field+ptr as u64,ptr,true)?;
  // Base de texto efectiva: la que da el llamante o, si no, la del pcHeader.
  let effective_base=opt.text_base.or(if text_start>0 {Some(text_start)} else {None});
- let _cutab_off=r.uint(field+2*(ptr as u64),ptr,true)?;
- let _filetab_off=r.uint(field+3*(ptr as u64),ptr,true)?;
- let _pctab_off=r.uint(field+4*(ptr as u64),ptr,true)?;
+ let cutab_off=r.uint(field+2*(ptr as u64),ptr,true)?;
+ let filetab_off=r.uint(field+3*(ptr as u64),ptr,true)?;
+ let pctab_off=r.uint(field+4*(ptr as u64),ptr,true)?;
  let pcln_off=r.uint(field+5*(ptr as u64),ptr,true)?;
  let pcln_base=base.checked_add(pcln_off).ok_or(Error::Overflow("pcln base"))?;
  let funcname_base=base.checked_add(funcname_off).ok_or(Error::Overflow("funcname base"))?;
+ // Resolutor de fichero:linea (cutab/filetab/pctab del pcHeader).
+ // MEDIDO 2026-11-22: con este mecanismo se reproduce el fichero:linea de
+ // la tabla de referencia en 161.680 de 161.682 funciones del binario real
+ // (las 2 restantes no tienen fichero en la referencia tampoco).
+ let resolver=SourceResolver::new(
+  base.checked_add(cutab_off).ok_or(Error::Overflow("cutab base"))?,
+  base.checked_add(filetab_off).ok_or(Error::Overflow("filetab base"))?,
+  base.checked_add(pctab_off).ok_or(Error::Overflow("pctab base"))?,
+  base.checked_add(pcln_off).ok_or(Error::Overflow("pcln base"))?,
+  min_lc,
+ );
  let table_bytes=(nfunc+1).checked_mul(8).ok_or(Error::Overflow("functab length"))?;
  r.bytes(pcln_base,table_bytes)?;
  let mut raw=Vec::with_capacity(nfunc as usize);
@@ -115,9 +142,22 @@ pub fn parse_go118_plus(data:&[u8], opt:ParseOptions)->Result<Analysis>{
    let start_va=effective_base.and_then(|b|b.checked_add(entry as u64)).map(|v|format!("0x{v:x}"));
    let end_va=effective_base.and_then(|b|b.checked_add(next as u64)).map(|v|format!("0x{v:x}"));
    let name_status=name_status.to_string();
-   functions.push(Function{index:i as u64,start_va,end_va,text_section_index:None,entryoff:entry,funcoff,nameoff,args_size,deferreturn,pcsp,pcfile,pcln,npcdata,cu_offset,start_line,func_id,flags,nfuncdata,pcdata_offsets,funcdata_offsets,observed_name:name,name_status,evidence:vec!["pclntab:pcHeader".into(),"pclntab:functab(entryoff,funcoff)".into(),"pclntab:_func.nameOff".into(),"pclntab:_func.variable_arrays".into()]});
+   // Fichero y linea: se resuelven con cutab/filetab/pctab (ver filetab.rs).
+   // `entry_va` es la PC de entrada de la funcion (lo que el runtime usa
+   // como `f.entry()`); si la base de texto no esta resuelta, no hay linea.
+   let entry_va=effective_base.and_then(|b|b.checked_add(entry as u64));
+   let (source_file,source_line)=match entry_va {
+    Some(ev)=>{
+      let f=resolver.file(&r,cu_offset,pcfile,ev).unwrap_or(None);
+      let l=resolver.line(&r,pcln,ev).unwrap_or(None);
+      (f,l)
+    },
+    None=>(None,None),
+   };
+   let package=name.as_deref().and_then(go_package);
+   functions.push(Function{index:i as u64,start_va,end_va,text_section_index:None,entryoff:entry,funcoff,nameoff,args_size,deferreturn,pcsp,pcfile,pcln,npcdata,cu_offset,start_line,func_id,flags,nfuncdata,pcdata_offsets,funcdata_offsets,observed_name:name,name_status,source_file,source_line,package,evidence:vec!["pclntab:pcHeader".into(),"pclntab:functab(entryoff,funcoff)".into(),"pclntab:_func.nameOff".into(),"pclntab:_func.variable_arrays".into(),"pclntab:_func.pcfile+pctab->cutab->filetab".into(),"pclntab:_func.pcln+pctab->line".into()]});
  }
- Ok(Analysis{schema_version:"1.1".into(),parser:ParserInfo{name:"go-retool".into(),version:env!("CARGO_PKG_VERSION").into(),pclntab_layout:"go1.18+ modern functab; Go1.20 magic family; V5 semantic coverage not implied".into()},modules:vec![Module{module_index:opt.module_index,module_identity:"offline-pclntab-module".into(),pclntab_file_offset:format!("0x{base:x}"),go_version:None,text_base_va:effective_base.map(|v|format!("0x{v:x}")),text_base_status:match (opt.text_base,effective_base){
+ Ok(Analysis{schema_version:"1.2".into(),parser:ParserInfo{name:"go-retool".into(),version:env!("CARGO_PKG_VERSION").into(),pclntab_layout:"go1.18+ modern functab; Go1.20 magic family; V5 semantic coverage not implied".into()},modules:vec![Module{module_index:opt.module_index,module_identity:"offline-pclntab-module".into(),pclntab_file_offset:format!("0x{base:x}"),go_version:None,text_base_va:effective_base.map(|v|format!("0x{v:x}")),text_base_status:match (opt.text_base,effective_base){
    (Some(_),_)=>match opt.text_base_source{Some(src)=>format!("{src}; caller attests the mapping"),None=>"explicitly-supplied; caller must attest mapping".into()},
    (None,Some(v))=>format!("from pcHeader.textStart (0x{v:x}); Go runtime text base"),
    (None,None)=>"unresolved; relative offsets only".into(),

@@ -48,5 +48,11 @@ pub struct Function {
     pub funcdata_offsets:Vec<Option<u32>>,
     pub observed_name:Option<String>,
     pub name_status:String,
+    /// Fichero fuente (cutab/filetab del pcHeader). `None` si no se resuelve.
+    pub source_file:Option<String>,
+    /// Linea en la PC de entrada (tabla pcvalue de `_func.pcln`).
+    pub source_line:Option<i32>,
+    /// Paquete Go (todo lo anterior al ultimo '/' del nombre).
+    pub package:Option<String>,
     pub evidence:Vec<String>,
 }
