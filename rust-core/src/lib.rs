@@ -120,6 +120,7 @@ pub mod task_sync;
 pub mod agyshim;
 pub mod gobook;
 pub mod re_engine;
+pub mod re_fusion;
 pub mod sqlite_mitm;
 pub mod rea_assistant;
 pub mod code_ast;
