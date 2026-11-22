@@ -65,6 +65,7 @@ pub mod entropy;
 pub mod env_introspect;
 pub mod es_eid;
 pub mod format_oracle;
+pub mod ghidra;
 pub mod freezer;
 pub mod frida_dbi;
 pub mod git_ops;
