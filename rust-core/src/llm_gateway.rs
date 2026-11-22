@@ -159,7 +159,16 @@ pub fn chat_completions(body: &Value) -> Result<Value, GatewayError> {
         "id": format!("chatcmpl-mgd-{}", now_millis()),
         "object": "chat.completion",
         "created": now_secs(),
-        "model": model,
+        // HONESTIDAD (2026-11-22): 'model' dice el modelo que **realmente**
+        // contestó, NO el que pidió el cliente.  Antes devolvía el pedido y
+        // el cliente (Antigravity, p.ej.) se creería que habló con Gemini
+        // cuando en realidad respondió MiniMax por el router.
+        // Lo pedido viaja aparte, en 'megadaemon.requested_model'.
+        "model": if res.model_name.trim().is_empty() {
+            model.clone()
+        } else {
+            res.model_name.clone()
+        },
         "choices": [{
             "index": 0,
             "message": message,
@@ -173,6 +182,12 @@ pub fn chat_completions(body: &Value) -> Result<Value, GatewayError> {
             "vendor": res.vendor,
             "latency_ms": res.latency_ms,
             "fallback_used": res.fallback_used,
+            // Lo que pidió el cliente y si se sustituyó.
+            "requested_model": model,
+            "substituted": !res.model_id.eq_ignore_ascii_case(&model)
+                && !MEGADAEMON_ALIASES
+                    .iter()
+                    .any(|a| a.eq_ignore_ascii_case(&model)),
         }
     }))
 }
@@ -238,6 +253,22 @@ pub fn gemini_route(path: &str) -> Option<GeminiRoute> {
     let model = if let Some(m) = rest.strip_prefix(GEMINI_V1BETA_PREFIX) {
         m.to_string()
     } else if rest == "/v1internal" {
+        String::new()
+    } else if let Some(algo) = rest.strip_prefix("/v1internal/") {
+        // Endpoint dinámico (MEDIDO 2026-11-22): el language server de
+        // Antigravity resuelve el endpoint de Cloud Code como
+        // `<base>/v1internal/<algo>` y luego llama a
+        // `<base>/v1internal/<algo>:generateContent`.  El patch de
+        // referencia (proyecto `vahapogut/antigravity-add-model`, Apache-2.0)
+        // deja `<algo> = xxxxxxx`, de modo que la ruta real es
+        // `/v1internal/xxxxxxx:generateContent`.
+        // MEDIDO en el móvil: `liblanguage_server.so` contiene UNA vez
+        // `https://daily-cloudcode-pa.googleapis.com` (42 B) y el destino de
+        // referencia `http://localhost:50999/v1internal/xxxxxxx` (42 B):
+        // el reemplazo conserva la longitud ⇒ sirve para cualquier SO.
+        if algo.is_empty() {
+            return None;
+        }
         String::new()
     } else {
         return None;
@@ -339,9 +370,33 @@ fn gemini_partes(parts: Option<&Value>) -> String {
 /// Ejecuta una petición Gemini contra el router de MegaDaemon y devuelve
 /// la respuesta **en formato Gemini** (`candidates`/`usageMetadata`).
 pub fn gemini_generate_content(body: &Value) -> Result<Value, GatewayError> {
+    gemini_generate_content_for("", body)
+}
+
+/// Igual que [`gemini_generate_content`] pero sabiendo **qué** modelo pidió
+/// el cliente (va en la URL: `/v1beta/models/{model}:generateContent`).
+///
+/// El modelo pedido se devuelve en `megadaemon.requested_model` y
+/// `modelVersion` dice el que **realmente** contestó: el gateway no
+/// suplanta a nadie.
+pub fn gemini_generate_content_for(path: &str, body: &Value) -> Result<Value, GatewayError> {
     let g = gemini_prompt(body)?;
-    let res = crate::providers::execute_chat(&g.prompt, None, None, g.system.as_deref(), g.max_tokens);
-    Ok(gemini_response(&res, g.tools_requested))
+    let pedido = gemini_route(path)
+        .map(|r| r.model)
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(|| "megadaemon".to_string());
+    let solicitado = if pedido.eq_ignore_ascii_case("megadaemon") {
+        None
+    } else {
+        Some(pedido.as_str())
+    };
+    let res = crate::providers::execute_chat(&g.prompt, solicitado, None, g.system.as_deref(), g.max_tokens);
+    let mut v = gemini_response(&res, g.tools_requested);
+    v["megadaemon"]["requested_model"] = json!(pedido);
+    v["megadaemon"]["substituted"] = json!(
+        !res.model_id.eq_ignore_ascii_case(&pedido) && !pedido.eq_ignore_ascii_case("megadaemon")
+    );
+    Ok(v)
 }
 
 /// Envoltorio de la respuesta de `providers::execute_chat` en forma Gemini.
@@ -367,7 +422,13 @@ fn gemini_response(res: &crate::providers::ChatResult, tools_requested: usize) -
             "candidatesTokenCount": res.tokens_used,
             "totalTokenCount": res.tokens_used,
         },
-        "modelVersion": "megadaemon",
+        // HONESTIDAD (2026-11-22): 'modelVersion' dice el modelo que
+        // REALMENTE contestó, no el que se pidió (ver chat_completions).
+        "modelVersion": if res.model_name.trim().is_empty() {
+            "megadaemon".to_string()
+        } else {
+            res.model_name.clone()
+        },
         // Trazabilidad propia (no rompe el formato Gemini).
         "megadaemon": {
             "provider_id": res.model_id,
@@ -384,7 +445,12 @@ fn gemini_response(res: &crate::providers::ChatResult, tools_requested: usize) -
 ///
 /// con la respuesta entera, porque el daemon no hace streaming fino).
 pub fn gemini_stream_sse(body: &Value) -> Result<String, GatewayError> {
-    let v = gemini_generate_content(body)?;
+    gemini_stream_sse_for("", body)
+}
+
+/// Variante *streaming* que sabe qué modelo pidió el cliente.
+pub fn gemini_stream_sse_for(path: &str, body: &Value) -> Result<String, GatewayError> {
+    let v = gemini_generate_content_for(path, body)?;
     let texto = v["candidates"][0]["content"]["parts"]
         .as_array()
         .map(|ps| {
@@ -505,6 +571,38 @@ mod tests {
         assert_eq!(v["usageMetadata"]["candidatesTokenCount"], 7);
         assert_eq!(v["megadaemon"]["provider_id"], "minimax-m3.1-flash");
         assert_eq!(v["megadaemon"]["tools_requested"], 3);
+    }
+
+    #[test]
+    fn la_respuesta_dice_el_modelo_REAL_que_contesto() {
+        // HONESTIDAD: el campo 'model' dice el modelo que realmente contestó,
+        // no el que pidió el cliente.  Si no, un cliente (Antigravity) se
+        // creería que habló con Gemini cuando respondió MiniMax.
+        let res = crate::providers::ChatResult {
+            reply: "hola".to_string(),
+            reasoning: String::new(),
+            model_id: "minimax-m3.1-flash".to_string(),
+            model_name: "MiniMax-M3.1-Flash".to_string(),
+            vendor: "MiniMax".to_string(),
+            latency_ms: 10.0,
+            tokens_used: 3,
+            tools_used: Vec::new(),
+            fallback_used: false,
+            quota: None,
+        };
+        let v = gemini_response(&res, 0);
+        assert_eq!(v["modelVersion"], "MiniMax-M3.1-Flash");
+        assert_eq!(v["megadaemon"]["provider_id"], "minimax-m3.1-flash");
+    }
+
+    #[test]
+    fn el_dialecto_gemini_conserva_el_modelo_pedido() {
+        // La ruta dice qué se pidió; el cuerpo dice qué contestó.
+        let body = json!({"contents":[{"role":"user","parts":[{"text":"hola"}]}]});
+        let r = gemini_route("/v1beta/models/gemini-4-hydrogen:generateContent").unwrap();
+        assert_eq!(r.model, "gemini-4-hydrogen");
+        // (la llamada real va al proveedor; aquí se comprueba el parseo)
+        let _ = gemini_prompt(&body).unwrap();
     }
 
     #[test]
