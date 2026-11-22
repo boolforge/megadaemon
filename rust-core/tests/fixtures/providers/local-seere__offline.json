@@ -1,0 +1,16 @@
+{
+  "_meta": {
+    "id": "local-seere__offline",
+    "provider": "local-seere",
+    "status": 200,
+    "origen": "SINTETICO",
+    "nota": "El motor local SEERE v12 (offline) devuelve su propia forma (answer/tools/tokens), NO la de OpenAI. Se documenta aqui para que nadie intente parsearlo como OpenAI: es el ultimo recurso de la cascada."
+  },
+  "body": {
+    "answer": "Respuesta local determinista del SEERE v12.",
+    "tools": [
+      { "tool": "TextIngest", "arg": "notas.txt" }
+    ],
+    "tokens": 33
+  }
+}

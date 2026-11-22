@@ -1,0 +1,16 @@
+{
+  "_meta": {
+    "id": "minimax-m3.1-flash__http_401",
+    "provider": "minimax-m3.1-flash",
+    "status": 401,
+    "origen": "SINTETICO",
+    "nota": "Cuerpo de error 401 que ECOA la API key (caso real: algunos proveedores devuelven la clave en el mensaje). La clave de aqui es FICTICIA y no sirve para nada: sirve para probar que la redaccion la tapa antes de que llegue al cliente."
+  },
+  "body": {
+    "error": {
+      "message": "Invalid API key: sk-EXAMPLE-NO-ES-UNA-KEY-0000 (rejected)",
+      "type": "authentication_error",
+      "code": "invalid_api_key"
+    }
+  }
+}

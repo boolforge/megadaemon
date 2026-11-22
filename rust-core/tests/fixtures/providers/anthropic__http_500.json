@@ -1,0 +1,16 @@
+{
+  "_meta": {
+    "id": "anthropic__http_500",
+    "provider": "anthropic",
+    "status": 500,
+    "origen": "SINTETICO",
+    "nota": "500 del proveedor: SI es reintentable (backoff), al contrario que un 4xx. Es el caso que justifica los reintentos."
+  },
+  "body": {
+    "type": "error",
+    "error": {
+      "type": "api_error",
+      "message": "Internal server error while processing the request."
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "_meta": {
+    "id": "pollinations-free__text_plain",
+    "provider": "pollinations-free",
+    "status": 200,
+    "origen": "SINTETICO",
+    "nota": "Respuesta en TEXTO PLANO (endpoint zero-key que no devuelve JSON). Debe aceptarse tal cual como contenido."
+  },
+  "raw": "Pollinations responde en texto plano cuando no hay JSON.\nSegunda linea."
+}

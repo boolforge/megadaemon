@@ -1,0 +1,10 @@
+{
+  "_meta": {
+    "id": "zai-glm-free__truncated",
+    "provider": "zai-glm-free",
+    "status": 200,
+    "origen": "SINTETICO",
+    "nota": "Respuesta TRUNCADA (corte de red a media generacion): JSON invalido. No puede entrar en panic; el daemon debe devolver un error con mensaje util y caer al siguiente proveedor."
+  },
+  "raw": "{\"id\":\"zai-example-001\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"La respuesta se corta aqu"
+}

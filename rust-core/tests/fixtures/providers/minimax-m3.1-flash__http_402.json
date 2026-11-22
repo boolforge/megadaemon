@@ -1,0 +1,16 @@
+{
+  "_meta": {
+    "id": "minimax-m3.1-flash__http_402",
+    "provider": "minimax-m3.1-flash",
+    "status": 402,
+    "origen": "SINTETICO",
+    "nota": "402 = sin saldo / plan agotado. Es uno de los dos status que el quota_guard tiene que registrar (con el status REAL, no con 'HTTP transport error')."
+  },
+  "body": {
+    "error": {
+      "message": "Insufficient balance. Please top up your account to continue.",
+      "type": "billing_error",
+      "code": "insufficient_credits"
+    }
+  }
+}

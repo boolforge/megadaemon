@@ -1,0 +1,29 @@
+{
+  "_meta": {
+    "id": "openrouter-free__content_array",
+    "provider": "openrouter-free",
+    "status": 200,
+    "origen": "SINTETICO",
+    "nota": "'message.content' como ARRAY de partes (respuesta multimodal de varios proveedores). Antes el daemon hacia as_str() y devolvia cadena vacia => 'Unexpected JSON payload' => se caia al siguiente proveedor."
+  },
+  "body": {
+    "id": "gen-example-003",
+    "object": "chat.completion",
+    "created": 1764000005,
+    "model": "openrouter/free",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": [
+            { "type": "text", "text": "parte 1" },
+            { "type": "text", "text": "parte 2" }
+          ]
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": { "total_tokens": 9 }
+  }
+}
