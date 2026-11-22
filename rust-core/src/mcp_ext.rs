@@ -13,7 +13,11 @@ use serde_json::{json, Value};
 
 /// Definiciones de las herramientas nuevas.
 pub fn tool_definitions() -> Value {
-    json!([
+    // Las herramientas del bloque "backups Titanium / catalogo / plan de
+    // migracion" y del "contenedor Swift Backup" viven en su propio modulo
+    // (otro dueho de fichero): aqui solo se **extiende** el array (un hunk)
+    // para que la CLI, el MCP y el agente hablen del mismo codigo.
+    let base = json!([
         {
             "name": "drive_backup",
             "description": "Google Drive desde el propio MegaDaemon: sube un fichero o un directorio ENTERO (se comprime en ZIP) con subida resumible en trozos de 256 KiB, SHA-256 verificado en local y credenciales OAuth leidas del fichero 0600. Sin curl, sin dd, sin scripts: todo en Rust. Acciones: upload | download | status. Subir publica el contenido en un remoto: exige confirm=true.",
@@ -685,7 +689,15 @@ pub fn tool_definitions() -> Value {
                 }
             }
         },
-])
+    ]);
+    let mut out = base.as_array().cloned().unwrap_or_default();
+    if let Some(extra) = crate::titanium_backup::tool_definitions_mcp().as_array() {
+        out.extend(extra.clone());
+    }
+    if let Some(extra) = crate::swift_container::tool_definitions_mcp().as_array() {
+        out.extend(extra.clone());
+    }
+    Value::Array(out)
 }
 
 /// Despacha las herramientas nuevas. `None` = no es de este grupo.
@@ -700,6 +712,16 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect::<Vec<String>>())
             .unwrap_or_default()
     };
+
+    // Bloque "backups Titanium / catalogo / plan de migracion" y bloque
+    // "contenedor Swift Backup": se resuelven antes del `match` porque sus
+    // nombres no chocan con los de aqui.
+    if let Some(r) = crate::titanium_backup::dispatch_mcp(name, args) {
+        return Some(r);
+    }
+    if let Some(r) = crate::swift_container::dispatch_mcp(name, args) {
+        return Some(r);
+    }
 
     let r = match name {
         "drive_backup" => {
