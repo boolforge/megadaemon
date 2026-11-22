@@ -28,6 +28,19 @@ permissions:
   contents: read
 
 jobs:
+  # GATE DE SINTAXIS (2026-11-22): parsea cada .rs con rustfmt ANTES de
+  # compilar.  Detecta en SEGUNDOS los merges que concatenan texto (main se
+  # rompio dos veces por eso: un delimitador sin cerrar y un '<' en el
+  # nombre de un test) y NO se come la RAM del runner.
+  # Es un gate de SINTAXIS, no de formato.
+  sintaxis:
+    name: sintaxis (rustfmt, sin compilar)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: parsear cada .rs
+        run: bash tools/check-sintaxis.sh
+
   quality:
     name: calidad (fmt + clippy + tests)
     runs-on: ubuntu-latest
