@@ -26,6 +26,7 @@ pub mod backup_ab;
 pub mod backup_apps;
 pub mod backup_crypto;
 pub mod backup_inventory;
+pub mod llm_gateway;
 pub mod backup_engine;
 pub mod backup_formats;
 pub mod backup_full;
