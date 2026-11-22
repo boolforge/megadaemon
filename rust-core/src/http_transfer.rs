@@ -81,9 +81,36 @@ pub struct Resultado {
     pub segundos: f64,
     pub resumed: bool,
     pub sha256: Option<String>,
+    /// BLAKE3 (mas rapido que SHA-256; para descargas grandes).
+    #[serde(default)]
+    pub blake3: Option<String>,
     pub error: Option<String>,
     /// Cabeceras de respuesta relevantes (content-length, etag...).
     pub cabeceras: Vec<(String, String)>,
+}
+
+/// Nombre de fichero sugerido a partir de la URL (con el crate `url`).
+pub fn nombre_de_url(url: &str) -> String {
+    if let Ok(u) = url::Url::parse(url) {
+        let n = u
+            .path_segments()
+            .and_then(|s| s.filter(|x| !x.is_empty()).last().map(|x| x.to_string()))
+            .unwrap_or_default();
+        if !n.is_empty() {
+            return n;
+        }
+        if let Some(h) = u.host_str() {
+            return h.to_string();
+        }
+    }
+    "descarga.bin".to_string()
+}
+
+/// ¿La URL es válida? (WHATWG)
+pub fn url_valida(url: &str) -> bool {
+    url::Url::parse(url)
+        .map(|u| matches!(u.scheme(), "http" | "https"))
+        .unwrap_or(false)
 }
 
 fn agente(opts: &Opciones) -> ureq::Agent {
@@ -171,6 +198,12 @@ pub fn descargar(url: &str, opts: &Opciones) -> Result<Resultado, String> {
     if let Some(r) = &rango {
         req = req.header("Range", r);
     }
+    // `Accept-Encoding: identity` por defecto: `ureq` NO descomprime gzip
+    // solo (a diferencia de reqwest) y no queremos un ZIP con el nombre
+    // del binario.  Si el caller pone su propia cabecera, manda la suya.
+    if !opts.cabeceras.iter().any(|(k, _)| k.eq_ignore_ascii_case("accept-encoding")) {
+        req = req.header("Accept-Encoding", "identity");
+    }
     for (k, v) in &opts.cabeceras {
         req = req.header(k.as_str(), v.as_str());
     }
@@ -205,6 +238,7 @@ pub fn descargar(url: &str, opts: &Opciones) -> Result<Resultado, String> {
             segundos: t0.elapsed().as_secs_f64(),
             resumed: false,
             sha256: None,
+            blake3: None,
             error: Some(format!("HTTP {status}")),
             cabeceras,
         });
@@ -213,21 +247,44 @@ pub fn descargar(url: &str, opts: &Opciones) -> Result<Resultado, String> {
         bytes_prev = 0;
     }
 
+    // Content-Encoding: br => hay que descomprimir (GitHub y otros
+    // servidores lo usan para las releases grandes).
+    let encoding_br = cabeceras
+        .iter()
+        .any(|(k, v)| k == "content-encoding" && v.to_ascii_lowercase().contains("br"));
+
     let mut sha = Sha256::new();
+    let mut hasher3 = blake3::Hasher::new();
     let mut total = bytes_prev;
+
+    // Descarga ATOMICA: se escribe en `<destino>.part` y solo se renombra
+    // al terminar bien.  Si se corta, el destino NUNCA queda corrupto: el
+    // `.part` sirve para reanudar (Range) en la siguiente invocacion.
+    let parte: Option<PathBuf> = opts.destino.as_ref().map(|d| {
+        let mut p = d.clone();
+        let nombre = p
+            .file_name()
+            .map(|n| format!("{}.part", n.to_string_lossy()))
+            .unwrap_or_else(|| "descarga.part".to_string());
+        p.set_file_name(nombre);
+        p
+    });
 
     match &opts.destino {
         Some(d) => {
             if let Some(p) = d.parent() {
                 let _ = std::fs::create_dir_all(p);
             }
+            // Se escribe en el `.part` (o en el destino si no se pudo
+            // preparar) y al final se renombra de forma atomica.
+            let destino_parcial = parte.clone().unwrap_or_else(|| d.clone());
             let mut f = std::fs::OpenOptions::new()
                 .create(true)
                 .write(true)
                 .append(resumed)
                 .truncate(!resumed)
-                .open(d)
-                .map_err(|e| format!("abrir {}: {e}", d.display()))?;
+                .open(&destino_parcial)
+                .map_err(|e| format!("abrir {}: {e}", destino_parcial.display()))?;
             let mut buf = vec![0u8; 64 * 1024];
             let mut r = resp.into_body().into_reader();
             loop {
@@ -236,26 +293,44 @@ pub fn descargar(url: &str, opts: &Opciones) -> Result<Resultado, String> {
                     break;
                 }
                 sha.update(&buf[..n]);
+                hasher3.update(&buf[..n]);
                 f.write_all(&buf[..n]).map_err(|e| format!("escribir: {e}"))?;
                 total += n as u64;
             }
             f.flush().ok();
+            // Renombrado atomico: el destino solo existe si esta completo.
+            if destino_parcial != *d {
+                std::fs::rename(&destino_parcial, d).map_err(|e| {
+                    format!(
+                        "renombrar {} -> {}: {e}",
+                        destino_parcial.display(),
+                        d.display()
+                    )
+                })?;
+            }
         }
         None => {
             let mut buf = vec![0u8; 64 * 1024];
             let mut r = resp.into_body().into_reader();
+            let mut r: Box<dyn Read> = if encoding_br {
+                Box::new(brotli::Decompressor::new(r, 8192))
+            } else {
+                Box::new(r)
+            };
             loop {
                 let n = r.read(&mut buf).map_err(|e| format!("leer: {e}"))?;
                 if n == 0 {
                     break;
                 }
                 sha.update(&buf[..n]);
+                hasher3.update(&buf[..n]);
                 total += n as u64;
             }
         }
     }
 
     let hex = crate::util_text::hex(&sha.finalize());
+    let hex3 = hasher3.finalize().to_hex().to_string();
     let mut error = None;
     if let Some(esp) = &opts.sha256_esperado {
         if !esp.eq_ignore_ascii_case(&hex) {
@@ -273,6 +348,7 @@ pub fn descargar(url: &str, opts: &Opciones) -> Result<Resultado, String> {
         segundos: t0.elapsed().as_secs_f64(),
         resumed,
         sha256: Some(hex),
+        blake3: Some(hex3),
         error,
         cabeceras,
     })
@@ -351,6 +427,7 @@ pub fn subir(
         segundos: t0.elapsed().as_secs_f64(),
         resumed: false,
         sha256: Some(crate::util_text::hex(&Sha256::digest(&datos))),
+        blake3: Some(blake3::hash(&datos).to_hex().to_string()),
         error: if status >= 400 {
             Some(format!("HTTP {status}"))
         } else {
