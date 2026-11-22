@@ -532,20 +532,36 @@ if [ -z "$release_json" ] && [ "$ASSET" = "$STABLE_ASSET" ]; then
 else
   [ -n "$release_json" ] && SA="$(printf '%s' "$release_json" | tr ',' '\n' | grep 'browser_download_url' | grep 'megadaemon-core-android-arm64.sha256"' | sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
 fi
+# MEDIDO el 2026-11-22 (revisión de W2, P0-3): la descarga del .sha256 era
+# opcional y, si fallaba, se instalaba el binario SIN verificar (con un simple
+# aviso) => el móvil podía quedarse con un binario que nadie ha comprobado.
+# Ahora es FATAL: sin .sha256 no se instala nada.
 EXPECT=""
-if "$CURL" -fsSL -o "$DL.sha256" "$SA" 2>/dev/null; then
-  EXPECT="$(cut -d' ' -f1 < "$DL.sha256" | tr -d '\r\n ')"
+if ! "$CURL" -fsSL -o "$DL.sha256" "$SA" 2>/dev/null; then
+  die "no pude descargar el .sha256 del release ($SA): no instalo nada sin verificar"
 fi
+EXPECT="$(cut -d' ' -f1 < "$DL.sha256" | tr -d '\r\n ')"
+[ -n "$EXPECT" ] || die "el .sha256 del release vino vacio: no instalo nada sin verificar"
 GOT="$(sha256sum "$DL" | cut -d' ' -f1)"
-if [ -n "$EXPECT" ]; then
-  [ "$EXPECT" != "$GOT" ] && die "sha256 del release ($EXPECT) != el descargado ($GOT)"
-  say "sha256 verificado: $GOT"
-else
-  warn "no pude descargar el .sha256: SIGO con el binario sin verificar (NO recomendado)"
-fi
+[ "$EXPECT" = "$GOT" ] || die "sha256 del release ($EXPECT) != el descargado ($GOT)"
+say "sha256 verificado: $GOT"
 # ¿es realmente un ELF aarch64?
+# MEDIDO el 2026-11-22 (revisión de W2, P0-2): la comprobación sólo corría si
+# había `readelf` (que el móvil/Termux no tiene) => la puerta se saltaba en
+# silencio y, con el 404 de P0-1, se podía instalar un HTML de error como si
+# fuera el daemon.  Ahora se comprueba la CABECERA ELF directamente (magic
+# 7f454c46 + e_machine 0xB7 = aarch64), sin dependencias, y es FATAL.
+elf_aarch64() { # $1 = fichero -> 0 si es ELF 64/32 LE con e_machine=aarch64
+  _m="$(od -An -tx1 -N 4 "$1" 2>/dev/null | tr -d ' \n')"
+  _e="$(od -An -tx1 -j 18 -N 2 "$1" 2>/dev/null | tr -d ' \n')"
+  [ "$_m" = "7f454c46" ] || return 1
+  case "$_e" in b700|B700) return 0 ;; esac
+  return 1
+}
+elf_aarch64 "$DL" || die "lo descargado NO es un ELF aarch64 (probablemente un HTML de error): no instalo nada"
+say "cabecera ELF aarch64 verificada"
 if command -v readelf >/dev/null 2>&1; then
-  readelf -h "$DL" 2>/dev/null | grep -qi "aarch64" || die "el binario descargado NO es aarch64"
+  readelf -h "$DL" 2>/dev/null | grep -qi "aarch64" || die "readelf dice que NO es aarch64"
 fi
 chmod 755 "$DL"
 if [ "$DESTINO" = movil ]; then
