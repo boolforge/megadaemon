@@ -10,8 +10,6 @@
 //! sin `confirm: true`**.
 
 use serde_json::{json, Value};
-use crate::csc_verify;
-use crate::npu_vs4l;
 
 /// Definiciones de las herramientas nuevas.
 pub fn tool_definitions() -> Value {
@@ -50,15 +48,31 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "daad_harvester",
-            "description": "Evidence-led DAAD database recognizer, disassembler, retro media inspector (TAP, TZX, DSK, ADF, P00) and SQLite preservation catalog interface.",
+            "description": "Evidence-led DAAD database recognizer, full DDB IR extractor, interpreter fingerprinter, load-model verifier (10 retro targets), recursive media unpacker (ZIP, GZ, +3DOS, P00, TAP, TZX, D64, CPC DSK, ADF, DMS, FAT12), CondAct disassembler, and SQLite preservation catalog interface.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Ruta al fichero, imagen de disco, o base de datos state.db" },
-                    "action": { "type": "string", "enum": ["scan", "embedded", "media", "disasm", "catalog"], "default": "scan" },
-                    "platform": { "type": "string", "description": "Filtro de plataforma para catalog o dialecto (v1/v2)" },
+                    "action": { "type": "string", "enum": ["scan", "embedded", "media", "disasm", "catalog", "ir", "fingerprint", "load_model", "unpack"], "default": "scan" },
+                    "platform": { "type": "string", "description": "Filtro de plataforma para catalog, dialecto (v1/v2) para disasm, o target para load_model (amiga_hunk, atari_st_prg, c64_prg, c64_entry_state, cpc_amsdos, dos_mz, plus4_prg, zx_plus3dos, msx_z80, pcw_z80)" },
                     "query": { "type": "string", "description": "Filtro de busqueda para catalog (titulo o id)" }
                 }
+            }
+        },
+        {
+            "name": "coding_agent",
+            "description": "Autonomous multi-turn ReAct software engineering agent in pure Rust. Reads, edits, searches, and runs commands inside a sandboxed workspace using MegaDaemon's live provider vault with automatic SEERE fallback and JSONL session persistence.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "goal": { "type": "string", "description": "Objetivo de ingenieria de software a resolver en la sesion" },
+                    "workspace_root": { "type": "string", "description": "Directorio raiz del workspace (opcional; por defecto '.')" },
+                    "model": { "type": "string", "description": "Modelo LLM preferido (opcional)" },
+                    "session_id": { "type": "string", "description": "ID de sesion JSONL para reanudar o etiquetar (opcional)" },
+                    "max_turns": { "type": "integer", "default": 15, "description": "Numero maximo de turnos ReAct (por defecto 15)" },
+                    "allow_outside_workspace": { "type": "boolean", "default": false, "description": "Permitir acceso fuera de workspace_root (por defecto false)" }
+                },
+                "required": ["goal"]
             }
         },
 
@@ -606,6 +620,25 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                                 let (condacts, next_offset) = crate::daad::CondActDisassembler::disassemble_stream(&data, 0, dialect);
                                 json!({ "ok": true, "count": condacts.len(), "next_offset": next_offset, "condacts": condacts })
                             }
+                            "ir" => {
+                                match crate::daad_ir::parse_ddb_ir_auto(&data, &path) {
+                                    Ok(doc) => json!({ "ok": true, "ir": doc }),
+                                    Err(e) => json!({ "ok": false, "error": e }),
+                                }
+                            }
+                            "fingerprint" => {
+                                let fp = crate::daad_ir::fingerprint_binary(&data, &path);
+                                json!({ "ok": true, "fingerprint": fp })
+                            }
+                            "load_model" => {
+                                let platform = s("platform");
+                                let admission = crate::daad_load_models::verify_load_model(&platform, &data);
+                                json!({ "ok": true, "admission": admission })
+                            }
+                            "unpack" => {
+                                let members = crate::daad_unpack::unpack_recursive(&data, &path, 3);
+                                json!({ "ok": true, "count": members.len(), "members": members })
+                            }
                             _ => {
                                 let analysis = crate::daad::DAADBytecodeParser::parse_ddb(&data, &path);
                                 json!({ "ok": true, "analysis": analysis })
@@ -619,6 +652,43 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         json!({ "content": [{ "type": "text", "text": txt }], "isError": true })
                     }
                 }
+            }
+        }
+        "coding_agent" => {
+            let goal = s("goal");
+            if goal.trim().is_empty() {
+                json!({ "content": [{ "type": "text", "text": "{\"ok\":false,\"error\":\"missing_goal\"}" }], "isError": true })
+            } else {
+                let ws_raw = s("workspace_root");
+                let workspace_root = if ws_raw.trim().is_empty() {
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+                } else {
+                    std::path::PathBuf::from(ws_raw)
+                };
+                let model = {
+                    let m = s("model");
+                    if m.trim().is_empty() { None } else { Some(m) }
+                };
+                let session_id = {
+                    let sid = s("session_id");
+                    if sid.trim().is_empty() { None } else { Some(sid) }
+                };
+                let max_turns = args
+                    .get("max_turns")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| (n as usize).clamp(1, 50))
+                    .unwrap_or(15);
+                let cfg = crate::agent_coding::CodingAgentConfig {
+                    workspace_root,
+                    max_turns,
+                    max_context_chars: 120_000,
+                    model,
+                    session_id,
+                    allow_outside_workspace: b("allow_outside_workspace"),
+                };
+                let report = crate::agent_coding::run_coding_session_live(&goal, &cfg);
+                let txt = serde_json::to_string_pretty(&report).unwrap_or_default();
+                json!({ "content": [{ "type": "text", "text": txt }] })
             }
         }
         "clipboard" => {

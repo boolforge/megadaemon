@@ -235,7 +235,7 @@ fn local_browser_request(peer: &std::net::IpAddr, headers: &str) -> bool {
     api_key::is_loopback(peer) && host_is_loopback(headers) && !has_proxy_headers(headers)
 }
 
-fn requires_auth(path: &str, method: &str, local_browser: bool) -> bool {
+fn requires_auth(path: &str, _method: &str, local_browser: bool) -> bool {
     // v13.2.3 (AUTH-01…AUTH-06): FAIL-CLOSED.
     //
     // Antes sólo se protegían los POST, y en la rama GET quedaban endpoints
@@ -1706,6 +1706,54 @@ fn handle_client(mut stream: TcpStream) {
             "/api/voice" => {
                 send_json(&mut stream, &crate::voice_runtime::status());
             }
+            "/api/coding/sessions" => {
+                let sessions_dir = std::path::PathBuf::from(state_dir()).join("coding_sessions");
+                let mut sessions: Vec<Value> = Vec::new();
+                if let Ok(entries) = fs::read_dir(&sessions_dir) {
+                    for entry in entries.flatten() {
+                        let p = entry.path();
+                        if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                            continue;
+                        }
+                        let id = p
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if id.is_empty() {
+                            continue;
+                        }
+                        let (bytes, modified_epoch) = match entry.metadata() {
+                            Ok(m) => {
+                                let ts = m
+                                    .modified()
+                                    .ok()
+                                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                    .map(|d| d.as_secs())
+                                    .unwrap_or(0);
+                                (m.len(), ts)
+                            }
+                            Err(_) => (0, 0),
+                        };
+                        sessions.push(json!({
+                            "id": id,
+                            "bytes": bytes,
+                            "modified_epoch": modified_epoch,
+                        }));
+                    }
+                }
+                sessions.sort_by(|a, b| {
+                    let ta = a["modified_epoch"].as_u64().unwrap_or(0);
+                    let tb = b["modified_epoch"].as_u64().unwrap_or(0);
+                    tb.cmp(&ta).then_with(|| {
+                        a["id"]
+                            .as_str()
+                            .unwrap_or("")
+                            .cmp(b["id"].as_str().unwrap_or(""))
+                    })
+                });
+                send_json(&mut stream, &json!({ "ok": true, "sessions": sessions }));
+            }
             _ => {
                 send_http_response(&mut stream, 404, "application/json", b"{\"error\":\"not_found\"}");
             }
@@ -1992,6 +2040,66 @@ fn handle_client(mut stream: TcpStream) {
                 obj.insert("battery_pct".into(), json!(pstate.capacity_pct));
                 obj.insert("charging".into(), json!(pstate.charging));
             }
+            send_json(&mut stream, &v);
+        }
+        "/api/coding/run" => {
+            let goal = body_json["goal"].as_str().unwrap_or("").trim();
+            if goal.is_empty() {
+                let err_body = json!({
+                    "ok": false,
+                    "error": "missing required non-empty 'goal' field"
+                })
+                .to_string();
+                send_http_response(
+                    &mut stream,
+                    400,
+                    "application/json; charset=utf-8",
+                    err_body.as_bytes(),
+                );
+                return;
+            }
+            let workspace_root = body_json["workspace_root"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| {
+                        std::path::PathBuf::from("/data/user/0/com.agy/files/megadaemon")
+                    })
+                });
+            let model = body_json["model"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            let session_id = body_json["session_id"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            let max_turns = body_json["max_turns"]
+                .as_u64()
+                .map(|n| (n as usize).clamp(1, 100))
+                .unwrap_or(20);
+            let max_context_chars = body_json["max_context_chars"]
+                .as_u64()
+                .map(|n| (n as usize).max(4096))
+                .unwrap_or(120_000);
+            let allow_outside_workspace = body_json["allow_outside_workspace"]
+                .as_bool()
+                .unwrap_or(false);
+
+            let cfg = crate::agent_coding::CodingAgentConfig {
+                workspace_root,
+                max_turns,
+                max_context_chars,
+                model,
+                session_id,
+                allow_outside_workspace,
+            };
+            let report = crate::agent_coding::run_coding_session_live(goal, &cfg);
+            let v = serde_json::to_value(&report).unwrap_or_else(|_| json!({}));
             send_json(&mut stream, &v);
         }
         "/api/providers" => {
@@ -2665,7 +2773,6 @@ pub fn run_server(port: u16) -> Result<(), String> {
     loop {
         std::thread::sleep(std::time::Duration::from_secs(3600));
     }
-    Ok(())
 }
 
 /// Puertos alias del cockpit.

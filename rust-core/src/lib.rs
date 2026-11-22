@@ -1,6 +1,7 @@
 //! MegaDaemon v15 — Rust Core (biblioteca unificada).
 //!
 //! Lib unificada con todos los módulos de MegaDaemon v15.
+#![recursion_limit = "256"]
 
 pub mod accelerator_policy;
 pub mod adb_client;

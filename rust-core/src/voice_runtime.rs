@@ -30,7 +30,7 @@
 
 use crate::agent_voice::{
     act, now_iso, plan_next, speak_to_peer, voice_status, whoami, Action, Brain, Executor,
-    LlmBrain, PeerView, RuleBrain, TaskView, VoiceContext, VoiceOutcome, VoiceProfile,
+    LlmBrain, PeerView, RuleBrain, TaskView, VoiceContext, VoiceProfile,
 };
 use crate::{coordination, mesh, providers, webui};
 use serde_json::{json, Value};
@@ -716,7 +716,6 @@ pub fn broadcast(lines: &[String]) -> Value {
     let mut journal_ok = 0usize;
     let mut sync_ok = 0usize;
     let mut board_ok = 0usize;
-    let mut swarm: Option<Value> = None;
     let mut errors: Vec<String> = Vec::new();
 
     let journal = journal_path();
@@ -772,22 +771,22 @@ pub fn broadcast(lines: &[String]) -> Value {
         .filter_map(|v| v.get("describe").and_then(|d| d.as_str()).map(|s| s.to_string()))
         .collect::<Vec<_>>()
         .join("; ");
-    if spoken.is_empty() {
-        swarm = Some(json!({"ok": false, "skipped": "sin texto que difundir"}));
+    let swarm: Option<Value> = if spoken.is_empty() {
+        Some(json!({"ok": false, "skipped": "sin texto que difundir"}))
     } else if !budget_available() {
-        swarm = Some(json!({"ok": false, "skipped": "presupuesto de acciones agotado"}));
+        Some(json!({"ok": false, "skipped": "presupuesto de acciones agotado"}))
     } else {
         let provider = std::env::var("MEGADAEMON_VOICE_PROVIDER")
             .unwrap_or_else(|_| "local-seere".to_string());
         let res = providers::execute_chat(&spoken, Some(&provider), None, None, 256);
-        swarm = Some(json!({
+        Some(json!({
             "ok": !res.reply.trim().is_empty(),
             "provider": provider,
             "model": res.model_name,
             "latency_ms": res.latency_ms,
             "reply": redact(&res.reply),
-        }));
-    }
+        }))
+    };
 
     json!({
         "journal_lines": journal_ok,
@@ -1132,14 +1131,61 @@ pub fn handle(action: &str, args: &Value) -> Value {
                 speak(peer, text)
             }
         }
+        "code" => {
+            let goal = args.get("goal").and_then(|v| v.as_str()).unwrap_or("").trim();
+            if goal.is_empty() {
+                json!({"ok": false, "error": "code necesita 'goal'"})
+            } else {
+                let ws = args.get("workspace").and_then(|v| v.as_str());
+                let max_turns = args
+                    .get("max_turns")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| (n as usize).clamp(1, 20))
+                    .unwrap_or(10);
+                delegate_coding_goal(goal, ws, max_turns)
+            }
+        }
         "whoami" => whoami_json(),
         "status" => status(),
         _ => json!({
             "ok": false,
             "error": "accion desconocida",
-            "hint": "acciones: plan | act | speak | whoami | status",
+            "hint": "acciones: plan | act | speak | code | whoami | status",
         }),
     }
+}
+
+/// Bridge agentic voice/SEERE requests to the multi-turn coding engine.
+/// Produces a concise, secret-redacted TTS-friendly summary alongside the report.
+pub fn delegate_coding_goal(goal: &str, workspace: Option<&str>, max_turns: usize) -> Value {
+    let ws = workspace
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/data/user/0/com.agy/files/megadaemon"));
+    let cfg = crate::agent_coding::CodingAgentConfig {
+        workspace_root: ws,
+        max_turns: max_turns.clamp(1, 20),
+        max_context_chars: 96_000,
+        model: None,
+        session_id: None,
+        allow_outside_workspace: false,
+    };
+    let report = crate::agent_coding::run_coding_session_live(goal, &cfg);
+    let safe_answer = redact(&report.final_answer);
+    let speech_summary: String = safe_answer.lines().take(3).collect::<Vec<_>>().join(" ");
+    let speech_trimmed: String = speech_summary.chars().take(280).collect();
+    json!({
+        "ok": report.completed && report.error.is_none(),
+        "completed": report.completed,
+        "session_id": report.session_id,
+        "turns": report.turns_taken,
+        "tool_calls": report.tool_calls_executed,
+        "files_modified": report.files_modified,
+        "speech_summary": speech_trimmed,
+        "final_answer": safe_answer,
+        "error": report.error,
+    })
 }
 
 // ------------------------------------------------------------------------ //
