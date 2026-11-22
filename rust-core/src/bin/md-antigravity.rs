@@ -138,6 +138,8 @@ fn main() -> ExitCode {
                 cmd_conversation(&cfg, &id, json_out)
             }
             "tasks" => cmd_tasks(json_out),
+            "model" => cmd_model(&cfg, json_out),
+            "env" => cmd_env(json_out),
             "enqueue" => {
                 let text = argv[2..].join(" ");
                 if text.trim().is_empty() {
@@ -167,7 +169,14 @@ fn main() -> ExitCode {
 /// Mensaje de uso.
 fn usage() {
     eprintln!(
-        "uso: md-antigravity <status|catalog|conversations|search|conversation|tasks|enqueue> [args]\n\
+        "uso: md-antigravity <status|catalog|conversations|search|conversation|tasks|model|env|enqueue> [args]\n\
+         \n\
+         subcomandos de asimilación:\n\
+         \x20 model                       lista los modelos personalizados (BYOM) de la IDE\n\
+         \x20 model set [--label <etiqueta>] [--url <base>]   registra el modelo (por defecto 'megadaemon')\n\
+         \x20 model remove --label <etiqueta>                  quita un modelo personalizado\n\
+         \x20 env                        catálogo del entorno/utilidades de Antigravity\n\
+         \x20 env --tool <nombre>        ficha de una herramienta concreta\n\
          \n\
          opciones: --json --host <h> --port <n> --timeout <s> --model <enum> --workspace <uri> --wait <s>"
     );
@@ -380,9 +389,121 @@ fn cmd_tasks(json_out: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_enqueue(cfg: &BridgeConfig, text: &str, json_out: bool) -> Result<(), String> {
+/// **Modelos personalizados (BYOM) de Antigravity**: el "modelo" de la IDE
+/// es SIEMPRE el gateway del MegaDaemon canónico.
+///
+/// * `model`             → lista lo que hay registrado ahora mismo.
+/// * `model set`         → registra `megadaemon` (etiqueta y URL opcionales).
+/// * `model remove`      → quita un modelo personalizado.
+fn cmd_model(cfg: &BridgeConfig, json_out: bool) -> Result<(), String> {
+    use megadaemon_core::antigravity_model as am;
     let b = connect(cfg).map_err(|e| e.to_string())?;
-    let cid = b
+    let sub = std::env::args()
+        .collect::<Vec<String>>()
+        .get(2)
+        .cloned()
+        .unwrap_or_default()
+        .trim_start_matches('-')
+        .to_string();
+    match sub.as_str() {
+        "set" => {
+            let label = arg("--label").unwrap_or_else(|| am::DEFAULT_LABEL.to_string());
+            let url = arg("--url").unwrap_or_else(|| am::DEFAULT_BASE_URL.to_string());
+            let spec = am::ModelSpec::new(&label, &url);
+            am::register(&b, &spec).map_err(|e| e.to_string())?;
+            let modelos = am::current_models(&b).map_err(|e| e.to_string())?;
+            let v = json!({
+                "ok": true,
+                "registrado": am::summary(&am::model_info(&spec)),
+                "modelos": modelos.iter().map(|(k, i)| json!({"label": k, "info": am::summary(i)})).collect::<Vec<_>>(),
+                "nota": "el modelo SELECCIONADO en la GUI lo elige el usuario; el registro lo hace aparecer en el selector",
+            });
+            emit(json_out, &v, |v| {
+                println!("registrado: {}", v.pointer("/registrado/label").and_then(|x| x.as_str()).unwrap_or("?"));
+                println!("url base : {}", v.pointer("/registrado/base_url").and_then(|x| x.as_str()).unwrap_or("?"));
+                println!("modelos  : {}", v.get("modelos").and_then(|x| x.as_array()).map(|a| a.len()).unwrap_or(0));
+            });
+            Ok(())
+        }
+        "remove" => {
+            let label = arg("--label")
+                .ok_or_else(|| "uso: md-antigravity model remove --label <etiqueta>".to_string())?;
+            am::remove(&b, &label).map_err(|e| e.to_string())?;
+            let modelos = am::current_models(&b).map_err(|e| e.to_string())?;
+            let v = json!({ "ok": true, "quitado": label, "modelos": modelos.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>() });
+            emit(json_out, &v, |v| {
+                println!("quitado: {}", v.get("quitado").and_then(|x| x.as_str()).unwrap_or("?"));
+            });
+            Ok(())
+        }
+        _ => {
+            let modelos = am::current_models(&b).map_err(|e| e.to_string())?;
+            let v = json!({
+                "ok": true,
+                "n": modelos.len(),
+                "modelos": modelos.iter().map(|(k, i)| json!({"label": k, "info": am::summary(i)})).collect::<Vec<_>>(),
+            });
+            emit(json_out, &v, |v| {
+                println!("modelos personalizados: {}", v.get("n").and_then(|x| x.as_u64()).unwrap_or(0));
+                if let Some(arr) = v.get("modelos").and_then(|x| x.as_array()) {
+                    for m in arr {
+                        println!(
+                            "  - {}  ->  {}  (max_tokens={})",
+                            m.pointer("/label").and_then(|x| x.as_str()).unwrap_or("?"),
+                            m.pointer("/info/base_url").and_then(|x| x.as_str()).unwrap_or("?"),
+                            m.pointer("/info/max_tokens").and_then(|x| x.as_u64()).unwrap_or(0)
+                        );
+                    }
+                }
+            });
+            Ok(())
+        }
+    }
+}
+
+/// **Entorno y utilidades de Antigravity** absorbidos por MegaDaemon.
+fn cmd_env(json_out: bool) -> Result<(), String> {
+    use megadaemon_core::antigravity_env as ae;
+    let timeout = arg("--timeout")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(15_000);
+    if let Some(tool) = arg("--tool") {
+        let v = ae::tool_report(&tool, timeout);
+        emit(json_out, &v, |v| {
+            println!(
+                "{}  {}",
+                v.get("name").and_then(|x| x.as_str()).unwrap_or("?"),
+                v.get("version").and_then(|x| x.as_str()).unwrap_or("(sin version)")
+            );
+            if let Some(r) = v.pointer("/tool/real").and_then(|x| x.as_str()) {
+                println!("  real: {r}");
+            }
+        });
+        return Ok(());
+    }
+    let v = ae::environment_report(timeout);
+    emit(json_out, &v, |v| {
+        println!(
+            "runtime: {}  ({} entradas, {} B)",
+            v.get("runtime_bin").and_then(|x| x.as_str()).unwrap_or("?"),
+            v.get("runtime_entradas").and_then(|x| x.as_u64()).unwrap_or(0),
+            v.get("runtime_bytes").and_then(|x| x.as_u64()).unwrap_or(0)
+        );
+        if let Some(arr) = v.get("herramientas_clave").and_then(|x| x.as_array()) {
+            for t in arr {
+                println!(
+                    "  - {:<10} {}",
+                    t.get("name").and_then(|x| x.as_str()).unwrap_or("?"),
+                    t.get("version").and_then(|x| x.as_str()).unwrap_or("(sin version)")
+                );
+            }
+        }
+    });
+    Ok(())
+}
+
+fn cmd_enqueue(cfg: &BridgeConfig, text: &str, json_out: bool) -> Result<(), String> {
+    let b = connect(cfg).map_err(|e| e.to_string())?;    let cid = b
         .enqueue(text, &cfg.workspace_uris)
         .map_err(|e| e.to_string())?;
     let wait = arg("--wait").and_then(|v| v.parse::<u64>().ok());
