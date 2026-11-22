@@ -114,6 +114,8 @@ pub mod re_engine;
 pub mod rea_assistant;
 pub mod code_ast;
 pub mod re_disasm;
+pub mod re_bdd;
+pub mod re_mba;
 pub mod recording_vault;
 pub mod recordings;
 pub mod axml_parser;

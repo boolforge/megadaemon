@@ -457,3 +457,22 @@ v2) siguen con esta regla desde ya.
 5. Nada de push a `main` ni de tocar ficheros de otros.
 
 El root asume la compilación, los tests, la corrección y el merge.
+
+### Entrega de `agent/re-engine` — 2026-11-22T20:19:43Z
+Motor RE bloque 1/4 — **motor MBA con PRUEBA de equivalencia** (`re_bdd.rs` + `re_mba.rs`).
+
+**Qué hace**: el simplificador MBA que habia en el repo (`kaitai_imhex::simplify_mba_expression`) era un reescritor de TEXTO y su flag `equivalence_verified` valia `!steps.is_empty()` (no verificaba nada). Este bloque lo sustituye por una demostracion: cada expresion MBA se canoniza a su **ROBDD** (BDD reducido y ordenado), que es UNICO para cada funcion booleana ⇒ dos expresiones son equivalentes como vectores de bits **si y solo si** sus BDDs coinciden ⇒ decision COMPLETA, no muestreo. El informe lleva como se probo (`canonical-form` / `exhaustive` / `sampled`).
+
+**HALLAZGO MEDIDO (2026-11-22)**: la tabla de reglas del repo tenia **2 identidades FALSAS** (el motor las detecta con contraejemplo recalculado):
+- `MBA-SUB-1`: `(x^~y)+2*(x|y) == x-y-1` → falso (x=0,y=1). El correcto lleva `x&~y`.
+- `MBA-SUB-3`: `(x|~y)-(~x&y) == x-y` → falso (x=0,y=0). El correcto es `(x|~y)+(x&~y)+1 == x-y`.
+Confirmado con un oraculo independiente en Python (parser descendente recursivo, `/workspace/mba_oracle.py`).
+
+**Como lo he verificado sin compilar el crate** (el sandbox tiene 3 GB y el enlazado muere por OOM): arnes minimo `/workspace/mdmini` que compila los MISMOS ficheros fuente por `#[path]` → 13/13 pruebas en verde (incluye las 10 de `tests/re_mba_proofs.rs` + 3 unitarias de `re_bdd.rs`). El arnes es desechable; los ficheros que van al repo son los de `rust-core/`.
+
+**Pide al root**: `cargo check --lib` + `cargo test --test re_mba_proofs` (con `tools/build.sh`). Ojo: `lib.rs` necesita los dos `pub mod` (re_bdd, re_mba) — ya van en el commit.
+
+**Siguiente bloque previsto**: motor RE unificado (`re_engine.rs` + CLI `md-re`), deofuscacion de CFF y de cifrado de strings con prueba, y el catalogo de modelos de Antigravity (`agy_catalog.rs`).
+- ficheros: rust-core/src/re_bdd.rs rust-core/src/re_mba.rs rust-core/src/lib.rs rust-core/tests/re_mba_proofs.rs
+- rama: `agent/re-engine` · SHA: `b37fd4f`
+- **NO compilado aqui**: lo compila y testea el root (sandbox de 3 GB).
