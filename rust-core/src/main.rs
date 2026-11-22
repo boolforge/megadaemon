@@ -34,6 +34,11 @@ fn print_usage() {
     eprintln!("  npu-probe                                   Probe Exynos 2100 NPU (/dev/vertex10, EDEN, KleidiAI) & Pin Cores 4-7");
     eprintln!("  npu-probe --vs4l                            Sondea el driver VS4L/NPU (ioctl SIN argumento => devuelve el tamano que espera)");
     eprintln!("  csc-verify                                Verifica en el movil si la feature de grabacion nativa (CSC) esta activa");
+    eprintln!("  rootcheck <paquete>[,...]                 Banco de pruebas de ocultacion de root: veredicto + evidencia");
+    eprintln!("  rootcheck --state                        Que senales de root quedan a la vista ahora mismo");
+    eprintln!("  rootcheck --exec <paquete>               Arranca la app y captura su logcat filtrado");
+    eprintln!("  magisk list|enable|disable|install       Gestion real de modulos Magisk (install valida el ZIP)");
+    eprintln!("  magisk shamiko [<zip>]                   Ficha de la release oficial + estado real en el movil");
     eprintln!("  locate-roms [refresh]                       Native Multi-Platform ROM & Binary Auto-Discovery");
     eprintln!("  disasm <plat> <file> [offset] [count]       Native Multi-Arch Disassembler");
     eprintln!("  hex <file> [offset] [length]                Native Hex & ASCII Inspector");
@@ -742,6 +747,166 @@ fn main() {
                 .find(|w| w[0] == "--expect")
                 .map(|w| w[1].to_string());
             let rep = csc_verify::verify_expecting(expect.as_deref());
+            println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+        }
+
+        "csc-patch" => {
+            // Aplica (o SIMULA) un valor nuevo para una feature del CSC y
+            // VERIFICA que el XML re-codificado cambia de sha256 y que el
+            // valor queda aplicado.
+            //
+            //   megadaemon-core csc-patch --value RecordingAllowedByMenu,disclaimer_latin
+            //   megadaemon-core csc-patch --value RecordingAllowed --apply
+            //
+            // Sin `--apply` es una SIMULACIÓN: no toca el móvil (por defecto no
+            // se cambia el valor legal de fábrica).
+            let value = args
+                .windows(2)
+                .find(|w| w[0] == "--value")
+                .map(|w| w[1].to_string());
+            let feature = args
+                .windows(2)
+                .find(|w| w[0] == "--feature")
+                .map(|w| w[1].to_string())
+                .unwrap_or_else(|| "CscFeature_VoiceCall_ConfigRecording".to_string());
+            let apply = args.iter().any(|a| a == "--apply");
+            let Some(valor) = value else {
+                eprintln!("Uso: megadaemon-core csc-patch --value <valor> [--feature <nombre>] [--apply]");
+                std::process::exit(2);
+            };
+            let csc = csc_patch::active_csc().unwrap_or_else(|| "AMO".to_string());
+            let modulo = if apply {
+                std::path::PathBuf::from(csc_patch::MODULE_DIR)
+            } else {
+                std::path::PathBuf::from("/data/local/tmp/megadaemon/csc_patch_dryrun")
+            };
+            let antes = csc_patch::read_csc_xml(&csc)
+                .ok()
+                .and_then(|_| {
+                    let ruta = csc_patch::xml_candidates(&csc)
+                        .into_iter()
+                        .find(|p| p.exists())
+                        .unwrap_or_default();
+                    std::fs::read(&ruta)
+                        .ok()
+                        .map(|b| root_occlusion::sha256_hex(&b))
+                })
+                .unwrap_or_else(|| "?".to_string());
+            let rep = match csc_patch::patch(&csc, &feature, &valor, &modulo) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("csc-patch error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            // Verificación: se vuelve a leer el fichero escrito, se calcula su
+            // sha256, se descodifica (OMC) y se comprueba el valor.
+            let bytes = std::fs::read(&rep.modulo).unwrap_or_default();
+            let despues = root_occlusion::sha256_hex(&bytes);
+            let leido = root_occlusion::read_device_file(&rep.modulo, 1 << 20)
+                .and_then(|b| {
+                    let (xml, _enc, _err) = csc_verify::decode_csc_file(&b);
+                    xml.and_then(|x| rom_migration::csc_feature_get(&x, &feature))
+                });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "modo": if apply { "aplicado" } else { "simulacion" },
+                    "csc": rep.csc,
+                    "feature": rep.feature,
+                    "valor_anterior": rep.valor_anterior,
+                    "valor_pedido": rep.valor_nuevo,
+                    "valor_leido_del_fichero_re_codificado": leido,
+                    "valor_aplicado": leido.as_deref() == Some(rep.valor_nuevo.as_str()),
+                    "sha256_antes": antes,
+                    "sha256_despues": despues,
+                    "sha256_cambia": antes != despues,
+                    "bytes": rep.bytes_escritos,
+                    "fichero": rep.modulo,
+                    "contents_db_actualizado": rep.contents_db_actualizado,
+                    "aviso": if apply {
+                        "reinicia para que el framework lea el fichero; sin --apply esto es solo una simulacion"
+                    } else {
+                        "SIMULACION: no se ha escrito nada en el modulo"
+                    },
+                }))
+                .unwrap()
+            );
+        }
+
+        "rootcheck" => {
+            // Banco de pruebas de ocultacion de root:
+            //   megadaemon-core rootcheck <paquete> [<paquete>...]
+            //   megadaemon-core rootcheck --state      (que se ve ahora mismo)
+            //   megadaemon-core rootcheck --exec <pkg>  (prueba de ejecucion)
+            //   megadaemon-core rootcheck --static <pkg>
+            // Salida: JSON con la tabla app -> senal -> veredicto.
+            let mut pkgs: Vec<String> = Vec::new();
+            let mut mode = "audit";
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--state" => mode = "state",
+                    "--exec" => mode = "exec",
+                    "--static" => mode = "static",
+                    "--csc" => mode = "csc",
+                    other => pkgs.push(other.to_string()),
+                }
+                i += 1;
+            }
+            if pkgs.is_empty() && mode == "audit" {
+                eprintln!("Usage: megadaemon-core rootcheck <paquete>[,<paquete>...] | --state | --exec <pkg> | --static <pkg> | --csc");
+                std::process::exit(2);
+            }
+            let packages = serde_json::json!(pkgs);
+            let rep = android::root_occlusion_audit(&packages, "", mode);
+            println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+        }
+
+        "magisk" => {
+            // Gestion real de modulos Magisk:
+            //   megadaemon-core magisk list
+            //   megadaemon-core magisk enable <id> | disable <id>
+            //   megadaemon-core magisk validate <zip>
+            //   megadaemon-core magisk install <zip> [--enable] [--dry-run]
+            //   megadaemon-core magisk shamiko [<zip>] [--enable] [--dry-run]
+            let sub = args.get(2).map(|s| s.as_str()).unwrap_or("list");
+            let rest: Vec<String> = args.iter().skip(3).cloned().collect();
+            let has = |f: &str| rest.iter().any(|a| a == f);
+            let positional: Vec<String> = rest
+                .iter()
+                .filter(|a| !a.starts_with("--"))
+                .cloned()
+                .collect();
+            let enable = has("--enable");
+            let dry_run = if has("--dry-run") {
+                true
+            } else {
+                !has("--real")
+            };
+            let rep = match sub {
+                "list" => android::magisk_module("list", "", "", "", "", enable, dry_run),
+                "enable" | "disable" => {
+                    let id = positional.first().cloned().unwrap_or_default();
+                    android::magisk_module(sub, &id, "", "", "", enable, dry_run)
+                }
+                "validate" => {
+                    let zip = positional.first().cloned().unwrap_or_default();
+                    android::magisk_module("validate_zip", "", "", "", &zip, enable, dry_run)
+                }
+                "install" => {
+                    let zip = positional.first().cloned().unwrap_or_default();
+                    android::magisk_module("install", "", "", "", &zip, enable, dry_run)
+                }
+                "shamiko" => {
+                    let zip = positional.first().cloned().unwrap_or_default();
+                    android::magisk_module("shamiko", "", "", "", &zip, enable, dry_run)
+                }
+                other => {
+                    eprintln!("Subcomando desconocido: {}", other);
+                    std::process::exit(2);
+                }
+            };
             println!("{}", serde_json::to_string_pretty(&rep).unwrap());
         }
 

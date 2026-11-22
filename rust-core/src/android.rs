@@ -376,9 +376,43 @@ pub fn selinux_control(action: &str, rule: &str) -> Value {
 // ========================================================================= //
 // magisk_module
 // ========================================================================= //
-pub fn magisk_module(action: &str, module_id: &str, name: &str, description: &str) -> Value {
+pub fn magisk_module(
+    action: &str,
+    module_id: &str,
+    name: &str,
+    description: &str,
+    zip_path: &str,
+    enable: bool,
+    dry_run: bool,
+) -> Value {
     let id = module_id.trim();
     match action {
+        "validate_zip" => {
+            if zip_path.trim().is_empty() {
+                return err("missing_zip", "hace falta zip_path");
+            }
+            let info = crate::magisk_module::validate_module_zip(zip_path);
+            json!({ "ok": info.valid, "zip": info.to_json() })
+        }
+        "install" => {
+            if zip_path.trim().is_empty() {
+                return err("missing_zip", "hace falta zip_path");
+            }
+            crate::magisk_module::install_module_zip(zip_path, enable, dry_run)
+        }
+        "shamiko" => {
+            if zip_path.trim().is_empty() {
+                // Sin ZIP: se devuelve la ficha de la release y el estado real.
+                return json!({
+                    "ok": true,
+                    "release": crate::magisk_module::shamiko_release_info(),
+                    "status": crate::magisk_module::shamiko_status(),
+                    "note": "sin zip_path no se instala nada: se devuelve la ficha de la \
+                             release oficial y el estado medido en el movil",
+                });
+            }
+            crate::magisk_module::shamiko_prepare(zip_path, enable, dry_run)
+        }
         "list" => {
             let script = r#"
 for d in /data/adb/modules/*/; do
@@ -451,6 +485,119 @@ magisk --sqlite "SELECT key,value FROM settings;" 2>/dev/null
             json!({ "ok": r.code == Some(0), "module": id, "output": r.combined() })
         }
         other => err("bad_action", &format!("acción no soportada: {}", other)),
+    }
+}
+
+// ========================================================================= //
+// root_occlusion_audit
+// ========================================================================= //
+
+/// Auditoría de ocultación de root.
+///
+/// `packages` es una lista (JSON array) o una lista separada por comas.
+/// `mode` decide el alcance:
+///
+/// * `audit` (por defecto) — tabla completa app → señal → veredicto.
+/// * `state` — sólo el estado actual de las señales (qué queda a la vista).
+/// * `exec` — sólo la prueba de ejecución (logcat de la app en marcha).
+/// * `static` — sólo el escaneo estático del APK.
+/// * `csc` — el valor real de la feature de grabación del CSC activo.
+pub fn root_occlusion_audit(packages: &Value, package: &str, mode: &str) -> Value {
+    let mut pkgs: Vec<String> = Vec::new();
+    if let Some(arr) = packages.as_array() {
+        for v in arr {
+            if let Some(s) = v.as_str() {
+                if !s.trim().is_empty() {
+                    pkgs.push(s.trim().to_string());
+                }
+            }
+        }
+    } else if let Some(s) = packages.as_str() {
+        for part in s.split(',') {
+            if !part.trim().is_empty() {
+                pkgs.push(part.trim().to_string());
+            }
+        }
+    }
+    if !package.trim().is_empty() {
+        pkgs.push(package.trim().to_string());
+    }
+    let mode = if mode.is_empty() { "audit" } else { mode };
+    match mode {
+        "state" => {
+            let ref_app = pkgs
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "com.android.settings".to_string());
+            let states = crate::root_occlusion::occlusion_state(&ref_app);
+            json!({
+                "ok": true,
+                "reference_app": ref_app,
+                "signals": states.iter().map(|s| json!({
+                    "signal": s.signal,
+                    "visible": s.visible,
+                    "hidden_by": s.hidden_by,
+                    "evidence": s.evidence,
+                    "status": s.status,
+                })).collect::<Vec<_>>(),
+            })
+        }
+        "exec" => {
+            if pkgs.is_empty() {
+                return err("missing_package", "hace falta package (o packages)");
+            }
+            let mut out = Vec::new();
+            for p in &pkgs {
+                out.push(crate::root_occlusion::execution_test(p));
+            }
+            json!({ "ok": true, "executions": out })
+        }
+        "static" => {
+            if pkgs.is_empty() {
+                return err("missing_package", "hace falta package (o packages)");
+            }
+            let mut out = Vec::new();
+            for p in &pkgs {
+                let path = crate::root_occlusion::package_apk_path(p).unwrap_or_default();
+                let scan = crate::root_occlusion::scan_apk(&path);
+                out.push(json!({
+                    "package": p,
+                    "apk_path": path,
+                    "apk_size": scan.apk_size,
+                    "dex_count": scan.dex_count,
+                    "so_count": scan.so_count,
+                    "hits": scan.hits.iter().map(|h| json!({
+                        "signal": h.signal,
+                        "source": h.source,
+                        "evidence": h.evidence,
+                    })).collect::<Vec<_>>(),
+                    "warnings": scan.warnings,
+                }));
+            }
+            json!({ "ok": true, "static": out })
+        }
+        "csc" => {
+            let live = crate::root_occlusion::csc_feature_live();
+            json!({
+                "ok": true,
+                "path": crate::root_occlusion::CSC_ACTIVE_PATH,
+                "sha256": live.as_ref().map(|(s, _)| s.clone()),
+                "feature": crate::csc_verify::FEATURE,
+                "value": live.as_ref().and_then(|(_, v)| v.clone()),
+                "variant": live
+                    .as_ref()
+                    .and_then(|(_, v)| v.as_ref().map(|s| crate::csc_verify::classify_variant(s))),
+                "module_active": crate::root_occlusion::device_path_exists(
+                    "/data/adb/modules/megadaemon_csc_recording/cscfeature.xml"),
+            })
+        }
+        _ => {
+            if pkgs.is_empty() {
+                return err("missing_package", "hace falta package (o packages)");
+            }
+            let report = crate::root_occlusion::audit(&pkgs);
+            json!({ "ok": true, "audit": report })
+        }
     }
 }
 
@@ -982,16 +1129,31 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "magisk_module",
-            "description": "Gestiona módulos de Magisk: listar, habilitar, deshabilitar, crear/actualizar y apartar (nunca borra: se mueve para poder revertir).",
+            "description": "Gestiona módulos de Magisk: listar, habilitar, deshabilitar, instalar desde un ZIP local, crear/actualizar y apartar (nunca borra: se mueve para poder revertir).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["list", "enable", "disable", "remove", "create_or_update"] },
+                    "action": { "type": "string", "enum": ["list", "enable", "disable", "remove", "create_or_update", "install", "validate_zip", "shamiko"] },
                     "module_id": { "type": "string" },
                     "name": { "type": "string" },
-                    "description": { "type": "string" }
+                    "description": { "type": "string" },
+                    "zip_path": { "type": "string" },
+                    "enable": { "type": "boolean", "default": false },
+                    "dry_run": { "type": "boolean", "default": true }
                 },
                 "required": ["action"]
+            }
+        },
+        {
+            "name": "root_occlusion_audit",
+            "description": "Auditoria de ocultacion de root: por app, que senales mira (estatico: tabla de cadenas del DEX + .so nativas) y si ahora mismo quedan a la vista desde el namespace de la app (runtime) y en su logcat (ejecucion). Devuelve la tabla app -> senal -> veredicto.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "packages": { "type": "array", "items": { "type": "string" } },
+                    "package": { "type": "string" },
+                    "mode": { "type": "string", "enum": ["audit", "state", "exec", "static", "csc"], "default": "audit" }
+                }
             }
         },
         {
@@ -1073,7 +1235,20 @@ pub fn dispatch(name: &str, args: &Value) -> Value {
             b("delete"),
         ),
         "selinux_control" => selinux_control(&s("action"), &s("rule")),
-        "magisk_module" => magisk_module(&s("action"), &s("module_id"), &s("name"), &s("description")),
+        "magisk_module" => magisk_module(
+            &s("action"),
+            &s("module_id"),
+            &s("name"),
+            &s("description"),
+            &s("zip_path"),
+            b("enable"),
+            args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(true),
+        ),
+        "root_occlusion_audit" => root_occlusion_audit(
+            args.get("packages").unwrap_or(&Value::Null),
+            &s("package"),
+            &s("mode"),
+        ),
         "kernel_and_blocks" => kernel_and_blocks(
             &s("action"),
             u("lines") as u32,
