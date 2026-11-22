@@ -102,7 +102,9 @@ pub fn voice_state_path() -> String {
 
 /// Journal del bus (canal 1 de la difusión).
 pub fn journal_path() -> String {
-    mesh::journal_path(&state_dir()).to_string_lossy().to_string()
+    mesh::journal_path(&state_dir())
+        .to_string_lossy()
+        .to_string()
 }
 
 /// Directorio del canal `sync` (canal 2).
@@ -267,11 +269,8 @@ pub fn build_context() -> VoiceContext {
     }
 
     let st = load_voice_state();
-    ctx.secs_since_last_tick = now_epoch()
-        - st
-            .get("last_tick_ts")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
+    ctx.secs_since_last_tick =
+        now_epoch() - st.get("last_tick_ts").and_then(|v| v.as_i64()).unwrap_or(0);
     ctx.last_action = st
         .get("last_action")
         .and_then(|v| v.as_str())
@@ -423,7 +422,7 @@ const SECRET_PREFIXES: &[&str] = &[
     "ya29.",
     "akia",
     "asia",
-    "eyj",  // cabecera JWT (base64 de {"")
+    "eyj", // cabecera JWT (base64 de {"")
 ];
 
 /// Campos cuyo valor es un hash y **no** debe redactarse.
@@ -695,7 +694,11 @@ fn append_locked(path: &str, line: &str) -> Result<(), String> {
     // descriptor sigue vivo y es único durante toda la llamada.
     let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
     if rc != 0 {
-        return Err(format!("flock {}: {}", path, std::io::Error::last_os_error()));
+        return Err(format!(
+            "flock {}: {}",
+            path,
+            std::io::Error::last_os_error()
+        ));
     }
     let mut f = f;
     let r = f
@@ -750,10 +753,7 @@ pub fn broadcast(lines: &[String]) -> Value {
 
         if let Ok(v) = serde_json::from_str::<Value>(&safe_line) {
             if let Ok(board) = coordination::TaskBoard::open(&board_path()) {
-                if board
-                    .publish_event("voice_action", &owner_id(), &v)
-                    .is_ok()
-                {
+                if board.publish_event("voice_action", &owner_id(), &v).is_ok() {
                     board_ok += 1;
                 }
             }
@@ -769,7 +769,11 @@ pub fn broadcast(lines: &[String]) -> Value {
         .iter()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
         .map(|v| redact_value(&v))
-        .filter_map(|v| v.get("describe").and_then(|d| d.as_str()).map(|s| s.to_string()))
+        .filter_map(|v| {
+            v.get("describe")
+                .and_then(|d| d.as_str())
+                .map(|s| s.to_string())
+        })
         .collect::<Vec<_>>()
         .join("; ");
     if spoken.is_empty() {
@@ -801,7 +805,13 @@ pub fn broadcast(lines: &[String]) -> Value {
 /// Nombre de fichero seguro para un id de nodo.
 fn sanitize(id: &str) -> String {
     id.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -971,7 +981,10 @@ pub fn tick(brain: &dyn Brain) -> Value {
 /// Acción a JSON (para la tool y el journal).
 pub fn action_json(a: &Action) -> Value {
     match a {
-        Action::Claim { task_id, capability } => json!({
+        Action::Claim {
+            task_id,
+            capability,
+        } => json!({
             "action": "claim", "task_id": task_id, "capability": capability,
         }),
         Action::Ask { peer, question } => json!({
@@ -987,7 +1000,11 @@ pub fn action_json(a: &Action) -> Value {
 pub fn run_action(action: &Action, spread: bool) -> Value {
     let ctx = build_context();
     let outcome = act(&ctx, action, &DaemonExecutor);
-    let broadcast = if spread { broadcast(&outcome.broadcast) } else { json!({"skipped": true}) };
+    let broadcast = if spread {
+        broadcast(&outcome.broadcast)
+    } else {
+        json!({"skipped": true})
+    };
     let _ = record_action(&outcome.action.key(), outcome.ok);
     json!({
         "ok": outcome.ok,
@@ -1046,15 +1063,12 @@ pub fn handle(action: &str, args: &Value) -> Value {
     match action {
         "plan" => {
             let ctx = build_context();
-            let brain: Box<dyn Brain> = if args
-                .get("llm")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-            {
-                default_brain()
-            } else {
-                Box::new(RuleBrain)
-            };
+            let brain: Box<dyn Brain> =
+                if args.get("llm").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    default_brain()
+                } else {
+                    Box::new(RuleBrain)
+                };
             let a = plan_next(&ctx, brain.as_ref());
             json!({
                 "ok": true,
@@ -1069,7 +1083,12 @@ pub fn handle(action: &str, args: &Value) -> Value {
             // `confirm: true`).  Si la voz puede llamar tools sin confirmar,
             // la política no existe.  => `do` exige confirmación explícita.
             let wants_tool = args.get("action").and_then(|v| v.as_str()) == Some("do");
-            if wants_tool && !args.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if wants_tool
+                && !args
+                    .get("confirm")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            {
                 return json!({
                     "ok": false,
                     "error": "confirmation_required",
@@ -1080,22 +1099,50 @@ pub fn handle(action: &str, args: &Value) -> Value {
             // Acción explícita o, si no viene, la que decide el cerebro.
             let action = match args.get("action").and_then(|v| v.as_str()) {
                 Some("claim") => Action::Claim {
-                    task_id: args.get("task_id").and_then(|v| v.as_str()).unwrap_or("").into(),
-                    capability: args.get("capability").and_then(|v| v.as_str()).unwrap_or("").into(),
+                    task_id: args
+                        .get("task_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .into(),
+                    capability: args
+                        .get("capability")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .into(),
                 },
                 Some("ask") => Action::Ask {
-                    peer: args.get("peer").and_then(|v| v.as_str()).unwrap_or("").into(),
-                    question: args.get("question").and_then(|v| v.as_str()).unwrap_or("").into(),
+                    peer: args
+                        .get("peer")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .into(),
+                    question: args
+                        .get("question")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .into(),
                 },
                 Some("speak") => Action::Speak {
-                    text: args.get("text").and_then(|v| v.as_str()).unwrap_or("").into(),
+                    text: args
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .into(),
                 },
                 Some("do") => Action::Do {
-                    tool: args.get("tool").and_then(|v| v.as_str()).unwrap_or("").into(),
+                    tool: args
+                        .get("tool")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .into(),
                     args: args.get("args").cloned().unwrap_or(json!({})),
                 },
                 Some("idle") => Action::Idle {
-                    reason: args.get("reason").and_then(|v| v.as_str()).unwrap_or("").into(),
+                    reason: args
+                        .get("reason")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .into(),
                 },
                 _ => {
                     let brain = default_brain();
@@ -1108,7 +1155,11 @@ pub fn handle(action: &str, args: &Value) -> Value {
             // rama "_" la decide el cerebro y el LlmBrain sabe emitir "do"
             // (agent_voice.rs) => esa via esquivaba la confirmacion.
             if let Action::Do { tool, .. } = &action {
-                if !args.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if !args
+                    .get("confirm")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
                     return json!({
                         "ok": false,
                         "error": "confirmation_required",
@@ -1237,11 +1288,24 @@ mod tests {
     #[test]
     fn accion_a_json_cubre_las_cinco() {
         let acts = vec![
-            Action::Claim { task_id: "t1".into(), capability: "reverse".into() },
-            Action::Ask { peer: "p".into(), question: "q".into() },
-            Action::Speak { text: "hola".into() },
-            Action::Do { tool: "apk_inventory".into(), args: json!({}) },
-            Action::Idle { reason: "nada".into() },
+            Action::Claim {
+                task_id: "t1".into(),
+                capability: "reverse".into(),
+            },
+            Action::Ask {
+                peer: "p".into(),
+                question: "q".into(),
+            },
+            Action::Speak {
+                text: "hola".into(),
+            },
+            Action::Do {
+                tool: "apk_inventory".into(),
+                args: json!({}),
+            },
+            Action::Idle {
+                reason: "nada".into(),
+            },
         ];
         for a in acts {
             let j = action_json(&a);
@@ -1266,14 +1330,21 @@ mod tests {
     #[ignore = "necesita un mesh con al menos un peer vivo (estado real del movil)"]
     fn el_catalogo_tiene_los_tres_tipos() {
         let c = catalog();
-        let items = c.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let items = c
+            .get("items")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
         assert!(items.iter().any(|i| i["kind"] == "model"));
         assert!(items.iter().any(|i| i["kind"] == "agent"));
         assert!(items.iter().any(|i| i["kind"] == "service"));
         // Nada inventado: latency sin medir es null
         for i in items.iter() {
             assert!(i.get("latency").is_some());
-            assert!(i.get("health").map(|h| h.get("available").is_some()).unwrap_or(false));
+            assert!(i
+                .get("health")
+                .map(|h| h.get("available").is_some())
+                .unwrap_or(false));
         }
     }
 

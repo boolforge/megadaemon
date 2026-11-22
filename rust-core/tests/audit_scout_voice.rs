@@ -57,11 +57,11 @@ fn state_dir(tag: &str) -> PathBuf {
 #[test]
 fn voice01_redact_no_deja_el_secreto_cuando_va_pegado() {
     let casos = [
-        format!("token={}", SEC),                       // prefijo pegado
-        format!("\"{}\"", SEC),                         // entre comillas
-        format!("https://x/cb?access_token={}", SEC),   // query string
-        format!("Authorization: {}", SEC),              // cabecera
-        format!("Bearer {}", SEC),                      // esquema
+        format!("token={}", SEC),                     // prefijo pegado
+        format!("\"{}\"", SEC),                       // entre comillas
+        format!("https://x/cb?access_token={}", SEC), // query string
+        format!("Authorization: {}", SEC),            // cabecera
+        format!("Bearer {}", SEC),                    // esquema
     ];
     let mut fugados = vec![];
     for c in &casos {
@@ -95,9 +95,17 @@ fn voice02_el_mensaje_al_buzon_del_peer_no_lleva_secretos() {
     println!("[VOICE-02] speak() devolvió: {}", r);
     let inbox = dir.join("inbox").join("peer-audit.ndjson");
     let contenido = fs::read_to_string(&inbox).unwrap_or_else(|e| {
-        panic!("[VOICE-02] no se pudo leer el buzón {}: {}", inbox.display(), e)
+        panic!(
+            "[VOICE-02] no se pudo leer el buzón {}: {}",
+            inbox.display(),
+            e
+        )
     });
-    println!("[VOICE-02] buzón ({} bytes): {:?}", contenido.len(), &contenido[..contenido.len().min(300)]);
+    println!(
+        "[VOICE-02] buzón ({} bytes): {:?}",
+        contenido.len(),
+        &contenido[..contenido.len().min(300)]
+    );
     assert!(
         !contenido.contains(SEC),
         "[VOICE-02] P0: la credencial quedó en CLARO en el buzón compartido {}\n\
@@ -116,8 +124,15 @@ fn voice02_el_mensaje_al_buzon_del_peer_no_lleva_secretos() {
 #[test]
 fn voice03_la_allow_list_rechaza_lo_destructivo_y_normaliza_el_nombre() {
     for tool in [
-        "fs_write", "root_exec", "restart", "reboot", "git_ops", "battery_saver",
-        "adb_shell", "signing_vault", "megadaemon_rizin",
+        "fs_write",
+        "root_exec",
+        "restart",
+        "reboot",
+        "git_ops",
+        "battery_saver",
+        "adb_shell",
+        "signing_vault",
+        "megadaemon_rizin",
     ] {
         assert!(
             !vr::is_allowed(tool),
@@ -125,7 +140,13 @@ fn voice03_la_allow_list_rechaza_lo_destructivo_y_normaliza_el_nombre() {
             tool
         );
     }
-    for tool in ["mesh_claim", "swarm_chat", "system_overview", "MESH_CLAIM", " mesh_claim "] {
+    for tool in [
+        "mesh_claim",
+        "swarm_chat",
+        "system_overview",
+        "MESH_CLAIM",
+        " mesh_claim ",
+    ] {
         assert!(
             vr::is_allowed(tool),
             "[VOICE-03] la tool {} debería estar permitida (normalización trim+lowercase)",
@@ -140,7 +161,10 @@ fn voice03_la_allow_list_rechaza_lo_destructivo_y_normaliza_el_nombre() {
 // ------------------------------------------------------------------------ //
 #[test]
 fn voice04_la_accion_do_exige_confirmacion() {
-    let r = vr::handle("act", &json!({"action": "do", "tool": "system_overview", "args": {}}));
+    let r = vr::handle(
+        "act",
+        &json!({"action": "do", "tool": "system_overview", "args": {}}),
+    );
     println!("[VOICE-04] handle(act, do sin confirm) -> {}", r);
     assert_eq!(
         r.get("ok").and_then(|v| v.as_bool()),
@@ -163,8 +187,16 @@ fn voice04_la_accion_do_exige_confirmacion() {
 fn voice05_la_allow_list_no_contiene_tools_inexistentes() {
     // Contrato copiado de voice_runtime.rs:370-384 (constante privada).
     let allowed = [
-        "mesh_claim", "mesh_ask", "swarm_chat", "system_overview", "capabilities",
-        "task_queue", "alerts", "agent", "apk_inventory", "dex_decompile",
+        "mesh_claim",
+        "mesh_ask",
+        "swarm_chat",
+        "system_overview",
+        "capabilities",
+        "task_queue",
+        "alerts",
+        "agent",
+        "apk_inventory",
+        "dex_decompile",
         "mesh_snapshot",
     ];
     // Las dos primeras las ejecuta el propio ejecutor (ramas especiales).
