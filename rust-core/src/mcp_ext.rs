@@ -2342,6 +2342,51 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         "antigravity_endpoint" => {
             return crate::antigravity_endpoint::dispatch(name, args);
         }
+        // Reconstruccion multi-motor: Ghidra + Rizin + DiE + motor propio
+        // + pclntab.  Compara los metodos y fusiona lo mejor de cada uno.
+        "re_fusion" => {
+            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("compare");
+            let s = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let ruta = s("binario");
+            if ruta.is_empty() {
+                return Some(json!({"ok": false, "error": "falta 'binario'"}));
+            }
+            let opt = |k: &str| -> Option<std::path::PathBuf> {
+                let v = s(k);
+                if v.trim().is_empty() {
+                    None
+                } else {
+                    Some(std::path::PathBuf::from(v))
+                }
+            };
+            let o = crate::re_fusion::OpcionesFusion {
+                binario: std::path::PathBuf::from(&ruta),
+                simbolos_tsv: opt("simbolos"),
+                anchors_tsv: opt("anclas"),
+                ghidra_dir: opt("ghidra_dir"),
+                java_home: opt("java_home"),
+                project_dir: opt("project_dir")
+                    .unwrap_or_else(|| std::path::PathBuf::from("/workspace/agy-re/tools-out/proj")),
+                project_name: if s("project").is_empty() { "Go".to_string() } else { s("project") },
+                out_dir: opt("out")
+                    .unwrap_or_else(|| std::path::PathBuf::from("/workspace/agy-re/tools-out/fusion")),
+                max_memory: if s("max_memoria").is_empty() { "1400M".to_string() } else { s("max_memoria") },
+                timeout: std::time::Duration::from_secs(s("timeout_s").parse().unwrap_or(1800)),
+                hacer_motor: true,
+                hacer_die: s("sin_die").is_empty(),
+                hacer_rizin: s("sin_rizin").is_empty(),
+                // Ghidra es el lento (JVM): solo si lo piden explicitamente.
+                hacer_ghidra: !s("sin_ghidra").is_empty(),
+            };
+            let r = crate::re_fusion::ejecutar(&o);
+            match accion {
+                "informe" => json!({
+                    "ok": true,
+                    "comparativa": r.get("comparativa").cloned().unwrap_or_default(),
+                }),
+                _ => r,
+            }
+        }
         _ => return None,
     };
     let _ = i("unused");

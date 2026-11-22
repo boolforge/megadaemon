@@ -143,3 +143,38 @@ md-re fusion /workspace/agy-re/liblanguage_server.so --json
 * `PENDIENTE`: hooks Frida/Zygisk (SQLite, red, ficheros).
 * `PENDIENTE`: decompilar en el móvil (el toolchain de Antigravity incluye
   un JDK completo).
+
+## 7. Automatizado dentro de MegaDaemon (lo pedido: "aprenderlo y automatizarlo")
+
+Ya no hace falta orquestar nada a mano:
+
+| vía | cómo | qué hace |
+|---|---|---|
+| **CLI** | `md-re compare <binario>` / `md-re fusion <binario> [--symbols TSV] [--anchors TSV] [--out DIR]` | comparativa + fusión |
+| **MCP** | tool `re_fusion` (`accion=compare|fusion|informe`) | lo mismo, desde cualquier agente de la flota |
+| **script** | `tools/reconstruir.sh <binario> [opciones]` | pipeline de punta a punta (import → símbolos → decompile → strings → fusión → informe) |
+
+El script **extrae el GhidraScript del propio módulo Rust**
+(`tools/extraer-ghidra-script.sh`) ⇒ la fuente única es `ghidra.rs`; el
+`.java` nunca se desincroniza del que usa `md-ghidra`.
+
+Ejemplo medido:
+
+```bash
+tools/reconstruir.sh /workspace/agy-re/liblanguage_server.so \
+  --symbols /workspace/agy-re/tools-out/go.funcs.tsv \
+  --anchors /workspace/agy-re/tools-out/anchors_gateway.tsv \
+  --out /workspace/agy-re/tools-out/fusion
+```
+
+### Lo que se puede automatizar a partir de aquí
+
+1. **Vigilar binarios nuevos**: cuando Antigravity se actualice, el hash del
+   `liblanguage_server.so` cambia ⇒ el daemon puede re-exportar símbolos,
+   reimportar en Ghidra y devolver el diff de lo que cambió.
+2. **Degradar por lotes**: `md-re fusion` con `--anchors` de 200 en 200 para
+   no cargar la JVM de golpe (medido: 81 funciones = 69 s; 911 = ~12 min).
+3. **Cruce automático con el catálogo**: las tools que `AdminFileSetsModels`
+   valida (`ask_permission`, `manage_subagents`, …) y los checks de
+   `ParseAdminSettings` se pueden contrastar con el catálogo vivo de
+   MegaDaemon y avisar si Antigravity intenta cambiar algo.
