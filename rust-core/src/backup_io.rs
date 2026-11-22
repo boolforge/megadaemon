@@ -33,8 +33,15 @@ pub fn apply_io_limits(nice: i32, ionice_class: u8) -> String {
         if rc == 0 { "ok" } else { "no aplicado" }
     ));
     // ionice: `ioprio_set(IOPRIO_WHO_PROCESS, 0, prio)` vía syscall.
+    //
+    // BUG REAL (medido el 2026-11-22 en el móvil): el número de syscall era
+    // **252**, que en AArch64 NO es `ioprio_set` (252 es `process_vm_readv`)
+    // ⇒ la syscall fallaba y la prioridad de I/O **nunca** se bajaba en el
+    // móvil (justo lo que protects al móvil de congelarse). En la tabla
+    // asm-generic (AArch64): `ioprio_set` = **28** (`ioprio_get` = 29). En
+    // x86_64 sí es 251.
     #[cfg(target_arch = "aarch64")]
-    const SYS_IOPRIO_SET: libc::c_long = 252;
+    const SYS_IOPRIO_SET: libc::c_long = 28;
     #[cfg(target_arch = "x86_64")]
     const SYS_IOPRIO_SET: libc::c_long = 251;
     #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]

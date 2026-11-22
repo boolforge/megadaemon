@@ -161,15 +161,26 @@ pub fn chunk_plan(file_size: u64, chunk_size: u64) -> Vec<DriveChunkRange> {
 }
 
 /// Metadatos JSON para crear el fichero en Drive.
+/// Metadatos del fichero para la sesión de subida resumible.
+///
+/// BUG REAL (medido el 2026-11-22 en el móvil): el JSON llevaba `"size"` ⇒
+/// Google Drive respondía **HTTP 403 "The resource body includes fields
+/// which are not directly writable"** ⇒ **ninguna** subida nativa funcionaba
+/// (ni la del motor de backup ni la tool `drive_backup` del daemon).
+/// El tamaño va **sólo** en la cabecera `X-Upload-Content-Length` (que ya se
+/// manda): en el cuerpo sólo van los campos escribibles (`name`, `mimeType`,
+/// `parents`).
 pub fn file_metadata(name: &str, size: u64, target: &DriveTarget) -> String {
     let mut parents = String::new();
     if !target.folder_id.is_empty() {
         parents = format!(",\"parents\":[\"{}\"]", target.folder_id);
     }
+    // `size` se acepta en la firma por compatibilidad con las llamadas
+    // existentes, pero **no** se escribe en el cuerpo (Drive lo rechaza).
+    let _ = size;
     format!(
-        "{{\"name\":\"{}\",\"mimeType\":\"application/octet-stream\",\"size\":\"{}\"{}}}",
+        "{{\"name\":\"{}\",\"mimeType\":\"application/octet-stream\"{}}}",
         name.replace('"', "\\\""),
-        size,
         parents
     )
 }

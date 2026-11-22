@@ -1253,7 +1253,17 @@ pub fn collect_sources(
                         }
                         out.push(SourceFile {
                             device_path: p.to_string_lossy().to_string(),
-                            inside: rel,
+                            // La ruta DENTRO del contenedor es **relativa**
+                            // (como la del APK): sin la `/` inicial.
+                            //
+                            // BUG REAL (medido el 2026-11-22 en el móvil): antes
+                            // los datos se guardaban con la ruta ABSOLUTA del
+                            // dispositivo (`/data/user/0/<pkg>/...`) y los APK
+                            // con la relativa (`data/app/...`) ⇒ el `restore`
+                            // (que valida con `safe_relative_path`) rechazaba
+                            // los datos con "ruta absoluta no permitida" y el
+                            // backup no se podía restaurar.
+                            inside: rel.trim_start_matches('/').to_string(),
                             package: app.package.clone(),
                             source: source.clone(),
                         });
@@ -1961,15 +1971,21 @@ impl<'a> SegmentWriter<'a> {
     /// Cierra el tar (dos bloques nulos) y sella el último segmento.
     fn finish(&mut self) -> Result<(), String> {
         if self.plain.is_none() {
-            // Sin ficheros: se crea un segmento vacío para que el contenedor
-            // sea siempre válido.
+            // Sin fichero en curso: se crea el segmento vacío para que el
+            // contenedor sea siempre válido.
+            //
+            // BUG REAL (medido el 2026-11-22 en el móvil): el `File` se
+            // creaba y se **soltaba** sin guardarlo en `self.plain` ⇒ el
+            // `unwrap()` de abajo **panicaba** cuando el último fichero
+            // había rotado justo el segmento (caso normal: el panic tumbaba
+            // el backup entero y se perdían los segmentos ya subida).
             let p = self.plain_path();
             let f = File::create(&p).map_err(|e| format!("no se puede crear {}: {e}", p.display()))?;
-            drop(f);
+            self.plain = Some(f);
             self.plain_len = 0;
         }
         {
-            let w = self.plain.as_mut().unwrap();
+            let w = self.plain.as_mut().ok_or("el segmento en curso se perdió")?;
             w.write_all(&[0u8; 1024])
                 .map_err(|e| format!("no se puede escribir el fin del tar: {e}"))?;
             w.flush().ok();

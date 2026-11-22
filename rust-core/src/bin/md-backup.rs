@@ -43,6 +43,17 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
+
+/// El argumento **posicional** n (0 = nombre del binario, 1 = subcomando).
+///
+/// BUG REAL (medido el 2026-11-22 en el móvil): el uso documentado decía
+/// `md-backup verify <dir>` pero el CLI sólo leía `--container`/`--dir` ⇒ el
+/// comando fallaba con "necesita la ruta del contenedor" justo cuando se
+/// usaba como dice la ayuda.
+fn positional(n: usize) -> Option<String> {
+    std::env::args().nth(n).filter(|s| !s.trim().is_empty())
+}
+
 /// Estado por defecto del daemon en el móvil (fuera del repo).
 const DEFAULT_STATE_DIR: &str = "/data/local/tmp/megadaemon/state";
 
@@ -439,9 +450,12 @@ fn cmd_list() -> Result<ExitCode, String> {
 // --------------------------------------------------------------------------
 
 fn cmd_verify() -> Result<ExitCode, String> {
-    let dir = PathBuf::from(arg("--container").or_else(|| arg("--dir")).ok_or(
-        "verify necesita la ruta del contenedor (md-backup verify <dir>)",
-    )?);
+    let dir = PathBuf::from(
+        arg("--container")
+            .or_else(|| arg("--dir"))
+            .or_else(|| positional(2))
+            .ok_or("verify necesita la ruta del contenedor (md-backup verify <dir>)")?,
+    );
     let key = match arg("--key") {
         Some(p) => Some(backup_apps::read_key_file(&PathBuf::from(p))?),
         None => None,
@@ -483,9 +497,12 @@ fn cmd_verify() -> Result<ExitCode, String> {
 // --------------------------------------------------------------------------
 
 fn cmd_restore() -> Result<ExitCode, String> {
-    let dir = PathBuf::from(arg("--container").or_else(|| arg("--dir")).ok_or(
-        "restore necesita la ruta del contenedor (md-backup restore <dir>)",
-    )?);
+    let dir = PathBuf::from(
+        arg("--container")
+            .or_else(|| arg("--dir"))
+            .or_else(|| positional(2))
+            .ok_or("restore necesita la ruta del contenedor (md-backup restore <dir>)")?,
+    );
     let key = match arg("--key") {
         Some(p) => Some(backup_apps::read_key_file(&PathBuf::from(p))?),
         None => None,
