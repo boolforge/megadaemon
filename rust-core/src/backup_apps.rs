@@ -2498,7 +2498,6 @@ pub fn upload_file_chunked_hashed(
     let size = meta.len();
     let sha = crate::drive_native::sha256_file(path)?;
     let target = crate::drive_client::DriveTarget::folder(folder_id);
-    let ag = crate::drive_native::agent();
 
     // 1) Sesión de subida resumible.
     let url = format!(
@@ -2506,7 +2505,7 @@ pub fn upload_file_chunked_hashed(
         crate::drive_client::DRIVE_UPLOAD_API
     );
     let (ak, av) = crate::google_auth::auth_header(state_dir)?;
-    let resp = ag
+    let resp = crate::drive_native::upload_agent()
         .post(&url)
         .header(ak, av)
         .header("Content-Type", "application/json; charset=UTF-8")
@@ -2558,7 +2557,10 @@ pub fn upload_file_chunked_hashed(
         let mut last_err = String::new();
         while attempt <= max_retries {
             let (ak2, av2) = crate::google_auth::auth_header(state_dir)?;
-            let r = ag
+            // Agente de subida: NO sigue redirecciones (el 308 "Resume
+            // Incomplete" de Drive es una respuesta normal, no una
+            // redirección) ⇒ ver `drive_native::upload_agent`.
+            let r = crate::drive_native::upload_agent()
                 .put(&session)
                 .header(ak2, av2)
                 .header("Content-Range", format!("bytes {}-{}/{}", offset, end, size))
@@ -2568,7 +2570,10 @@ pub fn upload_file_chunked_hashed(
                 Ok(resp) => {
                     let st = resp.status().as_u16();
                     let body = resp.into_body().read_to_vec().unwrap_or_default();
-                    if st == 200 || st == 201 {
+                    // 308 = "Resume Incomplete": el trozo se ha guardado
+                    // pero el fichero aún no está completo ⇒ NO es un error.
+                    let chunk_ok = if last { st == 200 || st == 201 } else { st == 308 || st == 200 || st == 201 };
+                    if chunk_ok {
                         if last {
                             if let Ok(j) = serde_json::from_slice::<Value>(&body) {
                                 if let Some(id) = j.get("id").and_then(|v| v.as_str()) {
