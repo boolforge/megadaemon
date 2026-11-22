@@ -1697,4 +1697,11 @@ pub fn shamiko_prepare(zip_path: &str, enable: bool, dry_run: bool) -> Value {
             "module_prop": o2,
             "is_shamiko": valid_id,
             "warning": if valid_id { Value::Null } else {
-                json!("el module.prop no dice id=sham
+                json!("el module.prop no dice id=shamiko: revisa el ZIP antes de instalar")
+            },
+        });
+    }
+    v["shamiko"] = shamiko_release_info();
+    v["status"] = shamiko_status();
+    v
+}
