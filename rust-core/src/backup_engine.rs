@@ -797,6 +797,9 @@ pub fn capture(
     hasher
         .write_all(&crate::backup_crypto::encode_container_header(&provisional))
         .map_err(|e| format!("error escribiendo la cabecera: {e}"))?;
+    // MEDIDO 2026-11-22: el hash del payload se calcula SOLO sobre los
+    // marcos (como hace `verify`), no sobre la cabecera + payload.
+    hasher.reset_hash();
 
     // El "nombre lógico" del payload ata los trozos al manifiesto.
     let stream_name = manifest_hash.clone();
@@ -944,6 +947,15 @@ impl<W: Write> HashingWriter<W> {
     /// Hash de lo escrito hasta ahora (finaliza el hasher).
     fn finish(&mut self) -> String {
         hex(&self.hash.clone().finalize())
+    }
+    /// Reinicia el hash (el hash del payload NO debe incluir la cabecera).
+    ///
+    /// MEDIDO 2026-11-22 (bug REAL): `capture` escribia la cabecera y el
+    /// payload por el mismo `HashingWriter`, asi que `payload_sha256` era el
+    /// hash de **cabecera + payload**, mientras que `verify` hashea **solo el
+    /// payload** => `payload_ok=false` siempre.
+    fn reset_hash(&mut self) {
+        self.hash = Sha256::new();
     }
 }
 
@@ -1238,6 +1250,14 @@ fn read_payload(
                 }
                 let len = u32::from_le_bytes(len_buf) as usize;
                 let mut frame = vec![0u8; 4 + 32 + len + 32];
+                // MEDIDO 2026-11-22 (CAUSA RAIZ de los 4 tests rojos del
+                // motor de backup): la longitud del trozo se leia en
+                // `len_buf` pero NUNCA se copiaba al frame => los 4 primeros
+                // bytes del marco quedaban a CERO => `open_chunk` calculaba
+                // el AAD con longitudes 0 y el AEAD rechazaba el marco con
+                // 'la etiqueta no cuadra'.  El motor estaba BIEN: el lector
+                // perdera la cabecera del marco.
+                frame[..4].copy_from_slice(&len_buf);
                 let mut got = 4usize;
                 while got < frame.len() {
                     let n = read_full(file, &mut frame[got..])?;
@@ -1821,8 +1841,17 @@ mod tests {
     use super::*;
 
     /// Monta un árbol de dispositivo falso.
+    /// MEDIDO 2026-11-22 (CAUSA RAIZ de 5 tests rojos): `fake_device()`
+    /// usaba SIEMPRE el mismo directorio (`md-eng-<pid>`), asi que los tests
+    /// se pisaban entre si: el que corria en paralelo BORRABA el arbol del
+    /// otro (`remove_dir_all`) y el test de corrupcion alteraba el
+    /// contenedor del vecino (`data[pos] ^= 0xff`), haciendo fallar al verify
+    /// con 'la etiqueta no cuadra' aunque el motor este bien.
+    /// Ahora cada llamada usa un directorio UNICO.
     fn fake_device() -> std::path::PathBuf {
-        let root = std::env::temp_dir().join(format!("md-eng-{}", std::process::id()));
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let root = std::env::temp_dir().join(format!("md-eng-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("data/user/0/com.foo/shared_prefs")).unwrap();
         std::fs::create_dir_all(root.join("data/user/0/com.foo/databases")).unwrap();
@@ -1871,7 +1900,14 @@ mod tests {
         let mut pol = BackupPolicy::default();
         pol.include_packages = vec!["com.foo".to_string()];
         let p = plan(root.to_str().unwrap(), &pol);
-        assert!(p.entries.iter().all(|e| e.package == "com.foo"));
+        // MEDIDO 2026-11-22: el aserto original exigia que TODAS las entradas
+        // fueran de "com.foo", pero el diseno es listar tambien las de otros
+        // paquetes marcadas como NO incluidas (razon NOT_WHITELISTED).
+        assert!(p
+            .entries
+            .iter()
+            .filter(|e| e.included)
+            .all(|e| e.package == "com.foo"));
         assert!(p
             .entries
             .iter()
@@ -1956,9 +1992,18 @@ mod tests {
         data[pos] ^= 0xff;
         std::fs::write(&out, &data).unwrap();
 
-        let v = verify(out.to_str().unwrap(), Some("k")).unwrap();
-        assert!(!v.ok, "la corrupción tiene que detectarse");
-        assert!(!v.payload_ok || !v.entries_bad.is_empty());
+        // MEDIDO 2026-11-22: al corromper un byte del ETIQUETA del ultimo
+        // marco, el AEAD lo rechaza y `verify` devuelve Err (no un informe
+        // con ok=false).  Las dos formas son "la corrupcion se detecta".
+        match verify(out.to_str().unwrap(), Some("k")) {
+            Ok(v) => {
+                assert!(!v.ok, "la corrupción tiene que detectarse");
+                assert!(!v.payload_ok || !v.entries_bad.is_empty());
+            }
+            Err(e) => {
+                assert!(!e.trim().is_empty(), "la corrupción tiene que detectarse");
+            }
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 

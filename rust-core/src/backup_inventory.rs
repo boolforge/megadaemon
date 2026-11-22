@@ -624,6 +624,10 @@ pub const EXCLUSION_PATTERNS: &[&str] = &[
     "/code_cache/",
     "/no_backup/",
     "/thumbnails/",
+    // MEDIDO 2026-11-22: Android nombra la carpeta de miniaturas del usuario
+    // con punto delante (".thumbnails"), y el patron "/thumbnails/" NO la
+    // cubria (test exclusiones_p5).
+    ".thumbnails",
     ".tmp",
     ".crdownload",
 ];
@@ -2096,6 +2100,15 @@ pub fn verify_container(path: &Path, keys: &KeyMaterial) -> Result<VerifyReport,
     // MEDIDO 2026-11-22: `files_bad` se mueve al struct de salida y DESPUES se
     // usaba `.len()` => borrow of moved value.  Se cuenta antes.
     let files_bad_count = files_bad.len();
+    // MEDIDO 2026-11-22: el detalle del informe necesita los NOMBRES de los
+    // fallos, pero `files_bad` se mueve al struct => se copia el resumen
+    // ANTES del move.
+    let files_bad_preview = files_bad
+        .iter()
+        .take(5)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
     Ok(VerifyReport {
         ok,
         profile: header.profile.clone(),
@@ -2111,7 +2124,7 @@ pub fn verify_container(path: &Path, keys: &KeyMaterial) -> Result<VerifyReport,
                 header.streams.len()
             )
         } else {
-            format!("{files_bad_count} entradas no cuadran")
+            format!("{files_bad_count} entradas no cuadran: {files_bad_preview}")
         },
     })
 }

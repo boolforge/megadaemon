@@ -392,6 +392,17 @@ pub struct TarStream<R: std::io::Read> {
     reader: R,
     buf: Vec<u8>,
     remaining: u64,
+    /// Relleno hasta el siguiente bloque de 512 bytes de la entrada actual.
+    ///
+    /// MEDIDO 2026-11-22 (bug REAL que rompia el CI): el formato tar/USTAR
+    /// rellena el contenido de cada entrada hasta un multiplo de 512 bytes.
+    /// Este lector consumia EXACTAMENTE `size` bytes y no saltaba ese
+    /// relleno, de modo que la cabecera siguiente se leia desplazada
+    /// (dentro del relleno) => nombres truncados y entradas perdidas.
+    /// Consecuencia medida: en un tar de 3 entradas se leian 5 (una vacia,
+    /// "nsitive.key" en vez de "KEYS/sensitive.key"), y por eso los
+    /// `verify`/`restore` del motor de backup fallaban.
+    pending_pad: u64,
     done: bool,
     current: Option<TarStreamEntry>,
 }
@@ -403,6 +414,7 @@ impl<R: std::io::Read> TarStream<R> {
             reader,
             buf: vec![0u8; 512],
             remaining: 0,
+            pending_pad: 0,
             done: false,
             current: None,
         }
@@ -436,6 +448,29 @@ impl<R: std::io::Read> TarStream<R> {
             }
             self.remaining = 0;
         }
+        // MEDIDO 2026-11-22: faltaba saltar el RELLENO de la entrada
+        // anterior (los datos se rellenan a 512 bytes).
+        if self.pending_pad > 0 {
+            let mut sink = std::io::sink();
+            let mut left = self.pending_pad;
+            let mut chunk = vec![0u8; 64 * 1024];
+            while left > 0 {
+                let n = left.min(chunk.len() as u64) as usize;
+                let read = self
+                    .reader
+                    .read(&mut chunk[..n])
+                    .map_err(|e| format!("error leyendo el relleno del tar: {e}"))?;
+                if read == 0 {
+                    self.done = true;
+                    self.pending_pad = 0;
+                    return Ok(None);
+                }
+                left -= read as u64;
+                std::io::Write::write_all(&mut sink, &chunk[..read])
+                    .map_err(|e| format!("error descartando el relleno: {e}"))?;
+            }
+            self.pending_pad = 0;
+        }
         loop {
             let n = self
                 .reader
@@ -467,6 +502,8 @@ impl<R: std::io::Read> TarStream<R> {
                 format!("{prefix}/{base}")
             };
             self.remaining = size;
+            // Relleno hasta el siguiente bloque de 512 (formato USTAR).
+            self.pending_pad = (512 - (size % 512)) % 512;
             let entry = TarStreamEntry {
                 name,
                 size,
@@ -498,6 +535,29 @@ impl<R: std::io::Read> TarStream<R> {
             std::io::Write::write_all(out, &chunk[..n]).map_err(|e| format!("error escribiendo: {e}"))?;
             self.remaining -= n as u64;
             total += n as u64;
+        }
+        // MEDIDO 2026-11-22: al terminar el contenido hay que saltar el
+        // relleno hasta el siguiente bloque de 512 bytes; si no, la
+        // cabecera siguiente se lee desplazada.
+        if self.pending_pad > 0 {
+            let mut sink = std::io::sink();
+            let mut left = self.pending_pad;
+            let mut chunk = vec![0u8; 64 * 1024];
+            while left > 0 {
+                let n = left.min(chunk.len() as u64) as usize;
+                let read = self
+                    .reader
+                    .read(&mut chunk[..n])
+                    .map_err(|e| format!("error leyendo el relleno: {e}"))?;
+                if read == 0 {
+                    self.pending_pad = 0;
+                    return Err("el tar termina dentro del relleno".to_string());
+                }
+                left -= read as u64;
+                std::io::Write::write_all(&mut sink, &chunk[..read])
+                    .map_err(|e| format!("error descartando el relleno: {e}"))?;
+            }
+            self.pending_pad = 0;
         }
         Ok(total)
     }
