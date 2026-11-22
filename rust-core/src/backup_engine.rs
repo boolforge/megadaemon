@@ -1154,6 +1154,8 @@ pub fn verify(container: &str, passphrase: Option<&str>) -> Result<VerifyReport,
     }
 
     let ok = payload_ok && manifest_ok && entries_bad.is_empty();
+    // `entries_bad` se mueve al informe: el detalle necesita el numero ANTES.
+    let entries_bad_len = entries_bad.len();
     Ok(VerifyReport {
         ok,
         encrypted,
@@ -1167,7 +1169,7 @@ pub fn verify(container: &str, passphrase: Option<&str>) -> Result<VerifyReport,
         } else {
             format!(
                 "payload_ok={payload_ok} manifest_ok={manifest_ok} entradas_cojas={}",
-                entries_bad.len()
+                entries_bad_len
             )
         },
     })
@@ -1486,7 +1488,9 @@ pub fn restore(
             if let Some(parent) = bpath.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            std::fs::copy(&target, &bpath).ok()
+            // La lista de rollback guarda la RUTA de la copia (no los bytes
+            // copiados): al deshacer hay que copiar DE ESA RUTA.
+            std::fs::copy(&target, &bpath).ok().map(|_| bpath)
         } else {
             None
         };
@@ -1566,6 +1570,10 @@ pub fn restore(
         written.clear();
     }
 
+    // `written` y `failed` se mueven al informe: el detalle necesita los
+    // recuentos ANTES de moverlos.
+    let written_len = written.len();
+    let failed_len = failed.len();
     Ok(RestoreReport {
         dry_run: options.dry_run,
         ok,
@@ -1575,13 +1583,13 @@ pub fn restore(
         rolled_back,
         bytes,
         detail: if options.dry_run {
-            format!("simulación: {} ficheros seleccionados, {} bytes", written.len(), bytes)
+            format!("simulación: {} ficheros seleccionados, {} bytes", written_len, bytes)
         } else if ok {
-            format!("{} ficheros restaurados, {} bytes", written.len(), bytes)
+            format!("{} ficheros restaurados, {} bytes", written_len, bytes)
         } else {
             format!(
                 "fallo en {} ficheros ⇒ rollback ({})",
-                failed.len(),
+                failed_len,
                 if rolled_back { "hecho" } else { "no" }
             )
         },

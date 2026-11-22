@@ -891,7 +891,7 @@ pub fn parse_swift_info_page(bytes: &[u8]) -> Result<SwiftInfoPage, String> {
         header_size,
         method_id,
         created_at_ms,
-        kdf_method_id,
+        kdf_method_id: kdf_method_id as u16,
         iteration_candidates,
         blocks,
         u16s,
@@ -1444,7 +1444,7 @@ mod tests {
     fn el_aead_por_trozos_ida_y_vuelta() {
         let key = vec![9u8; AEGIS_KEY_LEN];
         let c = ChunkCipher::own(&key).unwrap();
-        let datos = b"contenido de prueba, con acentos: ñ é 😀".repeat(10);
+        let datos = "contenido de prueba, con acentos: ñ é 😀".repeat(10).into_bytes();
         let frame = c.seal_chunk("payload/app.dat", 0, &datos);
         let abierto = c.open_chunk("payload/app.dat", 0, &frame).unwrap();
         assert_eq!(abierto, datos);
@@ -1455,7 +1455,9 @@ mod tests {
         let key = vec![9u8; AEGIS_KEY_LEN];
         let c = ChunkCipher::own(&key).unwrap();
         let datos = b"secreto".repeat(100);
-        let frame = c.seal_chunk("payload/app.dat", 0, &datos, 1);
+        // La firma real es `seal_chunk(entry, index, plaintext)`: el 4º
+        // argumento que quedaba aqui era de una firma anterior.
+        let frame = c.seal_chunk("payload/app.dat", 0, &datos);
         // mismo troce, otra posición => no descifra
         assert!(c.open_chunk("payload/app.dat", 1, &frame).is_err());
         // mismo troce, otra entrada => no descifra

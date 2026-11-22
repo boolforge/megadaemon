@@ -18,11 +18,12 @@
 //! Nota: los tests de esta crate son los de `src/root_hide.rs` y
 //! `src/app_intel.rs`; aquí sólo se cablea el acceso.
 
-#[path = "../src/root_hide.rs"]
-mod root_hide;
-
-#[path = "../src/app_intel.rs"]
-mod app_intel;
+// Los dos módulos YA estan cableados en `src/lib.rs` (`pub mod root_hide;` y
+// `pub mod app_intel;`). Este arnes se include con `#[path]` por historia, pero
+// al hacerlo `crate::` pasa a ser la raiz de ESTE crate y `app_intel` deja de
+// encontrar a `crate::apk_inventory` (E0433). Patron de la flota: los arneses
+// usan la biblioteca (`use megadaemon_core::...;`) en vez de copiar modulos.
+use megadaemon_core::{app_intel, root_hide};
 
 /// Comprobación de humo: los dos módulos deben exponer su API principal.
 #[test]

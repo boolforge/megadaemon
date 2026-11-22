@@ -46,7 +46,9 @@ pub fn sha256_file(path: &Path) -> Result<String, String> {
         }
         h.update(&buf[..n]);
     }
-    Ok(h.iter().map(|x| format!("{:02x}", x)).collect())
+    // `sha2` 0.10: el hash se obtiene con `finalize()`, no con `iter()`.
+    let out = h.finalize();
+    Ok(out.iter().map(|x| format!("{:02x}", x)).collect())
 }
 
 /// Agente HTTP con tiempos acotados.
@@ -291,7 +293,9 @@ pub fn download_file(
         }
         return Err(format!("descargar {} devolvió {}: {}", file_id, st, txt));
     }
-    let mut body = resp.into_body();
+    // `ureq` 3.x: el cuerpo se lee con `as_reader()`.
+    let mut resp_body = resp.into_body();
+    let mut body = resp_body.as_reader();
     let mut out = File::create(dest).map_err(|e| format!("crear {}: {}", dest.display(), e))?;
     let mut total = 0u64;
     let mut buf = vec![0u8; 256 * 1024];
