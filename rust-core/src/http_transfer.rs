@@ -541,7 +541,7 @@ mod tests {
         let mut s = Sha256::new();
         s.update(b"abc");
         assert_eq!(
-            hex::encode(s.finalize()),
+            crate::util_text::hex(&s.finalize()),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }
