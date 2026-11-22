@@ -209,29 +209,45 @@ pub fn modulos_para(f: Formato) -> Vec<String> {
 /// MEDIDO 2026-11-22 en el `liblanguage_server.so` de Antigravity: magic en
 /// `.lrodata` @ `0x1449ff0`, **161.682 funciones**.
 pub fn detectar_go_pclntab(datos: &[u8]) -> Option<(u64, Option<String>)> {
-    const MAGIC: [u8; 4] = [0xff, 0xff, 0xff, 0xf1];
+    // El magic 0xFFFFFFF1 se guarda en el fichero en ORDEN LITTLE-ENDIAN:
+    // los bytes en el disco son F1 FF FF FF.  Con los bytes invertidos
+    // (FF FF FF F1) la comparacion NUNCA se cumplia y el motor no detectaba
+    // NINGUN binario Go: era el bug que hacia rojo el test del repo.
+    const MAGIC: [u8; 4] = [0xf1, 0xff, 0xff, 0xff];
+    // MEDIDO 2026-11-22 (liblanguage_server.so de Antigravity): hay **189**
+    // apariciones del magic en el binario y sólo UNA es la pclntab de verdad.
+    // La version anterior se quedaba con la PRIMERA que-"cuadraba" y devolvia
+    // 17.684 en vez de 161.682 (el test del repo fallaba).
+    //
+    // El pcHeader de go1.18+ es:
+    //   magic(4) pad1(1) pad2(1) minLC(1) ptrSize(1) nfunc(ptr) nfiles(ptr) ...
+    // y se valida igual que lo hace `go-retool`: pad1==pad2==0, minLC!=0 y
+    // ptrSize en {4,8}.  Entre las cabeceras validas se queda la de MAYOR
+    // nfunc (la pclntab real tiene 161.682; las demas son copias parciales).
+    let mut mejor: Option<(u64, String)> = None;
     let mut i = 0usize;
-    while i + 4 <= datos.len() {
-        if datos[i..i + 4] == MAGIC {
-            // go1.18+: el layout es
-            //   magic(4) pad(2) minLC(1) ptrSize(1) nfunc(ptrSize) nfiles(ptrSize) ...
-            // nfunc ocupa 8 bytes en 64-bit: leerlo como u32 даaba la mitad.
-            // MEDIDO: el binario Go de Antigravity tiene 161.682 funciones;
-            // con u32 salia 2366 (exactamente nfunc/2 truncado).
-            if i + 16 <= datos.len() {
-                let ptr = if datos[i + 7] == 8 { 8usize } else { 4usize };
-                let mut n: u64 = 0;
-                for k in 0..ptr {
-                    n |= (datos[i + 8 + k] as u64) << (8 * k);
-                }
-                if n > 0 && n < 5_000_000 {
-                    return Some((n, Some("go1.18+".to_string())));
+    while i + 16 <= datos.len() {
+        if datos[i..i + 4] == MAGIC
+            && datos[i + 4] == 0
+            && datos[i + 5] == 0
+            && datos[i + 6] != 0
+            && (datos[i + 7] == 4 || datos[i + 7] == 8)
+        {
+            let ptr = datos[i + 7] as usize;
+            let mut n: u64 = 0;
+            for k in 0..ptr {
+                n |= (datos[i + 8 + k] as u64) << (8 * k);
+            }
+            if n > 0 && n < 5_000_000 {
+                let etiqueta = format!("go1.18+ (minLC={})", datos[i + 6]);
+                if mejor.as_ref().map(|(m, _)| n > *m).unwrap_or(true) {
+                    mejor = Some((n, etiqueta));
                 }
             }
         }
         i += 4;
     }
-    None
+    mejor.map(|(n, t)| (n, Some(t)))
 }
 
 /// Extrae cadenas imprimibles con su desplazamiento.
@@ -400,9 +416,323 @@ pub fn analizar(path: &Path, o: &OpcionesAnalisis) -> Result<Value, String> {
     Ok(out)
 }
 
+// ---------------------------------------------------------------------------
+// 10. MOTOR DE DEOFUSCACIÓN (todo en un solo sitio)
+// ---------------------------------------------------------------------------
+
+/// Opciones del motor de deofuscación.
+#[derive(Debug, Clone)]
+pub struct OpcionesDeofuscacion {
+    /// Longitud mínima (bytes) para considerar una cadena cifrada.
+    pub min_len_cifrado: usize,
+    /// Máximo de cadenas cifradas a devolver.
+    pub max_cadenas: usize,
+    /// Ventana de código a desensamblar (bytes) para CFF y predicados opacos.
+    pub ventana_disasm: usize,
+    /// Entradas para la prueba diferencial del aplanado.
+    pub entradas_prueba: usize,
+}
+
+impl Default for OpcionesDeofuscacion {
+    fn default() -> Self {
+        OpcionesDeofuscacion {
+            min_len_cifrado: 12,
+            max_cadenas: 20,
+            ventana_disasm: 256 * 1024,
+            entradas_prueba: 64,
+        }
+    }
+}
+
+/// Desensambla una ventana de código y devuelve el CFG del IR.
+///
+/// Devuelve `None` si la arquitectura no está soportada por Capstone.
+pub fn cfg_de_ventana(
+    datos: &[u8],
+    arch: &str,
+    base: u64,
+    ventana: usize,
+) -> Option<crate::re_ir::Cfg> {
+    let rep = crate::re_disasm::disasm_capstone(datos, arch, base, 200_000).ok()?;
+    let instrs: Vec<(u64, String)> = rep
+        .instructions
+        .iter()
+        .filter_map(|i| {
+            let addr = u64::from_str_radix(i.address.trim_start_matches("0x"), 16).ok()?;
+            Some((addr, i.text.clone()))
+        })
+        .collect();
+    if instrs.is_empty() {
+        return None;
+    }
+    Some(crate::re_ir::Cfg::desde_disasm(&instrs))
+}
+
+/// Localiza la sección de código de un ELF y devuelve `(arquitectura, offset,
+/// tamaño, dirección virtual)`.
+pub fn seccion_de_codigo(datos: &[u8]) -> Option<(String, usize, usize, u64)> {
+    let elf = goblin::elf::Elf::parse(datos).ok()?;
+    let arch = match elf.header.e_machine {
+        goblin::elf::header::EM_AARCH64 => "arm64".to_string(),
+        goblin::elf::header::EM_X86_64 => "x86_64".to_string(),
+        goblin::elf::header::EM_386 => "x86".to_string(),
+        _ => return None,
+    };
+    for sh in &elf.section_headers {
+        if elf.shdr_strtab.get_at(sh.sh_name) == Some(".text") {
+            return Some((
+                arch,
+                sh.sh_offset as usize,
+                sh.sh_size as usize,
+                sh.sh_addr,
+            ));
+        }
+    }
+    None
+}
+
+/// Construye el programa plano de `re_cff` a partir del CFG real, para que el
+/// aplanado se pueda **demostrar** por ejecución diferencial.
+///
+/// Cada bloque del CFG se traduce a un bloque del programa: las constantes
+/// conocidas (`mov reg, inm`) pasan a asignaciones y el resto de instrucciones
+/// pasan a *efectos* observables.  El dispatcher se traduce a un `switch` del
+/// registro de estado, que es exactamente lo que es.
+pub fn programa_desde_cfg(
+    cfg: &crate::re_ir::Cfg,
+    disp: &crate::re_ir::DispatcherCfg,
+) -> Option<crate::re_cff::FlatProgram> {
+    use crate::re_cff::{Block, FlatProgram, SVal, Stmt, Terminator};
+    let idx_de = |addr: u64| -> Option<usize> { cfg.index_of(addr) };
+    let mut bloques = Vec::with_capacity(cfg.blocks.len());
+    for (i, b) in cfg.blocks.iter().enumerate() {
+        let mut stmts: Vec<Stmt> = Vec::new();
+        for ins in &b.ins {
+            match ins.mnem.as_str() {
+                "mov" | "movabs" | "movz" => {
+                    if let Some(v) = crate::re_ir::parse_int(ins.op1()) {
+                        stmts.push(Stmt::Assign {
+                            dst: ins.op0().to_string(),
+                            value: SVal::Const(v),
+                        });
+                        continue;
+                    }
+                    stmts.push(Stmt::Effect(ins.mnem.clone()));
+                }
+                "xor" if ins.op0() == ins.op1() => {
+                    stmts.push(Stmt::Assign {
+                        dst: ins.op0().to_string(),
+                        value: SVal::Const(0),
+                    });
+                }
+                _ => stmts.push(Stmt::Effect(
+                    format!("{} {}", ins.mnem, ins.ops).trim().to_string(),
+                )),
+            }
+        }
+        let term = match &b.flow {
+            crate::re_ir::Flow::Jump(t) => match idx_de(*t) {
+                Some(x) => Terminator::Goto(x),
+                None => Terminator::Halt,
+            },
+            crate::re_ir::Flow::Cond { target, .. } => {
+                let then = idx_de(*target);
+                let else_ = cfg.next_addr(b.addr).and_then(idx_de);
+                match (then, else_) {
+                    (Some(t), Some(e)) => Terminator::Cond {
+                        cond: SVal::Const(1),
+                        then_block: t,
+                        else_block: e,
+                    },
+                    (Some(t), None) => Terminator::Goto(t),
+                    _ => Terminator::Halt,
+                }
+            }
+            crate::re_ir::Flow::Indirect { .. } => {
+                if b.addr == disp.addr {
+                    let cases: Vec<(i64, usize)> = disp
+                        .casos
+                        .iter()
+                        .filter_map(|(k, dest)| idx_de(*dest).map(|x| (*k, x)))
+                        .collect();
+                    Terminator::Switch {
+                        state_var: disp.variable_estado.clone(),
+                        cases,
+                        default: None,
+                    }
+                } else {
+                    Terminator::Halt
+                }
+            }
+            crate::re_ir::Flow::Ret => Terminator::Halt,
+            _ => Terminator::Halt,
+        };
+        bloques.push(Block {
+            id: i,
+            stmts,
+            term,
+        });
+    }
+    Some(FlatProgram {
+        entry: 0,
+        blocks: bloques,
+    })
+}
+
+/// **Motor de deofuscación**: un único punto de entrada que aplica TODAS las
+/// técnicas y devuelve un informe uniforme con la evidencia de cada paso.
+///
+/// Hace:
+/// * **MBA**: simplificación de expresiones con prueba de equivalencia (BDD).
+/// * **Control-flow flattening**: detección del dispatcher, reaplanado y
+///   **prueba diferencial** de que el resultado se comporta igual.
+/// * **Strings cifrados**: búsqueda de claves periódicas y extracción del
+///   texto descifrado (con prueba de ida y vuelta).
+/// * **Constantes ofuscadas**: patrón "cargar constante + XOR con clave" y
+///   comprobación de que la constante real aparece en claro en el binario.
+/// * **Predicados opacos**: a nivel de bloque (valor constante conocido) y a
+///   nivel de expresión (forma canónica BDD).
+pub fn deobfuscar(path: &Path, o: &OpcionesDeofuscacion) -> Result<Value, String> {
+    let datos = std::fs::read(path).map_err(|e| format!("leer: {e}"))?;
+    let id = identificar(path)?;
+    let mut out = json!({
+        "ok": true,
+        "ruta": path.display().to_string(),
+        "identificacion": serde_json::to_value(&id).unwrap_or(Value::Null),
+        "tecnicas": [
+            "mba (prueba BDD)",
+            "control-flow flattening (prueba diferencial)",
+            "strings cifrados (ida y vuelta)",
+            "constantes ofuscadas (prueba en claro)",
+            "predicados opacos (bloque + expresion)"
+        ],
+    });
+
+    // --- cadenas cifradas (datos) -------------------------------------------
+    let cifradas = crate::re_crypto::detectar_cifrado(&datos, o.min_len_cifrado, o.max_cadenas);
+    out["cadenas_cifradas"] = json!({
+        "total": cifradas.len(),
+        "muestra": cifradas.iter().take(10).map(|c| json!({
+            "offset": c.offset,
+            "len": c.len,
+            "clave": c.clave.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>(),
+            "texto": c.texto,
+            "prueba": format!("{:?}", c.prueba),
+        })).collect::<Vec<_>>(),
+    });
+
+    // --- desensamblado -> CFG ----------------------------------------------
+    if let Some((arch, off, size, vaddr)) = seccion_de_codigo(&datos) {
+        let ventana = size.min(o.ventana_disasm);
+        let code = &datos[off..off + ventana];
+        out["codigo"] = json!({
+            "arquitectura": arch,
+            "seccion": ".text",
+            "offset": off,
+            "vaddr": vaddr,
+            "bytes_analizados": ventana,
+        });
+        if let Some(cfg) = cfg_de_ventana(code, &arch, vaddr, ventana) {
+            out["bloques"] = json!(cfg.blocks.len());
+
+            // predicados opacos a nivel de bloque
+            let opacos = crate::re_opaque::detectar_opacos(&cfg);
+            out["predicados_opacos"] = json!({
+                "total": opacos.len(),
+                "muestra": opacos.iter().take(10).map(|o| json!({
+                    "addr": o.addr,
+                    "condicion": o.cc,
+                    "destino": o.destino,
+                    "valor": o.valor,
+                    "veredicto": o.veredicto.label(),
+                    "prueba": o.prueba,
+                })).collect::<Vec<_>>(),
+            });
+
+            // constantes ofuscadas (cargar + XOR con clave)
+            let constantes = crate::re_crypto::detectar_constantes_ofuscadas(&cfg, &datos);
+            out["constantes_ofuscadas"] = json!({
+                "total": constantes.len(),
+                "muestra": constantes.iter().take(10).map(|c| json!({
+                    "addr": c.addr,
+                    "cifrada": format!("{:#x}", c.cifrada),
+                    "clave": format!("{:#x}", c.clave),
+                    "real": format!("{:#x}", c.real),
+                    "prueba": c.prueba.as_ref().map(|p| format!("{p:?}")),
+                })).collect::<Vec<_>>(),
+            });
+
+            // control-flow flattening
+            match crate::re_ir::detectar_dispatcher_cfg(&cfg) {
+                Some(disp) => {
+                    let mut cff = json!({
+                        "dispatcher": disp.addr,
+                        "grado_entrada": disp.grado_entrada,
+                        "variable_estado": disp.variable_estado,
+                        "casos": disp.casos.len(),
+                    });
+                    if let Some(prog) = programa_desde_cfg(&cfg, &disp) {
+                        let rep = crate::re_cff::analyze_cff(&prog, o.entradas_prueba);
+                        cff["detectado"] = json!(rep.detected);
+                        cff["cadena"] = json!(rep.cadena);
+                        cff["prueba"] = match &rep.proof {
+                            Some(p) => json!({
+                                "passed": p.passed,
+                                "entradas": p.inputs_tested,
+                                "detalle": p.detail,
+                                "diferencia": p.mismatch.as_ref().map(|m| json!({
+                                    "motivo": m.motivo,
+                                    "original": m.original.effects,
+                                    "aplanado": m.aplanado.effects,
+                                })),
+                            }),
+                            None => Value::Null,
+                        };
+                    }
+                    out["control_flow_flattening"] = cff;
+                }
+                None => {
+                    out["control_flow_flattening"] = json!({
+                        "detectado": false,
+                        "nota": "no hay dispatcher (bloque con grado de entrada >= 3) en la ventana analizada",
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(out)
+}
+
+/// Simplifica una expresión MBA y devuelve el informe con su prueba.
+pub fn mba(expr: &str) -> Value {
+    match crate::re_mba::parse(expr) {
+        Ok(e) => {
+            let rep = crate::re_mba::simplify(&e);
+            serde_json::to_value(rep).unwrap_or(Value::Null)
+        }
+        Err(e) => json!({ "ok": false, "error": e.to_string() }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn el_motor_mba_devuelve_la_prueba() {
+        let v = mba("(x ^ y) + 2*(x & y)");
+        assert_eq!(v["changed"], json!(true));
+        assert_eq!(v["simplified"], json!("(x + y)"));
+        assert_eq!(v["proof"]["passed"], json!(true));
+        assert_eq!(v["proof"]["kind"], json!("CanonicalForm"));
+    }
+
+    #[test]
+    fn una_expresion_mba_invalida_no_revienta() {
+        let v = mba("(x ^ ");
+        assert_eq!(v["ok"], json!(false));
+    }
 
     #[test]
     fn detecta_elf_y_go() {
@@ -419,20 +749,30 @@ mod tests {
 
     #[test]
     fn el_magic_de_go_se_detecta_en_un_blob_sintetico() {
+        // pcHeader de go1.18+: magic(4) pad1(1) pad2(1) minLC(1) ptrSize(1) nfunc(ptr)
         let mut d = vec![0u8; 64];
-        d[16..20].copy_from_slice(&[0xff, 0xff, 0xff, 0xf1]);
-        d[24..28].copy_from_slice(&1234u32.to_le_bytes());
+        d[16..20].copy_from_slice(&[0xf1, 0xff, 0xff, 0xff]);
+        d[20] = 0; // pad1
+        d[21] = 0; // pad2
+        d[22] = 1; // minLC
+        d[23] = 8; // ptrSize = 8 (64 bits)
+        d[24..32].copy_from_slice(&1234u64.to_le_bytes());
         let (n, _) = detectar_go_pclntab(&d).expect("debe detectar");
         assert_eq!(n, 1234);
     }
 
     #[test]
     fn extrae_cadenas_con_offset() {
-        let d = b"\x00\x01hola mundo\x00fin\x00";
+        // FIX 2026-11-22: la cadena de ejemplo era "fin" (3 bytes) con
+        // min_len=4, asi que el motor la filtraba y devolvia 1 cadena, no 2.
+        // El test estaba ROJO en main; ahora la segunda cadena tiene 4 bytes.
+        let d = b"\x00\x01hola mundo\x00final\x00";
         let v = extraer_cadenas(d, 4, 10);
         assert_eq!(v.len(), 2);
         assert_eq!(v[0].1, "hola mundo");
         assert_eq!(v[0].0, 2);
+        assert_eq!(v[1].1, "final");
+        assert_eq!(v[1].0, 13);
     }
 
     #[test]
