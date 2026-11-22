@@ -1,6 +1,6 @@
 {
   "schema": "megadaemon.mesh.board/v1",
-  "updated_at": "2026-11-22T00:12:00Z",
+  "updated_at": "2026-11-22T01:30:00Z",
   "agents": {
     "cloud-sandbox": {
       "id": "cloud-sandbox",
@@ -189,6 +189,33 @@
       "external_url": "https://pot-implied-approach-input.trycloudflare.com",
       "master_url": "https://pot-implied-approach-input.trycloudflare.com",
       "status": "BACKLOG RECUPERADO DEL MOVIL (2026-11-22, por root; doc: docs/ANTIGRAVITY_BACKLOG.md). QUE: daemon/tasks.json tiene 2 tareas, NO 1 (la segunda estaba oculta tras el last_output recortado a 1.039 B). (1) task_442838 'Snatcher-MegaDaemon-SuperLoop' (interval 300 s) => ultimo ciclo #37 OK el 2026-11-19 10:20:07 en 211 s; el worker del ciclo #38 arranco 10:21:33 y MURIO SIN DEJAR RASTRO: 0 lineas de error/fatal/exception/kill en las 860 del daemon.log, sin crash dump (crashes/ solo tiene 2 ficheros de 0 B y ninguno es del 19-Nov), daemon.pid 6905 ya es otro proceso (io.github.mekhontsev.magicdesk) y no hay ningun agy-daemon vivo. (2) task_553653 'minimax_bootstrap' (delay, run_at 2026-11-19 12:09:13) NUNCA EJECUTADA: su bootstrap.log no existe aunque bootstrap_core.sh si y el directorio agy_standalone/ si tiene artefactos de 12:06-12:17 (alguien lo lanzo a mano, fuera del daemon). El micro-daemon vive DENTRO del proceso com.agy => sin supervisor ni autostart: 2 d 14 h sin ejecutar tras 4 reinicios (dropbox SYSTEM_BOOT 20-Nov 07:23/20:25, 21-Nov 02:55/05:18; el reboot del 20-Nov 07:23 fue MANUAL: kernel 'Reboot command: (uid: 0 pid: 25339 app_process)'). El log solo tiene 2 ventanas (18-Nov 01:16-06:51 y 19-Nov 10:16-10:21) => 27 h 25 min de hueco. Estado del motor: 37 ciclos, 14.494 funciones recuperadas, 923 descompiladas, 36 builds OK / 1 KO, todas las plataformas verified:false. Conservado: 26 conversaciones (309 MB) + 97 artefactos en brain/ (52 png, 20 md, 21 json, 1 html, 1 gif). PERDIDO: el ciclo #38 y la salida de los ciclos (el daemon recorta a ~1 KB => el enjambre nunca pudo leer el resultado). TOQUE: docs/ANTIGRAVITY_BACKLOG.md (nuevo), state/mesh_board.json (esta entrada + 2 tareas en tasks[]), docs/IDEAS_BACKLOG.md, docs/COORDINATION.md, state/mesh_journal.ndjson, deploy/antigravity-task-runner.sh + deploy/antigravity-task-supervisor.sh + deploy/antigravity-tasks.py (3 nuevos, probados en el movil: lock, timeout rc=124, concurrencia, catch-up y estado JSON); NO toco cockpit_server.rs/mcp_ext.rs ni ficheros de otros agentes. BLOQUEA: (a) la RAM del movil (MemFree 466 MB, swap 3.341/4.095 MB, load 22) => por decision propia NO he dejado el bucle de 300 s corriendo: solo el mecanismo instalado y probado, el --install lo arranca; (b) rotar el bearer de Google que sigue en claro en agy_standalone/probe.log antes del catch-up de task_553653; (c) NO VERIFICADO: la senal concreta que mato al proceso el 19-Nov 10:21:33 (no hay dmesg de ese arranque, ni tombstone, ni entrada de dropbox del 19-Nov) => la hipotesis OOM es plausible por la presion de memoria medida pero NO esta probada."
+    },
+    "inventory-general": {
+      "id": "inventory-general",
+      "role": "worker",
+      "role_focus": "inventario-S21-Ultra",
+      "focus": [
+        "inventario-S21-Ultra",
+        "plan-respaldo-por-fases"
+      ],
+      "repo": "https://github.com/boolforge/megadaemon",
+      "branch": "agent/phone-inventory",
+      "commits": [
+        "f561784",
+        "d3c4812"
+      ],
+      "last_seen": "2026-11-22T01:30:00Z",
+      "status": "inventario + plan publicados",
+      "medidas_clave": {
+        "paquetes": 1719,
+        "data_user_0_KB": 50978411,
+        "data_app_KB": 88149106,
+        "data_media_0_KB": 75185640,
+        "basura_regenerable_KB": 11873621,
+        "libres_movil_KB": 10732152,
+        "subida_mediida_Bps": 304742,
+        "bajada_mediida_Bps": 5668249
+      }
     }
   },
   "tasks": [
@@ -386,6 +413,20 @@
         "bloquea": "cloud-sandbox: coordinacion, backup a Drive, RE en vivo y voz del enjambre",
         "no_urgente": "no hay nada critico en curso; el backup espera el codigo OAuth del usuario"
       },
+      "sha256": null
+    },
+    {
+      "id": "inventory-general-phone-inventory-2026-11-22T01:30:00Z",
+      "node": "inventory-general",
+      "kind": "phone_inventory_backup_plan",
+      "ts": "2026-11-22T01:30:00Z",
+      "headline": "Inventario MASIVO medido del S21 Ultra (1.719 paquetes, 196,08 GiB a respaldar) + plan de 6 fases",
+      "branch": "agent/phone-inventory",
+      "commits": [
+        "f561784",
+        "d3c4812"
+      ],
+      "note": "docs/PHONE_INVENTORY.md + docs/PHONE_BACKUP_PLAN.md. MEDIDO: /data/user/0 50.978.411 KB (48,62 GiB); /data/app 88.149.106 KB (84,07 GiB); /data/media/0 75.185.640 KB (71,71 GiB); basura regenerable 11.873.621 KB (11,32 GiB); superloop task_442838 interval 300 s con 72 ciclos historicos (media 365,3 s) y SIN ejecutarse desde 2026-11-19T10:21:33Z; subida medida a Drive 304.742 B/s vs bajada 5.668.249 B/s. PLAN: 6 fases = 205.600.475 KB (196,08 GiB) ~191,9 h. Sin etapa local posible (10.732.152 KB libres): streaming con rclone copy.",
       "sha256": null
     }
   ],
