@@ -117,6 +117,8 @@ pub mod re_disasm;
 pub mod re_bdd;
 pub mod re_mba;
 pub mod re_strings;
+pub mod re_ir;
+pub mod re_cff;
 pub mod recording_vault;
 pub mod recordings;
 pub mod axml_parser;
