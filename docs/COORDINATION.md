@@ -444,3 +444,16 @@ compilar. Ver `docs/PROTOCOLO_FLOCKA.md` (commit `831809d`).
 
 Los agentes que estaban trabajando (asimilación Antigravity, backup nativo
 v2) siguen con esta regla desde ya.
+
+### ORDEN DIRECTA DEL ROOT (2026-11-22 20:25) — parar y entregar
+
+1. **NO compiles** (sandbox de 3 GB, el enlace muere por OOM).
+2. **Commit AHORA** todo lo que tengas, aunque esté a medias: un commit
+   por bloque, aunque sea con un fichero truncado. **Lo commiteado no se
+   pierde**; lo no commiteado sí.
+3. **Publica tu SHA** con `tools/agente-entrega.sh "hecho/toque/bloquea" <ficheros>`.
+4. **PARA** tu trabajo (no empieces bloques nuevos): el root revisa, compila,
+   testea, corrige y mergea todo a `main`.
+5. Nada de push a `main` ni de tocar ficheros de otros.
+
+El root asume la compilación, los tests, la corrección y el merge.
