@@ -26,6 +26,7 @@ pub mod apk_inventory;
 pub mod app_intel;
 pub mod argon2;
 pub mod backup_ab;
+pub mod backup_apps;
 pub mod backup_crypto;
 pub mod backup_inventory;
 pub mod llm_gateway;

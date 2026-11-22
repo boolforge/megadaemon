@@ -621,6 +621,8 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "phone_backup",
+            "description": "Motor de backup nativo de apps (Rust puro, sin curl ni shell): inventario de apps del movil, contenedor cifrado AEGIS-256 por segmentos con manifiesto sha256 por fichero, verificacion del AEAD, restauracion (simulacro por defecto, exige confirm=true) y SUBIDA PIPELINING a Drive (sube cada segmento ya cerrado mientras se recoge el siguiente; mide MiB/s y ETA). Anti-congelacion: nice/ionice de la clase mas baja, sleep entre lotes y descanso si la carga del sistema se dispara. Acciones: inventory | create | list | verify | restore | upload. create/restore/upload escriben o publican en Drive: exigen confirm=true.",
             "name": "quota_status",
             "description": "Estado de la CUOTA de los proveedores/modelos: cuanto queda (%), cuando resetea y en que modo esta (normal/aviso/ahorro/pausa). Respuesta MUY compacta (~70 tokens) para no gastar. En 'pausa' significa que la cuota se agota: termina el paso actual, guarda tu checkpoint y espera al reset; no sigas abriendo tareas nuevas.",
             "inputSchema": {
@@ -909,6 +911,194 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             let txt = serde_json::to_string(&v).unwrap_or_default();
             json!({ "content": [{ "type": "text", "text": txt }] })
         }
+                "phone_backup" => {
+                    // Motor de backup nativo de apps: la MISMA libreria que el
+                    // binario `md-backup` (paridad CLI <-> MCP <-> agent_coding).
+                    let action = {
+                        let a = s("action");
+                        if a.trim().is_empty() { "inventory".to_string() } else { a }
+                    };
+                    let st = crate::cockpit_server::state_dir();
+                    let root = std::path::PathBuf::from({
+                        let r = s("root");
+                        if r.is_empty() { "/".to_string() } else { r }
+                    });
+                    let packages = sa("packages");
+                    // `create`, `restore` y `upload` escriben o publican: exigen
+                    // `confirm: true` (misma politica que el resto de tools).
+                    let needs_confirm = matches!(action.as_str(), "create" | "restore" | "upload");
+                    if needs_confirm && !b("confirm") {
+                        json!({ "content": [{ "type": "text", "text": format!("phone_backup {action} exige confirm=true") }], "isError": true })
+                    } else {
+                        let res: Result<Value, String> = match action.as_str() {
+                            "inventory" => {
+                                let opts = crate::backup_apps::InventoryOptions {
+                                    root: root.clone(),
+                                    packages: packages.clone(),
+                                    measure: b("measure"),
+                                    ..Default::default()
+                                };
+                                crate::backup_apps::inventory(&opts).map(|apps| {
+                                    json!({
+                                        "ok": true,
+                                        "packages": apps.len(),
+                                        "apps": apps,
+                                    })
+                                })
+                            }
+                            "list" => {
+                                let out = s("out");
+                                if out.is_empty() {
+                                    Err("phone_backup list necesita 'out'".to_string())
+                                } else {
+                                    crate::backup_apps::list(std::path::Path::new(&out)).map(|v| {
+                                        json!({ "ok": true, "containers": v })
+                                    })
+                                }
+                            }
+                            "verify" => {
+                                let out = s("out");
+                                if out.is_empty() {
+                                    Err("phone_backup verify necesita 'out'".to_string())
+                                } else {
+                                    let key = match s("key") {
+                                        p if p.trim().is_empty() => Ok(None),
+                                        p => crate::backup_apps::read_key_file(std::path::Path::new(&p)).map(Some),
+                                    };
+                                    match key {
+                                        Err(e) => Err(e),
+                                        Ok(key) => crate::backup_apps::verify(std::path::Path::new(&out), key.as_deref()).map(|r| {
+                                            json!({ "ok": r.ok, "report": r })
+                                        }),
+                                    }
+                                }
+                            }
+                            "create" => {
+                                let out = s("out");
+                                if out.is_empty() {
+                                    Err("phone_backup create necesita 'out'".to_string())
+                                } else {
+                                    let opts = crate::backup_apps::CreateOptions {
+                                        root: root.clone(),
+                                        out: std::path::PathBuf::from(&out),
+                                        packages: packages.clone(),
+                                        segment_bytes: if n("segment_bytes") > 0 { n("segment_bytes") } else { crate::backup_apps::DEFAULT_SEGMENT_BYTES },
+                                        passphrase: s("password").into(),
+                                        key_out: {
+                                            let k = s("key_out");
+                                            if k.is_empty() { None } else { Some(std::path::PathBuf::from(k)) }
+                                        },
+                                        ..Default::default()
+                                    };
+                                    let mut sink = crate::backup_apps::NullSink;
+                                    crate::backup_apps::create(&opts, &mut sink).map(|r| json!({ "ok": true, "report": r }))
+                                }
+                            }
+                            "restore" => {
+                                let out = s("out");
+                                if out.is_empty() {
+                                    Err("phone_backup restore necesita 'out'".to_string())
+                                } else {
+                                    let key = match s("key") {
+                                        p if p.trim().is_empty() => Ok(None),
+                                        p => crate::backup_apps::read_key_file(std::path::Path::new(&p)).map(Some),
+                                    };
+                                    let key = match key {
+                                        Err(e) => return Some(json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true })),
+                                        Ok(k) => k,
+                                    };
+                                    let dest = {
+                                        let d = s("dest");
+                                        if d.is_empty() { "/".to_string() } else { d }
+                                    };
+                                    let opts = crate::backup_apps::RestoreOptions {
+                                        dir: std::path::PathBuf::from(&out),
+                                        dest: std::path::PathBuf::from(&dest),
+                                        packages: packages.clone(),
+                                        confirm: b("confirm"),
+                                        overwrite: b("overwrite"),
+                                        key,
+                                    };
+                                    crate::backup_apps::restore(&opts).map(|r| json!({ "ok": r.mismatches.is_empty(), "report": r }))
+                                }
+                            }
+                            "upload" => {
+                                let out = s("out");
+                                let folder = s("folder_id");
+                                if out.is_empty() {
+                                    Err("phone_backup upload necesita 'out'".to_string())
+                                } else if folder.is_empty() {
+                                    Err("phone_backup upload necesita 'folder_id'".to_string())
+                                } else {
+                                    let workers = if n("workers") == 0 { 3usize } else { (n("workers") as usize).clamp(1, 16) };
+                                    let state_dir = {
+                                        let sd = s("state_dir");
+                                        if sd.is_empty() { st.clone() } else { sd }
+                                    };
+                                    // El `?` no vale aquí (esta función devuelve
+                                    // `Option`): la subida va en una clausura que
+                                    // sí devuelve `Result`.
+                                    (|| -> Result<Value, String> {
+                                    // Subcarpeta (p.ej. `P0-apps`): se busca o se crea
+                                    // con el VFS nativo.
+                                    let folder = match s("subfolder") {
+                                        sub if sub.trim().is_empty() => folder.clone(),
+                                        sub => crate::drive_native::ensure_folder(&sub, &folder, Some(&state_dir))?,
+                                    };
+                                    let name = {
+                                        let nm = s("name");
+                                        if nm.is_empty() {
+                                            std::path::Path::new(&out)
+                                                .file_name()
+                                                .map(|x| x.to_string_lossy().to_string())
+                                                .unwrap_or_else(|| "backup".to_string())
+                                        } else { nm }
+                                    };
+                                    let mut up = crate::backup_apps::DriveUploader::new(&folder, &name, workers);
+                                    up.chunk_bytes = if n("chunk_bytes") > 0 { n("chunk_bytes") } else { crate::backup_apps::DRIVE_CHUNK_MIN };
+                                    up.state_dir = Some(state_dir.clone());
+                                    up.delete_after_upload = b("delete_after_upload");
+                                    up.container_dir = Some(std::path::PathBuf::from(&out));
+                                    up.start()?;
+                                    let header = crate::backup_apps::read_header(std::path::Path::new(&out))?;
+                                    for sg in &header.segments {
+                                        let p = std::path::Path::new(&out).join("segments").join(&sg.name);
+                                        if !p.exists() { continue; }
+                                        // `submit` es un método del trait `SegmentSink`:
+                                        // se llama con la ruta completa para no
+                                        // depender del `use`.
+                                        crate::backup_apps::SegmentSink::submit(
+                                            &mut up,
+                                            &crate::backup_apps::SealedSegment {
+                                                index: sg.index,
+                                                path: p,
+                                                info: sg.clone(),
+                                            },
+                                        )?;
+                                    }
+                                    let manifest = crate::backup_apps::read_manifest(std::path::Path::new(&out))?;
+                                    crate::backup_apps::SegmentSink::finish(&mut up, &header, &manifest)?;
+                                    let stats = up.stats();
+                                    let up_ms = stats.ended_ms.saturating_sub(stats.started_ms).max(1);
+                                    Ok(json!({
+                                        "ok": up.errors().is_empty(),
+                                        "segments": stats.segments,
+                                        "bytes": stats.bytes,
+                                        "mib_per_s": (crate::backup_apps::mib_per_s(stats.bytes, up_ms) * 1000.0).round() / 1000.0,
+                                        "eta_s": crate::backup_apps::eta_s(stats.bytes, stats.total_bytes.max(stats.bytes), up_ms).round() as u64,
+                                        "errors": up.errors(),
+                                    }))
+                                    })()
+                                }
+                            }
+                            other => Err(format!("unknown phone_backup action '{}'", other)),
+                        };
+                        match res {
+                            Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
+                            Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+                        }
+                    }
+                }
         "quota_status" => {
             // Snapshot COMPACTO por defecto: el objetivo es que el agente
             // sepa cuanto queda sin gastar tokens de mas.
