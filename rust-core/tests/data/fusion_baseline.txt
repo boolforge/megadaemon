@@ -45,3 +45,9 @@ rust-core/src/crypto_scan.rs:push('・'),
 rust-core/src/crypto_scan.rs:push('「'),
 rust-core/src/crypto_scan.rs:push('」'),
 rust-core/src/crypto_scan.rs:push('漢');
+
+# MEDIDO el 2026-11-22 (falsos positivos del lint de fusiones):
+# - "decompiled" = "de" + "compiled": es una palabra inglesa, no una fusión.
+# - "seeglob"     = "see" + "glob":     es un identificador, no una fusión.
+docs/ANTIGRAVITY_BACKLOG.md:decompiled
+docs/DNS_DIAG_20261120.md:seeglob

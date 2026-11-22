@@ -1119,11 +1119,19 @@ mod tests {
     }
 
     /// Fixture real: RSA-2048 generada con OpenSSL, indice firmado con
-    /// `openssl dgst -sha256 -sign` (PKCS#1 v1.5).  Reproducible con
-    /// `tools/store_fixtures/` (script `store_manager_fixture.sh`).
+    /// `openssl dgst -sha256 -sign` (PKCS#1 v1.5) y clave publica en el
+    /// formato `n:e` que exige `parse_public_key` (base64 del ASCII "n:e").
+    ///
+    /// MEDIDO el 2026-11-22: el fixture ANTERIOR traia la clave publica en
+    /// binario (260 bytes sin separador ':') => `parse_public_key` devolvia
+    /// "clave publica sin separador ':'" => `verify_index` caia en
+    /// `SignatureInvalid` => **este test no podia pasar jams** (y por tanto
+    /// la firma RSA nunca se daba por valida).  Regenerado con
+    /// `tools/store_fixtures/store_manager_fixture.sh`, que ademas lo
+    /// VERIFICA con `openssl dgst -sha256 -verify` antes de escribirlo.
     const FIXTURE_BODY: &str = r#"{"generated_at":"2026-11-20T00:00:00Z","entries":[{"id":"lsposed","name":"LSPosed","version":"1.9.2","url":"files/lsposed.zip","sha256":"2222222222222222222222222222222222222222222222222222222222222222","size":20480}]}"#;
-    const FIXTURE_PUBKEY: &str = "wPvS4fmDY/A8v7jegBNZfa2x/uWSmaFjvhwGfkk2HrOrddy350ID/qVRk77TkHSEdd635OQotweO6G8MKnh3MsoLn6zgQuLKTIgzeuDyjSADgi/cxSc2dTv4WKeDgML1Fc4XRG2TXzGKn/4noMJVsQWg0OSioT43Dm+YnlZTqH5BT8CIMAOXHSLPT+8AGOOt7nh/c+xCLkDp5VnKz69ZXhVf51hJfhAK5sgeZA6GYa6zaDmD/YeOkl6hIhbYSJqrhq2nbKf0vzTP6zs0JcXLEKt+36LlnLWKgLQs1iCM31uLj8U/CTq3/YW8yHcvkfFbF6+C+KWG0gBGY9rjtcEJNToBAAE=";
-    const FIXTURE_SIG: &str = "DDwYuUPscB7G7+jsESEHwONeaFTxv/5yyHQP7IR+4qiUuRFuDULrWsGkI8Ut5Pp0dDWvx4Ui4bgHsiaTxyLyvbmRaGAQyC2W75zWL93C4ZDaSA0Zj2dSOhvPbZIQTBnj7103dAlQCU5i8NUMjjjNwZ+8y328YZaqokDM1Txcuf07itMdqxwLyq8yeKTwbRptP4fuk6sfbIOUGjSmIO6MSkhPkc8f4ihKb6Q7XppsYLf3hViAtwjyGkJimN6jrwDmCuokP+mZVsuvBJ6NK34swfVBTCVRa5bVU7mTwFST1smbwoKhcDoXvZsIR5egAePBrf2oJfQFGkseNHI23lp17g==";
+    const FIXTURE_PUBKEY: &str = "APaljkhPFOsjHN/AJ4sGmz9TJ1WuxwSJK6Doj6YPzzhyDqxRnIgmuQK1yUgnDWwtvNUMXK2hmJqGUYB0g0VFpqdr4rkDsXhvmRw/MP6MKp2HugkzxvNT/kC/qWiScsNOnYTtrn1FLbX++KSJunYI60t7v5FI1OOo/HBI2hq8+pYt8YHwYkNnem0tpfLpvMHKxYgrrra/+hwQf7Xt2scpCSjzblpohudTLv3gCJ2vCoD2NHnVDWyA8DK+AfJi604oG1QDTQhr9PDHNtrN+970DLFhlPBb27prcSZHHWqJJiI3Hq+D1sI4f/ff0x/iwbDI6nLtT+PvNGYfnGlvRvnkptM6AQAB";
+    const FIXTURE_SIG: &str = "MELSEwuFgyS+EJ23jUwOqdEJchZR7utTpf90T4Dro6IWe5rUKlHJ4E6eNglVVFX4vEo0AO1KMzlOEVO/huQdznzRJ8aqwiAn+m/ApRe4rxUstHhavqHXyZS1jfTF4TTztFm+qSVLVu0IbMM16HkaNAe6b4dh++wMNRGJXv5L/SleeRhzDkhwJ5lPhThwNoJmh9l9Eo8h4OjL3z4g7WMNyjGhCCnXb6b2D0KOik0WemPlVztbNgxJ9bacsGMNElpj2/WVmIobWamTeEBtTnEhhCRgdLko9cN5E7n8JHCZ5qLHF4Swj0B5XNg+5BojTJYAcj1O86bPrBRoHVHoBdX0DA==";
 
     #[test]
     fn indice_firmado_por_rsa_se_verifica() {

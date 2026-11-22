@@ -1190,7 +1190,7 @@ impl Default for SwiftWriteOptions {
 /// confirmado** (sólo se midió el orden de campos del escritor x86_64). Este
 /// función escribe algo **estructuralmente** parecido, pero **no se puede
 /// garantizar** que la app de Swift Backup lo lea. Se usa, sobre todo, para
-/// poder probar el lector de往返.
+/// poder probar el lector de ida y vuelta.
 ///
 /// Devuelve el informe: lo que se escribió y **lo que no se puede prometer**.
 pub fn write_swift_backup(

@@ -1769,7 +1769,7 @@ fn chrono_hour() -> u32 {
 /// Encola el backup nocturno en el [`crate::task_scheduler`].
 ///
 /// Devuelve el id de la tarea. La tarea es **pesada** (gigas) ⇒ el
-/// planificador laを踏ま Launch sólo cuando la batería y la política lo
+/// planificador la Launch sólo cuando la batería y la política lo
 /// permiten.
 pub fn schedule_backup(policy: BackupPolicy, out_path: &str) -> String {
     let payload = json!({

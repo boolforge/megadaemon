@@ -5,7 +5,7 @@
 Responde a LA pregunta que hoy cuesta media hora: **¿qué está caído, el móvil,
 la red, el relay o la credencial?**
 
-La distinction clave (medida el 2026-11-20/21, cuando la flota损失 el tiempo
+La distinction clave (medida el 2026-11-20/21, cuando la flota perdio el tiempo
 persiguiendo al móvil equivocado):
 
   * `000` / sin conexión  => **no hay ruta**: móvil apagado sin wifi, túnel

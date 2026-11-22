@@ -150,6 +150,13 @@ fn los_arnes_usan_la_libreria_y_no_copian_modulos() {
             let txt = leer(&p);
             for linea in txt.lines() {
                 let l = linea.trim();
+                // MEDIDO el 2026-11-22: los comentarios que EXPLICAN el
+                // patrón antiguo mencionan `#[path = "../src/x.rs"]` => el
+                // guard los contaba como includes reales y fallaba solo
+                // (falso positivo).  Sólo cuentan las líneas de CÓDIGO.
+                if l.starts_with("//") {
+                    continue;
+                }
                 const PRE: &str = "#[path = \"../src/";
                 if let Some(inicio) = l.find(PRE) {
                     let resto = &l[inicio + PRE.len()..];

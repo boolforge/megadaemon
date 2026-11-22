@@ -128,9 +128,16 @@ mod tests_iso {
 
     #[test]
     fn iso8601_de_una_epoch_conocida() {
-        // 2026-11-19T19:30:00Z = 1795138200
-        assert_eq!(format_iso8601(1_795_138_200), "2026-11-19T19:30:00Z");
+        // MEDIDO el 2026-11-22 (oráculo independiente: `datetime.datetime
+        // .fromtimestamp(1795138200, timezone.utc)` => 2026-11-20T01:30:00Z):
+        // el epoch 1_795_138_200 es el 2026-11-20T01:30:00Z.  El test
+        // esperaba "2026-11-19T19:30:00Z" => el MISMO instante con un
+        // desplazamiento de -6 h => el test estaba escrito con hora local y
+        // la IMPLEMENTACIÓN era correcta.
+        assert_eq!(format_iso8601(1_795_138_200), "2026-11-20T01:30:00Z");
         assert_eq!(format_iso8601(0), "1970-01-01T00:00:00Z");
+        // el mismo instante con el offset de -6 h => misma marca UTC
+        assert_eq!(format_iso8601(1_795_138_200 - 6 * 3600), "2026-11-19T19:30:00Z");
     }
 
     #[test]
