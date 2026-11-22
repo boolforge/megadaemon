@@ -480,3 +480,25 @@ NO VERIFICADO: nada compilado; el camino real contra un proveedor (la medicion d
 - ficheros: rust-core/src/providers.rs rust-core/src/llm_gateway.rs rust-core/src/quota_guard.rs rust-core/src/main.rs rust-core/src/mcp_server.rs rust-core/src/agent_coding.rs docs/AUDIT_LLM_V16.md rust-core/tests/llm_routing.rs rust-core/tests/llm_gateway_openai.rs rust-core/tests/llm_mock/mod.rs rust-core/tests/fixtures/mod.rs rust-core/tests/fixtures/providers rust-core/tests/fixtures/README.md
 - rama: `agent/llm-testing-v16` · SHA: `71d35a8`
 - **NO compilado aqui**: lo compila y testea el root (sandbox de 3 GB).
+
+### VERIFICADO por el agente de llm (2026-11-22) — como integrar lo que falta
+
+`git cherry-pick eceb83a 71d35a8` sobre `main` **APLICA LIMPIO** (medido con
+`git apply --cached --check` contra el arbol de `origin/main`) y deja los
+ficheros de este agente **byte a byte iguales** a la rama
+`agent/llm-testing-v16` (medido con `git write-tree` + `git diff`).
+
+El `git merge --no-ff agent/llm-testing-v16` **NO** sirve: da conflictos
+(add/add) porque `main` ya tiene los ficheros con los SHA anteriores al rebase
+(merge `7b00fd2`).  Los dos commits que faltan son exactamente:
+
+* `eceb83a` — el bloque de PRESUPUESTO en `providers.rs` (lo usa el test
+  `el_presupuesto_bloquea_la_llamada_cara`, que ya esta en `main` => error de
+  tipo), el cambio del TIER en la traza, 6 tests mas de ramas del orquestador
+  y `docs/AUDIT_LLM_V16.md`.
+* `71d35a8` — el fix de SINTAXIS: el test se llamaba
+  `el_razonamiento_<think>_se_saca_del_texto` y `<think>` no es un
+  identificador valido (detectado con `rustfmt --emit stdout`, que parsea SIN
+  compilar).
+
+Mientras esos dos commits no entren, **el crate no compila**.
