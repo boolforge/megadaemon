@@ -106,6 +106,48 @@ fn main() {
                     std::path::PathBuf::from(ruta),
                     360,
                 );
+                // v18: el plugin MCP de Antigravity (`megadaemon-minimax`)
+                // declara a mano el token de sesion y la API key.  Si se
+                // rota cualquiera de los dos, sus 52 tools dejan de
+                // responder sin aviso.  Aqui se re-sincroniza al arrancar.
+                match megadaemon_core::antigravity_clone::sincronizar_mcp_config() {
+                    Ok(r) if r.aplicado => {
+                        eprintln!(
+                            "antigravity: mcp_config sincronizado ({})",
+                            r.campos_actualizados.join(", ")
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => eprintln!("antigravity: mcp_config no sincronizado: {e}"),
+                }
+                // v18: el plugin MCP de Antigravity (`megadaemon-minimax`)
+                // declara a mano el token de sesion y la API key.  Si se
+                // rota cualquiera de los dos, sus 52 tools dejan de
+                // responder sin aviso.  Aqui se re-sincroniza al arrancar.
+                match megadaemon_core::antigravity_clone::sincronizar_mcp_config() {
+                    Ok(r) if r.aplicado => {
+                        eprintln!(
+                            "antigravity: mcp_config sincronizado ({})",
+                            r.campos_actualizados.join(", ")
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => eprintln!("antigravity: mcp_config no sincronizado: {e}"),
+                }
+                // v18: el plugin MCP de Antigravity (`megadaemon-minimax`)
+                // declara a mano el token de sesion y la API key.  Si se
+                // rota cualquiera de los dos, sus 52 tools dejan de
+                // responder sin aviso.  Aqui se re-sincroniza al arrancar.
+                match megadaemon_core::antigravity_clone::sincronizar_mcp_config() {
+                    Ok(r) if r.aplicado => {
+                        eprintln!(
+                            "antigravity: mcp_config sincronizado ({})",
+                            r.campos_actualizados.join(", ")
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => eprintln!("antigravity: mcp_config no sincronizado: {e}"),
+                }
             }
             if let Err(e) = cockpit_server::run_server(port) {
                 eprintln!("Cockpit server error: {}", e);
