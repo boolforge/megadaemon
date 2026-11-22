@@ -237,6 +237,19 @@ pub fn is_known_kind(kind: &str) -> bool {
         "root.stealth.status",
         "root.stealth.apply",
         "tasks.list",
+        // v16 — capa de automatización (motor de reglas, cron, energía,
+        // comunicaciones y puente con los automatizadores instalados).
+        "automation.list",
+        "automation.poll",
+        "automation.fire",
+        "cron.list",
+        "cron.tick",
+        "energy.status",
+        "energy.apply",
+        "comms.status",
+        "comms.decide",
+        "bridge.report",
+        "bridge.detect",
     ];
     KINDS.contains(&kind)
 }
@@ -388,6 +401,64 @@ pub fn execute(kind: &str, payload: &Value) -> Value {
         "tasks.list" => {
             let r = crate::task_scheduler::list_json();
             json!({ "ok": true, "summary": format!("{} tareas", r["tasks"].as_array().map(|a| a.len()).unwrap_or(0)), "detail": r })
+        }
+        // v16 — automatización: el agente puede pilotar los módulos nuevos.
+        "automation.list" => {
+            let r = crate::automation_runtime::automation_list();
+            json!({ "ok": true, "summary": format!("{} reglas de automatización", r["count"].clone()), "detail": r })
+        }
+        "automation.poll" => {
+            let r = crate::automation_runtime::automation_poll(true);
+            let n = r["outcomes"].as_array().map(|a| a.len()).unwrap_or(0);
+            json!({ "ok": true, "summary": format!("{} eventos sondeados, {} acciones disparadas", r["events"].as_array().map(|a| a.len()).unwrap_or(0), n), "detail": r })
+        }
+        "automation.fire" => {
+            let kind = payload.get("event").and_then(|v| v.as_str()).unwrap_or("schedule");
+            let key = payload.get("key").and_then(|v| v.as_str()).unwrap_or("");
+            let value = payload.get("value").and_then(|v| v.as_f64());
+            let text = payload.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            match crate::automation_runtime::automation_fire(kind, key, value, text, true) {
+                Ok(r) => json!({ "ok": true, "summary": format!("evento {} disparado", kind), "detail": r }),
+                Err(e) => json!({ "ok": false, "error": e }),
+            }
+        }
+        "cron.list" => {
+            let r = crate::automation_runtime::cron_list();
+            json!({ "ok": true, "summary": format!("{} tareas cron", r["count"].clone()), "detail": r })
+        }
+        "cron.tick" => {
+            let r = crate::automation_runtime::cron_tick(true);
+            json!({ "ok": true, "summary": format!("{} tareas ejecutadas", r["executed"].as_array().map(|a| a.len()).unwrap_or(0)), "detail": r })
+        }
+        "energy.status" => {
+            let r = crate::automation_runtime::energy_status();
+            json!({ "ok": true, "summary": format!("perfil '{}'", r["decision"]["profile"].clone()), "detail": r })
+        }
+        "energy.apply" => {
+            let profile = payload.get("profile").and_then(|v| v.as_str()).unwrap_or("");
+            let r = crate::automation_runtime::energy_apply(profile);
+            json!({ "ok": true, "summary": format!("política de energía aplicada (perfil '{}')", r["profile"].clone()), "detail": r })
+        }
+        "comms.status" => {
+            let r = crate::automation_runtime::comms_status();
+            json!({ "ok": true, "summary": "estado de la automatización de comunicaciones", "detail": r })
+        }
+        "comms.decide" => {
+            let kind = payload.get("event").and_then(|v| v.as_str()).unwrap_or("sms_received");
+            let peer = payload.get("peer").and_then(|v| v.as_str()).unwrap_or("");
+            let body = payload.get("body").and_then(|v| v.as_str()).unwrap_or("");
+            match crate::automation_runtime::comms_decide(kind, peer, body) {
+                Ok(r) => json!({ "ok": true, "summary": format!("{} decisiones para {}", r["decisions"].as_array().map(|a| a.len()).unwrap_or(0), kind), "detail": r }),
+                Err(e) => json!({ "ok": false, "error": e }),
+            }
+        }
+        "bridge.report" => {
+            let r = crate::automation_runtime::bridge_report();
+            json!({ "ok": true, "summary": "informe del puente con los automatizadores instalados", "detail": r })
+        }
+        "bridge.detect" => {
+            let r = crate::automation_runtime::bridge_detect();
+            json!({ "ok": true, "summary": format!("{} automatizadores conocidos", r["targets"].as_array().map(|a| a.len()).unwrap_or(0)), "detail": r })
         }
         other => json!({
             "ok": false,

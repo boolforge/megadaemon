@@ -96,6 +96,131 @@ fn main() {
             mcp_server::run_stdio_mcp_server();
         }
 
+        // v16 — Capa de automatización (CLI de los 5 módulos nuevos).
+        //   megadaemon-core automation <list|add|remove|enable|disable|poll|events|fire|journal>
+        //   megadaemon-core cron       <list|add|remove|tick|plan|resume>
+        //   megadaemon-core energy    <status|snapshot|profiles|apply|set_profile> [perfil]
+        //   megadaemon-core comms     <status|consent|decide|handle|journal> [evento] [peer] [texto]
+        //   megadaemon-core bridge    <detect|report|fire|inbox> [paquete] [accion]
+        "automation" | "cron" | "energy" | "comms" | "bridge" => {
+            let cmd = args[1].as_str();
+            let action = args.get(2).cloned().unwrap_or_else(|| "list".to_string());
+            let rest: Vec<String> = args.iter().skip(3).cloned().collect();
+            let r: serde_json::Value = match cmd {
+                "automation" => match action.as_str() {
+                    "add" => {
+                        // La regla llega como JSON en el último argumento.
+                        let raw = rest.join(" ");
+                        let rule: serde_json::Value = serde_json::from_str(&raw)
+                            .unwrap_or_else(|e| serde_json::json!({"ok": false, "error": e.to_string()}));
+                        match megadaemon_core::automation_runtime::automation_add(&rule) {
+                            Ok(v) => v,
+                            Err(e) => serde_json::json!({"ok": false, "error": e}),
+                        }
+                    }
+                    "remove" => match megadaemon_core::automation_runtime::automation_remove(rest.first().map(|s| s.as_str()).unwrap_or("")) {
+                        Ok(v) => v,
+                        Err(e) => serde_json::json!({"ok": false, "error": e}),
+                    },
+                    "enable" => match megadaemon_core::automation_runtime::automation_toggle(rest.first().map(|s| s.as_str()).unwrap_or(""), true) {
+                        Ok(v) => v,
+                        Err(e) => serde_json::json!({"ok": false, "error": e}),
+                    },
+                    "disable" => match megadaemon_core::automation_runtime::automation_toggle(rest.first().map(|s| s.as_str()).unwrap_or(""), false) {
+                        Ok(v) => v,
+                        Err(e) => serde_json::json!({"ok": false, "error": e}),
+                    },
+                    "poll" => megadaemon_core::automation_runtime::automation_poll(false),
+                    "events" => serde_json::json!({
+                        "ok": true,
+                        "events": megadaemon_core::automation_runtime::poll_events().iter().map(|e| serde_json::json!({
+                            "kind": e.kind.as_str(), "key": e.key, "value": e.value, "ts": e.ts
+                        })).collect::<Vec<_>>(),
+                    }),
+                    "fire" => {
+                        let kind = rest.first().cloned().unwrap_or_default();
+                        let key = rest.get(1).cloned().unwrap_or_default();
+                        let text = rest.get(2).cloned().unwrap_or_default();
+                        match megadaemon_core::automation_runtime::automation_fire(&kind, &key, None, &text, false) {
+                            Ok(v) => v,
+                            Err(e) => serde_json::json!({"ok": false, "error": e}),
+                        }
+                    }
+                    "journal" => megadaemon_core::automation_runtime::automation_journal(50),
+                    _ => megadaemon_core::automation_runtime::automation_list(),
+                },
+                "cron" => match action.as_str() {
+                    "add" => {
+                        let raw = rest.join(" ");
+                        let job: serde_json::Value = serde_json::from_str(&raw)
+                            .unwrap_or_else(|e| serde_json::json!({"ok": false, "error": e.to_string()}));
+                        match megadaemon_core::automation_runtime::cron_add(&job) {
+                            Ok(v) => v,
+                            Err(e) => serde_json::json!({"ok": false, "error": e}),
+                        }
+                    }
+                    "remove" => match megadaemon_core::automation_runtime::cron_remove(rest.first().map(|s| s.as_str()).unwrap_or("")) {
+                        Ok(v) => v,
+                        Err(e) => serde_json::json!({"ok": false, "error": e}),
+                    },
+                    "tick" => megadaemon_core::automation_runtime::cron_tick(false),
+                    "plan" => megadaemon_core::automation_runtime::cron_plan(),
+                    "resume" => megadaemon_core::automation_runtime::cron_resume(),
+                    _ => megadaemon_core::automation_runtime::cron_list(),
+                },
+                "energy" => match action.as_str() {
+                    "snapshot" => serde_json::json!({
+                        "ok": true,
+                        "raw": megadaemon_core::automation_runtime::probe_energy_text(),
+                        "snapshot": megadaemon_core::energy_automation::snapshot_to_json(
+                            &megadaemon_core::automation_runtime::energy_snapshot(),
+                        ),
+                    }),
+                    "profiles" => megadaemon_core::automation_runtime::energy_profiles(),
+                    "apply" => megadaemon_core::automation_runtime::energy_apply(rest.first().map(|s| s.as_str()).unwrap_or("")),
+                    "set_profile" => match megadaemon_core::automation_runtime::energy_set_profile(rest.first().map(|s| s.as_str()).unwrap_or("")) {
+                        Ok(v) => v,
+                        Err(e) => serde_json::json!({"ok": false, "error": e}),
+                    },
+                    _ => megadaemon_core::automation_runtime::energy_status(),
+                },
+                "comms" => match action.as_str() {
+                    "decide" => match megadaemon_core::automation_runtime::comms_decide(
+                        rest.first().map(|s| s.as_str()).unwrap_or(""),
+                        rest.get(1).map(|s| s.as_str()).unwrap_or(""),
+                        rest.get(2).map(|s| s.as_str()).unwrap_or(""),
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => serde_json::json!({"ok": false, "error": e}),
+                    },
+                    "handle" => match megadaemon_core::automation_runtime::comms_handle(
+                        rest.first().map(|s| s.as_str()).unwrap_or(""),
+                        rest.get(1).map(|s| s.as_str()).unwrap_or(""),
+                        rest.get(2).map(|s| s.as_str()).unwrap_or(""),
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => serde_json::json!({"ok": false, "error": e}),
+                    },
+                    "journal" => megadaemon_core::automation_runtime::comms_journal(50),
+                    _ => megadaemon_core::automation_runtime::comms_status(),
+                },
+                _ => match action.as_str() {
+                    "report" => megadaemon_core::automation_runtime::bridge_report(),
+                    "fire" => match megadaemon_core::automation_runtime::bridge_fire(
+                        rest.first().map(|s| s.as_str()).unwrap_or(""),
+                        rest.get(1).map(|s| s.as_str()).unwrap_or(""),
+                        &[],
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => serde_json::json!({"ok": false, "error": e}),
+                    },
+                    "inbox" => megadaemon_core::automation_runtime::bridge_inbox(),
+                    _ => megadaemon_core::automation_runtime::bridge_detect(),
+                },
+            };
+            println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+        }
+
         // v15 (W0): la voz a mano (status | plan | act | whoami | catalog).
         // Útil para depurar el bucle autónomo sin esperar al siguiente tick.
         "voice" => {

@@ -197,6 +197,81 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "automation",
+            "description": "Motor de disparadores y reglas de MegaDaemon (si X entonces Y): eventos del sistema (SMS, llamada, batería, temperatura, red, WiFi, app abierta, fichero, planificador) -> acciones (notificación, script, HTTP, fichero, ajuste, comando root, broadcast). Reglas persistentes + journal + cooldown.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["list", "add", "remove", "enable", "disable", "poll", "events", "fire", "journal"] },
+                    "rule": { "type": "object", "description": "regla completa en JSON (trigger, conditions, actions)" },
+                    "rule_id": { "type": "string" },
+                    "event": { "type": "string", "enum": ["sms_received", "call_missed", "call_ended", "call_incoming", "battery_changed", "charger_changed", "app_opened", "app_closed", "file_created", "temperature_changed", "network_changed", "wifi_changed", "schedule", "screen_on", "screen_off", "boot_completed"] },
+                    "key": { "type": "string" },
+                    "value": { "type": "number" },
+                    "text": { "type": "string" },
+                    "limit": { "type": "integer", "default": 50 },
+                    "dry_run": { "type": "boolean", "default": false },
+                    "confirm": { "type": "boolean", "default": false }
+                }
+            }
+        },
+        {
+            "name": "cron",
+            "description": "Planificador cron persistente en Rust: tareas de 5 campos con estado en disco, reintentos, catch-up de ejecuciones perdidas, reanudación de tareas interrumpidas y límites de recursos. Sin crond en el móvil: esto lo sustituye.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["list", "add", "remove", "tick", "plan", "resume"] },
+                    "job": { "type": "object", "description": "tarea cron en JSON (cron, action, catch_up, heavy...)" },
+                    "job_id": { "type": "string" },
+                    "limit": { "type": "integer", "default": 50 },
+                    "dry_run": { "type": "boolean", "default": false },
+                    "confirm": { "type": "boolean", "default": false }
+                }
+            }
+        },
+        {
+            "name": "energy",
+            "description": "Automatización de energía y térmica: perfiles (límite de carga, umbrales térmicos, veto de trabajo pesado), integración con el módulo Magisk XtremeBS y con la protección de batería de Samsung. Decide y aplica sobre el estado real medido.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["status", "snapshot", "profiles", "apply", "set_profile"] },
+                    "profile": { "type": "string" },
+                    "confirm": { "type": "boolean", "default": false }
+                }
+            }
+        },
+        {
+            "name": "comms",
+            "description": "Automatización de comunicaciones: auto-respuestas, reenvío, grabación de llamadas y bitácora, regidas por el consentimiento del usuario (comms_consent.json). Todo lo decidido queda registrado.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["status", "consent", "decide", "handle", "journal"] },
+                    "event": { "type": "string", "enum": ["sms_received", "sms_sent", "call_incoming", "call_missed", "call_ended"] },
+                    "peer": { "type": "string" },
+                    "body": { "type": "string" },
+                    "consent": { "type": "object" },
+                    "limit": { "type": "integer", "default": 50 }
+                }
+            }
+        },
+        {
+            "name": "bridge",
+            "description": "Puente con los automatizadores instalados (AutoTasker, Termux:Boot, Tasker, MacroDroid): detecta cuál está, qué superficie de disparo expone de verdad y construye el comando am para lanzarlo. También expone la bandeja de entrada de eventos.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["detect", "report", "fire", "inbox"] },
+                    "package": { "type": "string" },
+                    "action_name": { "type": "string" },
+                    "extras": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } },
+                    "confirm": { "type": "boolean", "default": false }
+                }
+            }
+        },
+        {
             "name": "git_ops",
             "description": "Operaciones git autónomas de megadaemon: estado del repo del dispositivo, diff, commit y push con la identidad del demonio. Push exige confirmación explícita y nunca usa --force.",
             "inputSchema": {
@@ -589,6 +664,139 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             "protect" => crate::battery_saver::set_protected(sa("protected")),
             "xbs" => crate::battery_saver::xbs_config(),
             _ => crate::battery_saver::status(),
+        },
+        "automation" => match s("action").as_str() {
+            "add" => {
+                let rule = args.get("rule").cloned().unwrap_or(json!({}));
+                match crate::automation_runtime::automation_add(&rule) {
+                    Ok(v) => v,
+                    Err(e) => json!({"ok": false, "error": e}),
+                }
+            }
+            "remove" => match crate::automation_runtime::automation_remove(&s("rule_id")) {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            },
+            "enable" => match crate::automation_runtime::automation_toggle(&s("rule_id"), true) {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            },
+            "disable" => match crate::automation_runtime::automation_toggle(&s("rule_id"), false) {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            },
+            "poll" => crate::automation_runtime::automation_poll(b("dry_run")),
+            "events" => {
+                let evs = crate::automation_runtime::poll_events();
+                json!({
+                    "ok": true,
+                    "events": evs.iter().map(|e| json!({
+                        "kind": e.kind.as_str(), "key": e.key, "value": e.value, "ts": e.ts
+                    })).collect::<Vec<_>>(),
+                })
+            }
+            "fire" => {
+                let val = args.get("value").and_then(|x| x.as_f64());
+                match crate::automation_runtime::automation_fire(
+                    &s("event"), &s("key"), val, &s("text"), b("dry_run"),
+                ) {
+                    Ok(v) => v,
+                    Err(e) => json!({"ok": false, "error": e}),
+                }
+            }
+            "journal" => crate::automation_runtime::automation_journal(
+                if n("limit") == 0 { 50 } else { n("limit") as usize },
+            ),
+            _ => crate::automation_runtime::automation_list(),
+        },
+        "cron" => match s("action").as_str() {
+            "add" => {
+                let job = args.get("job").cloned().unwrap_or(json!({}));
+                match crate::automation_runtime::cron_add(&job) {
+                    Ok(v) => v,
+                    Err(e) => json!({"ok": false, "error": e}),
+                }
+            }
+            "remove" => match crate::automation_runtime::cron_remove(&s("job_id")) {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            },
+            "plan" => crate::automation_runtime::cron_plan(),
+            "tick" => crate::automation_runtime::cron_tick(b("dry_run")),
+            "resume" => crate::automation_runtime::cron_resume(),
+            _ => crate::automation_runtime::cron_list(),
+        },
+        "energy" => match s("action").as_str() {
+            "snapshot" => {
+                let txt = crate::automation_runtime::probe_energy_text();
+                json!({
+                    "ok": true,
+                    "raw": txt,
+                    "snapshot": crate::energy_automation::snapshot_to_json(
+                        &crate::automation_runtime::energy_snapshot(),
+                    ),
+                })
+            }
+            "profiles" => crate::automation_runtime::energy_profiles(),
+            "apply" => crate::automation_runtime::energy_apply(&s("profile")),
+            "set_profile" => match crate::automation_runtime::energy_set_profile(&s("profile")) {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            },
+            _ => crate::automation_runtime::energy_status(),
+        },
+        "comms" => match s("action").as_str() {
+            "consent" => match args.get("consent").cloned() {
+                Some(c) => match crate::automation_runtime::comms_set_consent(&c) {
+                    Ok(v) => v,
+                    Err(e) => json!({"ok": false, "error": e}),
+                },
+                None => crate::automation_runtime::comms_status(),
+            },
+            "decide" => match crate::automation_runtime::comms_decide(
+                &s("event"), &s("peer"), &s("body"),
+            ) {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            },
+            "handle" => match crate::automation_runtime::comms_handle(
+                &s("event"), &s("peer"), &s("body"),
+            ) {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            },
+            "journal" => crate::automation_runtime::comms_journal(
+                if n("limit") == 0 { 50 } else { n("limit") as usize },
+            ),
+            _ => crate::automation_runtime::comms_status(),
+        },
+        "bridge" => match s("action").as_str() {
+            "report" => crate::automation_runtime::bridge_report(),
+            "fire" => {
+                let extras: Vec<(String, String)> = args
+                    .get("extras")
+                    .and_then(|x| x.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|e| {
+                                let p = e.as_array()?;
+                                Some((
+                                    p.first()?.as_str()?.to_string(),
+                                    p.get(1)?.as_str()?.to_string(),
+                                ))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                match crate::automation_runtime::bridge_fire(
+                    &s("package"), &s("action_name"), &extras,
+                ) {
+                    Ok(v) => v,
+                    Err(e) => json!({"ok": false, "error": e}),
+                }
+            }
+            "inbox" => crate::automation_runtime::bridge_inbox(),
+            _ => crate::automation_runtime::bridge_detect(),
         },
         "git_ops" => match s("action").as_str() {
             "identity" => crate::git_ops::identity(),
