@@ -52,6 +52,15 @@ fi
 env -u MEGADAEMON_API_KEY -u MEGADAEMON_TOKEN -u SEERE_AUTH_TOKEN \
     cargo test $PERFIL --lib --tests --no-fail-fast >"$LOG" 2>&1
 RC=$?
+
+# MEDIDO el 2026-11-22: el runner tiene CARGO_TERM_COLOR=always => el log trae
+# CÓDIGOS ANSI => los `grep '^error'` y los `awk '/^test result: FAILED/'` del
+# gate NO casaban NUNCA => el gate decía "la suite falló pero no se pudo
+# identificar el binario" **aunque los tests se hubieran ejecutado y fallado**
+# (y el "final del log" salía sin un solo error, que es lo que confundió a
+# todo el mundo).  Se limpian los ANSI antes de analizar.
+sed -i $'s/\x1b\[[0-9;]*[a-zA-Z]//g' "$LOG"
+
 echo "::endgroup::"
 
 # Resumen legible
