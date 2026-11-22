@@ -89,6 +89,43 @@ jobs:
             cargo test --release --lib api_key::
           env -u MEGADAEMON_API_KEY -u MEGADAEMON_TOKEN -u SEERE_AUTH_TOKEN \
             cargo test --release --test harness_policy
+      - name: "Gate (BLOQUEA): higiene de modulos (los merges en masa rompian main)"
+        # MEDIDO 3 veces el 2026-11-21: un merge de flota dejo `pub mod peers;`
+        # y `pub mod backup_ab;` DECLARADOS DOS VECES (E0428) y `store_manager`
+        # sin declarar (E0433) => la lib no compilaba => los 4 jobs del CI en
+        # rojo => NINGUN ARM64 publicado (10 h sin binario).  Estas tres
+        # comprobaciones son deterministas, cuestan un segundo y cortan esa
+        # clase de fallo ANTES de gastar 20 minutos de runner.
+        run: |
+          set -u
+          fail=0
+          echo "--- 1) modulos declarados mas de una vez en lib.rs ---"
+          dups=$(grep -E '^\s*(pub\s+)?mod\s+[a-z_0-9]+\s*;' rust-core/src/lib.rs \
+                 | sed -E 's/.*mod\s+([a-z_0-9]+).*/\1/' | sort | uniq -d)
+          if [ -n "$dups" ]; then
+            echo "::error::modulos declarados mas de una vez: $(echo "$dups" | tr '\n' ' ')"
+            fail=1
+          else
+            echo "OK: ninguna declaracion duplicada"
+          fi
+          echo "--- 2) modulos .rs sin declarar en lib.rs (E0583) ---"
+          missing=""
+          for f in rust-core/src/*.rs; do
+            b=$(basename "$f" .rs)
+            [ "$b" = "lib" ] && continue
+            [ "$b" = "main" ] && continue
+            grep -qE "^\s*(pub\s+)?mod\s+$b\s*;" rust-core/src/lib.rs || missing="$missing $b"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::modulos sin declarar en lib.rs:$missing"
+            fail=1
+          else
+            echo "OK: todos los modulos estan declarados"
+          fi
+          echo "--- 3) el workflow es YAML valido (si no, GitHub lo RECHAZA entero) ---"
+          python3 tools/yaml_lint.py .github/workflows/*.yml || fail=1
+          [ "$fail" = 0 ] || exit 1
+          echo "higiene de modulos OK"
 
   build-android:
     name: build ARM64 (Android / NDK)
