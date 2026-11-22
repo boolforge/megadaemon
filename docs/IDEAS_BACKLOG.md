@@ -79,3 +79,19 @@
 | F3 | Decidir si el kernel pasa a **GKI 5.15/6.1** (implica testear vendor modules) | B4 |
 | F4 | Decidir qué se limpia en el móvil **después** del backup | A5 |
 | F5 | Confirmar si se instala **LSPosed** y se quitan `cromite-webview`/`hosts`/`luckypatcher_*` | C2 |
+
+## G. Antigravity — backlog del cliente en el móvil (2026-11-22)
+
+> Recuperado del S21 Ultra por root. Detalle y evidencia: `docs/ANTIGRAVITY_BACKLOG.md`.
+
+| # | idea | estado | detalle |
+|---|---|---|---|
+| G1 | **Backlog real del micro-daemon de Antigravity** (2 tareas en `daemon/tasks.json`, no 1) | ✅ | `task_442838` "Snatcher-MegaDaemon-SuperLoop" (interval 300 s) + `task_553653` "minimax_bootstrap" (delay, **nunca ejecutada**) |
+| G2 | **Reanudar la tarea recurrente**: el worker del ciclo #38 arrancó el 19-Nov 10:21:33 y el micro-daemon **murió sin dejar rastro** (0 errores en las 860 líneas del log, sin crash dump, PID reciclado a otra app) | ⛔ | el planificador vive **dentro** del proceso `com.agy`: sin supervisor ni autostart no vuelve solo. Quedó **2 d 14 h** sin ejecutar tras 4 reinicios |
+| G3 | **Arranque con lock + timeout + log con fecha + estado legible** (para que el enjambre lea el ciclo) | ✅ | `deploy/antigravity-task-runner.sh`, `deploy/antigravity-task-supervisor.sh`, `deploy/antigravity-tasks.py` — probados en el móvil: lock OK, timeout `rc=124`, concurrencia OK, catch-up OK, `last_status.json` OK |
+| G4 | **Recuperar lo perdido**: 14.494 funciones, 923 descompiladas, 36 builds OK / 1 KO, 37 ciclos | ✅ | `megadaemon_state.json` (el estado del motor está a salvo) |
+| G5 | **Recuperar las 27 h 25 min** de ejecución perdida (18-Nov 06:51 → 19-Nov 10:16) | ⛔ | irrecuperable: no quedó registro. La causa del hueco **NO VERIFICADA** |
+| G6 | **Salida de los ciclos completa** (el daemon recorta `last_output` a ~1 KB ⇒ el enjambre nunca leyó el resultado) | ✅ | el runner guarda el log íntegro con fecha |
+| G7 | **Cerrar el `verified: false`** de las 6 plataformas (ps1 14.494 func, saturn 0, pce 0, msx2 256 paletas, pc88 7 ports, segacd 53.110) | ⏳ | el motor declara mucho y **no ha verificado nada** |
+| G8 | **Rotar el bearer de Google en claro** de `agy_standalone/probe.log` | ⛔ | requisito previo al catch-up de `task_553653` (`bootstrap_core.sh` escribe ahí) |
+| G9 | **Bajar la carga del móvil** antes de reactivar el bucle de 300 s | ⏳ | medido: `MemFree` 466 MB, swap 3.341/4.095 MB, load 22 ⇒ el ciclo es un trabajo pesado |
