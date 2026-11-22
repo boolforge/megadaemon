@@ -728,3 +728,88 @@ fn la_traza_va_dentro_del_json_del_resultado() {
     let r: ChatResult = serde_json::from_str(antiguo).expect("no se pudo deserializar");
     assert!(r.provider_trace.is_empty());
 }
+
+static DAILY_BUDGET_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+struct BudgetGuard;
+impl Drop for BudgetGuard {
+    fn drop(&mut self) {
+        megadaemon_core::providers::set_daily_budget_usd(None);
+        megadaemon_core::providers::reset_daily_budget();
+    }
+}
+
+#[test]
+fn registrar_uso_y_fleet_cost_se_registran_en_cada_respuesta() {
+    let _lock = DAILY_BUDGET_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = BudgetGuard;
+    megadaemon_core::providers::reset_daily_budget();
+    megadaemon_core::providers::set_daily_budget_usd(None);
+
+    let ok_with_usage = r#"{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1000,"completion_tokens":1000,"total_tokens":2000}}"#;
+    let t = MockTransport::new();
+    t.responde("https://p-usage.test/v1", 200, ok_with_usage);
+    let v = vault(
+        vec![prov("p-usage-test", "https://p-usage.test/v1", "gpt-4o-mini", "paid")],
+        "p-usage-test",
+    );
+    let d = deps(&v, &t);
+    let res = execute_chat_with("hola", Some("p-usage-test"), None, None, 128, &d);
+    assert_eq!(res.model_id, "p-usage-test");
+    assert_eq!(res.tokens_used, 2000);
+
+    let snap = megadaemon_core::providers::daily_budget_snapshot();
+    assert_eq!(snap["calls_total"].as_u64(), Some(1));
+    assert_eq!(snap["tokens_total"].as_u64(), Some(2000));
+    let spend = snap["spend_usd"].as_f64().unwrap();
+    assert!(
+        (spend - 0.00075).abs() < 1e-9,
+        "gpt-4o-mini 1k in + 1k out debe costar 0.00075 USD, obtenido {}",
+        spend
+    );
+
+    let estados = megadaemon_core::quota_guard::estado(Some("p-usage-test"));
+    assert!(
+        !estados.is_empty() && estados[0].ventanas.iter().any(|w| w.nombre == "tokens"),
+        "quota_guard::registrar_uso debe haber registrado la ventana 'tokens': {:?}",
+        estados
+    );
+}
+
+#[test]
+fn presupuesto_diario_bloquea_pago_al_superar_limite_y_permite_gratis() {
+    let _lock = DAILY_BUDGET_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = BudgetGuard;
+    megadaemon_core::providers::reset_daily_budget();
+    megadaemon_core::providers::set_daily_budget_usd(Some(0.0005));
+
+    let ok_with_usage = r#"{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1000,"completion_tokens":1000,"total_tokens":2000}}"#;
+    let t = MockTransport::new();
+    t.responde("https://paid.test/v1", 200, ok_with_usage);
+    t.responde("https://free.test/v1", 200, OK);
+    let v = vault(
+        vec![
+            prov("p-paid", "https://paid.test/v1", "gpt-4o-mini", "paid"),
+            prov("p-free", "https://free.test/v1", "m-free", "free"),
+        ],
+        "p-paid",
+    );
+    let d = deps(&v, &t);
+
+    // 1a llamada: spend=0 < 0.0005 -> entra en p-paid, gasta 0.00075 USD (> 0.0005).
+    let r1 = execute_chat_with("hola", Some("p-paid"), None, None, 128, &d);
+    assert_eq!(r1.model_id, "p-paid");
+    assert_eq!(t.veces("https://paid.test/v1"), 1);
+
+    // 2a llamada: spend=0.00075 >= 0.0005 -> salta p-paid por presupuesto y cae a p-free.
+    let r2 = execute_chat_with("hola", Some("p-paid"), None, None, 128, &d);
+    assert_eq!(r2.model_id, "p-free");
+    assert_eq!(t.veces("https://paid.test/v1"), 1, "no debe volver a llamar a p-paid");
+    assert_eq!(t.veces("https://free.test/v1"), 1);
+    assert!(
+        r2.provider_trace.iter().any(|l| l.contains("presupuesto")),
+        "traza debe incluir salto por presupuesto: {:?}",
+        r2.provider_trace
+    );
+}
+

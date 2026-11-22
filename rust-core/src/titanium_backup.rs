@@ -592,7 +592,7 @@ pub fn dispatch_mcp(name: &str, args: &Value) -> Option<Value> {
         }
         _ => return None,
     };
-    Some(r)
+    r
 }
 
 /// Ruta de un fichero dentro de un paquete ya extraído (comodidad).

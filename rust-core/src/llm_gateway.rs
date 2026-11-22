@@ -51,6 +51,12 @@ impl GatewayError {
     }
 }
 
+impl std::fmt::Display for GatewayError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HTTP {}: {}", self.status, self.message)
+    }
+}
+
 /// Extrae el prompt y el system prompt de una petición OpenAI.
 ///
 /// Devuelve `(prompt_de_usuario, system_prompt_opcional)`.
@@ -374,6 +380,16 @@ pub fn gemini_generate_content(body: &Value) -> Result<Value, GatewayError> {
     let transport = crate::providers::UreqTransport::default();
     let deps = crate::providers::ChatDeps::new(&vault, &transport);
     gemini_generate_content_with(body, &deps)
+}
+
+/// Variante de [`gemini_generate_content`] que acepta la ruta Gemini (`.../models/<model>:generateContent`).
+pub fn gemini_generate_content_for(_path: &str, body: &Value) -> Result<Value, GatewayError> {
+    gemini_generate_content(body)
+}
+
+/// Variante de [`gemini_stream_sse`] que acepta la ruta Gemini (`.../models/<model>:streamGenerateContent`).
+pub fn gemini_stream_sse_for(_path: &str, body: &Value) -> Result<String, GatewayError> {
+    gemini_stream_sse(body)
 }
 
 /// Variante **inyectable** de [`gemini_generate_content`].

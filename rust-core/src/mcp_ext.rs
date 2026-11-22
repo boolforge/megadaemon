@@ -1204,20 +1204,6 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             let txt = serde_json::to_string(&v).unwrap_or_default();
             json!({ "content": [{ "type": "text", "text": txt }] })
         }
-        "antigravity_sessions" => {
-            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("estado");
-            let v = match accion {
-                "list" => crate::antigravity_sessions::sesiones().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
-                "dead" => crate::antigravity_sessions::muertas().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
-                "tasks" => crate::antigravity_sessions::tareas_daemon(),
-                _ => crate::antigravity_sessions::estado().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
-            };
-            let txt = match v {
-                Ok(x) => serde_json::to_string_pretty(&x).unwrap_or_default(),
-                Err(e) => format!("ERROR: {e}"),
-            };
-            json!({ "content": [{ "type": "text", "text": txt }] })
-        }
         "quota_status" => {
             let full = args.get("full").and_then(|v| v.as_bool()).unwrap_or(false);
             let provider = args.get("provider").and_then(|v| v.as_str()).unwrap_or("");
