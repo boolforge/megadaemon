@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# md-magisk — gestión real de módulos Magisk.
+#
+#   md-magisk list                          lista los módulos y el estado de Magisk
+#   md-magisk enable <id>                   habilita un módulo
+#   md-magisk disable <id>                  deshabilita un módulo
+#   md-magisk validate <zip>                valida un ZIP de módulo (no toca nada)
+#   md-magisk install <zip> [--dry-run]     instala (simulación por defecto)
+#   md-magisk install <zip> --real [--enable]
+#   md-magisk shamiko [<zip>]               ficha de la release + estado real
+#
+# Envoltorio de `megadaemon-core magisk`. La instalación NUNCA borra nada y
+# por defecto deja el módulo deshabilitado: activarlo es decisión de quien
+# reinicia.
+set -euo pipefail
+
+find_bin() {
+  if command -v megadaemon-core >/dev/null 2>&1; then
+    command -v megadaemon-core
+    return 0
+  fi
+  for c in \
+    /data/local/tmp/megadaemon/megadaemon-core \
+    /data/local/tmp/megadaemon-core \
+    /usr/local/bin/megadaemon-core \
+    "$HOME/.cargo/bin/megadaemon-core"
+  do
+    [ -x "$c" ] && { echo "$c"; return 0; }
+  done
+  return 1
+}
+
+BIN="$(find_bin)" || {
+  echo "md-magisk: no encuentro megadaemon-core (instálalo o ponlo en el PATH)" >&2
+  exit 127
+}
+
+exec "$BIN" magisk "$@"
