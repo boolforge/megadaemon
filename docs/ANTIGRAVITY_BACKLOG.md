@@ -27,6 +27,10 @@
 | Tarea **nunca** ejecutada | **1** (`task_553653`, `minimax_bootstrap`, `run_at` 2026-11-19 12:09:13) |
 | Último ciclo completo | **#37**, terminado 2026-11-19 10:20:07 (211 s, `success`) |
 | Ciclo #38 | **arrancado 10:21:33 y muerto sin dejar rastro** (ni log, ni estado, ni error) |
+<<<<<<< HEAD
+=======
+| **Reinicio del backlog** | ✅ **2026-11-22 01:11:10 → 01:14:36**: el runner volvió a ejecutar el **ciclo #38 completo** (`BUILD: PASS`, 206 s) y `megadaemon_state.json` pasó a `cycle_count: 38` (§5.1) |
+>>>>>>> agent/antigravity-backlog
 | Trabajo conservado | **26 conversaciones (309 MB)**, 97 artefactos en `brain/`, 14.494 funciones recuperadas, 923 descompiladas, 36 builds OK |
 | Trabajo perdido | las **27 h 25 min** en las que el daemon no corrió (18-Nov 06:51 → 19-Nov 10:16) y el ciclo #38 |
 | Causa del "petó" | el proceso **murió sin registrar nada** (ni crash, ni error) ⇒ **kill**, no excepción |
@@ -333,6 +337,10 @@ Tres ficheros nuevos (nada existente tocado):
 | **timeout** (comando `sleep 30`, `MAX_RUNTIME=3`) | `rc:124`, `reason:"timeout-max-runtime"` ⇒ **no se cuelga** ✅ |
 | **concurrencia** (dos runners a la vez) | el segundo: "hay otro ciclo en marcha" y se sale sin tocar nada ✅ |
 | `antigravity-task-supervisor.sh --status` | "daemon de la app: sin señal -> el supervisor puede correr el ciclo" ✅ |
+<<<<<<< HEAD
+=======
+| **CICLO REAL #38** (el comando de `tasks.json`, sin tocar) | **✅ `rc:0`, `cycle:"38"`, 206 s**, log íntegro (no los 1 KB del daemon) y `CYCLE #38 COMPLETE (205.11s) \| BUILD: PASS` ⇒ **`megadaemon_state.json` pasó de `cycle_count: 37` a `38`** (`last_cycle_timestamp` 1795306476 = 2026-11-22 01:14:36). **El flujo que se había petado vuelve a correr y deja estado legible.** |
+>>>>>>> agent/antigravity-backlog
 
 > **Nota de diseño (medida)**: `flock` en este móvil es el de **toybox
 > 0.8.9-android** y su sintaxis es `flock [-sxun] fd` ⇒ **no** admite
