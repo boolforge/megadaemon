@@ -90,6 +90,7 @@ CSC_VALOR="${MD_CSC_VALOR:-RecordingAllowed}"
 CSC_ACTIVO=1
 PURGAR_AG=0
 BUILD=0
+PUBLICAR=1
 SELFTEST=0
 
 for a in "$@"; do
@@ -100,6 +101,7 @@ for a in "$@"; do
     --csc-valor=*)             CSC_VALOR="${a#*=}" ;;
     --sin-csc)                 CSC_ACTIVO=0 ;;
     --purgar-antigravity)      PURGAR_AG=1 ;;
+    --sin-publicar)            PUBLICAR=0 ;;
     --build)                   BUILD=1 ;;
     --selftest)                SELFTEST=1 ;;
     --pc)                      DESTINO=pc ;;
@@ -216,6 +218,39 @@ selftest() {
   chk "$( [ "$DESTINO" = movil ] || [ "$DESTINO" = pc ] && echo 1 || echo 0 )" "destino=$DESTINO"
   say "selftest: $ok ok, $ko fallos"
   [ "$ko" -eq 0 ]
+}
+
+# --- token de GitHub en el movil (para publicar el canal al repo) ---------
+# MEDIDO el 2026-11-22: sin esto, el hostname del tunel rapido cambia en
+# cada reinicio y la flota se queda ciega (el "quick" de channel.json
+# salia vacio).  Con un token de escritura en el repo, el movil publica
+# su URL viva en state/channel.json y la flota la lee siempre de ahi.
+find_gh_token() {
+  for t in "$MD_DIR/.gh_token" "$MD_DIR/github.token" "$HOME/.mavis/github.token" \
+           "$STATE_REAL/.gh_token" "$MD_DIR/state/.gh_token"; do
+    [ -f "$t" ] && tr -d '\r\n ' < "$t" && return 0
+  done
+  return 1
+}
+
+# --- publicar la URL viva al repo (channel.json) --------------------------
+publicar_canal() {
+  [ -n "$TURL" ] || { warn "no hay URL que publicar"; return 1; }
+  PUB="$MD_DIR/channel-publish"
+  if [ ! -x "$PUB" ]; then
+    say "  bajando channel-publish del release..."
+    "$CURL" -fsSL -o "$PUB" "https://github.com/$REPO_SLUG/releases/latest/download/channel-publish-arm64" 2>/dev/null \
+      && chmod 755 "$PUB" || { warn "  no pude bajar channel-publish"; return 1; }
+  fi
+  TOKGH="$(find_gh_token)" || { warn "  no hay token de GitHub en el movil (ponlo en $MD_DIR/.gh_token, 0600)"; return 1; }
+  say "  publicando la URL al repo (state/channel.json)..."
+  OUT="$(GITHUB_TOKEN="$TOKGH" "$PUB" --repo-publish --url "$TURL" 2>&1)"
+  printf '%s\n' "$OUT" | tail -3 | while read -r l; do say "    $l"; done
+  case "$OUT" in
+    *OK*|*ok*|*publicado*) say "  canal publicado: la flota lo leerá de state/channel.json" ;;
+    *) warn "  la publicación no confirmó (mira el detalle arriba)" ;;
+  esac
+  return 0
 }
 
 # --- inventario de procesos (con RSS y linea de comandos real) -------------
@@ -595,6 +630,13 @@ if [ -n "$TURL" ]; then
   fi
 else
   warn "no encuentro la URL del túnel"
+fi
+
+say "=== 4b) publicar el canal al repo (para que la flota no se ciegue) ==="
+if [ "${PUBLICAR:-1}" = "1" ]; then
+  publicar_canal || warn "  el canal no se pudo publicar (el movil sigue siendo accesible por la URL de /sdcard/megadaemon.url)"
+else
+  say "  omitido (--sin-publicar)"
 fi
 
 say "=== 5) CSC: parche de la feature de grabación ==="
