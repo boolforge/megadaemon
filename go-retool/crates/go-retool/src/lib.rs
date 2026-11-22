@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod address;
+pub mod anchors;
 pub mod container;
 pub mod embed;
 pub mod error;
@@ -20,3 +21,4 @@ pub mod symbols;
 pub use error::{Error, Result};
 pub use pclntab::{parse_go118_plus, ParseOptions};
 pub use symbols::{build_export, parse_json, parse_tsv, to_rizin_script, to_tsv, SymbolExport};
+pub use anchors::{Anchor, AnchorExport};

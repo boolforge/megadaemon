@@ -41,6 +41,48 @@ This repository is a research implementation and reproducible fixture kit, not a
 - Automatic `embed.FS` discovery, slice-header parsing, string/[]byte extraction and hash verification; the record decoder requires a caller-supplied mapped image and array address.
 - DWARF parsing, CFG matching, Garble recovery, patching, binary rewriting or execution of untrusted samples.
 
+## Export de simbolos y anclajes (medido 2026-11-22)
+
+`go-retool export` vuelca la pclntab en formatos que consumen Ghidra y Rizin.
+La direccion es la REAL (base de texto + `entryoff`) y el nombre es el REAL de
+Go (no el mangled del ELF).
+
+```sh
+# TSV de simbolos (7 columnas: va, nombre, fichero:linea, va_fin, paquete,
+# tamano, entryoff)
+go-retool export tsv  liblanguage_server.so --offset 0x1449ff0 --out symbols.tsv
+
+# JSON autocontenido (simbolos + anclajes)
+go-retool export json liblanguage_server.so --offset 0x1449ff0 --out symbols.json \
+  --anchors anchors.tsv
+
+# Los anclajes cruzados con los simbolos (paquete, fichero, linea, tamano)
+go-retool export tsv liblanguage_server.so --offset 0x1449ff0 --out symbols.tsv \
+  --anchors anchors.tsv --anchors-out anchors.full.tsv
+```
+
+MEDIDO con el binario real de Antigravity (`liblanguage_server.so`,
+181.358.800 B, sha256 `f25135e4…70ff27`, Go 1.28 RC02, pclntab en `.lrodata`
+@ 0x1449ff0, base de texto 0x4d06cb8):
+
+- 161.682 funciones exportadas; 161.680 con fichero y linea; 161.682 con tamano.
+- Las 161.682 direcciones coinciden EXACTAMENTE con la tabla de referencia
+  `go.funcs.tsv` (0 diferencias de direccion, 0 diferencias de nombre real,
+  2 diferencias de `fichero:linea`: `go:textfipsstart` y `go:textfipsend`, que
+  en la referencia tampoco tienen fichero).
+- TSV completo (43.809.869 B): sha256
+  `e9168425d407d4b7fc1228c1d6ff1f4ce657c4abde0617af8c71340867b033d7`.
+- JSON completo (60.065.217 B): sha256
+  `0e46f6197a319ac70ad332ac1667319520c9c6a034270b6f28fd61fd6f15934f`.
+
+### Anclajes
+
+Un anclaje es una *funcion hito* elegida para decompilar a mano: un punto de
+observacion del binario.  Las familias son `entry` (los dos puntos de
+entrada), `mcp` (el SDK MCP de Google, transporte del language server) y
+`provider` (los clientes de modelo).  El TSV de anclajes tiene cinco columnas:
+`0x<va>`, nombre de simbolo, nombre real de Go, `fichero:linea` y etiqueta.
+
 ## Build and test
 
 Requires Rust 1.85+ and Cargo (the `object` 0.41 dependency raises the MSRV). The generation environment did not contain `rustc` or `cargo`; therefore Rust source and tests could not be compiled or executed here. The Go 1.23.2 Linux/amd64 fixture was built and run; the plugin was loaded by its host. An independent Python structural checker validated four Go 1.23.2 targets: Linux/amd64 1,889/1,889, Linux/arm64 1,887/1,887, Windows/amd64 1,939/1,939, and Darwin/arm64 1,946/1,946 names resolved, with zero structural errors in each. These are Python checker results, not Rust parser results, and do not validate Go 1.27 support.

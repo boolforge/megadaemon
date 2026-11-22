@@ -34,6 +34,10 @@ pub struct SymbolExport {
     /// Checksum FNV-1a 64 de la concatenacion de las filas (orden de salida).
     pub rows_fnv1a64: String,
     pub functions: Vec<Symbol>,
+    /// Anclajes (funciones hito para decompilar a mano).  Vacio si no se
+    /// pasaron con `--anchors`.
+    #[serde(default)]
+    pub anchors: Vec<crate::anchors::Anchor>,
 }
 
 #[derive(Debug,Clone,Serialize,Deserialize)]
@@ -73,6 +77,10 @@ pub struct Symbol {
     pub file: Option<String>,
     /// Linea fuente.
     pub line: Option<i32>,
+    /// Tamano en bytes: `end_va - va` (extent de la pclntab).
+    pub size: Option<u64>,
+    /// `entryoff` de la functab (offset relativo a la base de texto).
+    pub entryoff: u64,
     /// Estado de la resolucion del nombre.
     pub name_status: String,
 }
@@ -98,6 +106,11 @@ pub fn build_export(analysis:&Analysis, origin:&str)->SymbolExport{
     package:f.package.clone(),
     file:f.source_file.clone(),
     line:f.source_line,
+    size:match (f.start_va.as_deref(),f.end_va.as_deref()){
+     (Some(a),Some(b))=>match (parse_hex(a),parse_hex(b)){ (Some(x),Some(y)) if y>x=>Some(y-x),_=>None },
+     _=>None,
+    },
+    entryoff:f.entryoff as u64,
     name_status:f.name_status.clone(),
    });
   }
@@ -118,10 +131,15 @@ pub fn build_export(analysis:&Analysis, origin:&str)->SymbolExport{
   count:functions.len() as u64,
   rows_fnv1a64:format!("{:016x}",fnv1a64(&rows)),
   functions,
+  anchors:Vec::new(),
  }
 }
 
 /// Fila TSV de un simbolo (sin salto de linea).
+///
+/// Columnas: `va`, `nombre`, `fichero:linea`, `va_fin`, `paquete`, `tamano`,
+/// `entryoff`.  Las dos ultimas se anadieron en la version 1.1 del formato;
+/// `parse_tsv` acepta tambien el formato antiguo de 5 columnas.
 pub fn tsv_row(s:&Symbol)->String{
  let loc=match (&s.file,s.line){
   (Some(f),Some(l))=>format!("{f}:{l}"),
@@ -129,7 +147,8 @@ pub fn tsv_row(s:&Symbol)->String{
   (None,Some(l))=>format!("?:{l}"),
   (None,None)=>"?".to_string(),
  };
- format!("{}\t{}\t{}\t{}\t{}",s.va,s.name,loc,s.end_va,s.package.clone().unwrap_or_default())
+ let size=s.size.map(|v|v.to_string()).unwrap_or_default();
+ format!("{}\t{}\t{}\t{}\t{}\t{}\t{}",s.va,s.name,loc,s.end_va,s.package.clone().unwrap_or_default(),size,s.entryoff)
 }
 
 /// Documento TSV completo.
@@ -179,7 +198,9 @@ pub fn parse_tsv(text:&str)->Result<SymbolExport>{
    None=>{ if p[2]=="?"||p[2].is_empty(){(None,None)}else{(Some(p[2].to_string()),None)} },
   };
   let package=if p.len()>4&&!p[4].is_empty(){Some(p[4].to_string())}else{crate::pclntab::go_package(p[1])};
-  functions.push(Symbol{va:format!("0x{va:x}"),end_va:format!("0x{end_va:x}"),name:p[1].to_string(),package,file,line:line_no,name_status:"observed".to_string()});
+  let size=if p.len()>5&&!p[5].is_empty(){parse_hex(p[5])}else{None};
+  let entryoff=if p.len()>6&&!p[6].is_empty(){parse_hex(p[6]).unwrap_or(0)}else{0};
+  functions.push(Symbol{va:format!("0x{va:x}"),end_va:format!("0x{end_va:x}"),name:p[1].to_string(),package,file,line:line_no,size,entryoff,name_status:"observed".to_string()});
  }
  let mut rows=Vec::new();
  for s in &functions{ rows.extend_from_slice(tsv_row(s).as_bytes()); }
@@ -190,6 +211,7 @@ pub fn parse_tsv(text:&str)->Result<SymbolExport>{
   count:functions.len() as u64,
   rows_fnv1a64:format!("{:016x}",fnv1a64(&rows)),
   functions,
+  anchors:Vec::new(),
  })
 }
 
@@ -225,7 +247,7 @@ pub fn parse_hex(s:&str)->Option<u64>{
 mod tests {
  use super::*;
  fn sym(va:&str,name:&str,file:Option<&str>,line:Option<i32>)->Symbol{
-  Symbol{va:va.to_string(),end_va:format!("0x{:x}",parse_hex(va).unwrap_or(0)+0x10),name:name.to_string(),package:crate::pclntab::go_package(name),file:file.map(|s|s.to_string()),line,name_status:"observed".to_string()}
+  Symbol{va:va.to_string(),end_va:format!("0x{:x}",parse_hex(va).unwrap_or(0)+0x10),name:name.to_string(),package:crate::pclntab::go_package(name),file:file.map(|s|s.to_string()),line,size:Some(0x10),entryoff:parse_hex(va).unwrap_or(0),name_status:"observed".to_string()}
  }
  #[test] fn round_trip_tsv(){
   let exp=SymbolExport{
@@ -235,6 +257,7 @@ mod tests {
    count:2,
    rows_fnv1a64:String::new(),
    functions:vec![sym("0x4d06cb8","internal/abi.(*RegArgs).Dump",Some("a/b.go"),Some(47)),sym("0x4d06ea8","runtime.main",None,None)],
+   anchors:Vec::new(),
   };
   let mut e=exp.clone();
   let mut rows=Vec::new();
@@ -259,6 +282,7 @@ mod tests {
    count:1,
    rows_fnv1a64:String::new(),
    functions:vec![sym("0x4d06cb8","main.main",Some("main.go"),Some(3))],
+   anchors:Vec::new(),
   };
   let mut rows=Vec::new();
   for s in &e.functions{rows.extend_from_slice(tsv_row(s).as_bytes());}
@@ -281,6 +305,7 @@ mod tests {
    count:1,
    rows_fnv1a64:"deadbeefdeadbeef".to_string(),
    functions:vec![sym("0x4d06cb8","main.main",None,None)],
+   anchors:Vec::new(),
   };
   let json=serde_json::to_string(&e).unwrap();
   assert!(parse_json(&json).is_err(),"checksum de filas incorrecto debe fallar");

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/go-retool/symbols.schema.json",
+  "title": "go-retool symbols export",
+  "description": "Documento que produce `go-retool export json`.  Una fila por funcion Go con su direccion REAL (base de texto + entryoff), su nombre REAL de Go, el paquete, el fichero y la linea de origen, y el extent (tamano) que da la pclntab.  La seccion `anchors` lleva las funciones hito para decompilar a mano.",
+  "type": "object",
+  "required": ["schema_version", "generator", "source", "count", "rows_fnv1a64", "functions"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "generator": {"type": "object", "required": ["name", "version"]},
+    "source": {
+      "type": "object",
+      "required": ["file", "pclntab_file_offset", "text_base_status", "nfunc"],
+      "properties": {
+        "file": {"type": "string", "description": "Ruta del binario analizado."},
+        "pclntab_file_offset": {"type": "string", "pattern": "^0x[0-9a-fA-F]+$"},
+        "text_base_va": {"type": ["string", "null"], "pattern": "^0x[0-9a-fA-F]+$"},
+        "text_base_status": {"type": "string", "description": "Como se resolvio la base de texto."},
+        "nfunc": {"type": "integer", "minimum": 0, "description": "Funciones declaradas por el pcHeader."},
+        "nfiles": {"type": ["integer", "null"]}
+      }
+    },
+    "count": {"type": "integer", "minimum": 0},
+    "rows_fnv1a64": {"type": "string", "pattern": "^[0-9a-f]{16}$", "description": "Checksum FNV-1a 64 de las filas TSV."},
+    "functions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["va", "end_va", "name", "name_status"],
+        "properties": {
+          "va": {"type": "string", "pattern": "^0x[0-9a-fA-F]+$"},
+          "end_va": {"type": "string", "pattern": "^0x[0-9a-fA-F]+$"},
+          "name": {"type": "string", "description": "Nombre REAL de Go (p.ej. `internal/abi.(*RegArgs).Dump`)."},
+          "package": {"type": ["string", "null"]},
+          "file": {"type": ["string", "null"]},
+          "line": {"type": ["integer", "null"]},
+          "size": {"type": ["integer", "null"], "minimum": 1, "description": "Extent en bytes: end_va - va."},
+          "entryoff": {"type": "integer", "minimum": 0, "description": "entryoff de la functab (offset relativo a la base de texto)."},
+          "name_status": {"type": "string"}
+        }
+      }
+    },
+    "anchors": {
+      "type": "array",
+      "description": "Funciones hito (puntos de observacion) para decompilar a mano.",
+      "items": {
+        "type": "object",
+        "required": ["addr", "name", "symbol", "tag", "description"],
+        "properties": {
+          "addr": {"type": "string", "pattern": "^0x[0-9a-fA-F]+$"},
+          "name": {"type": "string", "description": "Nombre real de Go."},
+          "symbol": {"type": "string", "description": "Nombre de simbolo (mangled) equivalente."},
+          "package": {"type": ["string", "null"]},
+          "file": {"type": ["string", "null"]},
+          "line": {"type": ["integer", "null"]},
+          "size": {"type": ["integer", "null"]},
+          "tag": {"type": "string", "description": "Familia del anclaje: entry, mcp, provider, model, config."},
+          "description": {"type": "string", "description": "Que senala el anclaje."}
+        }
+      }
+    }
+  }
+}
