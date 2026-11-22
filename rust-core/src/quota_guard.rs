@@ -183,11 +183,25 @@ pub fn persistir() {
 /// Extrae el código HTTP de un mensaje de error del proveedor.
 ///
 /// El error de `call_openai_http` tiene la forma "HTTP 429: ...".
+///
+/// v16: busca en TODAS las posiciones (antes se quedaba con la primera
+/// "HTTP " y, si detrás no había un número, devolvía `None` ⇒ un
+/// "HTTP transport error: http status: 429" se tragaba el status).
 pub fn status_de_error(msg: &str) -> Option<u16> {
-    let i = msg.find("HTTP ")? + 5;
-    let resto = &msg[i..];
-    let fin = resto.find(|c: char| !c.is_ascii_digit()).unwrap_or(resto.len());
-    resto[..fin].trim().parse::<u16>().ok()
+    let mut desde = 0usize;
+    while let Some(i) = msg[desde..].find("HTTP ") {
+        let ini = desde + i + 5;
+        let resto = &msg[ini..];
+        let fin = resto.find(|c: char| !c.is_ascii_digit()).unwrap_or(resto.len());
+        if let Ok(n) = resto[..fin].trim().parse::<u16>() {
+            return Some(n);
+        }
+        desde = ini;
+        if desde >= msg.len() {
+            break;
+        }
+    }
+    None
 }
 
 /// Detecta un error de cuota en el cuerpo de la respuesta de un proveedor.
@@ -220,6 +234,11 @@ pub fn parsear_error_cuota(cuerpo: &str) -> Option<ErrorCuota> {
                 .find(|c: char| !c.is_ascii_digit() && c != ':' && c != ' ' && c != '.')
                 .unwrap_or(resto.len());
             let frag = resto[..fin].trim();
+            // v16 (DEFECTO-12): "resets at 1795130605." (CON punto final,
+            // que es como lo escribe casi todo el mundo) NO se detectaba:
+            // el '.' se colaba en el número, el parseo fallaba y el
+            // proveedor no se pausaba con su hora de reset.
+            let frag = frag.trim_end_matches('.').trim();
             if let Ok(epoch) = frag.parse::<u64>() {
                 if epoch > 1_000_000_000 {
                     reset_at = Some(epoch);
