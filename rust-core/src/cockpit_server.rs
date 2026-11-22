@@ -24,7 +24,6 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const SCUMMVM_TOOLS_DIR: &str = "/data/user/0/com.agy/files/scummvm/tools/re_pipeline";
-const STATE_DIR: &str = "/data/user/0/com.agy/files/megadaemon/state";
 
 /// Directorio de estado efectivo.
 ///
@@ -32,14 +31,14 @@ const STATE_DIR: &str = "/data/user/0/com.agy/files/megadaemon/state";
 /// con `MEGADAEMON_STATE_DIR` (tests, despliegues fuera de Android, entornos
 /// de escritorio).  Sin esto el cockpit escribía siempre en
 /// `/data/user/0/...`, que en un escritorio no existe (o requiere root).
+///
+/// v16 (2026-11-22): la definición vive en `crate::state_dir` (módulo sin
+/// dependencias) ⇒ el motor de backup y la bóveda de proveedores la usan sin
+/// tener que compilar el daemon entero (el binario ARM64 `md-backup` pedía
+/// ~2,2 GB al rustc y el OOM killer lo mataba en un contenedor de 3 GB).
+/// Aquí **delega**: una sola fuente de verdad.
 pub fn state_dir() -> String {
-    if let Ok(d) = std::env::var("MEGADAEMON_STATE_DIR") {
-        let d = d.trim();
-        if !d.is_empty() {
-            return d.to_string();
-        }
-    }
-    STATE_DIR.to_string()
+    crate::state_dir::state_dir()
 }
 /// Directorio BASE de la instancia: el **padre** de `state_dir()`.
 ///

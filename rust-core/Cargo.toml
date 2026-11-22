@@ -123,3 +123,14 @@ codegen-units = 1
 # sigue sirviendo.  Además es lo que hace que `catch_unwind` (usado en las
 # herramientas de análisis) pueda cumplir su papel.
 strip = true
+
+# v16 (2026-11-22): el crate `megadaemon-core` es ENORME (200+ módulos) ⇒ con
+# `opt-level=3` el rustc pide ~2,2 GB de RAM y el OOM killer lo mata en
+# máquinas de 3 GB (medido 5 SIGKILL seguidos en este sandbox al compilar el
+# ARM64). Para ESTE paquete basta `opt-level=1`: su trabajo real es I/O, SHA-256
+# y red (no CPU) ⇒ se pierde un % imperceptible y el build entra en un
+# contenedor de 3 GB. Los overrides de `package` **no** tocan el perfil de las
+# dependencias (siguen compilándose con el perfil base ⇒ no se recalcula nada).
+[profile.release.package.megadaemon-core]
+opt-level = 1
+codegen-units = 4

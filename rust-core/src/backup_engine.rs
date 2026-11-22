@@ -188,37 +188,10 @@ impl BackupPolicy {
     }
 }
 
-/// Comodín simple: `*` = cualquier secuencia, `?` = un carácter.
-pub fn glob_match(pattern: &str, text: &str) -> bool {
-    // Caso rápido: sin comodines ⇒ subcadena (comportamiento histórico).
-    if !pattern.contains('*') && !pattern.contains('?') {
-        return text.contains(pattern);
-    }
-    let p: Vec<char> = pattern.chars().collect();
-    let t: Vec<char> = text.chars().collect();
-    let (mut pi, mut ti) = (0usize, 0usize);
-    let (mut star, mut mark) = (usize::MAX, 0usize);
-    while ti < t.len() {
-        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
-            pi += 1;
-            ti += 1;
-        } else if pi < p.len() && p[pi] == '*' {
-            star = pi;
-            mark = ti;
-            pi += 1;
-        } else if star != usize::MAX {
-            pi = star + 1;
-            mark += 1;
-            ti = mark;
-        } else {
-            return false;
-        }
-    }
-    while pi < p.len() && p[pi] == '*' {
-        pi += 1;
-    }
-    pi == p.len()
-}
+// La función de comodín vive en `crate::backup_glob` (módulo sin
+// dependencias) ⇒ aquí se re-exporta para que la API pública de este módulo
+// NO cambie. Ver `backup_glob.rs` para el porqué.
+pub use crate::backup_glob::glob_match;
 
 // ---------------------------------------------------------------------------
 // El plan
