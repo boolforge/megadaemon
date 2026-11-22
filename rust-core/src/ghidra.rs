@@ -330,10 +330,14 @@ fn find_java(cfg: &GhidraConfig) -> (Option<PathBuf>, Option<PathBuf>, bool, Vec
 
     for base in candidates {
         let java = base.join("bin").join("java");
+        // MEDIDO 2026-11-22: `searched` solo se rellenaba DESPUES de
+        // comprobar que el fichero era ejecutable, asi que cuando no habia
+        // Java la lista quedaba VACIA y el error decia "no se busco en
+        // ninguna parte".  Ahora se registra CADA ruta probada.
+        searched.push(java.display().to_string());
         if !is_executable_file(&java) {
             continue;
         }
-        searched.push(java.display().to_string());
         let javac = base.join("bin").join("javac");
         let is_jdk = is_executable_file(&javac);
         let home = base
@@ -375,16 +379,14 @@ impl GhidraTool {
 
         Ok(GhidraTool {
             analyze_headless: headless,
+            // MEDIDO 2026-11-22: el segundo `or_else` de la version anterior
+            // era un no-op MAL TIPADO (`.and(Some(cfg.ghidra_dir.clone()))`
+            // sobre un `Option<&PathBuf>`) y hacia fallar la compilacion.
+            // Ahora solo queda la deduccion desde el propio analyzeHeadless:
+            // <dir>/support/analyzeHeadless.
             ghidra_dir: cfg
                 .ghidra_dir
                 .clone()
-                .or_else(|| {
-                    cfg.ghidra_dir.as_ref().and(Some(cfg.ghidra_dir.clone()))
-                })
-                .or_else(|| {
-                    // deduce del propio analyzeHeadless: <dir>/support/analyzeHeadless
-                    cfg.ghidra_dir.clone()
-                })
                 .or_else(|| std::env::var("MD_GHIDRA_DIR").ok().map(PathBuf::from))
                 .or_else(|| {
                     let mut it = searched.get("analyzeHeadless").cloned().unwrap_or_default().into_iter();
@@ -665,7 +667,7 @@ pub fn parse_anchors_tsv(path: &Path) -> GhidraResult<Vec<Anchor>> {
 }
 
 /// Busca en el export de símbolos la función cuyo nombre contiene `needle`.
-pub fn find_symbol(symbols: &[SymbolRef], needle: &str) -> Option<&SymbolRef> {
+pub fn find_symbol<'a>(symbols: &'a [SymbolRef], needle: &str) -> Option<&'a SymbolRef> {
     if let Some(exact) = symbols.iter().find(|s| s.name == needle) {
         return Some(exact);
     }

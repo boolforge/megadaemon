@@ -28,8 +28,10 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use megadaemon_core::ghidra::{
-    decompile_anchors, find_symbol, import_binary, parse_anchors_tsv, parse_symbols_tsv,
-    program_info, GhidraConfig, GhidraTool,
+    // MEDIDO 2026-11-22: faltaba `apply_symbols` en la lista de importacion
+    // => el subcomando `symbols` no compilaba (E0425).
+    apply_symbols, decompile_anchors, find_symbol, import_binary, parse_anchors_tsv,
+    parse_symbols_tsv, program_info, GhidraConfig, GhidraTool,
 };
 
 fn uso() {

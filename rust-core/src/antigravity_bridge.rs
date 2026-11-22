@@ -336,11 +336,16 @@ pub struct ConversationSummary {
 /// también una lista por si el servidor cambiara de forma.
 pub fn conversation_summaries_from(v: &Value) -> Vec<ConversationSummary> {
     let mut out = Vec::new();
-    let src = v
-        .get("trajectorySummaries")
-        .unwrap_or(v)
-        .get("trajectorySummaries")
-        .unwrap_or(v);
+    // MEDIDO 2026-11-22: la version anterior encadenaba DOS `.get` seguidos
+    // con `.unwrap_or(v)`: al encontrar "trajectorySummaries" en la raiz
+    // tomaba el mapa, y al buscar la clave DENTRO del mapa (que no existe)
+    // volvia a caer en el objeto raiz => se iteraba sobre las claves de la
+    // raiz y "trajectorySummaries" salia como si fuera un id de conversacion.
+    // Ahora se desenvuelve UNA vez y, si viene con doble envoltura, otra.
+    let mut src: &Value = v.get("trajectorySummaries").unwrap_or(v);
+    if let Some(inner) = src.get("trajectorySummaries") {
+        src = inner;
+    }
     match src {
         Value::Object(map) => {
             for (cid, s) in map {
@@ -795,8 +800,11 @@ fn fetch_text(agent: &ureq::Agent, url: &str) -> BridgeResult<String> {
 
 /// Traduce el error de `ureq` a un mensaje entendible.
 fn describe_ureq(e: &ureq::Error) -> String {
+    // MEDIDO 2026-11-22: ureq 3.5.2 NO tiene variante `Transport` (la
+    // tiene ureq 2.x).  Se matchea solo el codigo HTTP y el resto se
+    // delega en su Display, que no cambia entre versiones.
     match e {
         ureq::Error::StatusCode(c) => format!("código HTTP {c}"),
-        ureq::Error::Transport(t) => format!("transporte: {t}"),
+        other => format!("{other}"),
     }
 }

@@ -160,7 +160,7 @@ pub enum HashPolicy {
 }
 
 /// Una regla de la matriz: qué se recoge, de dónde y con qué cuidado.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Rule {
     /// Identificador estable de la regla.
     pub id: &'static str,
@@ -1751,6 +1751,12 @@ pub fn export(
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     let manifest_sha16 = export_manifest_sha16(&files);
+    // MEDIDO 2026-11-22: `ExportManifest { files, }` MUEVE el vector, asi que
+    // los recuentos se hacen ANTES de construirlo.
+    let sensitive_files = files.iter().filter(|f| f.sensitive).count();
+    let sensitive_bytes: u64 = files.iter().filter(|f| f.sensitive).map(|f| f.size).sum();
+    let data_bytes: u64 = files.iter().map(|f| f.size).sum();
+    let files_count = files.len();
     let manifest = ExportManifest {
         version: INVENTORY_VERSION,
         profile: opts.level.profile().to_string(),
@@ -1789,7 +1795,10 @@ pub fn export(
             &normal_tar,
             &main_cipher,
             &main_key,
-            &main_kdf,
+            // MEDIDO 2026-11-22: el array de flujos mezclaba `&String` (main_kdf)
+            // y `&str` ("raw") en la misma posicion => E0308.  Ahora los dos
+            // son &str.
+            main_kdf.as_str(),
             LABEL_MAIN_KEY_CHECK,
         ),
         (
@@ -1819,7 +1828,9 @@ pub fn export(
         version: INVENTORY_VERSION,
         profile: opts.level.profile().to_string(),
         created_at: now_epoch(),
-        manifest_sha16,
+        // MEDIDO 2026-11-22: se clonaba porque el valor se usa DESPUES en el
+        // struct de salida (use of moved value).
+        manifest_sha16: manifest_sha16.clone(),
         streams: descs,
         key_entry: INVENTORY_KEY_ENTRY.to_string(),
     };
@@ -1835,7 +1846,7 @@ pub fn export(
     file.write_all(&streams_data)
         .map_err(|e| format!("error escribiendo los flujos: {e}"))?;
     file.flush()
-        .map_err(|e| format("error volcando el contenedor: {e}"))?;
+        .map_err(|e| format!("error volcando el contenedor: {e}"))?;
     let bytes = file
         .metadata()
         .map(|m| m.len())
@@ -1853,9 +1864,7 @@ pub fn export(
     )
     .map_err(|e| format!("no se puede escribir {}: {e}", manifest_path.display()))?;
 
-    let sensitive_files = files.iter().filter(|f| f.sensitive).count();
-    let sensitive_bytes: u64 = files.iter().filter(|f| f.sensitive).map(|f| f.size).sum();
-    let data_bytes: u64 = files.iter().map(|f| f.size).sum();
+
 
     let mut drive_file_id = None;
     if opts.upload {
@@ -1876,7 +1885,7 @@ pub fn export(
         key_path: key_path.to_string_lossy().to_string(),
         bytes,
         manifest_sha16,
-        files: files.len(),
+        files: files_count,
         data_bytes,
         sensitive_files,
         sensitive_bytes,
@@ -2084,6 +2093,9 @@ pub fn verify_container(path: &Path, keys: &KeyMaterial) -> Result<VerifyReport,
     }
 
     let ok = files_bad.is_empty();
+    // MEDIDO 2026-11-22: `files_bad` se mueve al struct de salida y DESPUES se
+    // usaba `.len()` => borrow of moved value.  Se cuenta antes.
+    let files_bad_count = files_bad.len();
     Ok(VerifyReport {
         ok,
         profile: header.profile.clone(),
@@ -2099,7 +2111,7 @@ pub fn verify_container(path: &Path, keys: &KeyMaterial) -> Result<VerifyReport,
                 header.streams.len()
             )
         } else {
-            format!("{} entradas no cuadran", files_bad.len())
+            format!("{files_bad_count} entradas no cuadran")
         },
     })
 }
@@ -2267,6 +2279,9 @@ pub struct RestoreReport {
     pub ok: bool,
     /// Ficheros escritos.
     pub written: Vec<String>,
+    /// Número de ficheros escritos (MEDIDO 2026-11-22: se cuenta antes de
+    /// mover el vector, porque se usaba despues del move).
+    pub written_count: usize,
     /// Ficheros saltados.
     pub skipped: Vec<String>,
     /// Ficheros que fallaron.
@@ -2386,9 +2401,13 @@ pub fn restore(
         }
     }
 
+    // MEDIDO 2026-11-22: `written` se mueve al struct; el numero se cuenta
+    // ANTES (el campo `written_count` solo vive dentro del literal).
+    let written_count = written.len();
     Ok(RestoreReport {
         dry_run,
         ok: failed.is_empty(),
+        written_count,
         written,
         skipped,
         failed,
@@ -2396,11 +2415,11 @@ pub fn restore(
         detail: if dry_run {
             format!(
                 "SIMULACRO: se escribirían {} ficheros ({} bytes); usa --confirm para escribir",
-                written.len(),
+                written_count,
                 bytes
             )
         } else {
-            format!("{} ficheros escritos ({} bytes)", written.len(), bytes)
+            format!("{written_count} ficheros escritos ({bytes} bytes)")
         },
     })
 }
@@ -2424,7 +2443,7 @@ pub enum Consolidation {
 }
 
 /// Una familia de apps detectada.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Family {
     /// Clave de la familia.
     pub key: &'static str,
@@ -2612,24 +2631,28 @@ pub fn is_commercial(package: &str) -> bool {
 }
 
 /// Detecta la familia de un paquete.
-pub fn family_of(package: &str) -> Option<&'static Family> {
+/// MEDIDO 2026-11-22: la version anterior devolvia `Option<&'static Family>`
+/// PERO `families()` construye el Vec en el HEAP en cada llamada => era
+/// imposible devolver una referencia a ese temporal (E0515).  Ahora se
+/// devuelve una COPIA (`Option<Family>`).
+pub fn family_of(package: &str) -> Option<Family> {
     let p = package.to_ascii_lowercase();
     let all = families();
     for f in &all {
         for kw in family_keywords(f.key) {
             if p.contains(kw) {
-                return Some(f);
+                return Some(f.clone());
             }
         }
     }
     if is_commercial(package) {
-        return all.iter().find(|f| f.key == "commercial");
+        return all.iter().find(|f| f.key == "commercial").cloned();
     }
     None
 }
 
 /// Informe de consolidación.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ConsolidationReport {
     /// Paquetes analizados.
     pub packages_analyzed: usize,
@@ -2870,10 +2893,12 @@ mod tests {
             sha16: Some("0123456789abcdef".into()),
             package: None,
         };
-        let m = canonical_manifest(&[e]);
+        // MEDIDO 2026-11-22: `e` se movia al array temporal y luego se
+        // usaba otra vez (use of moved value).  Se clona.
+        let m = canonical_manifest(std::slice::from_ref(&e));
         assert!(!m.contains("clave"));
         assert!(m.contains("WifiConfigStore.xml"));
-        assert_eq!(manifest_sha16(&[e]).len(), 16);
+        assert_eq!(manifest_sha16(std::slice::from_ref(&e)).len(), 16);
     }
 
     #[test]

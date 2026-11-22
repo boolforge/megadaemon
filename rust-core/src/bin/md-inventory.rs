@@ -80,7 +80,9 @@ fn opt(args: &[String], name: &str) -> Option<String> {
 
 /// Lee un flag (presente = true).
 fn flag(args: &[String], name: &str) -> bool {
-    args.iter().any(|a| a == format!("--{name}"))
+    // MEDIDO 2026-11-22: comparaba `&String` con `String` (E0277).
+    let flag = format!("--{name}");
+    args.iter().any(|a| a == &flag)
 }
 
 /// Parsea una lista de niveles (`P0`, `P0-identidad`, ...).
