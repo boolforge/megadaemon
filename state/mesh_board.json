@@ -1,6 +1,6 @@
 {
   "schema": "megadaemon.mesh.board/v1",
-  "updated_at": "2026-11-20T07:05:00Z",
+  "updated_at": "2026-11-22T01:30:00Z",
   "agents": {
     "cloud-sandbox": {
       "id": "cloud-sandbox",
@@ -328,6 +328,33 @@
         "no_urgente": "no hay nada critico en curso; el backup espera el codigo OAuth del usuario"
       },
       "sha256": null
+    },
+    {
+      "task_id": "antigravity-task_553653",
+      "title": "minimax_bootstrap",
+      "capability": "antigravity",
+      "priority": 5,
+      "owner": "antigravity",
+      "state": "pending",
+      "payload": {
+        "source": "antigravity-daemon",
+        "trigger": "delay",
+        "interval_sec": null,
+        "enabled": true,
+        "project": "",
+        "conversation_id": "",
+        "wake_app": false,
+        "command_preview": "bash .../modules/runner/bootstrap_core.sh >> .../agy_standalone/bootstrap.log 2>&1",
+        "command_len": 164,
+        "last_run_status": null,
+        "last_run_duration": null,
+        "last_run_ts": null,
+        "run_at": 1795086553.6536741,
+        "run_at_iso": "2026-11-19T12:09:13+01:00",
+        "created_at": 1795086553.6536999,
+        "stalled_for_s": 216167,
+        "note": "NUNCA ejecutada: no tiene last_run_status ni last_run_ts y su salida (agy_standalone/bootstrap.log) no existe. El script bootstrap_core.sh si existe y agy_standalone/ si tiene artefactos de 12:06-12:17 => se lanzo a mano, fuera del daemon. Catch-up preparado en deploy/antigravity-task-supervisor.sh."
+      }
     }
   ],
   "links": {
