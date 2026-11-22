@@ -1,0 +1,26 @@
+{
+  "_meta": {
+    "id": "minimax-m3.1-flash__reasoning_think",
+    "provider": "minimax-m3.1-flash",
+    "status": 200,
+    "origen": "SINTETICO",
+    "nota": "El razonamiento llega DENTRO del texto con <think>...</think> (modelos 'thinking' que no separan el campo). El daemon debe sacar el CoT y deixar solo la respuesta."
+  },
+  "body": {
+    "id": "chatcmpl-example-minimax-003",
+    "object": "chat.completion",
+    "created": 1764000002,
+    "model": "MiniMax-M3.1-Flash",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "<think>El usuario pide el resultado.</think>La respuesta final es 42."
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": { "total_tokens": 41 }
+  }
+}

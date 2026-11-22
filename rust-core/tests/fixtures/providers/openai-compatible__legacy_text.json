@@ -1,0 +1,19 @@
+{
+  "_meta": {
+    "id": "openai-compatible__legacy_text",
+    "provider": "openai-compatible",
+    "status": 200,
+    "origen": "SINTETICO",
+    "nota": "Forma legacy de /v1/completions: 'choices[0].text' sin 'message'. El daemon debe aceptarlo (no todo endpoint compatible usa el dialecto de chat)."
+  },
+  "body": {
+    "id": "cmpl-example-001",
+    "object": "text_completion",
+    "created": 1764000007,
+    "model": "legacy-model",
+    "choices": [
+      { "index": 0, "text": "Respuesta en forma legacy.", "finish_reason": "stop" }
+    ],
+    "usage": { "total_tokens": 8 }
+  }
+}

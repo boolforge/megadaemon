@@ -1,0 +1,36 @@
+{
+  "_meta": {
+    "id": "openrouter-free__tool_calls",
+    "provider": "openrouter-free",
+    "status": 200,
+    "origen": "SINTETICO",
+    "nota": "Tool calls NATIVAS de OpenAI ('function.arguments' llega como TEXTO JSON). El daemon debe: (a) parsearlas, (b) reflejarlas en tools_used, (c) NO romper si 'arguments' no es JSON valido."
+  },
+  "body": {
+    "id": "gen-example-001",
+    "object": "chat.completion",
+    "created": 1764000003,
+    "model": "openrouter/free",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": [
+            {
+              "id": "call_abc123",
+              "type": "function",
+              "function": {
+                "name": "leer_fichero",
+                "arguments": "{\"ruta\":\"/tmp/ejemplo.bin\"}"
+              }
+            }
+          ]
+        },
+        "finish_reason": "tool_calls"
+      }
+    ],
+    "usage": { "prompt_tokens": 50, "completion_tokens": 12, "total_tokens": 62 }
+  }
+}

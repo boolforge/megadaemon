@@ -1,0 +1,10 @@
+{
+  "_meta": {
+    "id": "pollinations-free__text_plain_utf8",
+    "provider": "pollinations-free",
+    "status": 200,
+    "origen": "SINTETICO",
+    "nota": "Texto plano con UTF-8 multibyte (emoji y acentos) para fijar el recorte sin partir un caracter: el codigo viejo ( &[..len().min(200)] ) hacia PANIC si el corte caia en medio."
+  },
+  "raw": "Emoji de prueba: 🦾🧠🔧 — acentos: áéíóú ñÑ — y un texto un poco largo para que el recorte tenga que cortar por el medio de un caracter multibyte de verdad."
+}

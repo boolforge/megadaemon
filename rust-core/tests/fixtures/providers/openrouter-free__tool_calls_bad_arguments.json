@@ -1,0 +1,33 @@
+{
+  "_meta": {
+    "id": "openrouter-free__tool_calls_bad_arguments",
+    "provider": "openrouter-free",
+    "status": 200,
+    "origen": "SINTETICO",
+    "nota": "Tool call con 'arguments' que NO es JSON valido (cortado a media). El parseo no puede entrar en panic: se conserva como texto y la tool sigue apareciendo en tools_used."
+  },
+  "body": {
+    "id": "gen-example-002",
+    "object": "chat.completion",
+    "created": 1764000004,
+    "model": "openrouter/free",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": [
+            {
+              "id": "call_bad001",
+              "type": "function",
+              "function": { "name": "leer_fichero", "arguments": "{\"ruta\":\"/tmp/ele" }
+            }
+          ]
+        },
+        "finish_reason": "tool_calls"
+      }
+    ],
+    "usage": { "total_tokens": 20 }
+  }
+}
