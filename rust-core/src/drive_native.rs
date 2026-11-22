@@ -107,10 +107,12 @@ pub fn upload_file(
         .ok_or("la sesión de subida no trae la cabecera Location")?
         .to_string();
 
-    // 2) Trozos. Con un fichero vacío no hay trozos: se sube en una go.
-    let plan = chunk_plan(size, DRIVE_CHUNK_GRANULARITY);
+    // 2) Trozos de 16 MiB (64 × 256 KiB, múltiplo exacto de la granularidad de Google Drive)
+    // para saturar el enlace sin round-trips por cada 256 KiB.
+    let upload_chunk = DRIVE_CHUNK_GRANULARITY * 64;
+    let plan = chunk_plan(size, upload_chunk);
     let mut file = File::open(path).map_err(|e| format!("abrir {}: {}", path.display(), e))?;
-    let mut buf = vec![0u8; DRIVE_CHUNK_GRANULARITY as usize];
+    let mut buf = vec![0u8; upload_chunk as usize];
     let mut offset: u64 = 0;
     let mut file_id = String::new();
 
@@ -141,9 +143,15 @@ pub fn upload_file(
             .map_err(|e| format!("subir trozo en {}: {}", offset, e))?;
         let st = resp.status().as_u16();
         let body = resp.into_body().read_to_vec().unwrap_or_default();
-        if st != 200 && st != 201 {
+        // Google Drive v3 resumable upload returns 308 Resume Incomplete on intermediate chunks
+        // and 200/201 on completion of the final chunk.
+        let chunk_ok = if last {
+            st == 200 || st == 201
+        } else {
+            st == 308 || st == 200 || st == 201
+        };
+        if !chunk_ok {
             let txt: String = String::from_utf8_lossy(&body).chars().take(200).collect();
-            // 401 = el token caducó: se invalida y se reintenta una vez.
             if st == 401 {
                 google_auth::invalidate();
                 return Err(format!(
@@ -320,14 +328,259 @@ pub fn default_download_path(file_id: &str) -> PathBuf {
     std::env::temp_dir().join(format!("md_drive_dl_{}", file_id))
 }
 
+fn urlencode_component(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
+
+/// Finds or creates a folder in Google Drive under `parent_id` (empty = My Drive root).
+pub fn ensure_folder(
+    name: &str,
+    parent_id: &str,
+    state_dir: Option<&str>,
+) -> Result<String, String> {
+    let escaped = name.replace('\\', "\\\\").replace('\'', "\\'");
+    let parent_clause = if parent_id.is_empty() {
+        "'root' in parents".to_string()
+    } else {
+        format!("'{}' in parents", parent_id)
+    };
+    let q = format!(
+        "mimeType = 'application/vnd.google-apps.folder' and name = '{}' and {} and trashed = false",
+        escaped, parent_clause
+    );
+    let url = format!(
+        "{}?q={}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true",
+        crate::drive_client::DRIVE_API,
+        urlencode_component(&q)
+    );
+    let ag = agent();
+    let (ak, av) = google_auth::auth_header(state_dir)?;
+    let resp = ag
+        .get(&url)
+        .header(ak, av)
+        .call()
+        .map_err(|e| format!("buscar carpeta '{}': {}", name, e))?;
+    if resp.status().as_u16() == 200 {
+        let body = resp.into_body().read_to_vec().unwrap_or_default();
+        if let Ok(j) = serde_json::from_slice::<Value>(&body) {
+            if let Some(id) = j["files"]
+                .as_array()
+                .and_then(|a| a.first())
+                .and_then(|f| f["id"].as_str())
+            {
+                return Ok(id.to_string());
+            }
+        }
+    }
+
+    let mut meta = json!({
+        "name": name,
+        "mimeType": "application/vnd.google-apps.folder"
+    });
+    if !parent_id.is_empty() {
+        meta["parents"] = json!([parent_id]);
+    }
+    let (ak2, av2) = google_auth::auth_header(state_dir)?;
+    let create_url = format!("{}?supportsAllDrives=true&fields=id", crate::drive_client::DRIVE_API);
+    let resp2 = ag
+        .post(&create_url)
+        .header(ak2, av2)
+        .header("Content-Type", "application/json; charset=UTF-8")
+        .send(meta.to_string().as_bytes())
+        .map_err(|e| format!("crear carpeta '{}': {}", name, e))?;
+    let st = resp2.status().as_u16();
+    let b2 = resp2.into_body().read_to_vec().unwrap_or_default();
+    if st != 200 && st != 201 {
+        let txt: String = String::from_utf8_lossy(&b2).chars().take(200).collect();
+        return Err(format!("crear carpeta '{}' devolvió {}: {}", name, st, txt));
+    }
+    let j2: Value = serde_json::from_slice(&b2).map_err(|e| format!("JSON carpeta: {}", e))?;
+    j2["id"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Drive no devolvió id al crear carpeta".to_string())
+}
+
+/// Uploads a single file with exponential backoff retry on 429/5xx/transient network errors.
+pub fn upload_file_retry(
+    path: &Path,
+    name: &str,
+    target: &DriveTarget,
+    state_dir: Option<&str>,
+    max_retries: usize,
+) -> Result<Uploaded, String> {
+    let mut attempt = 0usize;
+    loop {
+        match upload_file(path, name, target, state_dir) {
+            Ok(up) => return Ok(up),
+            Err(e) if attempt < max_retries => {
+                attempt += 1;
+                let backoff_ms = (250u64 << attempt.min(5)).min(8000);
+                std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+                let _ = e;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// High-speed concurrent directory sync to Google Drive (pure Rust, `ignore` + `std::thread::scope`).
+/// Uploads largest files first with 16 MiB resumable chunks across `workers` threads and
+/// verifies remote size before optionally deleting verified local files.
+pub fn upload_dir_parallel(
+    local_dir: &Path,
+    remote_folder_name: &str,
+    parent_id: &str,
+    workers: usize,
+    verify_delete: bool,
+    state_dir: Option<&str>,
+) -> Result<Value, String> {
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    if !local_dir.is_dir() {
+        return Err(format!("no existe directorio: {}", local_dir.display()));
+    }
+    let started = std::time::Instant::now();
+    let root_folder_id = ensure_folder(remote_folder_name, parent_id, state_dir)?;
+
+    let mut files: Vec<(PathBuf, PathBuf, u64)> = Vec::new();
+    let walker = ignore::WalkBuilder::new(local_dir)
+        .hidden(false)
+        .git_ignore(false)
+        .build();
+    for entry in walker.flatten() {
+        if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let p = entry.path().to_path_buf();
+        let rel = p.strip_prefix(local_dir).unwrap_or(&p).to_path_buf();
+        let sz = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        files.push((p, rel, sz));
+    }
+    // Largest files first to free space and saturate 16 MiB chunk pipelines early.
+    files.sort_by(|a, b| b.2.cmp(&a.2));
+
+    let total_files = files.len();
+    let folder_cache: Mutex<std::collections::HashMap<String, String>> =
+        Mutex::new(std::collections::HashMap::new());
+    let queue = Mutex::new(files);
+    let uploaded_files = AtomicUsize::new(0);
+    let uploaded_bytes = AtomicU64::new(0);
+    let deleted_files = AtomicUsize::new(0);
+    let errors: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let n_workers = workers.clamp(1, 16);
+
+    std::thread::scope(|s| {
+        for _ in 0..n_workers {
+            s.spawn(|| loop {
+                let item = {
+                    let mut q = queue.lock().unwrap();
+                    q.pop()
+                };
+                let Some((abs_path, rel_path, expected_size)) = item else {
+                    break;
+                };
+                // Resolve remote parent folder chain.
+                let mut cur_parent = root_folder_id.clone();
+                if let Some(parent_rel) = rel_path.parent() {
+                    let mut acc = String::new();
+                    for comp in parent_rel.components() {
+                        let seg = comp.as_os_str().to_string_lossy().to_string();
+                        if seg.is_empty() || seg == "." {
+                            continue;
+                        }
+                        if !acc.is_empty() {
+                            acc.push('/');
+                        }
+                        acc.push_str(&seg);
+                        let cached = {
+                            let c = folder_cache.lock().unwrap();
+                            c.get(&acc).cloned()
+                        };
+                        if let Some(id) = cached {
+                            cur_parent = id;
+                        } else {
+                            match ensure_folder(&seg, &cur_parent, state_dir) {
+                                Ok(id) => {
+                                    let mut c = folder_cache.lock().unwrap();
+                                    c.insert(acc.clone(), id.clone());
+                                    cur_parent = id;
+                                }
+                                Err(e) => {
+                                    errors.lock().unwrap().push(format!("{}: {}", acc, e));
+                                    cur_parent.clear();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if cur_parent.is_empty() {
+                    continue;
+                }
+                let fname = rel_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file.bin");
+                let target = DriveTarget::folder(&cur_parent);
+                match upload_file_retry(&abs_path, fname, &target, state_dir, 3) {
+                    Ok(up) => {
+                        uploaded_files.fetch_add(1, Ordering::Relaxed);
+                        uploaded_bytes.fetch_add(up.bytes, Ordering::Relaxed);
+                        if verify_delete && up.bytes == expected_size && !up.file_id.is_empty() {
+                            if std::fs::remove_file(&abs_path).is_ok() {
+                                deleted_files.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        errors
+                            .lock()
+                            .unwrap()
+                            .push(format!("{}: {}", rel_path.display(), e));
+                    }
+                }
+            });
+        }
+    });
+
+    let elapsed_s = started.elapsed().as_secs_f64().max(0.001);
+    let bytes_done = uploaded_bytes.load(Ordering::Relaxed);
+    let mbps = (bytes_done as f64 / (1024.0 * 1024.0)) / elapsed_s;
+    let errs = errors.into_inner().unwrap_or_default();
+
+    Ok(json!({
+        "ok": errs.is_empty(),
+        "root_folder_id": root_folder_id,
+        "total_files": total_files,
+        "uploaded_files": uploaded_files.load(Ordering::Relaxed),
+        "deleted_files": deleted_files.load(Ordering::Relaxed),
+        "uploaded_bytes": bytes_done,
+        "elapsed_secs": (elapsed_s * 100.0).round() / 100.0,
+        "throughput_mib_s": (mbps * 100.0).round() / 100.0,
+        "workers": n_workers,
+        "errors": errs,
+    }))
+}
+
 /// Informe del estado de Google Drive (sin secretos).
 pub fn status(state_dir: Option<&str>) -> Value {
     let mut st = google_auth::status(state_dir);
     st["api"] = json!({
         "upload": DRIVE_UPLOAD_API,
         "files": crate::drive_client::DRIVE_API,
-        "chunk_bytes": DRIVE_CHUNK_GRANULARITY,
-        "transport": "nativo (ureq, Rust puro; sin curl ni shell)",
+        "chunk_bytes": DRIVE_CHUNK_GRANULARITY * 64,
+        "transport": "nativo paralelo (ureq + ignore, Rust puro; 16 MiB chunks)",
     });
     st
 }

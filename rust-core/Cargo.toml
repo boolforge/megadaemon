@@ -36,6 +36,23 @@ zip = { version = "2.2", default-features = false, features = ["deflate"] }  # l
 # binario ARM64 no depende de ninguna libzstd del sistema (Android no trae
 # ninguna). Mismo mecanismo que el SQLite `bundled` de arriba.
 zstd = { version = "0.13", default-features = false, features = ["arrays"] }
+# --- Pure-Rust Battle-Tested Reuse Suite (Android ARM64 NDK static-safe) ---
+aho-corasick = "1.1"
+bzip2 = "0.6"
+crc32fast = "1.5"
+fatfs = "0.3"
+format198x-commodore-amiga-adf = "0.3"
+format198x-commodore-c64-d64 = "0.1"
+format198x-tzx = "0.1"
+go-retool = { path = "../go-retool/crates/go-retool" }
+goblin = { version = "0.10", default-features = false, features = ["elf32", "elf64", "pe32", "pe64", "mach32", "mach64", "archive", "endian_fd"] }
+grep-regex = "0.1"
+grep-searcher = "0.1"
+ignore = "0.4"
+lzma-rs = "0.3"
+memchr = "2.8"
+similar = "3.2"
+tar = "0.4"
 
 [features]
 

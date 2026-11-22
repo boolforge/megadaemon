@@ -66,6 +66,7 @@ pub mod freezer;
 pub mod frida_dbi;
 pub mod git_ops;
 pub mod github_connector;
+pub mod go_retool;
 pub mod google_auth;
 pub mod hw_mapper;
 pub mod kaitai_imhex;

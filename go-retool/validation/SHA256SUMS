@@ -1,0 +1,6 @@
+1a57e7f78f9c11e0bf8ccb752655f664973f70c76a0da27f62e826cb3251ef5b  artifacts/fixture-go1.23.2-darwin-arm64
+9dae4e6bb16213a87a4241366c3374ea434e1debb2f0c0aff408d7aee9a61bba  artifacts/fixture-go1.23.2-linux-amd64
+4ff66287e2a0e2753b2fde239a9508a9b584e81dca02f82d9ec8e6b9b7702517  artifacts/fixture-go1.23.2-linux-arm64
+b8629bc4e7f3ae841d4c7b86dcbf2863f50bbc69cd3b3fc5afa9d5562b10a9ed  artifacts/fixture-go1.23.2-windows-amd64
+8a05d73dac09f5ff464ff3c72b4a27d77860b9fe75b6f32e2ba8eba32be3b415  artifacts/fixture-plugin-go1.23.2-linux-amd64.so
+5174f4186f6b5438a7673419d647fe9e8f19985c5ecdc7492e0d7f989e3ef349  artifacts/fixture-pluginhost-go1.23.2-linux-amd64

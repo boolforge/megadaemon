@@ -66,17 +66,9 @@ pub fn compute_hashes(data: &[u8]) -> ArtifactHashes {
     }
 }
 
-/// Standard IEEE 802.3 CRC-32 (polynomial `0xEDB88320`, matching `zlib.crc32`).
+/// Standard IEEE 802.3 CRC-32 (SIMD-accelerated via `crc32fast`).
 pub fn compute_crc32(data: &[u8]) -> u32 {
-    let mut crc: u32 = 0xFFFF_FFFF;
-    for &byte in data {
-        crc ^= byte as u32;
-        for _ in 0..8 {
-            let mask = (crc & 1).wrapping_neg();
-            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
-        }
-    }
-    !crc
+    crc32fast::hash(data)
 }
 
 /// Standard RFC 1950 Adler-32 (mod 65521, matching `zlib.adler32`).
@@ -218,6 +210,84 @@ pub fn extract_single_layer(data: &[u8], filename: &str) -> Option<(&'static str
         let members = extract_gzip(data, filename);
         if !members.is_empty() {
             return Some((if ext == "adz" { "amiga-adz" } else { "gzip" }, members));
+        }
+    }
+
+    // 2b. BZIP2 (pure-Rust libbz2-rs-sys via bzip2 crate)
+    if data.starts_with(b"BZh") || ext == "bz2" {
+        let mut dec = bzip2::read::BzDecoder::new(Cursor::new(data));
+        let mut out = Vec::new();
+        if dec.take(MAX_MEMBER_SIZE as u64 + 1).read_to_end(&mut out).is_ok()
+            && !out.is_empty()
+            && out.len() <= MAX_MEMBER_SIZE
+        {
+            let stem = Path::new(filename)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("payload.bin")
+                .to_string();
+            return Some(("bzip2", vec![(stem, out)]));
+        }
+    }
+
+    // 2c. XZ / LZMA (pure-Rust lzma-rs crate)
+    if data.starts_with(b"\xfd7zXZ\x00") || ext == "xz" {
+        let mut out = Vec::new();
+        if lzma_rs::xz_decompress(&mut Cursor::new(data), &mut out).is_ok()
+            && !out.is_empty()
+            && out.len() <= MAX_MEMBER_SIZE
+        {
+            let stem = Path::new(filename)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("payload.bin")
+                .to_string();
+            return Some(("xz", vec![(stem, out)]));
+        }
+    } else if ext == "lzma" {
+        let mut out = Vec::new();
+        if lzma_rs::lzma_decompress(&mut Cursor::new(data), &mut out).is_ok()
+            && !out.is_empty()
+            && out.len() <= MAX_MEMBER_SIZE
+        {
+            let stem = Path::new(filename)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("payload.bin")
+                .to_string();
+            return Some(("lzma", vec![(stem, out)]));
+        }
+    }
+
+    // 2d. POSIX/USTAR TAR (tar crate)
+    if (data.len() >= 265 && &data[257..262] == b"ustar") || ext == "tar" {
+        let mut archive = tar::Archive::new(Cursor::new(data));
+        if let Ok(entries) = archive.entries() {
+            let mut members = Vec::new();
+            for entry in entries.flatten() {
+                if members.len() >= MAX_TOTAL_MEMBERS {
+                    break;
+                }
+                if !entry.header().entry_type().is_file() {
+                    continue;
+                }
+                let name = entry
+                    .path()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                if name.is_empty() {
+                    continue;
+                }
+                let mut buf = Vec::new();
+                if entry.take(MAX_MEMBER_SIZE as u64 + 1).read_to_end(&mut buf).is_ok()
+                    && buf.len() <= MAX_MEMBER_SIZE
+                {
+                    members.push((name, buf));
+                }
+            }
+            if !members.is_empty() {
+                return Some(("tar", members));
+            }
         }
     }
 

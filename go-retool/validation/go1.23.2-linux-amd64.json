@@ -1,0 +1,18 @@
+{
+  "binary": "artifacts/fixture-go1.23.2-linux-amd64",
+  "pclntab_candidates": [
+    {
+      "pclntab_file_offset": "0xedd40",
+      "magic": "0xfffffff1",
+      "pointer_size": 8,
+      "min_lc": 1,
+      "nfunc": 1889,
+      "funcname_offset": "0x60",
+      "pcln_offset": "0x4fac0",
+      "names_resolved": 1889,
+      "sentinel_entryoff": "0xa0034",
+      "errors": []
+    }
+  ],
+  "note": "Independent Python structural sanity check; not proof of complete Go release support."
+}

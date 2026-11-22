@@ -358,6 +358,58 @@ fn main() {
             println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
         }
 
+        "go-retool" => {
+            let sub = args.get(2).map(|s| s.as_str()).unwrap_or("analyze");
+            let fp = args.get(3).map(|s| s.as_str()).unwrap_or("");
+            if fp.is_empty() {
+                eprintln!("Uso: megadaemon go-retool <analyze|container|functions|ghidra_json> <binario> [filtro]");
+                std::process::exit(1);
+            }
+            let query = args.get(4).map(|s| s.as_str());
+            let rep = megadaemon_core::go_retool::handle_action(
+                sub,
+                std::path::Path::new(fp),
+                query,
+                500,
+            );
+            println!("{}", serde_json::to_string_pretty(&rep).unwrap_or_default());
+        }
+
+        "drive-sync" => {
+            let local_dir = args.get(2).map(|s| s.as_str()).unwrap_or("");
+            let remote_name = args.get(3).map(|s| s.as_str()).unwrap_or("MegaDaemon_Sync");
+            let parent_id = args
+                .windows(2)
+                .find(|w| w[0] == "--parent")
+                .map(|w| w[1].as_str())
+                .unwrap_or("");
+            let workers = args
+                .windows(2)
+                .find(|w| w[0] == "--workers")
+                .and_then(|w| w[1].parse::<usize>().ok())
+                .unwrap_or(8);
+            let verify_delete = args.iter().any(|a| a == "--verify-delete");
+            if local_dir.is_empty() {
+                eprintln!("Uso: megadaemon drive-sync <local_dir> <remote_folder> [--parent <id>] [--workers 8] [--verify-delete]");
+                std::process::exit(1);
+            }
+            let st = megadaemon_core::cockpit_server::state_dir();
+            match megadaemon_core::drive_native::upload_dir_parallel(
+                std::path::Path::new(local_dir),
+                remote_name,
+                parent_id,
+                workers,
+                verify_delete,
+                Some(&st),
+            ) {
+                Ok(rep) => println!("{}", serde_json::to_string_pretty(&rep).unwrap_or_default()),
+                Err(e) => {
+                    eprintln!("drive-sync error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
         "die-binwalk" => {
             let fp = args.get(2).map(|s| s.as_str()).unwrap_or("");
             let rep = binwalk_die::analyze_binary_full(fp);

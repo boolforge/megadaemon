@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/go-retool/analysis.schema.json",
+  "title": "go-retool analysis output",
+  "type": "object",
+  "required": ["schema_version", "parser", "modules", "warnings"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "parser": {"type": "object", "required": ["name", "version", "pclntab_layout"]},
+    "modules": {"type": "array", "items": {"type": "object", "required": ["module_index", "module_identity", "pclntab_file_offset", "text_base_status", "magic", "pointer_size", "min_instruction_size", "nfunc", "functions", "warnings"], "properties": {
+      "module_index": {"type": "integer", "minimum": 0},
+      "module_identity": {"type": "string"},
+      "pclntab_file_offset": {"type": "string", "pattern": "^0x[0-9a-fA-F]+$"},
+      "go_version": {"type": ["string", "null"]},
+      "text_base_va": {"type": ["string", "null"], "pattern": "^0x[0-9a-fA-F]+$"},
+      "text_base_status": {"type": "string"},
+      "functions": {"type": "array", "items": {"type": "object", "required": ["index", "start_va", "end_va", "text_section_index", "entryoff", "funcoff", "nameoff", "name_status", "evidence"], "properties": {
+        "start_va": {"type": ["string", "null"]}, "end_va": {"type": ["string", "null"]},
+        "text_section_index": {"type": ["integer", "null"]}, "entryoff": {"type": "integer"}, "funcoff": {"type": "integer"}, "nameoff": {"type": "integer"}
+      }}}
+    }}}
+  }
+}

@@ -20,10 +20,12 @@ pub fn tool_definitions() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["upload", "download", "status"], "default": "upload" },
+                    "action": { "type": "string", "enum": ["upload", "sync", "download", "status"], "default": "upload" },
                     "path": { "type": "string", "description": "Ruta local a subir (fichero o directorio)" },
                     "name": { "type": "string", "description": "Nombre en Drive (opcional; por defecto, el del fichero)" },
                     "folder_id": { "type": "string", "description": "Carpeta destino en Drive (vacio = Mi Drive)" },
+                    "workers": { "type": "integer", "default": 8, "description": "Hilos paralelos para sync (por defecto 8)" },
+                    "verify_delete": { "type": "boolean", "default": false, "description": "Borrar local tras verificar tamano remoto (sync)" },
                     "file_id": { "type": "string", "description": "Id de Drive a descargar (action=download)" },
                     "dest": { "type": "string", "description": "Ruta destino de la descarga (action=download)" },
                     "confirm": { "type": "boolean", "default": false }
@@ -73,6 +75,20 @@ pub fn tool_definitions() -> Value {
                     "allow_outside_workspace": { "type": "boolean", "default": false, "description": "Permitir acceso fuera de workspace_root (por defecto false)" }
                 },
                 "required": ["goal"]
+            }
+        },
+        {
+            "name": "go_retool",
+            "description": "Pure-Rust Go binary reverse engineering toolset (ELF/PE/Mach-O container scan, Go 1.18+ pclntab function & package recovery, Ghidra JSON export, and stackmap inspection).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Ruta al binario Go (ELF, PE o Mach-O)" },
+                    "action": { "type": "string", "enum": ["analyze", "container", "functions", "ghidra_json"], "default": "analyze" },
+                    "query": { "type": "string", "description": "Filtro opcional de nombre de funcion (accion functions)" },
+                    "limit": { "type": "integer", "default": 200, "description": "Maximo de funciones a devolver" }
+                },
+                "required": ["path"]
             }
         },
 
@@ -500,6 +516,36 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         }
                     }
                 }
+                "sync" => {
+                    if !b("confirm") {
+                        json!({ "content": [{ "type": "text", "text": "drive_backup sync exige confirm=true" }] })
+                    } else {
+                        let path = s("path");
+                        let name = {
+                            let nm = s("name");
+                            if nm.trim().is_empty() {
+                                std::path::Path::new(&path)
+                                    .file_name()
+                                    .map(|x| x.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| "MegaDaemon_Sync".to_string())
+                            } else { nm }
+                        };
+                        let folder = s("folder_id");
+                        let raw_w = n("workers") as usize;
+                        let workers = if raw_w == 0 { 8 } else { raw_w.clamp(1, 16) };
+                        match crate::drive_native::upload_dir_parallel(
+                            std::path::Path::new(&path),
+                            &name,
+                            &folder,
+                            workers,
+                            b("verify_delete"),
+                            Some(&st),
+                        ) {
+                            Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
+                            Err(e) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({ "ok": false, "error": e })).unwrap_or_default() }], "isError": true }),
+                        }
+                    }
+                }
                 _ => {
                     if !b("confirm") {
                         json!({ "content": [{ "type": "text", "text": "drive_backup exige confirm=true (sube el contenido a Google Drive)" }] })
@@ -688,6 +734,34 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 };
                 let report = crate::agent_coding::run_coding_session_live(&goal, &cfg);
                 let txt = serde_json::to_string_pretty(&report).unwrap_or_default();
+                json!({ "content": [{ "type": "text", "text": txt }] })
+            }
+        }
+        "go_retool" => {
+            let path = s("path");
+            if path.trim().is_empty() {
+                json!({ "content": [{ "type": "text", "text": "{\"ok\":false,\"error\":\"missing_path\"}" }], "isError": true })
+            } else {
+                let action = {
+                    let a = s("action");
+                    if a.is_empty() { "analyze".to_string() } else { a }
+                };
+                let query = {
+                    let q = s("query");
+                    if q.trim().is_empty() { None } else { Some(q) }
+                };
+                let limit = args
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as usize)
+                    .unwrap_or(200);
+                let res = crate::go_retool::handle_action(
+                    &action,
+                    std::path::Path::new(&path),
+                    query.as_deref(),
+                    limit,
+                );
+                let txt = serde_json::to_string_pretty(&res).unwrap_or_default();
                 json!({ "content": [{ "type": "text", "text": txt }] })
             }
         }

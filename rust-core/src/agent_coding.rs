@@ -901,30 +901,25 @@ pub fn tool_replace_file_content(
 
     atomic_write(&path, updated.as_bytes())?;
 
-    let diff = build_concise_diff(raw_path, target, replacement, match_count);
+    let diff = build_concise_diff(raw_path, &original, &updated, match_count);
     Ok(diff)
 }
 
-fn build_concise_diff(path: &str, target: &str, replacement: &str, count: usize) -> String {
-    let mut out = format!(
-        "Replaced {} occurrence(s) in {}\n--- a/{}\n+++ b/{}\n",
-        count, path, path, path
-    );
-    for line in target.lines().take(40) {
-        out.push('-');
-        out.push_str(line);
-        out.push('\n');
+fn build_concise_diff(path: &str, original: &str, updated: &str, count: usize) -> String {
+    let diff = similar::TextDiff::from_lines(original, updated);
+    let unified = diff
+        .unified_diff()
+        .context_radius(3)
+        .header(&format!("a/{}", path), &format!("b/{}", path))
+        .to_string();
+    let mut lines: Vec<&str> = unified.lines().collect();
+    let omitted = lines.len().saturating_sub(80);
+    if omitted > 0 {
+        lines.truncate(80);
     }
-    if target.lines().count() > 40 {
-        out.push_str("-...[omitted]\n");
-    }
-    for line in replacement.lines().take(40) {
-        out.push('+');
-        out.push_str(line);
-        out.push('\n');
-    }
-    if replacement.lines().count() > 40 {
-        out.push_str("+...[omitted]\n");
+    let mut out = format!("Replaced {} occurrence(s) in {}\n{}", count, path, lines.join("\n"));
+    if omitted > 0 {
+        out.push_str(&format!("\n...[{} more diff lines omitted]", omitted));
     }
     out
 }
@@ -965,7 +960,8 @@ pub fn tool_write_to_file(
     ))
 }
 
-/// Pure-Rust recursive code search skipping VCS and build directories.
+/// Ripgrep-powered recursive code search (`ignore` + `grep-searcher` + `grep-regex`)
+/// honoring `.gitignore`, skipping binary files, and streaming bounded results.
 pub fn tool_search_code(
     workspace: &Path,
     allow_outside: bool,
@@ -990,77 +986,61 @@ pub fn tool_search_code(
         .get("case_insensitive")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let query_lower = if case_insensitive {
-        query.to_lowercase()
-    } else {
-        String::new()
-    };
+
+    let matcher = grep_regex::RegexMatcherBuilder::new()
+        .case_insensitive(case_insensitive)
+        .fixed_strings(true)
+        .build(query)
+        .map_err(|e| format!("invalid search pattern: {}", e))?;
+
+    let mut searcher = grep_searcher::SearcherBuilder::new()
+        .binary_detection(grep_searcher::BinaryDetection::quit(b'\x00'))
+        .line_number(true)
+        .build();
 
     let canon_root = fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
     let mut matches: Vec<String> = Vec::new();
-    let mut stack: Vec<PathBuf> = vec![scope_path];
     let mut truncated = false;
 
-    while let Some(cur) = stack.pop() {
+    let walker = ignore::WalkBuilder::new(&scope_path)
+        .hidden(false)
+        .git_ignore(true)
+        .max_filesize(Some(SEARCH_MAX_FILE_BYTES))
+        .filter_entry(|entry| {
+            let name = entry.file_name().to_str().unwrap_or("");
+            !SKIP_DIRS.contains(&name)
+        })
+        .build();
+
+    for entry in walker.flatten() {
         if matches.len() >= max_results {
             truncated = true;
             break;
         }
-        let meta = match fs::symlink_metadata(&cur) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        if meta.file_type().is_symlink() {
+        let path = entry.path();
+        if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
             continue;
         }
-        if meta.is_dir() {
-            if let Some(name) = cur.file_name().and_then(|n| n.to_str()) {
-                if SKIP_DIRS.contains(&name) {
-                    continue;
-                }
-            }
-            let Ok(rd) = fs::read_dir(&cur) else {
-                continue;
-            };
-            let mut children: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|x| x.path())).collect();
-            children.sort();
-            for child in children.into_iter().rev() {
-                stack.push(child);
-            }
-        } else if meta.is_file() {
-            if meta.len() > SEARCH_MAX_FILE_BYTES {
-                continue;
-            }
-            let Ok(bytes) = fs::read(&cur) else {
-                continue;
-            };
-            let probe = bytes.len().min(1024);
-            if bytes[..probe].contains(&0) {
-                continue;
-            }
-            let text = String::from_utf8_lossy(&bytes);
-            let display_path = cur
-                .strip_prefix(&canon_root)
-                .unwrap_or(&cur)
-                .display()
-                .to_string();
+        let display_path = path
+            .strip_prefix(&canon_root)
+            .unwrap_or(path)
+            .display()
+            .to_string();
 
-            for (idx, line) in text.lines().enumerate() {
-                let hit = if case_insensitive {
-                    line.to_lowercase().contains(&query_lower)
+        let _ = searcher.search_path(
+            &matcher,
+            path,
+            grep_searcher::sinks::UTF8(|line_num, line| {
+                let snippet = truncate_utf8_prefix(line.trim(), 200);
+                matches.push(format!("{}:{}: {}", display_path, line_num, snippet));
+                if matches.len() >= max_results {
+                    truncated = true;
+                    Ok(false)
                 } else {
-                    line.contains(query)
-                };
-                if hit {
-                    let snippet = truncate_utf8_prefix(line.trim(), 200);
-                    matches.push(format!("{}:{}: {}", display_path, idx + 1, snippet));
-                    if matches.len() >= max_results {
-                        truncated = true;
-                        break;
-                    }
+                    Ok(true)
                 }
-            }
-        }
+            }),
+        );
     }
 
     if matches.is_empty() {

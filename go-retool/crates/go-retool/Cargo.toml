@@ -1,0 +1,15 @@
+[package]
+name = "go-retool"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+object = { version = "0.41", features = ["read"] }
+
+[[bin]]
+name = "go-retool"
+path = "src/main.rs"

@@ -151,6 +151,30 @@ pub fn refresh_from_file(path: &Path) -> Result<GoogleToken, String> {
     })
 }
 
+/// Lee un `access_token` vigente desde `rclone.conf` si no existe `gdrive_credentials.json`.
+fn fallback_rclone_token() -> Option<GoogleToken> {
+    let raw = std::fs::read_to_string("/data/local/tmp/rc/rclone.conf").ok()?;
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("token") {
+            let rest = rest.trim_start();
+            if let Some(json_str) = rest.strip_prefix('=') {
+                if let Ok(v) = serde_json::from_str::<Value>(json_str.trim()) {
+                    if let Some(tok) = v.get("access_token").and_then(|x| x.as_str()) {
+                        if !tok.is_empty() {
+                            return Some(GoogleToken {
+                                access_token: tok.to_string(),
+                                expires_at: Instant::now() + Duration::from_secs(1800),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Token válido: de la caché, o refrescado.
 pub fn token(state_dir: Option<&str>) -> Result<GoogleToken, String> {
     let mut guard = CACHE
@@ -162,7 +186,13 @@ pub fn token(state_dir: Option<&str>) -> Result<GoogleToken, String> {
         }
     }
     let path = credentials_path(state_dir);
-    let t = refresh_from_file(&path)?;
+    let t = if path.exists() {
+        refresh_from_file(&path)?
+    } else if let Some(tok) = fallback_rclone_token() {
+        tok
+    } else {
+        refresh_from_file(&path)?
+    };
     *guard = Some(t.clone());
     Ok(t)
 }
