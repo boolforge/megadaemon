@@ -232,9 +232,52 @@ pub fn patch(
     modulo: &Path,
 ) -> Result<PatchReport, String> {
     let (xml, fuente) = read_csc_xml(csc)?;
-    let valor_anterior = csc_feature_get(&xml, feature);
-    let nuevo_xml = set_feature(&xml, feature, valor);
+    patch_con_xml(&xml, &fuente, csc, feature, valor, modulo)
+}
+
+/// Igual que [`patch`], pero con el XML **ya leído**.
+///
+/// Separate para que los tests puedan ejercitar el parche completo
+/// (OMC -> gzip -> OMC) sin el movil.
+pub fn patch_con_xml(
+    xml: &str,
+    fuente: &std::path::Path,
+    csc: &str,
+    feature: &str,
+    valor: &str,
+    modulo: &std::path::Path,
+) -> Result<PatchReport, String> {
+    let fuente = fuente.to_path_buf();
+    let valor_anterior = csc_feature_get(xml, feature);
+    // MEDIDO (2026-11-22): el modulo instalado en el movil era un NO-OP.
+    // El XML de fabrica ya traia `RecordingAllowedByMenu,disclaimer_latin`
+    // (el disclaimed es el aviso legal que Samsung pone al grabar desde
+    // el menu) y el parche se aplico sobre un XML que NO contenia la
+    // feature pedida => el fichero re-codificado salia IDENTICO al
+    // original (mismo sha256) y el modulo no cambiaba NADA.  Por eso:
+    //   * si la feature no existe en el XML, se avisa y se puede insertar;
+    //   * despues de re-codificar, se VERIFICA que el valor ha cambiado
+    //     de verdad (re-decodificando lo escrito), y si no, se error.
+    // `rom_migration::csc_feature_set` sustituye la feature si existe y la
+    // INSERTA dentro de <FeatureSet> si no (y falla si no hay <FeatureSet>).
+    let nuevo_xml = crate::rom_migration::csc_feature_set(xml, feature, valor)?;
+    // Verificacion en caliente: el XML nuevo debe contener el valor nuevo.
+    if csc_feature_get(&nuevo_xml, feature).as_deref() != Some(valor) {
+        return Err(format!(
+            "el parche NO se aplico: tras parchear, '{feature}' sigue siendo {:?} (se esperaba {:?})",
+            csc_feature_get(&nuevo_xml, feature),
+            valor
+        ));
+    }
     let datos = omc_encode_gzip(nuevo_xml.as_bytes())?;
+    // Verificacion en frio: lo escrito, re-decodificado, debe contener el
+    // valor.  Asi un modulo no-op es IMPOSIBLE (falla aqui).
+    let releido = omc_decode_gzip(&datos).map_err(|e| format!("re-decodificar lo escrito: {e}"))?;
+    if csc_feature_get(&releido, feature).as_deref() != Some(valor) {
+        return Err(format!(
+            "el fichero escrito no contiene '{feature}={valor}' tras re-codificar (OMC)"
+        ));
+    }
     std::fs::create_dir_all(modulo).map_err(|e| format!("mkdir {:?}: {e}", modulo))?;
     let destino = modulo.join("cscfeature.xml");
     std::fs::write(&destino, &datos).map_err(|e| format!("write {:?}: {e}", destino))?;

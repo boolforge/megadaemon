@@ -223,6 +223,116 @@ pub fn decidir(actual: Option<&str>, short_nuevo: &str) -> Estado {
     }
 }
 
+/// Lanza el hilo de **auto-actualización permanente**.
+///
+/// DECISIÓN DEL USUARIO (2026-11-22): *"que megadaemon se auto actualice
+/// siempre"*.  Antes sólo existía `megadaemon-core update` (manual).
+///
+/// MECÁNICA (todo con el cliente HTTP propio: el móvil NO tiene curl/wget):
+/// 1. espera `intervalo` (con jitter, para no hacer todos los nodos a la vez);
+/// 2. `comprobar()` (1 petición al manifiesto, sin descargar el binario);
+/// 3. si hay versión nueva ⇒ `aplicar()` (descarga, verifica SHA-256,
+///    instalación atómica con `.prev` para el rollback);
+/// 4. deja rastro en `state/auto_update.log`.
+///
+/// SEGURIDAD:
+/// * `MD_NO_AUTO_UPDATE=1` desactiva el hilo por completo.
+/// * `MD_AUTO_UPDATE_INTERVAL_MIN` cambia el intervalo (por defecto 360 min).
+/// * Tras instalar, el daemon **NO se reinicia solo**: sale con código 10
+///   (que es lo que el supervisor `service.d` entiende como "hay binario
+///   nuevo, relánzame").  Si no hay supervisor, el proceso **no** sale:
+///   el binario nuevo queda instalado y se aplica en el próximo reinicio.
+pub fn lanzar_auto_actualizador(ruta_bin: std::path::PathBuf, minutos: u64) {
+    if std::env::var("MD_NO_AUTO_UPDATE").ok().as_deref() == Some("1") {
+        return;
+    }
+    let intervalo = std::env::var("MD_AUTO_UPDATE_INTERVAL_MIN")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(minutos.max(30));
+    std::thread::Builder::new()
+        .name("md-auto-update".to_string())
+        .spawn(move || loop {
+            // Jitter de hasta 5 minutos: evita que toda la flota golpee a la
+            // vez la API de GitHub en el mismo instante.
+            let jitter = (ruta_bin
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.subsec_nanos() as u64)
+                .unwrap_or(0))
+                % 300;
+            std::thread::sleep(std::time::Duration::from_secs(jitter * 60 / 300));
+            let estado = comprobar(&ruta_bin);
+            let hay = matches!(estado, Estado::Actualizable { .. });
+            if hay {
+                match aplicar(&ruta_bin) {
+                    Ok(r) if r.instalado => {
+                        registrar(&format!(
+                            "instalado {} (previo {:?}) el {}",
+                            r.short,
+                            r.previo,
+                            ahora()
+                        ));
+                        // Código 10 = "se instaló una versión nueva" => el
+                        // supervisor relanza el daemon con el binario nuevo.
+                        // Si no hay supervisor, NO se sale: el binario queda
+                        // instalado para el próximo reinicio.
+                        if supervisor_presente() {
+                            std::process::exit(10);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => registrar(&format!("fallo al actualizar: {e}")),
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_secs(intervalo * 60));
+        })
+        .ok();
+}
+
+/// ¿Hay un supervisor que relance el daemon?  (Magisk `service.d` o el
+/// proceso `99-megadaemon.sh`).
+fn supervisor_presente() -> bool {
+    if std::env::var("MD_NO_AUTO_UPDATE_RESTART").ok().as_deref() == Some("1") {
+        return false;
+    }
+    if std::path::Path::new("/data/adb/service.d/99-megadaemon.sh").exists() {
+        return true;
+    }
+    // En el PC puede ser otro supervisor: se busca el binario en la lista.
+    std::process::Command::new("sh")
+        .args(["-c", "ps -A -o args 2>/dev/null | grep -c '99-megadaemon' || true"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().ok())
+        .map(|n| n > 0)
+        .unwrap_or(false)
+}
+
+/// Escribe una línea en `state/auto_update.log` (best effort).
+fn registrar(linea: &str) {
+    let sd = crate::cockpit_server::state_dir();
+    let dir = std::path::Path::new(&sd);
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    let ruta = dir.join("auto_update.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&ruta)
+    {
+        use std::io::Write;
+        let _ = writeln!(f, "[{}] {linea}", ahora());
+    }
+}
+
+fn ahora() -> String {
+    crate::util_text::now_iso()
+}
+
 /// Comprueba si hay una versión nueva.  **No descarga el binario.**
 pub fn comprobar(ruta_bin: &Path) -> Estado {
     let m = match manifiesto() {

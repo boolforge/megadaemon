@@ -86,6 +86,27 @@ fn main() {
             // (MEGADAEMON_VOICE=1): 1 acción por tick, cooldown, presupuesto
             // por hora y NUNCA reinicios ni procesos nuevos.
             megadaemon_core::voice_runtime::spawn_autonomous_loop();
+            // v18: auto-actualización PERMANENTE ("que se auto actualice
+            // siempre").  El hilo comprueba el manifiesto de la release,
+            // descarga sólo si hay versión nueva, verifica el SHA-256 y
+            // deja el anterior en `.prev`.  Se desactiva con
+            // MD_NO_AUTO_UPDATE=1.  Tras instalar, sale con código 10 si
+            // hay supervisor (para que lo relance con el binario nuevo).
+            {
+                let ruta = std::env::var("MEGADAEMON_BIN").ok().unwrap_or_else(|| {
+                    if cfg!(target_os = "android") {
+                        "/data/local/tmp/megadaemon/megadaemon-core".to_string()
+                    } else {
+                        std::env::current_exe()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_else(|_| "megadaemon-core".to_string())
+                    }
+                });
+                megadaemon_core::self_update::lanzar_auto_actualizador(
+                    std::path::PathBuf::from(ruta),
+                    360,
+                );
+            }
             if let Err(e) = cockpit_server::run_server(port) {
                 eprintln!("Cockpit server error: {}", e);
                 std::process::exit(1);

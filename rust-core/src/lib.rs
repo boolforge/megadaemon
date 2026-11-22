@@ -19,6 +19,7 @@ pub mod antispam;
 pub mod api_key;
 pub mod apk_deobfuscator;
 pub mod antigravity_bridge;
+pub mod antigravity_clone;
 pub mod apk_inventory;
 pub mod app_intel;
 pub mod argon2;
