@@ -1,0 +1,7 @@
+{
+  "provider": "groq-free",
+  "origin": "synthetic",
+  "source": "SINTETICO: 429 rate limit (REINTENTABLE).",
+  "status": 429,
+  "body": "{\"error\":{\"message\":\"Rate limit reached for model\",\"type\":\"rate_limit_error\",\"code\":\"rate_limit_exceeded\"}}"
+}

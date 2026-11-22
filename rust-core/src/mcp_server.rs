@@ -58,9 +58,25 @@ fn tool_definitions_core() -> Value {
                     },
                     "system": { "type": "string", "description": "Optional system instruction." },
                     "attachment_path": { "type": "string", "description": "Optional path to ANY file (.7z, .exe, .elf, .md, .py, .bin) for grounded Rust DiE/Binwalk pre-analysis." },
-                    "max_tokens": { "type": "integer", "default": 1024 }
+                    "max_tokens": { "type": "integer", "default": 1024 },
+                    "include_reasoning": { "type": "boolean", "default": false, "description": "Incluye el razonamiento (CoT) del modelo en la respuesta. Por defecto NO se envia." }
                 },
                 "required": ["prompt"]
+            }
+        },
+        {
+            "name": "megadaemon_chat",
+            "description": "Gateway OpenAI-compatible de MegaDaemon: el 'modelo' es SIEMPRE 'megadaemon' y MegaDaemon enruta (proveedor pedido -> fallback -> SEERE local) con trazabilidad. Misma ruta que POST /v1/chat/completions.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "model": { "type": "string", "default": "megadaemon", "description": "'megadaemon' (routing completo) o el id de un proveedor concreto." },
+                    "messages": { "type": "array", "description": "Mensajes OpenAI (role + content). El content puede ser texto o un array de partes." },
+                    "max_tokens": { "type": "integer", "default": 2048 },
+                    "include_trace": { "type": "boolean", "default": false, "description": "Anade el bloque 'megadaemon' con la trazabilidad (proveedor, latencia, fallback)." },
+                    "include_reasoning": { "type": "boolean", "default": false, "description": "Anade 'reasoning_content' con el razonamiento del modelo." }
+                },
+                "required": ["messages"]
             }
         },
         {
@@ -276,16 +292,37 @@ pub fn dispatch_tool(name: &str, args: &Value) -> Value {
             let sys = args["system"].as_str();
             let att = args["attachment_path"].as_str();
             let max_tok = args["max_tokens"].as_u64().unwrap_or(1024) as u32;
+            // v16 (AUDIT-LLM-16-E): el razonamiento (CoT) ya no se manda al
+            // cliente por defecto; sólo con `include_reasoning: true`.
+            let include_reasoning = args["include_reasoning"].as_bool().unwrap_or(false);
             let res = providers::execute_chat(prompt, Some(model), att, sys, max_tok);
-            let txt = if res.reasoning.is_empty() {
-                format!("[{} | {} ms | {} tok]\n{}", res.model_name, res.latency_ms, res.tokens_used, res.reply)
-            } else {
+            let txt = if include_reasoning && !res.reasoning.is_empty() {
                 format!(
                     "[{} | {} ms | {} tok]\n<reasoning>\n{}\n</reasoning>\n\n{}",
                     res.model_name, res.latency_ms, res.tokens_used, res.reasoning, res.reply
                 )
+            } else {
+                format!(
+                    "[{} | {} ms | {} tok]\n{}",
+                    res.model_name, res.latency_ms, res.tokens_used, res.reply
+                )
             };
             json!({ "content": [{ "type": "text", "text": txt }] })
+        }
+        // v16: gateway OpenAI-compatible por MCP (paridad con el CLI
+        // `gateway` y con el endpoint HTTP `/v1/chat/completions`).
+        "megadaemon_chat" => {
+            let body = args.clone();
+            match crate::llm_gateway::chat_completions(&body) {
+                Ok(v) => {
+                    let txt = serde_json::to_string_pretty(&v).unwrap_or_default();
+                    json!({ "content": [{ "type": "text", "text": txt }], "structuredContent": v })
+                }
+                Err(e) => json!({
+                    "content": [{ "type": "text", "text": serde_json::to_string_pretty(&e.to_json()).unwrap_or_default() }],
+                    "isError": true
+                }),
+            }
         }
         "swarm_chat" => {
             let prompt = args["prompt"].as_str().unwrap_or("");

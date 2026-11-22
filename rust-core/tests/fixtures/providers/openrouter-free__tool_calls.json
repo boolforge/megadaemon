@@ -1,0 +1,7 @@
+{
+  "provider": "openrouter-free",
+  "origin": "synthetic",
+  "source": "SINTETICO: tool_calls nativas de OpenAI (formato de la API real: function.name + function.arguments como STRING JSON).",
+  "status": 200,
+  "body": "{\"id\":\"chatcmpl-synth-0003\",\"object\":\"chat.completion\",\"created\":1764000003,\"model\":\"openrouter/free\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"id\":\"call_abc123\",\"type\":\"function\",\"function\":{\"name\":\"view_file\",\"arguments\":\"{\\\"path\\\":\\\"src/main.rs\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":200,\"completion_tokens\":15,\"total_tokens\":215}}"
+}

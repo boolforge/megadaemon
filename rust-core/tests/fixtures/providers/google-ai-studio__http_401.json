@@ -1,0 +1,7 @@
+{
+  "provider": "google-ai-studio",
+  "origin": "synthetic",
+  "source": "SINTETICO: 401 con el cuerpo de error tipico de Gemini (la API key NO va en el cuerpo: se manda en la cabecera).",
+  "status": 401,
+  "body": "{\"error\":{\"code\":401,\"message\":\"API key not valid. Please pass a valid API key.\",\"status\":\"UNAUTHENTICATED\"}}"
+}

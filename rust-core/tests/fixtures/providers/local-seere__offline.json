@@ -1,0 +1,7 @@
+{
+  "provider": "local-seere",
+  "origin": "real",
+  "source": "REAL: es la forma que devuelve el motor local SEERE v13 (run_seere_v11) cuando el LLM local no esta arrancado. El texto 'ERR_LLM_UNREACHABLE' es el que produce de verdad el motor en el movil sin llama-server.",
+  "status": 200,
+  "body": "{\"version\":\"13.1\",\"answer\":\"ERR_LLM_UNREACHABLE:127.0.0.1:8080 Connection refused\",\"mode\":\"REACT\",\"grounded\":false,\"tools\":[],\"tokens\":0,\"ms\":3,\"finish\":\"error\"}"
+}

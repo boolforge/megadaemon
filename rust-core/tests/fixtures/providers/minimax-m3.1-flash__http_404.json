@@ -1,0 +1,7 @@
+{
+  "provider": "minimax-m3.1-flash",
+  "origin": "synthetic",
+  "source": "SINTETICO: 404 (modelo inexistente o retirado). NO se reintenta.",
+  "status": 404,
+  "body": "{\"error\":{\"message\":\"The model does not exist\",\"type\":\"invalid_request_error\"}}"
+}

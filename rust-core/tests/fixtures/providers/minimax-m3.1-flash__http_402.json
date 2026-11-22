@@ -1,0 +1,7 @@
+{
+  "provider": "minimax-m3.1-flash",
+  "origin": "synthetic",
+  "source": "SINTETICO: 402 sin saldo (credito agotado). El daemon debe distinguirlo de un 404.",
+  "status": 402,
+  "body": "{\"base_resp\":{\"status_code\":1008,\"status_msg\":\"insufficient balance\"}}"
+}

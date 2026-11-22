@@ -1,0 +1,7 @@
+{
+  "provider": "openrouter-free",
+  "origin": "synthetic",
+  "source": "SINTETICO: respuesta multimodal: message.content es un ARRAY de partes (no un string). El parser viejo leia '' y perdia el texto.",
+  "status": 200,
+  "body": "{\"id\":\"chatcmpl-synth-0005\",\"object\":\"chat.completion\",\"created\":1764000005,\"model\":\"openrouter/free\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"parte uno\"},{\"type\":\"text\",\"text\":\"parte dos\"}]},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":8,\"total_tokens\":18}}"
+}

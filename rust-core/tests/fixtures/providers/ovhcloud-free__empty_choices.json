@@ -1,0 +1,7 @@
+{
+  "provider": "ovhcloud-free",
+  "origin": "synthetic",
+  "source": "SINTETICO: 200 pero el JSON NO tiene 'choices' (respuesta vacia del gateway).",
+  "status": 200,
+  "body": "{\"id\":\"chatcmpl-synth-0006\",\"object\":\"chat.completion\",\"created\":1764000006,\"model\":\"gpt-4o-mini\",\"usage\":{\"total_tokens\":0}}"
+}

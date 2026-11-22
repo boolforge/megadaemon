@@ -13,6 +13,8 @@ fn print_usage() {
     eprintln!("  cockpit [port]                              Launch 100% Pure-Rust Multi-Threaded Cockpit HTTP Server (default: 3000)");
     eprintln!("  mcp-server                                  Run Antigravity JSON-RPC 2.0 MCP Server over stdio (MiniMax + RE Tools)");
     eprintln!("  chat <model_id> <prompt>                    Query any catalog provider (MiniMax M3.1-Flash/M3, Groq, OpenRouter, Google AI Studio, ...) or Local SEERE");
+    eprintln!("  chat <model_id> <prompt> [--reasoning]      Same, but also prints the model's reasoning (off by default)");
+    eprintln!("  gateway <json>                              OpenAI-compatible gateway (same routing as POST /v1/chat/completions)");
     eprintln!("  die-binwalk <file>                          Detect It Easy + Binwalk + Scalpel + Bulk Extractor + Comtype Scanner");
     eprintln!("  cirx-ssa [mas]                              LTO-Decomp v3.4 CIRX Micro-RTL SSA, Risk Score S/R & SMT-LIB2 Export");
     eprintln!("  mba <expr>                                  D810/Goomba Mixed Boolean-Arithmetic (MBA) Algebraic Simplifier");
@@ -289,7 +291,35 @@ fn main() {
             let model = args.get(2).map(|s| s.as_str());
             let prompt = if args.len() > 3 { args[3..].join(" ") } else { "Hello".into() };
             let res = providers::execute_chat(&prompt, model, None, None, 1024);
-            println!("{}", serde_json::to_string_pretty(&res).unwrap());
+            // v16 (AUDIT-LLM-16-E): el razonamiento (CoT) ya no se imprime
+            // por defecto: sale sólo con `--reasoning`.
+            let show_reasoning = args.iter().any(|a| a == "--reasoning");
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&res.public_json(show_reasoning)).unwrap()
+            );
+        }
+
+        // v16: gateway OpenAI-compatible por línea de órdenes (paridad con
+        // el endpoint HTTP `/v1/chat/completions` y con la tool MCP).
+        "gateway" => {
+            // `gateway <json>` o `gateway` (lee el JSON de stdin).
+            let raw = match args.get(2) {
+                Some(j) => j.clone(),
+                None => {
+                    let mut buf = String::new();
+                    let _ = io::stdin().read_to_string(&mut buf);
+                    buf
+                }
+            };
+            let body: serde_json::Value = serde_json::from_str(raw.trim()).unwrap_or(serde_json::Value::Null);
+            match llm_gateway::chat_completions(&body) {
+                Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap()),
+                Err(e) => {
+                    eprintln!("{}", serde_json::to_string_pretty(&e.to_json()).unwrap());
+                    std::process::exit(1);
+                }
+            }
         }
 
         "code" => {

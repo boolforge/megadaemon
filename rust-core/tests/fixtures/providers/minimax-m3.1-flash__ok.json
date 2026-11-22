@@ -1,0 +1,7 @@
+{
+  "provider": "minimax-m3.1-flash",
+  "origin": "real",
+  "source": "MEDIDO 2026-11-22 en el movil (S21 Ultra, build v13.1): 'megadaemon-core chat minimax-m3.1-flash \"Responde exactamente: MINIMAX_OK\"' => {reply: MINIMAX_OK, vendor: MiniMax, latency_ms: 1232, tokens_used: 373, fallback_used: false}. El cuerpo JSON exacto NO se capturo (la medicion solo guardo los campos del CLI); aqui se RECONSTRUYE la forma OpenAI con las cifras reales (total_tokens 373) y el texto real. Sin credenciales.",
+  "status": 200,
+  "body": "{\"id\":\"chatcmpl-9f2c1a7e4b6d4e8f\",\"object\":\"chat.completion\",\"created\":1764000000,\"model\":\"MiniMax-M3.1-Flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"MINIMAX_OK\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":297,\"completion_tokens\":76,\"total_tokens\":373}}"
+}

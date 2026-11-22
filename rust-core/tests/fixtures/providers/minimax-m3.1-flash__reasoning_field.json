@@ -1,0 +1,7 @@
+{
+  "provider": "minimax-m3.1-flash",
+  "origin": "synthetic",
+  "source": "SINTETICO: variante con el razonamiento en el campo propio reasoning_content (DeepSeek, OpenRouter, some gateways).",
+  "status": 200,
+  "body": "{\"id\":\"chatcmpl-synth-0002\",\"object\":\"chat.completion\",\"created\":1764000002,\"model\":\"deepseek-chat\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"La respuesta es 42.\",\"reasoning_content\":\"Primero calculo 6*7 = 42.\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":80,\"completion_tokens\":20,\"total_tokens\":100}}"
+}

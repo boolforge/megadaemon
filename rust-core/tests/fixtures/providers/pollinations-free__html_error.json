@@ -1,0 +1,7 @@
+{
+  "provider": "pollinations-free",
+  "origin": "synthetic",
+  "source": "SINTETICO: un proxy devuelve HTML con status 200 (NO es una respuesta del modelo).",
+  "status": 200,
+  "body": "<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body>nginx</body></html>"
+}

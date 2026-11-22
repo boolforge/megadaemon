@@ -1,0 +1,7 @@
+{
+  "provider": "anthropic",
+  "origin": "synthetic",
+  "source": "SINTETICO: 500 del proveedor (REINTENTABLE).",
+  "status": 500,
+  "body": "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Internal server error\"}}"
+}

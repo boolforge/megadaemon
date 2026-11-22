@@ -1,0 +1,7 @@
+{
+  "provider": "zai-glm-free",
+  "origin": "synthetic",
+  "source": "SINTETICO: respuesta JSON TRUNCADA (el proveedor corto el stream a mitad). El cuerpo empieza por '{' asi que NO es texto plano: es un error de parseo.",
+  "status": 200,
+  "body": "{\"id\":\"chatcmpl-synth-0004\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"La respuesta completa es mu"
+}

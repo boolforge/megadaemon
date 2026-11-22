@@ -1,0 +1,7 @@
+{
+  "provider": "pollinations-free",
+  "origin": "synthetic",
+  "source": "SINTETICO: endpoint zero-key que devuelve TEXTO PLANO (no JSON). El daemon lo historicamnente aceptaba como respuesta.",
+  "status": 200,
+  "body": "OK: respuesta en texto plano de un endpoint sin JSON"
+}

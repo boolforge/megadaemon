@@ -1,0 +1,7 @@
+{
+  "provider": "minimax-m3.1-flash",
+  "origin": "synthetic",
+  "source": "SINTETICO: forma observada en los razonadores MiniMax/GLM (el razonamiento va DENTRO del content, entre <think> y </think>), no dentro de reasoning_content. Redactado: sin credenciales.",
+  "status": 200,
+  "body": "{\"id\":\"chatcmpl-synth-0001\",\"object\":\"chat.completion\",\"created\":1764000001,\"model\":\"MiniMax-M3.1-Flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"<think>El usuario pide una cadena exacta. Debo responder MINIMAX_OK y nada mas.</think>MINIMAX_OK\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":120,\"completion_tokens\":30,\"total_tokens\":150}}"
+}
