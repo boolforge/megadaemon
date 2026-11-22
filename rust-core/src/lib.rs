@@ -79,6 +79,7 @@ pub mod hw_mapper;
 pub mod job_queue;
 pub mod kaitai_imhex;
 pub mod kdeconnect;
+pub mod kernel_and_blocks;
 pub mod lab_kit;
 pub mod lan;
 pub mod magisk_module;
