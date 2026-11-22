@@ -67,6 +67,32 @@ pub(crate) fn agent() -> &'static ureq::Agent {
     })
 }
 
+/// Agente HTTP **específico de las sesiones de subida** de Drive.
+///
+/// BUG REAL (medido el 2026-11-22 en el móvil): con el agente normal, `ureq`
+/// interpreta el **308 Resume Incomplete** (la respuesta normal de la subida
+/// por trozos de Drive) como si fuera una **redirección** ⇒ intenta seguirla
+/// ⇒ el 308 **no trae cabecera `Location`** ⇒ `ureq` aborta con
+/// `protocol: missing a location header` ⇒ **no se subía NI UN TROZO**.
+///
+/// Con `max_redirects(0)` el 308 vuelve como una respuesta normal y el
+/// chunk-plan puede continuar. (Este bug rompía también la tool
+/// `drive_backup` del daemon, que usa el mismo `upload_file`.)
+pub(crate) fn upload_agent() -> &'static ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        let cfg = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(900)))
+            .timeout_connect(Some(Duration::from_secs(20)))
+            .http_status_as_error(false)
+            // Sin seguir redirecciones: el 308 de "Resume Incomplete" es una
+            // respuesta legítima, no una redirección.
+            .max_redirects(0)
+            .build();
+        ureq::Agent::new_with_config(cfg)
+    })
+}
+
 pub(crate) fn is_transient_status(st: u16) -> bool {
     matches!(st, 408 | 429 | 500 | 502 | 503 | 504)
 }
@@ -96,7 +122,6 @@ pub fn upload_file(
     }
     let size = meta.len();
     let sha = sha256_file(path)?;
-    let ag = agent();
 
     // 1) Sesión de subida resumible con reintentos en 401/429/5xx/timeouts.
     let url = format!(
@@ -108,7 +133,7 @@ pub fn upload_file(
     let mut last_err = String::new();
     for attempt in 0..5u32 {
         let (ak, av) = google_auth::auth_header(state_dir)?;
-        match ag
+        match upload_agent()
             .post(&url)
             .header(ak, av)
             .header("Content-Type", "application/json; charset=UTF-8")
@@ -183,7 +208,7 @@ pub fn upload_file(
         let mut chunk_err = String::new();
         for attempt in 0..5u32 {
             let (ak2, av2) = google_auth::auth_header(state_dir)?;
-            match ag
+            match upload_agent()
                 .put(&session)
                 .header(ak2, av2)
                 .header("Content-Range", format!("bytes {}-{}/{}", offset, end, size))
