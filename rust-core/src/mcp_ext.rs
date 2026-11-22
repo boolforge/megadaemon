@@ -637,6 +637,29 @@ pub fn tool_definitions() -> Value {
             }
 },
 {
+            "name": "re_fusion",
+            "description": "RECONSTRUCCION MULTI-MOTOR: ejecuta los motores que ya tiene MegaDaemon (Ghidra headless para el pseudocodigo, Rizin para funciones/imports/strings, DiE+Binwalk para el formato, el motor propio para MBA/CFF/crypto y el pclntab para los simbolos Go con fichero:linea), COMPARA lo que da cada uno y FUSIONA lo mejor: pseudocodigo + nombre Go original + fichero:linea + strings. Acciones: compare (rapido, sin Ghidra) | fusion (todo) | informe (solo la tabla comparativa). El parametro binario es obligatorio; simbolos/anclas son los TSV; ghidra_dir y java_home se autodetectan (Ghidra 11.2+ exige JDK 21).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "accion": { "type": "string", "description": "compare | fusion | informe" },
+                    "binario": { "type": "string", "description": "Ruta del binario a reconstruir (obligatoria)." },
+                    "simbolos": { "type": "string", "description": "TSV de simbolos (0xADDR <TAB> nombre <TAB> comentario)." },
+                    "anclas": { "type": "string", "description": "TSV de anclas a decompilar (0xADDR <TAB> nombre <TAB> simbolo <TAB> loc <TAB> tag)." },
+                    "out": { "type": "string", "description": "Directorio de salida (por defecto /workspace/agy-re/tools-out/fusion)." },
+                    "project_dir": { "type": "string", "description": "Proyecto Ghidra." },
+                    "project": { "type": "string", "description": "Nombre del proyecto Ghidra (Go)." },
+                    "ghidra_dir": { "type": "string", "description": "Instalacion de Ghidra (autodetectada si se omite)." },
+                    "java_home": { "type": "string", "description": "JAVA_HOME (autodetectado si se omite)." },
+                    "max_memoria": { "type": "string", "description": "Heap de la JVM (defecto 1400M; con menos de 3 GB de RAM usar 1200M)." },
+                    "timeout_s": { "type": "integer", "description": "Timeout por fase de Ghidra en segundos (defecto 1800)." },
+                    "sin_ghidra": { "type": "string", "description": "Poner cualquier valor para NO usar Ghidra (evita la JVM)." },
+                    "sin_rizin": { "type": "string", "description": "Poner cualquier valor para NO usar Rizin." },
+                    "sin_die": { "type": "string", "description": "Poner cualquier valor para NO usar DiE/Binwalk." }
+                }
+            }
+        },
+{
             "name": "phone_backup",
             "description": "Motor de backup nativo de apps (Rust puro, sin curl ni shell): inventario de apps del movil, contenedor cifrado AEGIS-256 por segmentos con manifiesto sha256 por fichero, verificacion del AEAD, restauracion (simulacro por defecto, exige confirm=true) y SUBIDA PIPELINING a Drive (sube cada segmento ya cerrado mientras se recoge el siguiente; mide MiB/s y ETA). Anti-congelacion: nice/ionice de la clase mas baja, sleep entre lotes y descanso si la carga del sistema se dispara. Acciones: inventory | create | list | verify | restore | upload. create/restore/upload escriben o publican en Drive: exigen confirm=true.",
             "inputSchema": {
