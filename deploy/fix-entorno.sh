@@ -70,7 +70,7 @@ STATE_REAL="$(sh_on_phone 'echo $MEGADAEMON_STATE_DIR' | tr -d '\n')"
 log "state_dir que usa el daemon: $STATE_REAL"
 HAS_KEY="$(sh_on_phone "ls -1 $STATE_DIR/megadaemon_api.key 2>/dev/null | wc -l" | tr -d ' \n')"
 HAS_KEY_REAL="$(sh_on_phone "ls -1 $STATE_REAL/megadaemon_api.key 2>/dev/null | wc -l" | tr -d ' \n')"
-DAEMON="$(sh_on_phone 'pgrep -f "megadaemon-core" | head -1' | tr -d ' \n')"
+DAEMON="$(sh_on_phone 'pgrep -x "megadaemon-core" | head -1' | tr -d ' \n')"
 log "daemon vivo: ${DAEMON:-NO}"
 log "key en $STATE_DIR: ${HAS_KEY:-0} | key en state_dir real: ${HAS_KEY_REAL:-0}"
 KEY_SHA16="$(sh_on_phone "cat $STATE_DIR/megadaemon_api.key 2>/dev/null" | tr -d '\r\n' | sha256sum | cut -c1-16)"
@@ -86,8 +86,8 @@ fi
 # --- 2) CREDENCIAL EN UN SOLO SITIO ------------------------------------------
 log "=== paso 1/5: credencial unificada ==="
 if [ "${HAS_KEY:-0}" = "0" ] || [ "${HAS_KEY_REAL:-0}" = "0" ]; then
-  sh_on_phone "mkdir -p $STATE_REAL && cp -f $STATE_DIR/megadaemon_api.key $STATE_DIR/megadaemon_api.keys $STATE_REAL/ 2>/dev/null; chmod 600 $STATE_REAL/megadaemon_api.* 2>/dev/null; ls -la $STATE_REAL" >/dev/null
-  log "key copiada al state_dir del daemon (sin reiniciar: la config se recarga por peticion)"
+  log "NO se copia la key: una sola fuente de verdad => el daemon debe mirar $STATE_DIR (donde ya esta)"
+  log "el supervisor exportara MEGADAEMON_STATE_DIR=$STATE_DIR (insertado AL PRINCIPIO) y el daemon lo hereda"
 else
   log "la key ya estaba en ambos sitios"
 fi
@@ -108,9 +108,10 @@ log "=== paso 2/5: binario ARM64 ==="
 [ -f "$BIN_LOCAL" ] || die "no existe $BIN_LOCAL (descargalo del artefacto del CI: dist/)"
 EXPECT="$(cut -d' ' -f1 < "$BIN_LOCAL.sha256" 2>/dev/null)"
 GOT="$(sha256sum "$BIN_LOCAL" | cut -d' ' -f1)"
-[ -n "$EXPECT" ] && [ "$EXPECT" != "$GOT" ] && die "sha256 local != el del .sha256 ($EXPECT != $GOT)"
+[ -n "$EXPECT" ] || die "el .sha256 local viene vacio"
+[ "$EXPECT" = "$GOT" ] || die "sha256 local != el del .sha256 ($EXPECT != $GOT)"
 log "sha256 verificado: $GOT"
-command -v file >/dev/null && file "$BIN_LOCAL" | grep -q "aarch64" || warn "el binario no parece aarch64 (revisalo)"
+file "$BIN_LOCAL" | grep -q "ELF 64-bit LSB.*ARM aarch64" || die "el binario local NO es un ELF aarch64"
 
 log "subiendo el binario (10 MB)..."
 "$ADB" push "$BIN_LOCAL" "$PHONE_DIR/megadaemon-core.new" >/dev/null 2>&1 || die "fallo el push del binario"
@@ -130,7 +131,7 @@ log "binario instalado y ejecutable (+x)"
 log "=== paso 3/5: reinicio del daemon ==="
 sh_on_phone "pkill -x megadaemon-core 2>/dev/null; sleep 2" >/dev/null
 sleep 3
-NEWD="$(sh_on_phone 'pgrep -f "megadaemon-core" | head -1' | tr -d '\n')"
+NEWD="$(sh_on_phone 'pgrep -x "megadaemon-core" | head -1' | tr -d '\n')"
 [ -n "$NEWD" ] || { sh_on_phone "cp -f $PHONE_DIR/megadaemon-core.bak $PHONE_DIR/megadaemon-core; chmod 755 $PHONE_DIR/megadaemon-core; pkill -x megadaemon-core; sleep 3" >/dev/null; die "el daemon no arranco: binario restaurado"; }
 log "daemon arrancado (pid $NEWD)"
 
@@ -141,7 +142,7 @@ else
   log "supervisor presente"
 fi
 # una sola fuente de verdad: el supervisor debe exportar el STATE_DIR
-sh_on_phone "grep -q MEGADAEMON_STATE_DIR /data/adb/service.d/99-megadaemon.sh || echo 'export MEGADAEMON_STATE_DIR=$STATE_DIR' >> /data/adb/service.d/99-megadaemon.sh" >/dev/null
+sh_on_phone "test -s /data/adb/service.d/99-megadaemon.sh || exit 3; grep -q MEGADAEMON_STATE_DIR /data/adb/service.d/99-megadaemon.sh || { printf '#!/system/bin/sh\\nexport MEGADAEMON_STATE_DIR=$STATE_DIR\\n'; cat /data/adb/service.d/99-megadaemon.sh; } > /data/adb/service.d/99-megadaemon.sh.new && mv -f /data/adb/service.d/99-megadaemon.sh.new /data/adb/service.d/99-megadaemon.sh && chmod 755 /data/adb/service.d/99-megadaemon.sh" >/dev/null
 log "MEGADAEMON_STATE_DIR unificado en el supervisor"
 
 # --- 5) TUNEL + RELAY --------------------------------------------------------
