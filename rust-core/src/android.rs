@@ -1008,6 +1008,10 @@ pub fn tool_definitions() -> Value {
                 "required": ["action"]
             }
         },
+        // v13.4 — herramienta de RESPALDO SEGURO del kernel (el punto de
+        // retorno antes de tocar la partición de arranque): volcado + SHA-256
+        // + subida a Drive + plan de rollback. Nunca escribe en /dev/block.
+        crate::kernel_and_blocks::tool_definition(),
         {
             "name": "app_control",
             "description": "Gestión de apps: listar, info, habilitar/deshabilitar, desinstalar (con -k opcional), limpiar datos/caché, permisos, appops, instalar APK y abrir.",
@@ -1080,6 +1084,9 @@ pub fn dispatch(name: &str, args: &Value) -> Value {
             &s("partition"),
             &s("dst"),
         ),
+        // v13.4 — respaldo seguro del kernel (volcado + SHA-256 + Drive +
+        // plan de rollback). Módulo propio: `kernel_and_blocks.rs`.
+        "kernel_backup" => crate::kernel_and_blocks::tool_dispatch(&args),
         "app_control" => app_control(
             &s("action"),
             &s("scope"),
@@ -1136,7 +1143,7 @@ mod tests {
         for esperado in [
             "system_overview", "root_exec", "fs_read", "fs_write", "find_duplicates",
             "props_and_settings", "selinux_control", "magisk_module", "kernel_and_blocks",
-            "app_control", "screen_and_ui",
+            "kernel_backup", "app_control", "screen_and_ui",
         ] {
             assert!(nombres.contains(&esperado), "falta la herramienta {}", esperado);
         }

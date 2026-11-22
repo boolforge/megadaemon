@@ -61,6 +61,7 @@ pub mod git_ops;
 pub mod github_connector;
 pub mod hw_mapper;
 pub mod kaitai_imhex;
+pub mod kernel_and_blocks;
 pub mod magisk_module;
 pub mod mcp_ext;
 pub mod mcp_server;
