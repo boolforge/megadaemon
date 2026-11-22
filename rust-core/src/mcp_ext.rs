@@ -1182,6 +1182,67 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             };
             json!({ "content": [{ "type": "text", "text": txt }] })
         }
+        "sqlite_mitm" => {
+            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("estado");
+            let s = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            match accion {
+                "estado" => {
+                    let a = crate::sqlite_mitm::ruta_db_antigravity();
+                    let p = crate::sqlite_mitm::ruta_db_propia();
+                    let sz = |x: &std::path::Path| std::fs::metadata(x).map(|m| m.len()).unwrap_or(0);
+                    json!({
+                        "ok": true,
+                        "antigravity": {"ruta": a.display().to_string(), "bytes": sz(&a),
+                                        "modo": "SOLO LECTURA (busy_timeout 2s): Antigravity puede escribir"},
+                        "megadaemon": {"ruta": p.display().to_string(), "bytes": sz(&p),
+                                       "modo": "escritura propia (WAL, indexada)"},
+                    })
+                }
+                "replicar" => {
+                    let limite = args.get("limite").and_then(|v| v.as_u64()).unwrap_or(5000) as usize;
+                    match crate::sqlite_mitm::replicar(limite) {
+                        Ok(v) => v,
+                        Err(e) => json!({"ok": false, "error": e}),
+                    }
+                }
+                "servida" => {
+                    let ocultar: Vec<String> = args
+                        .get("ocultar")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                        .unwrap_or_default();
+                    let reescribir: Vec<(String, String)> = args
+                        .get("reescribir")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| x.as_str())
+                                .filter_map(|t| t.split_once('=').map(|(a, b)| (a.to_string(), b.to_string())))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let dest = std::path::PathBuf::from(if s("destino").is_empty() {
+                        format!("{}/antigravity_servida.db", crate::cockpit_server::state_dir())
+                    } else {
+                        s("destino")
+                    });
+                    match crate::sqlite_mitm::generar_db_servida(&ocultar, &reescribir, &dest) {
+                        Ok(v) => json!({"ok": true, "resultado": v,
+                                       "montaje": crate::sqlite_mitm::plan_montaje(&dest)}),
+                        Err(e) => json!({"ok": false, "error": e}),
+                    }
+                }
+                "montaje" => {
+                    let dest = std::path::PathBuf::from(if s("destino").is_empty() {
+                        format!("{}/antigravity_servida.db", crate::cockpit_server::state_dir())
+                    } else {
+                        s("destino")
+                    });
+                    crate::sqlite_mitm::plan_montaje(&dest)
+                }
+                _ => json!({"ok": false, "error": "accion desconocida: usa estado|replicar|servida|montaje"}),
+            }
+        }
         "re_analyze" => {
             let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("catalogo");
             let ruta = args.get("ruta").and_then(|v| v.as_str()).unwrap_or("");
