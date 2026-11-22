@@ -4,7 +4,9 @@
 # Qué hace (todo se mide en el propio móvil):
 #   1. estado ANTES: loadavg, RAM y disco (números, no estimas);
 #   2. inventario de las apps elegidas (sin escribir nada);
-#   3. SUBIDA PIPELINING de verdad: `upload --create` recoge y sube a la vez
+#   3. SUBIDA PIPELINING de verdad (sin `--delete-after-upload`: el
+#      contenedor local se necesita para verificar y restaurar después; la
+#      limpieza se hace al final, paso 8): `upload --create` recoge y sube a la vez
 #      (cada segmento ya cerrado se sube mientras se recoge el siguiente) y
 #      mide MiB/s y ETA reales;
 #   4. verificación LOCAL (manifiesto + AEAD);
@@ -90,7 +92,7 @@ run "$BIN" upload --out "$OUT" --folder "$FOLDER" --subfolder "$SUBFOLDER" \
     --workers 3 --state-dir "$STATE" \
     --key-out "$KEYS/prueba_p0.keys.json" \
     --nice 15 --ionice 3 --load-high "$LOAD_HIGH" --sleep-ms 120 --batch 64 \
-    --name prueba_p0 --delete-after-upload --verify-download
+    --name prueba_p0 --verify-download
 {
     echo "fin   : $(date -Is)"
     echo "loadavg despues: $(cat /proc/loadavg)"
@@ -128,6 +130,15 @@ say "ESTADO DESPUES"
 {
     estado
     echo "md-backup en marcha: $(pidof md-backup 2>/dev/null | tr '\n' ' ')"
+} >> "$LOG" 2>&1
+
+# --- 8. Limpieza del contenedor local (el disco del móvil es escaso) ------
+say "LIMPIEZA"
+{
+    echo "contenedor local antes: $(du -sk "$OUT" 2>/dev/null | cut -f1) kB"
+    rm -rf "$OUT"
+    echo "contenedor local borrado (en Drive sigue)"
+    echo "disco /data: $(df -k /data | tail -1 | awk '{print $4" kB libres"}')"
 } >> "$LOG" 2>&1
 
 say "FIN (log en $LOG)"
