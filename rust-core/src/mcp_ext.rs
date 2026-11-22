@@ -581,6 +581,23 @@ pub fn tool_definitions() -> Value {
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
+            "name": "quota_status",
+            "description": "Estado de la CUOTA de los proveedores/modelos: cuanto queda (%), cuando resetea y en que modo esta (normal/aviso/ahorro/pausa). Respuesta MUY compacta (~70 tokens) para no gastar. En 'pausa' significa que la cuota se agota: termina el paso actual, guarda tu checkpoint y espera al reset; no sigas abriendo tareas nuevas.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "provider": {
+                        "type": "string",
+                        "description": "Id del proveedor (opcional; sin el, el peor de todos)."
+                    },
+                    "full": {
+                        "type": "boolean",
+                        "description": "true = detalle completo (gasta mas tokens); por defecto, snapshot compacto."
+                    }
+                }
+            }
+        },
+        {
             "name": "csc_verify",
             "description": "Verificador post-parche del CSC: lee el CSC activo (mps_code.dat), descifra el cscfeature.xml OMC del movil, comprueba el valor de CscFeature_VoiceCall_ConfigRecording, lo contrasta con el fileSize de contents.db, busca copias en claro del framework y devuelve el mapa vivo de los CSC con la feature. Con expect_value exige un valor EXACTO (p.ej. 'RecordingAllowed' o 'RecordingAllowedByMenu,disclaimer_latin'): si el valor presente difiere devuelve verdict MISMATCH, y siempre indica la variante (sin-disclaimer / con-disclaimer / apagado).",
             "inputSchema": {
@@ -722,6 +739,22 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         "npu_vs4l_probe" => {
             let rep = crate::npu_vs4l::probe();
             let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
+            json!({ "content": [{ "type": "text", "text": txt }] })
+        }
+        "quota_status" => {
+            // Snapshot COMPACTO por defecto: el objetivo es que el agente
+            // sepa cuanto queda sin gastar tokens de mas.
+            let full = args.get("full").and_then(|v| v.as_bool()).unwrap_or(false);
+            let provider = args.get("provider").and_then(|v| v.as_str()).unwrap_or("");
+            let v = if full {
+                json!({
+                    "estado": crate::quota_guard::estado(if provider.is_empty() { None } else { Some(provider) }),
+                    "aviso": crate::quota_guard::aviso_para_agente(),
+                })
+            } else {
+                crate::quota_guard::snapshot_compacto_de(if provider.is_empty() { None } else { Some(provider) })
+            };
+            let txt = serde_json::to_string(&v).unwrap_or_default();
             json!({ "content": [{ "type": "text", "text": txt }] })
         }
         "csc_verify" => {

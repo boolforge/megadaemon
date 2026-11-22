@@ -85,6 +85,13 @@ pub struct ChatResult {
     pub tokens_used: u64,
     pub tools_used: Vec<String>,
     pub fallback_used: bool,
+    /// Estado de la cuota del proveedor (snapshot MUY compacto).
+    ///
+    /// Viaja DENTRO de la respuesta: el agente sabe cuanto queda sin
+    /// pedirlo y sin gastar un token en una llamada extra.
+    /// `None` si no hay datos de cuota.
+    #[serde(default)]
+    pub quota: Option<serde_json::Value>,
 }
 
 fn default_vault() -> ProviderVault {
@@ -642,6 +649,7 @@ pub fn execute_chat(
             tokens_used: 0,
             tools_used: Vec::new(),
             fallback_used: false,
+            quota: None,
         };
     }
 
@@ -675,6 +683,7 @@ pub fn execute_chat(
             tokens_used: res["tokens"].as_u64().unwrap_or(0),
             tools_used,
             fallback_used: false,
+            quota: None,
         };
     }
 
@@ -748,10 +757,18 @@ pub fn execute_chat(
                     latency_ms: (t0.elapsed().as_secs_f64() * 1000.0).round(),
                     tokens_used: tokens,
                     tools_used,
+                    quota: Some(crate::quota_guard::snapshot_compacto_de(Some(&p.id))),
                     fallback_used: idx > 0,
                 };
             }
             Err(e) => {
+                // Cuota/rate-limit: se REGISTRA para poder avisar al agente y
+                // PAUSAR con elegancia en vez de cortarle el flujo a mitad.
+                if let Some(st) = crate::quota_guard::status_de_error(&e) {
+                    if st == 429 || st == 402 {
+                        crate::quota_guard::registrar_error_cuota(&p.id, st, &e);
+                    }
+                }
                 errors.push(format!("{}: {}", p.id, e));
             }
         }
@@ -776,6 +793,7 @@ pub fn execute_chat(
         tokens_used: res["tokens"].as_u64().unwrap_or(0),
         tools_used,
         fallback_used: true,
+        quota: Some(crate::quota_guard::snapshot_compacto()),
     }
 }
 

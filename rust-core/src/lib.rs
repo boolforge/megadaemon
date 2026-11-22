@@ -103,6 +103,7 @@ pub mod price_table;
 pub mod profile_analysis;
 pub mod provider_catalog;
 pub mod providers;
+pub mod quota_guard;
 pub mod rea_assistant;
 pub mod code_ast;
 pub mod re_disasm;

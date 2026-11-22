@@ -26,6 +26,8 @@ use std::sync::{Mutex, OnceLock};
 pub enum State {
     Pending,
     Running,
+    /// Pausada: se espera a `resume_after` (cuota agotada, red caida...).
+    Paused,
     Done,
     Failed,
     Cancelled,
@@ -36,6 +38,7 @@ impl State {
         match self {
             State::Pending => "pending",
             State::Running => "running",
+            State::Paused => "paused",
             State::Done => "done",
             State::Failed => "failed",
             State::Cancelled => "cancelled",
@@ -44,6 +47,7 @@ impl State {
     fn from_str(s: &str) -> State {
         match s {
             "running" => State::Running,
+            "paused" => State::Paused,
             "done" => State::Done,
             "failed" => State::Failed,
             "cancelled" => State::Cancelled,
@@ -82,6 +86,13 @@ pub struct Task {
     pub result: Option<Value>,
     /// Nodo al que se asignó (para el reparto distribuido).
     pub node: String,
+    /// Epoch hasta el que la tarea está en pausa (cuota, red...).  `None`
+    /// = se puede ejecutar ya.
+    pub resume_after: Option<u64>,
+    /// Epoch en que caduca el lease del nodo que la tiene.
+    pub lease_expira: Option<u64>,
+    /// Motivo de la última pausa (para que el agente lo sepa).
+    pub motivo_pausa: Option<String>,
 }
 
 fn now() -> u64 {
@@ -136,6 +147,9 @@ pub fn submit(kind: &str, payload: Value, priority: u8, deps: Vec<String>, res: 
         error: None,
         result: None,
         node: String::new(),
+        resume_after: None,
+        lease_expira: None,
+        motivo_pausa: None,
     };
     let id = t.id.clone();
     queue().lock().unwrap_or_else(|p| p.into_inner()).push(t);
@@ -206,9 +220,14 @@ fn deps_ok(t: &Task, q: &[Task]) -> bool {
 
 /// Selección de la siguiente tarea a ejecutar, según energía y recursos.
 fn pick(q: &[Task], allow_heavy: bool, max_cpu: u8) -> Option<String> {
+    let t0 = now();
     let mut best: Option<&Task> = None;
     for t in q {
         if t.state != State::Pending {
+            continue;
+        }
+        // Una tarea con `resume_after` futuro NO se ejecuta (cuota o red).
+        if t.resume_after.map(|r| r > t0).unwrap_or(false) {
             continue;
         }
         if !deps_ok(t, q) {
@@ -249,6 +268,19 @@ pub fn run_due(max: usize) -> Vec<Value> {
         let allow_heavy = pol.allow_heavy || pstate.charging;
         let max_cpu: u8 = if allow_heavy { 3 } else { 1 };
 
+        // Despausar lo que ya puede volver (cuota recuperada, reset pasado).
+        {
+            let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
+            let t0 = now();
+            for t in q.iter_mut() {
+                if t.state == State::Paused {
+                    if t.resume_after.map(|r| r <= t0).unwrap_or(true) {
+                        t.state = State::Pending;
+                        t.motivo_pausa = None;
+                    }
+                }
+            }
+        }
         let id = {
             let q = queue().lock().unwrap_or_else(|p| p.into_inner());
             pick(&q, allow_heavy, max_cpu)
@@ -341,6 +373,8 @@ pub fn persist() {
                 "deps": t.deps, "created_at": t.created_at,
                 "started_at": t.started_at, "finished_at": t.finished_at,
                 "error": t.error, "node": t.node,
+                "resume_after": t.resume_after, "lease_expira": t.lease_expira,
+                "motivo_pausa": t.motivo_pausa,
             })
         })
         .collect();
@@ -388,6 +422,9 @@ pub fn restore() -> usize {
             error: it["error"].as_str().map(|s| s.to_string()),
             result: None,
             node: it["node"].as_str().unwrap_or("").to_string(),
+            resume_after: it["resume_after"].as_u64(),
+            lease_expira: it["lease_expira"].as_u64(),
+            motivo_pausa: it["motivo_pausa"].as_str().map(|s| s.to_string()),
         });
         n += 1;
     }
@@ -442,6 +479,9 @@ pub fn import_tasks(v: &Value) -> usize {
             error: None,
             result: None,
             node: it["node"].as_str().unwrap_or("").to_string(),
+            resume_after: it["resume_after"].as_u64(),
+            lease_expira: it["lease_expira"].as_u64(),
+            motivo_pausa: it["motivo_pausa"].as_str().map(|s| s.to_string()),
         });
         n += 1;
     }
@@ -565,5 +605,199 @@ mod tests {
     fn el_estado_usa_nombres_estables() {
         assert_eq!(State::Pending.as_str(), "pending");
         assert_eq!(State::from_str("failed"), State::Failed);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MIGRACIÓN Y PAUSA (2026-11-22)
+//
+// MEDIDO: los agentes de la flota se quedaron SIN CUOTA a mitad de un
+// bloque y perdieron el trabajo que no estaba commiteado.  Con estas tres
+// funciones, la cola no se pierde y el trabajo se REPARTE:
+//
+// * `pausar_por_cuota`: el nodo agota la cuota -> sus tareas quedan en
+//   `paused` con `resume_after = reset_at` (no se cortan a mitad).
+// * `migrar_tareas`: el nodo died/se quedo sin cuota -> sus tareas pasan a
+//   otro nodo, que las retoma desde el checkpoint.
+// * `expirar_leases`: el nodo murio sin devolver la tarea -> el lease
+//   caduca y la tarea vuelve a la cola para que otro la coja.
+// ---------------------------------------------------------------------------
+
+/// Pausa las tareas de un nodo porque se agotó la cuota.
+///
+/// Devuelve cuántas quedaron en pausa.  `reset_at` es el epoch del reset;
+/// si es `None`, la pausa es de 15 minutos por defecto.
+pub fn pausar_por_cuota(node: &str, reset_at: Option<u64>, motivo: &str) -> usize {
+    let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
+    let hasta = reset_at.unwrap_or(now() + 900);
+    let mut n = 0;
+    for t in q.iter_mut() {
+        if t.node == node && (t.state == State::Running || t.state == State::Pending) {
+            t.state = State::Paused;
+            t.resume_after = Some(hasta);
+            t.motivo_pausa = Some(motivo.to_string());
+            n += 1;
+        }
+    }
+    drop(q);
+    persist();
+    n
+}
+
+/// Reasigna las tareas de un nodo a otro (handoff).
+///
+/// Útil cuando un agente falla, se queda sin cuota o se apaga: el trabajo
+/// pasa a otro nodo SIN perderse.
+pub fn migrar_tareas(desde: &str, hacia: &str) -> usize {
+    let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
+    let mut n = 0;
+    for t in q.iter_mut() {
+        if t.node == desde && matches!(t.state, State::Running | State::Pending | State::Paused) {
+            t.node = hacia.to_string();
+            t.state = State::Pending;
+            t.resume_after = None;
+            t.lease_expira = None;
+            t.motivo_pausa = None;
+            n += 1;
+        }
+    }
+    drop(q);
+    persist();
+    n
+}
+
+/// Devuelve a la cola las tareas cuyo lease ha caducado.
+///
+/// Un nodo que muere con una tarea en curso NO la pierde: el lease caduca
+/// y otro nodo puede cogerla.
+pub fn expirar_leases() -> usize {
+    let t0 = now();
+    let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
+    let mut n = 0;
+    for t in q.iter_mut() {
+        if t.state == State::Running {
+            if t.lease_expira.map(|e| e <= t0).unwrap_or(false) {
+                t.state = State::Pending;
+                t.node = String::new();
+                t.motivo_pausa = Some("lease caducado (el nodo no devolvio la tarea)".to_string());
+                n += 1;
+            }
+        }
+    }
+    drop(q);
+    if n > 0 {
+        persist();
+    }
+    n
+}
+
+/// Asigna un lease a las tareas que este nodo está ejecutando.
+///
+/// `segundos` = duración del lease; el nodo lo refresca mientras trabaja.
+pub fn renovar_lease(nodo: &str, segundos: u64) -> usize {
+    let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
+    let mut n = 0;
+    for t in q.iter_mut() {
+        if t.node == nodo && t.state == State::Running {
+            t.lease_expira = Some(now() + segundos);
+            n += 1;
+        }
+    }
+    drop(q);
+    n
+}
+
+/// Reparte el trabajo entre nodos: cada nodo coge hasta `max` tareas
+/// pendientes.  Devuelve los ids que se ha asignado.
+pub fn repartir_por_nodo(nodo: &str, max: usize, lease_segundos: u64) -> Vec<String> {
+    let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
+    let mut out = Vec::new();
+    for t in q.iter_mut() {
+        if out.len() >= max {
+            break;
+        }
+        if t.state == State::Pending && t.node.is_empty() {
+            t.node = nodo.to_string();
+            t.lease_expira = Some(now() + lease_segundos);
+            out.push(t.id.clone());
+        }
+    }
+    drop(q);
+    if !out.is_empty() {
+        persist();
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests_migracion {
+    use super::*;
+
+    /// El objetivo: si un nodo se queda sin cuota o muere, la tarea NO se
+    /// pierde y otro nodo puede cogerla.
+    #[test]
+    fn pausar_por_cuota_deja_las_tareas_para_el_reset() {
+        let id = submit("test-cuota", json!({"x": 1}), 1, vec![], Resources::default());
+        {
+            let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(t) = q.iter_mut().find(|t| t.id == id) {
+                t.node = "nodo-a".to_string();
+                t.state = State::Running;
+            }
+        }
+        let n = pausar_por_cuota("nodo-a", Some(now() + 3600), "cuota agotada");
+        assert_eq!(n, 1);
+        let t = get(&id).unwrap();
+        assert_eq!(t.state, State::Paused);
+        assert!(t.resume_after.unwrap() > now());
+        assert_eq!(t.motivo_pausa.as_deref(), Some("cuota agotada"));
+    }
+
+    #[test]
+    fn migrar_tareas_mueve_el_trabajo_a_otro_nodo() {
+        let id = submit("test-migra", json!({}), 1, vec![], Resources::default());
+        {
+            let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(t) = q.iter_mut().find(|t| t.id == id) {
+                t.node = "nodo-muerto".to_string();
+                t.state = State::Running;
+            }
+        }
+        let n = migrar_tareas("nodo-muerto", "nodo-vivo");
+        assert_eq!(n, 1);
+        let t = get(&id).unwrap();
+        assert_eq!(t.node, "nodo-vivo");
+        assert_eq!(t.state, State::Pending);
+    }
+
+    #[test]
+    fn un_lease_caducado_devuelve_la_tarea_a_la_cola() {
+        let id = submit("test-lease", json!({}), 1, vec![], Resources::default());
+        {
+            let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(t) = q.iter_mut().find(|t| t.id == id) {
+                t.node = "nodo-muerto".to_string();
+                t.state = State::Running;
+                t.lease_expira = Some(now() - 10);
+            }
+        }
+        assert_eq!(expirar_leases(), 1);
+        let t = get(&id).unwrap();
+        assert_eq!(t.state, State::Pending);
+        assert!(t.node.is_empty());
+    }
+
+    #[test]
+    fn una_tarea_pausada_no_se_ejecuta_hasta_el_reset() {
+        let id = submit("test-pausa", json!({}), 1, vec![], Resources::default());
+        {
+            let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(t) = q.iter_mut().find(|t| t.id == id) {
+                t.state = State::Paused;
+                t.resume_after = Some(now() + 3600);
+            }
+        }
+        let ids = repartir_por_nodo("nodo-x", 10, 60);
+        assert!(!ids.contains(&id), "una tarea en pausa no se reparte");
     }
 }
