@@ -120,6 +120,7 @@ pub mod rom_locator;
 pub mod rom_migration;
 pub mod root_hide;
 pub mod root_intel;
+pub mod root_occlusion;
 pub mod root_stealth;
 pub mod script_sandbox;
 pub mod seere_v11;
