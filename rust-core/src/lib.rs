@@ -61,6 +61,7 @@ pub mod drive_native;
 pub mod duckdns;
 pub mod entropy;
 pub mod env_introspect;
+pub mod es_eid;
 pub mod format_oracle;
 pub mod freezer;
 pub mod frida_dbi;

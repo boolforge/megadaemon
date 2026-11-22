@@ -375,6 +375,42 @@ fn main() {
             println!("{}", serde_json::to_string_pretty(&rep).unwrap_or_default());
         }
 
+        "eid" => {
+            let sub = args.get(2).map(|s| s.as_str()).unwrap_or("help");
+            match sub {
+                "inspect-p12" => {
+                    let fp = args.get(3).map(|s| s.as_str()).unwrap_or("");
+                    let pass = args.get(4).map(|s| s.as_str()).unwrap_or("");
+                    if fp.is_empty() {
+                        eprintln!("Uso: megadaemon eid inspect-p12 <archivo.p12> [password]");
+                        std::process::exit(1);
+                    }
+                    match megadaemon_core::es_eid::load_pkcs12(std::path::Path::new(fp), pass) {
+                        Ok(id) => println!(
+                            "{}",
+                            serde_json::to_string_pretty(&id.inspection).unwrap_or_default()
+                        ),
+                        Err(e) => {
+                            eprintln!("eid inspect-p12 error: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                "dnie-atr" => {
+                    let hex_str = args.get(3).map(|s| s.as_str()).unwrap_or("");
+                    let bytes: Vec<u8> = (0..hex_str.len())
+                        .step_by(2)
+                        .filter_map(|i| hex_str.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
+                        .collect();
+                    let res = megadaemon_core::es_eid::inspect_dnie_atr(&bytes);
+                    println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+                }
+                _ => {
+                    println!("Uso: megadaemon eid <inspect-p12|dnie-atr> ...");
+                }
+            }
+        }
+
         "drive-sync" => {
             let local_dir = args.get(2).map(|s| s.as_str()).unwrap_or("");
             let remote_name = args.get(3).map(|s| s.as_str()).unwrap_or("MegaDaemon_Sync");

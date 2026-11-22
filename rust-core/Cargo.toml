@@ -51,8 +51,13 @@ grep-searcher = "0.1"
 ignore = "0.4"
 lzma-rs = "0.3"
 memchr = "2.8"
+oauth2 = { version = "5.0", default-features = false }
+p12-keystore = "0.4"
+rdnie = { version = "0.4", default-features = false }
 similar = "3.2"
 tar = "0.4"
+webpki-roots = "1.0"
+x509-cert = "0.3"
 
 [features]
 

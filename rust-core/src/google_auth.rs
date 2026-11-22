@@ -239,7 +239,152 @@ pub fn status(state_dir: Option<&str>) -> Value {
         "token_cached": cached.is_some(),
         "token_expired": cached.map(|t| t.is_expired()).unwrap_or(true),
         "state_dir": state_dir.unwrap_or(""),
+        "oauth2_crate": "oauth2 5.0 (PKCE + Device Flow + Refresh Token via ureq)",
     })
+}
+
+/// Pure-sync `oauth2` v5.0 HTTP adapter backed by MegaDaemon's hardened `ureq` agent (zero `tokio`/`reqwest` bloat).
+fn ureq_oauth_http(
+    request: oauth2::HttpRequest,
+) -> Result<oauth2::HttpResponse, std::io::Error> {
+    let ag = agent();
+    let uri = request.uri().to_string();
+    let method = request.method().as_str();
+    let mut out_resp = if method == "POST" {
+        let mut req = ag.post(&uri);
+        for (k, v) in request.headers().iter() {
+            if let Ok(vs) = v.to_str() {
+                req = req.header(k.as_str(), vs);
+            }
+        }
+        req.send(request.body().as_slice())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
+    } else {
+        let mut req = ag.get(&uri);
+        for (k, v) in request.headers().iter() {
+            if let Ok(vs) = v.to_str() {
+                req = req.header(k.as_str(), vs);
+            }
+        }
+        req.call()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
+    };
+
+    let status_u16 = out_resp.status().as_u16();
+    let status = oauth2::http::StatusCode::from_u16(status_u16)
+        .unwrap_or(oauth2::http::StatusCode::INTERNAL_SERVER_ERROR);
+    let mut headers = oauth2::http::HeaderMap::new();
+    for (k, v) in out_resp.headers().iter() {
+        if let (Ok(hn), Ok(hv)) = (
+            oauth2::http::header::HeaderName::from_bytes(k.as_str().as_bytes()),
+            oauth2::http::header::HeaderValue::from_bytes(v.as_bytes()),
+        ) {
+            headers.insert(hn, hv);
+        }
+    }
+    let body = out_resp
+        .body_mut()
+        .read_to_vec()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
+    let mut builder = oauth2::http::Response::builder().status(status);
+    if let Some(hm) = builder.headers_mut() {
+        *hm = headers;
+    }
+    builder
+        .body(body)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+}
+
+/// Generates an OAuth2 Authorization URL + PKCE (`S256`) verifier/state using the `oauth2` crate.
+pub fn build_pkce_auth_url(
+    client_id: &str,
+    client_secret: Option<&str>,
+    auth_url: &str,
+    token_url: &str,
+    redirect_url: &str,
+    scopes: &[&str],
+) -> Result<(String, String, String), String> {
+    use oauth2::basic::BasicClient;
+    use oauth2::{
+        AuthUrl, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge, RedirectUrl, Scope, TokenUrl,
+    };
+
+    let mut client = BasicClient::new(ClientId::new(client_id.to_string()))
+        .set_auth_uri(AuthUrl::new(auth_url.to_string()).map_err(|e| e.to_string())?)
+        .set_token_uri(TokenUrl::new(token_url.to_string()).map_err(|e| e.to_string())?)
+        .set_redirect_uri(RedirectUrl::new(redirect_url.to_string()).map_err(|e| e.to_string())?);
+    if let Some(sec) = client_secret {
+        client = client.set_client_secret(ClientSecret::new(sec.to_string()));
+    }
+    let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+    let mut req = client.authorize_url(CsrfToken::new_random).set_pkce_challenge(pkce_challenge);
+    for sc in scopes {
+        req = req.add_scope(Scope::new((*sc).to_string()));
+    }
+    let (url, csrf) = req.url();
+    Ok((
+        url.to_string(),
+        pkce_verifier.secret().to_string(),
+        csrf.secret().to_string(),
+    ))
+}
+
+/// Refreshes an OAuth2 token cleanly via `oauth2::basic::BasicClient::exchange_refresh_token`.
+pub fn refresh_with_oauth2(
+    client_id: &str,
+    client_secret: &str,
+    refresh_token: &str,
+) -> Result<GoogleToken, String> {
+    use oauth2::basic::BasicClient;
+    use oauth2::{ClientId, ClientSecret, RefreshToken, TokenResponse, TokenUrl};
+
+    let client = BasicClient::new(ClientId::new(client_id.to_string()))
+        .set_client_secret(ClientSecret::new(client_secret.to_string()))
+        .set_token_uri(TokenUrl::new(TOKEN_URL.to_string()).map_err(|e| e.to_string())?);
+    let rt = RefreshToken::new(refresh_token.to_string());
+    let tok = client
+        .exchange_refresh_token(&rt)
+        .request(&ureq_oauth_http)
+        .map_err(|e| format!("oauth2 refresh failed: {}", e))?;
+    let secs = tok.expires_in().map(|d| d.as_secs()).unwrap_or(3600);
+    Ok(GoogleToken {
+        access_token: tok.access_token().secret().to_string(),
+        expires_at: Instant::now() + Duration::from_secs(secs.saturating_sub(RENEW_MARGIN_SECS)),
+    })
+}
+
+/// Starts an OAuth2 Device Authorization Flow (`RFC 8628`) via `oauth2::basic::BasicClient`.
+pub fn start_device_flow(
+    client_id: &str,
+    client_secret: Option<&str>,
+    device_auth_url: &str,
+    scopes: &[&str],
+) -> Result<Value, String> {
+    use oauth2::basic::BasicClient;
+    use oauth2::{ClientId, ClientSecret, DeviceAuthorizationUrl, Scope};
+
+    let mut client = BasicClient::new(ClientId::new(client_id.to_string()))
+        .set_device_authorization_url(
+            DeviceAuthorizationUrl::new(device_auth_url.to_string()).map_err(|e| e.to_string())?,
+        );
+    if let Some(sec) = client_secret {
+        client = client.set_client_secret(ClientSecret::new(sec.to_string()));
+    }
+    let mut req = client.exchange_device_code();
+    for sc in scopes {
+        req = req.add_scope(Scope::new((*sc).to_string()));
+    }
+    let details: oauth2::StandardDeviceAuthorizationResponse = req
+        .request(&ureq_oauth_http)
+        .map_err(|e| format!("oauth2 device flow failed: {}", e))?;
+    Ok(json!({
+        "verification_uri": details.verification_uri().to_string(),
+        "user_code": details.user_code().secret(),
+        "device_code": details.device_code().secret(),
+        "expires_in_secs": details.expires_in().as_secs(),
+        "interval_secs": details.interval().as_secs(),
+    }))
 }
 
 #[cfg(test)]

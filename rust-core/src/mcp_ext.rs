@@ -91,6 +91,23 @@ pub fn tool_definitions() -> Value {
                 "required": ["path"]
             }
         },
+        {
+            "name": "es_eid",
+            "description": "Spanish eID engine (FNMT Certificado Electrónico .p12/.pfx via p12-keystore + x509-cert + rustls mTLS, and DNI Electrónico 3.0/4.0 via rdnie ATR/APDU).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["inspect_p12", "dnie_atr", "dnie_apdu"], "default": "inspect_p12" },
+                    "path": { "type": "string", "description": "Path to .p12/.pfx file (inspect_p12)" },
+                    "password": { "type": "string", "description": "PKCS#12 password (inspect_p12)" },
+                    "atr_hex": { "type": "string", "description": "Hex ATR bytes (dnie_atr)" },
+                    "pin": { "type": "string", "description": "DNIe PIN (dnie_apdu)" },
+                    "digest_hex": { "type": "string", "description": "32-byte SHA-256 hex digest (dnie_apdu)" },
+                    "key_ref": { "type": "integer", "default": 1 }
+                },
+                "required": ["action"]
+            }
+        },
 
         {
             "name": "clipboard",
@@ -763,6 +780,52 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 );
                 let txt = serde_json::to_string_pretty(&res).unwrap_or_default();
                 json!({ "content": [{ "type": "text", "text": txt }] })
+            }
+        }
+        "es_eid" => {
+            let action = {
+                let a = s("action");
+                if a.is_empty() { "inspect_p12".to_string() } else { a }
+            };
+            let decode_hex = |h: &str| -> Vec<u8> {
+                (0..h.len())
+                    .step_by(2)
+                    .filter_map(|i| h.get(i..i + 2).and_then(|b| u8::from_str_radix(b, 16).ok()))
+                    .collect()
+            };
+            match action.as_str() {
+                "inspect_p12" => {
+                    let path = s("path");
+                    let pass = s("password");
+                    match crate::es_eid::load_pkcs12(std::path::Path::new(&path), &pass) {
+                        Ok(id) => {
+                            let txt = serde_json::to_string_pretty(&id.inspection).unwrap_or_default();
+                            json!({ "content": [{ "type": "text", "text": txt }] })
+                        }
+                        Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+                    }
+                }
+                "dnie_atr" => {
+                    let bytes = decode_hex(&s("atr_hex"));
+                    let res = crate::es_eid::inspect_dnie_atr(&bytes);
+                    let txt = serde_json::to_string_pretty(&res).unwrap_or_default();
+                    json!({ "content": [{ "type": "text", "text": txt }] })
+                }
+                "dnie_apdu" => {
+                    let pin = s("pin");
+                    let digest_bytes = decode_hex(&s("digest_hex"));
+                    if digest_bytes.len() != 32 {
+                        json!({ "content": [{ "type": "text", "text": "{\"ok\":false,\"error\":\"digest_hex must be 32 bytes (64 hex chars)\"}" }], "isError": true })
+                    } else {
+                        let mut arr = [0u8; 32];
+                        arr.copy_from_slice(&digest_bytes);
+                        let key_ref = args.get("key_ref").and_then(|v| v.as_u64()).unwrap_or(1) as u8;
+                        let frames = crate::es_eid::dnie_sign_apdu_sequence(&pin, key_ref, &arr);
+                        let txt = serde_json::to_string_pretty(&frames).unwrap_or_default();
+                        json!({ "content": [{ "type": "text", "text": txt }] })
+                    }
+                }
+                other => json!({ "content": [{ "type": "text", "text": format!("{{\"ok\":false,\"error\":\"unknown action {}\"}}", other) }], "isError": true }),
             }
         }
         "clipboard" => {

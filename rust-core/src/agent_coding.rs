@@ -623,6 +623,27 @@ pub fn tool_definitions() -> Value {
                     "required": ["command"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "megadaemon_tool",
+                "description": "Invoke any built-in MegaDaemon MCP tool natively in-process (e.g. daad_harvester, go_retool, drive_backup, clipboard, repo_updates, github, apk_inventory, etc.).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tool_name": {
+                            "type": "string",
+                            "description": "Exact MegaDaemon MCP tool name (e.g. 'go_retool', 'daad_harvester', 'drive_backup')."
+                        },
+                        "arguments": {
+                            "type": "object",
+                            "description": "JSON arguments object forwarded to the tool."
+                        }
+                    },
+                    "required": ["tool_name"]
+                }
+            }
         }
     ])
 }
@@ -1237,6 +1258,16 @@ pub fn dispatch_tool(
         "search_code" => tool_search_code(workspace, allow_outside, args),
         "list_dir" => tool_list_dir(workspace, allow_outside, args),
         "run_command" => tool_run_command(workspace, allow_outside, args),
+        "megadaemon_tool" => match args.get("tool_name").and_then(Value::as_str) {
+            Some(tname) if !tname.trim().is_empty() => {
+                let targs = args.get("arguments").cloned().unwrap_or_else(|| json!({}));
+                match crate::mcp_ext::dispatch(tname, &targs) {
+                    Some(v) => Ok(serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string())),
+                    None => Err(format!("unknown MegaDaemon MCP tool '{}'", tname)),
+                }
+            }
+            _ => Err("missing required string 'tool_name'".to_string()),
+        },
         other => Err(format!("unknown tool '{}'", other)),
     };
 
@@ -2443,5 +2474,35 @@ mod tests {
             .messages()
             .iter()
             .any(|m| m.role == Role::System && m.content.contains("LOOP GUARD")));
+    }
+
+    #[test]
+    fn test_megadaemon_tool_bridges_mcp_ext() {
+        let ws = TempWorkspace::new("mcp_bridge");
+        let res = dispatch_tool(
+            "megadaemon_tool",
+            &json!({
+                "tool_name": "es_eid",
+                "arguments": {
+                    "action": "dnie_atr",
+                    "atr_hex": "3B00"
+                }
+            }),
+            ws.path(),
+            false,
+        );
+        assert!(res.ok, "megadaemon_tool failed: {}", res.output);
+        let outer: Value = serde_json::from_str(&res.output).expect("valid outer json");
+        let inner_txt = outer["content"][0]["text"].as_str().expect("text payload");
+        let inner: Value = serde_json::from_str(inner_txt).expect("valid inner json");
+        assert_eq!(inner["is_dnie_3_4"], false);
+
+        let missing = dispatch_tool(
+            "megadaemon_tool",
+            &json!({ "tool_name": "nonexistent_tool_xyz" }),
+            ws.path(),
+            false,
+        );
+        assert!(!missing.ok);
     }
 }
