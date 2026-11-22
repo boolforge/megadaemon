@@ -673,6 +673,78 @@ fn map_ureq_error(provider: &str, e: ureq::Error) -> ProviderError {
     }
 }
 
+/// Gasto acumulado por el daemon (USD) y el día en que se cuenta.
+struct GastoGlobal {
+    dia: u64,
+    gastado: f64,
+}
+
+static GASTO: OnceLock<Mutex<GastoGlobal>> = OnceLock::new();
+
+fn gasto_global() -> &'static Mutex<GastoGlobal> {
+    GASTO.get_or_init(|| {
+        Mutex::new(GastoGlobal {
+            dia: crate::service_bus::today_epoch(),
+            gastado: 0.0,
+        })
+    })
+}
+
+/// Puerta de presupuesto por defecto del daemon.
+///
+/// v16 (DEFECTO-11): el presupuesto del `service_bus` **no lo consultaba
+/// NINGÚN camino real**: `execute_chat` hace su propia cascada y el bus se
+/// creaba "al vuelo" en cada llamada (gasto siempre a cero) ⇒ el "tope" no
+/// protegía nada.  Aquí se conecta de verdad, pero **opt-in**: sin
+/// `MD_BUDGET_DAY_USD` no hay tope ⇒ el comportamiento de v15 queda intacto.
+///
+/// El gasto se anota DESPUÉS de la llamada (el coste real no se sabe antes),
+/// así que la comprobación es un tope "consultivo": dos llamadas
+/// simultáneas pueden pasarse por el mismo céntimo.  El ACUMULADO sí es
+/// exacto (mutex).
+pub fn budget_permite(p: &ProviderEntry, max_tokens: u32) -> bool {
+    let coste = crate::service_bus::cost_for_model(&p.model, &p.tier).estimate_call(max_tokens);
+    if coste <= 0.0 {
+        // Los gratuitos (o los de coste desconocido-gratuito) nunca bloquean.
+        return true;
+    }
+    let tope = match std::env::var("MD_BUDGET_DAY_USD")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+    {
+        Some(v) if v > 0.0 => v,
+        _ => return true,
+    };
+    let dia = crate::service_bus::today_epoch();
+    let g = gasto_global();
+    let mut s = g.lock().unwrap_or_else(|p| p.into_inner());
+    if s.dia != dia {
+        s.dia = dia;
+        s.gastado = 0.0;
+    }
+    (s.gastado + coste) <= tope + 1e-12
+}
+
+/// Anota el gasto estimado de una llamada (después de la llamada).
+pub fn gasto_anotar(p: &ProviderEntry, max_tokens: u32) {
+    let coste = crate::service_bus::cost_for_model(&p.model, &p.tier).estimate_call(max_tokens);
+    if coste <= 0.0 {
+        return;
+    }
+    let dia = crate::service_bus::today_epoch();
+    let g = gasto_global();
+    let mut s = g.lock().unwrap_or_else(|p| p.into_inner());
+    if s.dia != dia {
+        s.dia = dia;
+        s.gastado = 0.0;
+    }
+    s.gastado += coste;
+}
+
+/// Puerta de presupuesto por defecto (puntero a función, para que viva
+/// todo el programa sin problemas de temporalidad).
+static GATE_PRESUPUESTO: fn(&ProviderEntry, u32) -> bool = budget_permite;
+
 /// Todo lo que la cascada necesita, **inyectado** (⇒ testeable sin red).
 ///
 /// v16: `execute_chat` leía el vault de disco y hacía el POST con `ureq`
@@ -686,6 +758,8 @@ pub struct ChatDeps<'a> {
     pub transport: &'a dyn LlmTransport,
     /// ¿Este proveedor está en pausa por cuota?  Por defecto `quota_guard`.
     pub quota_paused: fn(&str) -> bool,
+    /// ¿Permite el presupuesto gastar en este proveedor?  `None` = sin tope.
+    pub budget_permite: Option<&'a dyn Fn(&ProviderEntry, u32) -> bool>,
     /// Timeout de UNA llamada a proveedor.
     pub timeout: Duration,
     /// Nº de reintentos por proveedor (429/5xx/transporte/timeout).
@@ -695,12 +769,13 @@ pub struct ChatDeps<'a> {
 }
 
 impl<'a> ChatDeps<'a> {
-    /// Dependencias de producción (timeout y reintentos por defecto).
+    /// Dependencias de producción (timeout, reintentos y presupuesto).
     pub fn new(vault: &'a ProviderVault, transport: &'a dyn LlmTransport) -> Self {
         ChatDeps {
             vault,
             transport,
             quota_paused: crate::quota_guard::en_pausa,
+            budget_permite: Some(&GATE_PRESUPUESTO),
             timeout: Duration::from_secs(DEFAULT_PROVIDER_TIMEOUT_SECS),
             retries: MAX_RETRIES,
             backoff_ms: 250,
@@ -1378,6 +1453,16 @@ pub fn execute_chat_with(
             continue;
         }
 
+        // v16 (DEFECTO-11): el presupuesto puede vetar un proveedor CARO
+        // ANTES de gastar un céntimo (tope opt-in: `MD_BUDGET_DAY_USD`).
+        if let Some(permitir) = deps.budget_permite {
+            if !permitir(p, capped_max_tokens) {
+                trace.push(format!("{} => SALTADO (fuera de presupuesto)", p.id));
+                errors.push(format!("{}: fuera de presupuesto", p.id));
+                continue;
+            }
+        }
+
         let key = match p.auth_type.as_str() {
             "gh_cli" => match resolve_gh_token() {
                 Some(t) => t,
@@ -1440,7 +1525,15 @@ pub fn execute_chat_with(
                             for tc in &parsed.tool_calls {
                                 tools_used.push(format!("provider_tool:{}", tc.name));
                             }
-                            trace.push(format!("{} => OK", p.id));
+                            // v16 (DEFECTO-11): el gasto se anota aqui (el
+                            // coste real no se conoce antes de la llamada).
+                            gasto_anotar(p, capped_max_tokens);
+                            // v16 (DEFECTO-18): la traza dice el TIER del
+                            // proveedor que atendió: si el fallback cayó en
+                            // uno de PAGO, el cliente lo ve (antes el
+                            // `fallback_used` no decía si había costado
+                            // dinero).
+                            trace.push(format!("{} => OK (tier {})", p.id, p.tier));
                             return ChatResult {
                                 reply: parsed.content,
                                 reasoning: parsed.reasoning,

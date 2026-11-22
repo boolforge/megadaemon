@@ -721,10 +721,146 @@ fn la_traza_va_dentro_del_json_del_resultado() {
     let res = execute_chat_with("hola", Some("p1"), None, None, 128, &d);
     let json = serde_json::to_value(&res).unwrap();
     assert!(json["provider_trace"].is_array());
-    assert_eq!(json["provider_trace"][0].as_str().unwrap(), "p1 => OK");
+    assert!(
+        json["provider_trace"][0]
+            .as_str()
+            .unwrap()
+            .contains("p1 => OK"),
+        "traza: {:?}",
+        json["provider_trace"]
+    );
+    // v16 (DEFECTO-18): la traza dice el TIER (si el fallback cayó en un
+    // proveedor de PAGO, el cliente lo ve).
+    assert!(json["provider_trace"][0]
+        .as_str()
+        .unwrap()
+        .contains("tier free"));
     // Y el campo nuevo NO rompe la forma antigua: un JSON sin
     // `provider_trace` se sigue deserializando (serde default).
     let antiguo = r#"{"reply":"x","reasoning":"","model_id":"a","model_name":"b","vendor":"c","latency_ms":1.0,"tokens_used":0,"tools_used":[],"fallback_used":false}"#;
     let r: ChatResult = serde_json::from_str(antiguo).expect("no se pudo deserializar");
     assert!(r.provider_trace.is_empty());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. Ramas del orquestador que faltaban por cubrir
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn sin_modelo_se_usa_el_default_del_vault() {
+    let t = MockTransport::new();
+    t.responde("https://p1.test/v1", 200, OK);
+    t.responde("https://p2.test/v1", 200, OK);
+    let v = vault(
+        vec![
+            prov("p1", "https://p1.test/v1", "m1", "free"),
+            prov("p2", "https://p2.test/v1", "m2", "free"),
+        ],
+        "p2",
+    );
+    let d = deps(&v, &t);
+    // Sin modelo pedido (y con un modelo vacío) => default del vault.
+    let res = execute_chat_with("hola", None, None, None, 128, &d);
+    assert_eq!(res.model_id, "p2");
+    let res2 = execute_chat_with("hola", Some("   "), None, None, 128, &d);
+    assert_eq!(res2.model_id, "p2");
+    assert!(!res.fallback_used);
+}
+
+#[test]
+fn el_camino_local_explicito_no_llama_a_nadie() {
+    let t = MockTransport::new();
+    let v = vault(
+        vec![prov("p1", "https://p1.test/v1", "m1", "free")],
+        "p1",
+    );
+    let d = deps(&v, &t);
+    let res = execute_chat_with("hola", Some("local-seere"), None, None, 128, &d);
+    assert_eq!(res.model_id, "local-seere");
+    assert!(!res.fallback_used);
+    assert!(
+        t.endpoints().is_empty(),
+        "la ruta local no debe llamar a la nube: {:?}",
+        t.endpoints()
+    );
+    assert!(res.provider_trace.iter().any(|l| l.contains("offline")));
+}
+
+#[test]
+fn la_ruta_hibrida_usa_el_proveedor_de_nube() {
+    let t = MockTransport::new();
+    t.responde("https://mm.test/v1", 200, OK);
+    let v = vault(
+        vec![prov("minimax-m3.1-flash", "https://mm.test/v1", "MiniMax-M3.1-Flash", "paid")],
+        "minimax-m3.1-flash",
+    );
+    let d = deps(&v, &t);
+    // "hybrid-seere" acaba en el proveedor de nube (el motor local sólo
+    // aporta el contexto RE).
+    let res = execute_chat_with("hola", Some("hybrid-seere"), None, None, 128, &d);
+    assert_eq!(res.model_id, "minimax-m3.1-flash");
+    assert_eq!(t.veces("https://mm.test/v1"), 1);
+}
+
+#[test]
+fn un_proveedor_con_auth_none_se_llama_sin_credencial() {
+    let t = MockTransport::new();
+    t.responde("https://poll.test/v1", 200, OK);
+    let mut p = prov("pollinations-free", "https://poll.test/v1", "openai", "keyless");
+    p.api_key = String::new();
+    p.auth_type = "none".to_string();
+    let v = vault(vec![p], "pollinations-free");
+    let d = deps(&v, &t);
+    let res = execute_chat_with("hola", Some("pollinations-free"), None, None, 128, &d);
+    assert_eq!(res.model_id, "pollinations-free");
+    assert_eq!(t.veces("https://poll.test/v1"), 1);
+}
+
+#[test]
+fn un_fallo_de_transporte_cae_al_siguiente() {
+    let t = MockTransport::new();
+    t.cae("https://p1.test/v1");
+    t.responde("https://p2.test/v1", 200, OK);
+    let v = vault(
+        vec![
+            prov("p1", "https://p1.test/v1", "m1", "free"),
+            prov("p2", "https://p2.test/v1", "m2", "free"),
+        ],
+        "p1",
+    );
+    let d = deps(&v, &t);
+    let res = execute_chat_with("hola", Some("p1"), None, None, 128, &d);
+    assert_eq!(res.model_id, "p2");
+    assert!(res.fallback_used);
+    assert!(res
+        .provider_trace
+        .iter()
+        .any(|l| l.contains("transport")));
+}
+
+#[test]
+fn una_respuesta_ilegible_cae_al_siguiente() {
+    let t = MockTransport::new();
+    // 2xx con un cuerpo truncado: no se puede parsear => al siguiente.
+    t.responde(
+        "https://p1.test/v1",
+        200,
+        &fixtures::cuerpo("zai-glm-free__truncated.json"),
+    );
+    t.responde("https://p2.test/v1", 200, OK);
+    let v = vault(
+        vec![
+            prov("p1", "https://p1.test/v1", "m1", "free"),
+            prov("p2", "https://p2.test/v1", "m2", "free"),
+        ],
+        "p1",
+    );
+    let d = deps(&v, &t);
+    let res = execute_chat_with("hola", Some("p1"), None, None, 128, &d);
+    assert_eq!(res.model_id, "p2");
+    assert!(res.fallback_used);
+    assert!(res
+        .provider_trace
+        .iter()
+        .any(|l| l.contains("ilegible") || l.contains("respuesta")));
 }
