@@ -58,6 +58,15 @@ similar = "3.2"
 tar = "0.4"
 webpki-roots = "1.0"
 x509-cert = "0.3"
+# --- PoC 2/3/5/6 Ecosystem Expansion (Tree-sitter, Rhai, VT100, DWARF + x86/ARM64 Disasm) ---
+tree-sitter = "0.24"
+tree-sitter-rust = "0.23"
+rhai = { version = "1.20", features = ["sync", "only_i64"] }
+vt100 = "0.15"
+gimli = "0.31"
+addr2line = "0.24"
+iced-x86 = "1.21"
+capstone = "0.13"
 
 [features]
 

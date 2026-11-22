@@ -411,6 +411,68 @@ fn main() {
             }
         }
 
+        "ast" => {
+            let fp = args.get(2).map(|s| s.as_str()).unwrap_or("");
+            if fp.is_empty() {
+                eprintln!("Uso: megadaemon ast <archivo.rs>");
+                std::process::exit(1);
+            }
+            match megadaemon_core::code_ast::analyze_file(std::path::Path::new(fp)) {
+                Ok(rep) => println!("{}", serde_json::to_string_pretty(&rep).unwrap_or_default()),
+                Err(e) => {
+                    eprintln!("ast error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        "disasm" => {
+            let arch = args.get(2).map(|s| s.as_str()).unwrap_or("arm64");
+            let hex_str = args.get(3).map(|s| s.as_str()).unwrap_or("");
+            if hex_str.is_empty() {
+                eprintln!("Uso: megadaemon disasm <arm64|arm|x86_64|x86_32> <hex_bytes>");
+                std::process::exit(1);
+            }
+            let bytes: Vec<u8> = (0..hex_str.len())
+                .step_by(2)
+                .filter_map(|i| hex_str.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
+                .collect();
+            let res = if arch == "x86_32" || arch == "x86_64" {
+                let bits = if arch == "x86_32" { 32 } else { 64 };
+                Ok(megadaemon_core::re_disasm::disasm_x86_iced(&bytes, bits, 0x400000, 128))
+            } else {
+                megadaemon_core::re_disasm::disasm_capstone(&bytes, arch, 0x400000, 128)
+            };
+            match res {
+                Ok(rep) => println!("{}", serde_json::to_string_pretty(&rep).unwrap_or_default()),
+                Err(e) => {
+                    eprintln!("disasm error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        "rhai" => {
+            let script = args.get(2).map(|s| s.as_str()).unwrap_or("40 + 2");
+            let rep = megadaemon_core::script_sandbox::eval_sandboxed(script, 50_000);
+            println!("{}", serde_json::to_string_pretty(&rep).unwrap_or_default());
+        }
+
+        "jobs" => {
+            let db = std::path::Path::new(&megadaemon_core::cockpit_server::state_dir()).join("megadaemon_jobs.db");
+            let q = megadaemon_core::job_queue::JobQueue::open(&db).expect("open job queue");
+            let list = q.list(50).unwrap_or_default();
+            println!("{}", serde_json::to_string_pretty(&list).unwrap_or_default());
+        }
+
+        "audit" => {
+            let db = std::path::Path::new(&megadaemon_core::cockpit_server::state_dir()).join("megadaemon_audit.db");
+            let rows = megadaemon_core::tool_policy::AuditJournal::open(&db)
+                .and_then(|j| j.recent(50))
+                .unwrap_or_default();
+            println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_default());
+        }
+
         "drive-sync" => {
             let local_dir = args.get(2).map(|s| s.as_str()).unwrap_or("");
             let remote_name = args.get(3).map(|s| s.as_str()).unwrap_or("MegaDaemon_Sync");

@@ -471,14 +471,79 @@ pub fn upload_dir_parallel(
     files.sort_by(|a, b| b.2.cmp(&a.2));
 
     let total_files = files.len();
+    let total_bytes: u64 = files.iter().map(|f| f.2).sum();
     let folder_cache: Mutex<std::collections::HashMap<String, String>> =
         Mutex::new(std::collections::HashMap::new());
     let queue = Mutex::new(files);
     let uploaded_files = AtomicUsize::new(0);
     let uploaded_bytes = AtomicU64::new(0);
     let deleted_files = AtomicUsize::new(0);
+    let last_report_ms = AtomicU64::new(0);
     let errors: Mutex<Vec<String>> = Mutex::new(Vec::new());
     let n_workers = workers.clamp(1, 16);
+
+    let emit_progress = |force: bool| {
+        let now_ms = started.elapsed().as_millis() as u64;
+        let prev = last_report_ms.load(Ordering::Relaxed);
+        if !force && now_ms.saturating_sub(prev) < 2000 {
+            return;
+        }
+        if !force
+            && last_report_ms
+                .compare_exchange(prev, now_ms, Ordering::Relaxed, Ordering::Relaxed)
+                .is_err()
+        {
+            return;
+        }
+        let f_done = uploaded_files.load(Ordering::Relaxed);
+        let b_done = uploaded_bytes.load(Ordering::Relaxed);
+        let elapsed_s = (now_ms as f64 / 1000.0).max(0.001);
+        let mbps = (b_done as f64 / (1024.0 * 1024.0)) / elapsed_s;
+        let pct = if total_bytes > 0 {
+            (b_done as f64 / total_bytes as f64) * 100.0
+        } else if total_files > 0 {
+            (f_done as f64 / total_files as f64) * 100.0
+        } else {
+            100.0
+        };
+        let eta_s = if mbps > 0.001 && total_bytes > b_done {
+            ((total_bytes - b_done) as f64 / (1024.0 * 1024.0)) / mbps
+        } else {
+            0.0
+        };
+        let err_count = errors.lock().map(|e| e.len()).unwrap_or(0);
+        eprintln!(
+            "[drive-sync] {}/{} files ({:.1}%) | {:.1}/{:.1} MiB | {:.2} MiB/s | ETA {:.0}s | errs {}",
+            f_done,
+            total_files,
+            pct,
+            b_done as f64 / (1024.0 * 1024.0),
+            total_bytes as f64 / (1024.0 * 1024.0),
+            mbps,
+            eta_s,
+            err_count
+        );
+        if let Some(sd) = state_dir {
+            let p = Path::new(sd).join("drive_sync_progress.json");
+            let tmp = Path::new(sd).join("drive_sync_progress.json.tmp");
+            let payload = json!({
+                "remote_folder": remote_folder_name,
+                "uploaded_files": f_done,
+                "total_files": total_files,
+                "uploaded_bytes": b_done,
+                "total_bytes": total_bytes,
+                "percent": (pct * 10.0).round() / 10.0,
+                "throughput_mib_s": (mbps * 100.0).round() / 100.0,
+                "eta_secs": eta_s.round() as u64,
+                "errors": err_count,
+            });
+            if std::fs::write(&tmp, serde_json::to_string_pretty(&payload).unwrap_or_default()).is_ok() {
+                let _ = std::fs::rename(&tmp, &p);
+            }
+        }
+    };
+
+    emit_progress(true);
 
     std::thread::scope(|s| {
         for _ in 0..n_workers {
@@ -550,9 +615,12 @@ pub fn upload_dir_parallel(
                             .push(format!("{}: {}", rel_path.display(), e));
                     }
                 }
+                emit_progress(false);
             });
         }
     });
+
+    emit_progress(true);
 
     let elapsed_s = started.elapsed().as_secs_f64().max(0.001);
     let bytes_done = uploaded_bytes.load(Ordering::Relaxed);

@@ -108,6 +108,83 @@ pub fn tool_definitions() -> Value {
                 "required": ["action"]
             }
         },
+        {
+            "name": "ast_analyze",
+            "description": "Tree-sitter Rust AST symbol extraction and syntax-error verification.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to .rs file" }
+                },
+                "required": ["path"]
+            }
+        },
+        {
+            "name": "re_disasm",
+            "description": "Multi-ISA disassembler & provenance inspector (iced-x86, Capstone ARM64/ARM/x64, goblin + gimli DWARF).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["disasm", "provenance"], "default": "disasm" },
+                    "arch": { "type": "string", "enum": ["arm64", "arm", "x86_64", "x86_32"], "default": "arm64" },
+                    "hex": { "type": "string", "description": "Hex machine code bytes (disasm)" },
+                    "base_addr": { "type": "string", "description": "Hex base address e.g. 0x400000" },
+                    "max_insns": { "type": "integer", "default": 64 },
+                    "path": { "type": "string", "description": "Binary path (provenance)" }
+                }
+            }
+        },
+        {
+            "name": "job_queue",
+            "description": "Durable SQLite job queue with leases, idempotency keys, retries, and crash recovery.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["enqueue", "claim", "complete", "fail", "cancel", "list"], "default": "list" },
+                    "kind": { "type": "string" },
+                    "payload": { "type": "object" },
+                    "idempotency_key": { "type": "string" },
+                    "id": { "type": "integer" },
+                    "error": { "type": "string" },
+                    "limit": { "type": "integer", "default": 50 }
+                }
+            }
+        },
+        {
+            "name": "rhai_eval",
+            "description": "Resource-bounded sandboxed Rhai scripting engine.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "script": { "type": "string" },
+                    "max_ops": { "type": "integer", "default": 50000 }
+                },
+                "required": ["script"]
+            }
+        },
+        {
+            "name": "term_snapshot",
+            "description": "Parse raw ANSI/VT terminal output into a rendered vt100 screen snapshot.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "raw": { "type": "string" },
+                    "rows": { "type": "integer", "default": 24 },
+                    "cols": { "type": "integer", "default": 80 }
+                },
+                "required": ["raw"]
+            }
+        },
+        {
+            "name": "tool_audit",
+            "description": "Query recent tool invocations and policy decisions from the SQLite audit journal.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "integer", "default": 30 }
+                }
+            }
+        },
 
         {
             "name": "clipboard",
@@ -826,6 +903,120 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     }
                 }
                 other => json!({ "content": [{ "type": "text", "text": format!("{{\"ok\":false,\"error\":\"unknown action {}\"}}", other) }], "isError": true }),
+            }
+        }
+        "ast_analyze" => {
+            let path = s("path");
+            match crate::code_ast::analyze_file(std::path::Path::new(&path)) {
+                Ok(rep) => {
+                    let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
+                    json!({ "content": [{ "type": "text", "text": txt }] })
+                }
+                Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+            }
+        }
+        "re_disasm" => {
+            let action = {
+                let a = s("action");
+                if a.is_empty() { "disasm".to_string() } else { a }
+            };
+            if action == "provenance" {
+                let path = s("path");
+                match crate::re_disasm::inspect_binary_provenance(std::path::Path::new(&path)) {
+                    Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
+                    Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+                }
+            } else {
+                let arch = {
+                    let a = s("arch");
+                    if a.is_empty() { "arm64".to_string() } else { a }
+                };
+                let hex_str = s("hex").replace(' ', "");
+                let bytes: Vec<u8> = (0..hex_str.len())
+                    .step_by(2)
+                    .filter_map(|i| hex_str.get(i..i + 2).and_then(|b| u8::from_str_radix(b, 16).ok()))
+                    .collect();
+                let base_str = s("base_addr");
+                let base = u64::from_str_radix(base_str.trim_start_matches("0x"), 16).unwrap_or(0x400000);
+                let max_insns = args.get("max_insns").and_then(|v| v.as_u64()).unwrap_or(64) as usize;
+                let res = if arch == "x86_32" || arch == "x86_64" {
+                    let bits = if arch == "x86_32" { 32 } else { 64 };
+                    Ok(crate::re_disasm::disasm_x86_iced(&bytes, bits, base, max_insns))
+                } else {
+                    crate::re_disasm::disasm_capstone(&bytes, &arch, base, max_insns)
+                };
+                match res {
+                    Ok(rep) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&rep).unwrap_or_default() }] }),
+                    Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+                }
+            }
+        }
+        "job_queue" => {
+            let db = std::path::Path::new(&crate::cockpit_server::state_dir()).join("megadaemon_jobs.db");
+            match crate::job_queue::JobQueue::open(&db) {
+                Ok(q) => {
+                    let action = {
+                        let a = s("action");
+                        if a.is_empty() { "list".to_string() } else { a }
+                    };
+                    let out: Result<Value, String> = match action.as_str() {
+                        "enqueue" => {
+                            let kind = s("kind");
+                            let payload = args.get("payload").cloned().unwrap_or_else(|| json!({}));
+                            let key = {
+                                let k = s("idempotency_key");
+                                if k.is_empty() { None } else { Some(k) }
+                            };
+                            q.enqueue(&kind, &payload, key.as_deref(), 3)
+                                .map(|r| serde_json::to_value(r).unwrap_or(Value::Null))
+                        }
+                        "claim" => q.claim_next(60).map(|r| serde_json::to_value(r).unwrap_or(Value::Null)),
+                        "complete" => {
+                            let id = args.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let res_v = args.get("payload").cloned().unwrap_or_else(|| json!({}));
+                            q.complete(id, &res_v).map(|_| json!({"ok": true, "id": id}))
+                        }
+                        "fail" => {
+                            let id = args.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let err = s("error");
+                            q.fail_or_retry(id, &err).map(|st| json!({"ok": true, "id": id, "status": st}))
+                        }
+                        "cancel" => {
+                            let id = args.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+                            q.cancel(id).map(|c| json!({"ok": true, "cancelled": c}))
+                        }
+                        _ => {
+                            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+                            q.list(limit).map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
+                        }
+                    };
+                    match out {
+                        Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
+                        Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+                    }
+                }
+                Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+            }
+        }
+        "rhai_eval" => {
+            let script = s("script");
+            let max_ops = args.get("max_ops").and_then(|v| v.as_u64()).unwrap_or(50_000);
+            let rep = crate::script_sandbox::eval_sandboxed(&script, max_ops);
+            json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&rep).unwrap_or_default() }] })
+        }
+        "term_snapshot" => {
+            let raw = s("raw");
+            let rows = args.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
+            let cols = args.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
+            let snap = crate::term_state::render_vt100_snapshot(raw.as_bytes(), rows, cols);
+            json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&snap).unwrap_or_default() }] })
+        }
+        "tool_audit" => {
+            let db = std::path::Path::new(&crate::cockpit_server::state_dir()).join("megadaemon_audit.db");
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(30) as usize;
+            match crate::tool_policy::AuditJournal::open(&db).and_then(|j| j.recent(limit)) {
+                Ok(rows) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&rows).unwrap_or_default() }] }),
+                Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
             }
         }
         "clipboard" => {

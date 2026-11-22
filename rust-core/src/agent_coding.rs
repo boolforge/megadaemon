@@ -627,6 +627,44 @@ pub fn tool_definitions() -> Value {
         {
             "type": "function",
             "function": {
+                "name": "ast_symbols",
+                "description": "Parse a Rust (.rs) source file with Tree-sitter to extract exact symbol ranges (fn, struct, enum, trait, impl, mod) and syntax errors.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to .rs file."
+                        }
+                    },
+                    "required": ["path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "rhai_eval",
+                "description": "Evaluate a sandboxed Rhai script in-process with strict operation limits and zero ambient OS/filesystem access.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "script": {
+                            "type": "string",
+                            "description": "Rhai script source."
+                        },
+                        "max_ops": {
+                            "type": "integer",
+                            "description": "Max operations limit (100..500000, default 50000)."
+                        }
+                    },
+                    "required": ["script"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "megadaemon_tool",
                 "description": "Invoke any built-in MegaDaemon MCP tool natively in-process (e.g. daad_harvester, go_retool, drive_backup, clipboard, repo_updates, github, apk_inventory, etc.).",
                 "parameters": {
@@ -1244,20 +1282,77 @@ pub struct ToolExecResult {
     pub output: String,
 }
 
-/// Dispatches a tool call by name against the workspace.
+/// Dispatches a tool call by name against the workspace, gated by `tool_policy` and audited in SQLite.
 pub fn dispatch_tool(
     name: &str,
     args: &Value,
     workspace: &Path,
     allow_outside: bool,
 ) -> ToolExecResult {
-    let res = match name {
+    let ctx = crate::tool_policy::ToolContext::for_agent(
+        workspace.to_path_buf(),
+        "agent_coding",
+        allow_outside,
+    );
+    let audit_db = Path::new(&crate::cockpit_server::state_dir()).join("megadaemon_audit.db");
+
+    let res = crate::tool_policy::invoke_with_policy(&ctx, name, args, Some(&audit_db), || match name {
         "view_file" => tool_view_file(workspace, allow_outside, args),
-        "replace_file_content" => tool_replace_file_content(workspace, allow_outside, args),
-        "write_to_file" => tool_write_to_file(workspace, allow_outside, args),
+        "replace_file_content" => {
+            let mut out = tool_replace_file_content(workspace, allow_outside, args)?;
+            if let Some(raw_path) = args.get("path").and_then(Value::as_str) {
+                if raw_path.ends_with(".rs") {
+                    if let Ok(p) = resolve_safe_path(workspace, raw_path, allow_outside) {
+                        if let Ok(ast) = crate::code_ast::analyze_file(&p) {
+                            if ast.ok {
+                                out.push_str(&format!("\n[AST CHECK: OK ({} symbols)]", ast.symbol_count));
+                            } else {
+                                out.push_str(&format!("\n[AST SYNTAX WARNING: {} error(s): {:?}]", ast.error_count, ast.errors));
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(out)
+        }
+        "write_to_file" => {
+            let mut out = tool_write_to_file(workspace, allow_outside, args)?;
+            if let Some(raw_path) = args.get("path").and_then(Value::as_str) {
+                if raw_path.ends_with(".rs") {
+                    if let Ok(p) = resolve_safe_path(workspace, raw_path, allow_outside) {
+                        if let Ok(ast) = crate::code_ast::analyze_file(&p) {
+                            if ast.ok {
+                                out.push_str(&format!("\n[AST CHECK: OK ({} symbols)]", ast.symbol_count));
+                            } else {
+                                out.push_str(&format!("\n[AST SYNTAX WARNING: {} error(s): {:?}]", ast.error_count, ast.errors));
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(out)
+        }
         "search_code" => tool_search_code(workspace, allow_outside, args),
         "list_dir" => tool_list_dir(workspace, allow_outside, args),
         "run_command" => tool_run_command(workspace, allow_outside, args),
+        "ast_symbols" => {
+            let raw_path = args
+                .get("path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing required string argument 'path'".to_string())?;
+            let path = resolve_safe_path(workspace, raw_path, allow_outside)?;
+            let rep = crate::code_ast::analyze_file(&path)?;
+            Ok(serde_json::to_string_pretty(&rep).unwrap_or_default())
+        }
+        "rhai_eval" => {
+            let script = args
+                .get("script")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing required string argument 'script'".to_string())?;
+            let max_ops = args.get("max_ops").and_then(Value::as_u64).unwrap_or(50_000);
+            let rep = crate::script_sandbox::eval_sandboxed(script, max_ops);
+            Ok(serde_json::to_string_pretty(&rep).unwrap_or_default())
+        }
         "megadaemon_tool" => match args.get("tool_name").and_then(Value::as_str) {
             Some(tname) if !tname.trim().is_empty() => {
                 let targs = args.get("arguments").cloned().unwrap_or_else(|| json!({}));
@@ -1269,7 +1364,7 @@ pub fn dispatch_tool(
             _ => Err("missing required string 'tool_name'".to_string()),
         },
         other => Err(format!("unknown tool '{}'", other)),
-    };
+    });
 
     match res {
         Ok(output) => ToolExecResult { ok: true, output },
@@ -2504,5 +2599,40 @@ mod tests {
             false,
         );
         assert!(!missing.ok);
+    }
+
+    #[test]
+    fn test_ast_symbols_rhai_and_post_edit_check() {
+        let ws = TempWorkspace::new("ast_rhai");
+        let wr = dispatch_tool(
+            "write_to_file",
+            &json!({
+                "path": "sample.rs",
+                "content": "pub fn greet() -> i32 { 7 }\n",
+                "overwrite": true
+            }),
+            ws.path(),
+            false,
+        );
+        assert!(wr.ok, "write_to_file failed: {}", wr.output);
+        assert!(wr.output.contains("[AST CHECK: OK"));
+
+        let ast = dispatch_tool(
+            "ast_symbols",
+            &json!({ "path": "sample.rs" }),
+            ws.path(),
+            false,
+        );
+        assert!(ast.ok);
+        assert!(ast.output.contains("greet"));
+
+        let rhai = dispatch_tool(
+            "rhai_eval",
+            &json!({ "script": "6 * 7" }),
+            ws.path(),
+            false,
+        );
+        assert!(rhai.ok);
+        assert!(rhai.output.contains("\"value\": \"42\""));
     }
 }
