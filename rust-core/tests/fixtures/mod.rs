@@ -238,8 +238,3 @@ pub fn cuerpo(file: &str) -> String {
         None => String::new(),
     }
 }
-
-/// El fixture del banco con ese nombre de fichero.
-pub fn por_fichero(file: &str) -> Option<&'static Fixture> {
-    FIXTURES.iter().find(|f| f.file == file)
-}

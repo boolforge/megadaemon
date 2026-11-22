@@ -544,7 +544,7 @@ fn el_razonamiento_por_campo_se_separa_del_texto() {
 }
 
 #[test]
-fn el_razonamiento_<think>_se_saca_del_texto() {
+fn el_razonamiento_etiqueta_think_se_saca_del_texto() {
     let cuerpo = fixtures::cuerpo("minimax-m3.1-flash__reasoning_think.json");
     let r = parse_provider_reply("minimax-m3.1-flash", &cuerpo).unwrap();
     assert_eq!(r.content, "La respuesta final es 42.");
