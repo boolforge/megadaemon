@@ -202,9 +202,11 @@
       "branch": "agent/phone-inventory",
       "commits": [
         "f561784",
-        "d3c4812"
+        "d3c4812",
+        "5c5b2fa",
+        "9cf76c2"
       ],
-      "last_seen": "2026-11-22T01:30:00Z",
+      "last_seen": "2026-11-22T01:40:00Z",
       "status": "inventario + plan publicados",
       "medidas_clave": {
         "paquetes": 1719,
@@ -424,7 +426,9 @@
       "branch": "agent/phone-inventory",
       "commits": [
         "f561784",
-        "d3c4812"
+        "d3c4812",
+        "5c5b2fa",
+        "9cf76c2"
       ],
       "note": "docs/PHONE_INVENTORY.md + docs/PHONE_BACKUP_PLAN.md. MEDIDO: /data/user/0 50.978.411 KB (48,62 GiB); /data/app 88.149.106 KB (84,07 GiB); /data/media/0 75.185.640 KB (71,71 GiB); basura regenerable 11.873.621 KB (11,32 GiB); superloop task_442838 interval 300 s con 72 ciclos historicos (media 365,3 s) y SIN ejecutarse desde 2026-11-19T10:21:33Z; subida medida a Drive 304.742 B/s vs bajada 5.668.249 B/s. PLAN: 6 fases = 205.600.475 KB (196,08 GiB) ~191,9 h. Sin etapa local posible (10.732.152 KB libres): streaming con rclone copy.",
       "sha256": null
