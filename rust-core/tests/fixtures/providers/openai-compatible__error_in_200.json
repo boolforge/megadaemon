@@ -1,0 +1,15 @@
+{
+  "_meta": {
+    "id": "openai-compatible__error_in_200",
+    "provider": "openai-compatible",
+    "status": 200,
+    "origen": "SINTETICO",
+    "nota": "2xx con cuerpo de ERROR (algunos proxies devuelven 200 y el error dentro). Debe tratarse como fallo del proveedor, no como respuesta vacia."
+  },
+  "body": {
+    "error": {
+      "message": "Model overloaded, please retry later.",
+      "type": "server_error"
+    }
+  }
+}

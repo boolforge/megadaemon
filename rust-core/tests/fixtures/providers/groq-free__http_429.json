@@ -1,0 +1,15 @@
+{
+  "_meta": {
+    "id": "groq-free__http_429",
+    "provider": "groq-free",
+    "status": 429,
+    "origen": "SINTETICO",
+    "nota": "429 con 'rate limit reached; resets at <epoch>' y 'retry after <segundos>': es el cuerpo que el quota_guard tiene que entender (parsear_error_cuota) para poner al proveedor en PAUSA."
+  },
+  "body": {
+    "error": {
+      "message": "Rate limit reached for groq-free. Please try again in 42s; resets at 1795130605.",
+      "type": "rate_limit_error"
+    }
+  }
+}
