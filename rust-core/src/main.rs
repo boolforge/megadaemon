@@ -106,47 +106,9 @@ fn main() {
                     std::path::PathBuf::from(ruta),
                     360,
                 );
-                // v18: el plugin MCP de Antigravity (`megadaemon-minimax`)
-                // declara a mano el token de sesion y la API key.  Si se
-                // rota cualquiera de los dos, sus 52 tools dejan de
-                // responder sin aviso.  Aqui se re-sincroniza al arrancar.
-                match megadaemon_core::antigravity_clone::sincronizar_mcp_config() {
-                    Ok(r) if r.aplicado => {
-                        eprintln!(
-                            "antigravity: mcp_config sincronizado ({})",
-                            r.campos_actualizados.join(", ")
-                        );
-                    }
-                    Ok(_) => {}
-                    Err(e) => eprintln!("antigravity: mcp_config no sincronizado: {e}"),
-                }
-                // v18: el plugin MCP de Antigravity (`megadaemon-minimax`)
-                // declara a mano el token de sesion y la API key.  Si se
-                // rota cualquiera de los dos, sus 52 tools dejan de
-                // responder sin aviso.  Aqui se re-sincroniza al arrancar.
-                match megadaemon_core::antigravity_clone::sincronizar_mcp_config() {
-                    Ok(r) if r.aplicado => {
-                        eprintln!(
-                            "antigravity: mcp_config sincronizado ({})",
-                            r.campos_actualizados.join(", ")
-                        );
-                    }
-                    Ok(_) => {}
-                    Err(e) => eprintln!("antigravity: mcp_config no sincronizado: {e}"),
-                }
-                // v18: el plugin MCP de Antigravity (`megadaemon-minimax`)
-                // declara a mano el token de sesion y la API key.  Si se
-                // rota cualquiera de los dos, sus 52 tools dejan de
-                // responder sin aviso.  Aqui se re-sincroniza al arrancar.
-                match megadaemon_core::antigravity_clone::sincronizar_mcp_config() {
-                    Ok(r) if r.aplicado => {
-                        eprintln!(
-                            "antigravity: mcp_config sincronizado ({})",
-                            r.campos_actualizados.join(", ")
-                        );
-                    }
-                    Ok(_) => {}
-                    Err(e) => eprintln!("antigravity: mcp_config no sincronizado: {e}"),
+                // v18: sincroniza el runtime unificado de Antigravity al arrancar.
+                if let Err(e) = megadaemon_core::antigravity_clone::unificar_runtime() {
+                    eprintln!("antigravity: runtime no unificado: {e}");
                 }
             }
             if let Err(e) = cockpit_server::run_server(port) {
@@ -489,11 +451,11 @@ fn main() {
             }
         }
 
-        "disasm" => {
+        "re-disasm" => {
             let arch = args.get(2).map(|s| s.as_str()).unwrap_or("arm64");
             let hex_str = args.get(3).map(|s| s.as_str()).unwrap_or("");
             if hex_str.is_empty() {
-                eprintln!("Uso: megadaemon disasm <arm64|arm|x86_64|x86_32> <hex_bytes>");
+                eprintln!("Uso: megadaemon re-disasm <arm64|arm|x86_64|x86_32|m68k|6800|6809|ppc|mips|riscv64> <hex_bytes>");
                 std::process::exit(1);
             }
             let bytes: Vec<u8> = (0..hex_str.len())
@@ -560,6 +522,37 @@ fn main() {
                     std::process::exit(1);
                 }
             }
+        }
+
+        "retro-tools" => {
+            let sub = args.get(2).map(|s| s.as_str()).unwrap_or("axml");
+            let fp = args.get(3).map(|s| s.as_str()).unwrap_or("");
+            if fp.is_empty() {
+                eprintln!("Uso: megadaemon retro-tools <axml|font-1bpp|saturn-pal|scummvm-save|dex-origins> <archivo>");
+                std::process::exit(1);
+            }
+            let bytes = std::fs::read(fp).unwrap_or_else(|e| {
+                eprintln!("read {}: {}", fp, e);
+                std::process::exit(1);
+            });
+            let out = match sub {
+                "axml" => match megadaemon_core::axml_parser::parse_axml(&bytes) {
+                    Ok(r) => serde_json::to_value(r).unwrap_or_default(),
+                    Err(e) => {
+                        eprintln!("axml error: {}", e);
+                        std::process::exit(1);
+                    }
+                },
+                "font-1bpp" => megadaemon_core::retro_gfx::extract_1bpp_glyphs(&bytes, 64),
+                "saturn-pal" => megadaemon_core::retro_gfx::inspect_saturn_palette(&bytes, true),
+                "scummvm-save" => megadaemon_core::scummvm_save::parse_scummvm_savegame(&bytes),
+                "dex-origins" => megadaemon_core::dex_origins::scan_dex_origins(&bytes),
+                other => {
+                    eprintln!("subcomando desconocido '{}'", other);
+                    std::process::exit(1);
+                }
+            };
+            println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
         }
 
         "drive-sync" => {

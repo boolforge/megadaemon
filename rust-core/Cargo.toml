@@ -97,6 +97,14 @@ version = "0.26"
 optional = true
 features = ["ring"]
 
+[profile.dev]
+debug = "line-tables-only"
+codegen-units = 16
+
+[profile.test]
+debug = "line-tables-only"
+codegen-units = 16
+
 [profile.release]
 opt-level = 3
 lto = true

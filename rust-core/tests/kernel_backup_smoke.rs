@@ -20,9 +20,7 @@
 
 use serde_json::json;
 
-/// Copia aislada del módulo real (sin `crate::`).
-#[path = "../src/kernel_and_blocks.rs"]
-mod kb;
+use megadaemon_core::kernel_and_blocks as kb;
 
 #[test]
 fn la_tool_declara_todas_las_acciones_del_contrato() {

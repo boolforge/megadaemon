@@ -201,6 +201,20 @@ pub fn tool_definitions() -> Value {
                 }
             }
         },
+        {
+            "name": "retro_apk_tools",
+            "description": "Pure-Rust Retro & Android binary tools (AXML AndroidManifest decoder, 1bpp 8x8 font extractor, Saturn VDP2 CRAM palette inspector, ScummVM savegame parser).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["axml", "font_1bpp", "saturn_palette", "scummvm_save"], "default": "axml" },
+                    "path": { "type": "string", "description": "Path to binary file" },
+                    "max_chars": { "type": "integer", "default": 64 },
+                    "endian": { "type": "string", "enum": ["be", "le"], "default": "be" }
+                },
+                "required": ["path"]
+            }
+        },
 
         {
             "name": "clipboard",
@@ -1070,6 +1084,37 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             match res {
                 Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
                 Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+            }
+        }
+        "retro_apk_tools" => {
+            let action = {
+                let a = s("action");
+                if a.is_empty() { "axml".to_string() } else { a }
+            };
+            let path = s("path");
+            match std::fs::read(&path) {
+                Ok(bytes) => {
+                    let out: Result<Value, String> = match action.as_str() {
+                        "axml" => crate::axml_parser::parse_axml(&bytes)
+                            .map(|r| serde_json::to_value(r).unwrap_or(Value::Null)),
+                        "font_1bpp" => {
+                            let max_c = args.get("max_chars").and_then(|v| v.as_u64()).unwrap_or(64) as usize;
+                            Ok(crate::retro_gfx::extract_1bpp_glyphs(&bytes, max_c))
+                        }
+                        "saturn_palette" => {
+                            let be = s("endian") != "le";
+                            Ok(crate::retro_gfx::inspect_saturn_palette(&bytes, be))
+                        }
+                        "scummvm_save" => Ok(crate::scummvm_save::parse_scummvm_savegame(&bytes)),
+                        "dex_origins" => Ok(crate::dex_origins::scan_dex_origins(&bytes)),
+                        other => Err(format!("unknown retro_apk_tools action '{}'", other)),
+                    };
+                    match out {
+                        Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
+                        Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+                    }
+                }
+                Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e.to_string()}).to_string() }], "isError": true }),
             }
         }
         "clipboard" => {
