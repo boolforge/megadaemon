@@ -43,8 +43,8 @@
 //! | `vbmeta` | 65.536 B | `b1ef8b5108b1a333c13e6db5cf1e2c1446a4e017e81d0fe9b9392de70a1238c9` | 111 ms |
 //! | `vbmeta_system` | 65.536 B | `254732e930687a6d5a3c0c82965f84c9a4a36767f6aa39eeacabf53af6aba5c6` | 110 ms |
 //!
-//! ⇒ un respaldo completo son **191 MiB** y **~2,4 s** de `dd`: el punto de
-//! retorno es barato. No hay excusa para tocar el kernel sin él.
+//! ⇒ un respaldo completo son **201.457.664 B (192,06 MiB)** y **2.438 ms** de
+//! `dd`: el punto de retorno es barato. No hay excusa para tocar el kernel sin él.
 //!
 //! ### OJO: `init_boot` NO existe en este móvil
 //!

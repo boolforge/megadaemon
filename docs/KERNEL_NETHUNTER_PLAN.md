@@ -82,7 +82,7 @@ para la reversión, malo para depurar).
   ⇒ **NO existe `init_boot`** (Samsung usa `recovery` en su lugar) ni
   `vendor_dlkm`.
 * `/data`: **225 GB totales, 191 GB usados, ~33 GB libres** (f2fs).
-* `/data/adb` = 1,4 GB; **24 módulos Magisk** (incluye `playintegrityfix`,
+* `/data/adb` = 1,4 GB; **25 módulos Magisk** (incluye `playintegrityfix`,
   `tricky_store`, `zygisk_lsposed`, `mm`, `mmrl_wpd`, `megadaemon_csc_recording`,
   `megadaemon_energy`, `flagsecurepatcher`, `hosts`, `cromite-webview`…).
 * `/data/adb/service.d/`: `91-adb-tcp.sh`, `98-cloudflared.sh`,
@@ -106,7 +106,7 @@ para la reversión, malo para depurar).
 | `vbmeta` | 65.536 | `b1ef8b5108b1a333c13e6db5cf1e2c1446a4e017e81d0fe9b9392de70a1238c9` | `d891a13e17c7759d2e40d2130ff0dfd7` | 111 ms |
 | `vbmeta_system` | 65.536 | `254732e930687a6d5a3c0c82965f84c9a4a36767f6aa39eeacabf53af6aba5c6` | `f78ac7aeb9be2bc9fa2efe262266348a` | 110 ms |
 
-**Total: 200.694.656 B (191,4 MiB) en ~2,4 s de `dd`** ⇒ el punto de retorno
+**Total: 201.457.664 B (192,06 MiB) en 2.438 ms de `dd`** ⇒ el punto de retorno
 es barato: no hay excusa para tocar el kernel sin él.
 
 ### 2.2 Dónde está
@@ -125,7 +125,7 @@ es barato: no hay excusa para tocar el kernel sin él.
 | `kernel-backup-20261122-vbmeta.img` | `1yn6XLj94vTqbhohZvmYUyBcqBoWJWq-0` | 65.536 | `d891a13e17c7759d2e40d2130ff0dfd7` |
 | `kernel-backup-20261122-vbmeta_system.img` | `1JxnwKGa2J3S5-UGcO9la14oHin6h8857` | 65.536 | `f78ac7aeb9be2bc9fa2efe262266348a` |
 
-  Subida medida: 200,7 MB en **69 s** (≈2,9 MB/s), token minteado **en el
+  Subida medida: 201,5 MB en **69 s** (≈2,9 MB/s), token minteado **en el
   móvil** con su propio `gdrive_credentials.json` (0600) ⇒ la credencial no
   sale del dispositivo.
 * Además se subirán **al estado del móvil** (`/data/adb`, `service.d`, CSC) en
