@@ -1,0 +1,51 @@
+[package]
+name = "md-backup-core"
+version = "13.4.0"
+edition = "2021"
+authors = ["MegaDaemon Engineering Team <megadaemon@agy.internal>"]
+description = "Binario `md-backup`: motor de backup nativo de apps. Compila SÓLO los módulos que necesita (los MISMOS ficheros fuente del crate principal), para que quepa en un contenedor de 3 GB."
+
+# Crate STANDALONE (no es miembro del workspace principal): así el CI del
+# repo no lo compila por sorpresa y este crate puede tener su propio perfil.
+[workspace]
+
+[lib]
+name = "megadaemon_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "md-backup"
+path = "src/main.rs"
+
+[dependencies]
+# Las MISMAS dependencias que usa el crate principal para estos módulos.
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
+base64ct = { version = "1", features = ["alloc"] }
+flate2 = "1"
+ignore = "0.4"
+libc = "0.2"
+memmap2 = "0.9"
+oauth2 = "5"
+ring = "0.17"
+rsa = { version = "0.9", features = ["pem"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha1 = { version = "0.10", features = ["oid"] }
+sha2 = "0.10"
+ureq = { version = "3.5.2", features = ["rustls", "json"] }
+# Mismo knob que el crate principal (`default-features = false` + `arrays`):
+# el binario C de zstd va embebido y no depende de libzstd del sistema
+# (Android no trae ninguna).
+zstd = { version = "0.13", default-features = false, features = ["arrays"] }
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+
+[profile.release]
+# Idéntico al que usa el CI para el ARM64 (`.github/workflows/build.yml`:
+# `CARGO_PROFILE_RELEASE_LTO=false`, `CODEGEN_UNITS=16`, `DEBUG=0`) ⇒ así los
+# artefactos de las dependencias ya compilados para `aarch64-linux-android`
+# se **reutilizan** y no hay que recompilarlos.
+opt-level = 3
+lto = false
+codegen-units = 16
+debug = 0
+strip = true

@@ -829,49 +829,11 @@ fn run_capture(root: &str, cmd: &[&str]) -> Option<String> {
 // Anti-congelación: límites de I/O
 // ========================================================================= //
 
-/// Baja la prioridad de I/O del proceso actual.
-///
-/// * `nice`: prioridad de CPU (0 = normal, 19 = la más baja).
-/// * `ionice_class`: 1 = realtime, 2 = best-effort, 3 = idle (la más baja).
-///
-/// Se aplica al **propio proceso**: el escaneo nunca compite con el usuario.
-pub fn apply_io_limits(nice: i32, ionice_class: u8) -> String {
-    let mut notes = Vec::new();
-    // nice: `setpriority(PRIO_PROCESS, 0, nice)`.
-    let rc = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, nice) };
-    notes.push(format!(
-        "nice={} ({})",
-        nice,
-        if rc == 0 { "ok" } else { "no aplicado" }
-    ));
-    // ionice: `ioprio_set(IOPRIO_WHO_PROCESS, 0, prio)` vía syscall.
-    #[cfg(target_arch = "aarch64")]
-    const SYS_IOPRIO_SET: libc::c_long = 252;
-    #[cfg(target_arch = "x86_64")]
-    const SYS_IOPRIO_SET: libc::c_long = 251;
-    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
-    const SYS_IOPRIO_SET: libc::c_long = -1;
-    if SYS_IOPRIO_SET > 0 {
-        let class = (ionice_class as i32).clamp(0, 3);
-        let prio = (class << 13) | 4; // data=4 (prioridad baja dentro de la clase)
-        let rc = unsafe { libc::syscall(SYS_IOPRIO_SET, 1i32, 0i32, prio) };
-        notes.push(format!(
-            "ionice_class={} ({})",
-            class,
-            if rc == 0 { "ok" } else { "no aplicado" }
-        ));
-    }
-    notes.join(" ")
-}
-
-/// Carga del sistema (1 min, 5 min, 15 min).
-pub fn loadavg_tuple(loadavg: &str) -> (f64, f64, f64) {
-    let mut it = loadavg.split_whitespace();
-    let a = it.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-    let b = it.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-    let c = it.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-    (a, b, c)
-}
+// Las tres utilidades de I/O viven en `crate::backup_io` (módulo sin
+// dependencias) ⇒ aquí se re-exportan para que la API pública de este módulo
+// NO cambie. Ver `backup_io.rs` para el porqué (el binario ARM64 del motor de
+// backup no compilaba con el crate entero en un contenedor de 3 GB).
+pub use crate::backup_io::{apply_io_limits, loadavg_tuple, random_bytes};
 
 // ========================================================================= //
 // El escaneo
@@ -1533,14 +1495,6 @@ impl KeyMaterial {
             .map_err(|e| format!("no se puede leer {}: {e}", path.display()))?;
         serde_json::from_str(&data).map_err(|e| format!("material de claves inválido: {e}"))
     }
-}
-
-/// Bytes aleatorios (CSPRNG del sistema).
-pub fn random_bytes(n: usize) -> Result<Vec<u8>, String> {
-    let mut out = vec![0u8; n];
-    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut out)
-        .map_err(|_| "no se puede leer del CSPRNG del sistema".to_string())?;
-    Ok(out)
 }
 
 // ========================================================================= //

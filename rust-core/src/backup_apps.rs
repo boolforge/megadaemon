@@ -29,7 +29,7 @@
 //!
 //! **Reutiliza** (no es un motor paralelo): `backup_crypto` (AEGIS-256 por
 //! trozos, Argon2id, key-check, manifiesto), `backup_formats` (`TarStream`,
-//! `safe_relative_path`), `backup_engine` (`glob_match`),
+//! `safe_relative_path`), `backup_glob` (`glob_match`),
 //! `backup_inventory` (`apply_io_limits`, `loadavg_tuple`),
 //! `drive_client`/`drive_native`/`google_auth` (subida resumible nativa).
 
@@ -37,9 +37,9 @@ use crate::backup_crypto::{self, ChunkCipher, KdfMethod, KdfParams, ManifestEntr
 // El manifiesto es parte de la API pública del motor (lo usan el CLI, el MCP
 // y los tests) ⇒ se re-exporta.
 pub use crate::backup_crypto::Manifest;
-use crate::backup_engine::glob_match;
+use crate::backup_glob::glob_match;
 use crate::backup_formats::{safe_relative_path, TarStream};
-use crate::backup_inventory::{apply_io_limits, loadavg_tuple};
+use crate::backup_io::{apply_io_limits, loadavg_tuple};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -48,7 +48,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -79,8 +79,14 @@ pub const LABEL_SEGMENT_AAD: &str = "MDAPP1-aegis256-aad-v1";
 /// Tamaño por defecto del segmento: 16 MiB (medido como el mejor equilibrio
 /// entre staging, paralelismo y sobrecarga por fichero en Drive).
 pub const DEFAULT_SEGMENT_BYTES: u64 = 16 * 1024 * 1024;
-/// Tope del tamaño de un segmento (1 GiB): por encima el móvil no lo aguanta.
-pub const MAX_SEGMENT_BYTES: u64 = 1024 * 1024 * 1024;
+/// Tope del tamaño de un segmento: 32 MiB.
+///
+/// MEDIDO (2026-11-22): el móvil tiene la RAM justa y el sello de un
+/// segmento trabaja con **tres** copias en memoria (el `.plain` leído, el
+/// marco AEAD y el fichero final) ⇒ con 32 MiB el pico es ~96 MiB. Con
+/// 1 GiB (el tope anterior) el pico sería de ~3 GiB: el OOM killer se
+/// lleva el daemon y el túnel cae. **Nada de leer 2 GiB de una vez.**
+pub const MAX_SEGMENT_BYTES: u64 = 32 * 1024 * 1024;
 /// Granularidad mínima que exige Drive en las subidas resumibles.
 pub const DRIVE_CHUNK_MIN: u64 = 256 * 1024;
 /// Tamaño del trozo de subida: **1 MiB**.
@@ -93,6 +99,18 @@ pub const DRIVE_CHUNK_MIN: u64 = 256 * 1024;
 pub const UPLOAD_CHUNK_BYTES: u64 = 1024 * 1024;
 /// Tamaño de la cabecera de un segmento (bytes).
 pub const SEGMENT_HEADER_LEN: usize = 32;
+
+/// Tope de segmentos **en vuelo** (cola acotada del pipelining).
+///
+/// El productor (recogida) y el consumidor (subida) están desacoplados por
+/// una cola **acotada**: si Drive va lento (medido: 297,6 KiB/s), el
+/// productor **se frena** (backpressure) en vez de llenar la memoria del móvil
+/// con segmentos cerrados. 4–8 es el rango pedido: enough para que la subida
+/// no se pare entre recogidas, poco para que la RAM no se dispare.
+pub const MAX_INFLIGHT_SEGMENTS: usize = 8;
+/// Mínimo de la cola en vuelo (con 1 worker, 4 segmentos bastan para no
+/// dejar la red ociosa).
+pub const MIN_INFLIGHT_SEGMENTS: usize = 4;
 
 /// Directorios **regenerables** dentro de los datos de una app.
 ///
@@ -191,6 +209,8 @@ pub struct AppEntry {
     pub data_bytes: Option<u64>,
     /// Ficheros medidos en los datos privados.
     pub file_count: Option<u64>,
+    /// Bytes del APK principal (medido, si se pudo).
+    pub apk_bytes: Option<u64>,
     /// Ruta de los datos externos (`/sdcard/Android/data/<pkg>`).
     pub external_dir: String,
     /// Ruta de los datos multimedia (`/sdcard/Android/media/<pkg>`).
@@ -344,6 +364,7 @@ pub fn inventory(opts: &InventoryOptions) -> Result<Vec<AppEntry>, String> {
                 data_dir,
                 data_bytes: None,
                 file_count: None,
+                apk_bytes: None,
                 external_dir,
                 media_dir,
             });
@@ -365,6 +386,7 @@ pub fn inventory(opts: &InventoryOptions) -> Result<Vec<AppEntry>, String> {
                 data_dir: format!("/data/user/0/{}", pkg),
                 data_bytes: None,
                 file_count: None,
+                apk_bytes: None,
                 external_dir: format!("/sdcard/Android/data/{}", pkg),
                 media_dir: format!("/sdcard/Android/media/{}", pkg),
             });
@@ -386,6 +408,28 @@ pub fn inventory(opts: &InventoryOptions) -> Result<Vec<AppEntry>, String> {
             if e.apk_path.is_empty() {
                 e.apk_path = e.apk_paths.first().cloned().unwrap_or_default();
             }
+        }
+    }
+    // Tamaño del APK: se mide con `stat` (barato: un `stat` por APK).
+    for e in entries.iter_mut() {
+        let mut total = 0u64;
+        let mut any = false;
+        let paths = if e.apk_paths.is_empty() {
+            vec![e.apk_path.clone()]
+        } else {
+            e.apk_paths.clone()
+        };
+        for p in paths.iter().filter(|p| !p.is_empty()) {
+            let full = join_root(root, Path::new(p));
+            if let Ok(md) = fs::metadata(&full) {
+                if md.is_file() {
+                    total += md.len();
+                    any = true;
+                }
+            }
+        }
+        if any {
+            e.apk_bytes = Some(total);
         }
     }
     // Medición de los datos privados.
@@ -648,6 +692,15 @@ pub struct ContainerHeader {
     pub plain_bytes: u64,
     /// Ficheros respaldados.
     pub files: usize,
+    /// Plan **validado** que se aplicó (`None` si no hubo plan).
+    ///
+    /// MEDIDO: el LLM propone y el código valida ⇒ lo que se guarda aquí es
+    /// la **decisión**, con la propuesta cruda dentro (auditoría).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<Value>,
+    /// SHA-256 del plan aplicado (lo ata a la cabecera).
+    #[serde(default)]
+    pub plan_sha256: String,
 }
 
 /// Un segmento ya cerrado.
@@ -984,6 +1037,11 @@ pub struct CreateOptions {
     pub allow_live_framework: bool,
     /// Patrones extra a excluir (globs).
     pub exclude_patterns: Vec<String>,
+    /// Plan **validado** (propuesto por el LLM, validado por el código).
+    ///
+    /// Si viene, **manda el plan**: sus paquetes, sus exclusiones y sus
+    /// banderas. El modelo nunca se aplica sin validar.
+    pub plan: Option<crate::backup_plan::PlanDecision>,
     /// ¿Simulación (no escribe nada)?
     pub dry_run: bool,
     /// Gobierno anti-congelación.
@@ -1005,6 +1063,7 @@ impl Default for CreateOptions {
             include_media: false,
             allow_live_framework: false,
             exclude_patterns: Vec::new(),
+            plan: None,
             dry_run: false,
             gov: Governor::default(),
         }
@@ -1055,6 +1114,12 @@ pub struct CreateReport {
     pub forbidden_files: u64,
     /// Bytes prohibidos por política.
     pub forbidden_bytes: u64,
+    /// Plan **validado** que se aplicó (`None` si no hubo plan).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<Value>,
+    /// SHA-256 del plan aplicado.
+    #[serde(default)]
+    pub plan_sha256: String,
 }
 
 /// El consumidor de segmentos (la otra mitad del pipelining).
@@ -1338,15 +1403,46 @@ pub fn create(opts: &CreateOptions, sink: &mut dyn SegmentSink) -> Result<Create
     )?);
 
     // 2) Fuentes.
+    //
+    // Si hay un plan **validado**, el plan manda: sus paquetes, sus
+    // exclusiones y sus banderas (que ya pasaron el filtro del código).
+    // El LLM no decide: sólo propone.
+    let (eff_packages, eff_excludes, eff_media, eff_external) = match &opts.plan {
+        Some(p) => {
+            let pkgs = if opts.packages.is_empty() {
+                p.packages.clone()
+            } else {
+                opts.packages.clone()
+            };
+            let mut ex = p.exclude_patterns.clone();
+            for e in opts.exclude_patterns.iter() {
+                if !ex.contains(e) {
+                    ex.push(e.clone());
+                }
+            }
+            (
+                pkgs,
+                ex,
+                p.include_media && opts.include_media,
+                p.include_external && opts.include_external,
+            )
+        }
+        None => (
+            opts.packages.clone(),
+            opts.exclude_patterns.clone(),
+            opts.include_media,
+            opts.include_external,
+        ),
+    };
     let (sources, excl_files, excl_bytes, forbid_files, forbid_bytes) = collect_sources(
         &opts.root,
-        &opts.packages,
+        &eff_packages,
         opts.include_apk,
         opts.include_data,
-        opts.include_external,
-        opts.include_media,
+        eff_external,
+        eff_media,
         opts.allow_live_framework,
-        &opts.exclude_patterns,
+        &eff_excludes,
     )?;
 
     // 3) Reanudación.
@@ -1469,6 +1565,16 @@ pub fn create(opts: &CreateOptions, sink: &mut dyn SegmentSink) -> Result<Create
     };
     manifest.sort();
     let manifest_sha = manifest.hash();
+    // El plan validado (si lo hay) queda **registrado**: la propuesta cruda
+    // del LLM y la decisión del código, con sus rechazos.
+    let plan_value = opts.plan.as_ref().map(|p| {
+        json!({
+            "summary": p.summary(),
+            "decision": p,
+            "proposal_raw": p.proposal.raw,
+        })
+    });
+    let plan_sha = opts.plan.as_ref().map(|p| p.hash()).unwrap_or_default();
     let header = ContainerHeader {
         magic: CONTAINER_MAGIC.to_string(),
         version: CONTAINER_VERSION,
@@ -1484,6 +1590,8 @@ pub fn create(opts: &CreateOptions, sink: &mut dyn SegmentSink) -> Result<Create
         segments: seg_infos.clone(),
         plain_bytes: seg_infos.iter().map(|s| s.plain_len).sum(),
         files: manifest.entries.len(),
+        plan: plan_value.clone(),
+        plan_sha256: plan_sha.clone(),
     };
 
     if !opts.dry_run {
@@ -1501,6 +1609,16 @@ pub fn create(opts: &CreateOptions, sink: &mut dyn SegmentSink) -> Result<Create
         // (el contenedor se sube a Drive; la clave no).
         if let Some(p) = opts.key_out.as_ref() {
             write_key_file(p, &master, &kdf, &key_check, &key_source)?;
+        }
+        // El plan aplicado queda **en el contenedor**: qué propuso la IA, qué
+        // se aceptó y qué se rechazó.
+        if let (Some(pv), Some(p)) = (plan_value.as_ref(), opts.plan.as_ref()) {
+            fs::write(
+                opts.out.join(crate::backup_plan::PLAN_FILE),
+                serde_json::to_vec_pretty(&pv).unwrap_or_default(),
+            )
+            .map_err(|e| format!("no se puede escribir el plan: {e}"))?;
+            let _ = p;
         }
     }
     sink.finish(&header, &manifest)?;
@@ -1532,12 +1650,14 @@ pub fn create(opts: &CreateOptions, sink: &mut dyn SegmentSink) -> Result<Create
         },
         forbidden_files: forbid_files,
         forbidden_bytes: forbid_bytes,
+        plan: plan_value,
+        plan_sha256: plan_sha,
     })
 }
 
 /// Bytes aleatorios del CSPRNG (reutiliza el del módulo de inventario).
 fn backup_inventory_random(n: usize) -> Result<Vec<u8>, String> {
-    crate::backup_inventory::random_bytes(n)
+    crate::backup_io::random_bytes(n)
 }
 
 /// Epoch actual.
@@ -2785,6 +2905,8 @@ pub struct DriveUploader {
     pub container_dir: Option<PathBuf>,
     /// Número de conexiones en paralelo.
     pub workers: usize,
+    /// Tope de segmentos en vuelo (cola acotada ⇒ backpressure).
+    pub queue_capacity: usize,
     /// Tamaño del trozo de la subida resumible.
     pub chunk_bytes: u64,
     /// Directorio de estado (token de Google).
@@ -2795,7 +2917,7 @@ pub struct DriveUploader {
     pub max_retries: usize,
     /// ¿Simulación (no sube nada)?
     pub dry_run: bool,
-    tx: Option<Sender<Job>>,
+    tx: Option<SyncSender<Job>>,
     rx: Option<Arc<Mutex<Receiver<Job>>>>,
     workers_handles: Vec<std::thread::JoinHandle<()>>,
     stats: Arc<Counters>,
@@ -2818,6 +2940,7 @@ impl DriveUploader {
             name: name.to_string(),
             container_dir: None,
             workers: workers.clamp(1, 16),
+            queue_capacity: (workers.clamp(1, 16) * 2).clamp(MIN_INFLIGHT_SEGMENTS, MAX_INFLIGHT_SEGMENTS),
             chunk_bytes: DRIVE_CHUNK_MIN,
             state_dir: None,
             delete_after_upload: false,
@@ -2835,7 +2958,10 @@ impl DriveUploader {
 
     /// Arranca los hilos de subida.
     pub fn start(&mut self) -> Result<(), String> {
-        let (tx, rx) = channel::<Job>();
+        // Cola ACOTADA: `sync_channel` bloquea al productor cuando hay
+        // `queue_capacity` segmentos esperando ⇒ backpressure real (el móvil
+        // no llena la RAM de segmentos cerrados).
+        let (tx, rx) = sync_channel::<Job>(self.queue_capacity);
         let rx = Arc::new(Mutex::new(rx));
         self.tx = Some(tx);
         self.rx = Some(rx.clone());
@@ -2855,14 +2981,27 @@ impl DriveUploader {
             let ids = self.uploaded_ids.clone();
             let sidecars = self.sidecar_ids.clone();
             let h = std::thread::spawn(move || loop {
+                // `try_recv` (y no `recv` bloqueante con el mutex tomado):
+                // así un hilo **no** retiene el cerrojo mientras espera, y
+                // los N workers pueden subir en paralelo de verdad.
                 let job = {
                     let g = match rx.lock() {
                         Ok(g) => g,
                         Err(_) => break,
                     };
-                    g.recv()
+                    match g.try_recv() {
+                        Ok(j) => Some(j),
+                        // Cola vacía: se suelta el cerrojo y se reintenta
+                        // (20 ms: no es espera activa pesada).
+                        Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                        // Canal cerrado y vacío: no queda nada que subir.
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                    }
                 };
-                let Ok(job) = job else { break };
+                let Some(job) = job else {
+                    std::thread::sleep(Duration::from_millis(20));
+                    continue;
+                };
                 let seg_name = format!("{}.seg{:05}", ctx.name, job.seg.index);
                 let _ = ctx.stats.started_ms.compare_exchange(
                     0,
