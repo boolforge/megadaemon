@@ -1697,4 +1697,14 @@ pub fn shamiko_prepare(zip_path: &str, enable: bool, dry_run: bool) -> Value {
             "module_prop": o2,
             "is_shamiko": valid_id,
             "warning": if valid_id { Value::Null } else {
-                json!("el module.prop no dice id=sham
+                json!("el module.prop no dice id=shamiko/zygisk_shamiko: no se puede confirmar que sea Shamiko")
+            },
+            "nota": "Shamiko queda PREPARADO pero DESHABILITADO: activarlo exige \
+                    reiniciar el movil (decision del usuario). Nada se ha escrito \
+                    en una particion ni se ha reiniciado nada.",
+            "siguiente_paso": "revisar el module.prop y, si el usuario lo aprueba, \
+                               habilitar el modulo y reiniciar el movil.",
+        });
+    }
+    v
+}
