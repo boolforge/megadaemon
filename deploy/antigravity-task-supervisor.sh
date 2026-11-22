@@ -107,13 +107,33 @@ run_cycle() {
   return $_rc
 }
 
+# Copia un fichero de SRC_DIR a STATE_DIR.
+#
+# BUG REAL (medido 2026-11-22 en el móvil): el supervisor ya vive en
+# STATE_DIR (= /data/local/tmp/megadaemon/antigravity), asi que SRC_DIR y
+# STATE_DIR son el MISMO directorio => `cp` responde "are the same file",
+# devuelve 1 y el `--install` abortaba ANTES de crear el service.d => el
+# backlog de Antigravity se quedaba sin arranque automatico en cada
+# reinicio (medido: /data/adb/service.d/97-antigravity-tasks.sh NO existia).
+copiar_si_distinto() {
+  _src="$1"; _dst="$2"
+  if [ "$_src" = "$_dst" ]; then
+    return 0
+  fi
+  # Mismo fichero por inode (bind mount / hard link): tampoco hay que copiar.
+  if [ -e "$_src" ] && [ -e "$_dst" ] && [ "$(ls -i "$_src" 2>/dev/null)" = "$(ls -i "$_dst" 2>/dev/null)" ]; then
+    return 0
+  fi
+  cp -f "$_src" "$_dst"
+}
+
 install() {
   mkdir -p "$STATE_DIR" || return 1
-  cp -f "$SRC_DIR/antigravity-task-runner.sh" "$STATE_DIR/antigravity-task-runner.sh" || return 1
-  cp -f "$SRC_DIR/antigravity-tasks.py"        "$STATE_DIR/antigravity-tasks.py"        || return 1
+  copiar_si_distinto "$SRC_DIR/antigravity-task-runner.sh" "$STATE_DIR/antigravity-task-runner.sh" || return 1
+  copiar_si_distinto "$SRC_DIR/antigravity-tasks.py"        "$STATE_DIR/antigravity-tasks.py"        || return 1
   chmod 0755 "$STATE_DIR/antigravity-task-runner.sh" "$STATE_DIR/antigravity-tasks.py"
   [ -f "$SRC_DIR/antigravity-task-supervisor.sh" ] && \
-    cp -f "$SRC_DIR/antigravity-task-supervisor.sh" "$STATE_DIR/antigravity-task-supervisor.sh"
+    copiar_si_distinto "$SRC_DIR/antigravity-task-supervisor.sh" "$STATE_DIR/antigravity-task-supervisor.sh"
   [ -f "$STATE_DIR/antigravity-task-supervisor.sh" ] && \
     chmod 0755 "$STATE_DIR/antigravity-task-supervisor.sh"
 

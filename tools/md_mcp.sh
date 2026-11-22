@@ -60,29 +60,29 @@ for k in ("quick","duckdns","public","url"):
 
 TOK="$(curl -s -m 25 -X POST -H 'Content-Type: application/json' \
   -d "{\"api_key\":\"$KEY\"}" "$URL/api/session/exchange" 2>/dev/null \
-  | python3 -c 'import sys,json;print(json.load(sys.stdin).get("auth_token",""))' 2>/dev/null)"
+  | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("token") or d.get("auth_token") or "")' 2>/dev/null)"
 if [ -z "$TOK" ]; then
   recuperar_url || { echo "ERROR: el movil no respondio ni con la URL guardada ni con state/channel.json" >&2; exit 3; }
   TOK="$(curl -s -m 25 -X POST -H 'Content-Type: application/json' \
     -d "{\"api_key\":\"$KEY\"}" "$URL/api/session/exchange" 2>/dev/null \
-    | python3 -c 'import sys,json;print(json.load(sys.stdin).get("auth_token",""))' 2>/dev/null)"
+    | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("token") or d.get("auth_token") or "")' 2>/dev/null)"
 fi
 [ -n "$TOK" ] || { echo "ERROR: el movil no acepto la credencial (403?)" >&2; exit 3; }
 
 case "${1:-}" in
   list)
-    curl -s -m 30 -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+    curl -s -m 30 -X POST -H "Authorization: Bearer $TOK" -H "X-Seere-Auth-Token: $TOK" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
       -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$URL/mcp" \
       | python3 -c 'import sys,json;d=json.load(sys.stdin);[print(" ",t["name"],"-",(t.get("description") or "")[:90]) for t in d["result"]["tools"]]'
     ;;
   raw)
-    curl -s -m 30 -H "Authorization: Bearer $TOK" "$URL$2"
+    curl -s -m 30 -H "Authorization: Bearer $TOK" -H "X-Seere-Auth-Token: $TOK" -H "X-API-Key: $KEY" "$URL$2"
     ;;
   "")
     echo "uso: md_mcp.sh <herramienta> '<args json>' | list | raw <ruta>" >&2; exit 2 ;;
   *)
     ARGS="${2:-\{\}}"
-    curl -s -m 180 -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+    curl -s -m 180 -X POST -H "Authorization: Bearer $TOK" -H "X-Seere-Auth-Token: $TOK" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
       -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"$1\",\"arguments\":$ARGS}}" \
       "$URL/mcp" \
       | python3 -c '
