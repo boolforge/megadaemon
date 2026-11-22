@@ -15,7 +15,16 @@ fn run()->Result<(),String>{
  let mut offset=None;let mut text_base=None;let mut module_index=0u32;let mut i=2;
  while i<a.len(){match a[i].as_str(){"--offset"=>{i+=1;offset=Some(number(a.get(i).ok_or("missing --offset value")?)?);},"--text-base"=>{i+=1;text_base=Some(number(a.get(i).ok_or("missing --text-base value")?)?);},"--module-index"=>{i+=1;module_index=a.get(i).ok_or("missing module index")?.parse().map_err(|e|format!("bad module index: {e}"))?;},"--out"=>{i+=1;out=Some(a.get(i).ok_or("missing output path")?.clone());},x=>return Err(format!("unknown option {x}"))}i+=1;}
  let bytes=fs::read(&path).map_err(|e|format!("read {path}: {e}"))?;
- let opt=ParseOptions{module_index,file_offset:offset.ok_or("--offset is required")?,text_base,..Default::default()};
+ // Si el llamante NO da --text-base, se estima desde las secciones del
+ // contenedor (ver container::text_base_hint).  Es una estimacion: el
+ // valor definitivo sale de moduledata.text, que este crate no localiza.
+ let (text_base,text_base_source)=match text_base{
+  Some(v)=>(Some(v),Some("explicitly-supplied")),
+  None=>{let rep=scan_container(&bytes).map_err(|e|e.to_string())?;
+        let h=rep.text_base_hint.and_then(|h|h.strip_prefix("0x").and_then(|x|u64::from_str_radix(x,16).ok()));
+        (h,h.map(|_|"estimated-from-container-sections (runtime.text NOT verified)"))}
+ };
+ let opt=ParseOptions{module_index,file_offset:offset.ok_or("--offset is required")?,text_base,text_base_source,..Default::default()};
  let result=parse_go118_plus(&bytes,opt).map_err(|e|e.to_string())?;output(&result,out)
 }
 fn main(){if let Err(e)=run(){eprintln!("error: {e}");process::exit(2);}}

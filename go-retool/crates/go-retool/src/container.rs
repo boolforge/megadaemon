@@ -21,7 +21,42 @@ pub struct PclnCandidate{
 pub struct ContainerReport{
  pub format:String,pub architecture:String,pub endianness:String,
  pub is_64:bool,pub sections:Vec<SectionInfo>,pub pclntab_candidates:Vec<PclnCandidate>,
+ /// Base de texto estimada del modulo Go (VERIFICAR antes de fiarse).
+ ///
+ /// MEDIDO 2026-11-22 (liblanguage_server.so de Antigravity, Go 1.28 RC02,
+ /// layout 1.20, minLC=4): el `pcHeader.textStart` de una BIBLIOTECA
+ /// compartida vale 0 (el linker no puede conocer la VA final), y la
+ /// seccion `.text` NO empieza en el texto de Go: hay secciones
+ /// auxiliares antes (`.text.hot` con TAMANO 0 justo en el arranque del
+ /// texto).  El valor real de `runtime.text` resulto ser 0x4d06cb8, que
+ /// es la direccion de `.text.hot` (tamano 0) y NO la de `.text`.
+ ///
+ /// Regla usada: minima direccion entre las secciones cuyo nombre empieza
+ /// por ".text" (incluidas las de tamano 0).  Es una ESTIMACION: el valor
+ /// definitivo sale de `moduledata.text`, que este crate no localiza aun.
+ pub text_base_hint:Option<String>,
  pub warnings:Vec<String>,
+}
+
+/// Estima la base de texto de un modulo Go a partir de las secciones.
+///
+/// MEDIDO 2026-11-22 en el binario real de Antigravity (Go 1.28 RC02):
+/// la base correcta es 0x4d06cb8 (= `.text.hot`, seccion de TAMANO 0),
+/// mientras que `.text` empieza en 0x4d0f000.  Usar `.text` deja las
+/// VAs desplazadas ~0x8330 bytes y los nombres NO cuadran con las
+/// direcciones (comprobado contra `unstrip` y contra la tabla de
+/// funciones del agente de RE: 161.682/161.682 direcciones coinciden).
+///
+/// Por eso la regla mira TODAS las secciones ".text*" y se queda con la
+/// MENOR direccion, aunque su tamano sea 0.
+pub fn text_base_hint(sections:&[SectionInfo])->Option<u64>{
+ let mut best:Option<u64>=None;
+ for s in sections{
+  if !s.name.starts_with(".text"){continue;}
+  let addr=s.section_address.strip_prefix("0x").and_then(|h|u64::from_str_radix(h,16).ok())?;
+  best=Some(match best{Some(b) if b<=addr=>b,_=>addr});
+ }
+ best
 }
 #[derive(Debug,Clone)]
 struct Mapping{start:u64,size:u64,address:u64,name:String}
@@ -54,7 +89,8 @@ pub fn scan_container(data:&[u8])->Result<ContainerReport>{
   let section_address=mapping.and_then(|m|m.address.checked_add(off as u64-m.start)).map(|v|format!("0x{v:x}"));
   candidates.push(PclnCandidate{file_offset:format!("0x{off:x}"),magic:format!("0x{magic:08x}"),pointer_size:module.pointer_size,min_lc:module.min_instruction_size,nfunc:module.nfunc,names_resolved:names,section,section_address,address_domain:address_domain.clone(),address_status:"container section address only; Go text base unresolved".into()});
  }
- Ok(ContainerReport{format:format_name,architecture:format!("{:?}",file.architecture()),endianness:if file.is_little_endian(){"little"}else{"big"}.into(),is_64:file.is_64(),sections,pclntab_candidates:candidates,warnings:vec!["Only little-endian Go 1.18/1.20 magic-family pclntab candidates are parsed by this MVP.".into(),"Section address is the address of the pclntab bytes in the container section (format-specific, e.g. PE RVA), not moduledata.text; no function VA is derived from it.".into(),"Container section mappings do not resolve relocations, ASLR, secondary text sections, or runtime-loaded plugins.".into()]})
+ let tbh=text_base_hint(&sections);
+ Ok(ContainerReport{format:format_name,text_base_hint:tbh.map(|v|format!("0x{v:x}")),architecture:format!("{:?}",file.architecture()),endianness:if file.is_little_endian(){"little"}else{"big"}.into(),is_64:file.is_64(),sections,pclntab_candidates:candidates,warnings:vec!["Only little-endian Go 1.18/1.20 magic-family pclntab candidates are parsed by this MVP.".into(),"Section address is the address of the pclntab bytes in the container section (format-specific, e.g. PE RVA), not moduledata.text; no function VA is derived from it.".into(),"Container section mappings do not resolve relocations, ASLR, secondary text sections, or runtime-loaded plugins.".into()]})
 }
 
 #[cfg(test)]mod tests{

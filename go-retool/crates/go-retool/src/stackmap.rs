@@ -29,6 +29,10 @@ pub fn decode_stackmap(data:&[u8], max_maps:u32, max_bits:u32)->Result<StackMap>
 
 #[cfg(test)]mod tests{
  use super::*;
- #[test]fn lsb_first_and_multiple_maps(){let d=[2,0,0,0,9,0,0,0,0b0000_0101,0b0000_0010,0b0000_0001,0b0000_0000];let m=decode_stackmap(&d,8,32).unwrap();assert_eq!(m.maps[0],vec![true,false,true,false,false,false,false,false,true]);assert_eq!(m.maps[1],vec![true,false,false,false,false,false,false,false,false]);}
+ /// MEDIDO 2026-11-22: el test original usaba el byte 0b0000_0010 para
+ /// esperar que el bit 8 (el noveno) fuera 1, pero con el orden LSB-first
+ /// de `runtime.bitvector.ptrbit` ese byte pone a 1 el bit 9, no el 8: el
+ /// TEST estaba mal, el decoder era correcto.  Aqui se usa 0b0000_0001.
+ #[test]fn lsb_first_and_multiple_maps(){let d=[2,0,0,0,9,0,0,0,0b0000_0101,0b0000_0001,0b0000_0001,0b0000_0000];let m=decode_stackmap(&d,8,32).unwrap();assert_eq!(m.maps[0],vec![true,false,true,false,false,false,false,false,true]);assert_eq!(m.maps[1],vec![true,false,false,false,false,false,false,false,false]);}
  #[test]fn rejects_negative_dimensions(){let mut d=vec![0;8];d[..4].copy_from_slice(&(-1i32).to_le_bytes());assert!(decode_stackmap(&d,10,100).is_err());}
 }
