@@ -299,6 +299,16 @@ fn requires_auth(path: &str, _method: &str, local_browser: bool) -> bool {
     // página** que sirve el propio daemon (y el puente lo inyecta); "local"
     // se decide además por el **peer loopback real**, no sólo por el `Host`.
     let _ = local_browser;
+    // v16 (asimilación de Antigravity): el language server de Antigravity
+    // (`com.agy`, 127.0.0.1:45157) habla con el gateway **sin** poder
+    // enviar nuestro token de sesión (no es un cliente del cockpit).  Se le
+    // exime del token **sólo** en las rutas del dialecto Gemini y **sólo**
+    // si la petición es local (peer loopback + Host loopback + sin
+    // cabeceras de proxy): el túnel público (Host del dominio) sigue
+    // exigiendo API key ⇒ no se abre nada al exterior.
+    if local_browser && crate::llm_gateway::gemini_route(path).is_some() {
+        return false;
+    }
     true
 }
 
@@ -1245,6 +1255,39 @@ fn handle_client(mut stream: TcpStream) {
                                 }
                             }),
                         );
+                    }
+                }
+            }
+            // Dialecto GEMINI: el idioma que habla el language server de
+            // Antigravity (MEDIDO 2026-11-22 en `liblanguage_server.so`:
+            // `genai.Models.generateContent` + las rutas `/v1internal:*`).
+            // Es la vía por la que **Antigravity usa el MegaDaemon canónico**
+            // como su modelo (BYOM): el IDE manda `contents` y recibe
+            // `candidates`; el daemon decide el proveedor (routing + fallback).
+            p if crate::llm_gateway::gemini_route(p).is_some() => {
+                let body: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);
+                let ruta = crate::llm_gateway::gemini_route(path);
+                let stream_sse = ruta.as_ref().map(|r| r.stream).unwrap_or(false);
+                if stream_sse {
+                    match crate::llm_gateway::gemini_stream_sse(&body) {
+                        Ok(sse) => send_http_response(
+                            &mut stream,
+                            200,
+                            "text/event-stream; charset=utf-8",
+                            sse.as_bytes(),
+                        ),
+                        Err(e) => send_json(
+                            &mut stream,
+                            &json!({ "error": { "message": e.message, "code": e.status } }),
+                        ),
+                    }
+                } else {
+                    match crate::llm_gateway::gemini_generate_content(&body) {
+                        Ok(v) => send_json(&mut stream, &v),
+                        Err(e) => send_json(
+                            &mut stream,
+                            &json!({ "error": { "message": e.message, "code": e.status } }),
+                        ),
                     }
                 }
             }

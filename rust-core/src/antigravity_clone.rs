@@ -13,9 +13,27 @@
 //! megadaemon-core... En cuanto termine, verificaré drive-vfs..."*).
 //!
 //! Este módulo **unifica**: el binario que usa Antigravity pasa a ser
-//! **exactamente** el binario canónico que se auto-actualiza, y el código
-//! del clon se sincroniza con `main` por HTTP (el móvil **no tiene `git`**:
-//! `git: inaccessible or not found`).
+//! **exactamente** el binario canónico que se auto-actualiza.
+//!
+//! ASIMILACIÓN 2026-11-22 (qué se queda y qué se va)
+//! ----------------------------------------------------
+//! * **Se queda**: la **medición** ([`estado`], [`estado_clon`],
+//!   [`estado_runtime`]) y la **unificación** ([`unificar_runtime`]).
+//!   Medir la duplicidad es lo que permite governedla.
+//! * **Se va**: el **segundo motor de pull** que tenía este módulo (bajaba
+//!   el tarball de `main` y lo aplicaba sobre el clon).  Ahora
+//!   [`sincronizar_codigo`] **delega** en el mecanismo canónico
+//!   (`deploy/instalador-megadaemon.sh --instalar`); el daemon ya tiene su
+//!   propio auto-update (`self_update`) y una segunda implementación del
+//!   "pull" dentro del daemon es exactamente el *doble motor* que hay que
+//!   eliminar.
+//!
+//! CORRECCIÓN DE UNA AFIRMACIÓN FALSA (MEDIDO 2026-11-22)
+//! ----------------------------------------------------
+//! La versión anterior de este módulo decía *"el móvil **no** tiene `git`"*.
+//! Es **FALSO**: el runtime de Antigravity trae un userland Termux completo
+//! con `git 2.56.0` (ver `antigravity_env.rs`, que lo cataloga).  Ninguna
+//! función de este módulo debe volver a suponer que no hay `git`.
 //!
 //! Todo es reversible: antes de tocar nada se hace una copia de lo que se
 //! va a sustituir.
@@ -258,164 +276,102 @@ pub fn unificar_runtime() -> Result<ReporteUnificar, String> {
 }
 
 // ---------------------------------------------------------------------------
-// Sincronización del código del clon
+// Sincronización del código: DELEGADA (puente fino)
 // ---------------------------------------------------------------------------
 
-/// Resultado de sincronizar el código.
+/// Resultado de la sincronización del código del clon.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ReporteSync {
+    /// ¿Se aplicó algún cambio?
     pub aplicado: bool,
+    /// Commit al que apunta el clon (informativo).
     pub commit: Option<String>,
+    /// Nº de ficheros escritos (0 en la vía delegada).
     pub ficheros_escritos: usize,
+    /// Bytes escritos (0 en la vía delegada).
     pub bytes_escritos: u64,
+    /// Respaldos hechos (vacío en la vía delegada).
     pub respaldos: Vec<String>,
+    /// Qué se ha hecho y por qué.
     pub detalle: String,
+    /// Ruta del mecanismo **canónico** que se ha usado (si lo hay).
+    pub mecanismo_canonico: Option<String>,
+    /// Si el clon está desfasado respecto a lo esperado.
+    pub desfasado: bool,
 }
 
-/// Descarga `main` de GitHub y lo aplica sobre el clon de Antigravity.
+/// Sincroniza el código del clon **delegando** en el mecanismo canónico.
 ///
-/// El móvil **no tiene `git`**, así que el "pull" lo hace el daemon:
-/// 1. descarga el tarball de `main`;
-/// 2. lo extrae en un staging (con `TarStream`, que ya sabe saltar el
-///    relleno USTAR);
-/// 3. **respalda** los ficheros que van a cambiar;
-/// 4. los copia encima (sin tocar `.git`: el historial es de Antigravity);
-/// 5. anota el commit en `state/main_commit`.
+/// DECISIÓN (asimilación de Antigravity, 2026-11-22)
+/// --------------------------------------------------
+/// Este módulo **tenía** su propio motor de *pull*: descargaba el tarball de
+/// `main` de GitHub y lo aplicaba encima del clon con su propio gestor de
+/// respaldos.  Eso era **el segundo motor**: el daemon ya tiene el suyo
+/// (`self_update` para el binario y `deploy/instalador-megadaemon.sh` para la
+/// instalación completa), y el clon de Antigravity es una **copia** que la
+/// propia IDE no necesita para nada: la IDE sólo necesita el **binario**, y
+/// ése ya queda unificado con el canónico por [`unificar_runtime`].
+///
+/// Aquí no se borra nada sin sustituto: el equivalente canónico es
+///
+/// * **binario** → [`unificar_runtime`] (copia el binario canónico al runtime
+///   de Antigravity: mismo binario, misma versión, mismo auto-update), y
+/// * **instalación completa** → `deploy/instalador-megadaemon.sh --instalar`.
+///
+/// Si el instalador canónico está presente en el dispositivo, se le llama;
+/// si no, se informa con exactitud de qué falta (sin inventar).
 pub fn sincronizar_codigo() -> Result<ReporteSync, String> {
-    let url = format!("https://github.com/{REPO}/archive/refs/heads/main.tar.gz");
-    // ureq 3.x sigue los redirecciones por defecto (el tarball de GitHub
-    // redirige a codeload); no hay `redirects()` en el builder de 3.5.2.
-    let cliente = ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_secs(120)))
-        .timeout_connect(Some(std::time::Duration::from_secs(10)))
-        .build()
-        .new_agent();
-    let resp = cliente
-        .get(&url)
-        .call()
-        .map_err(|e| format!("GET {url}: {e}"))?;
-    let mut tar = Vec::new();
-    {
-        let mut cuerpo = resp.into_body();
-        std::io::copy(&mut cuerpo.as_reader(), &mut tar)
-            .map_err(|e| format!("descargando el tarball: {e}"))?;
-    }
-    let staging = estado_dir().join("antigravity_sync/staging");
-    let _ = std::fs::remove_dir_all(&staging);
-    std::fs::create_dir_all(&staging).map_err(|e| format!("mkdir staging: {e}"))?;
+    let clon = estado_clon();
+    let instalador = instalador_canonico();
+    let commit = clon.commit.clone();
 
-    let gz = flate2::read::GzDecoder::new(std::io::Cursor::new(tar));
-    let mut ts = crate::backup_formats::TarStream::new(gz);
-    let mut escritos = 0usize;
-    let mut bytes = 0u64;
-    let mut commit = None;
-    while let Some(entrada) = ts.next_entry().map_err(|e| format!("tar: {e}"))? {
-        // El tarball de GitHub viene con un directorio de primer nivel
-        // (`megadaemon-main/`): se quita para escribir en la raíz del clon.
-        let relativa = match entrada.name.split_once('/') {
-            Some((_, resto)) => resto.to_string(),
-            None => continue,
-        };
-        if relativa.is_empty() || relativa.starts_with(".git/") {
-            continue;
-        }
-        if entrada.typeflag == b'5' {
-            let _ = std::fs::create_dir_all(staging.join(&relativa));
-            continue;
-        }
-        if entrada.typeflag != b'0' && entrada.typeflag != b'\0' {
-            continue;
-        }
-        let destino = staging.join(&relativa);
-        if let Some(p) = destino.parent() {
-            let _ = std::fs::create_dir_all(p);
-        }
-        let mut f = std::fs::File::create(&destino).map_err(|e| format!("crear {destino:?}: {e}"))?;
-        let n = ts
-            .copy_data(&mut f)
-            .map_err(|e| format!("escribir {destino:?}: {e}"))?;
-        drop(f);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&destino, std::fs::Permissions::from_mode(entrada.mode & 0o777));
-        }
-        escritos += 1;
-        bytes += n;
-    }
-
-    // El commit exacto viene del tarball: `megadaemon-main/.git_archival.txt`
-    // no existe, pero GitHub añade el sha en la carpetaFather: se toma del
-    // `.git/HEAD` del clon si existe; si no, del fichero de estado.
-    let clon_commit = estado_clon().commit;
-    commit = clon_commit.clone();
-
-    // Respaldo + copia.
-    let mut respaldos = Vec::new();
-    let base = Path::new(CLON);
-    let marca = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let raiz_respaldo = estado_dir().join(format!("antigravity_sync/respaldo_{marca}"));
-    copiar_con_respaldo(&staging, base, &raiz_respaldo, &mut respaldos)?;
-    let _ = std::fs::remove_dir_all(&staging);
-
-    let mut rep = ReporteSync {
-        aplicado: true,
-        commit,
-        ficheros_escritos: escritos,
-        bytes_escritos: bytes,
-        respaldos,
-        detalle: format!("sincronizado desde {url}"),
+    let Some(instalador) = instalador else {
+        return Ok(ReporteSync {
+            aplicado: false,
+            commit,
+            ficheros_escritos: 0,
+            bytes_escritos: 0,
+            respaldos: Vec::new(),
+            detalle: format!(
+                "sin motor de sincronización propio (ASIMILADO): la fuente canónica es el repo \
+                 (main de {REPO}) y el binario canónico ya está unificado en {RUNTIME}. \
+                 Para una instalación completa usa deploy/instalador-megadaemon.sh --instalar."
+            ),
+            mecanismo_canonico: None,
+            desfasado: clon.commit.is_none(),
+        });
     };
-    if let Some(c) = &rep.commit {
-        let _ = std::fs::write(estado_dir().join("main_commit"), c);
-    }
-    Ok(rep)
+
+    // El instalador canónico se delega: el daemon no reimplementa el pull.
+    let salida = crate::android::root_exec(&format!("sh '{}' --instalar", instalador), 300_000, 64 * 1024);
+    Ok(ReporteSync {
+        aplicado: salida.code == Some(0),
+        commit,
+        ficheros_escritos: 0,
+        bytes_escritos: 0,
+        respaldos: Vec::new(),
+        detalle: format!(
+            "sincronización DELEGADA al instalador canónico ({}){}{}",
+            instalador,
+            salida.stdout.lines().last().unwrap_or(""),
+            if salida.timed_out { " (TIEMPO AGOTADO)" } else { "" }
+        ),
+        mecanismo_canonico: Some(instalador),
+        desfasado: false,
+    })
 }
 
-/// Copia `origen` sobre `destino`, guardando en `respaldo` lo que cambia.
-fn copiar_con_respaldo(
-    origen: &Path,
-    destino: &Path,
-    respaldo: &Path,
-    respaldos: &mut Vec<String>,
-) -> Result<(), String> {
-    let mut pila = vec![origen.to_path_buf()];
-    while let Some(dir) = pila.pop() {
-        let rd = match std::fs::read_dir(&dir) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        for ent in rd.flatten() {
-            let p = ent.path();
-            let rel = p.strip_prefix(origen).unwrap_or(&p);
-            let d = destino.join(rel);
-            if p.is_dir() {
-                let _ = std::fs::create_dir_all(&d);
-                pila.push(p);
-            } else {
-                let bytes = std::fs::read(&p).map_err(|e| format!("leer {p:?}: {e}"))?;
-                // Si el destino existe y es distinto, se respalda.
-                if let Ok(prev) = std::fs::read(&d) {
-                    if prev != bytes {
-                        let r = respaldo.join(rel);
-                        if let Some(parent) = r.parent() {
-                            let _ = std::fs::create_dir_all(parent);
-                        }
-                        let _ = std::fs::write(&r, &prev);
-                        respaldos.push(r.to_string_lossy().to_string());
-                    }
-                }
-                if let Some(parent) = d.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                std::fs::write(&d, &bytes).map_err(|e| format!("escribir {d:?}: {e}"))?;
-            }
+/// Ruta del instalador canónico en el dispositivo (si está).
+fn instalador_canonico() -> Option<String> {
+    for cand in [
+        "/data/local/tmp/megadaemon/instalador-megadaemon.sh",
+        "/data/user/0/com.agy/files/megadaemon/deploy/instalador-megadaemon.sh",
+    ] {
+        if Path::new(cand).exists() {
+            return Some(cand.to_string());
         }
     }
-    Ok(())
+    None
 }
 
 // ---------------------------------------------------------------------------

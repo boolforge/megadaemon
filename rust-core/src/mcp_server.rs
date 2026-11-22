@@ -38,6 +38,14 @@ pub fn tool_definitions() -> Value {
         if let Some(ext_arr) = crate::mcp_ext::tool_definitions().as_array().cloned() {
             arr.extend(ext_arr);
         }
+        // v16 (asimilación de Antigravity): el modelo de la IDE y el entorno
+        // que trae dentro son ya capacidades del daemon (una sola fuente).
+        if let Some(m_arr) = crate::antigravity_model::tool_definitions().as_array().cloned() {
+            arr.extend(m_arr);
+        }
+        if let Some(e_arr) = crate::antigravity_env::tool_definitions().as_array().cloned() {
+            arr.extend(e_arr);
+        }
     }
     base
 }
@@ -338,6 +346,24 @@ pub fn dispatch_tool(name: &str, args: &Value) -> Value {
             // invocación aquí => el MCP respondía "Unknown tool" a tools que
             // él mismo acababa de anunciar.  Ahora se enrutan.
             if let Some(r) = crate::mcp_ext::dispatch(name, args) {
+                let text = serde_json::to_string_pretty(&r).unwrap_or_default();
+                return json!({
+                    "content": [{ "type": "text", "text": text }],
+                    "structuredContent": r,
+                    "isError": r.get("ok").and_then(|v| v.as_bool()) == Some(false),
+                });
+            }
+            // v16 (asimilación de Antigravity): mismas reglas de contrato
+            // (content + structuredContent + isError).
+            if let Some(r) = crate::antigravity_model::dispatch(name, args) {
+                let text = serde_json::to_string_pretty(&r).unwrap_or_default();
+                return json!({
+                    "content": [{ "type": "text", "text": text }],
+                    "structuredContent": r,
+                    "isError": r.get("ok").and_then(|v| v.as_bool()) == Some(false),
+                });
+            }
+            if let Some(r) = crate::antigravity_env::dispatch(name, args) {
                 let text = serde_json::to_string_pretty(&r).unwrap_or_default();
                 return json!({
                     "content": [{ "type": "text", "text": text }],

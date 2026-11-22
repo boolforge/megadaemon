@@ -1932,6 +1932,16 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             let dir = std::path::PathBuf::from(crate::mesh::default_state_dir());
             crate::store_manager::handle_action(&action, args, &dir)
         }
+        // v16 (asimilación de Antigravity): las tools de los módulos de
+        // asimilación se enrutan AQUÍ también, para que `agent_coding`
+        // (que usa `megadaemon_tool` -> `mcp_ext::dispatch`) llegue a ellas
+        // con la misma paridad que el MCP y la CLI.
+        "antigravity_model" => {
+            return crate::antigravity_model::dispatch(name, args);
+        }
+        "antigravity_env" => {
+            return crate::antigravity_env::dispatch(name, args);
+        }
         _ => return None,
     };
     let _ = i("unused");
