@@ -1927,6 +1927,36 @@ fn handle_client(mut stream: TcpStream) {
         // dentro del gate de autenticacion (API key + token de sesion) y el
         // modulo marca como "sensible" lo que parece una clave/OTP y no lo
         // persiste en el historial.
+        // v18 — Panel de las sesiones de Antigravity + estado del clon.
+        //
+        // GET /api/antigravity/sesiones  -> estado agregado + lista
+        // GET /api/antigravity/estado    -> clon de codigo + runtime
+        //
+        // Permite a la flota VER y CONTROLAR lo que hace Antigravity sin
+        // depender del language server (gRPC con auth de Google), que esta
+        // bloqueado con 401.
+        "/api/antigravity/sesiones" => {
+            let limite = qp
+                .get("limit")
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(50);
+            match crate::antigravity_sessions::estado() {
+                Ok(e) => {
+                    let sesiones = crate::antigravity_sessions::sesiones()
+                        .map(|v| v.into_iter().take(limite).collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    send_json(
+                        &mut stream,
+                        &json!({ "ok": true, "estado": e, "sesiones": sesiones }),
+                    );
+                }
+                Err(err) => send_json(&mut stream, &json!({ "ok": false, "error": err })),
+            }
+        }
+        "/api/antigravity/estado" => {
+            let est = crate::antigravity_clone::estado();
+            send_json(&mut stream, &serde_json::to_value(est).unwrap_or(json!({})));
+        }
         "/api/clipboard" => {
             let mut b = body_json.clone();
             let action = b

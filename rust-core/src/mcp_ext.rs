@@ -567,6 +567,21 @@ pub fn tool_definitions() -> Value {
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
+            "name": "antigravity_sessions",
+            "description": "Panel de control de las SESIONES de Antigravity en el movil: lee conversation_summaries.db y devuelve cada conversacion con su estado (CASCADE_RUN_STATUS_*), pasos, si esta MUERTA (killed=1, sub-agente matado), si sigue con trabajo pendiente, el workspace, el padre y la jerarquia, el battle_id y la variante ganadora. Tambien expone las tareas del planificador interno (daemon/tasks.json). Es solo lectura: no toca la app.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "state", "dead", "tasks"],
+                        "description": "list = todas las sesiones; state = agregado; dead = solo las muertas; tasks = planificador interno (por defecto: state)"
+                    },
+                    "limit": { "type": "integer", "description": "Maximo de sesiones a devolver (por defecto 50)." }
+                }
+            }
+        },
+        {
             "name": "csc_verify",
             "description": "Verificador post-parche del CSC: lee el CSC activo (mps_code.dat), descifra el cscfeature.xml OMC del movil, comprueba el valor de CscFeature_VoiceCall_ConfigRecording, lo contrasta con el fileSize de contents.db, busca copias en claro del framework y devuelve el mapa vivo de los CSC con la feature. Con expect_value exige un valor EXACTO (p.ej. 'RecordingAllowed' o 'RecordingAllowedByMenu,disclaimer_latin'): si el valor presente difiere devuelve verdict MISMATCH, y siempre indica la variante (sin-disclaimer / con-disclaimer / apagado).",
             "inputSchema": {
@@ -709,6 +724,28 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             let rep = crate::npu_vs4l::probe();
             let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
             json!({ "content": [{ "type": "text", "text": txt }] })
+        }
+        "antigravity_sessions" => {
+            // Instrumentacion de las sesiones de Antigravity (solo lectura).
+            let accion = {
+                let a = s("action");
+                if a.trim().is_empty() { "state".to_string() } else { a }
+            };
+            let limite = if n("limit") == 0 { 50 } else { n("limit") as usize };
+            let salida = match accion.as_str() {
+                "list" => crate::antigravity_sessions::sesiones()
+                    .map(|v| json!({ "ok": true, "sesiones": v.into_iter().take(limite).collect::<Vec<_>>() })),
+                "dead" => crate::antigravity_sessions::muertas()
+                    .map(|v| json!({ "ok": true, "muertas": v.into_iter().take(limite).collect::<Vec<_>>() })),
+                "tasks" => crate::antigravity_sessions::tareas_daemon()
+                    .map(|v| json!({ "ok": true, "tareas": v })),
+                _ => crate::antigravity_sessions::estado()
+                    .map(|v| json!({ "ok": true, "estado": v })),
+            };
+            match salida {
+                Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
+                Err(e) => json!({ "content": [{ "type": "text", "text": format!("antigravity_sessions: {e}") }], "isError": true }),
+            }
         }
         "csc_verify" => {
             // `expect_value` exige un valor EXACTO de la feature: el verificador
