@@ -107,6 +107,27 @@ def main():
         print(json.dumps([row(t) for t in selected], indent=2, ensure_ascii=False))
         return 0
 
+    # MODO PENDIENTES: para el catch-up del supervisor sólo hacen falta el
+    # identificador y el COMANDO.  Antes se emitía la fila completa (11
+    # columnas) y el supervisor leía `id cmd`Tomando la 2ª columna, que es
+    # el NOMBRE de la tarea: medido en el móvil,
+    #   "sh: 1: minimax_bootstrap: not found"
+    # Ahora `--pending` emite exactamente 2 columnas (id y command) y el
+    # supervisor las lee sin ambigüedad.
+    if "--pending" in flags:
+        # Cabecera OBLIGATORIA: el supervisor lee con `tail -n +2` para
+        # saltarse la primera linea.  Sin cabecera, `tail -n +2` se come la
+        # PRIMERA tarea pendiente y el catch-up no ejecuta nada (medido
+        # 2026-11-22: la tarea `minimax_bootstrap` seguia sin ejecutarse).
+        print("\t".join(["id", "command"]))
+        for task in selected:
+            data = row(task)
+            print("\t".join([
+                str(data["id"]),
+                str(data["command"]).replace("\t", " ").replace("\n", " "),
+            ]))
+        return 0
+
     print("\t".join([
         "id", "name", "enabled", "trigger_type", "interval_sec", "run_at_iso",
         "last_run_status", "last_run_duration_s", "last_run_iso",

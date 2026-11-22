@@ -87,6 +87,17 @@ catchup_pending() {
   [ -f "$_helper" ] || return 0
   _out="$("$_py" "$_helper" --pending "$TASKS_JSON" 2>/dev/null | tail -n +2)"
   [ -n "$_out" ] || return 0
+  # BUG REAL (medido 2026-11-22): el TSV de `antigravity-tasks.py` tiene las
+  # columnas  id, name, enabled, trigger_type, interval_sec, run_at_iso,
+  # last_run_status, last_run_duration_s, last_run_iso, command_digest,
+  # command  => el COMANDO es la columna 11, no la 2.  Leyendo `id cmd` se
+  # ejecutaba el NOMBRE de la tarea: medido en el movil,
+  #   "sh: 1: minimax_bootstrap: not found"
+  # Por eso el catch-up lanzaba la tarea equivocada.  Aqui se toman la
+  # primera y la ULTIMA columna.
+  # `antigravity-tasks.py --pending` emite exactamente 2 columnas:
+  # id<TAB>command (ver el comentario en el helper: antes emitia 11 y el
+  # catch-up ejecutaba el NOMBRE de la tarea en vez del comando).
   echo "$_out" | while IFS="$(printf '\t')" read -r id cmd; do
     [ -n "$id" ] || continue
     [ -n "$cmd" ] || continue
