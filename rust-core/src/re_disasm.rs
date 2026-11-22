@@ -64,7 +64,9 @@ pub fn disasm_x86_iced(code: &[u8], bitness: u32, base_addr: u64, max_insns: usi
     }
 }
 
-/// Disassembles ARM64 (`arm64`), ARM (`arm`), or x86_64 (`x86_64`) machine code via `capstone`.
+/// Disassembles machine code across modern & retro ISAs via `capstone`
+/// (`arm64`, `arm`, `x86_64`, `m68k`/`68000`/`68020`, `6800`, `6809`, `6811`, `6309`,
+/// `ppc`/`ppc32`, `ppc64`, `mips`/`mips32`, `mips64`, `riscv32`, `riscv64`, `sparc`).
 pub fn disasm_capstone(code: &[u8], arch: &str, base_addr: u64, max_insns: usize) -> Result<DisasmReport, String> {
     let cs = match arch {
         "arm64" | "aarch64" => Capstone::new()
@@ -80,6 +82,73 @@ pub fn disasm_capstone(code: &[u8], arch: &str, base_addr: u64, max_insns: usize
         "x86_64" | "x64" => Capstone::new()
             .x86()
             .mode(arch::x86::ArchMode::Mode64)
+            .detail(false)
+            .build(),
+        "m68k" | "68000" | "68k" => Capstone::new()
+            .m68k()
+            .mode(arch::m68k::ArchMode::M68k000)
+            .detail(false)
+            .build(),
+        "68020" => Capstone::new()
+            .m68k()
+            .mode(arch::m68k::ArchMode::M68k020)
+            .detail(false)
+            .build(),
+        "6800" | "m6800" => Capstone::new()
+            .m680x()
+            .mode(arch::m680x::ArchMode::M680x6800)
+            .detail(false)
+            .build(),
+        "6809" | "m6809" => Capstone::new()
+            .m680x()
+            .mode(arch::m680x::ArchMode::M680x6809)
+            .detail(false)
+            .build(),
+        "6811" | "m6811" => Capstone::new()
+            .m680x()
+            .mode(arch::m680x::ArchMode::M680x6811)
+            .detail(false)
+            .build(),
+        "6309" => Capstone::new()
+            .m680x()
+            .mode(arch::m680x::ArchMode::M680x6309)
+            .detail(false)
+            .build(),
+        "ppc" | "ppc32" | "powerpc" => Capstone::new()
+            .ppc()
+            .mode(arch::ppc::ArchMode::Mode32)
+            .endian(capstone::Endian::Big)
+            .detail(false)
+            .build(),
+        "ppc64" => Capstone::new()
+            .ppc()
+            .mode(arch::ppc::ArchMode::Mode64)
+            .endian(capstone::Endian::Big)
+            .detail(false)
+            .build(),
+        "mips" | "mips32" => Capstone::new()
+            .mips()
+            .mode(arch::mips::ArchMode::Mips32)
+            .detail(false)
+            .build(),
+        "mips64" => Capstone::new()
+            .mips()
+            .mode(arch::mips::ArchMode::Mips64)
+            .detail(false)
+            .build(),
+        "riscv32" => Capstone::new()
+            .riscv()
+            .mode(arch::riscv::ArchMode::RiscV32)
+            .detail(false)
+            .build(),
+        "riscv64" | "riscv" => Capstone::new()
+            .riscv()
+            .mode(arch::riscv::ArchMode::RiscV64)
+            .detail(false)
+            .build(),
+        "sparc" => Capstone::new()
+            .sparc()
+            .mode(arch::sparc::ArchMode::Default)
             .detail(false)
             .build(),
         other => return Err(format!("unsupported capstone arch '{}'", other)),
@@ -128,7 +197,7 @@ pub fn inspect_binary_provenance(path: &Path) -> Result<serde_json::Value, Strin
         });
         return Ok(serde_json::json!({
             "ok": true,
-            "provenance": ["goblin", "gimli-dwarf-ready"],
+            "provenance": ["goblin", "gimli-dwarf-ready", "wazabin-sleigh-ready"],
             "format": "ELF",
             "is_64": elf.is_64,
             "entry": format!("0x{:x}", elf.entry),
@@ -142,7 +211,7 @@ pub fn inspect_binary_provenance(path: &Path) -> Result<serde_json::Value, Strin
         let pe = PE::parse(&bytes).map_err(|e| format!("goblin PE parse: {}", e))?;
         return Ok(serde_json::json!({
             "ok": true,
-            "provenance": ["goblin"],
+            "provenance": ["goblin", "wazabin-sleigh-ready"],
             "format": "PE",
             "is_64": pe.is_64,
             "entry": format!("0x{:x}", pe.entry),
@@ -184,5 +253,26 @@ mod tests {
         assert_eq!(arm64.count, 2);
         assert_eq!(arm64.instructions[0].text, "nop");
         assert_eq!(arm64.instructions[1].text, "ret");
+    }
+
+    #[test]
+    fn capstone_retro_cpus_m68k_6809_ppc_work() {
+        // M68K: nop (4e 71) rts (4e 75)
+        let m68k = disasm_capstone(&[0x4e, 0x71, 0x4e, 0x75], "m68k", 0x1000, 10).unwrap();
+        assert_eq!(m68k.count, 2);
+        assert_eq!(m68k.instructions[0].text, "nop");
+        assert_eq!(m68k.instructions[1].text, "rts");
+
+        // 6809: nop (12) rts (39)
+        let m6809 = disasm_capstone(&[0x12, 0x39], "6809", 0x8000, 10).unwrap();
+        assert_eq!(m6809.count, 2);
+        assert_eq!(m6809.instructions[0].text, "nop");
+        assert_eq!(m6809.instructions[1].text, "rts");
+
+        // PowerPC big-endian: nop (60 00 00 00) blr (4e 80 00 20)
+        let ppc = disasm_capstone(&[0x60, 0x00, 0x00, 0x00, 0x4e, 0x80, 0x00, 0x20], "ppc", 0x10000, 10).unwrap();
+        assert_eq!(ppc.count, 2);
+        assert_eq!(ppc.instructions[0].text, "nop");
+        assert_eq!(ppc.instructions[1].text, "blr");
     }
 }

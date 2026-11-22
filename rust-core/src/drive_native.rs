@@ -54,19 +54,36 @@ pub fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(hex)
 }
 
-/// Agente HTTP con tiempos acotados.
-fn agent() -> ureq::Agent {
-    let cfg = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(900)))
-        .timeout_connect(Some(Duration::from_secs(20)))
-        .http_status_as_error(false)
-        .build();
-    ureq::Agent::new_with_config(cfg)
+/// Agente HTTP compartido con pool TLS y tiempos acotados.
+pub(crate) fn agent() -> &'static ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        let cfg = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(900)))
+            .timeout_connect(Some(Duration::from_secs(20)))
+            .http_status_as_error(false)
+            .build();
+        ureq::Agent::new_with_config(cfg)
+    })
+}
+
+pub(crate) fn is_transient_status(st: u16) -> bool {
+    matches!(st, 408 | 429 | 500 | 502 | 503 | 504)
+}
+
+pub(crate) fn backoff_with_jitter(attempt: u32) {
+    let base_ms = 500u64.saturating_mul(1u64 << attempt.min(5)).min(16_000);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    let jitter_ms = nanos % 450;
+    std::thread::sleep(Duration::from_millis(base_ms + jitter_ms));
 }
 
 use std::time::Duration;
 
-/// Sube un fichero a Drive (subida resumible, en trozos de 256 KiB).
+/// Sube un fichero a Drive (subida resumible, en trozos de 16 MiB con retry por trozo).
 pub fn upload_file(
     path: &Path,
     name: &str,
@@ -81,34 +98,62 @@ pub fn upload_file(
     let sha = sha256_file(path)?;
     let ag = agent();
 
-    // 1) Sesión de subida resumible.
+    // 1) Sesión de subida resumible con reintentos en 401/429/5xx/timeouts.
     let url = format!(
         "{}?uploadType=resumable&supportsAllDrives=true",
         DRIVE_UPLOAD_API
     );
-    let (ak, av) = google_auth::auth_header(state_dir)?;
-    let resp = ag
-        .post(&url)
-        .header(ak, av)
-        .header("Content-Type", "application/json; charset=UTF-8")
-        .header("X-Upload-Content-Length", size.to_string())
-        .send(file_metadata(name, size, target).as_bytes())
-        .map_err(|e| format!("abrir sesión de subida: {}", e))?;
-    let status = resp.status().as_u16();
-    if status != 200 && status != 201 {
-        let b = resp.into_body().read_to_vec().unwrap_or_default();
-        let txt: String = String::from_utf8_lossy(&b).chars().take(200).collect();
-        return Err(format!("abrir sesión devolvió {}: {}", status, txt));
+    let meta_json = file_metadata(name, size, target);
+    let mut session = String::new();
+    let mut last_err = String::new();
+    for attempt in 0..5u32 {
+        let (ak, av) = google_auth::auth_header(state_dir)?;
+        match ag
+            .post(&url)
+            .header(ak, av)
+            .header("Content-Type", "application/json; charset=UTF-8")
+            .header("X-Upload-Content-Length", size.to_string())
+            .send(meta_json.as_bytes())
+        {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                if status == 200 || status == 201 {
+                    session = resp
+                        .headers()
+                        .get("location")
+                        .and_then(|v| v.to_str().ok())
+                        .ok_or("la sesión de subida no trae la cabecera Location")?
+                        .to_string();
+                    break;
+                }
+                let b = resp.into_body().read_to_vec().unwrap_or_default();
+                let txt: String = String::from_utf8_lossy(&b).chars().take(200).collect();
+                if status == 401 {
+                    google_auth::invalidate();
+                    last_err = format!("401 al abrir sesión: {}", txt);
+                    backoff_with_jitter(attempt);
+                    continue;
+                }
+                if is_transient_status(status) && attempt < 4 {
+                    last_err = format!("{} al abrir sesión: {}", status, txt);
+                    backoff_with_jitter(attempt);
+                    continue;
+                }
+                return Err(format!("abrir sesión devolvió {}: {}", status, txt));
+            }
+            Err(e) if attempt < 4 => {
+                last_err = format!("abrir sesión de subida: {}", e);
+                backoff_with_jitter(attempt);
+            }
+            Err(e) => return Err(format!("abrir sesión de subida: {}", e)),
+        }
     }
-    let session = resp
-        .headers()
-        .get("location")
-        .and_then(|v| v.to_str().ok())
-        .ok_or("la sesión de subida no trae la cabecera Location")?
-        .to_string();
+    if session.is_empty() {
+        return Err(last_err);
+    }
 
     // 2) Trozos de 16 MiB (64 × 256 KiB, múltiplo exacto de la granularidad de Google Drive)
-    // para saturar el enlace sin round-trips por cada 256 KiB.
+    // con retry/backoff por trozo para no perder progreso en 503/429/timeouts.
     let upload_chunk = DRIVE_CHUNK_GRANULARITY * 64;
     let plan = chunk_plan(size, upload_chunk);
     let mut file = File::open(path).map_err(|e| format!("abrir {}: {}", path.display(), e))?;
@@ -133,42 +178,62 @@ pub fn upload_file(
         }
         let end = offset + got as u64 - 1;
         let last = end + 1 >= size;
-        let (ak2, av2) = google_auth::auth_header(state_dir)?;
-        let resp = ag
-            .put(&session)
-            .header(ak2, av2)
-            .header("Content-Range", format!("bytes {}-{}/{}", offset, end, size))
-            .header("Content-Length", got.to_string())
-            .send(&buf[..got])
-            .map_err(|e| format!("subir trozo en {}: {}", offset, e))?;
-        let st = resp.status().as_u16();
-        let body = resp.into_body().read_to_vec().unwrap_or_default();
-        // Google Drive v3 resumable upload returns 308 Resume Incomplete on intermediate chunks
-        // and 200/201 on completion of the final chunk.
-        let chunk_ok = if last {
-            st == 200 || st == 201
-        } else {
-            st == 308 || st == 200 || st == 201
-        };
-        if !chunk_ok {
-            let txt: String = String::from_utf8_lossy(&body).chars().take(200).collect();
-            if st == 401 {
-                google_auth::invalidate();
-                return Err(format!(
-                    "token de Google caducado durante la subida (trozo en {}): {}",
-                    offset, txt
-                ));
+
+        let mut chunk_done = false;
+        let mut chunk_err = String::new();
+        for attempt in 0..5u32 {
+            let (ak2, av2) = google_auth::auth_header(state_dir)?;
+            match ag
+                .put(&session)
+                .header(ak2, av2)
+                .header("Content-Range", format!("bytes {}-{}/{}", offset, end, size))
+                .header("Content-Length", got.to_string())
+                .send(&buf[..got])
+            {
+                Ok(resp) => {
+                    let st = resp.status().as_u16();
+                    let body = resp.into_body().read_to_vec().unwrap_or_default();
+                    let chunk_ok = if last {
+                        st == 200 || st == 201
+                    } else {
+                        st == 308 || st == 200 || st == 201
+                    };
+                    if chunk_ok {
+                        if last {
+                            if let Ok(j) = serde_json::from_slice::<Value>(&body) {
+                                if let Some(id) = j.get("id").and_then(|v| v.as_str()) {
+                                    file_id = id.to_string();
+                                }
+                            }
+                        }
+                        chunk_done = true;
+                        break;
+                    }
+                    let txt: String = String::from_utf8_lossy(&body).chars().take(200).collect();
+                    if st == 401 {
+                        google_auth::invalidate();
+                        chunk_err = format!("401 trozo {}: {}", offset, txt);
+                        backoff_with_jitter(attempt);
+                        continue;
+                    }
+                    if is_transient_status(st) && attempt < 4 {
+                        chunk_err = format!("{} trozo {}: {}", st, offset, txt);
+                        backoff_with_jitter(attempt);
+                        continue;
+                    }
+                    return Err(format!("subir trozo en {} devolvió {}: {}", offset, st, txt));
+                }
+                Err(e) if attempt < 4 => {
+                    chunk_err = format!("subir trozo en {}: {}", offset, e);
+                    backoff_with_jitter(attempt);
+                }
+                Err(e) => return Err(format!("subir trozo en {}: {}", offset, e)),
             }
-            return Err(format!("subir trozo en {} devolvió {}: {}", offset, st, txt));
+        }
+        if !chunk_done {
+            return Err(chunk_err);
         }
         offset += got as u64;
-        if last {
-            if let Ok(j) = serde_json::from_slice::<Value>(&body) {
-                if let Some(id) = j.get("id").and_then(|v| v.as_str()) {
-                    file_id = id.to_string();
-                }
-            }
-        }
     }
 
     if file_id.is_empty() {

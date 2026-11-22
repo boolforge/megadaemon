@@ -473,6 +473,32 @@ fn main() {
             println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_default());
         }
 
+        "drive-vfs" => {
+            let sub = args.get(2).map(|s| s.as_str()).unwrap_or("ls");
+            let vpath = args.get(3).map(|s| s.as_str()).unwrap_or("drive:/");
+            let st = megadaemon_core::cockpit_server::state_dir();
+            let res: Result<serde_json::Value, String> = match sub {
+                "ls" => megadaemon_core::drive_vfs::ls(vpath, Some(&st), 100)
+                    .map(|v| serde_json::to_value(v).unwrap_or(serde_json::Value::Null)),
+                "stat" => megadaemon_core::drive_vfs::stat_path(vpath, Some(&st))
+                    .map(|v| serde_json::to_value(v).unwrap_or(serde_json::Value::Null)),
+                "find" => megadaemon_core::drive_vfs::find_by_name(vpath, Some(&st), 100)
+                    .map(|v| serde_json::to_value(v).unwrap_or(serde_json::Value::Null)),
+                "mkdir" => megadaemon_core::drive_vfs::mkdir_p(vpath, Some(&st))
+                    .map(|id| serde_json::json!({"ok": true, "folder_id": id})),
+                "cat" | "read" => megadaemon_core::drive_vfs::read_file_bytes(vpath, 65536, Some(&st))
+                    .map(|b| serde_json::json!({"ok": true, "bytes": b.len(), "text": String::from_utf8_lossy(&b)})),
+                _ => Err("Uso: megadaemon drive-vfs <ls|stat|find|mkdir|cat> <drive:/path|query>".to_string()),
+            };
+            match res {
+                Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default()),
+                Err(e) => {
+                    eprintln!("drive-vfs error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
         "drive-sync" => {
             let local_dir = args.get(2).map(|s| s.as_str()).unwrap_or("");
             let remote_name = args.get(3).map(|s| s.as_str()).unwrap_or("MegaDaemon_Sync");

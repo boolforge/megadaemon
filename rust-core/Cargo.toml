@@ -67,6 +67,14 @@ gimli = "0.31"
 addr2line = "0.24"
 iced-x86 = "1.21"
 capstone = "0.13"
+# --- SLEIGH + Retro/Modern Pure-Rust RE Ecosystem ---
+wazabin-sleigh = "0.1"
+yaxpeax-arch = "0.3"
+yaxpeax-x86 = "2.2"
+yaxpeax-arm = "0.5"
+yaxpeax-mips = "0.1"
+yaxpeax-avr = "0.1"
+iz80 = "0.5"
 
 [features]
 

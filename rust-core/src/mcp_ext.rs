@@ -185,6 +185,22 @@ pub fn tool_definitions() -> Value {
                 }
             }
         },
+        {
+            "name": "drive_vfs",
+            "description": "Google Drive Virtual Filesystem (ls, stat, read, find, mkdir, write) with SQLite metadata cache for browsing MakeMKV-RE-v6-backup, playground-sdk-research/output, etc.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["ls", "stat", "read", "find", "mkdir", "write"], "default": "ls" },
+                    "path": { "type": "string", "description": "VFS path e.g. drive:/MakeMKV-RE-v6-backup" },
+                    "query": { "type": "string", "description": "Search substring (find)" },
+                    "local_path": { "type": "string", "description": "Local source path (write)" },
+                    "remote_name": { "type": "string", "description": "Target filename (write)" },
+                    "max_bytes": { "type": "integer", "default": 65536 },
+                    "limit": { "type": "integer", "default": 100 }
+                }
+            }
+        },
 
         {
             "name": "clipboard",
@@ -1016,6 +1032,43 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(30) as usize;
             match crate::tool_policy::AuditJournal::open(&db).and_then(|j| j.recent(limit)) {
                 Ok(rows) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&rows).unwrap_or_default() }] }),
+                Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+            }
+        }
+        "drive_vfs" => {
+            let st = crate::cockpit_server::state_dir();
+            let action = {
+                let a = s("action");
+                if a.is_empty() { "ls".to_string() } else { a }
+            };
+            let vpath = {
+                let p = s("path");
+                if p.is_empty() { "drive:/".to_string() } else { p }
+            };
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
+            let res: Result<Value, String> = match action.as_str() {
+                "ls" => crate::drive_vfs::ls(&vpath, Some(&st), limit)
+                    .map(|v| serde_json::to_value(v).unwrap_or(Value::Null)),
+                "stat" => crate::drive_vfs::stat_path(&vpath, Some(&st))
+                    .map(|v| serde_json::to_value(v).unwrap_or(Value::Null)),
+                "find" => crate::drive_vfs::find_by_name(&s("query"), Some(&st), limit)
+                    .map(|v| serde_json::to_value(v).unwrap_or(Value::Null)),
+                "mkdir" => crate::drive_vfs::mkdir_p(&vpath, Some(&st))
+                    .map(|id| json!({"ok": true, "folder_id": id})),
+                "read" => {
+                    let max_b = args.get("max_bytes").and_then(|v| v.as_u64()).unwrap_or(65536) as usize;
+                    crate::drive_vfs::read_file_bytes(&vpath, max_b, Some(&st))
+                        .map(|b| json!({"ok": true, "bytes": b.len(), "text": String::from_utf8_lossy(&b)}))
+                }
+                "write" => {
+                    let lp = s("local_path");
+                    let rn = s("remote_name");
+                    crate::drive_vfs::write_local_file(std::path::Path::new(&lp), &vpath, &rn, Some(&st))
+                }
+                other => Err(format!("unknown drive_vfs action '{}'", other)),
+            };
+            match res {
+                Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
                 Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
             }
         }
