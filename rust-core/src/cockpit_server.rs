@@ -1211,6 +1211,24 @@ fn handle_client(mut stream: TcpStream) {
             // devuelve; el cliente nunca habla con un proveedor suelto.
             // Exige la API key de la instancia (no es una ruta publica: el
             // tunel expone el daemon).
+            // Cuota del modelo: endpoint COMPACTO para que un agente
+            // externo (curl, watchdog, panel) lo consulte sin gastar
+            // tokens de LLM.
+            "/api/quota" => {
+                let full = body_slice.is_empty()
+                    && query
+                        .split('&')
+                        .any(|kv| kv == "full=1" || kv == "full=true");
+                let v = if full {
+                    json!({
+                        "estado": crate::quota_guard::estado(None),
+                        "aviso": crate::quota_guard::aviso_para_agente(),
+                    })
+                } else {
+                    crate::quota_guard::snapshot_compacto()
+                };
+                send_json(&mut stream, &v);
+            }
             "/v1/chat/completions" | "/chat/completions" => {
                 let body: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);
                 match crate::llm_gateway::chat_completions(&body) {

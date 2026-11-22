@@ -448,6 +448,109 @@ pub fn export_tasks(node: &str) -> Value {
     json!({ "ok": true, "node": node, "count": tasks.len(), "tasks": tasks })
 }
 
+/// Exporta **todas** las tareas con su estado (para sincronizar nodos).
+///
+/// `export_tasks` sólo saca las `pending`: para sincronizar hace falta el
+/// estado completo (running, paused, done...).
+pub fn export_all_tasks(node: &str) -> Value {
+    let q = queue().lock().unwrap_or_else(|p| p.into_inner());
+    let tasks: Vec<Value> = q
+        .iter()
+        .map(|t| {
+            json!({
+                "id": t.id, "kind": t.kind, "state": t.state.as_str(),
+                "priority": t.priority, "payload": t.payload,
+                "attempts": t.attempts, "max_attempts": t.max_attempts,
+                "deps": t.deps, "node": t.node, "error": t.error,
+                "resume_after": t.resume_after, "lease_expira": t.lease_expira,
+                "motivo_pausa": t.motivo_pausa,
+                "created_at": t.created_at, "started_at": t.started_at,
+                "finished_at": t.finished_at,
+            })
+        })
+        .collect();
+    json!({ "ok": true, "node": node, "count": tasks.len(), "tasks": tasks })
+}
+
+/// Cuanto "avanzado" está un estado (para la fusión).
+fn rango_estado(s: State) -> u8 {
+    match s {
+        State::Done => 5,
+        State::Running => 4,
+        State::Paused => 3,
+        State::Pending => 2,
+        State::Failed => 1,
+        State::Cancelled => 0,
+    }
+}
+
+/// Fusiona las tareas de otro nodo con las locales **por id**.
+///
+/// Regla: gana el estado más avanzado (done > running > paused > pending).
+/// Así, un nodo que acaba de terminar una tarea no la re-ejecuta otro, y
+/// una tarea que el otro nodo tiene en curso no se duplica aquí.
+/// Devuelve (insertadas, actualizadas).
+pub fn merge_tasks(v: &Value) -> (usize, usize) {
+    let Some(items) = v["tasks"].as_array() else {
+        return (0, 0);
+    };
+    let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
+    let mut ins = 0;
+    let mut upd = 0;
+    for it in items {
+        let id = it["id"].as_str().unwrap_or("").to_string();
+        if id.is_empty() {
+            continue;
+        }
+        let remoto = State::from_str(it["state"].as_str().unwrap_or("pending"));
+        match q.iter_mut().find(|t| t.id == id) {
+            None => {
+                q.push(Task {
+                    id,
+                    kind: it["kind"].as_str().unwrap_or("").to_string(),
+                    priority: it["priority"].as_u64().unwrap_or(0) as u8,
+                    payload: it["payload"].clone(),
+                    state: remoto,
+                    attempts: it["attempts"].as_u64().unwrap_or(0) as u32,
+                    max_attempts: it["max_attempts"].as_u64().unwrap_or(2) as u32,
+                    deps: it["deps"]
+                        .as_array()
+                        .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                        .unwrap_or_default(),
+                    res: Resources::default(),
+                    created_at: it["created_at"].as_u64().unwrap_or_else(now),
+                    started_at: it["started_at"].as_u64(),
+                    finished_at: it["finished_at"].as_u64(),
+                    error: it["error"].as_str().map(|s| s.to_string()),
+                    result: None,
+                    node: it["node"].as_str().unwrap_or("").to_string(),
+                    resume_after: it["resume_after"].as_u64(),
+                    lease_expira: it["lease_expira"].as_u64(),
+                    motivo_pausa: it["motivo_pausa"].as_str().map(|s| s.to_string()),
+                });
+                ins += 1;
+            }
+            Some(local) => {
+                if rango_estado(remoto) > rango_estado(local.state) {
+                    local.state = remoto;
+                    local.node = it["node"].as_str().unwrap_or("").to_string();
+                    local.resume_after = it["resume_after"].as_u64();
+                    local.lease_expira = it["lease_expira"].as_u64();
+                    local.motivo_pausa = it["motivo_pausa"].as_str().map(|s| s.to_string());
+                    local.error = it["error"].as_str().map(|s| s.to_string());
+                    local.finished_at = it["finished_at"].as_u64();
+                    upd += 1;
+                }
+            }
+        }
+    }
+    drop(q);
+    if ins + upd > 0 {
+        persist();
+    }
+    (ins, upd)
+}
+
 /// Importa tareas desde otro nodo (fusión por id).
 pub fn import_tasks(v: &Value) -> usize {
     let Some(items) = v["tasks"].as_array() else {

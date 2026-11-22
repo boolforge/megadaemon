@@ -581,6 +581,29 @@ pub fn tool_definitions() -> Value {
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
+            "name": "task_queue",
+            "description": "Cola de tareas COMPARTIDA de MegaDaemon (movil + PC + agentes). Acciones: list (ver cola), submit (encolar), claim (TOMAR tareas con lease para este nodo), lease (renovar), migrate (pasar el trabajo de un nodo a otro cuando uno falla o se queda sin cuota), pause (pausar por cuota/red), merge (fusionar con lo que hay en Drive). IMPORTANTE: si la cuota esta en 'pausa', claim NO devuelve tareas: termina tu paso actual, guarda tu checkpoint y espera al reset.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "accion": {
+                        "type": "string",
+                        "description": "list | submit | claim | lease | migrate | pause | merge | sync"
+                    },
+                    "nodo": { "type": "string", "description": "Nombre de este nodo (pc, movil, agente-...)." },
+                    "kind": { "type": "string", "description": "Tipo de tarea (para submit)." },
+                    "payload": { "type": "string", "description": "JSON del payload (para submit)." },
+                    "prioridad": { "type": "integer", "description": "Prioridad (0-9, 9 = maxima)." },
+                    "max": { "type": "integer", "description": "Máximo de tareas a tomar (claim)." },
+                    "lease_s": { "type": "integer", "description": "Duración del lease en segundos (defecto 900)." },
+                    "desde": { "type": "string", "description": "Nodo origen (migrate)." },
+                    "hacia": { "type": "string", "description": "Nodo destino (migrate)." },
+                    "until": { "type": "integer", "description": "Epoch hasta el que se pausa (pause)." },
+                    "motivo": { "type": "string", "description": "Motivo de la pausa (cuota, red...)." }
+                }
+            }
+        },
+        {
             "name": "http_fetch",
             "description": "Transferencias HTTP nativas (el 'curl' de MegaDaemon, en Rust puro: el movil NO tiene curl/wget). Descarga una URL a fichero (con resume por Range, reintentos y verificacion SHA-256), consulta cabeceras (HEAD), hace GET de texto o POST de un fichero. Tambien acepta una lista de URLs para descargarlas EN PARALELO. Devuelve bytes, sha256, segundos y MB/s reales.",
             "inputSchema": {
@@ -756,6 +779,69 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         "npu_vs4l_probe" => {
             let rep = crate::npu_vs4l::probe();
             let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
+            json!({ "content": [{ "type": "text", "text": txt }] })
+        }
+        "task_queue" => {
+            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("list");
+            let nodo = args.get("nodo").and_then(|v| v.as_str()).unwrap_or("pc");
+            let v = match accion {
+                "list" => {
+                    let t = crate::task_scheduler::list();
+                    json!({ "ok": true, "count": t.len(), "tareas": t.iter().map(|x| json!({
+                        "id": x.id, "kind": x.kind, "state": x.state.as_str(),
+                        "priority": x.priority, "node": x.node,
+                        "resume_after": x.resume_after, "motivo_pausa": x.motivo_pausa,
+                    })).collect::<Vec<_>>() })
+                }
+                "submit" => {
+                    let kind = args.get("kind").and_then(|v| v.as_str()).unwrap_or("generica");
+                    let payload = args.get("payload")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| serde_json::from_str(s).ok())
+                        .unwrap_or(Value::Null);
+                    let prio = args.get("prioridad").and_then(|v| v.as_u64()).unwrap_or(5) as u8;
+                    let id = crate::task_scheduler::submit(&kind, payload, prio, vec![], Default::default());
+                    json!({ "ok": true, "id": id })
+                }
+                "claim" => {
+                    if crate::quota_guard::nivel_global() == crate::quota_guard::Nivel::Pausa {
+                        json!({
+                            "ok": false,
+                            "motivo": "cuota en pausa: termina tu paso actual, guarda el checkpoint y espera al reset",
+                            "aviso": crate::quota_guard::aviso_para_agente(),
+                        })
+                    } else {
+                        let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+                        let lease = args.get("lease_s").and_then(|v| v.as_u64()).unwrap_or(900);
+                        let ids = crate::task_scheduler::repartir_por_nodo(nodo, max, lease);
+                        json!({ "ok": true, "nodo": nodo, "tomadas": ids })
+                    }
+                }
+                "lease" => {
+                    let s = args.get("lease_s").and_then(|v| v.as_u64()).unwrap_or(900);
+                    json!({ "ok": true, "renovadas": crate::task_scheduler::renovar_lease(nodo, s) })
+                }
+                "migrate" => {
+                    let desde = args.get("desde").and_then(|v| v.as_str()).unwrap_or("");
+                    let hacia = args.get("hacia").and_then(|v| v.as_str()).unwrap_or("");
+                    json!({ "ok": true, "migradas": crate::task_scheduler::migrar_tareas(desde, hacia) })
+                }
+                "pause" => {
+                    let until = args.get("until").and_then(|v| v.as_u64());
+                    let motivo = args.get("motivo").and_then(|v| v.as_str()).unwrap_or("cuota");
+                    json!({ "ok": true, "pausadas": crate::task_scheduler::pausar_por_cuota(nodo, until, motivo) })
+                }
+                "sync" => match crate::task_sync::sincronizar_drive() {
+                    Ok(r) => r,
+                    Err(e) => json!({ "ok": false, "error": e }),
+                },
+                "merge" => {
+                    let export = crate::task_scheduler::export_all_tasks(nodo);
+                    json!({ "ok": true, "export": export })
+                }
+                _ => json!({ "ok": false, "error": format!("accion desconocida: {accion}") }),
+            };
+            let txt = serde_json::to_string(&v).unwrap_or_default();
             json!({ "content": [{ "type": "text", "text": txt }] })
         }
         "http_fetch" => {

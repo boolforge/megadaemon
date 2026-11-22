@@ -105,6 +105,7 @@ pub mod provider_catalog;
 pub mod providers;
 pub mod quota_guard;
 pub mod http_transfer;
+pub mod task_sync;
 pub mod rea_assistant;
 pub mod code_ast;
 pub mod re_disasm;
