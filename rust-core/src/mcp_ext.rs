@@ -581,6 +581,23 @@ pub fn tool_definitions() -> Value {
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
+            "name": "http_fetch",
+            "description": "Transferencias HTTP nativas (el 'curl' de MegaDaemon, en Rust puro: el movil NO tiene curl/wget). Descarga una URL a fichero (con resume por Range, reintentos y verificacion SHA-256), consulta cabeceras (HEAD), hace GET de texto o POST de un fichero. Tambien acepta una lista de URLs para descargarlas EN PARALELO. Devuelve bytes, sha256, segundos y MB/s reales.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "URL a descargar/consultar (para paralelo, la lista va en 'urls')." },
+                    "urls": { "type": "array", "items": { "type": "string" }, "description": "Varias URLs para descargar en paralelo." },
+                    "destino": { "type": "string", "description": "Ruta del fichero de destino (si se omite, se devuelve el cuerpo en memoria)." },
+                    "method": { "type": "string", "description": "GET (defecto), HEAD o POST/PUT." },
+                    "sha256": { "type": "string", "description": "SHA-256 esperado: si no coincide, NO se da por buena la descarga." },
+                    "workers": { "type": "integer", "description": "Hilos en paralelo (defecto 4)." },
+                    "timeout_s": { "type": "integer", "description": "Timeout global en segundos (defecto 120)." },
+                    "retries": { "type": "integer", "description": "Reintentos (defecto 3)." }
+                }
+            }
+        },
+        {
             "name": "quota_status",
             "description": "Estado de la CUOTA de los proveedores/modelos: cuanto queda (%), cuando resetea y en que modo esta (normal/aviso/ahorro/pausa). Respuesta MUY compacta (~70 tokens) para no gastar. En 'pausa' significa que la cuota se agota: termina el paso actual, guarda tu checkpoint y espera al reset; no sigas abriendo tareas nuevas.",
             "inputSchema": {
@@ -739,6 +756,71 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         "npu_vs4l_probe" => {
             let rep = crate::npu_vs4l::probe();
             let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
+            json!({ "content": [{ "type": "text", "text": txt }] })
+        }
+        "http_fetch" => {
+            let mut o = crate::http_transfer::Opciones::default();
+            if let Some(t) = args.get("timeout_s").and_then(|v| v.as_u64()) {
+                o.timeout_s = t;
+            }
+            if let Some(r) = args.get("retries").and_then(|v| v.as_u64()) {
+                o.reintentos = r as u32;
+            }
+            if let Some(s) = args.get("sha256").and_then(|v| v.as_str()) {
+                o.sha256_esperado = Some(s.to_string());
+            }
+            if let Some(d) = args.get("destino").and_then(|v| v.as_str()) {
+                if !d.is_empty() {
+                    o.destino = Some(std::path::PathBuf::from(d));
+                }
+            }
+            let method = args.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
+            let urls: Vec<String> = args
+                .get("urls")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let v = if !urls.is_empty() {
+                // Paralelo.
+                let workers = args.get("workers").and_then(|x| x.as_u64()).unwrap_or(4) as usize;
+                let dir = o
+                    .destino
+                    .clone()
+                    .unwrap_or_else(|| std::path::PathBuf::from("/data/local/tmp/megadaemon/downloads"));
+                let _ = std::fs::create_dir_all(&dir);
+                crate::http_transfer::descargar_paralelo(&urls, &dir, workers, &o)
+            } else {
+                let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                if url.is_empty() {
+                    json!({ "content": [{ "type": "text", "text": "http_fetch necesita 'url' o 'urls'" }] })
+                } else if method.eq_ignore_ascii_case("HEAD") {
+                    match crate::http_transfer::head(url, &o) {
+                        Ok(h) => serde_json::to_value(h).unwrap_or(Value::Null),
+                        Err(e) => json!({ "error": e }),
+                    }
+                } else if method.eq_ignore_ascii_case("GET") && o.destino.is_none() {
+                    match crate::http_transfer::get_texto(url, &o) {
+                        Ok((st, t)) => json!({ "status": st, "body": t.chars().take(4000).collect::<String>() }),
+                        Err(e) => json!({ "error": e }),
+                    }
+                } else if method.eq_ignore_ascii_case("POST") || method.eq_ignore_ascii_case("PUT") {
+                    let f = o.destino.clone().unwrap_or_default();
+                    match crate::http_transfer::subir(url, &f, &o, method) {
+                        Ok(r) => serde_json::to_value(r).unwrap_or(Value::Null),
+                        Err(e) => json!({ "error": e }),
+                    }
+                } else {
+                    match crate::http_transfer::descargar_con_reintentos(url, &o) {
+                        Ok(r) => serde_json::to_value(r).unwrap_or(Value::Null),
+                        Err(e) => json!({ "error": e }),
+                    }
+                }
+            };
+            let txt = serde_json::to_string(&v).unwrap_or_default();
             json!({ "content": [{ "type": "text", "text": txt }] })
         }
         "quota_status" => {
