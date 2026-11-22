@@ -5,6 +5,8 @@
 //! md-re identify  <binario>            # formato + evidencia
 //! md-re analyze   <binario>            # informe completo (uniforme)
 //! md-re strings   <binario> [--n 60]   # cadenas interesting
+//! md-re deobfuscate <binario>          # MOTOR de deofuscación (con pruebas)
+//! md-re mba <expresion>              # simplifica MBA + devuelve la prueba
 //! ```
 //!
 //! Todo en Rust puro y **estático**: nunca ejecuta el binario analizado.
@@ -19,6 +21,12 @@ fn ayuda() {
   md-re identify <fichero>      formato del binario, con evidencia
   md-re analyze  <fichero>      informe completo (strings, secciones, go, apk)
   md-re strings  <fichero> [--n N]   cadenas interesting (URLs, claves, rutas)
+  md-re deobfuscate <fichero>   MOTOR de deofuscacion: MBA con prueba BDD,
+                                control-flow flattening con prueba diferencial,
+                                strings cifrados, constantes ofuscadas y
+                                predicados opacos (todo con su evidencia)
+  md-re mba <expresion>       simplifica una expresion MBA y devuelve la
+                                DEMOSTRACION de equivalencia (BDD)
 
 Es analisis ESTATICO: nunca ejecuta el binario analizado."
     );
@@ -53,6 +61,27 @@ fn main() {
 
     let v: serde_json::Value = match sub.as_str() {
         "catalogo" => megadaemon_core::re_engine::catalogo(),
+        "mba" => {
+            // La expresion es el resto de los argumentos (puede tener espacios).
+            let expr: String = args[1..].join(" ");
+            if expr.trim().is_empty() {
+                eprintln!("falta la expresion MBA");
+                std::process::exit(2);
+            }
+            megadaemon_core::re_engine::mba(&expr)
+        }
+        "deobfuscate" => {
+            if ruta.is_empty() {
+                eprintln!("falta el fichero");
+                std::process::exit(2);
+            }
+            let mut o = megadaemon_core::re_engine::OpcionesDeofuscacion::default();
+            o.max_cadenas = max;
+            match megadaemon_core::re_engine::deobfuscar(Path::new(&ruta), &o) {
+                Ok(v) => v,
+                Err(e) => serde_json::json!({ "ok": false, "error": e }),
+            }
+        }
         "identify" | "analyze" | "strings" => {
             if ruta.is_empty() {
                 eprintln!("falta el fichero");

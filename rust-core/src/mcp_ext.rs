@@ -632,14 +632,16 @@ pub fn tool_definitions() -> Value {
 },
 {
             "name": "re_analyze",
-            "description": "MOTOR DE RE de MegaDaemon (punto de entrada UNICO): identifica el binario (ELF/PE/MachO/DEX/APK/Go/UPX) CON evidencia, extrae cadenas interesting (URLs, rutas, claves, magisk/root/jni), lista secciones y simbolos, y devuelve un informe uniforme. Accion catalogo lista TODAS las capacidades de RE/deofuscacion con el modulo que las implementa (~700 tokens) para que no adivines tool names. NUNCA ejecuta el binario analizado: es analisis estatico.",
+            "description": "MOTOR DE RE/DEOFUSCACION de MegaDaemon (punto de entrada UNICO): identifica el binario (ELF/PE/MachO/DEX/APK/Go/UPX) CON evidencia, extrae cadenas interesting, y deofusca de verdad: MBA con PRUEBA de equivalencia (BDD), control-flow flattening con prueba diferencial, strings cifrados, constantes ofuscadas y predicados opacos (accion 'motor'); la accion 'mba' simplifica una expresion y devuelve su demostracion. Accion catalogo lista TODAS las capacidades con el modulo que las implementa. NUNCA ejecuta el binario analizado: es analisis estatico.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "accion": { "type": "string", "description": "catalogo | identify | analyze | strings | deobfuscate" },
-                    "ruta": { "type": "string", "description": "Ruta del binario (obligatoria salvo en catalogo)." },
+                    "accion": { "type": "string", "description": "catalogo | identify | analyze | strings | deobfuscate | motor | mba" },
+                    "ruta": { "type": "string", "description": "Ruta del binario (obligatoria salvo en catalogo y mba)." },
                     "max_cadenas": { "type": "integer", "description": "Maximo de cadenas interesting (defecto 60)." },
-                    "plat_key": { "type": "string", "description": "Clave de plataforma para descifrar strings." }
+                    "plat_key": { "type": "string", "description": "Clave de plataforma para descifrar strings." },
+                    "expr": { "type": "string", "description": "Expresion MBA a simplificar (accion mba), p.ej. '(x ^ y) + 2*(x & y)'." },
+                    "ventana_disasm": { "type": "integer", "description": "Bytes de codigo a desensamblar para el motor (defecto 262144)." }
                 }
             }
 },
@@ -1169,6 +1171,27 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     let key = args.get("plat_key").and_then(|v| v.as_str()).unwrap_or("");
                     let rep = crate::deobfuscate::deobfuscate_binary(key, ruta, 500);
                     serde_json::to_value(rep).unwrap_or(Value::Null)
+                }
+                "motor" => {
+                    // MOTOR DE DEOFUSCACION (unico punto de entrada): MBA con
+                    // prueba BDD, control-flow flattening con prueba diferencial,
+                    // strings cifrados, constantes ofuscadas y predicados opacos.
+                    let mut o = crate::re_engine::OpcionesDeofuscacion::default();
+                    if let Some(n) = args.get("max_cadenas").and_then(|v| v.as_u64()) {
+                        o.max_cadenas = n as usize;
+                    }
+                    if let Some(n) = args.get("ventana_disasm").and_then(|v| v.as_u64()) {
+                        o.ventana_disasm = n as usize;
+                    }
+                    match crate::re_engine::deobfuscar(std::path::Path::new(ruta), &o) {
+                        Ok(v) => v,
+                        Err(e) => json!({ "ok": false, "error": e }),
+                    }
+                }
+                "mba" => {
+                    // Simplificacion MBA con PRUEBA de equivalencia (BDD).
+                    let expr = args.get("expr").and_then(|v| v.as_str()).unwrap_or("");
+                    crate::re_engine::mba(expr)
                 }
                 _ => {
                     let mut o = crate::re_engine::OpcionesAnalisis::default();

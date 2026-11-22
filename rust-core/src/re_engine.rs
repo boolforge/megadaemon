@@ -338,7 +338,19 @@ pub fn catalogo() -> Value {
             {"cap": "scanner-firmas", "modulo": "binwalk_die",
              "para": "identificar el empaquetador y la familia del binario"},
             {"cap": "motor-unificado", "modulo": "re_engine::analizar",
-             "para": "informe UNIFORME de cualquier formato, con la evidencia"}
+             "para": "informe UNIFORME de cualquier formato, con la evidencia"},
+            {"cap": "mba", "modulo": "re_mba + re_bdd",
+             "para": "simplificar MBA y DEMOSTRAR la equivalencia (ROBDD, decision completa)"},
+            {"cap": "control-flow-flattening", "modulo": "re_cff + re_ir",
+             "para": "detectar el dispatcher, reaplanar y PROBAR la equivalencia (diferencial)"},
+            {"cap": "strings-cifrados", "modulo": "re_crypto",
+             "para": "buscar la clave periodica y extraer el texto descifrado (ida y vuelta)"},
+            {"cap": "constantes-ofuscadas", "modulo": "re_crypto + re_cff",
+             "para": "patron 'cargar constante + XOR con clave' y prueba en claro"},
+            {"cap": "predicados-opacos", "modulo": "re_opaque (+ re_mba)",
+             "para": "detectar y PLEGAR ramas siempre ciertas/falsas (bloque y expresion)"},
+            {"cap": "motor-deofuscacion", "modulo": "re_engine::deobfuscar",
+             "para": "TODO el motor de deofuscacion en un solo informe (md-re deobfuscate)"}
         ],
         "notas": [
             "Ninguna operacion ejecuta el binario analizado: es analisis estatico.",
