@@ -46,3 +46,4 @@ artifacts/re/strings.txt
 artifacts/re/libro-completo.json
 artifacts/re/language-server-desensamblado.asm
 artifacts/re/LIBRO-COMPLETO.md
+tools/re_fusion-harness/target/

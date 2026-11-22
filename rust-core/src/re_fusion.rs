@@ -116,6 +116,39 @@ impl Metodo {
     }
 }
 
+/// Segmentos del ELF: `(paddr, tamaño, vaddr)`.
+///
+/// Se leen con `goblin` (ya dependencia del repo) para poder pasar del
+/// **offset de fichero** (que es lo que dan `re_strings` y `strings`) a la
+/// **dirección virtual** (que es lo que usan Ghidra y el pclntab).
+pub fn segmentos_elf(data: &[u8]) -> Vec<(u64, u64, u64)> {
+    use goblin::elf::Elf;
+    match Elf::parse(data) {
+        Ok(e) => e
+            .program_headers
+            .iter()
+            .filter(|p| p.p_type == goblin::elf::program_header::PT_LOAD)
+            .map(|p| (p.p_offset, p.p_filesz, p.p_vaddr))
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Convierte un offset de fichero en dirección virtual.
+pub fn offset_a_vaddr(offset: u64, segmentos: &[(u64, u64, u64)]) -> Option<u64> {
+    segmentos
+        .iter()
+        .find(|(paddr, size, _)| *paddr <= offset && offset < paddr + size)
+        .map(|(paddr, _, vaddr)| vaddr + (offset - paddr))
+}
+
+/// Image base con el que Ghidra carga este ELF.
+///
+/// MEDIDO: Ghidra lo carga en 0x100000, así que las direcciones que da
+/// (`entry address : 0726e828`) son `vaddr + 0x100000`.  Para cruzarlas con
+/// el export de símbolos (que da el offset real) hay que restar esta constante.
+pub const GHIDRA_IMAGE_BASE: u64 = 0x100000;
+
 /// Ejecuta los métodos pedidos y devuelve la comparativa.
 pub fn ejecutar(o: &OpcionesFusion) -> Value {
     let mut metodos: Vec<Metodo> = Vec::new();
@@ -158,7 +191,6 @@ pub fn ejecutar(o: &OpcionesFusion) -> Value {
 fn metodo_motor(o: &OpcionesFusion) -> Metodo {
     let mut m = Metodo::nuevo("motor (re_engine)");
     let t = Instant::now();
-    let ruta = o.binario.display().to_string();
 
     let ana = crate::re_engine::analizar(&o.binario, &crate::re_engine::OpcionesAnalisis::default());
     match ana {
@@ -250,9 +282,11 @@ fn metodo_rizin(o: &OpcionesFusion) -> Metodo {
     let t = Instant::now();
     let ruta = o.binario.display().to_string();
 
-    let info = crate::frida_dbi::run_rizin_analysis(&ruta, "info", None);
-    if info.get("status").and_then(|v| v.as_str()) == Some("error") {
-        m.nota = info
+    // tres modos: funciones, imports y strings (con direccion) => son los
+    // que la fusion necesita (las strings se cruzan con el pseudocodigo).
+    let funcs = crate::frida_dbi::run_rizin_analysis(&ruta, "functions", None);
+    if funcs.get("status").and_then(|v| v.as_str()) == Some("error") {
+        m.nota = funcs
             .get("message")
             .and_then(|v| v.as_str())
             .unwrap_or("rizin no disponible")
@@ -260,19 +294,41 @@ fn metodo_rizin(o: &OpcionesFusion) -> Metodo {
         m.ms = t.elapsed().as_millis();
         return m;
     }
+    let imports = crate::frida_dbi::run_rizin_analysis(&ruta, "imports", None);
+    // OJO: el modo "strings" de rizin NO se usa: `izj`/`izzj` no existen en
+    // 0.9.1 y `rz-bin -zz` aborta con este ELF.  Las strings salen de
+    // `re_strings` (nativo), mas abajo.
     m.ok = true;
 
-    if let Some(v) = info.get("functions").and_then(|v| v.as_array()) {
+    if let Some(v) = funcs.get("functions").and_then(|v| v.as_array()) {
         m.funciones = v.len();
     }
-    if let Some(v) = info.get("imports").and_then(|v| v.as_array()) {
+    if let Some(v) = imports.get("imports").and_then(|v| v.as_array()) {
         m.imports = v.len();
     }
-    if let Some(v) = info.get("strings").and_then(|v| v.as_array()) {
-        m.strings = v.len();
+    // Las strings NO salen de rizin: `izj`/`izzj` no existen en 0.9.1 y
+    // `rz-bin -zz` aborta con este ELF ("search interval size exceeds max
+    // region size").  Se usan las del motor nativo `re_strings`, que además
+    // es lo que ya tiene el repo.
+    let mut lista_strings: Vec<Value> = Vec::new();
+    match std::fs::read(&o.binario) {
+        Ok(data) => {
+            let segs = segmentos_elf(&data);
+            for h in crate::re_strings::extract_strings(&data, 4, 600_000) {
+                let vaddr = offset_a_vaddr(h.offset, &segs).unwrap_or(h.offset);
+                lista_strings.push(json!({"vaddr": vaddr, "offset": h.offset, "string": h.text}));
+            }
+        }
+        Err(e) => m.nota = format!("strings: {e}"),
     }
+    m.strings = lista_strings.len();
+    let combinado = json!({
+        "functions": funcs.get("functions").cloned().unwrap_or(Value::Null),
+        "imports": imports.get("imports").cloned().unwrap_or(Value::Null),
+        "strings": lista_strings,
+    });
     let p = o.out_dir.join("rizin.json");
-    let _ = std::fs::write(&p, serde_json::to_string_pretty(&info).unwrap_or_default());
+    let _ = std::fs::write(&p, serde_json::to_string_pretty(&combinado).unwrap_or_default());
     m.artefacto(&p);
     m.ms = t.elapsed().as_millis();
     m
@@ -479,7 +535,7 @@ pub fn fusionar(o: &OpcionesFusion, metodos: &[Metodo]) -> Value {
         simbolos.iter().map(|s| (s.addr, s)).collect();
 
     // Pseudocódigo producido por Ghidra.
-    let mut pseudo: Vec<(u64, String, PathBuf)> = Vec::new();
+    let mut pseudo: Vec<(u64, String, PathBuf, String, String)> = Vec::new();
     let dir = o.out_dir.join("pseudocodigo");
     if dir.exists() {
         if let Ok(rd) = std::fs::read_dir(&dir) {
@@ -488,9 +544,10 @@ pub fn fusionar(o: &OpcionesFusion, metodos: &[Metodo]) -> Value {
                 if p.extension().and_then(|s| s.to_str()) != Some("c") {
                     continue;
                 }
-                let nombre = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                let addr = u64::from_str_radix(nombre.trim_start_matches("0x"), 16).unwrap_or(0);
-                pseudo.push((addr, p.display().to_string(), p.clone()));
+                // la cabecera del .c lleva el simbolo Go, el fichero:linea y la
+                // direccion de entrada (con el image base de Ghidra).
+                let (addr, sym_go, origen) = leer_cabecera_c(&p);
+                pseudo.push((addr, p.display().to_string(), p.clone(), sym_go, origen));
             }
         }
     }
@@ -510,16 +567,20 @@ pub fn fusionar(o: &OpcionesFusion, metodos: &[Metodo]) -> Value {
     md.push_str("del pclntab (el binario no está ofuscado: los nombres son los del código original).\n\n");
 
     let mut con_origen = 0usize;
-    for (addr, ruta, path) in &pseudo {
+    for (addr, ruta, path, sym_go, origen_c) in &pseudo {
+        // el simbolo del TSV manda (trae el nombre Go y el fichero:linea);
+        // si no esta, usamos lo que dice la cabecera de Ghidra.
         let sym = por_addr.get(addr);
         if sym.is_some() {
             con_origen += 1;
         }
-        md.push_str(&format!("\n## `{}`\n\n", sym.map(|s| s.nombre.clone()).unwrap_or_else(|| format!("0x{addr:x}"))));
-        if let Some(s) = sym {
-            if !s.origen.is_empty() {
-                md.push_str(&format!("Origen: `{}`\n\n", s.origen));
-            }
+        let nombre = sym
+            .map(|s| s.nombre.clone())
+            .unwrap_or_else(|| if sym_go.is_empty() { format!("0x{addr:x}") } else { sym_go.clone() });
+        md.push_str(&format!("\n## `{}`\n\n", nombre));
+        let origen_txt = sym.map(|s| s.origen.clone()).unwrap_or_else(|| origen_c.clone());
+        if !origen_txt.is_empty() {
+            md.push_str(&format!("Origen: `{}`\n\n", origen_txt));
         }
         if let Some(t) = strings.get(addr) {
             md.push_str(&format!("String: `\"{}\"`\n\n", t));
@@ -543,6 +604,44 @@ pub fn fusionar(o: &OpcionesFusion, metodos: &[Metodo]) -> Value {
         "metodos_ok": metodos.iter().filter(|m| m.ok).count(),
         "metodos_total": metodos.len(),
     })
+}
+
+/// Lee la cabecera de un `.c` de Ghidra:
+///
+/// ```text
+/// // original Go symbol : google3/third_party/.../gateway.(*AdminSettings).X
+/// // source location    : third_party/jetski/gateway/admin_settings.go:85
+/// // entry address      : 06e923d8
+/// ```
+///
+/// Devuelve `(direccion real, simbolo Go, fichero:linea)`.  La direccion de
+/// la cabecera incluye el image base de Ghidra ⇒ se le resta.
+pub fn leer_cabecera_c(p: &Path) -> (u64, String, String) {
+    let txt = match std::fs::read_to_string(p) {
+        Ok(t) => t,
+        Err(_) => return (0, String::new(), String::new()),
+    };
+    let sym = txt
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("// original Go symbol :"))
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let origen = txt
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("// source location    :"))
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let addr_txt = txt
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("// entry address      :"))
+        .unwrap_or("")
+        .trim();
+    let addr = u64::from_str_radix(addr_txt.trim_start_matches("0x"), 16)
+        .map(|a| a.saturating_sub(GHIDRA_IMAGE_BASE))
+        .unwrap_or(0);
+    (addr, sym, origen)
 }
 
 /// Extrae `direccion -> string` del JSON de Rizin.
