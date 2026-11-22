@@ -380,7 +380,6 @@ const ALLOWED: &[&str] = &[
     "agent",
     "apk_inventory",
     "dex_decompile",
-    "mesh_snapshot",
 ];
 
 /// ¿La tool está vetada para la voz?
@@ -456,17 +455,88 @@ fn looks_like_secret(token: &str) -> bool {
 ///
 /// AUDIT-VOICE-02 (P0): por prefijo de credencial, no por "hex largo".
 pub fn redact(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for token in text.split_whitespace() {
-        if looks_like_secret(token) {
-            out.push_str("[redactado]");
-            out.push(' ');
-        } else {
-            out.push_str(token);
-            out.push(' ');
+    // AUDIT-VOICE-02 (P0): el redactor viejo partia por ESPACIOS y exigia
+    // que el prefijo de credencial estuviera al INICIO del token =>
+    // `token=ghp_...`, `"ghp_..."` o `?api_key=ghp_...` (un solo token que
+    // no empieza por el prefijo) salian INTACTOS al journal, al sync y al
+    // tablon (=> repo publico).
+    //
+    // Ahora el prefijo se busca como SUBSTRING, exigiendo que este en un
+    // LIMITE DE TOKEN (el caracter anterior no es alfanumerico ni `_-.`):
+    // "task-manager" no se falsea con el prefijo "sk-", pero "key=ghp_..."
+    // si se redacta.  Se redacta el TRAMO COMPLETO de la credencial.
+    // Ademas se CONSERVA el texto: el viejo reconunia todo con espacios
+    // (se comia los saltos de linea y un secreto partido por un \n quedaba
+    // a medias redactado).
+    let chars: Vec<char> = text.chars().collect();
+    let low: Vec<char> = text.to_ascii_lowercase().chars().collect();
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+
+    for pref in SECRET_PREFIXES {
+        let pl = pref.chars().count();
+        let mut i = 0usize;
+        while i + pl <= low.len() {
+            let cand: String = low[i..i + pl].iter().collect();
+            if cand == *pref && at_token_boundary(&chars, i) {
+                let mut j = i + pl;
+                while j < chars.len() && is_cred_char(chars[j]) {
+                    j += 1;
+                }
+                ranges.push((i, j));
+                i = j;
+            } else {
+                i += 1;
+            }
         }
     }
-    out.trim().to_string()
+    // JWT ("eyJ" + dos puntos) y hex largo (>=64), mismo criterio de limite.
+    let mut i = 0usize;
+    while i < low.len() {
+        if at_token_boundary(&chars, i) {
+            let mut j = i;
+            while j < chars.len() && is_cred_char(chars[j]) {
+                j += 1;
+            }
+            let run: String = low[i..j].iter().collect();
+            let hex = run.len() >= 64 && run.chars().all(|c| c.is_ascii_hexdigit());
+            let jwt = run.starts_with("eyj") && run.matches('.').count() >= 2;
+            if hex || jwt {
+                ranges.push((i, j));
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    if ranges.is_empty() {
+        return text.to_string();
+    }
+    ranges.sort_unstable();
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0usize;
+    for (s0, e0) in ranges {
+        if s0 < last {
+            continue;
+        }
+        out.extend(chars[last..s0].iter());
+        out.push_str("[redactado]");
+        last = e0;
+    }
+    out.extend(chars[last.min(chars.len())..].iter());
+    out
+}
+
+/// ¿El caracter es parte de una credencial (para saber donde acaba)?
+fn is_cred_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'
+}
+
+/// ¿La posicion `i` esta en el LIMITE de un token?
+fn at_token_boundary(chars: &[char], i: usize) -> bool {
+    if i == 0 {
+        return true;
+    }
+    !is_cred_char(chars[i - 1])
 }
 
 /// Redacta un valor JSON recursivamente, **preservando** los campos de hash
@@ -482,7 +552,9 @@ pub fn redact_value(v: &Value) -> Value {
                 if HASH_FIELDS.iter().any(|h| low == *h || low.ends_with(h)) {
                     out.insert(k.clone(), val.clone());
                 } else {
-                    out.insert(k.clone(), redact_value(val));
+                    // AUDIT-VOICE-02 (P2): la CLAVE tambien se redacta: una
+                    // credencial usada como nombre de campo sobrevivia.
+                    out.insert(redact(k), redact_value(val));
                 }
             }
             Value::Object(out)
@@ -544,7 +616,9 @@ impl Executor for DaemonExecutor {
                 }
                 let ctx = build_context();
                 let msg = speak_to_peer(&ctx, &peer, &question);
-                let r = webui::node_message(&peer, &msg, "");
+                // AUDIT-VOICE-02 (P0): la pregunta va al buzon (estado
+                // compartido => repo publico) => se redacta.
+                let r = webui::node_message(&peer, &redact(&msg), "");
                 Ok(json!({
                     "ok": r.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
                     "summary": format!("pregunta depositada en el buzón de {}", peer),
@@ -688,9 +762,13 @@ pub fn broadcast(lines: &[String]) -> Value {
 
     // Canal 4: el enjambre (swarm_chat). Sólo si hay presupuesto: cada
     // llamada es un modelo (dinero/tiempo) y el móvil va justo.
+    // AUDIT-VOICE-02 (P0): los canales 1-3 usan la linea YA redactada; el
+    // canal 4 (el proveedor) mandaba el texto ORIGINAL => la credencial
+    // salia de la maquina sin redactar.
     let spoken = lines
         .iter()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .map(|v| redact_value(&v))
         .filter_map(|v| v.get("describe").and_then(|d| d.as_str()).map(|s| s.to_string()))
         .collect::<Vec<_>>()
         .join("; ");
@@ -952,7 +1030,10 @@ pub fn whoami_json() -> Value {
 pub fn speak(peer: &str, text: &str) -> Value {
     let ctx = build_context();
     let msg = speak_to_peer(&ctx, peer, text);
-    let r = webui::node_message(peer, &msg, "");
+    // AUDIT-VOICE-02 (P0): lo que se ESCRIBE en el buzon del peer
+    // (`<state>/inbox/<peer>.ndjson` => tablon => repo PUBLICO) tiene que
+    // pasar por el redactor; antes solo se redactaba la COPIA devuelta.
+    let r = webui::node_message(peer, &redact(&msg), "");
     let mut out = r.clone();
     if let Some(obj) = out.as_object_mut() {
         obj.insert("message".into(), json!(redact(&msg)));
@@ -1022,6 +1103,20 @@ pub fn handle(action: &str, args: &Value) -> Value {
                     plan_next(&ctx, brain.as_ref())
                 }
             };
+            // AUDIT-VOICE-05 (P1): gate FINAL sobre la ACCION RESUELTA.  El
+            // gate anterior miraba la CADENA pedida ("action" == "do"); en la
+            // rama "_" la decide el cerebro y el LlmBrain sabe emitir "do"
+            // (agent_voice.rs) => esa via esquivaba la confirmacion.
+            if let Action::Do { tool, .. } = &action {
+                if !args.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    return json!({
+                        "ok": false,
+                        "error": "confirmation_required",
+                        "hint": "la voz ejecuta tools con confirm=true (mismo contrato que el resto del daemon)",
+                        "tool": tool,
+                    });
+                }
+            }
             let spread = args
                 .get("broadcast")
                 .and_then(|v| v.as_bool())
