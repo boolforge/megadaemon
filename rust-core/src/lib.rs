@@ -20,6 +20,7 @@ pub mod api_key;
 pub mod apk_deobfuscator;
 pub mod antigravity_bridge;
 pub mod antigravity_clone;
+pub mod antigravity_sessions;
 pub mod antigravity_env;
 pub mod antigravity_model;
 pub mod apk_inventory;

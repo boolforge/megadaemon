@@ -620,6 +620,16 @@ pub fn tool_definitions() -> Value {
                 }
             }
         },
+{
+            "name": "antigravity_sessions",
+            "description": "Estado de las SESIONES de Antigravity en el movil: conversaciones abiertas, sesiones muertas (con el motivo) y las tareas del daemon de Antigravity. Sirve para ver que esta vivo, que esta haciendo y para recuperar el trabajo cuando se queda sin cuota.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "accion": { "type": "string", "description": "estado (defecto) | list | dead | tasks" }
+                }
+            }
+},
         {
             "name": "phone_backup",
             "description": "Motor de backup nativo de apps (Rust puro, sin curl ni shell): inventario de apps del movil, contenedor cifrado AEGIS-256 por segmentos con manifiesto sha256 por fichero, verificacion del AEAD, restauracion (simulacro por defecto, exige confirm=true) y SUBIDA PIPELINING a Drive (sube cada segmento ya cerrado mientras se recoge el siguiente; mide MiB/s y ETA). Anti-congelacion: nice/ionice de la clase mas baja, sleep entre lotes y descanso si la carga del sistema se dispara. Acciones: inventory | create | list | verify | restore | upload. create/restore/upload escriben o publican en Drive: exigen confirm=true.",
@@ -1099,9 +1109,21 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         }
                     }
                 }
+        "antigravity_sessions" => {
+            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("estado");
+            let v = match accion {
+                "list" => crate::antigravity_sessions::sesiones().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                "dead" => crate::antigravity_sessions::muertas().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                "tasks" => crate::antigravity_sessions::tareas_daemon(),
+                _ => crate::antigravity_sessions::estado().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+            };
+            let txt = match v {
+                Ok(x) => serde_json::to_string_pretty(&x).unwrap_or_default(),
+                Err(e) => format!("ERROR: {e}"),
+            };
+            json!({ "content": [{ "type": "text", "text": txt }] })
+        }
         "quota_status" => {
-            // Snapshot COMPACTO por defecto: el objetivo es que el agente
-            // sepa cuanto queda sin gastar tokens de mas.
             let full = args.get("full").and_then(|v| v.as_bool()).unwrap_or(false);
             let provider = args.get("provider").and_then(|v| v.as_str()).unwrap_or("");
             let v = if full {
