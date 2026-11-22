@@ -1295,11 +1295,69 @@ fn handle_client(mut stream: TcpStream) {
                     json!({
                         "estado": crate::quota_guard::estado(None),
                         "aviso": crate::quota_guard::aviso_para_agente(),
+                        "daily_budget": crate::providers::daily_budget_snapshot(),
                     })
                 } else {
                     crate::quota_guard::snapshot_compacto()
                 };
                 send_json(&mut stream, &v);
+            }
+            "/api/budget" => {
+                if method == "POST" {
+                    let body: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);
+                    if let Some(lim) = body.get("limit_usd") {
+                        if lim.is_null() {
+                            crate::providers::set_daily_budget_usd(None);
+                        } else if let Some(v) = lim.as_f64() {
+                            crate::providers::set_daily_budget_usd(Some(v));
+                        }
+                    }
+                    if body.get("reset").and_then(|v| v.as_bool()) == Some(true) {
+                        crate::providers::reset_daily_budget();
+                    }
+                }
+                let mut snap = crate::providers::daily_budget_snapshot();
+                if let Some(obj) = snap.as_object_mut() {
+                    obj.insert("ok".into(), json!(true));
+                }
+                send_json(&mut stream, &snap);
+            }
+            "/api/antigravity/sessions" => {
+                let mut accion = "estado".to_string();
+                let mut conv_id = String::new();
+                let mut tail: usize = 20;
+                for kv in query.split('&') {
+                    if let Some((k, v)) = kv.split_once('=') {
+                        match k {
+                            "accion" | "action" => accion = v.to_string(),
+                            "id" | "conversation_id" => conv_id = v.to_string(),
+                            "tail" => tail = v.parse().unwrap_or(20),
+                            _ => {}
+                        }
+                    }
+                }
+                let res: Result<Value, String> = match accion.as_str() {
+                    "list" => crate::antigravity_sessions::sesiones()
+                        .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                    "dead" => crate::antigravity_sessions::muertas()
+                        .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                    "stalled" => crate::antigravity_sessions::colgadas()
+                        .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                    "tree" => crate::antigravity_sessions::arbol(if conv_id.is_empty() {
+                        None
+                    } else {
+                        Some(conv_id.as_str())
+                    }),
+                    "detail" => crate::antigravity_sessions::detalle_sesion(&conv_id, tail),
+                    "log" => crate::antigravity_sessions::daemon_log(tail).map(|lines| json!({ "lines": lines })),
+                    "tasks" => crate::antigravity_sessions::tareas_daemon(),
+                    _ => crate::antigravity_sessions::estado()
+                        .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                };
+                match res {
+                    Ok(v) => send_json(&mut stream, &json!({ "ok": true, "accion": accion, "data": v })),
+                    Err(e) => send_json(&mut stream, &json!({ "ok": false, "accion": accion, "error": e })),
+                }
             }
             "/v1/chat/completions" | "/chat/completions" => {
                 let body: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);

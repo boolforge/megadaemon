@@ -261,22 +261,6 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
-            "name": "task_queue",
-            "description": "Planificador multitarea: lista la cola, encola trabajo o ejecuta el lote pendiente respetando prioridad, dependencias y la política de energía del dispositivo.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["list", "submit", "run", "stats", "cancel", "retry", "export", "journal"] },
-                    "kind": { "type": "string", "description": "tipo de tarea (sync.local, apk.inventory, alerts.check, ...)" },
-                    "payload": { "type": "object" },
-                    "priority": { "type": "integer", "default": 5 },
-                    "task_id": { "type": "string" },
-                    "max": { "type": "integer", "default": 5 },
-                    "node": { "type": "string", "description": "nodo destino para repartir trabajo (distribuido)" }
-                }
-            }
-        },
-        {
             "name": "alerts",
             "description": "Sistema de alertas: evalúa las reglas reales (batería, thermal, disco, cola, citas) o lista/acuza las alertas emitidas.",
             "inputSchema": {
@@ -624,16 +608,19 @@ pub fn tool_definitions() -> Value {
                 }
             }
         },
-{
+        {
             "name": "antigravity_sessions",
-            "description": "Estado de las SESIONES de Antigravity en el movil: conversaciones abiertas, sesiones muertas (con el motivo) y las tareas del daemon de Antigravity. Sirve para ver que esta vivo, que esta haciendo y para recuperar el trabajo cuando se queda sin cuota.",
+            "description": "Instrumentacion completa (solo lectura) de las sesiones de Antigravity: estado agregado, lista, sub-agentes muertos/colgados, arbol padre->hijos, detalle con transcript y tasks/log del daemon.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "accion": { "type": "string", "description": "estado (defecto) | list | dead | tasks" }
+                    "accion": { "type": "string", "description": "estado (defecto) | list | dead | stalled | tree | detail | log | tasks" },
+                    "conversation_id": { "type": "string", "description": "ID de conversacion para detail o raiz opcional para tree." },
+                    "tail": { "type": "integer", "description": "Numero de lineas/pasos finales para detail o log (defecto 20)." },
+                    "app_dir": { "type": "string", "description": "Directorio alternativo de datos de Antigravity (opcional)." }
                 }
             }
-},
+        },
 {
             "name": "re_analyze",
             "description": "MOTOR DE RE de MegaDaemon (punto de entrada UNICO): identifica el binario (ELF/PE/MachO/DEX/APK/Go/UPX) CON evidencia, extrae cadenas interesting (URLs, rutas, claves, magisk/root/jni), lista secciones y simbolos, y devuelve un informe uniforme. Accion catalogo lista TODAS las capacidades de RE/deofuscacion con el modulo que las implementa (~700 tokens) para que no adivines tool names. NUNCA ejecuta el binario analizado: es analisis estatico.",
@@ -648,20 +635,22 @@ pub fn tool_definitions() -> Value {
             }
 },
 {
-            "name": "antigravity_sessions",
-            "description": "Estado de las SESIONES de Antigravity en el movil: conversaciones abiertas, sesiones muertas (con el motivo) y las tareas del daemon de Antigravity. Sirve para ver que esta vivo, que esta haciendo y para recuperar el trabajo cuando se queda sin cuota.",
+            "name": "phone_backup",
+            "description": "Motor de backup nativo de apps (Rust puro, sin curl ni shell): inventario de apps del movil, contenedor cifrado AEGIS-256 por segmentos con manifiesto sha256 por fichero, verificacion del AEAD, restauracion (simulacro por defecto, exige confirm=true) y SUBIDA PIPELINING a Drive (sube cada segmento ya cerrado mientras se recoge el siguiente; mide MiB/s y ETA). Anti-congelacion: nice/ionice de la clase mas baja, sleep entre lotes y descanso si la carga del sistema se dispara. Acciones: inventory | create | list | verify | restore | upload. create/restore/upload escriben o publican en Drive: exigen confirm=true.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "accion": { "type": "string", "description": "estado (defecto) | list | dead | tasks" }
+                    "action": { "type": "string", "description": "inventory | create | list | verify | restore | upload" },
+                    "out": { "type": "string", "description": "Directorio/ruta del contenedor." },
+                    "folder_id": { "type": "string", "description": "ID de carpeta en Drive (para upload)." },
+                    "packages": { "type": "array", "items": { "type": "string" } },
+                    "confirm": { "type": "boolean" }
                 }
             }
-},
+        },
         {
-            "name": "phone_backup",
-            "description": "Motor de backup nativo de apps (Rust puro, sin curl ni shell): inventario de apps del movil, contenedor cifrado AEGIS-256 por segmentos con manifiesto sha256 por fichero, verificacion del AEAD, restauracion (simulacro por defecto, exige confirm=true) y SUBIDA PIPELINING a Drive (sube cada segmento ya cerrado mientras se recoge el siguiente; mide MiB/s y ETA). Anti-congelacion: nice/ionice de la clase mas baja, sleep entre lotes y descanso si la carga del sistema se dispara. Acciones: inventory | create | list | verify | restore | upload. create/restore/upload escriben o publican en Drive: exigen confirm=true.",
             "name": "quota_status",
-            "description": "Estado de la CUOTA de los proveedores/modelos: cuanto queda (%), cuando resetea y en que modo esta (normal/aviso/ahorro/pausa). Respuesta MUY compacta (~70 tokens) para no gastar. En 'pausa' significa que la cuota se agota: termina el paso actual, guarda tu checkpoint y espera al reset; no sigas abriendo tareas nuevas.",
+            "description": "Estado de la CUOTA de los proveedores/modelos y presupuesto diario USD: cuanto queda (%), cuando resetea y en que modo esta (normal/aviso/ahorro/pausa). Respuesta MUY compacta (~70 tokens) para no gastar. En 'pausa' significa que la cuota se agota: termina el paso actual, guarda tu checkpoint y espera al reset; no sigas abriendo tareas nuevas.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -671,7 +660,11 @@ pub fn tool_definitions() -> Value {
                     },
                     "full": {
                         "type": "boolean",
-                        "description": "true = detalle completo (gasta mas tokens); por defecto, snapshot compacto."
+                        "description": "true = detalle completo + daily_budget (gasta mas tokens); por defecto, snapshot compacto."
+                    },
+                    "set_daily_budget_usd": {
+                        "type": ["number", "null"],
+                        "description": "Opcional: fija el limite diario de gasto en USD (null = sin limite)."
                     }
                 }
             }
@@ -1156,11 +1149,30 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 }
         "antigravity_sessions" => {
             let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("estado");
+            let conv_id = args.get("conversation_id").and_then(|v| v.as_str()).unwrap_or("");
+            let tail = args.get("tail").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+            let dir_buf = match args.get("app_dir").and_then(|v| v.as_str()) {
+                Some(d) if !d.trim().is_empty() => std::path::PathBuf::from(d.trim()),
+                _ => crate::antigravity_sessions::default_app_dir(),
+            };
+            let dir = dir_buf.as_path();
             let v = match accion {
-                "list" => crate::antigravity_sessions::sesiones().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
-                "dead" => crate::antigravity_sessions::muertas().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
-                "tasks" => crate::antigravity_sessions::tareas_daemon(),
-                _ => crate::antigravity_sessions::estado().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                "list" => crate::antigravity_sessions::sesiones_en(dir)
+                    .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                "dead" => crate::antigravity_sessions::muertas_en(dir)
+                    .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                "stalled" => crate::antigravity_sessions::colgadas_en(dir)
+                    .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                "tree" => crate::antigravity_sessions::arbol_en(
+                    dir,
+                    if conv_id.is_empty() { None } else { Some(conv_id) },
+                ),
+                "detail" => crate::antigravity_sessions::detalle_sesion_en(dir, conv_id, tail),
+                "log" => crate::antigravity_sessions::daemon_log_en(dir, tail)
+                    .map(|lines| json!({ "lines": lines })),
+                "tasks" => crate::antigravity_sessions::tareas_daemon_en(dir),
+                _ => crate::antigravity_sessions::estado_en(dir)
+                    .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
             };
             let txt = match v {
                 Ok(x) => serde_json::to_string_pretty(&x).unwrap_or_default(),
@@ -1204,27 +1216,21 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             let txt = serde_json::to_string(&v).unwrap_or_default();
             json!({ "content": [{ "type": "text", "text": txt }] })
         }
-        "antigravity_sessions" => {
-            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("estado");
-            let v = match accion {
-                "list" => crate::antigravity_sessions::sesiones().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
-                "dead" => crate::antigravity_sessions::muertas().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
-                "tasks" => crate::antigravity_sessions::tareas_daemon(),
-                _ => crate::antigravity_sessions::estado().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
-            };
-            let txt = match v {
-                Ok(x) => serde_json::to_string_pretty(&x).unwrap_or_default(),
-                Err(e) => format!("ERROR: {e}"),
-            };
-            json!({ "content": [{ "type": "text", "text": txt }] })
-        }
         "quota_status" => {
+            if let Some(lim) = args.get("set_daily_budget_usd") {
+                if lim.is_null() {
+                    crate::providers::set_daily_budget_usd(None);
+                } else if let Some(v) = lim.as_f64() {
+                    crate::providers::set_daily_budget_usd(Some(v));
+                }
+            }
             let full = args.get("full").and_then(|v| v.as_bool()).unwrap_or(false);
             let provider = args.get("provider").and_then(|v| v.as_str()).unwrap_or("");
             let v = if full {
                 json!({
                     "estado": crate::quota_guard::estado(if provider.is_empty() { None } else { Some(provider) }),
                     "aviso": crate::quota_guard::aviso_para_agente(),
+                    "daily_budget": crate::providers::daily_budget_snapshot(),
                 })
             } else {
                 crate::quota_guard::snapshot_compacto_de(if provider.is_empty() { None } else { Some(provider) })

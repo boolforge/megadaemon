@@ -244,6 +244,8 @@ fn el_catalogo_mcp_es_la_union_de_los_subcatalogos() {
         megadaemon_core::sync::tool_definitions(),
         megadaemon_core::adb_tool::tool_definitions(),
         megadaemon_core::mcp_ext::tool_definitions(),
+        megadaemon_core::antigravity_model::tool_definitions(),
+        megadaemon_core::antigravity_env::tool_definitions(),
     ] {
         for d in sub.as_array().unwrap() {
             esperado.push(d["name"].as_str().unwrap().to_string());

@@ -686,6 +686,9 @@ pub struct ChatDeps<'a> {
     pub transport: &'a dyn LlmTransport,
     /// ¿Este proveedor está en pausa por cuota?  Por defecto `quota_guard`.
     pub quota_paused: fn(&str) -> bool,
+    /// Predicado opcional de presupuesto por proveedor y `max_tokens`.
+    /// Si es `None`, se aplica `daily_budget_permite` (presupuesto diario USD).
+    pub budget_permite: Option<&'a dyn Fn(&ProviderEntry, u32) -> bool>,
     /// Timeout de UNA llamada a proveedor.
     pub timeout: Duration,
     /// Nº de reintentos por proveedor (429/5xx/transporte/timeout).
@@ -701,11 +704,132 @@ impl<'a> ChatDeps<'a> {
             vault,
             transport,
             quota_paused: crate::quota_guard::en_pausa,
+            budget_permite: None,
             timeout: Duration::from_secs(DEFAULT_PROVIDER_TIMEOUT_SECS),
             retries: MAX_RETRIES,
             backoff_ms: 250,
         }
     }
+}
+
+#[derive(Debug, Clone, Default)]
+struct DailyBudgetState {
+    day_epoch: u64,
+    limit_usd: Option<f64>,
+    spend_usd: f64,
+    tokens_total: u64,
+    calls_total: u64,
+    unpriced_calls: u64,
+}
+
+impl DailyBudgetState {
+    fn current_day() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() / 86_400)
+            .unwrap_or(0)
+    }
+
+    fn rollover_if_needed(&mut self) {
+        let today = Self::current_day();
+        if self.day_epoch != today {
+            self.day_epoch = today;
+            self.spend_usd = 0.0;
+            self.tokens_total = 0;
+            self.calls_total = 0;
+            self.unpriced_calls = 0;
+        }
+    }
+}
+
+fn daily_budget_cell() -> &'static std::sync::Mutex<DailyBudgetState> {
+    static CELL: std::sync::OnceLock<std::sync::Mutex<DailyBudgetState>> =
+        std::sync::OnceLock::new();
+    CELL.get_or_init(|| {
+        let limit_usd = std::env::var("MEGADAEMON_DAILY_BUDGET_USD")
+            .ok()
+            .and_then(|s| s.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v >= 0.0);
+        std::sync::Mutex::new(DailyBudgetState {
+            day_epoch: DailyBudgetState::current_day(),
+            limit_usd,
+            ..Default::default()
+        })
+    })
+}
+
+/// Configura el límite de gasto diario en USD (`None` = sin límite).
+pub fn set_daily_budget_usd(limit: Option<f64>) {
+    let mut g = daily_budget_cell().lock().unwrap_or_else(|p| p.into_inner());
+    g.rollover_if_needed();
+    g.limit_usd = limit.filter(|v| v.is_finite() && *v >= 0.0);
+}
+
+/// Reinicia los contadores del presupuesto diario (útil en tests).
+pub fn reset_daily_budget() {
+    let mut g = daily_budget_cell().lock().unwrap_or_else(|p| p.into_inner());
+    g.day_epoch = DailyBudgetState::current_day();
+    g.spend_usd = 0.0;
+    g.tokens_total = 0;
+    g.calls_total = 0;
+    g.unpriced_calls = 0;
+}
+
+/// Indica si el presupuesto diario permite llamar a `p`.
+/// Los proveedores gratuitos/locales (`tier` `free`/`local` o `auth_type` `none`/`local`)
+/// nunca se bloquean por el tope USD.
+pub fn daily_budget_permite(p: &ProviderEntry, _max_tokens: u32) -> bool {
+    if p.tier.eq_ignore_ascii_case("free")
+        || p.tier.eq_ignore_ascii_case("local")
+        || p.auth_type == "local"
+        || p.auth_type == "none"
+    {
+        return true;
+    }
+    let mut g = daily_budget_cell().lock().unwrap_or_else(|p| p.into_inner());
+    g.rollover_if_needed();
+    match g.limit_usd {
+        Some(cap) if cap <= 0.0 => false,
+        Some(cap) => g.spend_usd < cap,
+        None => true,
+    }
+}
+
+/// Registra el uso de tokens y el coste calculado con `price_table::fleet_cost`.
+pub fn record_daily_spend(
+    _provider_id: &str,
+    model: &str,
+    tokens_in: u64,
+    tokens_out: u64,
+    total_tokens: u64,
+) -> Option<f64> {
+    let cost = crate::price_table::fleet_cost(model, tokens_in, tokens_out);
+    let mut g = daily_budget_cell().lock().unwrap_or_else(|p| p.into_inner());
+    g.rollover_if_needed();
+    g.tokens_total = g.tokens_total.saturating_add(total_tokens);
+    g.calls_total = g.calls_total.saturating_add(1);
+    if let Some(usd) = cost.usd {
+        g.spend_usd += usd;
+    } else {
+        g.unpriced_calls = g.unpriced_calls.saturating_add(1);
+    }
+    cost.usd
+}
+
+/// Snapshot JSON del presupuesto y gasto diario actual.
+pub fn daily_budget_snapshot() -> Value {
+    let mut g = daily_budget_cell().lock().unwrap_or_else(|p| p.into_inner());
+    g.rollover_if_needed();
+    let remaining = g.limit_usd.map(|cap| (cap - g.spend_usd).max(0.0));
+    json!({
+        "day_epoch": g.day_epoch,
+        "limit_usd": g.limit_usd,
+        "spend_usd": g.spend_usd,
+        "remaining_usd": remaining,
+        "tokens_total": g.tokens_total,
+        "calls_total": g.calls_total,
+        "unpriced_calls": g.unpriced_calls,
+    })
 }
 
 fn default_vault() -> ProviderVault {
@@ -1378,6 +1502,16 @@ pub fn execute_chat_with(
             continue;
         }
 
+        let permitido = match deps.budget_permite {
+            Some(f) => f(p, capped_max_tokens),
+            None => daily_budget_permite(p, capped_max_tokens),
+        };
+        if !permitido {
+            trace.push(format!("{} => SALTADO (presupuesto)", p.id));
+            errors.push(format!("{}: fuera de presupuesto", p.id));
+            continue;
+        }
+
         let key = match p.auth_type.as_str() {
             "gh_cli" => match resolve_gh_token() {
                 Some(t) => t,
@@ -1440,6 +1574,19 @@ pub fn execute_chat_with(
                             for tc in &parsed.tool_calls {
                                 tools_used.push(format!("provider_tool:{}", tc.name));
                             }
+                            let tokens_in = parsed.prompt_tokens;
+                            let tokens_out = parsed.completion_tokens;
+                            let total_tokens = parsed
+                                .tokens_used
+                                .max(tokens_in.saturating_add(tokens_out));
+                            crate::quota_guard::registrar_uso(&p.id, total_tokens, None);
+                            let _cost_usd = record_daily_spend(
+                                &p.id,
+                                &p.model,
+                                tokens_in,
+                                tokens_out,
+                                total_tokens,
+                            );
                             trace.push(format!("{} => OK", p.id));
                             return ChatResult {
                                 reply: parsed.content,

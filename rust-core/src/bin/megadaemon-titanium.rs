@@ -186,19 +186,16 @@ fn main() {
                     }
                 }
             }
-            println!(
-                "{}",
-                json!({
-                    "ok": true,
-                    "carpeta": folder,
-                    "inventario": {
-                        "ficheros": base.totales.copiados + base.totales.excluidos + base.totales.no_migrables,
-                        "bytes": base.totales.bytes_totales,
-                    },
-                    "plan": plan,
-                    "ia": ia,
-                })
-            );
+            json!({
+                "ok": true,
+                "carpeta": folder,
+                "inventario": {
+                    "ficheros": base.totales.copiados + base.totales.excluidos + base.totales.no_migrables,
+                    "bytes": base.totales.bytes_totales,
+                },
+                "plan": plan,
+                "ia": ia,
+            })
         }
         _ => uso(),
     };

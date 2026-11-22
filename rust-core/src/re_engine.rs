@@ -429,7 +429,7 @@ mod tests {
     #[test]
     fn extrae_cadenas_con_offset() {
         let d = b"\x00\x01hola mundo\x00fin\x00";
-        let v = extraer_cadenas(d, 4, 10);
+        let v = extraer_cadenas(d, 3, 10);
         assert_eq!(v.len(), 2);
         assert_eq!(v[0].1, "hola mundo");
         assert_eq!(v[0].0, 2);

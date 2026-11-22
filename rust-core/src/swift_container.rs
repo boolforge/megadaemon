@@ -518,7 +518,7 @@ fn combinaciones_kdf(bytes: &[u8], cab: &Cabecera) -> Vec<KdfParams> {
     let paralelismos = vec![campo_u16_be(bytes, 98).unwrap_or(1) as u32, 4];
     let mut out = Vec::new();
     for it in iteraciones {
-        for par in paralelismos {
+        for &par in &paralelismos {
             let p = KdfParams {
                 iterations: it,
                 memory_kib: cab.argon2_memory_kib,
@@ -555,13 +555,13 @@ pub fn round_trip(bytes: &[u8], passphrase: &str) -> Result<RoundTrip, String> {
                 paso: "cabecera".into(),
                 ok: true,
                 detalle: format!(
-                    "formato {} ({} B), {} {}, cifrado {} (método {})",
+                    "formato {} ({} B), {} cifrado, compresión {} (método {})",
                     c.formato,
                     c.header_size,
                     if c.encryption == 1 { "con" } else { "sin" },
                     match c.compression {
-                        3 => "zstd",
-                        o => o,
+                        3 => "zstd".to_string(),
+                        o => o.to_string(),
                     },
                     c.encryption_method_id
                 ),

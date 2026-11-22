@@ -116,7 +116,7 @@ fn el_contenedor_real_tiene_sae1_sai1_y_saf1() {
     assert_eq!(pie.header_size, 32);
     // Invariante medida: el pie apunta a la posición real de SAI1.
     assert_eq!(
-        pie.offset_sai as usize, met.offset,
+        pie.offset_sai as u64, met.offset,
         "el pie SAF1 debe apuntar al SAI1 real"
     );
     assert!(cont.avisos.is_empty(), "avisos: {:?}", cont.avisos);
