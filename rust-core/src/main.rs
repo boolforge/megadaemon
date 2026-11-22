@@ -316,9 +316,29 @@ fn main() {
         }
 
         "chat" => {
-            let model = args.get(2).map(|s| s.as_str());
-            let prompt = if args.len() > 3 { args[3..].join(" ") } else { "Hello".into() };
-            let res = providers::execute_chat(&prompt, model, None, None, 1024);
+            // v16 (DEFECTO-10): el razonamiento interno (CoT) ya NO se
+            // imprime por defecto.  Antes el CLI volcaba el `reasoning`
+            // crudo a stdout (y de ahí al log del móvil).  Ahora hace falta
+            // pedirlo: `chat <modelo> <prompt> --reasoning`.
+            let mut model: Option<&str> = None;
+            let mut want_reasoning = false;
+            let mut rest: Vec<&str> = Vec::new();
+            for a in args.iter().skip(2) {
+                match a.as_str() {
+                    "--reasoning" => want_reasoning = true,
+                    _ => rest.push(a.as_str()),
+                }
+            }
+            // Compatibilidad: `chat <modelo> <prompt...>` (el modelo, el primero).
+            if !rest.is_empty() {
+                model = Some(rest[0]);
+                rest.remove(0);
+            }
+            let prompt = if rest.is_empty() { "Hello".to_string() } else { rest.join(" ") };
+            let mut res = providers::execute_chat(&prompt, model, None, None, 1024);
+            if !want_reasoning {
+                res.reasoning = String::new();
+            }
             println!("{}", serde_json::to_string_pretty(&res).unwrap());
         }
 

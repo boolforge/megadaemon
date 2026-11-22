@@ -141,6 +141,8 @@ pub fn chat_completions(body: &Value) -> Result<Value, GatewayError> {
     let res = crate::providers::execute_chat(&prompt, requested, None, system.as_deref(), max_tokens);
 
     let usage = json!({
+        // El proveedor no siempre reporta los tokens de ENTRADA; 0 = "no lo
+        // dice el proveedor" (no se inventa un número).
         "prompt_tokens": 0,
         "completion_tokens": res.tokens_used,
         "total_tokens": res.tokens_used,
@@ -173,6 +175,13 @@ pub fn chat_completions(body: &Value) -> Result<Value, GatewayError> {
             "vendor": res.vendor,
             "latency_ms": res.latency_ms,
             "fallback_used": res.fallback_used,
+            "tokens_used": res.tokens_used,
+            // v16: quién respondió y a quién se saltó (retirado, cuota en
+            // pausa, sin credencial).  Sin esto el `fallback_used` no
+            // explicaba NADA de lo que pasó.
+            "provider_trace": res.provider_trace,
+            // v16: el estado de la cuota viaja DENTRO de la respuesta.
+            "quota": res.quota,
         }
     }))
 }
@@ -376,6 +385,9 @@ fn gemini_response(res: &crate::providers::ChatResult, tools_requested: usize) -
             "latency_ms": res.latency_ms,
             "fallback_used": res.fallback_used,
             "tools_requested": tools_requested,
+            // v16: la traza de la cascada y el estado de cuota.
+            "provider_trace": res.provider_trace,
+            "quota": res.quota,
         }
     })
 }
@@ -497,6 +509,7 @@ mod tests {
             tools_used: Vec::new(),
             fallback_used: false,
             quota: None,
+            provider_trace: Vec::new(),
         };
         let v = gemini_response(&res, 3);
         assert_eq!(v["candidates"][0]["content"]["parts"][0]["text"], "hola");

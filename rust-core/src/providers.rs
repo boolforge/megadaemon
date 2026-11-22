@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Ruta HISTÓRICA del fichero de providers (instalaciones antiguas y
 /// despliegue dentro de la app Antigravity).  Se conserva como LECTURA de
@@ -92,6 +92,620 @@ pub struct ChatResult {
     /// `None` si no hay datos de cuota.
     #[serde(default)]
     pub quota: Option<serde_json::Value>,
+    /// Traza de la cascada: quién se intentó y a quién se saltó (y por qué).
+    ///
+    /// v16: `fallback_used` sólo decía "no fue el proveedor que pediste".
+    /// Con la traza, el cliente (y el agente) ve QUIÉN respondió y a QUIÉN
+    /// se saltó (modelo retirado, cuota en pausa, sin credencial).
+    /// `Vec::new()` = no hubo cascada (o no se pudo ni empezar).
+    #[serde(default)]
+    pub provider_trace: Vec<String>,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v16 — Errores TIPADOS, redacción de secretos, parseo PURO y transporte
+//       INYECTABLE (⇒ la cascada se testea sin red y sin secretos)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Tope duro de `max_tokens` que se envía a un proveedor.
+///
+/// v16: un `max_tokens` absurdo (10.000.000) hace que el proveedor
+/// responda 400 y el daemon lo trata como un fallo del PROVEEDOR ⇒ cae al
+/// siguiente sin avisar de que el problema era el `max_tokens`.
+pub const MAX_TOKENS_CAP: u32 = 32_768;
+
+/// `max_tokens` por defecto cuando el llamante no dice nada.
+pub const DEFAULT_MAX_TOKENS: u32 = 4_096;
+
+/// Timeout por defecto de UNA llamada a proveedor (segundos).
+pub const DEFAULT_PROVIDER_TIMEOUT_SECS: u64 = 45;
+
+/// Nº máximo de reintentos por proveedor (sólo 429/5xx/transporte/timeout).
+pub const MAX_RETRIES: u32 = 2;
+
+/// Error TIPADO de una llamada a proveedor.
+///
+/// v16: antes todo era `String`.  Con `String` no se puede distinguir
+/// "esto se reintenta" de "esto no" (429/5xx vs 401/404), ni "te falta la
+/// key" de "el proveedor está retirado", ni redactar el secreto de forma
+/// fiable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderError {
+    /// Fallo de transporte (DNS, TLS, conexión rechazada, corte).
+    Transport { provider: String, detail: String },
+    /// Timeout: el proveedor no respondió a tiempo.
+    Timeout { provider: String, detail: String },
+    /// Status HTTP >= 400 (con el status REAL: 401/402/404/429/5xx).
+    Http { provider: String, status: u16, detail: String },
+    /// Status 2xx pero cuerpo no interpretable.
+    Parse { provider: String, detail: String },
+    /// Falta la credencial (o no se pudo resolver).
+    MissingKey { provider: String, detail: String },
+    /// Proveedor o modelo RETIRADO del catálogo.
+    Retired { provider: String, model: String, note: String },
+    /// El presupuesto no permite la llamada.
+    Budget { provider: String, detail: String },
+}
+
+impl ProviderError {
+    /// Id del proveedor que falló.
+    pub fn provider(&self) -> &str {
+        match self {
+            ProviderError::Transport { provider, .. }
+            | ProviderError::Timeout { provider, .. }
+            | ProviderError::Http { provider, .. }
+            | ProviderError::Parse { provider, .. }
+            | ProviderError::MissingKey { provider, .. }
+            | ProviderError::Budget { provider, .. }
+            | ProviderError::Retired { provider, .. } => provider.as_str(),
+        }
+    }
+
+    /// Status HTTP, si lo hubo.
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            ProviderError::Http { status, .. } => Some(*status),
+            _ => None,
+        }
+    }
+
+    /// Etiqueta estable (para logs, trazas y tests).
+    pub fn kind(&self) -> &'static str {
+        match self {
+            ProviderError::Transport { .. } => "transport",
+            ProviderError::Timeout { .. } => "timeout",
+            ProviderError::Http { .. } => "http",
+            ProviderError::Parse { .. } => "parse",
+            ProviderError::MissingKey { .. } => "missing_key",
+            ProviderError::Retired { .. } => "retired",
+            ProviderError::Budget { .. } => "budget",
+        }
+    }
+
+    /// ¿Tiene sentido reintentar?
+    ///
+    /// Regla v16: **nunca** un 4xx (salvo 429 = rate limit) ni un error de
+    /// credenciales.  Un 401/404 no mejora reintentando: se pierde tiempo y
+    /// se puede disparar el *rate limit* del propio proveedor.
+    pub fn retryable(&self) -> bool {
+        match self {
+            ProviderError::Transport { .. } | ProviderError::Timeout { .. } => true,
+            ProviderError::Http { status, .. } => {
+                *status == 429 || (500..=599).contains(status)
+            }
+            _ => false,
+        }
+    }
+
+    /// El detalle (sin el prefijo del proveedor).
+    pub fn detail(&self) -> &str {
+        match self {
+            ProviderError::Transport { detail, .. }
+            | ProviderError::Timeout { detail, .. }
+            | ProviderError::Http { detail, .. }
+            | ProviderError::Parse { detail, .. }
+            | ProviderError::MissingKey { detail, .. }
+            | ProviderError::Budget { detail, .. } => detail.as_str(),
+            ProviderError::Retired { note, .. } => note.as_str(),
+        }
+    }
+
+    /// Devuelve una copia con el secreto sustituido por `***`.
+    ///
+    /// v16: el cuerpo de error de un proveedor puede ecoar la API key
+    /// ("Invalid API key: sk-abc…").  Ese texto acababa dentro de `reply`
+    /// (el fallback offline concatena los errores) y por tanto **en el
+    /// cliente**.
+    pub fn redacted(&self, secret: &str) -> ProviderError {
+        let s = secret.trim();
+        if s.is_empty() {
+            return self.clone();
+        }
+        let mut e = self.clone();
+        match &mut e {
+            ProviderError::Transport { detail, .. }
+            | ProviderError::Timeout { detail, .. }
+            | ProviderError::Http { detail, .. }
+            | ProviderError::Parse { detail, .. }
+            | ProviderError::MissingKey { detail, .. }
+            | ProviderError::Budget { detail, .. } => {
+                *detail = redact_secret(detail.as_str(), s);
+            }
+            ProviderError::Retired { .. } => {}
+        }
+        e
+    }
+}
+
+impl std::fmt::Display for ProviderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProviderError::Transport { provider, detail } => {
+                write!(f, "HTTP transport error ({}): {}", provider, detail)
+            }
+            ProviderError::Timeout { provider, detail } => {
+                write!(f, "timeout ({}): {}", provider, detail)
+            }
+            ProviderError::Http {
+                provider,
+                status,
+                detail,
+            } => write!(f, "HTTP {} ({}): {}", status, provider, detail),
+            ProviderError::Parse { provider, detail } => {
+                write!(f, "respuesta ilegible ({}): {}", provider, detail)
+            }
+            ProviderError::MissingKey { provider, detail } => {
+                write!(f, "sin credencial ({}): {}", provider, detail)
+            }
+            ProviderError::Retired {
+                provider,
+                model,
+                note,
+            } => write!(f, "MODELO RETIRADO: {} ({}) -> {}", model, provider, note),
+            ProviderError::Budget { provider, detail } => {
+                write!(f, "fuera de presupuesto ({}): {}", provider, detail)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProviderError {}
+
+/// Sustituye cualquier aparición del secreto por `***`.
+///
+/// Primero tapa las variantes CON prefijo ("Bearer sk-x") y después la
+/// clave sola, para que un secreto pegado con prefijo tampoco escape.
+pub fn redact_secret(text: &str, secret: &str) -> String {
+    let s = secret.trim();
+    if s.is_empty() {
+        return text.to_string();
+    }
+    let mut out = text.to_string();
+    for pre in ["Bearer ", "bearer ", "Basic ", "basic "] {
+        let with = format!("{}{}", pre, s);
+        if with != s {
+            out = out.replace(&with, &format!("{}***", pre));
+        }
+    }
+    out.replace(s, "***")
+}
+
+/// Redacta varios secretos a la vez.
+pub fn redact_all(text: &str, secrets: &[&str]) -> String {
+    let mut out = text.to_string();
+    for s in secrets {
+        out = redact_secret(&out, s);
+    }
+    out
+}
+
+/// Recorta a `n` caracteres SIN partir un UTF-8 por la mitad.
+///
+/// v16: `&texto[..texto.len().min(200)]` (el código anterior) hace PANIC
+/// si el corte cae en medio de un carácter multibyte (un emoji en el
+/// mensaje de error del proveedor tumbaba la petición).
+pub fn truncar(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
+}
+
+/// Tool call nativa del proveedor (OpenAI `tool_calls`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
+/// Respuesta del proveedor ya interpretada.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ParsedReply {
+    /// Texto final para el cliente (sin el `<think>`).
+    pub content: String,
+    /// Razonamiento interno (de `reasoning_content` o del `<think>`).
+    pub reasoning: String,
+    /// Tokens consumidos (`usage.total_tokens`).
+    pub tokens_used: u64,
+    /// Tokens de entrada (`usage.prompt_tokens`).
+    pub prompt_tokens: u64,
+    /// Tokens de salida (`usage.completion_tokens`).
+    pub completion_tokens: u64,
+    /// Tool calls nativas que pidió el proveedor.
+    pub tool_calls: Vec<ParsedToolCall>,
+    /// `finish_reason` del proveedor (`stop`, `length`, `tool_calls`…).
+    pub finish_reason: String,
+}
+
+/// Parsea la respuesta de un proveedor.  Función **PURO** (sin red, sin
+/// estado global ⇒ se testea con el banco de fixtures).
+///
+/// v16: antes el parseo estaba embebido en `call_openai_http` y sólo se
+/// podía probar contra un servidor real.  Aquí se mueve a una función
+/// pura que cubre los cuerpos raros que dan los proveedores de verdad:
+/// `<think>`, `reasoning_content`, `tool_calls`, `content` en array, body
+/// no-JSON y respuestas truncadas.
+pub fn parse_provider_reply(provider: &str, body: &str) -> Result<ParsedReply, ProviderError> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return Err(ProviderError::Parse {
+            provider: provider.to_string(),
+            detail: "respuesta HTTP vacía".to_string(),
+        });
+    }
+    let v: Value = match serde_json::from_str::<Value>(trimmed) {
+        Ok(v) => v,
+        Err(_) => {
+            // Algunos endpoints zero-key devuelven texto plano.
+            return Ok(ParsedReply {
+                content: trimmed.to_string(),
+                ..Default::default()
+            });
+        }
+    };
+    // Un 2xx con cuerpo de error: el proveedor falló de todos modos.
+    if let Some(err) = v.get("error") {
+        let msg = err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .or_else(|| err.as_str())
+            .unwrap_or("API error");
+        return Err(ProviderError::Parse {
+            provider: provider.to_string(),
+            detail: format!("la respuesta trae 'error': {}", msg),
+        });
+    }
+    let choice = v
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .cloned()
+        .unwrap_or(Value::Null);
+    let msg = choice.get("message").cloned().unwrap_or(Value::Null);
+
+    // Contenido: `string` o `array` de partes (multimodal).
+    let mut raw_content = match msg.get("content") {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    };
+    // Formato legacy: `choices[0].text` sin `message`.
+    if raw_content.trim().is_empty() {
+        raw_content = choice
+            .get("text")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string();
+    }
+
+    let extra_reason = msg
+        .get("reasoning_content")
+        .and_then(|m| m.as_str())
+        .or_else(|| msg.get("reasoning").and_then(|m| m.as_str()))
+        .unwrap_or("")
+        .to_string();
+    let (clean, think_tag) = split_think_tags(&raw_content);
+    let reasoning = if !extra_reason.trim().is_empty() {
+        extra_reason
+    } else {
+        think_tag
+    };
+
+    let usage = v.get("usage").cloned().unwrap_or(Value::Null);
+    let prompt_tokens = usage.get("prompt_tokens").and_then(|x| x.as_u64()).unwrap_or(0);
+    let completion_tokens = usage.get("completion_tokens").and_then(|x| x.as_u64()).unwrap_or(0);
+    let tokens_used = usage
+        .get("total_tokens")
+        .and_then(|x| x.as_u64())
+        .unwrap_or_else(|| prompt_tokens.saturating_add(completion_tokens));
+
+    let tool_calls = parse_tool_calls(msg.get("tool_calls"));
+    let finish_reason = choice
+        .get("finish_reason")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if clean.trim().is_empty() && reasoning.trim().is_empty() && tool_calls.is_empty() {
+        return Err(ProviderError::Parse {
+            provider: provider.to_string(),
+            detail: format!("respuesta sin contenido: {}", truncar(trimmed, 200)),
+        });
+    }
+    // Si el proveedor sólo devuelve razonamiento, el razonamiento ES la
+    // respuesta (igual que antes) pero sin duplicarlo.
+    let (content, reasoning) = if clean.trim().is_empty() {
+        (reasoning.clone(), String::new())
+    } else {
+        (clean, reasoning)
+    };
+    Ok(ParsedReply {
+        content,
+        reasoning,
+        tokens_used,
+        prompt_tokens,
+        completion_tokens,
+        tool_calls,
+        finish_reason,
+    })
+}
+
+/// Extrae las `tool_calls` nativas de un mensaje OpenAI.
+fn parse_tool_calls(node: Option<&Value>) -> Vec<ParsedToolCall> {
+    let arr = match node.and_then(|n| n.as_array()) {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for c in arr {
+        let f = c.get("function").cloned().unwrap_or(Value::Null);
+        let name = f
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let args = match f.get("arguments") {
+            Some(Value::String(s)) => {
+                serde_json::from_str::<Value>(s).unwrap_or(Value::String(s.clone()))
+            }
+            Some(v) => v.clone(),
+            None => Value::Object(serde_json::Map::new()),
+        };
+        out.push(ParsedToolCall {
+            id: c.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string(),
+            name,
+            arguments: args,
+        });
+    }
+    out
+}
+
+/// Saca el mensaje de error del cuerpo de una respuesta (JSON o texto).
+pub fn extract_error_detail(body: &str) -> String {
+    let t = body.trim();
+    if let Ok(v) = serde_json::from_str::<Value>(t) {
+        if let Some(e) = v.get("error") {
+            let m = e
+                .get("message")
+                .and_then(|m| m.as_str())
+                .or_else(|| e.as_str())
+                .map(|s| s.to_string());
+            if let Some(m) = m {
+                return truncar(&m, 200);
+            }
+        }
+        for campo in ["message", "detail"] {
+            if let Some(m) = v.get(campo).and_then(|m| m.as_str()) {
+                return truncar(m, 200);
+            }
+        }
+    }
+    truncar(t, 200)
+}
+
+/// Convierte un status HTTP + cuerpo en un error TIPADO (y redactable).
+///
+/// v16: el status se conserva (antes se perdía: `ureq` convertía los 4xx
+/// en `Err` y el diagnóstico de 401/402/404/429 era código muerto).
+pub fn parse_provider_error(provider: &str, status: u16, body: &str) -> ProviderError {
+    let detail = extract_error_detail(body);
+    let hint = match status {
+        401 | 403 => " (API key invalida o sin permisos)",
+        402 => " (sin saldo / plan agotado)",
+        404 => " (modelo inexistente o RETIRADO - mira el catalogo)",
+        429 => " (rate limit o cuota diaria agotada)",
+        _ => "",
+    };
+    ProviderError::Http {
+        provider: provider.to_string(),
+        status,
+        detail: format!("{}{}", detail, hint),
+    }
+}
+
+/// Petición HTTP a un proveedor (todo lo que necesita el transporte).
+#[derive(Debug, Clone)]
+pub struct LlmRequest {
+    pub endpoint: String,
+    pub model: String,
+    pub api_key: String,
+    pub auth_type: String,
+    pub body: Value,
+}
+
+/// Respuesta HTTP cruda de un proveedor.
+#[derive(Debug, Clone)]
+pub struct LlmResponse {
+    pub status: u16,
+    pub body: String,
+}
+
+/// Transporte HTTP **inyectable**.
+///
+/// v16: hasta ahora `call_openai_http` hacía el POST in situ con `ureq`, lo
+/// que hacía IMPOSIBLE testear la cascada, el fallback y el parseo sin
+/// red.  Con este trait, los tests inyectan un transporte de mentira y la
+/// suite es determinista y offline.
+pub trait LlmTransport: Send + Sync {
+    /// Ejecuta el POST.  Devuelve el status y el cuerpo SIEMPRE que haya
+    /// respuesta HTTP (incluido 4xx/5xx): el status lo interpreta la capa
+    /// de arriba.
+    fn post(&self, req: &LlmRequest, timeout: Duration) -> Result<LlmResponse, ProviderError>;
+
+    /// Nombre del transporte (para logs).
+    fn name(&self) -> &'static str {
+        "transport"
+    }
+}
+
+/// Transporte real (ureq + rustls).  Sin curl, sin fork/exec.
+#[derive(Debug, Clone)]
+pub struct UreqTransport {
+    /// Timeout de conexión.
+    pub connect_timeout: Duration,
+    /// Timeout de escritura.
+    pub write_timeout: Duration,
+}
+
+impl Default for UreqTransport {
+    fn default() -> Self {
+        UreqTransport {
+            connect_timeout: Duration::from_secs(10),
+            write_timeout: Duration::from_secs(10),
+        }
+    }
+}
+
+impl LlmTransport for UreqTransport {
+    fn name(&self) -> &'static str {
+        "ureq"
+    }
+
+    fn post(&self, req: &LlmRequest, timeout: Duration) -> Result<LlmResponse, ProviderError> {
+        let config = ureq::Agent::config_builder()
+            .timeout_global(Some(timeout))
+            .timeout_connect(Some(self.connect_timeout))
+            .timeout_per_write(Some(self.write_timeout))
+            // v16 (DEFECTO-01): por defecto `ureq` convierte 4xx/5xx en
+            // `Err`, y entonces el código NUNCA llegaba al bloque que
+            // distingue 401 (key mala) de 402 (sin saldo) de 404 (modelo
+            // muerto) de 429 (rate limit): el diagnóstico era CÓDIGO MUERTO
+            // y `quota_guard` nunca veía el status (no pausaba nunca).
+            .http_status_as_error(false)
+            .build();
+        let agent = ureq::Agent::new_with_config(config);
+
+        let mut r = agent.post(&req.endpoint);
+        let key = req.api_key.trim();
+        match req.auth_type.as_str() {
+            "anthropic" => {
+                if !key.is_empty() {
+                    r = r.header("x-api-key", key);
+                }
+                r = r.header("anthropic-version", "2023-06-01");
+            }
+            "none" | "local" => {}
+            _ => {
+                if !key.is_empty() {
+                    r = r.header("Authorization", &format!("Bearer {}", key));
+                }
+            }
+        }
+        r = r
+            .header("Content-Type", "application/json")
+            .header("HTTP-Referer", "https://github.com/boolforge/megadaemon")
+            .header("X-Title", "MegaDaemon Zenith v16");
+
+        let body_bytes = serde_json::to_vec(&req.body).map_err(|e| ProviderError::Transport {
+            provider: req.model.clone(),
+            detail: format!("cuerpo no serializable: {}", e),
+        })?;
+
+        let resp = match r.send(body_bytes.as_slice()) {
+            Ok(resp) => resp,
+            Err(e) => return Err(map_ureq_error(&req.model, e)),
+        };
+        let status = resp.status().as_u16();
+        let text = resp.into_body().read_to_string().map_err(|e| {
+            ProviderError::Transport {
+                provider: req.model.clone(),
+                detail: format!("HTTP body read error: {}", e),
+            }
+        })?;
+        Ok(LlmResponse { status, body: text })
+    }
+}
+
+/// Traduce un error de `ureq` al error tipado.
+fn map_ureq_error(provider: &str, e: ureq::Error) -> ProviderError {
+    match e {
+        ureq::Error::StatusCode(code) => ProviderError::Http {
+            provider: provider.to_string(),
+            status: code,
+            detail: String::new(),
+        },
+        ureq::Error::Timeout(_) => ProviderError::Timeout {
+            provider: provider.to_string(),
+            detail: "el proveedor no respondió a tiempo".to_string(),
+        },
+        ureq::Error::Io(io) => {
+            if io.kind() == std::io::ErrorKind::TimedOut {
+                ProviderError::Timeout {
+                    provider: provider.to_string(),
+                    detail: io.to_string(),
+                }
+            } else {
+                ProviderError::Transport {
+                    provider: provider.to_string(),
+                    detail: io.to_string(),
+                }
+            }
+        }
+        other => ProviderError::Transport {
+            provider: provider.to_string(),
+            detail: other.to_string(),
+        },
+    }
+}
+
+/// Todo lo que la cascada necesita, **inyectado** (⇒ testeable sin red).
+///
+/// v16: `execute_chat` leía el vault de disco y hacía el POST con `ureq`
+/// ⇒ no se podía testear ni un caso.  Ahora el núcleo (`execute_chat_with`)
+/// recibe el vault y el transporte; `execute_chat` sigue siendo la façade
+/// de producción con los mismos argumentos.
+pub struct ChatDeps<'a> {
+    /// El vault (proveedores + modelo por defecto).
+    pub vault: &'a ProviderVault,
+    /// Transporte HTTP.
+    pub transport: &'a dyn LlmTransport,
+    /// ¿Este proveedor está en pausa por cuota?  Por defecto `quota_guard`.
+    pub quota_paused: fn(&str) -> bool,
+    /// Timeout de UNA llamada a proveedor.
+    pub timeout: Duration,
+    /// Nº de reintentos por proveedor (429/5xx/transporte/timeout).
+    pub retries: u32,
+    /// Espera base entre reintentos (ms).  0 en tests (sin esperas).
+    pub backoff_ms: u64,
+}
+
+impl<'a> ChatDeps<'a> {
+    /// Dependencias de producción (timeout y reintentos por defecto).
+    pub fn new(vault: &'a ProviderVault, transport: &'a dyn LlmTransport) -> Self {
+        ChatDeps {
+            vault,
+            transport,
+            quota_paused: crate::quota_guard::en_pausa,
+            timeout: Duration::from_secs(DEFAULT_PROVIDER_TIMEOUT_SECS),
+            retries: MAX_RETRIES,
+            backoff_ms: 250,
+        }
+    }
 }
 
 fn default_vault() -> ProviderVault {
@@ -147,7 +761,51 @@ pub fn save_vault(vault: &ProviderVault) -> Result<(), String> {
         let _ = fs::create_dir_all(parent);
     }
     let text = serde_json::to_string_pretty(vault).map_err(|e| e.to_string())?;
-    fs::write(&path, text).map_err(|e| e.to_string())
+    // v16 (DEFECTO-07): escritura ATÓMICA (tmp + rename).  Antes
+    // `fs::write` truncaba el fichero y escribía encima: un corte de luz
+    // (o un OOM kill) en mitad dejaba un `providers.json` truncado ⇒
+    // `load_vault` lo declaraba corrupto y el daemon se quedaba SIN las
+    // API keys del usuario (y el siguiente `save_vault` las pisaba).
+    let tmp = format!("{}.tmp-{}", path, std::process::id());
+    fs::write(&tmp, text.as_bytes()).map_err(|e| format!("no se pudo escribir {}: {}", tmp, e))?;
+    if let Err(e) = fs::rename(&tmp, &path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!("no se pudo renombrar {} -> {}: {}", tmp, path, e));
+    }
+    Ok(())
+}
+
+/// Valida el endpoint de un proveedor.
+///
+/// v16 (DEFECTO-06): `update_provider` aceptaba CUALQUIER endpoint
+/// (`file://…`, `http://169.254.169.254/…` = metadatos de la nube) y el
+/// endpoint HTTP del cockpit **no tiene autenticación** ⇒ SSRF + robo de
+/// credenciales.  Ahora sólo se admiten `http`/`https`, sin credenciales
+/// embebidas en la URL y sin el endpoint de metadatos.
+pub fn validar_endpoint(ep: &str) -> Result<String, String> {
+    let s = ep.trim();
+    if s.is_empty() {
+        return Err("endpoint vacío".to_string());
+    }
+    let lower = s.to_ascii_lowercase();
+    if !lower.starts_with("http://") && !lower.starts_with("https://") {
+        return Err(format!("endpoint no permitido (sólo http/https): {}", s));
+    }
+    // Credenciales embebidas en la URL (http://user:pass@host).
+    let rest = match lower.strip_prefix("http://") {
+        Some(r) => r,
+        None => lower.strip_prefix("https://").unwrap_or(""),
+    };
+    if let Some(at) = rest.find('@') {
+        if rest[..at].contains(':') {
+            return Err("el endpoint no puede llevar credenciales embebidas".to_string());
+        }
+    }
+    // Metadatos de la nube: no es ningún proveedor de LLM.
+    if lower.contains("169.254.169.254") || lower.contains("metadata.google.internal") {
+        return Err("endpoint de metadatos bloqueado (SSRF)".to_string());
+    }
+    Ok(s.to_string())
 }
 
 fn mask_key(k: &str) -> String {
@@ -220,6 +878,22 @@ pub fn update_provider(
     enabled: Option<bool>,
     set_default: bool,
 ) -> Result<Value, String> {
+    // v16 (DEFECTO-06): se VALIDA antes de tocar NADA.  Antes el endpoint
+    // se aceptaba tal cual y el modelo se comprobaba contra el RETIRADO
+    // por ID (no por MODELO): `update_provider(id, model="MiniMax-M2.7")`
+    // se aceptaba y el vault quedaba con un modelo muerto.
+    let nuevo_endpoint: Option<String> = match endpoint {
+        Some(ep) if !ep.trim().is_empty() => Some(validar_endpoint(ep)?),
+        _ => None,
+    };
+    if let Some(m) = model {
+        let mt = m.trim();
+        if !mt.is_empty() {
+            if let Some((rid, rmodel, rnote)) = provider_catalog::is_retired(mt) {
+                return Err(format!("MODELO RETIRADO: {} ({}) -> {}", rmodel, rid, rnote));
+            }
+        }
+    }
     let mut vault = load_vault();
     let mut found = false;
     for p in &mut vault.providers {
@@ -236,26 +910,24 @@ pub fn update_provider(
                     p.model = m.trim().to_string();
                 }
             }
-            if let Some(ep) = endpoint {
-                if !ep.trim().is_empty() {
-                    // v13.2 (HW-03): cambiar el endpoint de un proveedor que ya
-                    // tiene una key guardada enviaba esa key al host nuevo
-                    // (SSRF + robo de credenciales) sin pedir la key.
-                    // Ahora hay que re-introducir la key al cambiar de host.
-                    let nuevo = ep.trim();
-                    if p.endpoint.trim() != nuevo && !p.api_key.trim().is_empty() {
-                        // v13.2 (HW-03): la API key queda ATADA al endpoint
-                        // completo (esquema+host+ruta), no sólo al host.  El
-                        // endpoint HTTP del cockpit no tiene autenticación, así
-                        // que sin esta regla cualquiera podía re-apuntar un
-                        // proveedor con key guardada yeysar esa key (SSRF +
-                        // robo de credenciales).  Al cambiar el endpoint, la
-                        // key se vacía y hay que re-introducirla.
-                        p.api_key = String::new();
-                        p.auth_type = "none".to_string();
-                    }
-                    p.endpoint = nuevo.to_string();
+            if let Some(nuevo) = nuevo_endpoint.as_ref() {
+                // v13.2 (HW-03): cambiar el endpoint de un proveedor que ya
+                // tiene una key guardada enviaba esa key al host nuevo
+                // (SSRF + robo de credenciales) sin pedir la key.
+                // Ahora hay que re-introducir la key al cambiar de host.
+                //
+                // v13.2 (HW-03): la API key queda ATADA al endpoint
+                // completo (esquema+host+ruta), no sólo al host.  El
+                // endpoint HTTP del cockpit no tiene autenticación, así
+                // que sin esta regla cualquiera podía re-apuntar un
+                // proveedor con key guardada yeysar esa key (SSRF +
+                // robo de credenciales).  Al cambiar el endpoint, la
+                // key se vacía y hay que re-introducirla.
+                if p.endpoint.trim() != nuevo.as_str() && !p.api_key.trim().is_empty() {
+                    p.api_key = String::new();
+                    p.auth_type = "none".to_string();
                 }
+                p.endpoint = nuevo.to_string();
             }
             if let Some(en) = enabled {
                 p.enabled = en;
@@ -279,10 +951,10 @@ pub fn update_provider(
             id: id.to_string(),
             name: format!("Custom ({})", id),
             vendor: "Custom".to_string(),
-            endpoint: endpoint
-                .unwrap_or("https://openrouter.ai/api/v1/chat/completions")
-                .to_string(),
-            model: model.unwrap_or("openai/gpt-4o-mini").to_string(),
+            endpoint: nuevo_endpoint.clone().unwrap_or_else(|| {
+                "https://openrouter.ai/api/v1/chat/completions".to_string()
+            }),
+            model: model.unwrap_or("openai/gpt-4o-mini").trim().to_string(),
             api_key: api_key.unwrap_or("").trim().to_string(),
             auth_type: "bearer".to_string(),
             tier: "custom".to_string(),
@@ -382,109 +1054,33 @@ pub fn call_openai_http(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
-        "max_tokens": max_tokens,
+        "max_tokens": if max_tokens == 0 { DEFAULT_MAX_TOKENS } else { max_tokens.min(MAX_TOKENS_CAP) },
         "temperature": temperature
     });
 
-    let config = ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_secs(45)))
-        .timeout_connect(Some(std::time::Duration::from_secs(10)))
-        .build();
-    let agent = ureq::Agent::new_with_config(config);
+    // v16: el POST va por el MISMO transporte inyectable que usa la
+    // cascada (y con `http_status_as_error(false)`), así que el status
+    // HTTP llega al diagnóstico en vez de perderse en un `Err`.
+    let transport = UreqTransport::default();
+    let req = LlmRequest {
+        endpoint: endpoint.to_string(),
+        model: model.to_string(),
+        api_key: api_key.to_string(),
+        auth_type: auth_type.to_string(),
+        body: payload,
+    };
+    let resp = transport
+        .post(&req, Duration::from_secs(DEFAULT_PROVIDER_TIMEOUT_SECS))
+        .map_err(|e| e.redacted(api_key).to_string())?;
 
-    let mut req = agent.post(endpoint);
-    let key = api_key.trim();
-    match auth_type {
-        "anthropic" => {
-            if !key.is_empty() {
-                req = req.header("x-api-key", key);
-            }
-            req = req.header("anthropic-version", "2023-06-01");
-        }
-        _ => {
-            if !key.is_empty() {
-                req = req.header("Authorization", &format!("Bearer {}", key));
-            }
-        }
-    }
-    req = req
-        .header("Content-Type", "application/json")
-        .header("HTTP-Referer", "https://github.com/boolforge/megadaemon")
-        .header("X-Title", "MegaDaemon Zenith v13.1");
-
-    let body_bytes = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
-    let resp = req
-        .send(body_bytes.as_slice())
-        .map_err(|e| format!("HTTP transport error: {}", e))?;
-
-    let status = resp.status().as_u16();
-    let text = resp
-        .into_body()
-        .read_to_string()
-        .map_err(|e| format!("HTTP body read error: {}", e))?;
-
-    if status >= 400 {
+    if resp.status >= 400 {
         // Diagnóstico accionable: distinguir saldo/agota/modelo-muerto.
-        let detail = serde_json::from_str::<Value>(text.trim())
-            .ok()
-            .and_then(|v| {
-                v.get("error")
-                    .and_then(|e| {
-                        e.get("message")
-                            .and_then(|m| m.as_str())
-                            .or_else(|| e.as_str())
-                            .map(|s| s.to_string())
-                    })
-                    .or_else(|| v.get("message").and_then(|m| m.as_str()).map(|s| s.to_string()))
-            })
-            .unwrap_or_else(|| text.chars().take(200).collect());
-        let hint = match status {
-            401 | 403 => " (API key invalida o sin permisos)",
-            402 => " (sin saldo / plan agotado)",
-            404 => " (modelo inexistente o RETIRADO - mira el catalogo)",
-            429 => " (rate limit o cuota diaria agotada)",
-            _ => "",
-        };
-        return Err(format!("HTTP {}: {}{}", status, detail, hint));
+        let e = parse_provider_error(model, resp.status, &resp.body).redacted(api_key);
+        return Err(e.to_string());
     }
 
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return Err("Empty HTTP response from provider".to_string());
-    }
-
-    // Algunos endpoints zero-key devuelven texto plano.
-    if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
-        if let Some(err_obj) = v.get("error") {
-            let msg = err_obj["message"]
-                .as_str()
-                .or_else(|| err_obj.as_str())
-                .unwrap_or("API error");
-            return Err(format!("Provider API error: {}", msg));
-        }
-        let msg_node = &v["choices"][0]["message"];
-        let content = msg_node["content"].as_str().unwrap_or("");
-        let extra_reason = msg_node["reasoning_content"]
-            .as_str()
-            .or_else(|| msg_node["reasoning"].as_str())
-            .unwrap_or("");
-        let tokens = v["usage"]["total_tokens"].as_u64().unwrap_or(0);
-        let (clean, think_tag) = split_think_tags(content);
-        let final_reason = if !extra_reason.is_empty() {
-            extra_reason.to_string()
-        } else {
-            think_tag
-        };
-        if !clean.is_empty() {
-            return Ok((clean, final_reason, tokens));
-        }
-        if !final_reason.is_empty() {
-            return Ok((final_reason.clone(), String::new(), tokens));
-        }
-        return Err(format!("Unexpected JSON payload: {}", &trimmed[..trimmed.len().min(200)]));
-    }
-
-    Ok((trimmed.to_string(), String::new(), 0))
+    let parsed = parse_provider_reply(model, &resp.body).map_err(|e| e.redacted(api_key).to_string())?;
+    Ok((parsed.content, parsed.reasoning, parsed.tokens_used))
 }
 
 fn default_re_system_prompt() -> &'static str {
@@ -625,12 +1221,39 @@ pub fn execute_chat(
     system_override: Option<&str>,
     max_tokens: u32,
 ) -> ChatResult {
-    let t0 = Instant::now();
+    // Fachada de producción: vault de disco + transporte real.
     let vault = load_vault();
-    let target_id = requested_model
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(&vault.default_model);
+    let transport = UreqTransport::default();
+    let deps = ChatDeps::new(&vault, &transport);
+    execute_chat_with(
+        prompt,
+        requested_model,
+        attachment_path,
+        system_override,
+        max_tokens,
+        &deps,
+    )
+}
+
+/// Núcleo de la cascada con TODO inyectado (vault + transporte + cuota).
+///
+/// v16: `execute_chat` leía el vault de disco y hacía el POST con `ureq`
+/// ⇒ ningún caso de la cascada era testeable.  Aquí todo es explícito y
+/// la firma pública de `execute_chat` no cambia.
+pub fn execute_chat_with(
+    prompt: &str,
+    requested_model: Option<&str>,
+    attachment_path: Option<&str>,
+    system_override: Option<&str>,
+    max_tokens: u32,
+    deps: &ChatDeps<'_>,
+) -> ChatResult {
+    let t0 = Instant::now();
+    let vault = deps.vault;
+    let target_id: &str = match requested_model.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        Some(s) => s,
+        None => vault.default_model.as_str(),
+    };
 
     // v13.2 (HW-13): pedir un modelo RETIRADO no puede terminar en otro
     // proveedor sin avisar.  Se responde con el aviso y el sustituto.
@@ -650,6 +1273,7 @@ pub fn execute_chat(
             tools_used: Vec::new(),
             fallback_used: false,
             quota: None,
+            provider_trace: vec![format!("{} => SALTADO (modelo retirado)", rid)],
         };
     }
 
@@ -684,6 +1308,7 @@ pub fn execute_chat(
             tools_used,
             fallback_used: false,
             quota: None,
+            provider_trace: vec!["local-seere => OK (offline)".to_string()],
         };
     }
 
@@ -709,6 +1334,14 @@ pub fn execute_chat(
     };
 
     let sys_prompt = system_override.unwrap_or_else(|| default_re_system_prompt());
+    // v16: `max_tokens` acotado.  Un `max_tokens` absurdo hacía que el
+    // proveedor respondiera 400 y el daemon lo tomaba como un fallo del
+    // PROVEEDOR ⇒ caía al siguiente sin decir cuál era el problema.
+    let capped_max_tokens = if max_tokens == 0 {
+        DEFAULT_MAX_TOKENS
+    } else {
+        max_tokens.min(MAX_TOKENS_CAP)
+    };
 
     // Build ordered candidate cascade: requested model first -> other enabled cloud models -> local SEERE v12
     let mut candidates: Vec<ProviderEntry> = Vec::new();
@@ -722,55 +1355,148 @@ pub fn execute_chat(
     }
 
     let mut errors: Vec<String> = Vec::new();
+    let mut trace: Vec<String> = Vec::new();
     for (idx, p) in candidates.iter().enumerate() {
+        // v16 (DEFECTO-03): un proveedor RETIRADO no puede usarse "de
+        // rebote" en la cascada.  El aviso de "modelo retirado" sólo
+        // cubría el modelo PEDIDO: el resto de la cascada lo gastaba en
+        // silencio (y con una key que el usuario ya no puede usar).
+        if let Some((_, rmodel, rnote)) = provider_catalog::is_retired(&p.id)
+            .or_else(|| provider_catalog::is_retired(&p.model))
+        {
+            trace.push(format!("{} => SALTADO (modelo retirado: {})", p.id, rmodel));
+            errors.push(format!("{}: modelo retirado ({})", p.id, rnote));
+            continue;
+        }
+
+        // v16 (DEFECTO-04): un proveedor en PAUSA por cuota no se llama:
+        // la cascada salta al siguiente.  Antes se gastaba la llamada
+        // (y el 429 no se registraba nunca, así que nadie se pausaba).
+        if (deps.quota_paused)(&p.id) {
+            trace.push(format!("{} => SALTADO (cuota en pausa)", p.id));
+            errors.push(format!("{}: cuota en pausa", p.id));
+            continue;
+        }
+
         let key = match p.auth_type.as_str() {
             "gh_cli" => match resolve_gh_token() {
                 Some(t) => t,
-                None => continue,
+                None => {
+                    trace.push(format!("{} => SALTADO (sin token de gh)", p.id));
+                    continue;
+                }
             },
-            "none" => String::new(),
+            "none" | "local" => String::new(),
             _ => {
                 if p.api_key.trim().is_empty() {
+                    trace.push(format!("{} => SALTADO (sin credencial)", p.id));
                     continue;
                 }
                 p.api_key.clone()
             }
         };
 
-        match call_openai_http(
-            &p.endpoint,
-            &p.model,
-            &key,
-            &p.auth_type,
-            sys_prompt,
-            &enriched_prompt,
-            max_tokens,
-            0.3,
-        ) {
-            Ok((reply, reasoning, tokens)) => {
-                return ChatResult {
-                    reply,
-                    reasoning,
-                    model_id: p.id.clone(),
-                    model_name: p.name.clone(),
-                    vendor: p.vendor.clone(),
-                    latency_ms: (t0.elapsed().as_secs_f64() * 1000.0).round(),
-                    tokens_used: tokens,
-                    tools_used,
-                    quota: Some(crate::quota_guard::snapshot_compacto_de(Some(&p.id))),
-                    fallback_used: idx > 0,
-                };
-            }
-            Err(e) => {
-                // Cuota/rate-limit: se REGISTRA para poder avisar al agente y
-                // PAUSAR con elegancia en vez de cortarle el flujo a mitad.
-                if let Some(st) = crate::quota_guard::status_de_error(&e) {
-                    if st == 429 || st == 402 {
-                        crate::quota_guard::registrar_error_cuota(&p.id, st, &e);
+        let payload = json!({
+            "model": p.model,
+            "messages": [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": enriched_prompt}
+            ],
+            "max_tokens": capped_max_tokens,
+            "temperature": 0.3
+        });
+        let req = LlmRequest {
+            endpoint: p.endpoint.clone(),
+            model: p.model.clone(),
+            api_key: key.clone(),
+            auth_type: p.auth_type.clone(),
+            body: payload,
+        };
+
+        // v16 (DEFECTO-05): reintentos con backoff SÓLO para lo que se
+        // puede reintentar (429, 5xx, transporte, timeout).  Un 401/404
+        // NO se reintenta: no mejora y quema el rate limit del proveedor.
+        let mut attempt: u32 = 0;
+        let mut err: Option<ProviderError> = None;
+        loop {
+            match deps.transport.post(&req, deps.timeout) {
+                Ok(resp) => {
+                    if resp.status >= 400 {
+                        let e = parse_provider_error(&p.id, resp.status, &resp.body).redacted(&key);
+                        if e.retryable() && attempt < deps.retries {
+                            attempt += 1;
+                            dormir_backoff(deps.backoff_ms, attempt);
+                            continue;
+                        }
+                        err = Some(e);
+                        break;
+                    }
+                    match parse_provider_reply(&p.id, &resp.body) {
+                        Ok(parsed) => {
+                            // v16 (DEFECTO-08): `tools_used` refleja lo
+                            // REALMENTE usado: las tool calls nativas que
+                            // pidió el proveedor (antes sólo salían las
+                            // herramientas locales de contexto RE).
+                            for tc in &parsed.tool_calls {
+                                tools_used.push(format!("provider_tool:{}", tc.name));
+                            }
+                            trace.push(format!("{} => OK", p.id));
+                            return ChatResult {
+                                reply: parsed.content,
+                                reasoning: parsed.reasoning,
+                                model_id: p.id.clone(),
+                                model_name: p.name.clone(),
+                                vendor: p.vendor.clone(),
+                                latency_ms: (t0.elapsed().as_secs_f64() * 1000.0).round(),
+                                tokens_used: parsed.tokens_used,
+                                tools_used,
+                                fallback_used: idx > 0,
+                                quota: Some(crate::quota_guard::snapshot_compacto_de(Some(&p.id))),
+                                provider_trace: trace,
+                            };
+                        }
+                        Err(e) => {
+                            err = Some(e.redacted(&key));
+                            break;
+                        }
                     }
                 }
-                errors.push(format!("{}: {}", p.id, e));
+                Err(e) => {
+                    let e = e.redacted(&key);
+                    if e.retryable() && attempt < deps.retries {
+                        attempt += 1;
+                        dormir_backoff(deps.backoff_ms, attempt);
+                        continue;
+                    }
+                    err = Some(e);
+                    break;
+                }
             }
+        }
+
+        if let Some(e) = &err {
+            // Cuota/rate-limit: se REGISTRA (con el status REAL) para que
+            // el agente lo vea y para poder PAUSAR en vez de reintentar en
+            // bucle.  v16: antes el status se perdía y esto nunca pasaba.
+            if let Some(st) = e.status() {
+                if st == 429 {
+                    crate::quota_guard::registrar_error_cuota(
+                        &p.id,
+                        st,
+                        &format!("{} rate limit", e.detail()),
+                    );
+                } else if st == 402 {
+                    crate::quota_guard::registrar_error_cuota(
+                        &p.id,
+                        st,
+                        &format!("{} insufficient credit", e.detail()),
+                    );
+                }
+            }
+            // v16 (DEFECTO-02): el error ya viene REDACTADO (la clave del
+            // proveedor no puede acabar en el `reply` que ve el cliente).
+            errors.push(format!("{}: {}", p.id, truncar(&e.to_string(), 200)));
+            trace.push(format!("{} => {}", p.id, truncar(&e.to_string(), 120)));
         }
     }
 
@@ -783,6 +1509,7 @@ pub fn execute_chat(
     } else {
         format!("{}\n\n[Fallback offline activo — errores cloud: {}]", ans, errors.join(" | "))
     };
+    trace.push("local-seere => OK (offline, último recurso)".to_string());
     ChatResult {
         reply: note,
         reasoning: String::new(),
@@ -794,7 +1521,17 @@ pub fn execute_chat(
         tools_used,
         fallback_used: true,
         quota: Some(crate::quota_guard::snapshot_compacto()),
+        provider_trace: trace,
     }
+}
+
+/// Espera el backoff entre reintentos (0 en tests ⇒ sin esperas).
+fn dormir_backoff(base_ms: u64, attempt: u32) {
+    if base_ms == 0 {
+        return;
+    }
+    let mult = 1u64 << attempt.min(6);
+    std::thread::sleep(Duration::from_millis(base_ms.saturating_mul(mult)));
 }
 
 pub fn test_provider_connection(id: &str) -> Value {
