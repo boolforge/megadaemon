@@ -1326,7 +1326,10 @@ mod tests {
 
     #[test]
     fn encuentra_bytes() {
-        assert_eq!(find_bytes(b"hola mundo", b"mundo"), Some(6));
+        // "mundo" empieza en el índice 5 de "hola mundo" (h=0 o=1 l=2 a=3
+        // espacio=4 m=5).  La expectativa decía 6: el off-by-one estaba en el
+        // test, la función devolvía bien (el CI: left=Some(5), right=Some(6)).
+        assert_eq!(find_bytes(b"hola mundo", b"mundo"), Some(5));
         assert_eq!(find_bytes(b"hola", b"xyz"), None);
     }
 
