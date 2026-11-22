@@ -4,10 +4,12 @@
 //!
 //! ```text
 //! md-backup inventory  [--root /] [--packages a,b] [--measure] [--json] [--limit N]
+//! md-backup plan       --out DIR [--root /] [--model megadaemon] [--max-apps N]
+//!                     [--allow-live-framework] [--json]
 //! md-backup create    --out DIR [--packages a,b] [--root /] [--segment-bytes N]
 //!                     [--password P] [--key-out F] [--no-apk] [--no-data]
 //!                     [--include-external] [--include-media] [--exclude GLOB]
-//!                     [--dry-run] [--nice N] [--ionice C] [--load-high F]
+//!                     [--plan F] [--dry-run] [--nice N] [--ionice C] [--load-high F]
 //!                     [--sleep-ms N] [--batch N]
 //! md-backup list      --out DIR [--json]
 //! md-backup verify    DIR [--key F] [--json]
@@ -33,6 +35,7 @@
 use megadaemon_core::backup_apps::{
     self, CreateOptions, DriveUploader, Governor, InventoryOptions, RestoreOptions, SegmentSink,
 };
+use megadaemon_core::backup_plan;
 use serde_json::json;
 use serde_json::Value;
 use std::fs;
@@ -135,7 +138,8 @@ fn usage() -> ExitCode {
     eprintln!(
         "uso:\n  \
 md-backup inventory  [--root /] [--packages a,b] [--measure] [--json] [--limit N]\n  \
-md-backup create    --out DIR [--packages a,b] [--segment-bytes N] [--password P] [--key-out F]\n  \
+md-backup plan       --out DIR [--root /] [--model M] [--max-apps N] [--allow-live-framework]\n  \
+md-backup create    --out DIR [--packages a,b] [--segment-bytes N] [--password P] [--key-out F] [--plan F]\n  \
 md-backup list      --out DIR [--json]\n  \
 md-backup verify    DIR [--key F] [--json]\n  \
 md-backup restore   DIR [--key F] [--package P] [--dest D] [--confirm] [--overwrite]\n  \
@@ -146,11 +150,12 @@ md-backup bench-upload --file F --folder ID [--workers N] [--chunk-bytes N]"
     ExitCode::from(2)
 }
 
-fn main() -> ExitCode {
+pub fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let sub = args.get(1).cloned().unwrap_or_default();
     let r = match sub.as_str() {
         "inventory" => cmd_inventory(),
+        "plan" => cmd_plan(),
         "create" => cmd_create(),
         "list" => cmd_list(),
         "verify" => cmd_verify(),
@@ -242,6 +247,101 @@ fn human_bytes(n: u64) -> String {
 }
 
 // --------------------------------------------------------------------------
+// plan: el LLM propone, el código valida
+// --------------------------------------------------------------------------
+
+/// `md-backup plan`: pide al gateway `megadaemon` una propuesta de plan
+/// (qué respaldar / qué excluir) a partir del **inventario real** del móvil
+/// y la **valida en código**.
+///
+/// Lo que se guarda (`plan.json`) es la **decisión validada** con la
+/// propuesta cruda dentro: la IA no decide nunca.
+fn cmd_plan() -> Result<ExitCode, String> {
+    let out = PathBuf::from(arg("--out").ok_or("plan necesita --out <dir>")?);
+    let root = PathBuf::from(arg("--root").unwrap_or_else(|| "/".to_string()));
+    let model = arg("--model").unwrap_or_else(|| "megadaemon".to_string());
+    let max_apps = arg_usize("--max-apps", 200);
+    let human_gate = flag("--allow-live-framework");
+
+    // 1. Inventario REAL (medido): el modelo no puede inventar lo que no
+    //    está en el móvil.
+    let opts = InventoryOptions {
+        root: root.clone(),
+        packages: arg_csv("--packages"),
+        measure: flag("--measure"),
+        limit: 0,
+        ..Default::default()
+    };
+    let apps = backup_apps::inventory(&opts)?;
+    let real_packages: Vec<String> = apps.iter().map(|a| a.package.clone()).collect();
+
+    // 2. La propuesta del LLM (puede fallar: sin red o sin proveedor).
+    let (proposal, llm_error) = match backup_plan::propose_with_llm(&apps, &model, max_apps) {
+        Ok(p) => (p, None),
+        Err(e) => (
+            backup_plan::PlanProposal {
+                rationale: "el LLM no respondió: se aplica el plan por defecto".to_string(),
+                raw: String::new(),
+                ..Default::default()
+            },
+            Some(e),
+        ),
+    };
+
+    // 3. Validación EN CÓDIGO (la IA no manda).
+    let decision = backup_plan::validate(&proposal, &real_packages, human_gate);
+
+    // 4. Se guarda el plan (decisión + propuesta cruda).
+    std::fs::create_dir_all(&out).map_err(|e| format!("no se puede crear {}: {e}", out.display()))?;
+    let plan_path = backup_plan::plan_path(&out);
+    backup_plan::write_plan(&plan_path, &decision)?;
+
+    if flag("--json") {
+        let mut doc = serde_json::to_value(&decision).unwrap_or_default();
+        if let Some(e) = &llm_error {
+            doc["llm_error"] = Value::String(e.clone());
+        }
+        println!("{}", serde_json::to_string_pretty(&doc).unwrap_or_default());
+    } else {
+        println!("fichero del plan : {}", plan_path.display());
+        println!("modelo           : {model}");
+        if let Some(e) = &llm_error {
+            println!("LLM              : ERROR ({e}) ⇒ plan por defecto");
+        } else {
+            println!("LLM              : propuesta recibida");
+        }
+        println!("paquetes aceptados ({}):", decision.packages.len());
+        for p in &decision.packages {
+            println!("  · {p}");
+        }
+        println!("exclusiones aceptadas ({}):", decision.exclude_patterns.len());
+        for p in &decision.exclude_patterns {
+            println!("  · {p}");
+        }
+        println!(
+            "media/data        : media={} data={} (puerta humana: {})",
+            decision.include_media, decision.include_external, human_gate
+        );
+        println!("rechazos ({}):", decision.rejections.len());
+        for r in &decision.rejections {
+            println!("  · {} — {}", r.what, r.reason);
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Lee el plan validado de `--plan` (si se pasó).
+fn load_plan() -> Result<Option<backup_plan::PlanDecision>, String> {
+    match arg("--plan") {
+        Some(p) if !p.trim().is_empty() => {
+            let d = backup_plan::read_plan(&PathBuf::from(p))?;
+            Ok(Some(d))
+        }
+        _ => Ok(None),
+    }
+}
+
+// --------------------------------------------------------------------------
 // create
 // --------------------------------------------------------------------------
 
@@ -249,6 +349,7 @@ fn cmd_create() -> Result<ExitCode, String> {
     let out = PathBuf::from(arg("--out").ok_or("create necesita --out <dir>")?);
     let root = PathBuf::from(arg("--root").unwrap_or_else(|| "/".to_string()));
     let gov = governor_from_args();
+    let plan = load_plan()?;
     let opts = CreateOptions {
         root,
         out: out.clone(),
@@ -262,6 +363,7 @@ fn cmd_create() -> Result<ExitCode, String> {
         include_media: flag("--include-media"),
         allow_live_framework: flag("--allow-live-framework"),
         exclude_patterns: arg_csv("--exclude"),
+        plan,
         dry_run: flag("--dry-run"),
         gov,
     };
@@ -293,6 +395,14 @@ fn cmd_create() -> Result<ExitCode, String> {
             "anti-congelación: {} · pausas {} ms · sleep {} ms · {} ms totales",
             report.io_limits, report.paused_ms, report.slept_ms, report.elapsed_ms
         );
+        if !report.plan_sha256.is_empty() {
+            println!("plan (LLM+validación): sha256 {}", report.plan_sha256);
+            if let Some(p) = &report.plan {
+                if let Some(s) = p.get("summary") {
+                    println!("  resumen        : {}", serde_json::to_string(s).unwrap_or_default());
+                }
+            }
+        }
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -464,6 +574,7 @@ fn cmd_upload() -> Result<ExitCode, String> {
             include_media: flag("--include-media"),
             allow_live_framework: flag("--allow-live-framework"),
             exclude_patterns: arg_csv("--exclude"),
+            plan: load_plan()?,
             dry_run: false,
             gov,
         };

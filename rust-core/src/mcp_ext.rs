@@ -563,12 +563,18 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "phone_backup",
-            "description": "Motor de backup nativo de apps (Rust puro, sin curl ni shell): inventario de apps del movil, contenedor cifrado AEGIS-256 por segmentos con manifiesto sha256 por fichero, verificacion del AEAD, restauracion (simulacro por defecto, exige confirm=true) y SUBIDA PIPELINING a Drive (sube cada segmento ya cerrado mientras se recoge el siguiente; mide MiB/s y ETA). Anti-congelacion: nice/ionice de la clase mas baja, sleep entre lotes y descanso si la carga del sistema se dispara. Acciones: inventory | create | list | verify | restore | upload. create/restore/upload escriben o publican en Drive: exigen confirm=true.",
+            "description": "Motor de backup nativo de apps (Rust puro, sin curl ni shell): inventario de apps del movil, PLAN propuesto por el LLM y VALIDADO en codigo (la IA nunca decide: el codigo filtra paquetes inexistentes, patrones inseguros y la puerta del framework vivo), contenedor cifrado AEGIS-256 por segmentos con manifiesto sha256 por fichero, verificacion del AEAD, restauracion (simulacro por defecto, exige confirm=true) y SUBIDA PIPELINING a Drive (sube cada segmento ya cerrado mientras se recoge el siguiente; mide MiB/s y ETA). Anti-congelacion: nice/ionice de la clase mas baja, sleep entre lotes y descanso si la carga del sistema se dispara. Acciones: inventory | plan | create | list | verify | restore | upload. create/restore/upload escriben o publican en Drive: exigen confirm=true.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["inventory", "create", "list", "verify", "restore", "upload"], "default": "inventory" },
+                    "action": { "type": "string", "enum": ["inventory", "plan", "create", "list", "verify", "restore", "upload"], "default": "inventory" },
                     "out": { "type": "string", "description": "Directorio del contenedor (create/list/upload) o ruta del contenedor (verify/restore)" },
+                    "plan": { "type": "string", "description": "Fichero 'plan.json' con el plan VALIDADO (create/upload). Lo genera la accion 'plan' (el LLM propone y el codigo valida)." },
+                    "model": { "type": "string", "default": "megadaemon", "description": "Modelo del gateway para la accion 'plan'" },
+                    "max_apps": { "type": "integer", "default": 200, "description": "Cuantas apps del inventario se le enseñan al LLM (plan)" },
+                    "allow_live_framework": { "type": "boolean", "default": false, "description": "Puerta HUMANA: autorizacion explicita para copiar Android/media y Android/data con el framework en marcha. El LLM NUNCA puede abrirla." },
+                    "include_external": { "type": "boolean", "default": false, "description": "Incluir /sdcard/Android/data (create/upload). Requiere allow_live_framework." },
+                    "include_media": { "type": "boolean", "default": false, "description": "Incluir /sdcard/Android/media (create/upload). Requiere allow_live_framework." },
                     "packages": { "type": "array", "items": { "type": "string" }, "description": "Paquetes a respaldar (vacio = todos)" },
                     "root": { "type": "string", "description": "Raiz del dispositivo", "default": "/" },
                     "measure": { "type": "boolean", "default": false, "description": "Mide el tamano de los datos privados (inventory)" },
@@ -1145,6 +1151,55 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                             })
                         }
                     }
+                    "plan" => (|| -> Result<Value, String> {
+                        // El LLM PROPONE; el codigo VALIDA. Lo que se guarda
+                        // es la decision validada (con la propuesta cruda
+                        // dentro, para auditoria).
+                        let out = s("out");
+                        if out.is_empty() {
+                            return Err("phone_backup plan necesita 'out'".to_string());
+                        }
+                        let inv_opts = crate::backup_apps::InventoryOptions {
+                            root: root.clone(),
+                            packages: packages.clone(),
+                            measure: b("measure"),
+                            limit: 0,
+                            ..Default::default()
+                        };
+                        let apps = crate::backup_apps::inventory(&inv_opts)?;
+                        let real: Vec<String> =
+                            apps.iter().map(|a| a.package.clone()).collect();
+                        let model = {
+                            let m = s("model");
+                            if m.is_empty() { "megadaemon".to_string() } else { m }
+                        };
+                        let max_apps = if n("max_apps") > 0 {
+                            (n("max_apps") as usize).min(2000)
+                        } else {
+                            200
+                        };
+                        let (proposal, llm_error) =
+                            match crate::backup_plan::propose_with_llm(&apps, &model, max_apps) {
+                                Ok(p) => (p, None),
+                                Err(e) => (
+                                    crate::backup_plan::PlanProposal {
+                                        rationale: "el LLM no respondio: plan por defecto"
+                                            .to_string(),
+                                        ..Default::default()
+                                    },
+                                    Some(e),
+                                ),
+                            };
+                        let gate = b("allow_live_framework");
+                        let decision = crate::backup_plan::validate(&proposal, &real, gate);
+                        let path = crate::backup_plan::plan_path(std::path::Path::new(&out));
+                        crate::backup_plan::write_plan(&path, &decision)?;
+                        let mut doc = serde_json::to_value(&decision).unwrap_or_default();
+                        if let Some(e) = &llm_error {
+                            doc["llm_error"] = Value::String(e.clone());
+                        }
+                        Ok(json!({ "ok": true, "plan_file": path.to_string_lossy(), "plan": doc }))
+                    })(),
                     "verify" => {
                         let out = s("out");
                         if out.is_empty() {
@@ -1167,6 +1222,15 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         if out.is_empty() {
                             Err("phone_backup create necesita 'out'".to_string())
                         } else {
+                            // Plan validado (si se paso): se lee ANTES del
+                            // `match` porque aqui no se puede usar `?`.
+                            let plan_arg = s("plan");
+                            let plan_decision = if plan_arg.trim().is_empty() {
+                                Ok(None)
+                            } else {
+                                crate::backup_plan::read_plan(std::path::Path::new(&plan_arg))
+                                    .map(Some)
+                            };
                             let opts = crate::backup_apps::CreateOptions {
                                 root: root.clone(),
                                 out: std::path::PathBuf::from(&out),
@@ -1176,6 +1240,15 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                                 key_out: {
                                     let k = s("key_out");
                                     if k.is_empty() { None } else { Some(std::path::PathBuf::from(k)) }
+                                },
+                                include_external: b("include_external"),
+                                include_media: b("include_media"),
+                                allow_live_framework: b("allow_live_framework"),
+                                plan: match plan_decision {
+                                    Ok(p) => p,
+                                    Err(e) => {
+                                        return Some(json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }))
+                                    }
                                 },
                                 ..Default::default()
                             };
