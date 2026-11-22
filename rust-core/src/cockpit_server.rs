@@ -1198,6 +1198,38 @@ fn handle_client(mut stream: TcpStream) {
             // POST /api/session/exchange   body: {"api_key": "..."}
             // → 200 {"ok":true,"token":"..."}  (el token va al navegador, no al
             //   HTML público).  Con la API key incorrecta → 403.
+            // Gateway OpenAI-compatible: EL "MODELO" ES SIEMPRE MEGADAEMON.
+            //
+            // POST /v1/chat/completions
+            // body: {"model":"megadaemon"|"<id de proveedor>", "messages":[...],
+            //        "max_tokens":N, "tools":[...]}
+            // -> 200 con la respuesta en formato OpenAI + un bloque
+            //    "megadaemon" con la trazabilidad (proveedor real, si hubo
+            //    fallback, latencia).
+            //
+            // MegaDaemon decide a quién llamar (routing con fallback real) y
+            // devuelve; el cliente nunca habla con un proveedor suelto.
+            // Exige la API key de la instancia (no es una ruta publica: el
+            // tunel expone el daemon).
+            "/v1/chat/completions" | "/chat/completions" => {
+                let body: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);
+                match crate::llm_gateway::chat_completions(&body) {
+                    Ok(v) => send_json(&mut stream, &v),
+                    Err(e) => {
+                        let code = if e.status >= 400 { e.status } else { 400 };
+                        send_json(
+                            &mut stream,
+                            &json!({
+                                "error": {
+                                    "message": e.message,
+                                    "type": "invalid_request_error",
+                                    "code": code,
+                                }
+                            }),
+                        );
+                    }
+                }
+            }
             "/api/session/exchange" => {
                 let body: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);
                 let provided = body
