@@ -60,12 +60,25 @@ for k in ("quick","duckdns","public","url"):
 
 TOK="$(curl -s -m 25 -X POST -H 'Content-Type: application/json' \
   -d "{\"api_key\":\"$KEY\"}" "$URL/api/session/exchange" 2>/dev/null \
-  | python3 -c 'import sys,json;print(json.load(sys.stdin).get("auth_token",""))' 2>/dev/null)"
+  | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("auth_token") or d.get("token") or "")' 2>/dev/null)"
 if [ -z "$TOK" ]; then
-  recuperar_url || { echo "ERROR: el movil no respondio ni con la URL guardada ni con state/channel.json" >&2; exit 3; }
+  if ! recuperar_url; then
+    # Diagnostico real (2026-11-22): el movil puede estar VIVO y responder
+    # 403 porque la key local no coincide con la vigente.  /health es publico
+    # y publica el fingerprint (fnv1a64) de la key que espera el movil.
+    ESPERADO="$(curl -s -m 12 "$URL/health" 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin).get("key_fp",""))' 2>/dev/null)"
+    echo "ERROR: el movil no respondio con la credencial local." >&2
+    if [ -n "$ESPERADO" ]; then
+      echo "  el movil esta VIVO y espera la key con fingerprint '$ESPERADO'." >&2
+      echo "  la key local no coincide => resincronizala (ver tools/sincronizar-key.sh)." >&2
+    else
+      echo "  (sin /health legible: el movil no es accesible por el tunel)" >&2
+    fi
+    exit 3
+  fi
   TOK="$(curl -s -m 25 -X POST -H 'Content-Type: application/json' \
     -d "{\"api_key\":\"$KEY\"}" "$URL/api/session/exchange" 2>/dev/null \
-    | python3 -c 'import sys,json;print(json.load(sys.stdin).get("auth_token",""))' 2>/dev/null)"
+    | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("auth_token") or d.get("token") or "")' 2>/dev/null)"
 fi
 [ -n "$TOK" ] || { echo "ERROR: el movil no acepto la credencial (403?)" >&2; exit 3; }
 
