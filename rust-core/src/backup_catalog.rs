@@ -198,7 +198,6 @@ pub fn resumir(entradas: &[EntradaInventario]) -> ResumenInventario {
         })
         .collect();
     ResumenInventario {
-    ResumenInventario {
         ficheros,
         bytes,
         por_clase,
