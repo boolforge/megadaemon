@@ -1295,11 +1295,32 @@ fn handle_client(mut stream: TcpStream) {
                     json!({
                         "estado": crate::quota_guard::estado(None),
                         "aviso": crate::quota_guard::aviso_para_agente(),
+                        "daily_budget": crate::providers::daily_budget_snapshot(),
                     })
                 } else {
                     crate::quota_guard::snapshot_compacto()
                 };
                 send_json(&mut stream, &v);
+            }
+            "/api/budget" => {
+                if method == "POST" {
+                    let body: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);
+                    if let Some(lim) = body.get("limit_usd") {
+                        if lim.is_null() {
+                            crate::providers::set_daily_budget_usd(None);
+                        } else if let Some(v) = lim.as_f64() {
+                            crate::providers::set_daily_budget_usd(Some(v));
+                        }
+                    }
+                    if body.get("reset").and_then(|v| v.as_bool()) == Some(true) {
+                        crate::providers::reset_daily_budget();
+                    }
+                }
+                let mut snap = crate::providers::daily_budget_snapshot();
+                if let Some(obj) = snap.as_object_mut() {
+                    obj.insert("ok".into(), json!(true));
+                }
+                send_json(&mut stream, &snap);
             }
             "/v1/chat/completions" | "/chat/completions" => {
                 let body: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);

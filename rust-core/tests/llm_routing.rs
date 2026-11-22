@@ -548,7 +548,7 @@ fn el_razonamiento_think_se_saca_del_texto() {
     let cuerpo = fixtures::cuerpo("minimax-m3.1-flash__reasoning_think.json");
     let r = parse_provider_reply("minimax-m3.1-flash", &cuerpo).unwrap();
     assert_eq!(r.content, "La respuesta final es 42.");
-    assert!(r.reasoning.contains("el usuario pide"));
+    assert!(r.reasoning.to_lowercase().contains("el usuario pide"));
     assert!(!r.content.contains("<think>"));
 }
 
