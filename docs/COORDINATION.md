@@ -457,3 +457,26 @@ v2) siguen con esta regla desde ya.
 5. Nada de push a `main` ni de tocar ficheros de otros.
 
 El root asume la compilación, los tests, la corrección y el merge.
+
+### Entrega de `agent/llm-testing-v16` — 2026-11-22T20:39:26Z
+URGENTE: main esta ROJO por 2 commits mios que faltaban en el merge (7b00fd2). Ya mergeaste la rama con los SHA ANTES de que yo rebaseara sobre el main nuevo; el rebase reescribio los SHA y el merge se quedo a medias.
+
+QUE FALTA EN MAIN (el build NO compila):
+1) rust-core/src/providers.rs: falta el bloque de PRESUPUESTO (GastoGlobal, budget_permite, gasto_anotar, GATE_PRESUPUESTO y el campo ChatDeps.budget_permite) que USA el test 'el_presupuesto_bloquea_la_llamada_cara', que SI esta en main => error de TIPO.
+2) rust-core/tests/llm_routing.rs: el test se llamaba 'el_razonamiento_<think>_se_saca_del_texto' y '<think>' NO es un identificador valido => error de SINTAXIS (detectado con 'rustfmt --emit stdout', que parsea SIN compilar ni enlazar).
+
+COMO INTEGRAR (en este orden):
+  git cherry-pick eceb83a 71d35a8     <- recomendado: son exactamente los 2 commits que faltan (doc + bloque de presupuesto + 6 tests + fix de sintaxis)
+  (alternativa) git merge --no-ff agent/llm-testing-v16   <- mi rama ya esta rebaseada sobre el main nuevo (SHA nuevos: 6f6d09c..71d35a8)
+
+LO QUE HICE (v16, todo con su defecto en docs/AUDIT_LLM_V16.md):
+- Auditoria adversarial de la parte de chat/LLM: 18 defectos REALES (15 arreglados, 3 documentados sin arreglar por decision), cada uno con su codigo y su reproduccion. Los tres graves: (a) el status HTTP se perdia (ureq 3.5.2 convierte los 4xx en Err por DEFECTO: config.rs:1068) => el diagnostico 401/402/404/429 era CODIGO MUERTO y quota_guard NUNCA veía el 429 => nadie se pausaba nunca; (b) la API key del proveedor podia acabar en el 'reply' del cliente; (c) el presupuesto del service_bus no lo consultaba NINGUN camino real.
+- Mejoras: ProviderError tipado, redaccion de secretos en TODOS los errores, transporte HTTP INYECTABLE (LlmTransport) => la cascada se testea sin red, execute_chat_with (nucleo testeable; execute_chat no cambia de firma), reintentos con backoff solo para 429/5xx/transporte (nunca 401/404), timeout por proveedor, max_tokens acotado, la cascada salta proveedor RETIRADO / en PAUSA de cuota / fuera de presupuesto y lo DICE en ChatResult.provider_trace, tools_used refleja las tool_calls nativas, save_vault atomico, update_provider valida endpoint (SSRF) y modelo retirado.
+- Paridad: CLI (--reasoning), tool MCP minimax_chat (include_reasoning), agent_coding (redaccion + cap), gateway (traza + cuota).
+- Tests: +58 (44 en llm_routing.rs + 14 en llm_gateway_openai.rs) => 1574 -> 1632. Banco de 20 respuestas CAPTURADAS en tests/fixtures/providers/ (TODAS marcadas SINTETICO: en esta sesion no se capturo ninguna traza HTTP cruda; sin credenciales).
+- NO compilado ni testeado aqui (protocolo de flota: el sandbox de 3 GB muere en el enlace). SI he pasado rustfmt --emit stdout (parseo sin enlazar) a todos los ficheros tocados: 1 error de sintaxis encontrado y corregido.
+
+NO VERIFICADO: nada compilado; el camino real contra un proveedor (la medicion del movil es del 2026-11-22, ANTES de estos cambios); la rama gh_cli sin token; el contexto RE (depende de rutas del dispositivo y del NPU); la perdida de actualizacion concurrente de providers.json (sigue sin arreglar: hace falta cerrojo de fichero).
+- ficheros: rust-core/src/providers.rs rust-core/src/llm_gateway.rs rust-core/src/quota_guard.rs rust-core/src/main.rs rust-core/src/mcp_server.rs rust-core/src/agent_coding.rs docs/AUDIT_LLM_V16.md rust-core/tests/llm_routing.rs rust-core/tests/llm_gateway_openai.rs rust-core/tests/llm_mock/mod.rs rust-core/tests/fixtures/mod.rs rust-core/tests/fixtures/providers rust-core/tests/fixtures/README.md
+- rama: `agent/llm-testing-v16` · SHA: `71d35a8`
+- **NO compilado aqui**: lo compila y testea el root (sandbox de 3 GB).
