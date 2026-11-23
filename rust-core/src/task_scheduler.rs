@@ -818,13 +818,34 @@ pub fn expirar_leases() -> usize {
     let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
     let mut n = 0;
     for t in q.iter_mut() {
-        if t.state == State::Running {
-            if t.lease_expira.map(|e| e <= t0).unwrap_or(false) {
+        // MEDIDO (2026-11-23, auditoría de calidad): `expirar_leases` sólo
+        // miraba las tareas EN CURSO (`Running`).  Una tarea REPARTIDA
+        // (`repartir_por_nodo` la deja en `Pending` con `node` y
+        // `lease_expira` puestos) cuyo nodo moría ANTES de empezarla se
+        // quedaba apuntando a ese nodo para siempre:
+        //   * `expirar_leases` no la tocaba (no estaba `Running`);
+        //   * `repartir_por_nodo` sólo coge tareas con `node` VACÍO;
+        //   => el trabajo NUNCA volvía a repartirse: la tarea se quedaba
+        //      colgada para siempre (trabajo perdido en silencio).
+        // Ahora una lease caducada libera el nodo SIEMPRE, esté la tarea en
+        // curso o pendiente.
+        if !t.lease_expira.map(|e| e <= t0).unwrap_or(false) {
+            continue;
+        }
+        match t.state {
+            State::Running => {
                 t.state = State::Pending;
                 t.node = String::new();
+                t.lease_expira = None;
                 t.motivo_pausa = Some("lease caducado (el nodo no devolvio la tarea)".to_string());
                 n += 1;
             }
+            State::Pending => {
+                t.node = String::new();
+                t.lease_expira = None;
+                n += 1;
+            }
+            _ => {}
         }
     }
     drop(q);
