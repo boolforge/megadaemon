@@ -3008,6 +3008,12 @@ pub fn run_server(port: u16) -> Result<(), String> {
     println!("  Hardware:  Exynos 2100 NPU (/dev/vertex10) + KleidiAI Cores 4-7");
     println!("==================================================================");
 
+    // MEDIDO 2026-11-23 (CI): los puertos ya enlazados se calculan ANTES de
+    // que el `for` de abajo consuma `listeners`: el `for` mueve el vector
+    // (into_iter) y el `listeners.iter()` posterior era un PRESTAMO de un
+    // valor movido => E0382 => la lib NO COMPILABA (todos los jobs del CI
+    // caidos, sin ARM64 ni release).
+    let ya: Vec<u16> = listeners.iter().map(|(p, _)| *p).collect();
     for (_, listener) in listeners {
         spawn_listener_thread(listener);
     }
@@ -3021,7 +3027,6 @@ pub fn run_server(port: u16) -> Result<(), String> {
     // cuanto salen, los sirve: el movil se autorepara sin reinicios.
     {
         let esperados: Vec<u16> = ports.clone();
-        let ya: Vec<u16> = listeners.iter().map(|(p, _)| *p).collect();
         let faltan: Vec<u16> = esperados.into_iter().filter(|p| !ya.contains(p)).collect();
         if !faltan.is_empty() {
             std::thread::spawn(move || {
