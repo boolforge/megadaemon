@@ -180,6 +180,13 @@ pub fn ruta_gate() -> PathBuf {
     PathBuf::from(RAIZ_APP).join("web/generated/main.js")
 }
 
+/// Longitud del secreto local del agente (hex).
+///
+/// MEDIDO (2026-11-23): la URL original (`https://daily-cloudcode-pa.googleapis.com`)
+/// mide **41** bytes, no 42 ⇒ con el prefijo "/mda/" (5) el secreto tiene que
+/// medir 15 (21 + 5 + 15 = 41) o la URL no cabe y el parche se rechaza.
+pub const LARGO_SECRETO: usize = 15;
+
 /// Prefijo de la ruta que usa el **language server** para hablar con el
 /// gateway.
 ///
@@ -197,7 +204,7 @@ pub fn ruta_gate() -> PathBuf {
 /// adivinarlo.
 pub const PREFIJO_AGENTE: &str = "/mda";
 
-/// Secreto local del proxy del agente (16 hex, 0600, estable).
+/// Secreto local del proxy del agente (15 hex, 0600, estable).
 ///
 /// Se crea la primera vez y no cambia: si cambiara, el binario parcheado
 /// dejaría de validar (y habría que re-patchear los 181 MB).
@@ -219,7 +226,7 @@ fn secreto_agente_real() -> String {
     let ruta = std::path::PathBuf::from(&dir).join("agy_proxy.secret");
     if let Ok(s) = std::fs::read_to_string(&ruta) {
         let t = s.trim().to_string();
-        if t.len() == 16 && t.chars().all(|c| c.is_ascii_hexdigit()) {
+        if t.len() == LARGO_SECRETO && t.chars().all(|c| c.is_ascii_hexdigit()) {
             return t;
         }
     }
@@ -233,20 +240,29 @@ fn secreto_agente_real() -> String {
         Err(_) => false,
     };
     let hex = if nuevo {
-        buf.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        buf.iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+            .chars()
+            .take(LARGO_SECRETO)
+            .collect::<String>()
     } else {
         // Plan B (sin /dev/urandom): el commit de la build (estable entre
         // reinicios ⇒ no obliga a re-patchear los 181 MB en cada arranque).
         let sha = crate::self_update::build_commit();
-        let t = sha.chars().filter(|c| c.is_ascii_hexdigit()).take(16).collect::<String>();
-        if t.len() == 16 {
+        let t = sha
+            .chars()
+            .filter(|c| c.is_ascii_hexdigit())
+            .take(LARGO_SECRETO)
+            .collect::<String>();
+        if t.len() == LARGO_SECRETO {
             t
         } else {
             let n = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos() as u64)
                 .unwrap_or(0);
-            format!("{:016x}", n ^ (std::process::id() as u64).wrapping_mul(0x9E3779B97F4A7C15))
+            format!("{:0width$x}", n ^ (std::process::id() as u64).wrapping_mul(0x9E3779B97F4A7C15), width = LARGO_SECRETO)
         }
     };
     let _ = std::fs::create_dir_all(&dir);
@@ -261,9 +277,8 @@ fn secreto_agente_real() -> String {
 
 /// URL destino para el LS, **de la misma longitud** que [`CLOUCODE_URL`].
 ///
-/// `http://127.0.0.1:<puerto>/mda/<16 hex>` → 42 bytes exactos con un
-/// puerto de 4 dígitos (21 + 5 + 16).  Con 5 dígitos hay que ajustar, así
-/// que el puerto canónico es 9090.
+/// `http://127.0.0.1:<puerto>/mda/<15 hex>` → 41 bytes exactos con un
+/// puerto de 4 dígitos (21 + 5 + 15), los mismos que la URL original.
 pub fn url_destino(puerto: u16) -> String {
     let base = format!("http://127.0.0.1:{puerto}{PREFIJO_AGENTE}/");
     let hex = secreto_agente();
@@ -286,8 +301,8 @@ pub fn quitar_prefijo_agente(path: &str) -> Option<String> {
     let resto = p.strip_prefix(pref.as_str())?;
     // `get(..16)` devuelve None si no hay 16 bytes o si el 16 no cae en un
     // borde de carácter (nada de `split_at`, que entra en pánico).
-    let secreto = resto.get(..16)?;
-    let cola = &resto[16..];
+    let secreto = resto.get(..LARGO_SECRETO)?;
+    let cola = &resto[LARGO_SECRETO..];
     if !secreto.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
@@ -702,6 +717,17 @@ mod tests {
     }
 
     #[test]
+    fn la_url_del_agente_cabe_exacta_como_la_original() {
+        // MEDIDO (2026-11-23): la URL original mide 41 bytes; con el
+        // prefijo y el secreto hay que llegar EXACTAMENTE a 41 o el parche
+        // se rechaza (el binario es ELF: cambiar la longitud lo rompe).
+        let u = url_destino(9090);
+        assert_eq!(u.len(), CLOUCODE_URL.len(), "{}", u);
+        assert_eq!(u.len(), 41);
+        assert!(url_destino_valido(9090));
+    }
+
+    #[test]
     fn url_destino_apunta_al_gateway() {
         let u = url_destino(9090);
         assert!(u.starts_with("http://127.0.0.1:9090/mda/"), "{}", u);
@@ -725,10 +751,10 @@ mod tests {
             Some("/v1internal:streamGenerateContent".to_string())
         );
         // Un secreto equivocado NO autentica.
-        let falsa = if sec == "0123456789abcdef" {
-            "0123456789abcdee".to_string()
+        let falsa = if sec == "0123456789abcde" {
+            "0123456789abcde0".to_string()
         } else {
-            "0123456789abcdef".to_string()
+            "0123456789abcde".to_string()
         };
         assert!(quitar_prefijo_agente(&format!("/mda/{falsa}/v1internal:x")).is_none());
         // Y una ruta normal, tampoco.
