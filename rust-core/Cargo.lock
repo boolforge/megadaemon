@@ -1937,7 +1937,6 @@ checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 name = "megadaemon-core"
 version = "13.4.0"
 dependencies = [
- "megadaemon-redact",
  "addr2line",
  "aho-corasick",
  "argon2",
@@ -1962,6 +1961,7 @@ dependencies = [
  "iz80",
  "libc",
  "lzma-rs",
+ "megadaemon-redact",
  "memchr",
  "memmap2",
  "oauth2",
@@ -2001,7 +2001,6 @@ dependencies = [
 [[package]]
 name = "megadaemon-redact"
 version = "1.0.0"
-dependencies = []
 
 [[package]]
 name = "memchr"

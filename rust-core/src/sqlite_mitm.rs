@@ -216,7 +216,34 @@ pub struct Conversacion {
     pub creada: i64,
     pub actualizada: i64,
     pub pasos: i64,
+    /// Copia **fiel** de la fila de origen (mismas claves y valores).
+    ///
+    /// NO se le añaden claves sintéticas: el `meta` se usa también como
+    /// lista de columnas al escribir la DB servida y al re-mergear, y una
+    /// clave que no existe en la tabla real hace fallar el INSERT
+    /// (`table conversation_summaries has no column named battle_id`).
     pub meta: Value,
+    /// `battle_id` normalizado (campo propio de Antigravity, opcional).
+    pub battle_id: Option<String>,
+    /// `winning_conversation_id` normalizado (opcional).
+    pub winning_conversation_id: Option<String>,
+}
+
+/// Columnas **reales** de una tabla (MEDIDO: `PRAGMA table_info`).
+///
+/// Es la lista de verdad: el `meta` de una fila puede traer claves
+/// sintéticas, pero la tabla destino sólo acepta las suyas.
+fn columnas_reales(con: &Connection, tabla: &str) -> Vec<String> {
+    let t = tabla.replace('"', "");
+    let mut st = match con.prepare(&format!("PRAGMA table_info(\"{t}\")")) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let cols = st
+        .query_map([], |r| r.get::<_, String>(1))
+        .map(|it| it.flatten().collect::<Vec<String>>())
+        .unwrap_or_default();
+    cols
 }
 
 /// Lee las conversaciones de la DB de Antigravity (sólo lectura).
@@ -286,9 +313,9 @@ pub fn leer_conversaciones(
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
         let pasos = f.get("steps").and_then(|v| v.as_i64()).unwrap_or(0);
-        let mut meta = f.as_object().cloned().unwrap_or_default();
-        meta.insert("battle_id".into(), json!(battle));
-        meta.insert("winning_conversation_id".into(), json!(winner));
+        // El `meta` es la copia FIEL de la fila (sin claves sintéticas):
+        // se usa como lista de columnas al escribir la DB servida.
+        let meta = f.clone();
         out.push(Conversacion {
             id,
             parent_id: parent,
@@ -296,7 +323,9 @@ pub fn leer_conversaciones(
             creada,
             actualizada,
             pasos,
-            meta: Value::Object(meta),
+            meta,
+            battle_id: battle,
+            winning_conversation_id: winner,
         });
     }
     Ok(out)
@@ -322,7 +351,17 @@ pub fn replicar(limite: usize) -> Result<Value, String> {
     {
         let tx = dst.transaction().map_err(|e| format!("tx: {e}"))?;
         for f in &filas {
-            let meta = serde_json::to_string(&f.meta).unwrap_or_default();
+            // En la DB PROPIA si metemos las claves normalizadas
+            // (`battle_id`, `winning_conversation_id`): alli son datos
+            // útiles y no hay riesgo de colision con el esquema.
+            let mut m = f.meta.as_object().cloned().unwrap_or_default();
+            if !m.contains_key("battle_id") {
+                m.insert("battle_id".into(), json!(f.battle_id));
+            }
+            if !m.contains_key("winning_conversation_id") {
+                m.insert("winning_conversation_id".into(), json!(f.winning_conversation_id));
+            }
+            let meta = serde_json::to_string(&Value::Object(m)).unwrap_or_default();
             let n = tx
                 .execute(
                     "INSERT INTO conversaciones (id,parent_id,estado,creada,actualizada,pasos,meta_json)
@@ -420,14 +459,7 @@ pub fn generar_db_servida_desde(
     let _ = std::fs::remove_file(&temporal);
     let mut dst =
         Connection::open(&temporal).map_err(|e| format!("abrir destino: {e}"))?;
-    let esquema = format!(
-        "CREATE TABLE IF NOT EXISTS {} AS SELECT * FROM {} LIMIT 0",
-        tabla, tabla
-    );
-    // copiamos el esquema real con sus columnas
-    let cols: Vec<String> = filas.first().map(|_| Vec::new()).unwrap_or_default();
-    let _ = cols;
-    // creamos la tabla con el mismo esquema leyendo de la original
+    // Copiamos el esquema real (y sus columnas) de la tabla de origen.
     let flags2 = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let src2 = Connection::open_with_flags(origen, flags2)
         .map_err(|e| format!("abrir RO {}: {e}", origen.display()))?;
@@ -438,23 +470,16 @@ pub fn generar_db_servida_desde(
             |r| r.get(0),
         )
         .unwrap_or_default();
+    // MEDIDO (2026-11-23): las columnas del INSERT se toman del ESQUEMA
+    // REAL de la tabla, no de las claves del `meta` (que pueden traer
+    // claves sinteticas que la tabla no tiene: `battle_id`, ...).
+    let nombres: Vec<String> = columnas_reales(&src2, &tabla);
     drop(src2);
     if sql_esquema.is_empty() {
         return Err(format!("no encuentro la tabla {tabla}"));
     }
     dst.execute_batch(&sql_esquema)
         .map_err(|e| format!("esquema destino: {e}"))?;
-    let _ = esquema;
-
-    let nombres: Vec<String> = filas
-        .first()
-        .map(|f| {
-            f.meta
-                .as_object()
-                .map(|o| o.keys().cloned().collect())
-                .unwrap_or_default()
-        })
-        .unwrap_or_default();
     if nombres.is_empty() {
         return Err("no hay filas que servir".to_string());
     }
@@ -840,6 +865,10 @@ fn remergear_servida_en_original(servida: &Path, original: &Path) -> Result<Valu
     src.busy_timeout(std::time::Duration::from_millis(2000))
         .map_err(|e| format!("busy_timeout servida: {e}"))?;
     let filas = leer_conversaciones(&src, &tabla, 1_000_000)?;
+    // MEDIDO (2026-11-23): columnas del ESQUEMA REAL de la DB servida (la
+    // original tiene el mismo esquema), no de las claves del `meta`
+    // (que pueden traer claves sinteticas que la tabla no tiene).
+    let nombres: Vec<String> = columnas_reales(&src, &tabla);
     drop(src);
 
     // 2) Escribir en la original (ya desmontada ⇒ es el fichero real).
@@ -849,10 +878,6 @@ fn remergear_servida_en_original(servida: &Path, original: &Path) -> Result<Valu
     dst.busy_timeout(std::time::Duration::from_millis(2000))
         .map_err(|e| format!("busy_timeout original: {e}"))?;
 
-    let nombres: Vec<String> = filas
-        .first()
-        .and_then(|f| f.meta.as_object().map(|o| o.keys().cloned().collect()))
-        .unwrap_or_default();
     if nombres.is_empty() {
         return Ok(json!({
             "ok": true,
@@ -902,7 +927,15 @@ fn remergear_servida_en_original(servida: &Path, original: &Path) -> Result<Valu
             let ps: Vec<&dyn rusqlite::ToSql> =
                 vals.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
             match tx.execute(&upsert, ps.as_slice()) {
-                Ok(_) => n += 1,
+                // MEDIDO (2026-11-23): `INSERT OR IGNORE` devuelve 0 cuando
+                // OMITE la fila (ya existe). Antes se contaba igual y la
+                // metrica "filas_re_mergadas" decia "insertadas" cuando
+                // en realidad eran "leidas".
+                Ok(k) => {
+                    if k > 0 {
+                        n += 1;
+                    }
+                }
                 Err(e) => return Err(format!("re-merge {}: {e}", f.id)),
             }
         }
