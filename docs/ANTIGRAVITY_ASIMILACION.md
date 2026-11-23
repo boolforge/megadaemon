@@ -311,6 +311,24 @@ Rutas servidas por el cockpit (`cockpit_server.rs`):
 
 ---
 
+## 7-bis. Continuación (2026-11-23): MITM de SQLite + proxy real + fusión con la GUI
+
+Esta rama (`rama/mitm-proxy-2026-11-23`) continúa el plan en tres
+direcciones; el detalle está en **[`docs/MITM-SQLITE-Y-PROXY.md`](MITM-SQLITE-Y-PROXY.md)**.
+
+| # | Antes (§4) | Ahora |
+|---|---|---|
+| 1 | `sqlite_mitm.rs` tenía el **plan** del bind-mount, sin ejecutarlo | Bind-mount **real** (módulo Magisk `deploy/magisk-mitm-sqlite/` + helper root), DB servida en **WAL**, captura por el motor de réplica existente, **re-merge** al desactivar. Además se corrige el **conflicto de rutas** de la DB entre `sqlite_mitm.rs` y `antigravity_sessions.rs` |
+| 2 | `agyshim.rs` interceptaba y registraba (y reenviaba con un **GET**) | **Proxy real**: atiende `/v1internal/*`, `/v1beta/*` y `/proxy/*`, reenvía **por el gateway canónico** y deja la traza (`megadaemon.requested_model` / `real_model` / `substituted`) en la respuesta y en el NDJSON (0600, credenciales redactadas por **nombre y por forma**) |
+| 3 | `antigravity_sessions.rs` daba estado, lista, árbol y detalle | + **estado normalizado**, **tokens y modelo en uso** (lectura defensiva: el esquema no está medido) y **correlación con el NDJSON del shim** |
+| 4 | La GUI tenía el gate, el endpoint y el modelo **por separado** | `antigravity_model::integrar()` encadena los cuatro puntos y `integracion_estado()` los audita |
+
+**NO VERIFICADO en dispositivo**: el S21 Ultra está caído desde el
+2026-11-23 (ADB inalcanzable, túnel 502).  Los ocho puntos a verificar y
+su comando exacto están en `docs/MITM-SQLITE-Y-PROXY.md` §4.
+
+---
+
 ## 8. Cómo reproducir las mediciones
 
 ```bash
