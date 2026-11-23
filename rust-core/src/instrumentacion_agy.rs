@@ -109,7 +109,22 @@ pub fn estado() -> Value {
         "agy_vivo": agy_vivo,
         "modo_so": modo_so(),
         "endpoint_local": {
-            "aplicado": endpoint.get("aplicado").and_then(|v| v.as_bool()).unwrap_or(false),
+            // MEDIDO (2026-11-23): se leía "aplicado" del estado del
+            // endpoint, pero `antigravity_endpoint::estado()` NO devuelve
+            // ese campo (devuelve "endpoint.parcheado") ⇒ la UI pintaba
+            // «sin aplicar» aunque el binario estuviera parcheado (medido:
+            // parcheado=true y sha256_coincide_manifesto=true).
+            // Ahora se leen los dos: el campo explícito y el anidado.
+            "aplicado": endpoint
+                .get("aplicado")
+                .and_then(|v| v.as_bool())
+                .or_else(|| {
+                    endpoint
+                        .get("endpoint")
+                        .and_then(|e| e.get("parcheado"))
+                        .and_then(|v| v.as_bool())
+                })
+                .unwrap_or(false),
             "url": endpoint.get("url").cloned().unwrap_or(Value::Null),
             "estado": endpoint,
         },

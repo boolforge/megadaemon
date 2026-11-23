@@ -131,6 +131,19 @@ fn main() {
                 // codigo 10.  Sin esto, la actualizacion se instala pero no
                 // entra en servicio hasta el siguiente reinicio.
                 megadaemon_core::supervisor::asegurar_supervisor();
+                // MEDIDO (2026-11-23): la bitácora de desarrollo estaba
+                // vacía al arrancar (sólo se escribía al auto-actualizar y
+                // al instrumentar) => la UI pintaba «Sin eventos» aunque el
+                // daemon llevaba horas vivo.  Se registra el arranque.
+                megadaemon_core::devlog::append(
+                    "arranque",
+                    serde_json::json!({
+                        "build": megadaemon_core::self_update::build_commit(),
+                        "binario": ruta,
+                        "puerto": port,
+                        "version": env!("CARGO_PKG_VERSION"),
+                    }),
+                );
                 // MEDIDO (2026-11-23, auditoría de calidad): la cola de tareas
                 // se guardaba en disco (`task_scheduler::persist`) pero
                 // `task_scheduler::restore` NO se llamaba NUNCA en todo el
