@@ -306,7 +306,7 @@ pub fn instalado_cheap() -> bool {
 /// algo ha cambiado; en el caso normal no se lee el fichero.
 pub fn estado() -> Value {
     let ruta = ruta_ls();
-    let guardado = leer_estado().unwrap_or(Value::Null);
+    let mut guardado = leer_estado().unwrap_or(Value::Null);
     let barato_ok = instalado_cheap();
     // En el caso normal (metadatos intactos) NO se lee el .so.
     let (sha_app, instalado) = if barato_ok {
@@ -353,6 +353,27 @@ pub fn estado() -> Value {
     } else {
         sha_falsa
     };
+    // MEDIDO (2026-11-23): el parche del endpoint reinstala el binario de la
+    // app de forma atómica (fichero nuevo) ⇒ cambia su mtime ⇒ la
+    // comprobación barata (bytes + mtime) fallaba y la UI pintaba
+    // «.so sin aplicar» aunque el sha256 del binario de la app era IDÉNTICO
+    // al del falso (medido: a25b406f… en ambos).  Cuando el hash demuestra
+    // que el falso está instalado, se refrescan los metadatos guardados
+    // para que la comprobación barata vuelva a ser válida (autorreparación
+    // del estado, sin tocar el binario de la app).
+    if instalado && !barato_ok {
+        let bytes_actual = std::fs::metadata(&ruta).map(|m| m.len()).unwrap_or(0);
+        let mt_actual = mtime(&ruta);
+        if let Some(obj) = guardado.as_object_mut() {
+            if obj.get("app_bytes").and_then(|v| v.as_u64()) != Some(bytes_actual)
+                || obj.get("app_mtime").and_then(|v| v.as_u64()) != Some(mt_actual)
+            {
+                obj.insert("app_bytes".to_string(), json!(bytes_actual));
+                obj.insert("app_mtime".to_string(), json!(mt_actual));
+                let _ = escribir_estado(&guardado);
+            }
+        }
+    }
     json!({
         "ok": true,
         "ruta_app": ruta.to_string_lossy(),
