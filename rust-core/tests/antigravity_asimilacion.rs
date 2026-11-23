@@ -195,10 +195,14 @@ fn el_clon_delega_el_pull_en_el_mecanismo_canonico() {
 
 #[test]
 fn la_unificacion_del_runtime_sigue_viva() {
-    // `unificar_runtime` es la operación que **sí** unifica (copia el
-    // binario canónico al runtime de Antigravity): no se toca.
+    // MEDIDO (2026-11-23): `unificar_runtime` sigue unificando el binario,
+    // pero **FUERA** de `runtime/bin/`: esa carpeta la gestiona la app y su
+    // desempaquetador no puede borrar lo que encuentra (`cannot unpack
+    // assets/runtime ... cannot delete .../runtime/bin/megadaemon-core`)
+    // => el core de Antigravity dejaba de arrancar.
     let e = antigravity_clone::estado_runtime();
-    assert!(e.ruta.contains("runtime/bin"));
+    assert!(e.ruta.contains("/megadaemon/bin/"), "ruta: {}", e.ruta);
+    assert!(!e.ruta.contains("runtime/bin"), "ruta: {}", e.ruta);
 }
 
 // ---------------------------------------------------------------------------

@@ -47,6 +47,31 @@ pub const CLON: &str = "/data/user/0/com.agy/files/megadaemon";
 pub const RUNTIME: &str = "/data/user/0/com.agy/files/runtime/bin";
 /// Binario canónico del daemon (root).
 pub const BIN_CANONICO: &str = "/data/local/tmp/megadaemon/megadaemon-core";
+
+/// Binario unificado **FUERA** del runtime que gestiona Antigravity.
+///
+/// MEDIDO (2026-11-23, móvil): el desempaquetador de la app **borra**
+/// `files/runtime/` en cada arranque/actualización y **falla** si no puede
+/// borrar lo que hay dentro:
+///
+/// ```text
+/// core start failed: cannot unpack assets/runtime into
+/// /data/user/0/com.agy/files/runtime: cannot delete
+/// /data/user/0/com.agy/files/runtime/bin/megadaemon-core
+/// ```
+///
+/// ⇒ **`runtime/` es de la app: no se escribe nada ahí**.  El binario
+/// unificado vive en el clon (que ya existe y mantiene la propia IDE), en
+/// `megadaemon/bin/`, y el intruso que nosotros metimos en `runtime/bin/`
+/// se borra (ver [`limpiar_runtime`]).
+pub const BIN_UNIFICADO: &str = "/data/user/0/com.agy/files/megadaemon/bin/megadaemon-core";
+
+/// Config MCP de Antigravity (la que declara el servidor `megadaemon-minimax`).
+pub const MCP_CONFIG: &str = "/data/user/0/com.agy/files/.gemini/config/mcp_config.json";
+
+/// Ficheros que **nosotros** metimos en `runtime/bin/` y que el
+/// desempaquetador de la app no puede borrar (rompen su arranque).
+pub const INTRUSOS_RUNTIME: &[&str] = &["megadaemon-core", "megadaemon-core.prev"];
 /// Repositorio público.
 pub const REPO: &str = "boolforge/megadaemon";
 /// UID de la app Antigravity (`u0_a1573` ⇒ 100000 + 1573).
@@ -77,6 +102,9 @@ pub struct EstadoClon {
 /// Estado del runtime de binarios de Antigravity.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EstadoRuntime {
+    /// ¿Sigue algún intruso nuestro en `runtime/bin/`? (rompe el arranque
+    /// de la app: medido 2026-11-23).
+    pub intruso_en_runtime: bool,
     pub ruta: String,
     /// ¿Existe `runtime/bin/megadaemon-core`?
     pub tiene_megadaemon: bool,
@@ -183,8 +211,12 @@ pub fn estado_clon() -> EstadoClon {
 }
 
 /// Estado del runtime de binarios.
+///
+/// MEDIDO (2026-11-23): el binario unificado **no** va en `runtime/bin/`
+/// (rompe el arranque de la app, ver [`BIN_UNIFICADO`]); aquí se mide la
+/// ruta buena y se avisa si el intruso sigue en el runtime.
 pub fn estado_runtime() -> EstadoRuntime {
-    let bin = Path::new(RUNTIME).join("megadaemon-core");
+    let bin = Path::new(BIN_UNIFICADO).to_path_buf();
     let mut e = EstadoRuntime {
         ruta: bin.to_string_lossy().to_string(),
         ..Default::default()
@@ -199,7 +231,92 @@ pub fn estado_runtime() -> EstadoRuntime {
         }
     }
     e.uid_directorio = uid_de(Path::new(RUNTIME));
+    e.intruso_en_runtime = intrusos_presentes();
     e
+}
+
+/// ¿Sigue alguno de nuestros ficheros en `runtime/bin/`?
+///
+/// Si sí, el **core de Antigravity no arranca** (medido 2026-11-23): el
+/// desempaquetador no puede borrarlos.
+pub fn intrusos_presentes() -> bool {
+    let dir = Path::new(RUNTIME);
+    INTRUSOS_RUNTIME
+        .iter()
+        .any(|n| dir.join(n).exists() || dir.join(n).is_symlink())
+}
+
+/// Arregla la config MCP de Antigravity para que el servidor
+/// `megadaemon-minimax` apunte al binario **unificado**.
+///
+/// MEDIDO (2026-11-22/23): la config del móvil declara
+/// `"command": "/data/user/0/com.agy/files/megadaemon/rust-core/target/release/megadaemon-core"`,
+/// ruta que **no existe** en el dispositivo (el clon no tiene build) ⇒ el
+/// servidor MCP no arranca aunque sus *schemas* de tools estén cacheados
+/// (por eso "parece" funcionar).
+///
+/// Es **idempotente**: sólo reescribe los `command` que apuntan a un
+/// `megadaemon-core` inexistente.  Devuelve `true` si cambió algo.
+pub fn arreglar_mcp_config() -> Result<bool, String> {
+    let raw = std::fs::read_to_string(MCP_CONFIG)
+        .map_err(|e| format!("leer {MCP_CONFIG}: {e}"))?;
+    let mut v: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("parsear {MCP_CONFIG}: {e}"))?;
+    let servers = match v.get_mut("mcpServers").and_then(|m| m.as_object_mut()) {
+        Some(m) => m,
+        None => return Ok(false),
+    };
+    let mut cambiado = false;
+    for (_nombre, srv) in servers.iter_mut() {
+        let cmd = match srv.get("command").and_then(|c| c.as_str()) {
+            Some(c) => c.to_string(),
+            None => continue,
+        };
+        if !cmd.contains("megadaemon-core") {
+            continue;
+        }
+        if Path::new(&cmd).exists() {
+            continue; // ya apunta a algo real: no se toca
+        }
+        if let Some(o) = srv.as_object_mut() {
+            o.insert(
+                "command".to_string(),
+                serde_json::Value::String(BIN_UNIFICADO.to_string()),
+            );
+            cambiado = true;
+        }
+    }
+    if !cambiado {
+        return Ok(false);
+    }
+    let salida = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
+    std::fs::write(MCP_CONFIG, salida).map_err(|e| format!("escribir {MCP_CONFIG}: {e}"))?;
+    Ok(true)
+}
+
+/// Borra de `runtime/bin/` lo que **nosotros** metimos allí.
+///
+/// Es la reparación del fallo medido el 2026-11-23 (`cannot unpack
+/// assets/runtime … cannot delete …/runtime/bin/megadaemon-core`): con esto
+/// fuera, la app puede desempaquetar su runtime y su core vuelve a arrancar.
+///
+/// Devuelve las rutas que ha quitado (vacío = no había nada).
+pub fn limpiar_runtime() -> Vec<String> {
+    let dir = Path::new(RUNTIME);
+    let mut quitados = Vec::new();
+    for n in INTRUSOS_RUNTIME {
+        let p = dir.join(n);
+        if p.exists() || p.is_symlink() {
+            match std::fs::remove_file(&p) {
+                Ok(()) => quitados.push(p.to_string_lossy().to_string()),
+                Err(e) => {
+                    // Con root se puede; sin root, el mensaje dice qué hacer.
+                    eprintln!("antigravity: no se pudo borrar {p:?}: {e}");
+                }
+            }
+        }
+    }
+    quitados
 }
 
 // ---------------------------------------------------------------------------
@@ -218,6 +335,10 @@ pub struct ReporteUnificar {
     pub detalle: String,
     /// Copia del binario anterior (para deshacer).
     pub copia_anterior: Option<String>,
+    /// Ficheros intrusos que se han quitado de `runtime/bin/`.
+    pub intrusos_eliminados: Vec<String>,
+    /// Qué pasó con la config MCP de Antigravity.
+    pub detalle_mcp: Option<String>,
 }
 
 /// Copia el binario canónico al runtime de Antigravity.
@@ -230,9 +351,15 @@ pub fn unificar_runtime() -> Result<ReporteUnificar, String> {
     if !canonico.exists() {
         return Err(format!("no existe el binario canónico {BIN_CANONICO}"));
     }
-    let dir = Path::new(RUNTIME);
-    std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {RUNTIME}: {e}"))?;
-    let dest = dir.join("megadaemon-core");
+    // MEDIDO (2026-11-23): el binario va FUERA de `runtime/bin/` (esa
+    // carpeta la gestiona la app y su desempaquetador no puede borrar lo que
+    // encuentra ⇒ el core de Antigravity deja de arrancar).
+    let dir = Path::new(BIN_UNIFICADO)
+        .parent()
+        .ok_or_else(|| "ruta unificada sin directorio".to_string())?
+        .to_path_buf();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    let dest = Path::new(BIN_UNIFICADO).to_path_buf();
 
     let mut rep = ReporteUnificar {
         destino: dest.to_string_lossy().to_string(),
@@ -258,9 +385,21 @@ pub fn unificar_runtime() -> Result<ReporteUnificar, String> {
     // El fichero tiene que ser legible por la app: se le da su UID.
     #[cfg(unix)]
     {
-        let uid = uid_de(dir).unwrap_or(UID_ANTIGRAVITY);
+        let uid = uid_de(&dir).unwrap_or(UID_ANTIGRAVITY);
         let _ = std::os::unix::fs::chown(&dest, Some(uid), None);
         rep.uid = uid_de(&dest);
+    }
+
+    // Lo que dejamos antes en `runtime/bin/` fuera: es lo que rompía el
+    // arranque de la app (medido 2026-11-23).
+    rep.intrusos_eliminados = limpiar_runtime();
+
+    // Y el MCP de Antigravity apunta al binario unificado (si no, su
+    // servidor MCP no arranca: el `command` apunta a un build inexistente).
+    match arreglar_mcp_config() {
+        Ok(true) => rep.detalle_mcp = Some("config MCP apuntada al binario unificado".into()),
+        Ok(false) => rep.detalle_mcp = Some("config MCP ya correcta o sin servidores".into()),
+        Err(e) => rep.detalle_mcp = Some(format!("config MCP no arreglada: {e}")),
     }
 
     let sha = sha256_de(&dest);
@@ -269,8 +408,13 @@ pub fn unificar_runtime() -> Result<ReporteUnificar, String> {
     rep.igual_que_canonico = Some(sha == sha256_de(canonico));
     rep.aplicado = true;
     rep.detalle = format!(
-        "binario canónico copiado al runtime de Antigravity (sha256 {})",
-        sha.clone().unwrap_or_else(|| "?".into())
+        "binario canónico copiado a {BIN_UNIFICADO} (sha256 {}); intrusos fuera de runtime/bin: {}",
+        sha.clone().unwrap_or_else(|| "?".into()),
+        if rep.intrusos_eliminados.is_empty() {
+            "ninguno".to_string()
+        } else {
+            rep.intrusos_eliminados.join(", ")
+        }
     );
     Ok(rep)
 }
@@ -448,6 +592,15 @@ mod tests {
             let e = unificar_runtime().unwrap_err();
             assert!(e.contains("canónico"), "mensaje: {e}");
         }
+    }
+
+    #[test]
+    fn el_binario_unificado_no_vive_en_el_runtime_de_la_app() {
+        // MEDIDO (2026-11-23): si el binario está en `runtime/bin/`, el
+        // desempaquetador de Antigravity no puede borrarlo y el core de la
+        // app NO arranca (`cannot unpack assets/runtime ... cannot delete`).
+        assert!(!BIN_UNIFICADO.starts_with(RUNTIME), "ruta: {BIN_UNIFICADO}");
+        assert!(BIN_UNIFICADO.contains("/megadaemon/bin/"), "ruta: {BIN_UNIFICADO}");
     }
 
     #[test]
