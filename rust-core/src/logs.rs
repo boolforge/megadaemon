@@ -51,7 +51,7 @@ pub fn fuentes() -> Vec<Fuente> {
             id: "daemon",
             nombre: "Daemon (stdout del supervisor)",
             tipo: "texto",
-            ruta: PathBuf::from(format!("{sdcard():?}/megadaemon.log")),
+            ruta: PathBuf::from(format!("{}/megadaemon.log", sdcard().display())),
         },
         Fuente {
             id: "auto_update",

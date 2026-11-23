@@ -374,7 +374,10 @@ pub fn resolve_template_v2() -> Option<String> {
     None
 }
 
-/// Plantilla HTML embebida del cockpit V2.
+/// Plantilla HTML embebida del cockpit **V1** (la legacy, en `/legacy`).
+pub const EMBEDDED_TEMPLATE: &str = include_str!("../../web/cockpit_template.html");
+
+/// Plantilla HTML embebida del cockpit **V2** (la que se sirve ahora).
 pub const EMBEDDED_V2_HTML: &str = include_str!("../../web/cockpit_v2.html");
 
 /// Ruta del template de la UI LEGACY (v1), que se sirve en `/legacy`.

@@ -4540,7 +4540,7 @@ pub fn nodes_detalle() -> Value {
             "uptime_human": human_duration(process_uptime_secs()),
             "cpu_pct": cpu_usage_pct(),
             "mem": mem_info(),
-            "build": crate::self_update::actual().ok(),
+            "build": crate::self_update::build_info(),
             "cola": crate::task_scheduler::stats(),
         }));
     }
@@ -4557,7 +4557,41 @@ pub fn nodes_detalle() -> Value {
 /// **Sistema**: telemetría real del nodo (no lo que el daemon cree).
 pub fn sistema_view() -> Value {
     let (pstate, pol) = crate::power_policy::current_policy();
-    let bat = crate::battery_advanced::read_battery();
+    // La bateria y la politica se serializan a mano: sus structs no
+    // implementan Serialize (son del dominio, no de la API).
+    let bat = crate::battery_advanced::read_battery("/sys/class/power_supply")
+        .map(|b| {
+            json!({
+                "capacity_pct": b.capacity_pct,
+                "status": b.status,
+                "health": b.health,
+                "temp_c": b.temp_c,
+                "voltage_mv": b.voltage_mv,
+                "current_ma": b.current_ma,
+                "charge_full": b.charge_full,
+                "charge_full_design": b.charge_full_design,
+            })
+        })
+        .unwrap_or(Value::Null);
+    let energia = json!({
+        "politica": {
+            "nombre": pol.name,
+            "razon": pol.reason,
+            "max_turns": pol.max_turns,
+            "prefer_local": pol.prefer_local,
+            "allow_heavy": pol.allow_heavy,
+            "max_tokens": pol.max_tokens,
+        },
+        "estado": {
+            "cargando": pstate.charging,
+            "bateria_pct": pstate.capacity_pct,
+            "temp_bateria_c": pstate.battery_temp_c,
+            "temp_cpu_c": pstate.cpu_temp_c,
+            "ahorro_sistema": pstate.system_power_save,
+            "governor": pstate.governor,
+            "thermal_hot": pstate.thermal_hot,
+        },
+    });
     json!({
         "ok": true,
         "generated_at": now_iso(),
@@ -4565,7 +4599,7 @@ pub fn sistema_view() -> Value {
             "pid": std::process::id(),
             "uptime_sec": process_uptime_secs(),
             "uptime_human": human_duration(process_uptime_secs()),
-            "build": crate::self_update::actual().ok(),
+            "build": crate::self_update::build_info(),
             "version": env!("CARGO_PKG_VERSION"),
             "state_dir": cockpit_state_dir(),
             "prefix": std::env::var("MEGADAEMON_PREFIX").unwrap_or_default(),
@@ -4577,8 +4611,7 @@ pub fn sistema_view() -> Value {
         "memoria": mem_info(),
         "bateria": bat,
         "energia": {
-            "politica": pol,
-            "estado": pstate,
+            "politica": energia,
             "perfiles": perfiles_energia(),
         },
         "npu": crate::npu_bridge::probe_exynos_npu_cached(),

@@ -353,7 +353,7 @@ pub fn escribir(cambios: &Value) -> Result<Value, String> {
     }
     let txt = serde_json::to_string_pretty(&base).map_err(|e| e.to_string())?;
     crate::util_fs::write_atomic(Path::new(&ruta), txt.as_bytes(), 0o600)
-        .map_err(|e| format!("escribir {ruta}: {e}"))?;
+        .map_err(|e| format!("escribir {}: {e}", ruta.display()))?;
     // Invalidar cache.
     if let Ok(mut c) = CACHE.lock() {
         *c = None;
@@ -422,7 +422,12 @@ pub fn informe() -> Value {
     let fichero = leer_fichero();
     let efectivo = leer();
     let mut editado: Vec<String> = Vec::new();
-    let mut por_ruta = |base: &Value, actual: &Value, prefijo: &str, editado: &mut Vec<String>| {
+    fn recorrido(
+        base: &Value,
+        actual: &Value,
+        prefijo: &str,
+        editado: &mut Vec<String>,
+    ) {
         if let (Some(b), Some(a)) = (base.as_object(), actual.as_object()) {
             for (k, av) in a {
                 let bv = b.get(k);
@@ -433,7 +438,7 @@ pub fn informe() -> Value {
                 };
                 match (bv, av) {
                     (Some(bv), av) if bv.is_object() && av.is_object() => {
-                        por_ruta(bv, av, &ruta, editado);
+                        recorrido(bv, av, &ruta, editado);
                     }
                     (Some(bv), av) if bv != av => editado.push(ruta),
                     (None, _) => editado.push(ruta),
@@ -441,8 +446,8 @@ pub fn informe() -> Value {
                 }
             }
         }
-    };
-    por_ruta(&fabrica, &fichero, "", &mut editado);
+    }
+    recorrido(&fabrica, &fichero, "", &mut editado);
     json!({
         "ok": true,
         "ruta": ruta().to_string_lossy(),

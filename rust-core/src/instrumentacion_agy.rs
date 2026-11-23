@@ -220,7 +220,7 @@ pub fn sincronizar_puente_mcp() -> Result<Value, String> {
             .or_insert_with(|| json!({}))
             .as_object_mut()
             .ok_or("headers no es un objeto")?;
-        if headers.get("X-Seere-Auth-Token").and_then(|t| t.as_str()) != Some(token.as_str()) {
+        if headers.get("X-Seere-Auth-Token").and_then(|t| t.as_str()) != Some(token) {
             headers.insert("X-Seere-Auth-Token".to_string(), json!(token));
             cambios += 1;
         }
@@ -242,6 +242,7 @@ pub fn sincronizar_puente_mcp() -> Result<Value, String> {
         );
         cambios += 1;
     }
+    let total_servidores = servers.len();
     if cambios > 0 {
         let txt = serde_json::to_string_pretty(&v).unwrap_or_default();
         crate::util_fs::write_atomic(Path::new(ruta), txt.as_bytes(), 0o644)
@@ -251,7 +252,7 @@ pub fn sincronizar_puente_mcp() -> Result<Value, String> {
         "ok": true,
         "cambios": cambios,
         "ruta": ruta,
-        "servidores": servers.len(),
+        "servidores": total_servidores,
     }))
 }
 
@@ -432,8 +433,12 @@ pub fn aplicar(puerto: u16, confirmar: bool) -> Value {
     if on("mitm_db", false) {
         let ocultar: Vec<String> = crate::config_efectiva::vector_de("instrumentacion_agy.ocultar")
             .unwrap_or_default();
-        let reescribir = crate::config_efectiva::pares_de("instrumentacion_agy.reescribir")
-            .unwrap_or_default();
+        let reescribir: Vec<(String, String)> = crate::config_efectiva::pares_de(
+            "instrumentacion_agy.reescribir",
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
         match crate::sqlite_mitm::activar(&ocultar, &reescribir) {
             Ok(v) => {
                 let ya = v
