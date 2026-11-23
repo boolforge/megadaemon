@@ -297,17 +297,15 @@ pub fn descargar(url: &str, opts: &Opciones) -> Result<Resultado, String> {
                 f.write_all(&buf[..n]).map_err(|e| format!("escribir: {e}"))?;
                 total += n as u64;
             }
-            f.flush().ok();
-            // Renombrado atomico: el destino solo existe si esta completo.
-            if destino_parcial != *d {
-                std::fs::rename(&destino_parcial, d).map_err(|e| {
-                    format!(
-                        "renombrar {} -> {}: {e}",
-                        destino_parcial.display(),
-                        d.display()
-                    )
-                })?;
-            }
+            f.flush().map_err(|e| format!("volcar {}: {e}", destino_parcial.display()))?;
+            // fsync: el contenido tiene que estar EN DISCO antes de que el
+            // nombre final lo apunte (si no, un corte de luz puede dejar el
+            // destino publicado y vacío).
+            f.sync_all()
+                .map_err(|e| format!("fsync {}: {e}", destino_parcial.display()))?;
+            // OJO: aquí NO se renombra.  El renombrado (publicación) se hace
+            // DESPUÉS de comprobar el sha-256 (ver más abajo): publicar antes
+            // de verificar es lo que dejaba ficheros corruptos publicados.
         }
         None => {
             let mut buf = vec![0u8; 64 * 1024];
@@ -337,6 +335,28 @@ pub fn descargar(url: &str, opts: &Opciones) -> Result<Resultado, String> {
             error = Some(format!(
                 "SHA-256 NO coincide: esperaba {esp}, obtuve {hex}"
             ));
+        }
+    }
+    // PUBLICACIÓN atómica y SÓLO si el contenido es el esperado.
+    //
+    // MEDIDO (2026-11-23, auditoría de calidad): antes el renombrado
+    // `.part` -> destino ocurría ANTES de comparar el sha-256 ⇒ un fichero
+    // que NO cuadra quedaba **publicado** en el destino: el resultado decía
+    // ok=false, pero el fichero roto ya estaba ahí (el agente que sólo mira
+    // si el fichero existe se comía el corrupto, y una re-descarga "reanudaba"
+    // encima del corrupto).  Ahora: si el sha no cuadra, el destino NO se
+    // toca (conserva lo que hubiera) y el `.part` se borra (se sabe que
+    // está mal: dejarlo haría que el siguiente "reanudar" siguiera con un
+    // prefijo corrupto).
+    if let (Some(d), Some(p)) = (&opts.destino, &parte) {
+        if p != d {
+            if error.is_none() {
+                std::fs::rename(p, d).map_err(|e| {
+                    format!("renombrar {} -> {}: {e}", p.display(), d.display())
+                })?;
+            } else {
+                let _ = std::fs::remove_file(p);
+            }
         }
     }
     Ok(Resultado {
