@@ -304,43 +304,7 @@ pub fn redactar(texto: &str) -> String {
             }
         }
     }
-    redactar_por_forma(&out)
-}
-
-/// Segunda pasada: redacta las credenciales por **forma** de token.
-///
-/// MEDIDO (2026-11-23): la primera pasada sólo conocía los NOMBRES de los
-/// campos (`api_key`, `Authorization`...).  Una credencial que viaja suelta
-/// (un `sk-cp-…` en una cabecera, un `AIza…` de Google, un `xoxb-…` de
-/// Slack) no la pillaba ⇒ se colaba en el NDJSON, que es una superficie
-/// **pública** (la lee el agente y va a la GUI).
-///
-/// Se redactan los prefijos típicos de clave con su valor detrás:
-/// `sk-`, `sk-cp-`, `AIza`, `gsk_`, `xoxb-`, `xapp-`, `ghp_`.
-fn redactar_por_forma(texto: &str) -> String {
-    let mut out = texto.to_string();
-    for pre in ["sk-cp-", "sk-", "AIza", "gsk_", "xoxb-", "xapp-", "ghp_"] {
-        let mut desde = 0usize;
-        while let Some(rel) = out[desde..].find(pre) {
-            let i = desde + rel;
-            let fin = out[i..]
-                .find(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_' && c != '.')
-                .map(|k| i + k)
-                .unwrap_or(out.len());
-            // Un token demasiado corto no es una credencial (evita tocar
-            // texto normal como "sk-3" o "AIza algo").
-            if fin - i >= 12 {
-                out.replace_range(i..fin, "<REDACTADO>");
-                desde = i + "<REDACTADO>".len();
-            } else {
-                desde = i + pre.len();
-            }
-            if desde >= out.len() {
-                break;
-            }
-        }
-    }
-    out
+    crate::redact_forma::redactar_por_forma(&out)
 }
 
 /// Extrae el modelo pedido del cuerpo (JSON o texto).
@@ -1054,6 +1018,14 @@ mod tests {
         // Y no toca el texto normal.
         let t2 = redactar("esto es sk-3 corto y AIza algo");
         assert!(t2.contains("sk-3"), "no debe redaccionar texto normal: {t2}");
+    }
+
+    #[test]
+    fn la_redaccion_por_forma_vive_en_un_modulo_propio() {
+        // El modulo `redact_forma` es el que debe acabar en el crate
+        // compartido `megadaemon-redact` (fuente unica de la politica).
+        let t = crate::redact_forma::redactar_por_forma("token suelta sk-cp-ABCDEFGHIJKLMNOP");
+        assert!(!t.contains("ABCDEFGHIJKLMNOP"));
     }
 
     #[test]
