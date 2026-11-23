@@ -18,7 +18,6 @@ audit_scout_voice
 # falla a proposito mientras el defecto exista.
 audit_scout_hw
 
-# `antigravity_bridge_smoke` (2026-11-23, rama agent/antigravity-instrumentado):
 # el test unitario `parsea_las_conversaciones` de la rama falla (el mapa de
 # conversaciones que devuelve el puente no coincide con lo que el test
 # espera).  PENDIENTE: lo arregla quien hizo la rama (el agente General);
