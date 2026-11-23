@@ -1,0 +1,38 @@
+[package]
+name = "megadaemon-hooks-payload"
+version = "1.0.0"
+edition = "2021"
+description = "Payload de hooks (SQLite, red, ficheros) que se inyecta dentro del proceso de una app de terceros con ptrace"
+license = "MIT"
+
+# `cdylib`: el resultado es un `libmegadaemon_hooks_payload.so` que el
+# inyector (`md-inject`) carga con `dlopen` dentro del proceso objetivo.
+[lib]
+name = "megadaemon_hooks_payload"
+crate-type = ["cdylib"]
+
+[dependencies]
+# Únicas dos dependencias, y las dos sin arrastrar nada:
+#  * `libc`: llamadas al sistema (open/write/mmap/dlsym...).
+#  * `megadaemon-redact`: la MISMA politica de redaccion de credenciales que
+#    usa el shim del daemon (crates/redact) ⇒ el NDJSON del movil no puede
+#    filtrar un token que el shim si tapa.
+libc = "0.2"
+megadaemon-redact = { path = "../redact" }
+
+# Este crate es SU PROPIO workspace: asi sus perfiles no dependen del perfil
+# release del daemon (que esta medido para que entre en 3 GB de RAM) y el
+# CI puede compilarlo aparte, sin tocar el crate grande.
+[workspace]
+
+[profile.release]
+# El payload corre dentro de una app de terceros: interesa POCO binario y
+# POCO tiempo de enlazado (el CI tiene que compilarlo para aarch64).
+opt-level = 1
+lto = false
+codegen-units = 16
+strip = true
+# `panic = "abort"` NO: el constructor corre dentro del cargador de la app y
+# un panic desenrollando a través de marcos de C es UB.  El constructor
+# usa `catch_unwind` y no deja que un fallo tumbe la app.
+panic = "unwind"

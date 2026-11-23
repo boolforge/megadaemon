@@ -124,6 +124,8 @@ pub mod re_fusion;
 pub mod supervisor;
 pub mod frida_hooks;
 pub mod hooks_payload;
+pub mod inject;
+pub mod hooks_bridge;
 pub mod sqlite_mitm;
 pub mod proto_regen;
 pub mod rea_assistant;

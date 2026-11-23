@@ -1174,6 +1174,11 @@ pub fn tool_definitions() -> Value {
         // retorno antes de tocar la partición de arranque): volcado + SHA-256
         // + subida a Drive + plan de rollback. Nunca escribe en /dev/block.
         crate::kernel_and_blocks::tool_definition(),
+        // v16 — INSTRUMENTACIÓN REAL por ptrace: instala el payload de hooks
+        // (SQLite/red/ficheros) en el móvil, lo inyecta en el proceso de la
+        // app y lee el NDJSON que genera.  El inyector corre como root
+        // (`su -mm -c`) porque `ptrace` a una app de terceros lo exige.
+        crate::hooks_bridge::tool_definition(),
         {
             "name": "app_control",
             "description": "Gestión de apps: listar, info, habilitar/deshabilitar, desinstalar (con -k opcional), limpiar datos/caché, permisos, appops, instalar APK y abrir.",
@@ -1262,6 +1267,9 @@ pub fn dispatch(name: &str, args: &Value) -> Value {
         // v13.4 — respaldo seguro del kernel (volcado + SHA-256 + Drive +
         // plan de rollback). Módulo propio: `kernel_and_blocks.rs`.
         "kernel_backup" => crate::kernel_and_blocks::tool_dispatch(&args),
+        // v16 — instrumentación real (ptrace) del proceso de una app.
+        // Módulo propio: `hooks_bridge.rs`.
+        "inject_hooks" => crate::hooks_bridge::dispatch(&args),
         "app_control" => app_control(
             &s("action"),
             &s("scope"),
@@ -1318,7 +1326,7 @@ mod tests {
         for esperado in [
             "system_overview", "root_exec", "fs_read", "fs_write", "find_duplicates",
             "props_and_settings", "selinux_control", "magisk_module", "kernel_and_blocks",
-            "kernel_backup", "app_control", "screen_and_ui",
+            "kernel_backup", "inject_hooks", "app_control", "screen_and_ui",
         ] {
             assert!(nombres.contains(&esperado), "falta la herramienta {}", esperado);
         }

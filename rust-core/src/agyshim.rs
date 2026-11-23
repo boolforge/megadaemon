@@ -225,71 +225,19 @@ pub fn redacta() -> bool {
 }
 
 /// Redacta lo que parece una credencial.
+///
+/// MEDIDO (2026-11-23): la implementación se movió al crate compartido
+/// `megadaemon-redact` (`crates/redact/`) porque el **payload de hooks** que
+/// se inyecta dentro de la app (Antigravity) necesita EXACTAMENTE la misma
+/// política de redacción: si el payload filtrara un token que este shim sí
+/// tapa, el NDJSON del móvil acabaría en el bus.  Aquí sólo se **delega**:
+/// mismo comportamiento, mismos casos de prueba (los del crate compartido).
+///
+/// El bug que motivó el crate (MEDIDO 2026-11-23, test rojo
+/// `redacta_credenciales`): la credencial SE FILTRABA al log porque se
+/// redactaba el NOMBRE de la clave pero no su VALOR.
 pub fn redactar(texto: &str) -> String {
-    let mut out = texto.to_string();
-    for pat in [
-        "api_key",
-        "apiKey",
-        "Authorization",
-        "bearer ",
-        "x-goog-api-key",
-    ] {
-        // El cursor avanza por delante de cada redaction: si no, el texto ya
-        // redactado ("api_key=<REDACTADO>") volveria a casar con el patron
-        // y el bucle no terminaria nunca.
-        let mut desde = 0usize;
-        while let Some(rel) = out[desde..].find(pat) {
-            let i = desde + rel;
-            // Se redacta el NOMBRE de la clave y su VALOR: si sólo se tapa el
-            // nombre, el secreto sigue en el texto
-            // ('{"api_key":"sk-cp-SECRETO"}' -> '{"api_key=<REDACTADO>":"sk-cp-SECRETO"}').
-            // MEDIDO (2026-11-23, test rojo redacta_credenciales): la
-            // credencial SE FILTRABA al log.
-            let fin_nombre = out[i..]
-                .find(|c: char| c == '"' || c == ',' || c == '\n' || c == ':')
-                .map(|k| i + k)
-                .unwrap_or(out.len());
-            let mut fin = fin_nombre;
-            // Detras del nombre puede venir la comilla de cierre del nombre
-            // ("api_key":"valor") y despues el ':' y el valor.
-            let mut pos = fin_nombre;
-            if out[pos..].starts_with('"') {
-                pos += 1;
-            }
-            let tras = out[pos..].trim_start();
-            if tras.starts_with(':') {
-                let inicio_valor = pos + (out[pos..].len() - tras.len()) + 1;
-                let tras2 = out[inicio_valor..].trim_start();
-                let offset = out[inicio_valor..].len() - tras2.len();
-                let inicio_real = inicio_valor + offset;
-                if tras2.starts_with('"') {
-                    fin = match tras2[1..].find('"') {
-                        Some(k) => inicio_real + 1 + k + 1,
-                        None => out.len(),
-                    };
-                } else {
-                    fin = out[inicio_real..]
-                        .find(|c: char| c == ',' || c == '\n' || c == '}')
-                        .map(|k| inicio_real + k)
-                        .unwrap_or(out.len());
-                }
-            } else if pat.ends_with(' ') {
-                // 'bearer sk-cp-SECRETO': el valor es el token siguiente.
-                let inicio_real = pos + (out[pos..].len() - tras.len());
-                fin = out[inicio_real..]
-                    .find(|c: char| c.is_whitespace() || c == '"' || c == ',' || c == '}')
-                    .map(|k| inicio_real + k)
-                    .unwrap_or(out.len());
-            }
-            let relleno = format!("{pat}=<REDACTADO>");
-            out.replace_range(i..fin, &relleno);
-            desde = i + relleno.len();
-            if desde >= out.len() {
-                break;
-            }
-        }
-    }
-    out
+    megadaemon_redact::redactar(texto)
 }
 
 /// Extrae el modelo pedido del cuerpo (JSON o texto).
