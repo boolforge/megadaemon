@@ -139,11 +139,11 @@ pub fn instalar() -> Result<hooks::Informe, String> {
     let mut informe = hooks::instalar(inter, g);
     informe.ndjson = ruta.clone();
     // 3) El evento de arranque (con el informe completo).
+    //    OJO: el escritor ya pone `ts`, `pid` y `tid` ⇒ aquí no se repiten.
     let mut campos = vec![
         json::campo("hook", "payload"),
         json::campo("event", "iniciado"),
         json::campo_num("version", VERSION as u64),
-        json::campo_num("pid", sys::pid() as u64),
         json::campo("ndjson", &ruta),
     ];
     let ganchos: Vec<String> = informe
