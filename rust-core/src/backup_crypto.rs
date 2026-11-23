@@ -1248,7 +1248,12 @@ pub fn write_swift_backup(
     let mut out_bytes = Vec::new();
     out_bytes.extend_from_slice(page);
     out_bytes.extend_from_slice(&compressed);
-    std::fs::write(out, &out_bytes).map_err(|e| format!("no se puede escribir {out}: {e}"))?;
+    // Escritura ATÓMICA (MEDIDO 2026-11-23, auditoría de calidad): con
+    // `fs::write` el fichero de backup se TRUNCABA antes de escribir ⇒ un
+    // corte a mitad dejaba un .dat corrupto en la ruta final (y el bueno
+    // anterior, si lo había, ya estaba destruido).
+    crate::util_fs::write_atomic(std::path::Path::new(out), &out_bytes, 0o600)
+        .map_err(|e| format!("no se puede escribir {out}: {e}"))?;
 
     Ok(serde_json::json!({
         "ok": true,
