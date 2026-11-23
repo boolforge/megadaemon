@@ -396,10 +396,17 @@ impl TaskBoard {
         let changed = self
             .conn
             .execute(
+                // MEDIDO (2026-11-23, auditoría de calidad): la condición
+                // sólo aceptaba 'queued' o 'claimed' con lease caducada ⇒
+                // una tarea que se quedó en 'running' cuando su agente
+                // murió NO se podía reclamar nunca (y `reclaim_expired`
+                // tampoco la liberaba) ⇒ quedaba colgada para siempre.
+                // `board.rs` ya lo hacía bien ('claimed','running').
                 "UPDATE tasks
                     SET owner=?1, status='claimed', lease_expires_at=?2, updated_at=?3
                   WHERE id=?4
-                    AND (status='queued' OR (status='claimed' AND lease_expires_at < ?3))",
+                    AND (status='queued'
+                         OR (status IN ('claimed','running') AND lease_expires_at > 0 AND lease_expires_at < ?3))",
                 params![owner, now + lease_secs, now, task_id],
             )
             .map_err(|e| format!("claim_task: {}", e))?;
@@ -418,8 +425,16 @@ impl TaskBoard {
         let n = self
             .conn
             .execute(
+                // MEDIDO (2026-11-23, auditoría de calidad): sólo miraba
+                // `status='claimed'` ⇒ una tarea que se quedó en 'running'
+                // cuando su agente murió NO se liberaba nunca: el reclaim
+                // no la tocaba y el `claim_task` tampoco la podía reclamar
+                // (su condición era 'queued' o 'claimed') ⇒ la tarea
+                // quedaba colgada para siempre y el trabajo se perdía.
+                // `board.rs` (el tablero v1) ya lo hacía bien:
+                // `state IN ('claimed','running')`.
                 "UPDATE tasks SET owner=NULL, status='queued', lease_expires_at=0, updated_at=?1
-                  WHERE status='claimed' AND lease_expires_at < ?1",
+                  WHERE status IN ('claimed','running') AND lease_expires_at > 0 AND lease_expires_at < ?1",
                 params![now],
             )
             .map_err(|e| format!("reclaim_expired: {}", e))?;
