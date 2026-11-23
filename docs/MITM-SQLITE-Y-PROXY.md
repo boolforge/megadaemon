@@ -31,6 +31,8 @@ deploy/magisk-mitm-sqlite/uninstall.sh
 deploy/magisk-mitm-sqlite/customize.sh
 deploy/magisk-mitm-sqlite/README.md
 tools/mitm-sqlite.sh                        <- envoltorio local del helper
+rust-core/src/antigravity_fake_so.rs        <- el .so instrumentado con un FICHERO FALSO
+rust-core/src/redact_forma.rs               <- la segunda pasada de redaccion (por forma)
 docs/MITM-SQLITE-Y-PROXY.md                 <- este documento
 ```
 
@@ -213,6 +215,61 @@ Acciones nuevas de la tool `antigravity_sessions`: `tokens` y
 
 ---
 
+## 3-bis. El `.so` de Antigravity: un **fichero falso** que el daemon posee
+
+*(petición del usuario, 2026-11-23: «hazlo también con el `.so`, que
+seguro que hace falta un fichero falso y que poseas el original para
+instrumentarlo»)*
+
+### El problema
+
+El language server (`liblanguage_server.so`, 181.358.800 B) lleva dentro,
+como constante, la URL del proveedor:
+`https://daily-cloudcode-pa.googleapis.com`.  Para que su tráfico pase por
+el MegaDaemon hay que **sustituir esa constante** por una URL local de la
+**misma longitud** (así el layout del ELF no cambia).  Eso ya lo hacía
+`antigravity_endpoint::aplicar_endpoint` (parche **en el sitio**, con el
+respaldo `.bak-megadaemon` **dentro del directorio de la app**).
+
+### Lo que hace el módulo nuevo (`rust-core/src/antigravity_fake_so.rs`)
+
+| Paso | Qué |
+|---|---|
+| 1 | El daemon **posee el ORIGINAL**: lo copia a su **propio** directorio (`<state>/agy/lib/liblanguage_server.so.original`) y anota su sha256 ⇒ **fuera del alcance de la app** (que antes podía tocar el `.bak`) |
+| 2 | El daemon **fabrica el FALSO**: los bytes del **original** con la URL sustituida ⇒ `liblanguage_server.so.fake`, un artefacto aparte (se puede inspeccionar, empujar y comparar) |
+| 3 | Lo **instala EN EL SITIO**: se escribe **encima** del fichero de la app **sin borrarlo antes** ⇒ se conservan el **inode**, la **etiqueta SELinux**, el dueño y los permisos (si se borrara y se recreara, el contexto SELinux se perdería y la app no podría cargarlo) |
+| 4 | `desactivar` **restaura** el original **byte a byte** y verifica su sha256 |
+
+El **original** es la fuente de verdad: el falso se fabrica **siempre** a
+partir de él (nunca del fichero actual, que podría estar ya parcheado).
+
+### Superficies
+
+* Tool MCP `antigravity_fake_so`: `plan` (no escribe) · `activar`
+  (`confirm=true`) · `desactivar` (`confirm=true`) · `estado`.
+* CLI: `md-antigravity fake [plan|activar|desactivar|estado] [--confirm]`.
+
+### Lo que NO está verificado
+
+El parche en sí **ya estaba medido** (2026-11-22, el SHA del manifiesto
+cambia y el LS sigue arrancando).  Lo **nuevo** —la propiedad del original
+por el daemon, el falso como artefacto separado y la instalación en el
+sitio conservando el inode— **NO se ha podido probar en el móvil**
+(caído desde el 2026-11-23).
+
+```bash
+# Verificación (en el móvil):
+md-antigravity fake plan          # ver los sha256 y los cambios
+md-antigravity fake activar --confirm
+sha256sum /data/user/0/com.agy/files/runtime/bin/liblanguage_server.so \
+          /data/local/tmp/megadaemon/state/agy/lib/liblanguage_server.so.fake \
+          /data/local/tmp/megadaemon/state/agy/lib/liblanguage_server.so.original
+# el del .so de la app debe coincidir con el del .fake, y el .original con el de git
+md-antigravity fake desactivar --confirm
+```
+
+---
+
 ## 4. Qué queda **NO VERIFICADO** (móvil caído)
 
 | # | Afirmación | Por qué no está verificada | **Comando exacto** de verificación |
@@ -225,6 +282,7 @@ Acciones nuevas de la tool `antigravity_sessions`: `tokens` y
 | V6 | El LS de Antigravity usa el gateway (el `megadaemon` de la GUI) | no hay dispositivo | `md-antigravity integrar --estado` + `POST https://127.0.0.1:45157/exa.language_server_pb.LanguageServerService/GetMcpServerStates {}` |
 | V7 | El modelo `megadaemon` aparece **habilitado** en el selector | la app regenera el bundle web | `grep -c 'osName==="linux"' /data/user/0/com.agy/files/web/generated/main.js` (debe ser 0 tras `integrar`) |
 | V8 | El esquema real de `conversations/<id>.db` | no se ha podido leer | `sqlite3 /data/user/0/com.agy/files/.gemini/antigravity-app/conversations/<id>.db '.schema'` |
+| V9 | El **fichero falso** del `.so` arranca y el LS usa el gateway | el móvil está caído (el parche en sí ya estaba medido) | `md-antigravity fake activar --confirm` + `sha256sum` de los tres ficheros (ver §3-bis) |
 
 ### Lo que **sí** está verificado en este entorno
 

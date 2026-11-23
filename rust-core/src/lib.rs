@@ -21,6 +21,7 @@ pub mod apk_deobfuscator;
 pub mod antigravity_bridge;
 pub mod antigravity_clone;
 pub mod antigravity_endpoint;
+pub mod antigravity_fake_so;
 pub mod antigravity_sessions;
 pub mod antigravity_env;
 pub mod antigravity_model;

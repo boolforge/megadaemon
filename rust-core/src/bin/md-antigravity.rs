@@ -142,6 +142,7 @@ fn main() -> ExitCode {
             "env" => cmd_env(json_out),
             "endpoint" => cmd_endpoint(json_out),
             "integrar" | "integracion" => cmd_integrar(json_out),
+            "fake" | "falso" => cmd_fake(json_out),
             "enqueue" => {
                 let text = argv[2..].join(" ");
                 if text.trim().is_empty() {
@@ -171,7 +172,7 @@ fn main() -> ExitCode {
 /// Mensaje de uso.
 fn usage() {
     eprintln!(
-        "uso: md-antigravity <status|catalog|conversations|search|conversation|tasks|model|env|endpoint|integrar|enqueue> [args]\n\
+        "uso: md-antigravity <status|catalog|conversations|search|conversation|tasks|model|env|endpoint|integrar|fake|enqueue> [args]\n\
          \n\
          subcomandos de asimilación:\n\
          \x20 model                       lista los modelos personalizados (BYOM) de la IDE\n\
@@ -602,6 +603,39 @@ fn cmd_integrar(json_out: bool) -> Result<(), String> {
             Ok(v) => v,
             Err(e) => json!({"ok": false, "error": e}),
         }
+    };
+    emit(json_out, &v, |v| {
+        println!("{}", serde_json::to_string_pretty(v).unwrap_or_default());
+    });
+    Ok(())
+}
+
+/// `md-antigravity fake [plan|activar|desactivar|estado] [--confirm] [--puerto=N]`
+///
+/// El FICHERO FALSO del language server: el daemon se queda con el
+/// ORIGINAL (fuera del dir de la app) y pone en su lugar un falso con la
+/// URL del proveedor sustituida por la del gateway local.
+fn cmd_fake(json_out: bool) -> Result<(), String> {
+    use megadaemon_core::antigravity_fake_so as fs;
+    let args: Vec<String> = std::env::args().collect();
+    let sub = args.get(2).cloned().unwrap_or_default().trim_start_matches('-').to_string();
+    let confirm = args.iter().any(|a| a == "--confirm");
+    let puerto: u16 = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--puerto="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(9090);
+    let v = match sub.as_str() {
+        "plan" => fs::plan(puerto),
+        "activar" | "apply" => match fs::activar(puerto, confirm) {
+            Ok(v) => v,
+            Err(e) => json!({"ok": false, "error": e}),
+        },
+        "desactivar" | "restore" => match fs::desactivar(confirm) {
+            Ok(v) => v,
+            Err(e) => json!({"ok": false, "error": e}),
+        },
+        _ => fs::estado(),
     };
     emit(json_out, &v, |v| {
         println!("{}", serde_json::to_string_pretty(v).unwrap_or_default());

@@ -43,6 +43,12 @@ pub fn tool_definitions() -> Value {
         if let Some(m_arr) = crate::antigravity_model::tool_definitions().as_array().cloned() {
             arr.extend(m_arr);
         }
+        // v16 (2026-11-23): el FICHERO FALSO del language server (el daemon
+        // posee el original y pone un falso con la URL del proveedor
+        // sustituida por la del gateway local).
+        if let Some(f_arr) = crate::antigravity_fake_so::tool_definitions().as_array().cloned() {
+            arr.extend(f_arr);
+        }
         if let Some(e_arr) = crate::antigravity_env::tool_definitions().as_array().cloned() {
             arr.extend(e_arr);
         }
@@ -364,6 +370,9 @@ pub fn dispatch_tool(name: &str, args: &Value) -> Value {
             }
             // v16 (asimilación de Antigravity): mismas reglas de contrato
             // (content + structuredContent + isError).
+            if let Some(r) = crate::antigravity_fake_so::dispatch(name, args) {
+                return Some(r);
+            }
             if let Some(r) = crate::antigravity_model::dispatch(name, args) {
                 let text = serde_json::to_string_pretty(&r).unwrap_or_default();
                 return json!({
