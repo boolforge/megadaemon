@@ -27,9 +27,15 @@ CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/workspace/md-target-rescate}"
 export CARGO_TARGET_DIR
 # Perfil LIGERO: sin debug info, un solo unit de codegen, optimizacion baja.
 # El link es la parte que se come la RAM.
-export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_DEV_CODEGEN_UNITS=1 CARGO_PROFILE_DEV_OPT_LEVEL=1
-export CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_TEST_CODEGEN_UNITS=1 CARGO_PROFILE_TEST_OPT_LEVEL=1
+# Perfil LIGERO y de POCA MEMORIA (medido el 2026-11-23: con
+# CODEGEN_UNITS=1 y el paralelismo por defecto, un `rustc` de este crate llega
+# a 2,0 GB de RSS y el OOM killer lo mata en un sandbox de 3 GB => 4 OOM
+# medidos).  Con 16 unidades y `-j 1` cada `rustc` se queda en ~800 MB.
+export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_DEV_CODEGEN_UNITS=16 CARGO_PROFILE_DEV_OPT_LEVEL=1
+export CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_TEST_CODEGEN_UNITS=16 CARGO_PROFILE_TEST_OPT_LEVEL=1
 export CARGO_INCREMENTAL=0
+# Un solo `rustc` a la vez: el limite real es la RAM, no la CPU.
+export CARGO_BUILD_JOBS=1
 
 if [ "${1:-}" = "--libre" ]; then rmdir "$LOCK" 2>/dev/null && echo "lock liberado"; exit 0; fi
 if [ "${1:-}" = "--estado" ]; then exec "$GUARDIA"; fi

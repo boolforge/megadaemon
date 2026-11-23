@@ -699,9 +699,6 @@ pub struct ChatDeps<'a> {
     /// que el veto rechace (p. ej. no gastar en proveedores de pago).
     /// `None` = sin veto (comportamiento por defecto).
     ///
-    /// Lo usan los tests del agente de LLM (v16): sin este campo, el test
-    /// `el_presupuesto_bloquea_la_llamada_cara` ni siquiera compilaba.
-    pub budget_permite: Option<&'a dyn Fn(&ProviderEntry, u32) -> bool>,
 }
 
 impl<'a> ChatDeps<'a> {
@@ -715,7 +712,6 @@ impl<'a> ChatDeps<'a> {
             timeout: Duration::from_secs(DEFAULT_PROVIDER_TIMEOUT_SECS),
             retries: MAX_RETRIES,
             backoff_ms: 250,
-            budget_permite: None,
         }
     }
 }
@@ -925,6 +921,14 @@ pub fn save_vault_at(path: &str, vault: &ProviderVault) -> Result<(), String> {
         }
     }
     let text = serde_json::to_string_pretty(vault).map_err(|e| e.to_string())?;
+    // Escritura ATÓMICA y con permisos 0600 (la bóveda tiene TODAS las API
+    // keys del usuario): tmp + rename, sin instants en 0644.
+    //
+    // MEDIDO (2026-11-23): el merge con la rama de Antigravity se llevó esta
+    // cola (que el merge de la auditoria habia traido) => `save_vault_at`
+    // devolvia () y no escribia NADA.
+    crate::util_fs::write_atomic(std::path::Path::new(path), text.as_bytes(), 0o600)
+        .map_err(|e| format!("no se pudo escribir {path}: {e}"))
 }
 
 /// Guarda la bóveda en la ruta REAL de la instancia (`providers_path()`).

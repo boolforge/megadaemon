@@ -162,7 +162,7 @@ pub fn guardar() {
     let _ = std::fs::create_dir_all(crate::cockpit_server::state_dir());
     let ruta = ruta_reglas();
     if let Err(e) = crate::util_fs::write_atomic(&ruta, txt.as_bytes(), 0o600) {
-        eprintln!("[agyshim] no se pudieron guardar las reglas en {ruta}: {e}");
+        eprintln!("[agyshim] no se pudieron guardar las reglas en {ruta:?}: {e}");
     }
 }
 

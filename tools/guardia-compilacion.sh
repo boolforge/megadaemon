@@ -23,10 +23,10 @@
 #   tools/guardia-compilacion.sh --esperar  # esperar hasta que se pueda
 set -uo pipefail
 
-# Umbral de RAM libre para empezar a compilar (MB).  Con 3 GB de total, 1.400
+# Umbral de RAM libre para empezar a compilar (MB).  Con 3 GB de total, 2.000
 # MB deja margen para el link con el perfil LIGERO (medido: `cargo test --lib`
 # con debug 0 y -j 1 entra en ~1,4 GB) sin que el OOM killer elija a
-MIN_LIBRE_MB="${MD_BUILD_MIN_LIBRE_MB:-1400}"
+MIN_LIBRE_MB="${MD_BUILD_MIN_LIBRE_MB:-2000}"
 LOCK="${MD_BUILD_LOCK:-/workspace/.build-lock}"
 
 mem_libre_mb() {

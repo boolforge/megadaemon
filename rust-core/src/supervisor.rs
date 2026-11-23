@@ -242,7 +242,8 @@ pub fn asegurar_supervisor() {
     }
     let r = instalar();
     // El guardian tambien se auto-repara (si el movil lo borro, se reinstala).
-    if let Ok(k) = instalar_keeper() {
+    {
+        let k = instalar_keeper();
         if k.get("ok").and_then(|v| v.as_bool()) == Some(true)
             && k.get("ya_instalado").and_then(|v| v.as_bool()) != Some(true)
         {

@@ -353,7 +353,7 @@ pub fn download_to_file<R: std::io::Read>(
         total += n as u64;
     }
     std::io::Write::flush(&mut f).map_err(|e| format!("no se pudo volcar: {e}"))?;
-    std::io::Write::sync_all(&mut f)
+    f.sync_all()
         .map_err(|e| format!("no se pudo sincronizar {}: {e}", parcial.display()))?;
     drop(f);
     // Publicación atómica: el destino final aparece sólo con el fichero

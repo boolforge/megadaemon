@@ -404,7 +404,7 @@ pub fn consultar_ia(
             if !directo.reply.trim().is_empty() {
                 return Ok((directo.reply, directo.model_id));
             }
-            return Err(format!("el gateway no respondió ({e})"));
+            return Err(format!("el gateway no respondió ({e:?})"));
         }
     }
 

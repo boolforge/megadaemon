@@ -1432,12 +1432,12 @@ fn inyectar_parado(
     let dir_dlopen = match resolver_dlopen(pid) {
         Ok(d) => d,
         Err(e) => {
-            inf.paso(format!("no se pudo resolver dlopen: {}", e));
+            inf.paso(&format!("no se pudo resolver dlopen: {}", e));
             return Err(e);
         }
     };
     inf.dlopen_addr = Some(format!("0x{:x}", dir_dlopen));
-    inf.paso(format!("dlopen en el objetivo: 0x{:x}", dir_dlopen));
+    inf.paso(&format!("dlopen en el objetivo: 0x{:x}", dir_dlopen));
 
     // 3) Registros originales (los restaura el llamante, siempre).
     let sp_original = sp_actual(regs_originales);
@@ -1455,7 +1455,7 @@ fn inyectar_parado(
              se buscaría 0x{:x}); el mapa de pila puede estar protegido",
             sp_original, scratch
         );
-        inf.paso(e.clone());
+        inf.paso(&e);
         return Err(e);
     }
 
@@ -1465,11 +1465,11 @@ fn inyectar_parado(
     ruta.push(0);
     if ruta.len() > OFFSET_RANURA as usize {
         let e = format!("la ruta de la biblioteca es demasiado larga ({} B)", ruta.len());
-        inf.paso(e.clone());
+        inf.paso(&e);
         return Err(e);
     }
     memoria.escribir(scratch, &ruta)?;
-    inf.paso(format!("ruta escrita en 0x{:x} ({} B)", scratch, ruta.len()));
+    inf.paso(&format!("ruta escrita en 0x{:x} ({} B)", scratch, ruta.len()));
 
     let llamada = preparar_llamada(regs_originales, dir_dlopen, scratch);
     if llamada.ranura_retorno != 0 {
@@ -1478,7 +1478,7 @@ fn inyectar_parado(
     let mut regs = *regs_originales;
     llamada.aplicar(&mut regs);
     escribir_registros(pid, &regs)?;
-    inf.paso(format!(
+    inf.paso(&format!(
         "llamada preparada: pc=0x{:x} sp=0x{:x} retorno=0x{:x}",
         llamada.pc, llamada.sp, llamada.magico
     ));
@@ -1488,7 +1488,7 @@ fn inyectar_parado(
     let status = match esperar(pid, 15_000) {
         Ok(s) => s,
         Err(e) => {
-            inf.paso(format!("la llamada remota no ha vuelto: {}", e));
+            inf.paso(&format!("la llamada remota no ha vuelto: {}", e));
             return Err(e);
         }
     };
@@ -1509,13 +1509,13 @@ fn inyectar_parado(
              dlopen ha fallado dentro del objetivo",
             pc_vuelta, senal
         );
-        inf.paso(e.clone());
+        inf.paso(&e);
         return Err(e);
     }
 
     let handle = valor_devuelto(&regs_vuelta);
     inf.handle_valido = handle != 0;
-    inf.paso(format!(
+    inf.paso(&format!(
         "dlopen ha vuelto: handle=0x{:x} (señal={})",
         handle, senal
     ));
@@ -1531,12 +1531,12 @@ fn inyectar_parado(
         .any(|m| !m.ruta.is_empty() && m.ruta.ends_with(&nombre_fichero));
     inf.cargada = cargada;
     if cargada {
-        inf.paso(format!(
+        inf.paso(&format!(
             "VERIFICADO: {} aparece en /proc/{}/maps",
             nombre_fichero, pid
         ));
     } else {
-        inf.paso(format!(
+        inf.paso(&format!(
             "AVISO: {} NO aparece en /proc/{}/maps (la carga no se puede dar por buena)",
             nombre_fichero, pid
         ));
