@@ -867,6 +867,168 @@
       </div>
     </section>
 
+    <!-- ══════════════════ CHAT (ported de la V1: chat + swarm) ══════════════════ -->
+    <section class="view" id="view-chat" role="tabpanel" aria-labelledby="tab-chat" tabindex="-1">
+      <div class="view__head">
+        <h1 class="view__title">Chat</h1>
+        <span class="view__subtitle" id="chat-sub">contra el gateway de MegaDaemon</span>
+      </div>
+
+      <div class="card">
+        <div class="field">
+          <label class="field__label" for="chat-model">Modelo</label>
+          <div class="btn-row">
+            <select class="input" id="chat-model" aria-label="Modelo"></select>
+            <button class="btn btn--sm btn--ghost" id="chat-modelos">Actualizar modelos</button>
+          </div>
+        </div>
+        <div class="field">
+          <label class="field__label" for="chat-prompt">Mensaje</label>
+          <textarea class="textarea" id="chat-prompt" rows="4" placeholder="escribe al agente…"></textarea>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn--sm btn--primary" id="chat-enviar">Enviar</button>
+          <span class="chip" id="chat-estado">inactivo</span>
+          <span class="chip chip--info" id="chat-proveedor">--</span>
+          <span class="chip chip--ghost" id="chat-latencia">--</span>
+        </div>
+        <div class="mt-3" id="chat-chips"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Respuesta</h2></div>
+        <div id="chat-respuesta"><p class="muted">(sin respuesta todavía)</p></div>
+        <div id="chat-traza" class="mt-3"></div>
+      </div>
+    </section>
+
+    <!-- ══════════════════ INSPECT (ported de la V1) ══════════════════ -->
+    <section class="view" id="view-inspect" role="tabpanel" aria-labelledby="tab-inspect" tabindex="-1">
+      <div class="view__head">
+        <h1 class="view__title">Inspect</h1>
+        <span class="view__subtitle" id="inspect-sub">analiza binarios del dispositivo</span>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Objetivo</h2></div>
+        <div class="field">
+          <label class="field__label" for="inspect-plataforma">Plataforma</label>
+          <select class="input" id="inspect-plataforma">
+            <option value="segacd">Mega Drive / Sega CD</option>
+            <option value="snes">SNES</option>
+            <option value="msx">MSX</option>
+            <option value="pc88">PC-88</option>
+            <option value="pce">PC Engine</option>
+            <option value="saturn">Saturn</option>
+            <option value="ps1">PlayStation</option>
+            <option value="generic">genérico</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="field__label" for="inspect-fichero">Fichero (ruta en el dispositivo)</label>
+          <input class="input mono" id="inspect-fichero" placeholder="/sdcard/…">
+        </div>
+        <div class="field">
+          <label class="field__label" for="inspect-offset">Offset</label>
+          <input class="input mono" id="inspect-offset" value="0x0">
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Análisis</h2>
+          <div class="btn-row">
+            <button class="btn btn--sm btn--primary" id="inspect-die">DiE / Binwalk</button>
+            <button class="btn btn--sm" id="inspect-hex">Hex / Disasm</button>
+            <button class="btn btn--sm" id="inspect-rizin">Rizin</button>
+            <button class="btn btn--sm" id="inspect-entropy">Entropía</button>
+            <button class="btn btn--sm" id="inspect-pattern">Patrones</button>
+          </div>
+        </div>
+        <div id="inspect-salida"></div>
+      </div>
+    </section>
+
+    <!-- ══════════════════ NPU (ported de la V1) ══════════════════ -->
+    <section class="view" id="view-npu" role="tabpanel" aria-labelledby="tab-npu" tabindex="-1">
+      <div class="view__head">
+        <h1 class="view__title">NPU</h1>
+        <span class="view__subtitle" id="npu-sub">NNAPI real del Exynos</span>
+      </div>
+
+      <div class="grid grid--stats" id="npu-stats"></div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Visión</h2>
+          <div class="btn-row">
+            <button class="btn btn--sm btn--primary" id="npu-vision">Ejecutar visión</button>
+            <button class="btn btn--sm btn--ghost" id="npu-continua">Activar continua</button>
+            <button class="btn btn--sm btn--ghost" id="npu-continua-off">Parar continua</button>
+          </div>
+        </div>
+        <div id="npu-vision-out"></div>
+      </div>
+    </section>
+
+    <!-- ══════════════════ VRAM (ported de la V1) ══════════════════ -->
+    <section class="view" id="view-vram" role="tabpanel" aria-labelledby="tab-vram" tabindex="-1">
+      <div class="view__head">
+        <h1 class="view__title">VRAM</h1>
+        <span class="view__subtitle">tiles y paletas de consolas clásicas</span>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Render</h2>
+          <button class="btn btn--sm btn--primary" id="vram-render">Renderizar</button>
+        </div>
+        <div class="grid grid--wide">
+          <div class="field">
+            <label class="field__label" for="vram-codec">Códec</label>
+            <select class="input" id="vram-codec">
+              <option value="4bpp_linear">4bpp lineal (MD/SegaCD/GBA/PS1)</option>
+              <option value="4bpp_planar">4bpp planar (SNES/PCE/SMS)</option>
+              <option value="2bpp_planar">2bpp planar (NES/GB/SNES)</option>
+              <option value="1bpp">1bpp fuente (MSX/PC88)</option>
+              <option value="8bpp_linear">8bpp lineal (PS1/Saturn/VGA)</option>
+              <option value="15bpp_rgb555">15bpp RGB555 (PS1/Saturn)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field__label" for="vram-palette">Paleta</label>
+            <select class="input" id="vram-palette">
+              <option value="cga_cyber">Obsidian Cyber (16c)</option>
+              <option value="obsidian_mint">Signal Mint</option>
+              <option value="sega_cram_9bit">Sega 9-bit CRAM</option>
+              <option value="ps1_clut_15bit">PS1/Saturn CLUT 15-bit</option>
+              <option value="vga_heat">Heatmap (entropía)</option>
+              <option value="grayscale">Escala de grises</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid grid--wide">
+          <div class="field">
+            <label class="field__label" for="vram-plataforma">Plataforma</label>
+            <select class="input" id="vram-plataforma">
+              <option value="segacd">Mega Drive / Sega CD</option>
+              <option value="snes">SNES</option>
+              <option value="msx">MSX</option>
+              <option value="pc88">PC-88</option>
+              <option value="pce">PC Engine</option>
+              <option value="saturn">Saturn</option>
+              <option value="ps1">PlayStation</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field__label" for="vram-offset">Offset</label>
+            <input class="input mono" id="vram-offset" value="0x0">
+          </div>
+        </div>
+        <div id="vram-salida" class="mt-3"></div>
+      </div>
+    </section>
+
   </main>
 
   <!-- ══════════════════ NAVEGACIÓN ══════════════════ -->
@@ -903,6 +1065,18 @@
     </button>
     <button class="tabbar__btn" role="tab" id="tab-antigravity" data-view="antigravity" aria-selected="false" aria-controls="view-antigravity">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2 4 6v6c0 5 3.4 9 8 10 4.6-1 8-5 8-10V6z"/><path d="m9 12 2 2 4-4"/></svg><span>Antigravity</span>
+    </button>
+    <button class="tabbar__btn" role="tab" id="tab-chat" data-view="chat" aria-selected="false" aria-controls="view-chat">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span>Chat</span>
+    </button>
+    <button class="tabbar__btn" role="tab" id="tab-inspect" data-view="inspect" aria-selected="false" aria-controls="view-inspect">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span>Inspect</span>
+    </button>
+    <button class="tabbar__btn" role="tab" id="tab-npu" data-view="npu" aria-selected="false" aria-controls="view-npu">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M10 3v3M14 3v3M10 18v3M14 18v3M3 10h3M3 14h3M18 10h3M18 14h3"/></svg><span>NPU</span>
+    </button>
+    <button class="tabbar__btn" role="tab" id="tab-vram" data-view="vram" aria-selected="false" aria-controls="view-vram">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg><span>VRAM</span>
     </button>
     <button class="tabbar__btn" role="tab" id="tab-logs" data-view="logs" aria-selected="false" aria-controls="view-logs">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M7 9h10M7 13h6"/></svg><span>Logs</span>
@@ -1024,7 +1198,11 @@ const VIEW_LOADERS = {
   sistema: loadSistema,
   logs: loadLogs,
   config: loadConfig,
-  tools: loadTools
+  tools: loadTools,
+  chat: loadChat,
+  inspect: loadInspect,
+  npu: loadNpu,
+  vram: loadVram
 };
 
 
@@ -1175,6 +1353,172 @@ async function toolsEjecutar() {
     body: JSON.stringify(args)
   }));
   $('#tools-out').innerHTML = '<pre class="logbox mono">' + esc(JSON.stringify(res, null, 2)) + "</pre>";
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CHAT (ported de la V1: chat + swarm)
+   ═══════════════════════════════════════════════════════════════════════════ */
+const CHAT_CHIPS = [
+  "Audita el estado del Exynos 2100 NPU, temperaturas y frecuencias actuales.",
+  "Ejecuta el análisis del paquete de la app y muestra el riesgo.",
+  "¿Qué hay roto en el móvil? Revisa logs, alertas y cola de tareas.",
+  "Resume la cola compartida y dime qué nodos están vivos."
+];
+
+async function chatCargarModelos() {
+  const d = await apiCall("/api/v2/llm", () => fetch("/api/v2/llm", { cache: "no-store", headers: authHeaders() }));
+  const sel = $("#chat-model");
+  const modelos = [];
+  const prov = (d.proveedores || d.providers || []);
+  (Array.isArray(prov) ? prov : []).forEach(function (p) {
+    (p.modelos || p.models || []).forEach(function (m) {
+      modelos.push(typeof m === "string" ? m : (m.id || m.nombre || m.name));
+    });
+  });
+  if (!modelos.length && d.modelo_por_defecto) modelos.push(d.modelo_por_defecto);
+  if (!modelos.length) modelos.push("megadaemon");
+  const unicos = modelos.filter(function (m, i) { return m && modelos.indexOf(m) === i; });
+  const previo = sel.value;
+  sel.innerHTML = unicos.map(function (m) { return '<option value="' + esc(m) + '">' + esc(m) + "</option>"; }).join("");
+  if (previo && unicos.indexOf(previo) >= 0) sel.value = previo;
+  $("#chat-chips").innerHTML = CHAT_CHIPS.map(function (c) {
+    return '<button class="chip" data-chip="' + esc(c) + '">' + esc(c.slice(0, 46)) + (c.length > 46 ? "…" : "") + "</button>";
+  }).join("");
+}
+
+async function loadChat() {
+  await chatCargarModelos();
+}
+
+async function chatEnviar(texto) {
+  const prompt = (texto !== undefined && texto !== null) ? texto : ($("#chat-prompt").value || "");
+  if (!prompt.trim()) { toast("warn", "Falta el mensaje", "escribe algo antes de enviar"); return; }
+  $("#chat-prompt").value = prompt;
+  $("#chat-estado").textContent = "enviando…";
+  const t0 = Date.now();
+  try {
+    const res = await apiCall("/v1/chat/completions", () => fetch("/v1/chat/completions", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        model: $("#chat-model").value || "megadaemon",
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 1024
+      })
+    }));
+    const ms = Date.now() - t0;
+    let texto2 = "";
+    try { texto2 = res.choices[0].message.content || ""; } catch (e) { texto2 = ""; }
+    const md = res.megadaemon || {};
+    $("#chat-estado").textContent = "respondido";
+    $("#chat-proveedor").textContent = md.provider || (res.model || "—");
+    $("#chat-latencia").textContent = ms + " ms";
+    $("#chat-respuesta").innerHTML = '<pre class="logbox mono">' + esc(texto2 || "(respuesta vacía)") + "</pre>";
+    const traza = md.provider_trace || [];
+    $("#chat-traza").innerHTML = traza.length
+      ? '<div class="notice"><div><div class="notice__title">Traza del proveedor</div><div class="mono small">' +
+        esc(JSON.stringify(traza, null, 2)) + "</div></div></div>"
+      : "";
+    $("#chat-sub").textContent = (res.model || "megadaemon") + " · " + ms + " ms";
+  } catch (e) {
+    $("#chat-estado").textContent = "error";
+    toast("error", "El chat falló", String(e && e.message || e));
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   INSPECT (ported de la V1)
+   ═══════════════════════════════════════════════════════════════════════════ */
+function inspectQuery(extra) {
+  const p = new URLSearchParams();
+  p.set("platform", $("#inspect-plataforma").value || "generic");
+  const f = ($("#inspect-fichero").value || "").trim();
+  if (f) p.set("file", f);
+  p.set("offset", ($("#inspect-offset").value || "0x0").trim());
+  if (extra) Object.keys(extra).forEach(function (k) { p.set(k, extra[k]); });
+  return p.toString();
+}
+
+function loadInspect() {
+  const el = $("#inspect-salida");
+  if (el && !el.innerHTML.trim()) {
+    el.innerHTML = '<div class="empty"><div class="empty__title">Sin análisis todavía</div><div class="empty__reason">Elige una plataforma y un fichero, y pulsa un botón de análisis.</div></div>';
+  }
+}
+
+function loadVram() {
+  const el = $("#vram-salida");
+  if (el && !el.innerHTML.trim()) {
+    el.innerHTML = '<div class="empty"><div class="empty__title">Sin render</div><div class="empty__reason">Pulsa "Renderizar" para dibujar los tiles.</div></div>';
+  }
+}
+
+async function inspectRun(modo) {
+  const q = inspectQuery({ mode: modo });
+  const mapa = { die: "die_binwalk", hex: "hex_inspect", rizin: "rizin", entropy: "entropy_scan", pattern: "pattern_scan" };
+  const ruta = "/api/" + (mapa[modo] || "die_binwalk");
+  const url = ruta + "?" + q;
+  const d = await apiCall(url, () => fetch(url, { cache: "no-store", headers: authHeaders() }));
+  const lineas = d.lines || d.resultados || d.matches || [];
+  $("#inspect-salida").innerHTML = (lineas.length
+    ? '<div class="table-wrap"><table class="table"><thead><tr><th>#</th><th>Dato</th></tr></thead><tbody>' +
+      lineas.map(function (l, i) {
+        const txt = typeof l === "string" ? l : JSON.stringify(l);
+        return "<tr><td class='muted small'>" + (i + 1) + "</td><td class='mono small'>" + esc(String(txt).slice(0, 400)) + "</td></tr>";
+      }).join("") + "</tbody></table></div>"
+    : "") +
+    '<pre class="logbox mono mt-3">' + esc(JSON.stringify(d, null, 2).slice(0, 20000)) + "</pre>";
+  $("#inspect-sub").textContent = modo + " · " + (lineas.length ? lineas.length + " líneas" : "sin líneas");
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   NPU (ported de la V1)
+   ═══════════════════════════════════════════════════════════════════════════ */
+async function loadNpu() {
+  const d = await apiCall("/api/npu_status", () => fetch("/api/npu_status", { cache: "no-store", headers: authHeaders() }));
+  state.data.npu = d;
+  const st = d.status || d;
+  const stats = [
+    ["Dispositivo NNAPI", st.device || st.dispositivo || "—"],
+    ["Versión API", st.api_version || st.version || "—"],
+    ["Disponible", st.available ? "sí" : "no"],
+    ["Backend", st.backend || st.driver || "—"]
+  ];
+  $("#npu-stats").innerHTML = stats.map(function (r) {
+    return '<div class="stat"><div class="stat__label">' + esc(r[0]) + '</div><div class="stat__value stat__value--sm">' + esc(r[1]) + "</div></div>";
+  }).join("");
+  $("#npu-sub").textContent = st.available ? "NNAPI operativo" : "NNAPI no disponible (cae a CPU)";
+  const vs = await apiCall("/api/vision_status", () => fetch("/api/vision_status", { cache: "no-store", headers: authHeaders() }));
+  $("#npu-vision-out").innerHTML = '<pre class="logbox mono">' + esc(JSON.stringify(vs, null, 2)) + "</pre>";
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   VRAM (ported de la V1)
+   ═══════════════════════════════════════════════════════════════════════════ */
+async function vramRender() {
+  const p = new URLSearchParams();
+  p.set("platform", $("#vram-plataforma").value || "segacd");
+  p.set("codec", $("#vram-codec").value || "4bpp_linear");
+  p.set("palette", $("#vram-palette").value || "cga_cyber");
+  p.set("offset", ($("#vram-offset").value || "0x0").trim());
+  const url = "/api/tile_render?" + p.toString();
+  const res = await fetch(url, { cache: "no-store", headers: authHeaders() });
+  if (!res.ok) {
+    let err = "HTTP " + res.status;
+    try { const j = await res.json(); err = j.error || err; } catch (e) { /* noop */ }
+    $("#vram-salida").innerHTML = '<div class="notice notice--danger"><div>' + esc(err) + "</div></div>";
+    return;
+  }
+  const blob = await res.blob();
+  const old = $("#vram-salida");
+  const img = document.createElement("img");
+  img.alt = "render de VRAM";
+  img.style.maxWidth = "100%";
+  img.style.imageRendering = "pixelated";
+  img.src = URL.createObjectURL(blob);
+  old.innerHTML = "";
+  old.appendChild(img);
 }
 
 /* ── Autenticación ──────────────────────────────────────────────────────── */
@@ -1584,14 +1928,23 @@ function paintNodosDetalle(det) {
     nodos.map(function (n) {
       const vivo = n.vivo === true;
       const vivoLocal = n.vivo_local || {};
-      const build = (vivoLocal.build && (vivoLocal.build.sha || vivoLocal.build.version)) || n.version || "—";
-      const chip = vivo
-        ? '<span class="chip chip--accent">vivo</span>'
-        : '<span class="chip chip--warn">sin latido</span>';
+      const sondeo = n.sondeo || null;
+      // El sondeo HTTP manda sobre la ficha del bus: si el nodo contesta a
+      // /health, esta vivo de verdad (aunque su latido sea viejo).
+      const contesta = sondeo && sondeo.vivo === true;
+      const caido = sondeo && sondeo.ok === false && sondeo.error;
+      const build = (vivoLocal.build && (vivoLocal.build.sha || vivoLocal.build.version)) ||
+        (sondeo && sondeo.build && (sondeo.build.sha || sondeo.build.version)) || n.version || "—";
+      let chip;
+      if (contesta) chip = '<span class="chip chip--accent">vivo</span>';
+      else if (vivo) chip = '<span class="chip chip--accent">latido</span>';
+      else if (caido) chip = '<span class="chip chip--danger">caído</span>';
+      else chip = '<span class="chip chip--warn">sin latido</span>';
+      const ui = sondeo && sondeo.ui ? ' <span class="chip chip--ghost">' + esc(sondeo.ui) + "</span>" : "";
       return "<tr><td class='mono small'>" + esc(n.id || n.hostname || "—") +
         (n.es_yo ? ' <span class="chip chip--info">yo</span>' : "") + "</td>" +
         "<td class='small'>" + esc(n.role || "—") + "</td>" +
-        "<td class='small'>" + chip + "</td>" +
+        "<td class='small'>" + chip + ui + "</td>" +
         "<td class='small mono'>" + (n.url ? '<a href="' + esc(n.url) + '" target="_blank" rel="noopener">' + esc(n.url) + "</a>" : "—") + "</td>" +
         "<td class='small mono'>" + esc(String(build).slice(0, 12)) + "</td>" +
         "<td class='small muted'>" + (n.edad_s >= 0 ? esc(n.edad_s + " s") : "—") + "</td></tr>";
@@ -3742,6 +4095,35 @@ function bindEvents() {
   $("#btn-share-upload").addEventListener("click", function () { uploadShare(true); });
   $("#btn-share-upload-one").addEventListener("click", function () { uploadShare(false); });
   // ── Logs ────────────────────────────────────────────────────────────────
+  // ── Chat / Inspect / NPU / VRAM (ported de la V1) ──────────────────────
+  $("#chat-enviar").addEventListener("click", function () { chatEnviar(); });
+  $("#chat-modelos").addEventListener("click", chatCargarModelos);
+  $("#chat-chips").addEventListener("click", function (e) {
+    const b = e.target.closest("[data-chip]");
+    if (b) chatEnviar(b.getAttribute("data-chip"));
+  });
+  $("#inspect-die").addEventListener("click", function () { inspectRun("die"); });
+  $("#inspect-hex").addEventListener("click", function () { inspectRun("hex"); });
+  $("#inspect-rizin").addEventListener("click", function () { inspectRun("rizin"); });
+  $("#inspect-entropy").addEventListener("click", function () { inspectRun("entropy"); });
+  $("#inspect-pattern").addEventListener("click", function () { inspectRun("pattern"); });
+  $("#npu-vision").addEventListener("click", function () {
+    apiCall("/api/vision_start", () => fetch("/api/vision_start", { method: "POST", headers: authHeaders() }))
+      .then(function () { return loadNpu(); })
+      .catch(function (e) { toast("error", "Visión", String(e && e.message || e)); });
+  });
+  $("#npu-continua").addEventListener("click", function () {
+    apiCall("/api/vision_start", () => fetch("/api/vision_start", { method: "POST", headers: authHeaders() }))
+      .then(function () { toast("ok", "Visión continua", "activada"); return loadNpu(); })
+      .catch(function (e) { toast("error", "Visión", String(e && e.message || e)); });
+  });
+  $("#npu-continua-off").addEventListener("click", function () {
+    apiCall("/api/vision_stop", () => fetch("/api/vision_stop", { method: "POST", headers: authHeaders() }))
+      .then(function () { toast("ok", "Visión continua", "parada"); return loadNpu(); })
+      .catch(function (e) { toast("error", "Visión", String(e && e.message || e)); });
+  });
+  $("#vram-render").addEventListener("click", vramRender);
+
   $("#btn-inst-refresh").addEventListener("click", function () { loadAntigravity(); });
   $("#btn-inst-apply").addEventListener("click", function () { instrumentacionAccion("aplicar"); });
   $("#btn-inst-restore").addEventListener("click", function () { instrumentacionAccion("restore"); });

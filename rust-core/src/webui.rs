@@ -4399,6 +4399,32 @@ pub fn tools_catalogo() -> Value {
     })
 }
 
+/// Sondea el `/health` de un nodo remoto (2,5 s como máximo).
+fn sondear_vivo(url: &str) -> Value {
+    let destino = format!("{}/health", url.trim_end_matches('/'));
+    let mut opts = crate::http_transfer::Opciones::default();
+    opts.timeout_s = 3;
+    opts.timeout_conexion_s = 2;
+    opts.reintentos = 0;
+    match crate::http_transfer::get_texto(&destino, &opts) {
+        Ok((status, cuerpo)) => {
+            let j: Value = serde_json::from_str(&cuerpo).unwrap_or(Value::Null);
+            let vivo = status == 200;
+            json!({
+                "ok": vivo,
+                "status": status,
+                "vivo": vivo,
+                "build": j.get("build").cloned().unwrap_or(Value::Null),
+                "version": j.get("version").cloned().unwrap_or(Value::Null),
+                "uptime_sec": j.get("uptime_sec").cloned().unwrap_or(Value::Null),
+                "ui": j.get("ui_servida").cloned().unwrap_or(Value::Null),
+                "error": if vivo { Value::Null } else { json!(cuerpo.chars().take(160).collect::<String>()) },
+            })
+        }
+        Err(e) => json!({"ok": false, "vivo": false, "error": e}),
+    }
+}
+
 /// **Detalle de los nodos**: la ficha completa de cada nodo conectado.
 ///
 /// Cada nodo lleva: su identidad (rol, host, plataforma, versión,
@@ -4478,6 +4504,29 @@ pub fn nodes_detalle() -> Value {
                 .map(|t| ahora - t)
                 .unwrap_or(-1)));
         }
+    }
+
+    // **Sondeo vivo** de los nodos conectados: se les pregunta por su
+    // /health y se guarda lo que responden (build, uptime, version).  Es lo
+    // que hace que la vista de nodos sea informacion y no una lista de
+    // nombres: si un nodo esta caido, se ve CAIDO.
+    //
+    // Presupuesto: 2,5 s por nodo y como mucho 6 sondeos => la vista nunca
+    // se queda colgada aunque la flota este perdida.
+    let max_sondeos = 6usize;
+    let mut sondeados = 0usize;
+    for n in lista.iter_mut() {
+        if sondeados >= max_sondeos {
+            break;
+        }
+        let url = n.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if url.is_empty() || !url.starts_with("http") {
+            continue;
+        }
+        sondeados += 1;
+        let Some(o) = n.as_object_mut() else { continue };
+        let salud = sondear_vivo(&url);
+        o.insert("sondeo".to_string(), salud);
     }
 
     // Estado vivo del nodo local (barato: todo es local).

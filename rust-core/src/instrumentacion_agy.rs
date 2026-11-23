@@ -564,7 +564,7 @@ mod tests {
         // En el PC no hay Antigravity: el estado debe seguir siendo JSON
         // valido (es lo que la UI pinta).
         let e = estado();
-        assert_eq!(e.get("ok").and_then(|v| v.as_str()), Some("true"));
+        assert_eq!(e.get("ok").and_then(|v| v.as_bool()), Some(true));
         assert!(e.get("piezas").is_none()); // el estado no tiene piezas
         assert!(e.get("config").is_some());
     }

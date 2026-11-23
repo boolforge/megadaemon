@@ -538,6 +538,12 @@ pub fn web_diagnostics() -> Value {
         "template_path": template_path,
         "template_bytes": template_bytes,
         "template_missing": template_source == "NINGUNA",
+        // Que UI se sirve de verdad (y donde esta la V1).  El sondeo de
+        // nodos lo usa para decir si un par sirve la V2 o la V1.
+        "ui_servida": if template_source.contains("v2") { "v2" } else { "v1" },
+        "ui_v2_path": resolve_template_v2(),
+        "ui_v1_path": resolve_template(),
+        "ui_v2_bytes": EMBEDDED_V2_HTML.len(),
         "token_materialized": token_materialized,
         "token_path": token_path,
         "local_ips": ips,
