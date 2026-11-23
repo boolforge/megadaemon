@@ -89,7 +89,7 @@ pub fn sincronizar_drive() -> Result<Value, String> {
         urlencode(&q)
     );
     let (ak, av) = crate::google_auth::auth_header(Some(&state))?;
-    let resp = crate::http_transfer::get_texto(
+    let (st, cuerpo) = crate::http_transfer::get_texto(
         &url,
         &{
             let mut o = crate::http_transfer::Opciones::default();
@@ -98,7 +98,19 @@ pub fn sincronizar_drive() -> Result<Value, String> {
         },
     )
     .map_err(|e| format!("listar cola en Drive: {e}"))?;
-    let lista: Value = serde_json::from_str(&resp.1).unwrap_or(Value::Null);
+    // MEDIDO (2026-11-23, auditoría de calidad): el status HTTP se
+    // IGNORABA (`resp.1` y nada más).  Un 401/403/500 de Drive devolvía un
+    // JSON de error ⇒ `lista["files"]` era `None` ⇒ el bucle no importaba
+    // NADA y la función devolvía `{"ok": true, "importadas": 0}`: el
+    // llamante creía que la cola estaba sincronizada cuando no se había
+    // sincronizado nada (fallo silencioso).  Ahora el status se comprueba y
+    // el motivo viaja en el error.
+    if st >= 400 {
+        let detalle: String = cuerpo.chars().take(160).collect();
+        return Err(format!("listar cola en Drive: HTTP {st}: {detalle}"));
+    }
+    let lista: Value = serde_json::from_str(&cuerpo)
+        .map_err(|e| format!("la lista de la cola en Drive no es JSON: {e}"))?;
 
     // 4) Descargar e importar (fusión por id).
     let mut importadas = 0usize;
@@ -113,14 +125,27 @@ pub fn sincronizar_drive() -> Result<Value, String> {
         let dest = PathBuf::from(&state).join(format!("sync-{name}"));
         match crate::drive_native::download_file(&id, &dest, Some(&state)) {
             Ok(b) => {
-                if let Ok(txt) = std::fs::read_to_string(&dest) {
-                    if let Ok(v) = serde_json::from_str::<Value>(&txt) {
-                        let (i, u) = crate::task_scheduler::merge_tasks(&v);
-                        importadas += i;
-                        actualizadas += u;
-                    }
+                // MEDIDO (2026-11-23, auditoría de calidad): el `if let Ok`
+                // se tragaba el error ⇒ una cola remota corrupta (o ilegible)
+                // se saltaba en silencio y el informe decía "descargada".
+                match std::fs::read_to_string(&dest) {
+                    Ok(txt) => match serde_json::from_str::<Value>(&txt) {
+                        Ok(v) => {
+                            let (i, u) = crate::task_scheduler::merge_tasks(&v);
+                            importadas += i;
+                            actualizadas += u;
+                            descargas.push(json!({"nombre": name, "bytes": b}));
+                        }
+                        Err(e) => descargas.push(json!({
+                            "nombre": name, "bytes": b,
+                            "error": format!("JSON inválido: {e}"),
+                        })),
+                    },
+                    Err(e) => descargas.push(json!({
+                        "nombre": name, "bytes": b,
+                        "error": format!("no se pudo leer: {e}"),
+                    })),
                 }
-                descargas.push(json!({"nombre": name, "bytes": b}));
             }
             Err(e) => descargas.push(json!({"nombre": name, "error": e})),
         }
