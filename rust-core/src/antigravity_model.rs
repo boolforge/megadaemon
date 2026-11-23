@@ -285,6 +285,168 @@ pub fn select_as_default(bridge: &AntigravityBridge, model: &str) -> BridgeResul
 }
 
 // ---------------------------------------------------------------------------
+// FUSIÓN: que la GUI de Antigravity use DE VERDAD el MegaDaemon
+// ---------------------------------------------------------------------------
+//
+// MEDIDO (2026-11-22) + lo que faltaba:
+//
+// * El modelo `megadaemon` **ya estaba registrado** en el estado de la IDE
+//   (`JetboxWriteState` ⇒ `customModelsConfig.customModels`), MEDIDO.
+// * PERO la GUI no lo ofrecía: el bundle web tiene el gate
+//   `osName==="linux"&&k.isGoogleInternal` (MEDIDO en `main.js`) ⇒ en
+//   Android **todos** los modelos personalizados salen `disabled`.
+//   El parche de ese gate ya existe (`antigravity_endpoint::aplicar_gate`).
+// * Y el language server tenía que apuntar al gateway
+//   (`antigravity_endpoint::aplicar_endpoint`).
+//
+// ⇒ Faltaba la acción que encadena TODO y dice qué ha quedado listo y qué
+// no.  Eso es `integrar` (y `integracion_estado` para auditarlo).
+//
+// NOTA DE HONESTIDAD: el gate se parchea en el bundle web
+// (`web/generated/main.js`); si la app regenera ese bundle, el parche se
+// pierde ⇒ `integracion_estado` lo comprueba y lo dice.
+
+/// Los 4 puntos de la fusión y su estado.
+pub fn integracion_estado() -> Value {
+    let ae = crate::antigravity_endpoint::estado();
+    let gate = crate::antigravity_endpoint::plan_gate();
+    let cfg = crate::antigravity_bridge::BridgeConfig::default();
+    let (registrado, error_bridge) = match crate::antigravity_bridge::AntigravityBridge::new(&cfg) {
+        Err(e) => (
+            json!({ "ok": false, "modelos": [] }),
+            json!({ "error": format!("no se pudo abrir el puente: {e}") }),
+        ),
+        Ok(bridge) => match current_models(&bridge) {
+        Ok(ms) => {
+            let m = ms.iter().find(|(k, _)| k == DEFAULT_LABEL);
+            (
+                json!({
+                    "ok": true,
+                    "etiqueta": DEFAULT_LABEL,
+                    "base_url": m
+                        .and_then(|(_, v)| v.get("modelName").and_then(|x| x.as_str()).map(|s| s.to_string()))
+                        .unwrap_or_default(),
+                    "api_provider": m
+                        .and_then(|(_, v)| v.get("apiProvider").and_then(|x| x.as_str()).map(|s| s.to_string()))
+                        .unwrap_or_default(),
+                }),
+                Value::Null,
+            )
+        }
+        Err(e) => (
+            json!({ "ok": false, "modelos": [] }),
+            json!({ "error": e.to_string() }),
+        ),
+        },
+    };
+    json!({
+        "ok": true,
+        "endpoint_ls": ae,
+        "gate_gui": gate,
+        "modelo_registrado": registrado,
+        "bridge_error": error_bridge,
+        "resumen": {
+            "gate_parcheado": gate.get("de").is_string()
+                && gate
+                    .get("de")
+                    .and_then(|v| v.as_str())
+                    .map(|d| d == crate::antigravity_endpoint::GATE_CONDICION)
+                    .unwrap_or(false)
+                && gate.get("ocurrencias").and_then(|v| v.as_u64()).unwrap_or(0) == 0,
+            "nota": "el gate se da por parcheado si la condicion original ya NO aparece en el bundle",
+        },
+    })
+}
+
+/// **Fusiona** el MegaDaemon con la GUI de Antigravity (accion de escritura).
+///
+/// Hace las cuatro cosas, **sin abortar en el primer fallo** (cada paso
+/// es independiente y el informe dice qué ha quedado y qué no):
+///
+/// 1. Parchea el **gate de la GUI** (`main.js`) ⇒ los modelos personalizados
+///    se habilitan en Android.
+/// 2. Parchea el **endpoint del language server** ⇒ el LS habla con el
+///    gateway canónico.
+/// 3. **Registra** el modelo `megadaemon` en el estado de la IDE.
+/// 4. Lo deja como **modelo seleccionado**.
+///
+/// Exige `confirm=true`: modifica ficheros y el estado de la IDE.
+pub fn integrar(confirmar: bool) -> Result<Value, String> {
+    if !confirmar {
+        return Err("confirm_required".to_string());
+    }
+    let mut pasos: Vec<Value> = Vec::new();
+
+    // 1) Gate de la GUI
+    match crate::antigravity_endpoint::aplicar_gate(true) {
+        Ok(v) => pasos.push(json!({ "paso": "gate_gui", "ok": true, "detalle": v })),
+        Err(e) => {
+            let ya = e.starts_with("sin_cambios");
+            pasos.push(json!({
+                "paso": "gate_gui",
+                "ok": ya,
+                "detalle": e,
+                "nota": if ya { "ya estaba parcheado (la condicion original ya no aparece)" } else { "" },
+            }));
+        }
+    }
+
+    // 2) Endpoint del language server
+    match crate::antigravity_endpoint::aplicar_endpoint(
+        crate::antigravity_endpoint::PUERTO_GATEWAY,
+        true,
+    ) {
+        Ok(v) => pasos.push(json!({ "paso": "endpoint_ls", "ok": true, "detalle": v })),
+        Err(e) => pasos.push(json!({ "paso": "endpoint_ls", "ok": false, "detalle": e })),
+    }
+
+    // 3) Registro del modelo en el estado de la IDE
+    let cfg = crate::antigravity_bridge::BridgeConfig::default();
+    let bridge = match crate::antigravity_bridge::AntigravityBridge::new(&cfg) {
+        Ok(b) => b,
+        Err(e) => {
+            return Err(format!(
+                "no se pudo abrir el puente con el language server: {e} (arranca Antigravity: am start -n com.agy)"
+            ))
+        }
+    };
+    let spec = ModelSpec::new(DEFAULT_LABEL, DEFAULT_BASE_URL);
+    match register(&bridge, &spec) {
+        Ok(v) => pasos.push(json!({ "paso": "registro_modelo", "ok": true, "detalle": v })),
+        Err(e) => pasos.push(json!({
+            "paso": "registro_modelo",
+            "ok": false,
+            "detalle": e.to_string(),
+            "nota": "el language server tiene que estar vivo (am force-stop com.agy lo reinicia)",
+        })),
+    }
+
+    // 4) Dejarlo como modelo seleccionado
+    match select_as_default(&bridge, DEFAULT_LABEL) {
+        Ok(v) => pasos.push(json!({ "paso": "modelo_seleccionado", "ok": true, "detalle": v })),
+        Err(e) => pasos.push(json!({
+            "paso": "modelo_seleccionado",
+            "ok": false,
+            "detalle": e.to_string(),
+        })),
+    }
+
+    let completos = pasos
+        .iter()
+        .filter(|p| p.get("ok").and_then(|v| v.as_bool()).unwrap_or(false))
+        .count();
+    Ok(json!({
+        "ok": completos == pasos.len(),
+        "pasos_ok": completos,
+        "pasos_total": pasos.len(),
+        "pasos": pasos,
+        "estado": integracion_estado(),
+        "efecto": "Antigravity GUI usa el gateway del MegaDaemon como modelo (megadaemon) y sus tools (el catalogo vivo del daemon).",
+        "aviso": "el gate vive en el bundle web: si la app lo regenera, hay que re-aplicar (accion 'integrar' de nuevo).",
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Tool MCP (paridad con el CLI)
 // ---------------------------------------------------------------------------
 
@@ -293,11 +455,11 @@ pub fn tool_definitions() -> Value {
     json!([
         {
             "name": "antigravity_model",
-            "description": "Modelos personalizados (BYOM) de Antigravity: el 'modelo' de la IDE es SIEMPRE el gateway del MegaDaemon canónico. Acciones: list (los que hay ahora), register (registra 'megadaemon' -> http://127.0.0.1:9090), remove (quita uno) y provider_key (escribe la credencial del proveedor en mcp_config.json). Registrar o quitar MODIFICA el estado de la IDE: exige confirm=true.",
+            "description": "Modelos personalizados (BYOM) de Antigravity: el 'modelo' de la IDE es SIEMPRE el gateway del MegaDaemon canonico. Acciones: list (los que hay ahora), register (registra 'megadaemon' -> http://127.0.0.1:9090), remove (quita uno), provider_key (escribe la credencial del proveedor en mcp_config.json), INTEGRAR (fusion: parchea el gate de la GUI para que los modelos personalizados se habiliten en Android + parchea el endpoint del language server + registra el modelo + lo deja seleccionado) e integracion_estado (audita los 4 puntos). Registrar, quitar o integrar MODIFICA el estado de la IDE: exige confirm=true.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["list", "register", "remove", "provider_key"], "default": "list" },
+                    "action": { "type": "string", "enum": ["list", "register", "remove", "provider_key", "integrar", "integracion_estado"], "default": "list" },
                     "label": { "type": "string", "default": "megadaemon", "description": "Etiqueta del modelo (chatModelName)." },
                     "base_url": { "type": "string", "default": "http://127.0.0.1:9090", "description": "URL base del modelo (modelName): el gateway de MegaDaemon." },
                     "api_key": { "type": "string", "description": "Credencial del proveedor (sólo para provider_key)." },
@@ -352,7 +514,7 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
     };
 
     // Las escrituras modifican el estado de la IDE: exigen confirmación.
-    if matches!(accion.as_str(), "register" | "remove" | "provider_key") && !confirm {
+    if matches!(accion.as_str(), "register" | "remove" | "provider_key" | "integrar") && !confirm {
         return Some(wrap(json!({
             "ok": false,
             "error": "confirm_required",
@@ -380,6 +542,16 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 Err(e) => Some(wrap(json!({ "ok": false, "error": e.to_string() }))),
             }
         }
+        "integrar" => {
+            // La FUSION: parchea el gate de la GUI, el endpoint del LS,
+            // registra el modelo y lo deja seleccionado.  Sin abortar en el
+            // primer fallo: el informe dice que paso y que no.
+            match integrar(confirm) {
+                Ok(v) => Some(wrap(v)),
+                Err(e) => Some(wrap(json!({ "ok": false, "error": e }))),
+            }
+        }
+        "integracion_estado" | "integracion" => Some(wrap(integracion_estado())),
         "remove" => {
             let cfg = crate::antigravity_bridge::BridgeConfig::default();
             let b = match AntigravityBridge::new(&cfg) {
