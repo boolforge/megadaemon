@@ -834,3 +834,118 @@ fn presupuesto_diario_bloquea_pago_al_superar_limite_y_permite_gratis() {
     );
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. Casos que faltaban (v16): default del vault, camino local, credencial
+//    opcional, fallo de transporte, respuesta ilegible y TIER en la traza.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn sin_modelo_se_usa_el_default_del_vault() {
+    let t = MockTransport::new();
+    t.responde("https://p1.test/v1", 200, OK);
+    let v = vault(vec![prov("p1", "https://p1.test/v1", "m1", "free")], "p1");
+    let d = deps(&v, &t);
+    let res = execute_chat_with("hola", None, None, None, 128, &d);
+    assert_eq!(
+        res.model_id, "p1",
+        "sin modelo pedido debe usar el default del vault"
+    );
+    assert_eq!(t.veces("https://p1.test/v1"), 1);
+}
+
+#[test]
+fn el_camino_local_explicito_no_llama_a_nadie() {
+    let t = MockTransport::new();
+    let v = vault(vec![prov("p1", "https://p1.test/v1", "m1", "free")], "p1");
+    let d = deps(&v, &t);
+    let res = execute_chat_with("hola", Some("local-seere"), None, None, 128, &d);
+    assert_eq!(res.model_id, "local-seere");
+    assert!(
+        t.endpoints().is_empty(),
+        "el camino local NO debe tocar la red: {:?}",
+        t.endpoints()
+    );
+}
+
+#[test]
+fn un_proveedor_con_auth_none_se_llama_sin_credencial() {
+    let t = MockTransport::new();
+    t.responde("https://p1.test/v1", 200, OK);
+    let mut p = prov("p1", "https://p1.test/v1", "m1", "free");
+    p.auth_type = "none".to_string();
+    p.api_key = String::new();
+    let v = vault(vec![p], "p1");
+    let d = deps(&v, &t);
+    let res = execute_chat_with("hola", Some("p1"), None, None, 128, &d);
+    assert_eq!(
+        res.model_id, "p1",
+        "auth_type=none debe poder llamarse sin credencial"
+    );
+    assert_eq!(t.veces("https://p1.test/v1"), 1);
+}
+
+#[test]
+fn un_fallo_de_transporte_cae_al_siguiente() {
+    let t = MockTransport::new();
+    t.cae("https://p1.test/v1");
+    t.responde("https://p2.test/v1", 200, OK);
+    let v = vault(
+        vec![
+            prov("p1", "https://p1.test/v1", "m1", "paid"),
+            prov("p2", "https://p2.test/v1", "m2", "free"),
+        ],
+        "p1",
+    );
+    let d = deps(&v, &t);
+    let res = execute_chat_with("hola", Some("p1"), None, None, 128, &d);
+    assert_eq!(
+        res.model_id, "p2",
+        "un fallo de transporte debe caer al siguiente proveedor"
+    );
+    assert!(res.fallback_used);
+    assert!(
+        res.provider_trace.iter().any(|l| l.contains("p1")),
+        "la traza debe mencionar el fallo de p1: {:?}",
+        res.provider_trace
+    );
+}
+
+#[test]
+fn una_respuesta_ilegible_cae_al_siguiente() {
+    let t = MockTransport::new();
+    t.responde("https://p1.test/v1", 200, "esto no es json");
+    t.responde("https://p2.test/v1", 200, OK);
+    let v = vault(
+        vec![
+            prov("p1", "https://p1.test/v1", "m1", "paid"),
+            prov("p2", "https://p2.test/v1", "m2", "free"),
+        ],
+        "p1",
+    );
+    let d = deps(&v, &t);
+    let res = execute_chat_with("hola", Some("p1"), None, None, 128, &d);
+    assert_eq!(
+        res.model_id, "p2",
+        "una respuesta ilegible debe caer al siguiente proveedor"
+    );
+    assert!(res.fallback_used);
+}
+
+#[test]
+fn la_traza_dice_el_tier_del_proveedor() {
+    // v16 (DEFECTO-18): el reenvío a un proveedor de PAGO tiene que ser
+    // visible en la traza; si no, el usuario no sabe que se gastó dinero.
+    let t = MockTransport::new();
+    t.responde("https://p1.test/v1", 200, OK);
+    let v = vault(vec![prov("p1", "https://p1.test/v1", "m1", "paid")], "p1");
+    let d = deps(&v, &t);
+    let res = execute_chat_with("hola", Some("p1"), None, None, 128, &d);
+    assert!(
+        res.provider_trace
+            .iter()
+            .any(|l| l.contains("p1") && l.contains("tier paid")),
+        "la traza debe decir el tier: {:?}",
+        res.provider_trace
+    );
+}

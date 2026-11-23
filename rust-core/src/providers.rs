@@ -1631,7 +1631,10 @@ pub fn execute_chat_with(
                                 tokens_out,
                                 total_tokens,
                             );
-                            trace.push(format!("{} => OK", p.id));
+                            // v16 (DEFECTO-18): la traza dice el TIER del
+                            // proveedor => el reenvío a un proveedor de PAGO
+                            // es VISIBLE (tier "paid"/"free"), no silencioso.
+                            trace.push(format!("{} => OK (tier {})", p.id, p.tier));
                             return ChatResult {
                                 reply: parsed.content,
                                 reasoning: parsed.reasoning,
