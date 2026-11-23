@@ -30,9 +30,23 @@ LOG=/sdcard/megadaemon.log
 log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 
 # --- 1) root (se re-lanza con `su -mm` si no lo somos) --------------------
+# MEDIDO (2026-11-23, Termux en Android): `bash <(curl ...)` NO funciona:
+# Android no expone /proc/self/fd para el proceso de Termux =>
+# "No such file or directory".  Con este script hay DOS formas:
+#   A) curl -sL <url> -o bootstrap-movil.sh && bash bootstrap-movil.sh   (mejor)
+#   B) curl -sL <url> | bash          (funciona: el script se guarda solo)
 if [ "$(id -u)" != "0" ]; then
+    if [ -f "$0" ]; then
+        log "pidiendo root (su -mm) ..."
+        exec su -mm -c "bash $0"
+    fi
+    # Venimos por tuberia: no hay fichero que re-ejecutar con root.  Se
+    # guarda el script (lo que queda de stdin) y se re-ejecuta con root.
+    SELF=/data/local/tmp/bootstrap-movil.$$.sh
+    cat > "$SELF"
+    chmod 755 "$SELF" 2>/dev/null
     log "pidiendo root (su -mm) ..."
-    exec su -mm -c "bash $0"
+    exec su -mm -c "bash $SELF"
 fi
 log "root ok"
 
