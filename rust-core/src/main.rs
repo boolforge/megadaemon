@@ -118,6 +118,10 @@ fn main() {
                             .unwrap_or_else(|_| "megadaemon-core".to_string())
                     }
                 });
+                // La ruta se copia antes de consumirla: el lanzador se la
+                // queda (move) y la bitácora la quiere para el evento de
+                // arranque.
+                let binario_registrado = ruta.clone();
                 megadaemon_core::self_update::lanzar_auto_actualizador(
                     std::path::PathBuf::from(ruta),
                     // 30 min: el movil esta al dia con la ultima build sin
@@ -139,7 +143,7 @@ fn main() {
                     "arranque",
                     serde_json::json!({
                         "build": megadaemon_core::self_update::build_commit(),
-                        "binario": ruta,
+                        "binario": binario_registrado,
                         "puerto": port,
                         "version": env!("CARGO_PKG_VERSION"),
                     }),
