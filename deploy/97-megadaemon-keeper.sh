@@ -25,7 +25,9 @@
 
 LOG=/sdcard/megadaemon.log
 SUPERVISOR=/data/adb/service.d/99-megadaemon.sh
-PREFIX=/data/local/tmp/megadaemon
+# MEDIDO (2026-11-23): ruta PERSISTENTE (la vieja, /data/local/tmp, es
+# volatil y el reinicio del movil se llevaba el binario).
+PREFIX=/data/adb/megadaemon
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] keeper: $*" >> "$LOG" 2>/dev/null
