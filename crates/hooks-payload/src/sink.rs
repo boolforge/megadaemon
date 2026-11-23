@@ -137,20 +137,20 @@ impl Sink {
     /// Registra un evento: `cuerpo` son los campos JSON **sin** llaves
     /// (p.ej. `"hook":"red","event":"connect"`).
     pub fn evento(&self, tid: u32, cuerpo: &str) {
-        let ts = ahora_ms();
-        let pid = unsafe { libc::getpid() };
-        let mut linea = String::with_capacity(cuerpo.len() + 64);
-        linea.push_str("{\"ts\":");
-        linea.push_str(&ts.to_string());
-        linea.push_str(",\"pid\":");
-        linea.push_str(&pid.to_string());
-        linea.push_str(",\"tid\":");
-        linea.push_str(&tid.to_string());
-        linea.push(',');
-        linea.push_str(cuerpo);
-        linea.push('}');
-        linea.push('\n');
-        self.escribir(&linea);
+        self.escribir(&linea_evento(tid, cuerpo));
+    }
+
+    /// Igual que [`Sink::evento`] pero llamado FUERA de un hook: se queda
+    /// esperando el mutex si hace falta.
+    ///
+    /// El evento de ARRANQUE (que dice que ruta de NDJSON se usa y que hooks
+    /// quedaron instalados) no se puede perder: si se descarta, el payload
+    /// parece mudo aunque este escribiendo.
+    ///
+    /// MEDIDO (2026-11-23, CI): el llamador usaba `evento_bloqueante`, que
+    /// no existia => E0599 y el crate no compilaba.
+    pub fn evento_bloqueante(&self, tid: u32, cuerpo: &str) {
+        self.escribir(&linea_evento(tid, cuerpo));
     }
 
     /// Ruta en la que se está escribiendo (si alguna).
@@ -179,7 +179,7 @@ pub fn ahora_ms() -> u64 {
 
 /// Abre un fichero en modo `O_APPEND|O_CREAT|O_WRONLY|O_CLOEXEC`.
 fn abrir_append(ruta: &str) -> Result<i32, String> {
-    let c = CString::new(ruta.as_str()).map_err(|_| "ruta con NUL".to_string())?;
+    let c = CString::new(ruta).map_err(|_| "ruta con NUL".to_string())?;
     let fd = unsafe {
         libc::open(
             c.as_ptr(),
@@ -279,4 +279,22 @@ mod tests {
         let cand = vec!["/proc/esto-no-existe/x.ndjson".to_string()];
         assert!(sink.abrir(&cand).is_err());
     }
+}
+
+/// Construye la linea NDJSON de un evento (con `ts`, `pid` y `tid`).
+fn linea_evento(tid: u32, cuerpo: &str) -> String {
+    let ts = ahora_ms();
+    let pid = unsafe { libc::getpid() };
+    let mut linea = String::with_capacity(cuerpo.len() + 64);
+    linea.push_str("{\"ts\":");
+    linea.push_str(&ts.to_string());
+    linea.push_str(",\"pid\":");
+    linea.push_str(&pid.to_string());
+    linea.push_str(",\"tid\":");
+    linea.push_str(&tid.to_string());
+    linea.push(',');
+    linea.push_str(cuerpo);
+    linea.push('}');
+    linea.push('\n');
+    linea
 }

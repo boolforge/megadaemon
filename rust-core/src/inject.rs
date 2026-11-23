@@ -963,7 +963,17 @@ fn errno_actual() -> i32 {
 }
 
 /// Pone `errno` a 0 (para distinguir "el peek devolvió -1" de "falló").
+///
+/// MEDIDO (2026-11-23, CI Android): `__errno_location` es de **glibc**; en
+/// Android (bionic) la funcion es `__errno` y el crate `libc` no expone la
+/// primera => E0425 y el build ARM64 (el binario del movil) no compilaba.
+/// Aqui se usa la variante que existe en cada plataforma.
 fn limpiar_errno() {
+    #[cfg(target_os = "android")]
+    unsafe {
+        *libc::__errno() = 0;
+    }
+    #[cfg(not(target_os = "android"))]
     unsafe {
         *libc::__errno_location() = 0;
     }

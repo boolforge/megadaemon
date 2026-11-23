@@ -226,7 +226,11 @@ fn adjunta<I: InvocationListener>(
     match interceptor.attach(ptr, &mut *boxed) {
         Ok(handle) => {
             let _ = Box::leak(boxed);
-            let _ = Box::leak(handle);
+            // MEDIDO (2026-11-23, CI): el `Listener` de frida-gum NO es un
+            // Box (es un handle plano) => `Box::leak(handle)` no compila
+            // (E0308).  Para que el hook siga vivo hay que OLVIDARLO
+            // (`mem::forget`), no filtrarlo.
+            std::mem::forget(handle);
             informe.ganchos.push(InformeGancho {
                 simbolo: simbolo.to_string(),
                 modulo,
