@@ -683,6 +683,20 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "reparar_entorno",
+            "description": "MegaDaemon se REPARA SOLO: diagnostica y arregla su propio entorno (prefijo persistente /data/adb/megadaemon, binario en servicio, watchdog de Magisk, guardian, API key, credenciales de Drive y plantilla web). Acciones: diagnostico (solo mira, no toca nada) | reparar (mira y arregla; es idempotente). Cada eslabon devuelve que/toque/bloquea. Util cuando el movil queda sin daemon, sin key (todo 403) o sin tunel: no hace falta PC ni ADB.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "accion": {
+                        "type": "string",
+                        "description": "diagnostico | reparar",
+                        "default": "diagnostico"
+                    }
+                }
+            }
+        },
+        {
             "name": "task_queue",
             "description": "Cola de tareas COMPARTIDA de MegaDaemon (movil + PC + agentes). Acciones: list (ver cola), submit (encolar), claim (TOMAR tareas con lease para este nodo), lease (renovar), migrate (pasar el trabajo de un nodo a otro cuando uno falla o se queda sin cuota), pause (pausar por cuota/red), merge (fusionar con lo que hay en Drive). IMPORTANTE: si la cuota esta en 'pausa', claim NO devuelve tareas: termina tu paso actual, guarda tu checkpoint y espera al reset.",
             "inputSchema": {
@@ -1263,6 +1277,14 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 _ => json!({"ok": false, "error": "accion desconocida (estado|publicar|sincronizar|plegar)"}),
             };
             json!({ "content": [{ "type": "text", "text": r.to_string() }] })
+        }
+        "reparar_entorno" => {
+            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("diagnostico");
+            let v = match accion {
+                "reparar" | "repair" => crate::reparar_entorno::reparar_ahora(),
+                _ => crate::reparar_entorno::diagnosticar(),
+            };
+            json!({ "content": [{ "type": "text", "text": v.a_json().to_string() }] })
         }
         "http_fetch" => {
             let mut o = crate::http_transfer::Opciones::default();

@@ -1345,6 +1345,22 @@ fn handle_client(mut stream: TcpStream) {
                 };
                 send_json(&mut stream, &v);
             }
+            "/api/reparar" => {
+                // El daemon repara SU PROPIO entorno.  GET = solo diagnostica;
+                // POST {"reparar": true} = diagnostica y arregla.
+                // Es idempotente y cada eslabon dice que/toque/bloquea.
+                let reparar = method == "POST"
+                    && serde_json::from_slice::<Value>(body_slice)
+                        .ok()
+                        .and_then(|b| b.get("reparar").and_then(|v| v.as_bool()))
+                        .unwrap_or(false);
+                let v = if reparar {
+                    crate::reparar_entorno::reparar_ahora().a_json()
+                } else {
+                    crate::reparar_entorno::diagnosticar().a_json()
+                };
+                send_json(&mut stream, &v);
+            }
             "/api/resonance" => {
                 // El tablón p2p (Drive): qué sabe el enjambre ahora mismo.
                 let state = crate::cockpit_server::state_dir();

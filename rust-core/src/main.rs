@@ -717,6 +717,15 @@ fn main() {
             }
         }
 
+        //   megadaemon-core reparar [--diagnostico] [--json]
+        //     Diagnostica y REPARA el entorno del propio nodo (prefijo
+        //     persistente, binario, watchdog, keeper, API key, credenciales
+        //     de Drive y plantilla web).  Es idempotente.
+        "reparar" | "repair" => {
+            let rc = megadaemon_core::reparar_entorno::run_cli(&args[2..]);
+            std::process::exit(rc);
+        }
+
         "retro-tools" => {
             let sub = args.get(2).map(|s| s.as_str()).unwrap_or("axml");
             let fp = args.get(3).map(|s| s.as_str()).unwrap_or("");
