@@ -1085,6 +1085,8 @@ def _run(o: Opciones, tmpdir: Path, t0: float) -> int:
     go_path_actual: List[Path] = [Path(".")]
     primera_en_go = True
     n_funciones_c = 0
+    n_funciones_con_pseudo = 0
+    n_funciones_sin_pseudo = 0
     n_funciones_go = 0
     n_ficheros_c = 0
     n_ficheros_go = 0
@@ -1237,8 +1239,10 @@ def _run(o: Opciones, tmpdir: Path, t0: float) -> int:
             if bloque is not None:
                 c_fh.write(bloque.texto.rstrip() + "\n")
                 total_bytes_c += len(bloque.texto)
+                n_funciones_con_pseudo += 1
             else:
                 c_fh.write("/* SIN PSEUDOCODIGO (%s) */\n" % (err or "no decompilado"))
+                n_funciones_sin_pseudo += 1
             c_fh.write("\n")
             n_funciones_c += 1
 
@@ -1329,12 +1333,21 @@ def _run(o: Opciones, tmpdir: Path, t0: float) -> int:
         f.write("| funciones en el export del pclntab | %d |\n" % n_func)
         f.write("| funciones procesadas (export del pclntab) | %d |\n" % n_func)
         f.write("| funciones con fila en el indice de Ghidra | %d |\n" % n_con_indice)
-        f.write("| funciones **sin** pseudocodigo | %d |\n" % len(no_decompiladas))
+        f.write(
+            "| funciones **sin** pseudocodigo (listadas en NO-DECOMPIADAS.tsv) | %d |\n"
+            % len(no_decompiladas)
+        )
         f.write("| funciones que solo existen en Ghidra (sin origen Go) | %d |\n" % n_join_solo_idx)
         f.write("| paquetes (directorios del binario) | %d |\n" % n_paquetes)
         f.write("| ficheros `.c` generados | %d |\n" % n_ficheros_c)
         f.write("| ficheros `.go` (stubs) generados | %d |\n" % n_ficheros_go)
-        f.write("| bloques de pseudocodigo volcados | %d |\n" % n_funciones_c)
+        f.write("| bloques escritos en los `.c` (cabecera por funcion) | %d |\n" % n_funciones_c)
+        f.write("| funciones CON pseudocodigo volcado | %d |\n" % n_funciones_con_pseudo)
+        f.write("| funciones SIN pseudocodigo | %d |\n" % n_funciones_sin_pseudo)
+        f.write(
+            "| funciones con fila de indice pero sin bloque de pseudocodigo | %d |\n"
+            % max(0, n_con_indice - n_funciones_con_pseudo)
+        )
         f.write("| stubs Go emitidos | %d |\n" % n_funciones_go)
         f.write("| identificadores Go que colisionaron (con sufijo) | %d |\n" % colisiones)
         f.write("| bytes del pseudocodigo volcado | %d |\n" % total_bytes_c)
