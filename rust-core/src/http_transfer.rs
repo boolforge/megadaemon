@@ -415,7 +415,7 @@ pub fn descargar(url: &str, opts: &Opciones) -> Result<Resultado, String> {
     // PUBLICACIÓN atómica y SÓLO si el contenido es el esperado.
     //
     // MEDIDO (2026-11-23, auditoría de calidad): antes el renombrado
-    // `.part` -> destino ocurría ANTES de comparar el sha-256 ⇒ un fichero
+    // `.part` -> destino se hacia ANTES de comparar el sha-256 ⇒ un fichero
     // que NO cuadra quedaba **publicado** en el destino: el resultado decía
     // ok=false, pero el fichero roto ya estaba ahí (el agente que sólo mira
     // si el fichero existe se comía el corrupto, y una re-descarga "reanudaba"

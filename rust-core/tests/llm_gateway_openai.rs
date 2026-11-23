@@ -64,7 +64,12 @@ fn la_respuesta_tiene_exactamente_la_forma_openai() {
     );
     assert_eq!(r["object"], "chat.completion");
     assert!(r["created"].is_u64(), "created: {:?}", r["created"]);
-    assert_eq!(r["model"], "megadaemon");
+    // HONESTIDAD (2026-11-23): `model` dice el modelo que REALMENTE contestó
+    // (el del proveedor que atendió la peticion), no el que pidió el
+    // cliente.  Lo pedido viaja en `megadaemon.requested_model`.
+    assert_eq!(r["model"], "Proveedor p1");
+    assert_eq!(r["megadaemon"]["requested_model"], "megadaemon");
+    assert_eq!(r["megadaemon"]["provider_id"], "p1");
 
     // choices[].
     assert!(r["choices"].is_array());
@@ -216,8 +221,10 @@ fn model_megadaemon_no_ata_la_peticion_a_un_proveedor() {
             "messages": [{"role": "user", "content": "ping"}]
         });
         let r = chat_completions_with(&body, &d).expect("no debe fallar");
-        // La respuesta hace eco del modelo pedido por el cliente...
-        assert_eq!(r["model"], *alias);
+        // La respuesta dice el modelo REAL que contestó (el del router), y
+        // lo pedido por el cliente viaja aparte (honestidad del gateway).
+        assert_eq!(r["model"], "Proveedor p1");
+        assert_eq!(r["megadaemon"]["requested_model"], *alias);
         // ...pero el que atiende lo decide el ROUTER (el default del
         // vault), no el alias.
         assert_eq!(
@@ -238,7 +245,9 @@ fn un_modelo_concreto_si_se_pide_ese_proveedor() {
         "messages": [{"role": "user", "content": "ping"}]
     });
     let r = chat_completions_with(&body, &d).expect("no debe fallar");
-    assert_eq!(r["model"], "p2");
+    // El modelo REAL que contestó (honestidad) y el pedido, aparte.
+    assert_eq!(r["model"], "Proveedor p2");
+    assert_eq!(r["megadaemon"]["requested_model"], "p2");
     assert_eq!(r["megadaemon"]["provider_id"], "p2");
     assert_eq!(t.veces("https://p2.test/v1"), 1);
     assert_eq!(t.veces("https://p1.test/v1"), 0);
@@ -309,7 +318,8 @@ fn la_forma_gemini_tiene_candidates() {
     assert_eq!(r["candidates"][0]["finishReason"], "STOP");
     assert_eq!(r["candidates"][0]["index"], 0);
     assert_eq!(r["usageMetadata"]["totalTokenCount"], 7);
-    assert_eq!(r["modelVersion"], "megadaemon");
+    // `modelVersion` dice el modelo REAL que contestó (honestidad).
+    assert_eq!(r["modelVersion"], "Proveedor p1");
     assert_eq!(r["megadaemon"]["provider_id"], "p1");
 }
 

@@ -594,7 +594,11 @@ mod tests {
             "tools": [{"functionDeclarations": [{"name": "a"}, {"name": "b"}]}]
         });
         let g = gemini_prompt(&body).unwrap();
-        assert!(g.prompt.contains("hola mundo"));
+        // MEDIDO (2026-11-23): las partes de un content Gemini se unen con
+        // "\n" (antes con " "), asi que el test no puede fijar el separador:
+        // comprueba que las dos partes estan y que el historial tambien.
+        assert!(g.prompt.contains("hola"));
+        assert!(g.prompt.contains("mundo"));
         assert!(g.prompt.contains("respuesta previa"));
         assert_eq!(g.system.as_deref(), Some("eres un agente"));
         assert_eq!(g.max_tokens, 1234);

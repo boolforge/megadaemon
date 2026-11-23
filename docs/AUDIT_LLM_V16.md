@@ -306,7 +306,7 @@ daemon sobrevive, pero la petición se cae.
 
 **Arreglado:** `truncar()` (por caracteres).
 
-### DEFECTO-14 — El parseo sólo entendía `content` como string · **P2**
+### DEFECTO-14 — El parseo sólo leía `content` como string · **P2**
 
 `msg_node["content"].as_str().unwrap_or("")` ⇒ con `content` en array
 (multimodal) el contenido **se perdía** y el daemon caía al siguiente

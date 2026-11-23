@@ -111,7 +111,18 @@ fn el_inyector_resuelve_pids_y_nombres_desde_proc() {
 
 #[test]
 fn la_llamada_remota_se_construye_con_los_registros_correctos() {
-    let regs = inject::Registros::default();
+    // MEDIDO (2026-11-23): con `default()` el SP vale 0 y la comprobacion
+    // "la ruta va por debajo del SP" no puede cumplirse => test rojo por un
+    // motivo artificial.  Aqui hay registros REALISTAS.
+    let mut regs = inject::Registros::default();
+    #[cfg(target_arch = "aarch64")]
+    {
+        regs.sp = 0x7fff_0000_0000;
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        regs.rsp = 0x7fff_0000_0000;
+    }
     let llamada = inject::preparar_llamada(&regs, 0x7fff_1234_5678, 0x1000);
     assert_eq!(llamada.pc, 0x7fff_1234_5678, "el PC debe ser dlopen");
     assert_eq!(llamada.arg0, 0x1000, "el primer argumento es la ruta");

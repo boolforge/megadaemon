@@ -495,7 +495,11 @@ mod tests {
         // Se simula un binario: no es un ELF, asi que se comprueba el
         // camino de error y el parser sobre un buffer plano.
         let d = descriptor_minimo("x/y.proto", "x.y", "proto3");
-        assert!(segmentos_elf64(&d[..64]).is_err());
+        // MEDIDO (2026-11-23): el buffer minimo mide 24 B; el test cortaba
+        // `d[..64]` => "range end index 64 out of range" (panic por el
+        // propio test, no por el escaner).  Se pasa el buffer entero: no es
+        // un ELF, asi que el escaner debe rechazarlo.
+        assert!(segmentos_elf64(&d).is_err());
         let fin = parse_file_descriptor_proto(&d, 0);
         assert_eq!(fin, d.len());
     }

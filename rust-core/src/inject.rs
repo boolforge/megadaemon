@@ -1570,16 +1570,37 @@ fn inyectar_parado(
 mod pruebas_llamada {
     use super::*;
 
+    /// Registros con un SP **realista**.
+    ///
+    /// MEDIDO (2026-11-23): `Registros::default()` deja el SP a 0, y con SP a
+    /// 0 la comprobacion "la ruta se escribe por debajo del SP" no se puede
+    /// cumplir (0x1234 < 0 es falso) => el test era rojo por un motivo
+    /// artificial, no por un defecto del inyector.
+    fn registros_con_sp() -> Registros {
+        let mut r = Registros::default();
+        #[cfg(target_arch = "aarch64")]
+        {
+            r.sp = 0x7fff_0000_0000;
+        }
+        #[cfg(target_arch = "x86_64")]
+        {
+            r.rsp = 0x7fff_0000_0000;
+        }
+        r
+    }
+
     #[test]
     fn la_llamada_es_pura_y_no_toca_nada() {
-        let r = Registros::default();
+        let r = registros_con_sp();
         let l = preparar_llamada(&r, 0xdeadbeef, 0x1234);
         assert_eq!(l.pc, 0xdeadbeef);
         assert_eq!(l.arg0, 0x1234);
         assert_eq!(l.arg1, RTLD_NOW_GLOBAL);
         assert_eq!(l.magico, RETORNO_MAGICO);
-        // La ruta se escribe POR DEBAJO del SP original.
-        assert!(l.arg0 < sp_actual(&r));
+        // El hueco de trabajo (donde se escribe la ruta) queda POR DEBAJO
+        // del SP original, y el nuevo SP apunta a la ranura.
+        assert!(l.sp < sp_actual(&r), "el hueco debe quedar bajo el SP original");
+        assert!(l.arg0 < sp_actual(&r), "la ruta se escribe bajo el SP");
     }
 
     #[test]
