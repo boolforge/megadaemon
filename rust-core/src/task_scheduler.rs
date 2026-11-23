@@ -380,10 +380,21 @@ pub fn persist() {
         .collect();
     drop(q);
     let _ = std::fs::create_dir_all(crate::cockpit_server::state_dir());
-    let _ = std::fs::write(
-        queue_path(),
-        serde_json::to_string_pretty(&json!({ "tasks": items })).unwrap_or_default(),
-    );
+    let ruta = queue_path();
+    // MEDIDO (2026-11-23, auditoría de calidad): la cola se guardaba con
+    // `fs::write`, que **trunca** el destino.  Si el proceso moría a mitad de
+    // la escritura, `task_queue.json` quedaba corrupto y `restore()` devolvía
+    // 0 tareas sin explicar por qué => el trabajo en curso se perdía en
+    // silencio.  Ahora se escribe de forma ATÓMICA (tmp + rename): el
+    // fichero que hay en disco es siempre el de la última cola COMPLETA.
+    let datos = serde_json::to_string_pretty(&json!({ "tasks": items })).unwrap_or_default();
+    if let Err(e) = crate::util_fs::write_atomic(
+        std::path::Path::new(&ruta),
+        datos.as_bytes(),
+        0o600,
+    ) {
+        eprintln!("[task_scheduler] no se pudo guardar la cola en {ruta}: {e}");
+    }
 }
 
 /// Restaura la cola desde disco.
