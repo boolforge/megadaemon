@@ -246,6 +246,11 @@ fn el_catalogo_mcp_es_la_union_de_los_subcatalogos() {
         megadaemon_core::mcp_ext::tool_definitions(),
         megadaemon_core::antigravity_model::tool_definitions(),
         megadaemon_core::antigravity_env::tool_definitions(),
+        // v16 (2026-11-23, rama del MITM): el FICHERO FALSO del language
+        // server tambien aporta su tool al catalogo fusionado.  El test
+        // enumeraba seis grupos y se quedaba UNO por detras => el gate
+        // del CI fallaba sin que hubiera ningun defecto.
+        megadaemon_core::antigravity_fake_so::tool_definitions(),
     ] {
         for d in sub.as_array().unwrap() {
             esperado.push(d["name"].as_str().unwrap().to_string());

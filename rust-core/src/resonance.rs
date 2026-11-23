@@ -300,10 +300,11 @@ impl Tablon {
         let foto = self.dir.join("foto.json");
         // Escritura ATÓMICA: primero a `.tmp`, luego rename ⇒ un corte de
         // luz no deja una instantánea corrupta (que rompería el tablón).
-        let tmp = self.dir.join("foto.json.tmp");
-        crate::util_fs::write_atomic(&tmp, txt.as_bytes(), 0o600)
+        // `util_fs::write_atomic` YA hace el tmp+rename (escritura atomica):
+        // MEDIDO (2026-11-23): al hacerlo aqui tambien, el `rename` manual
+        // fallaba (el tmp ya no existia) y la instantanea NO se creaba.
+        crate::util_fs::write_atomic(&foto, txt.as_bytes(), 0o600)
             .map_err(|e| std::io::Error::other(e))?;
-        std::fs::rename(&tmp, &foto)?;
         // El journal local se vacía (ya está en la instantánea).
         let j = self.dir.join(format!("cartas-{}.jsonl", self.nodo));
         let _ = std::fs::write(&j, b"");
