@@ -3,6 +3,12 @@
 //! Lib unificada con todos los módulos de MegaDaemon v15.
 #![recursion_limit = "256"]
 
+// El catalogo MCP (`mcp_ext::tool_definitions`) es un unico `json!([...])`
+// con 37 tools: su expansion supera el limite de recursion por defecto
+// del compilador, asi que se sube aqui (a nivel de crate, que es donde
+// rustc lo lee).
+#![recursion_limit = "4096"]
+
 pub mod accelerator_policy;
 pub mod adb_client;
 pub mod adb_tool;
