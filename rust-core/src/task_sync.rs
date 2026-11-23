@@ -11,7 +11,8 @@
 //! 4. devuelve el resumen (subidos, importados, conflictos).
 //!
 //! La fusión es por id y gana el estado más avanzado
-//! (running > pending > paused > done), de modo que un nodo que acaba de
+//! (**done > running > paused > pending**, el orden real de
+//! `task_scheduler::rango_estado`), de modo que un nodo que acaba de
 //! terminar una tarea no la revierte.
 
 use serde_json::{json, Value};
@@ -67,12 +68,18 @@ pub fn sincronizar_drive() -> Result<Value, String> {
     // 2) Exportar y subir la cola local.
     let export = crate::task_scheduler::export_all_tasks(&nodo);
     let total = export["tasks"].as_array().map(|a| a.len()).unwrap_or(0);
-    let fichero = PathBuf::from(&state).join(format!("tasks-{nodo}-{}.json", ahora()));
+    // Un único sello temporal: antes se llamaba `ahora()` DOS veces (fichero
+    // local y nombre en Drive) y podían caer en segundos distintos ⇒ el
+    // fichero local se quedaba con un nombre que no era el subido (y
+    // sobraba una copia local en el state dir).
+    let sello = ahora();
+    let nombre = format!("tasks-{nodo}-{sello}.json");
+    let fichero = PathBuf::from(&state).join(&nombre);
     let txt = serde_json::to_string_pretty(&export).unwrap_or_default();
     std::fs::write(&fichero, txt.as_bytes()).map_err(|e| format!("escribir local: {e}"))?;
     let up = crate::drive_native::upload_file(
         &fichero,
-        &format!("tasks-{nodo}-{}.json", ahora()),
+        &nombre,
         &crate::drive_client::DriveTarget::folder(&carpeta),
         Some(&state),
     );
