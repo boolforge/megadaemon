@@ -405,7 +405,7 @@ pub fn generar_db_servida_desde(
     destino: &Path,
 ) -> Result<Value, String> {
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let mut src = Connection::open_with_flags(origen, flags)
+    let src = Connection::open_with_flags(origen, flags)
         .map_err(|e| format!("abrir RO {}: {e}", origen.display()))?;
     src.busy_timeout(std::time::Duration::from_millis(2000))
         .map_err(|e| format!("busy_timeout: {e}"))?;
@@ -824,7 +824,7 @@ fn remergear_servida_en_original(servida: &Path, original: &Path) -> Result<Valu
 
     // 1) Leer la servida (sólo lectura + busy_timeout: no bloquea a nadie).
     let flags_s = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let mut src = Connection::open_with_flags(servida, flags_s)
+    let src = Connection::open_with_flags(servida, flags_s)
         .map_err(|e| format!("abrir servida RO {}: {e}", servida.display()))?;
     src.busy_timeout(std::time::Duration::from_millis(2000))
         .map_err(|e| format!("busy_timeout servida: {e}"))?;
@@ -923,7 +923,7 @@ pub fn estado_mitm() -> Result<Value, String> {
     // Última captura (la tabla `replicacion` de la DB propia).
     let ultima = abrir_db_propia()
         .ok()
-        .and_then(|mut c| {
+        .and_then(|c| {
             c.query_row(
                 "SELECT fuente, ultima, filas, huerfanos FROM replicacion LIMIT 1",
                 [],

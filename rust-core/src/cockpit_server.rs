@@ -1227,6 +1227,33 @@ fn handle_client(mut stream: TcpStream) {
                 }
                 return;
             }
+            // El shim tambien sirve el CATALOGO por GET:
+            // `GET /v1beta/models` es lo que pide el language server para
+            // saber que modelos hay (MEDIDO 2026-11-22).  Sin este brazo el
+            // GET se caia en el `_ => {}` y no devolvia NADA.
+            p if crate::agyshim::es_ruta_proxy(p) => {
+                let peticion = crate::agyshim::Peticion {
+                    metodo: method.to_string(),
+                    ruta: p.to_string(),
+                    cabeceras: Vec::new(),
+                    cuerpo: String::new(),
+                };
+                match crate::agyshim::proxy(&peticion) {
+                    Ok(r) => send_http_response(
+                        &mut stream,
+                        r.status,
+                        &r.content_type,
+                        r.cuerpo.as_bytes(),
+                    ),
+                    Err(e) => send_http_response(
+                        &mut stream,
+                        404,
+                        "application/json",
+                        format!("{{\"error\":\"{e}\"}}").as_bytes(),
+                    ),
+                }
+                return;
+            }
             _ => {}
         }
         // v15 (W1): API v2 (`webui.rs`).  Va DESPUÉS de los gates de API key y

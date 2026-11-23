@@ -675,7 +675,7 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
             salida = v.to_string();
         }
         Dialecto::OpenAi => {
-            let mut v = crate::llm_gateway::chat_completions(&cuerpo)
+            let mut v = crate::llm_gateway::chat_completions_con_traza(&cuerpo)
                 .map_err(|e| format!("gateway OpenAI: {}", e.message))?;
             requested = cuerpo
                 .get("model")
@@ -686,7 +686,6 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
             if requested.is_empty() {
                 requested = MODELO_CANONICO.to_string();
             }
-            crate::llm_gateway::anotar_traza(&mut v, &requested);
             real = v
                 .pointer("/megadaemon/provider_id")
                 .and_then(|x| x.as_str())
