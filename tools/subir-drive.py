@@ -29,6 +29,9 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 CHUNK = 8 * 1024 * 1024
 
 FILES = [
+    # Paquete regenerado con el árbol de Ghidra ACTUAL (58.264 funciones con
+    # pseudocodigo, 161.682 en total, 1.345 paquetes, stubs Go compilables).
+    ("/workspace/entrega/GO-REGENERADO.zip", "GO-REGENERADO.zip", "application/zip"),
     ("/workspace/entrega/GO-CODIGO-LEGIBLE.zip", "GO-CODIGO-LEGIBLE.zip", "application/zip"),
     ("/workspace/entrega/LIBRO-FUSIONADO.md", "LIBRO-FUSIONADO.md", "text/markdown"),
     ("/workspace/entrega/LIBRO-COMPLETO.md", "LIBRO-COMPLETO.md", "text/markdown"),

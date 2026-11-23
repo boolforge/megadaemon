@@ -598,6 +598,29 @@ def leer_tsv(ruta: Path) -> Iterator[Funcion]:
                 yield fn
 
 
+def rutas_indice(pseudo: Path) -> List[Path]:
+    """Todos los ``_index.tsv`` del árbol de pseudocodigo.
+
+    MEDIDO (2026-11-23): el árbol de Ghidra está REPARTIDO en subdirectorios
+    (``todo/s0``, ``todo/s1``, ``todo/s2``), cada uno con su ``_index.tsv``.
+    La herramienta sólo miraba en la raíz ⇒ «indice Ghidra: 0 filas» ⇒
+    ninguna función heredaba su origen Go.
+    """
+    out: List[Path] = []
+    raiz = pseudo / "_index.tsv"
+    if raiz.is_file():
+        out.append(raiz)
+    try:
+        subs = sorted(p for p in pseudo.iterdir() if p.is_dir())
+    except OSError:
+        subs = []
+    for d in subs:
+        f = d / "_index.tsv"
+        if f.is_file():
+            out.append(f)
+    return out
+
+
 def leer_indice_ghidra(ruta: Path) -> Iterator[Tuple[str, str, str, str, str, str, str]]:
     """Lee el ``_index.tsv`` de Ghidra: addr, name, file, line, bytes, ok, err."""
     with open(ruta, encoding="utf-8", errors="replace") as f:
@@ -767,8 +790,9 @@ def run(o: Opciones) -> int:
 def _run(o: Opciones, tmpdir: Path, t0: float) -> int:
     # ---------------- 1. indice del arbol de pseudocodigo -----------------
     mapa_pseudo = indexar_pseudocodigo(o.pseudo)
-    idx_ghidra = o.pseudo / "_index.tsv"
-    tiene_indice = idx_ghidra.is_file()
+    idx_ghidras = rutas_indice(o.pseudo)
+    idx_ghidra = idx_ghidras[0] if idx_ghidras else (o.pseudo / "_index.tsv")
+    tiene_indice = bool(idx_ghidras)
     log(
         "pseudocodigo: %d ficheros mapeados a su fichero Go (indice Ghidra: %s)"
         % (len(mapa_pseudo), "si" if tiene_indice else "NO -> se usara el comentario del bloque")
@@ -805,18 +829,19 @@ def _run(o: Opciones, tmpdir: Path, t0: float) -> int:
     n_idx = 0
     n_idx_sin_go = 0
     if tiene_indice:
-        for addr, name, file_, line_, bytes_, ok, err in leer_indice_ghidra(idx_ghidra):
-            if o.filtro_paquete and o.filtro_paquete not in os.path.dirname(file_):
-                continue
-            if not file_:
-                n_idx_sin_go += 1
-                continue
-            try:
-                linea_num = int(line_)
-            except ValueError:
-                linea_num = 0
-            ord_idx.add((file_, "%012d" % linea_num, name, addr, bytes_, ok, err))
-            n_idx += 1
+        for una in idx_ghidras:
+            for addr, name, file_, line_, bytes_, ok, err in leer_indice_ghidra(una):
+                if o.filtro_paquete and o.filtro_paquete not in os.path.dirname(file_):
+                    continue
+                if not file_:
+                    n_idx_sin_go += 1
+                    continue
+                try:
+                    linea_num = int(line_)
+                except ValueError:
+                    linea_num = 0
+                ord_idx.add((file_, "%012d" % linea_num, name, addr, bytes_, ok, err))
+                n_idx += 1
     log("indice Ghidra: %d filas (%d sin origen Go, no regeneradas)" % (n_idx, n_idx_sin_go))
 
     # ---------------- 4. unir y ordenar por (fichero, linea, addr) -------
@@ -1065,8 +1090,11 @@ def _run(o: Opciones, tmpdir: Path, t0: float) -> int:
         f.write("## Entradas\n\n")
         f.write("| entrada | ruta | sha256 |\n|---|---|---|\n")
         f.write("| export del pclntab | `%s` | `%s` |\n" % (o.tsv, sha256_de(o.tsv)))
-        if idx_ghidra.is_file():
-            f.write("| indice de Ghidra | `%s` | `%s` |\n" % (idx_ghidra, sha256_de(idx_ghidra)))
+        for una in idx_ghidras:
+            if una.is_file():
+                f.write(
+                    "| indice de Ghidra | `%s` | `%s` |\n" % (una, sha256_de(una))
+                )
         f.write(
             "| pseudocodigo | `%s` | %d ficheros mapeados |\n" % (o.pseudo, len(mapa_pseudo))
         )
