@@ -1253,7 +1253,15 @@ pub fn open(vault: &str, passphrase: &str, dest: &str) -> Result<Vec<String>, St
             fs::create_dir_all(parent)
                 .map_err(|e| format!("creación de {}: {}", parent.display(), e))?;
         }
-        fs::write(&out_path, data).map_err(|e| format!("escritura de {}: {}", out_path.display(), e))?;
+        // Escritura ATÓMICA (MEDIDO 2026-11-23, auditoría de calidad):
+        // `fs::write` TRUNCA el destino antes de escribir ⇒ al abrir una
+        // bóveda encima de una extracción anterior, un fallo a mitad
+        // dejaba un fichero PARCIAL y el bueno ya estaba destruido.
+        // Con tmp + rename, el destino queda completo o no se toca.
+        // El fichero nace con 0600: es material secreto (la bóveda guarda
+        // credenciales, tokens y claves).
+        crate::util_fs::write_atomic(&out_path, data, 0o600)
+            .map_err(|e| format!("escritura de {}: {}", out_path.display(), e))?;
         written.push(rel.clone());
     }
     Ok(written)
