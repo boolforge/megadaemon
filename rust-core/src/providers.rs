@@ -879,24 +879,45 @@ fn ts_now() -> u64 {
         .unwrap_or(0)
 }
 
-pub fn save_vault(vault: &ProviderVault) -> Result<(), String> {
-    let path = providers_path();
-    if let Some(parent) = Path::new(&path).parent() {
-        let _ = fs::create_dir_all(parent);
+/// Escribe la bóveda de proveedores en `path` (CREANDO su directorio).
+///
+/// MEDIDO 2026-11-23 (CI rojo, `audit_scout_seere::s14`): el DIRECTORIO de la
+/// bóveda NO se creaba antes de escribir el fichero.  `save_vault` lo hacía
+/// "a lo best-effort" (`let _ = fs::create_dir_all(parent)`) y se TRAGABA el
+/// error: el `fs::write` siguiente fallaba con "No such file or directory",
+/// un mensaje que no dice NADA de la causa real (el directorio que falta).
+///
+/// Aquí el directorio se crea ANTES de escribir y, si no se puede crear, el
+/// error lo dice explícitamente (qué directorio y por qué).  La escritura
+/// sigue siendo ATÓMICA (tmp + rename): un corte de luz (o un OOM kill) en
+/// mitad dejaba un `providers.json` truncado ⇒ `load_vault` lo declaraba
+/// corrupto y el daemon se quedaba SIN las API keys del usuario (y el
+/// siguiente `save_vault` las pisaba).
+pub fn save_vault_at(path: &str, vault: &ProviderVault) -> Result<(), String> {
+    if let Some(parent) = Path::new(path).parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "no se pudo crear el directorio de la bóveda {}: {}",
+                    parent.display(),
+                    e
+                )
+            })?;
+        }
     }
     let text = serde_json::to_string_pretty(vault).map_err(|e| e.to_string())?;
-    // v16 (DEFECTO-07): escritura ATÓMICA (tmp + rename).  Antes
-    // `fs::write` truncaba el fichero y escribía encima: un corte de luz
-    // (o un OOM kill) en mitad dejaba un `providers.json` truncado ⇒
-    // `load_vault` lo declaraba corrupto y el daemon se quedaba SIN las
-    // API keys del usuario (y el siguiente `save_vault` las pisaba).
     let tmp = format!("{}.tmp-{}", path, std::process::id());
     fs::write(&tmp, text.as_bytes()).map_err(|e| format!("no se pudo escribir {}: {}", tmp, e))?;
-    if let Err(e) = fs::rename(&tmp, &path) {
+    if let Err(e) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
         return Err(format!("no se pudo renombrar {} -> {}: {}", tmp, path, e));
     }
     Ok(())
+}
+
+/// Guarda la bóveda en la ruta REAL de la instancia (`providers_path()`).
+pub fn save_vault(vault: &ProviderVault) -> Result<(), String> {
+    save_vault_at(&providers_path(), vault)
 }
 
 /// Valida el endpoint de un proveedor.
