@@ -234,11 +234,17 @@ Credenciales y subida: `tools/drive_push.py --file RUTA --folder
 
 | fichero | id en Drive |
 |---|---|
-| `codigo-go-regenerado-RESUMEN.md` | `1L_V9z49BbRBbJIoG32G2fHEvpKdzpkPZ` |
+| `codigo-go-regenerado-RESUMEN.md` (8.071 B) | `1L_V9z49BbRBbJIoG32G2fHEvpKdzpkPZ` |
 | `codigo-go-regenerado-NO-DECOMPIADAS.tsv` (20.022.216 B) | `1--HXaAAeyvpXvnqpZOcq1r_1QdW_W1Kn` |
+| `codigo-go-regenerado.tar.gz` (44.091.932 B) | `1jSKIlwWbyq69c8oph65A-T7Lic4wJeUh` |
 
-El árbol completo (652 MB) se publica como `codigo-go-regenerado.tar.gz`
-(el `.c` + el módulo Go de stubs + el `RESUMEN.md`).
+El `.tar.gz` contiene el árbol entero (16.337 entradas: los 5.383 `.c`, los
+5.383 stubs `.go`, los 1.345 `README.md` de paquete, el `RESUMEN.md` y el
+`NO-DECOMPIADAS.tsv`); verificado con `tar tzf`.
+
+> La carpeta es **privada**: con la API key pública no se ve (da 0
+> ficheros); con la credencial `authorized_user` sí. Verificado así:
+> los 3 archivos están en `megadaemon-backup`.
 
 ---
 
