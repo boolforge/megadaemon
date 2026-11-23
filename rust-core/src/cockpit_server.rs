@@ -1536,10 +1536,43 @@ fn handle_client(mut stream: TcpStream) {
                     Err(e) => send_json(&mut stream, &json!({ "ok": false, "accion": accion, "error": e })),
                 }
             }
+            // ── DESCUBRIMIENTO DE MODELOS (gateway de Antigravity) ──
+            //
+            // MEDIDO (2026-11-23): el language server de Antigravity resuelve
+            // su catálogo con 4 tiers; el Tier 3 es "Gateway discovery at %s"
+            // y usa las variables `AGY_LLM_GATEWAY_*`.  Si el gateway es
+            // ESTE servidor, el selector de la IDE puede pintar los modelos
+            // del vault de MegaDaemon (MiniMax incluido) en vez de los de
+            // Google.  NO VERIFICADO en el móvil (aún sin daemon).
+            "/v1/models" => {
+                send_json(&mut stream, &crate::antigravity_gateway::models_openai())
+            }
+            "/v1internal:listModels" | "/v1beta/models" => {
+                send_json(&mut stream, &crate::antigravity_gateway::models_gemini())
+            }
             "/v1/chat/completions" | "/chat/completions" => {
                 let body: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);
+                // Instrumentación: cada llamada que pasa por el gateway queda
+                // anotada (modelo, longitud del prompt, proveedor real).
                 match crate::llm_gateway::chat_completions(&body) {
-                    Ok(v) => send_json(&mut stream, &v),
+                    Ok(v) => {
+                        crate::antigravity_gateway::instrumentar(
+                            "chat_completions",
+                            body.get("model").and_then(|m| m.as_str()).unwrap_or(""),
+                            &crate::llm_gateway::parse_messages(
+                                body.get("messages").unwrap_or(&Value::Null),
+                            )
+                            .map(|(p, _)| p)
+                            .unwrap_or_default(),
+                            json!({
+                                "provider": v.pointer("/megadaemon/provider_id").and_then(|x| x.as_str()).unwrap_or(""),
+                                "latency_ms": v.pointer("/megadaemon/latency_ms").cloned().unwrap_or(Value::Null),
+                                "tokens": v.pointer("/megadaemon/tokens_used").cloned().unwrap_or(Value::Null),
+                                "trace": v.pointer("/megadaemon/provider_trace").cloned().unwrap_or(Value::Null),
+                            }),
+                        );
+                        send_json(&mut stream, &v)
+                    }
                     Err(e) => {
                         let code = if e.status >= 400 { e.status } else { 400 };
                         send_json(
