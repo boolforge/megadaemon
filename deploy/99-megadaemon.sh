@@ -421,6 +421,47 @@ tunnel_ha_connections() {
 # ensure_tunnel <puerto_origen> <log> <fichero_url> <etiqueta> <dedup>
 tunnel_strikes=0
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Túnel MCP LEGACY (puerto 8765): DESACTIVADO por defecto.
+#
+# MEDIDO (2026-11-23, S21): el MCP ya lo sirve el daemon en el MISMO puerto
+# que el cockpit ($PORT).  El puerto 8765 no tiene NADIE escuchando => ese
+# túnel no puede funcionar nunca, y sin embargo el supervisor lo relanzaba
+# cada ~30 s: el log se llenaba de "la URL nueva NO responde" y el móvil
+# estaba en clase "thermal" (53-62 C) por el consumo de ese bucle.
+#
+# Por defecto se APAGA (y se mata el que hubiera), y se puede volver a
+# encender con MD_MCP_LEGACY_TUNNEL=1 (por si algún cliente antiguo sigue
+# apuntando a 8765).
+# ─────────────────────────────────────────────────────────────────────────────
+mcp_legacy_enabled() {
+    [ "${MD_MCP_LEGACY_TUNNEL:-0}" = "1" ]
+}
+
+mcp_legacy_stop() {
+    pids=$(pgrep -f "cloudflared tunnel .*127.0.0.1:8765" 2>/dev/null)
+    for p in $pids; do
+        kill "$p" 2>/dev/null && log "tunel mcp-legacy: instance obsoleta PID $p eliminada (8765 ya no lo sirve el daemon)"
+    done
+    # La URL que se dejaba era la de la API de cloudflared
+    # (https://api.trycloudflare.com): no es un túnel y confundía a la flota.
+    case "$(cat "$MCP_TUNNEL_URL_FILE" 2>/dev/null)" in
+        https://api.*|https://developers.*|"")
+            : > "$MCP_TUNNEL_URL_FILE" 2>/dev/null
+            log "tunel mcp-legacy: URL obsoleta limpiada de $MCP_TUNNEL_URL_FILE"
+            ;;
+    esac
+}
+
+ensure_mcp_legacy_tunnel() {
+    if mcp_legacy_enabled; then
+        ensure_tunnel 8765 "$MCP_TUNNEL_LOG" "$MCP_TUNNEL_URL_FILE" "mcp-legacy" 0 \
+            /data/data/com.termux/files/home/android-mcp/cloudflared.log
+    else
+        mcp_legacy_stop
+    fi
+}
+
 ensure_tunnel() {
     t_port=$1; t_log=$2; t_urlfile=$3; t_tag=$4; t_dedup=${5:-1}; t_fallback=${6:-}
     [ -x "$CLOUDFLARED" ] || return 0
@@ -1164,8 +1205,7 @@ write_state "ARRANCANDO: supervisor activo, puerto $PORT (prefijo $PREFIX)"
 # del MCP legacy) no dependen de que el cockpit esté listo, y así el túnel
 # ya está cuando el daemon tarda unos segundos.
 ensure_tunnel "$PORT" "$WEB_TUNNEL_LOG" "$WEB_TUNNEL_URL_FILE" "web" 1
-ensure_tunnel 8765 "$MCP_TUNNEL_LOG" "$MCP_TUNNEL_URL_FILE" "mcp-legacy" 0 \
-    /data/data/com.termux/files/home/android-mcp/cloudflared.log
+ensure_mcp_legacy_tunnel
 while true; do
     rotate
     prune_caches
@@ -1199,8 +1239,7 @@ while true; do
         ensure_web_bridge
         sync_antigravity_bridge
         ensure_tunnel "$PORT" "$WEB_TUNNEL_LOG" "$WEB_TUNNEL_URL_FILE" "web" 1
-        ensure_tunnel 8765 "$MCP_TUNNEL_LOG" "$MCP_TUNNEL_URL_FILE" "mcp-legacy" 0 \
-    /data/data/com.termux/files/home/android-mcp/cloudflared.log
+        ensure_mcp_legacy_tunnel
         write_url
         try_update
         # Vigilancia cada 5 s en vez de cada 60 s: si el daemon o el puente

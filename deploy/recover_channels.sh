@@ -64,10 +64,20 @@ if [ -z "$U" ] && [ -x "$CF" ]; then
   : > "$LOG/tunnel.url"
   setsid "$CF" tunnel --no-autoupdate --url http://127.0.0.1:9090 >"$LOG/tunnel.log" 2>&1 &
 fi
-if ! pgrep -f "cloudflared.*8765" >/dev/null 2>&1 && [ -x "$CF" ]; then
-  echo "   MCP legacy 8765 caído → relanzando (es OTRO cloudflared)"
-  : > "$LOG/tunnel8765.url"
-  setsid "$CF" tunnel --no-autoupdate --url http://127.0.0.1:8765 >"$LOG/tunnel8765.log" 2>&1 &
+# MEDIDO (2026-11-23): el MCP ya lo sirve el daemon en el MISMO puerto que el
+# cockpit (9090).  El 8765 no tiene NADIE escuchando => ese túnel no puede
+# funcionar y solo consume RAM (y calor) en el móvil.  Por defecto NO se
+# relanza; se puede forzar con MD_MCP_LEGACY_TUNNEL=1.
+if [ "${MD_MCP_LEGACY_TUNNEL:-0}" = "1" ]; then
+  if ! pgrep -f "cloudflared.*8765" >/dev/null 2>&1 && [ -x "$CF" ]; then
+    echo "   MCP legacy 8765 → relanzando (es OTRO cloudflared)"
+    : > "$LOG/tunnel8765.url"
+    setsid "$CF" tunnel --no-autoupdate --url http://127.0.0.1:8765 >"$LOG/tunnel8765.log" 2>&1 &
+  fi
+else
+  pids=$(pgrep -f "cloudflared.*8765" 2>/dev/null)
+  for p in $pids; do kill "$p" 2>/dev/null; done
+  [ -n "$pids" ] && echo "   MCP legacy 8765 desactivado (nadie lo sirve); instances terminadas"
 fi
 
 # --- 4) tunnel.url desde el log, en bucle cada 15 s -------------------------
@@ -85,10 +95,12 @@ while [ $i -lt 8 ]; do
 done
 [ -n "$U" ] || echo "   aún sin URL: revisa $LOG/tunnel.log"
 
-U2=$(grep -o "$URL_RE" "$LOG/tunnel8765.log" 2>/dev/null | head -1)
-if [ -n "$U2" ]; then
-  printf '%s\n' "$U2" > "$LOG/tunnel8765.url"
-  echo "   tunnel8765.url = $U2"
+if [ "${MD_MCP_LEGACY_TUNNEL:-0}" = "1" ]; then
+  U2=$(grep -o "$URL_RE" "$LOG/tunnel8765.log" 2>/dev/null | head -1)
+  if [ -n "$U2" ]; then
+    printf '%s\n' "$U2" > "$LOG/tunnel8765.url"
+    echo "   tunnel8765.url = $U2"
+  fi
 fi
 
 # --- 5) estado ---------------------------------------------------------------
