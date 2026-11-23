@@ -39,6 +39,8 @@
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::sync::OnceLock;
 
 /// Endpoint de Cloud Code presente en el LS de Antigravity (42 bytes).
 pub const CLOUCODE_URL: &str = "https://daily-cloudcode-pa.googleapis.com";
@@ -61,13 +63,114 @@ fn sha256_de(p: &Path) -> Option<String> {
     Some(sha256_hex(&datos))
 }
 
+/// Candidatas del binario del language server.
+///
+/// MEDIDO (2026-11-23): la ruta estaba HARDCODEADA y Antigravity, al
+/// actualizarse, movió su runtime: el `.so` ya no está en
+/// `runtime/bin/liblanguage_server.so` sino en
+/// `standalone_runtime/bin/language_server`, y en `agy_standalone/bin` hay
+/// un **symlink roto** al path viejo.  Con la ruta fija, la
+/// instrumentación fallaba con «No such file or directory» y el usuario
+/// veía que «no pasaba nada».
+const CANDIDATAS_LS: &[&str] = &[
+    "runtime/bin/liblanguage_server.so",
+    "standalone_runtime/bin/liblanguage_server.so",
+    "standalone_runtime/bin/language_server",
+    "agy_standalone/bin/liblanguage_server.so",
+    "agy_standalone/bin/language_server",
+];
+
 /// Ruta del binario del language server.
+///
+/// Se prueban las candidatas conocidas y, si ninguna existe, se **descubre**
+/// en el árbol de la app (con presupuesto acotado y cacheado: el árbol de
+/// la app es enorme).
 pub fn ruta_ls() -> PathBuf {
-    PathBuf::from(RAIZ_APP).join("runtime/bin/liblanguage_server.so")
+    for rel in CANDIDATAS_LS {
+        let p = PathBuf::from(RAIZ_APP).join(rel);
+        if p.exists() {
+            return p;
+        }
+    }
+    descubrir_ls().unwrap_or_else(|| PathBuf::from(RAIZ_APP).join(CANDIDATAS_LS[0]))
+}
+
+/// Cache del descubrimiento (la búsqueda en el árbol de la app no es gratis).
+static LS_DESCUBIERTO: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Busca el language server en el árbol de la app (profundidad acotada).
+fn descubrir_ls() -> Option<PathBuf> {
+    if let Some(v) = LS_DESCUBIERTO.get() {
+        return v.clone();
+    }
+    let mut mejor: Option<(u64, PathBuf)> = None;
+    let base = PathBuf::from(RAIZ_APP);
+    let nombres = ["liblanguage_server.so", "language_server"];
+    let mut visitar = |dir: &Path, prof: usize| {
+        if prof > 3 {
+            return;
+        }
+        let Ok(entradas) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entradas.flatten() {
+            let p = e.path();
+            let nombre = e.file_name();
+            let nombre = nombre.to_string_lossy();
+            // Se ignoran los directorios gigantes que no tienen nada que ver.
+            if nombre == "google-cloud-sdk"
+                || nombre == "gpui-mobile"
+                || nombre == "node_modules"
+                || nombre.starts_with('.')
+            {
+                continue;
+            }
+            if p.is_dir() {
+                visitar(&p, prof + 1);
+                continue;
+            }
+            if !nombres.contains(&nombre.as_ref()) {
+                continue;
+            }
+            let tam = e.metadata().map(|m| m.len()).unwrap_or(0);
+            // El language server real pesa ~180 MB: un symlink o un stub no
+            // sirve.  A igualdad de tamaño, gana el más reciente.
+            let fecha = e
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let clave = tam.saturating_mul(1000).saturating_add(fecha);
+            if tam > 50 * 1024 * 1024
+                && mejor.as_ref().map(|(c, _)| clave > *c).unwrap_or(true)
+            {
+                mejor = Some((clave, p.clone()));
+            }
+        }
+    };
+    visitar(&base, 0);
+    let r = mejor.map(|(_, p)| p);
+    let _ = LS_DESCUBIERTO.set(r.clone());
+    r
 }
 
 /// Ruta del manifiesto del runtime (sha256 por fichero).
+///
+/// También con candidatas: el manifiesto va junto al runtime y este se
+/// movió al actualizarse la app (medido el 2026-11-23).
 pub fn ruta_manifest() -> PathBuf {
+    for rel in [
+        "runtime/manifest.json",
+        "standalone_runtime/manifest.json",
+        "agy_standalone/manifest.json",
+    ] {
+        let p = PathBuf::from(RAIZ_APP).join(rel);
+        if p.exists() {
+            return p;
+        }
+    }
     PathBuf::from(RAIZ_APP).join("runtime/manifest.json")
 }
 
@@ -281,37 +384,77 @@ pub fn actualizar_manifesto_publico(sha: &str) -> bool {
     actualizar_manifesto(sha)
 }
 
-/// Actualiza el sha256 del LS en `runtime/manifest.json`.
+/// Actualiza el sha256 del LS en el manifiesto del runtime.
+///
+/// MEDIDO (2026-11-23): el manifiesto declara `bin/liblanguage_server.so`,
+/// pero tras actualizarse la app el fichero se llama `language_server` y
+/// vive en otro directorio.  Si el manifiesto no cuadra, la app **restaura
+/// su runtime** y la instrumentación se pierde (y el ciclo vuelve a
+/// aplicarla: un bucle).
+///
+/// Por eso se actualizan TODAS las claves que hablen de «language_server»,
+/// además de la del nombre real del fichero.
 fn actualizar_manifesto(sha: &str) -> bool {
-    let ruta = ruta_manifest();
-    let texto = match std::fs::read_to_string(&ruta) {
-        Ok(t) => t,
-        Err(_) => return false,
-    };
-    let mut v: Value = match serde_json::from_str(&texto) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-    let ok = v
-        .get_mut("files")
-        .and_then(|f| f.as_object_mut())
-        .map(|f| {
-            f.insert(
-                "bin/liblanguage_server.so".to_string(),
-                Value::String(sha.to_string()),
-            );
-            true
-        })
-        .unwrap_or(false);
-    if ok {
-        match serde_json::to_string_pretty(&v) {
-            Ok(s) => {
+    let nombre_real = ruta_ls()
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "liblanguage_server.so".to_string());
+    let mut alguno = false;
+    for ruta in manifiestos() {
+        let texto = match std::fs::read_to_string(&ruta) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let mut v: Value = match serde_json::from_str(&texto) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let ok = v
+            .get_mut("files")
+            .and_then(|f| f.as_object_mut())
+            .map(|f| {
+                // 1) la clave del nombre real del fichero
+                f.insert(format!("bin/{nombre_real}"), Value::String(sha.to_string()));
+                // 2) cualquier clave que ya hable del language server
+                let claves: Vec<String> = f
+                    .keys()
+                    .filter(|k| k.contains("language_server"))
+                    .cloned()
+                    .collect();
+                for k in claves {
+                    f.insert(k, Value::String(sha.to_string()));
+                }
+                true
+            })
+            .unwrap_or(false);
+        if ok {
+            if let Ok(s) = serde_json::to_string_pretty(&v) {
                 let _ = std::fs::write(&ruta, s);
+                alguno = true;
             }
-            Err(_) => return false,
         }
     }
-    ok
+    alguno
+}
+
+/// Todos los manifiestos de runtime que existen (el de la app actual puede
+/// estar en más de un sitio tras actualizarse).
+fn manifiestos() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for rel in [
+        "runtime/manifest.json",
+        "standalone_runtime/manifest.json",
+        "agy_standalone/manifest.json",
+    ] {
+        let p = PathBuf::from(RAIZ_APP).join(rel);
+        if p.exists() {
+            out.push(p);
+        }
+    }
+    if out.is_empty() {
+        out.push(ruta_manifest());
+    }
+    out
 }
 
 /// Plan del parche del gate de la GUI (no escribe nada).
