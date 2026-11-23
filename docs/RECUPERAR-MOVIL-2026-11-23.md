@@ -107,6 +107,37 @@ siguiente paso es la Vía A completa (el binario puede estar roto: un
 auto-update pudo matarlo sin dejar replacement ⇒ `repo_updates.rs:1675`
 hace `killall megadaemon-core`).
 
+#### Por qué murió (medido en el repo, no es misterio)
+
+`deploy/99-megadaemon.sh` tiene **dos autofuniles** contra su propio daemon:
+
+| # | Dónde | Qué hace |
+|---|---|---|
+| a | `99-megadaemon.sh:892` + `:699-701` | Tope de RSS **fijo de 200 MB**: si el daemon lo pasa ⇒ `pkill` + reinicio ("lo reinicio para no empujar al OOM killer").  Con el IDE de Google vivo (load 19,85, 3,9 GB libres) el daemon roza ese tope ⇒ **se mataba a sí mismo** |
+| b | `99-megadaemon.sh:686-692` | 3 sondas de `/health` fallidas seguidas ⇒ `pkill` + reinicio ("puede ser un mutex envenenado por un panic") |
+
+Y `deploy/97-megadaemon-keeper.sh` (creado hoy) documenta el desenlace exacto
+de este mismo incidente: *"1644 reinicios del daemon por un falso positivo
+del watchdog, y después **el supervisor murió sin dejar NADIE que lo
+resucitara** ⇒ móvil inalcanzable hasta un reinicio manual"*.  El móvil no
+ha reiniciado desde que el guardián existe ⇒ **nadie lo va a relanzar solo**.
+
+**Arreglo de raíz (ya en mi rama)**: el tope de RSS pasa a ser **adaptativo**
+(1/8 de la RAM libre, acotado a [200 MB, 512 MB]) en vez de un número fijo
+⇒ el supervisor deja de matar al daemon por RAM.
+
+**Y el kit además**:
+1. lee el log del supervisor (la línea literal
+   `el daemon usa <rss>kB (tope ...kB): lo reinicio…` dice cuál de los dos
+   autofuniles fue) **antes** de tocar nada;
+2. sube `MEGADAEMON_DAEMON_RSS_MAX_KB` en
+   `/data/local/tmp/megadaemon/megadaemon.env` (que el supervisor **carga**
+   al arrancar ⇒ sin `sed`, reversible y sobrevive a reinicios);
+3. **instala el guardián** `97-megadaemon-keeper.sh` en
+   `/data/adb/service.d/` ⇒ si el supervisor vuelve a morir, el guardián lo
+   resucita;
+4. relanza el supervisor **sin tocar `cloudflared`** ⇒ el hostname no cambia.
+
 ### VÍA B — Desde el móvil (Termux), sin PC
 
 ```sh

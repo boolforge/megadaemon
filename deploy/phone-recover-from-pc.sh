@@ -125,13 +125,82 @@ fi
 #     del túnel NO cambia ⇒ la URL de la flota sigue valiendo;
 #   * NO reinicia el móvil.
 if [ "$MODO" = solo_daemon ]; then
-  say "MODO RÁPIDO: relanzar sólo el daemon (el túnel NO se toca)"
-  BIN_INFO="$("${ADB[@]}" shell "ls -l /data/local/tmp/megadaemon/megadaemon-core 2>/dev/null; head -c 4 /data/local/tmp/megadaemon/megadaemon-core 2>/dev/null | od -An -tx1" 2>/dev/null | tr -d '\r')"
-  say "binario en el móvil:"
-  printf '%s\n' "$BIN_INFO" | sed 's/^/    /'
+  say "MODO RÁPIDO: relanzar SÓLO el daemon (el túnel NO se toca)"
+  say "  (el hostname sigue siendo el mismo: nada de lo que hagamos cambia la URL de la flota)"
+
+  # --- 1) DIAGNÓSTICO: POR QUÉ murió (el log lo dice literal) -------------
+  say "leyendo el log del supervisor y el estado del móvil..."
+  DIAG="$("${ADB[@]}" shell su -mm -c "sh -s" <<'EOS' 2>/dev/null | tr -d '\r'
+P=/data/local/tmp/megadaemon
+echo "== supervisor vivo: $(pgrep -f 99-megadaemon >/dev/null 2>&1 && echo SI || echo NO)"
+echo "== daemon vivo:     $(pgrep -f megadaemon-core >/dev/null 2>&1 && echo SI || echo NO)"
+echo "== cloudflared:     $(pgrep -f cloudflared >/dev/null 2>&1 && echo SI || echo NO)"
+echo "== RAM libre (kB):  $(awk '/MemAvailable/{print $2}' /proc/meminfo 2>/dev/null)"
+PID=$(pgrep -f "megadaemon-core cockpit" 2>/dev/null | head -1)
+[ -n "$PID" ] && echo "== RSS daemon (kB): $(awk '/^VmRSS:/{print $2}' /proc/$PID/status 2>/dev/null)"
+echo "== LOG DEL SUPERVISOR (ultimas lineas con pinta de-autofunil) =="
+for f in $P/supervisor.log $P/energy.log $P/daemon.log $P/megadaemon.log; do
+  [ -f "$f" ] || continue
+  grep -hE "lo reinicio|reinicio|OOM|no responde|mutext|panic" "$f" 2>/dev/null | tail -6
+done
+echo "== ENV FILE =="
+grep -E "RSS_MAX|MEGADAEMON_STATE_DIR|MEGADAEMON_LISTEN" $P/megadaemon.env 2>/dev/null
+EOS
+)"
+  printf '%s\n' "$DIAG" | sed 's/^/    /'
+
+  # --- 2) SUBIR EL TOPE DE RSS (adaptativo) --------------------------------
+  # MEDIDO (2026-11-23): `99-megadaemon.sh:892` usa
+  #   ENERGY_DAEMON_RSS_MAX_KB=${MEGADAEMON_DAEMON_RSS_MAX_KB:-204800}
+  # (200 MB) y mata al daemon si lo pasa (linea 699-701), y tambien si
+  # falla 3 sondas de /health seguidas (linea 686-692).  El supervisor
+  # CARGA $PREFIX/megadaemon.env (linea 30-31) => se sube el tope ahi, sin
+  # `sed` y de forma reversible.
+  MEM_FREE_KB="$(printf '%s\n' "$DIAG" | sed -n 's/.*RAM libre (kB):  *\([0-9]*\).*/\1/p' | head -1)"
+  CAP=""
+  if [ -n "$MEM_FREE_KB" ] && [ "$MEM_FREE_KB" -gt 0 ]; then
+    # 1/8 de la RAM libre, acotado a [204800, 512000] kB.
+    CAP=$(( MEM_FREE_KB / 8 ))
+    [ "$CAP" -lt 204800 ] && CAP=204800
+    [ "$CAP" -gt 512000 ] && CAP=512000
+  fi
+  [ -z "$CAP" ] && CAP=320000
+  say "subiendo el tope de RSS del daemon a ${CAP} kB (RAM libre medida: ${MEM_FREE_KB:-?} kB)"
+  "${ADB[@]}" shell su -mm -c "sh -s" >/dev/null 2>&1 <<EOS
+P=/data/local/tmp/megadaemon
+F=\$P/megadaemon.env
+mkdir -p \$P
+[ -f "\$F" ] || touch "\$F"
+if grep -q '^MEGADAEMON_DAEMON_RSS_MAX_KB=' "\$F" 2>/dev/null; then
+  sed -i 's|^MEGADAEMON_DAEMON_RSS_MAX_KB=.*|MEGADAEMON_DAEMON_RSS_MAX_KB=$CAP|' "\$F"
+else
+  echo "MEGADAEMON_DAEMON_RSS_MAX_KB=$CAP" >> "\$F"
+fi
+grep MEGADAEMON_DAEMON_RSS_MAX_KB "\$F"
+EOS
+
+  # --- 2-bis) INSTALAR EL GUARDIÁN DEL SUPERVISOR --------------------------
+  # MEDIDO (2026-11-23, el propio 97-megadaemon-keeper.sh): "1644 reinicios
+  # del daemon por un falso positivo del watchdog, y después el supervisor
+  # murió sin dejar NADIE que lo resucitara => móvil inalcanzable hasta un
+  # reinicio manual".  El guardián (service.d, hermano del supervisor)
+  # comprueba cada 60 s que el supervisor siga vivo y lo relanza.
+  # Sin él (el móvil no ha reiniciado desde que se creó), esto se repite.
+  KEEPER_SRC="$REPO/deploy/97-megadaemon-keeper.sh"
+  if [ -f "$KEEPER_SRC" ]; then
+    say "instalando el guardián del supervisor (97-megadaemon-keeper.sh)..."
+    "${ADB[@]}" push "$KEEPER_SRC" /data/adb/service.d/97-megadaemon-keeper.sh >/dev/null 2>&1 \
+      && "${ADB[@]}" shell "chmod 755 /data/adb/service.d/97-megadaemon-keeper.sh" >/dev/null 2>&1 \
+      && say "  guardián instalado" || warn "  no pude instalar el guardián (sigue siendo necesario relanzar a mano)"
+  else
+    warn "no encuentro $KEEPER_SRC: el guardián no se instala"
+  fi
+
+  # --- 3) RELANZAR EL SUPERVISOR (sin tocar cloudflared) -------------------
   say "relanzando el supervisor (99-megadaemon.sh) como root..."
-  "${ADB[@]}" shell "su -mm -c 'sh /data/adb/service.d/99-megadaemon.sh'" 2>&1 | tail -12
-  # Verificar por el TÚNEL (el mismo camino que usa la flota).
+  "${ADB[@]}" shell su -mm -c "sh /data/adb/service.d/99-megadaemon.sh" 2>&1 | tail -12
+
+  # --- 4) VERIFICAR por el TÚNEL (el mismo camino que usa la flota) -------
   TUNEL_ANTES="${MD_TUNEL_URL:-https://graphical-subscriber-sys-oil.trycloudflare.com}"
   say "esperando a que el daemon conteste por el túnel ($TUNEL_ANTES)..."
   OK=0
@@ -142,12 +211,13 @@ if [ "$MODO" = solo_daemon ]; then
     if [ "$C" = "200" ]; then OK=1; break; fi
   done
   if [ "$OK" = "1" ]; then
-    say "LISTO: el móvil vuelve a responder por el MISMO túnel (no hay que cambiar ninguna URL)."
+    say "LISTO: el móvil vuelve a contestar por el MISMO túnel (no cambia ninguna URL)."
     exit 0
   fi
   warn "el daemon no responde todavia por el túnel."
-  warn "siguiente paso: el binario puede estar roto (un auto-update lo mató y no dejó replacement)."
-  warn "  => ejecuta el modo COMPLETO:  sh deploy/phone-recover-from-pc.sh"
+  warn "siguiente paso: el binario puede estar roto (un auto-update hizo 'killall megadaemon-core'"
+  warn "  - repo_updates.rs:1675 - y no dejó replacement).  Pasa al modo COMPLETO:"
+  warn "    sh deploy/phone-recover-from-pc.sh"
   exit 2
 fi
 
