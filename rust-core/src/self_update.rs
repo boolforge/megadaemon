@@ -493,10 +493,25 @@ pub fn aplicar(ruta_bin: &Path) -> Result<Resultado, String> {
         return Err("el binario escrito no coincide con el descargado".to_string());
     }
 
+    // Instalación ATÓMICA: el destino NUNCA deja de existir.
+    //
+    // MEDIDO (2026-11-23, auditoría de calidad): antes se RENOMBRABA el
+    // binario actual a `.prev` y LUEGO se renombraba el `.new` al destino:
+    // entre esos dos `rename` hay una ventana en la que el binario **NO
+    // EXISTE**.  Si el proceso moría ahí (móvil sin batería, OOM) o si
+    // fallaba el segundo `rename`, el móvil se quedaba **SIN DAEMON**: el
+    // supervisor ve "no existe el binario" y no lo relanza (es el bug
+    // medido el 2026-07-20: el 502 por un binario ausente).
+    //
+    // Ahora: se COPIA el actual a `.prev` (para el rollback) y se renombra
+    // el `.new` encima del destino.  `rename(2)` sobre un fichero existente
+    // es atómico en Unix: el destino pasa de la versión vieja a la nueva
+    // sin dejar de existir ni un instante.
     let previo = ruta_bin.with_extension("prev");
     if ruta_bin.exists() {
         let _ = std::fs::remove_file(&previo);
-        std::fs::rename(ruta_bin, &previo).map_err(|e| format!("apartar el anterior: {e}"))?;
+        std::fs::copy(ruta_bin, &previo)
+            .map_err(|e| format!("copiar el anterior a {}: {e}", previo.display()))?;
     }
     std::fs::rename(&nuevo, ruta_bin).map_err(|e| format!("instalar: {e}"))?;
 
