@@ -215,6 +215,64 @@ pub fn plan_txt(objetivos: &[Objetivo], modulo: &str) -> String {
     out
 }
 
+/// Ruta donde el **payload de frida-gum** lee el plan.
+///
+/// MEDIDO (2026-11-23) en `crates/hooks-payload/src/plan.rs`:
+/// `RUTA_PLAN_POR_DEFECTO = "/data/local/tmp/megadaemon/hooks-plan.txt"`
+/// (o la variable de entorno `MEGADAEMON_HOOK_PLAN`).
+pub const RUTA_PLAN_PAYLOAD: &str = "/data/local/tmp/megadaemon/hooks-plan.txt";
+
+/// Escribe el plan **en el formato que lee el payload** (TXT tabulado) y
+/// también el JSON (para el humano) en el state dir.
+///
+/// El payload lo lee de `/data/local/tmp` (volátil a propósito: es un
+/// artefacto derivado, no estado), así que también se copia al state dir
+/// canónico (`<state>/agy/hooks-plan.json`) que no se pierde al reiniciar.
+///
+/// `base` = el bias de carga del `.so` en el proceso vivo (0 si aún no se ha
+/// medido: el payload puede calcularlo con los maps).
+pub fn escribir_plan_para_el_payload(base: u64) -> Result<Value, String> {
+    let ruta_ls = crate::antigravity_endpoint::ruta_ls();
+    let datos =
+        std::fs::read(&ruta_ls).map_err(|e| format!("{}: {e}", ruta_ls.display()))?;
+    let objetivos = resolver(&datos, base)?;
+    let txt = plan_txt(&objetivos, "liblanguage_server.so");
+
+    // 1) El que lee el payload.
+    let ruta_txt = PathBuf::from(RUTA_PLAN_PAYLOAD);
+    if let Some(dir) = ruta_txt.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    std::fs::write(&ruta_txt, txt.as_bytes())
+        .map_err(|e| format!("{}: {e}", ruta_txt.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&ruta_txt, std::fs::Permissions::from_mode(0o600));
+    }
+
+    // 2) El JSON en el state dir (persistente y legible).
+    let ruta_json = std::path::PathBuf::from(crate::cockpit_server::state_dir())
+        .join("agy/hooks-plan.json");
+    let plan_json = plan(&objetivos, base);
+    if let Some(dir) = ruta_json.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(
+        &ruta_json,
+        serde_json::to_string_pretty(&plan_json).unwrap_or_default().as_bytes(),
+    );
+
+    Ok(json!({
+        "ok": true,
+        "hooks": objetivos.len(),
+        "base": base,
+        "ruta_payload": ruta_txt.to_string_lossy(),
+        "ruta_json": ruta_json.to_string_lossy(),
+        "ids": objetivos.iter().map(|o| o.id().to_string()).collect::<Vec<_>>(),
+    }))
+}
+
 /// Ruta del plan en el móvil (la misma carpeta donde vive el payload).
 pub fn ruta_plan() -> PathBuf {
     PathBuf::from("/data/local/tmp/megadaemon/hooks-plan.json")

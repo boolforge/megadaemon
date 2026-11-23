@@ -82,6 +82,9 @@ pub fn por_defecto() -> Value {
             // eso se mata el LS (que la app relanza solo) para que cargue el
             // binario parcheado sin tumbar la UI.
             "relanzar_ls": true,
+            // El plan de hooks (direcciones del pclntab) que lee el payload
+            // de frida-gum: se reescribe cada vez que cambia el `.so`.
+            "plan_hooks": true,
             "ocultar": [],
             "reescribir": {}
         },
