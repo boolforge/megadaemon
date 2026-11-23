@@ -14,6 +14,7 @@
 | [`SEERE_V11.md`](SEERE_V11.md) | Harness SEERE: los 24 defectos de la v10, el diseño de la v11 (gramáticas tipadas, anti-eco, huella fuera del prompt) y los benchmarks E2E con modelos reales. |
 | [`CERTIFICADOS_Y_SEDES_ELECTRONICAS.md`](CERTIFICADOS_Y_SEDES_ELECTRONICAS.md) | **Certificados y sedes electrónicas**: SALUD Andalucía (historia clínica), Receta Electrónica Andalucía, Sede Electrónica de la Junta, Sede Judicial Electrónica, Seguridad Social y Cl@ve — qué se puede automatizar, qué **no** (prescripción, dispensación, firma) y con qué URL oficial está verificado cada cosa. |
 | [`CERT_SYNC_EN_NODOS.md`](CERT_SYNC_EN_NODOS.md) | **Sincronización de certificados entre nodos**: flujo inventario → cifrado (AEGIS-256 + Argon2id) → transferencia → despliegue → uso → revocación, con la política de `confirm`, la traza de auditoría y la frontera legal (certificados personales e intransferibles, datos de salud = categoría especial RGPD art. 9). |
+| [`INYECCION-HOOKS.md`](INYECCION-HOOKS.md) | **Inyección de hooks en Rust con frida-gum** (los bindings oficiales de Frida): el payload `crates/hooks-payload/` (cdylib aislada) que hookea SQLite, red y ficheros del proceso objetivo y escribe NDJSON; la tool MCP `hooks_payload` (estado/instalar/activar/leer), los requisitos de build de gum para Android (libclang + NDK + devkit precompilado) y el estado real (MEDIDO vs `NO VERIFICADO`). |
 
 ## Código de referencia y evidencia
 
