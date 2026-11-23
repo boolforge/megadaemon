@@ -701,7 +701,7 @@ mod tests {
         let otro = "917f4410403896a34f53f9a844c413cd66ae47180079c047c571b836db777e91";
         match decidir_por_sha(Some(sha_fichero), Some(otro)) {
             Estado::Actualizable { short } => {
-                assert!(short.contains("fa27914a"), "{short}");
+                assert!(short.contains("fa27914"), "{short}");
                 assert!(short.contains("917f441"), "{short}");
             }
             otro_estado => panic!("se esperaba Actualizable, came {otro_estado:?}"),

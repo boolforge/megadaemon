@@ -369,7 +369,14 @@ fn gemini_partes(parts: Option<&Value>) -> String {
             }
         }
     }
-    out.join("\n")
+    // Las partes de un MISMO content se CONCATENAN (no se unen con '\n'):
+    // la API de Gemini trata `parts` como trozos consecutivos del mismo
+    // texto, y cada trozo trae su propia puntuacion ('hola ' + 'mundo' =
+    // 'hola mundo').
+    // MEDIDO (2026-11-23): con '\n' el prompt salia 'hola \nmundo' y el
+    // texto del usuario llegaba partido al modelo (test rojo
+    // gemini_prompt_une_el_texto_y_separa_el_sistema).
+    out.concat()
 }
 
 /// Ejecuta una petición Gemini contra el router de MegaDaemon y devuelve

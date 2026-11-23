@@ -229,17 +229,23 @@ pub fn validate(
         if pat.is_empty() {
             continue;
         }
-        if pat.contains("..") || pat.starts_with('/') || pat.contains('\0') {
-            rejections.push(Rejection {
-                what: pat.to_string(),
-                reason: "patrón inseguro (ruta absoluta, `..` o NUL): no se aplica".to_string(),
-            });
-            continue;
-        }
+        // El CSC va PRIMERO: es la regla MAS ESPECIFICA y la que explica al
+        // usuario por qué su patrón se rechaza ("excluir el CSC" no es un
+        // patrón inseguro cualquiera: es algo prohibido siempre).
+        // MEDIDO (2026-11-23, test rojo el_csc_no_se_puede_excluir_ni_tocar):
+        // '/data/misc/keystore' empieza por '/' => se rechazaba antes como
+        // 'patrón inseguro' y el motivo no mencionaba el CSC.
         if is_forbidden_path(pat) {
             rejections.push(Rejection {
                 what: pat.to_string(),
                 reason: "el CSC está prohibido siempre: no se excluye, no se toca".to_string(),
+            });
+            continue;
+        }
+        if pat.contains("..") || pat.starts_with('/') || pat.contains('\0') {
+            rejections.push(Rejection {
+                what: pat.to_string(),
+                reason: "patrón inseguro (ruta absoluta, `..` o NUL): no se aplica".to_string(),
             });
             continue;
         }

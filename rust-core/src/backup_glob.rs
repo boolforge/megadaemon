@@ -17,12 +17,37 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
     }
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();
+    if p.is_empty() {
+        return true;
+    }
+    // Semantica HISTORICA: el patron se busca como SUBCADENA.  Sin
+    // comodines ya era 'text.contains' (el caso rapido de arriba); con
+    // comodines tiene que ser lo mismo, si no el motor se contradicia:
+    // 'abc' encuentra 'abc' dentro de 'xxabcxx' pero 'a*c' no.
+    // MEDIDO (2026-11-23, test rojo el_retroceso_del_asterisco_funciona):
+    // '*ab' no encontraba 'ab' dentro de 'xxabyy' porque la version con
+    // comodines exigia un match COMPLETO del texto entero.
+    for inicio in 0..=t.len() {
+        if coincide_desde(&p, &t[inicio..]) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Match con retroceso del asterisco, desde el inicio del texto dado.
+fn coincide_desde(p: &[char], t: &[char]) -> bool {
     let (mut pi, mut ti) = (0usize, 0usize);
     let (mut star, mut mark) = (usize::MAX, 0usize);
     while ti < t.len() {
         if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
             pi += 1;
             ti += 1;
+            // En modo SUBCADENA el patron puede estar completo antes de que
+            // se acabe el texto: '*ab' casa con 'ab' dentro de 'xxabyy'.
+            if pi == p.len() {
+                return true;
+            }
         } else if pi < p.len() && p[pi] == '*' {
             star = pi;
             mark = ti;
