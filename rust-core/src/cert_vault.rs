@@ -1920,28 +1920,15 @@ pub fn sanitize_label(label: &str) -> Result<String, String> {
 }
 
 /// Escribe un fichero de forma atómica con permisos `mode`.
+///
+/// MEDIDO (2026-11-23, auditoría de calidad): esta función era la ÚNICA
+/// implementación correcta del patrón "escribir sin truncar el destino",
+/// pero estaba **privada** en este módulo ⇒ los otros módulos que guardan
+/// estado (cola de tareas, cuota, plan de backup) seguían usando `fs::write`
+/// (que trunca).  Ahora la implementación canónica vive en
+/// [`crate::util_fs::write_atomic`] y aquí sólo se delega.
 fn write_atomic(path: &Path, data: &[u8], mode: u32) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
-    }
-    let tmp = path.with_extension(format!(
-        "{}.tmp",
-        path.extension().and_then(|e| e.to_str()).unwrap_or("bin")
-    ));
-    {
-        let mut f =
-            fs::File::create(&tmp).map_err(|e| format!("creación de {}: {}", tmp.display(), e))?;
-        // Los permisos se fijan **antes** de escribir: el fichero temporal
-        // no existe ni un instante con el modo por defecto del umask.
-        set_mode(&tmp, mode);
-        f.write_all(data)
-            .map_err(|e| format!("escritura de {}: {}", tmp.display(), e))?;
-        f.sync_all()
-            .map_err(|e| format!("fsync de {}: {}", tmp.display(), e))?;
-    }
-    fs::rename(&tmp, path).map_err(|e| format!("rename {}: {}", tmp.display(), e))?;
-    set_mode(path, mode);
-    Ok(())
+    crate::util_fs::write_atomic(path, data, mode)
 }
 
 /// Escribe un blob en el flujo de salida (streaming, por trozos).
