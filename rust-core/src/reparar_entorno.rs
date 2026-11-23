@@ -217,6 +217,12 @@ pub trait Entorno {
     fn chmod(&self, ruta: &str, modo: u32) -> Result<(), String>;
     fn modo(&self, ruta: &str) -> Option<u32>;
     fn remover(&self, ruta: &str) -> Result<(), String>;
+    /// Acuña una API key nueva en el `state_dir` (0600).
+    ///
+    /// Va por el trait (y no por una llamada directa) para que el modulo
+    /// sea testeable de verdad: la implementacion real delega en el motor
+    /// que YA existe ([`crate::api_key::ApiKeyConfig::generate_and_store`]).
+    fn acunar_api_key(&self, state_dir: &str) -> Result<(), String>;
 }
 
 /// Implementación real sobre el sistema de ficheros.
@@ -254,6 +260,10 @@ impl Entorno for FsEntorno {
     }
     fn remover(&self, ruta: &str) -> Result<(), String> {
         std::fs::remove_file(ruta).map_err(|e| format!("borrar {ruta}: {e}"))
+    }
+    fn acunar_api_key(&self, state_dir: &str) -> Result<(), String> {
+        // Motor EXISTENTE: no se reimplementa la acuñacion de la key.
+        crate::api_key::ApiKeyConfig::generate_and_store(state_dir).map(|_| ())
     }
 }
 
@@ -816,7 +826,7 @@ pub fn reparar(env: &dyn Entorno, cfg: &Config) -> Veredicto {
         }
         _ => {
             // Se acuña con el motor que ya existe (no se reimplementa).
-            match crate::api_key::ApiKeyConfig::generate_and_store(&cfg.state_dir) {
+            match env.acunar_api_key(&cfg.state_dir) {
                 Ok(_) => {
                     reparado = true;
                     v.push(Eslabon::nuevo(
@@ -999,6 +1009,15 @@ mod tests {
         }
         fn remover(&self, ruta: &str) -> Result<(), String> {
             self.ficheros.borrow_mut().remove(ruta);
+            Ok(())
+        }
+        fn acunar_api_key(&self, state_dir: &str) -> Result<(), String> {
+            let ruta = format!("{}/megadaemon_api.key", state_dir);
+            self.ficheros.borrow_mut().insert(
+                ruta.clone(),
+                "mdaemon_sk_live_0123456789abcdef0123456789abcdef\n".to_string(),
+            );
+            self.modos.borrow_mut().insert(ruta, 0o600);
             Ok(())
         }
     }
