@@ -1,0 +1,6 @@
+id=megadaemon_mitm_sqlite
+name=MegaDaemon MITM SQLite
+version=v1
+versionCode=1
+author=MegaDaemon Engineering Team
+description=Bind-mount de la DB de conversaciones de Antigravity para que el daemon la sirva (replica y re-merge). Desactivable en caliente.
