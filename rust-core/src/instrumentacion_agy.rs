@@ -387,6 +387,15 @@ pub fn bucle_automatico(puerto: u16) {
             };
             eprintln!("instrumentación AGY: {pieza} → {estado}{sufijo}");
         }
+        // Evento en la bitácora: el bucle automático acaba de tocar algo
+        // (sólo entra aquí si `revision_cheap()` encontró piezas faltantes).
+        crate::devlog::append(
+            "instrumentacion",
+            serde_json::json!({
+                "piezas": piezas,
+                "motivo": faltan,
+            }),
+        );
     }
 }
 

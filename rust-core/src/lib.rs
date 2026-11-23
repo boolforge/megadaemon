@@ -70,6 +70,7 @@ pub mod cirx_rtl;
 pub mod clipboard;
 pub mod cockpit_doctor;
 pub mod cockpit_server;
+pub mod devlog;
 pub mod config_efectiva;
 pub mod instrumentacion_agy;
 pub mod logs;

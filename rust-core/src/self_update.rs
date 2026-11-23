@@ -528,6 +528,17 @@ pub fn aplicar(ruta_bin: &Path) -> Result<Resultado, String> {
         let _ = std::fs::write(&ruta, format!("{}\n", m.short));
     }
 
+    // Evento en la bitácora de desarrollo: el móvil se autoactualizó.
+    crate::devlog::append(
+        "auto_update",
+        serde_json::json!({
+            "short": m.short,
+            "bytes": datos.len(),
+            "sha256_verificado": true,
+            "anterior": crate::build_commit(),
+        }),
+    );
+
     Ok(Resultado {
         instalado: true,
         short: m.short.clone(),

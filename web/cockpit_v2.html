@@ -742,6 +742,22 @@
 
       <div class="card">
         <div class="card__head">
+          <h2 class="card__title">Inventario de la API</h2>
+          <span class="small muted">medido contra el HTML que se está sirviendo</span>
+        </div>
+        <div id="sistema-inventario"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Bitácora de desarrollo</h2>
+          <span class="small muted">eventos del daemon, no telemetría</span>
+        </div>
+        <div id="sistema-devlog"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
           <h2 class="card__title">Voz del agente</h2>
           <button class="btn btn--sm btn--ghost" id="btn-voice-refresh">Consultar /mcp</button>
         </div>
@@ -3738,13 +3754,61 @@ function paintCuota(q) {
   el.innerHTML = html;
 }
 
+/** Pinta el inventario vivo de la API (rutas y quién las consume). */
+function paintInventario(inv) {
+  const el = $("#sistema-inventario");
+  if (!el) return;
+  const v2 = inv.v2 || {}, v1 = inv.v1 || {}, ui = inv.ui || {};
+  let html = '<div class="grid grid--stats">' +
+    '<div class="stat"><div class="stat__label">Rutas v2</div><div class="stat__value stat__value--sm">' +
+      esc(v2.total || 0) + '</div><div class="stat__meta">' + esc(v2.usadas_por_ui || 0) + " usadas por la UI</div></div>" +
+    '<div class="stat"><div class="stat__label">Rutas v1</div><div class="stat__value stat__value--sm">' +
+      esc(v1.total || 0) + '</div><div class="stat__meta">' + esc(v1.usadas_por_ui || 0) + " usadas · " +
+      esc(v1.huerfanas || 0) + " huérfanas</div></div>" +
+    '<div class="stat"><div class="stat__label">UI servida</div><div class="stat__value stat__value--sm">' +
+      esc(ui.origen || "?") + '</div><div class="stat__meta">' + esc(ui.bytes || 0) + " B · " +
+      esc(ui.rutas_pedidas || 0) + " fetch</div></div>" +
+    "</div>";
+  const huerf = (v1.rutas || []).filter(function (r) { return r.usada_por_ui === false; });
+  if (huerf.length) {
+    html += '<details class="notice notice--warn mt-3"><summary>' +
+      esc(huerf.length) + " rutas v1 que la UI no pide con fetch() (su contenido puede estar visible bajo /api/v2/…)</summary>" +
+      '<div class="mono small" style="margin-top:.4rem">' +
+      huerf.slice(0, 40).map(function (r) { return esc(r.method + " " + r.path); }).join("<br>") +
+      (huerf.length > 40 ? "<br>… y " + (huerf.length - 40) + " más" : "") +
+      "</div></details>";
+  }
+  el.innerHTML = html;
+}
+
+/** Pinta la bitácora de desarrollo. */
+function paintDevlog(dv) {
+  const el = $("#sistema-devlog");
+  if (!el) return;
+  const filas = dv.entradas || [];
+  if (!filas.length) {
+    el.innerHTML = '<div class="empty"><div class="empty__title">Sin eventos</div>' +
+      '<div class="empty__reason">El daemon aún no ha escrito en la bitácora (' + esc(dv.ruta || "?") + ").</div></div>";
+    return;
+  }
+  el.innerHTML = '<div class="table-wrap"><table class="table"><tbody>' + filas.slice(0, 40).map(function (f) {
+    const det = f.detalle ? JSON.stringify(f.detalle) : "";
+    return '<tr><td class="mono small">' + esc(f.iso || f.ts || "") + '</td><td>' + esc(f.evento || "") +
+      '</td><td class="mono small">' + esc(det.slice(0, 160)) + "</td></tr>";
+  }).join("") + "</tbody></table></div>";
+}
+
 async function loadSistema() {
-  const [loop, routes, sys, quota] = await Promise.all([
+  const [loop, routes, sys, quota, inv, dv] = await Promise.all([
     apiCall("/api/v2/agentic", () => fetch("/api/v2/agentic", { cache: "no-store", headers: authHeaders() })),
     apiCall("/api/v2/routes", () => fetch("/api/v2/routes", { cache: "no-store", headers: authHeaders() })),
     apiCall("/api/v2/system", () => fetch("/api/v2/system", { cache: "no-store", headers: authHeaders() })),
-    apiCall("/api/v2/quota", () => fetch("/api/v2/quota", { cache: "no-store", headers: authHeaders() }))
+    apiCall("/api/v2/quota", () => fetch("/api/v2/quota", { cache: "no-store", headers: authHeaders() })),
+    apiCall("/api/v2/inventario", () => fetch("/api/v2/inventario", { cache: "no-store", headers: authHeaders() })),
+    apiCall("/api/v2/devlog", () => fetch("/api/v2/devlog", { cache: "no-store", headers: authHeaders() }))
   ]);
+  paintInventario(inv);
+  paintDevlog(dv);
   state.data.agentic = loop;
   state.data.routes = routes;
   state.data.system = sys;

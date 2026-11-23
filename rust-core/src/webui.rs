@@ -186,6 +186,8 @@ fn route_descriptions() -> Vec<(&'static str, &'static str, &'static str)> {
         ("GET", "/api/v2/instrumentacion", "Estado vivo de la instrumentacion de Antigravity: .so (falso o in situ), modelo tras MegaDaemon, puente MCP y MITM de la DB."),
         ("POST", "/api/v2/instrumentacion", "Aplica, planifica o restaura la instrumentacion de Antigravity (accion=aplicar|plan|restore, confirmar=bool)."),
         ("GET", "/api/v2/backups", "Estado de Drive y de los respaldos: si hay credenciales, inventario real en disco y ultimos jobs de la cola durable."),
+        ("GET", "/api/v2/inventario", "Inventario VIVO de la API: que rutas existen (v1 y v2) y cuales las consume la UI, medido contra el HTML que el daemon esta sirviendo."),
+        ("GET", "/api/v2/devlog", "Bitacora de desarrollo del daemon (eventos, no telemetria): lo que ha escrito el propio daemon en devlog.json."),
     ]
 }
 
@@ -216,6 +218,155 @@ pub fn routes_doc() -> Value {
         "compatibility": {
             "v1_kept": true,
             "note": "las rutas v1 siguen vivas: la v2 es aditiva y la v1 no se rompe",
+        },
+    })
+}
+
+/// Fuente del servidor del cockpit: de ahi salen las rutas v1.
+///
+/// Se embebe para poder listar las rutas **en vivo** sin mantener una
+/// segunda tabla a mano (que es como se desincroniza todo).
+const SOURCE_COCKPIT: &str = include_str!("cockpit_server.rs");
+
+/// Rutas `/api/...` que la UI pide con `fetch("…")`.
+///
+/// Se ignora el query string: `fetch("/api/v2/share/get?path=…")` llama a
+/// la ruta `/api/v2/share/get` con parámetros.
+pub fn fetch_paths(html: &str) -> Vec<String> {
+    let mut out = vec![];
+    let needle = "fetch(";
+    let mut i = 0;
+    while i < html.len() {
+        let pos = match html[i..].find(needle) {
+            Some(p) => p,
+            None => break,
+        };
+        let start = i + pos + needle.len();
+        let rest = html[start..].trim_start();
+        if let Some(stripped) = rest.strip_prefix('"') {
+            if let Some(end) = stripped.find('"') {
+                let raw = &stripped[..end];
+                out.push(raw.split('?').next().unwrap_or(raw).to_string());
+            }
+        }
+        i = start;
+    }
+    out
+}
+
+/// HTML de la UI v2 **tal y como se sirve ahora** (disco si existe, si no el
+/// embebido) y de dónde sale.
+pub fn ui_html_servido() -> (String, &'static str) {
+    if let Some(p) = crate::cockpit_server::resolve_template_v2() {
+        if let Ok(s) = std::fs::read_to_string(&p) {
+            return (s, "disk");
+        }
+    }
+    (
+        crate::cockpit_server::EMBEDDED_V2_HTML.to_string(),
+        "embedded",
+    )
+}
+
+/// Rutas v1 extraídas del propio fuente del servidor.
+///
+/// El método se infiere del brazo del `match` (la ventana de texto que va
+/// desde la ruta hasta la siguiente ruta).  Es una heurística declarada,
+/// no una verdad: por eso el endpoint la llama `metodo_inferido`.
+pub fn v1_routes_desde_fuente(src: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = vec![];
+    let mut resto = src;
+    while let Some(i) = resto.find("\"/api/") {
+        let after = &resto[i + 1..];
+        let end = match after.find('"') {
+            Some(e) => e,
+            None => break,
+        };
+        let path = &after[..end];
+        let cuerpo = &after[end..];
+        let siguiente = cuerpo.find("\"/api/").unwrap_or(cuerpo.len());
+        let cuerpo = &cuerpo[..siguiente];
+        if !path.starts_with("/api/v2") && !path.starts_with("/api/tool/") {
+            let metodo = if cuerpo.contains("\"POST\"") {
+                "POST"
+            } else if cuerpo.contains("\"GET\"") {
+                "GET"
+            } else {
+                "?"
+            };
+            let par = (metodo.to_string(), path.to_string());
+            if !out.contains(&par) {
+                out.push(par);
+            }
+        }
+        resto = &after[end..];
+    }
+    out
+}
+
+/// Inventario VIVO de la API y de su consumo por la UI.
+///
+/// MEDIDO (2026-11-23, queja del usuario): el inventario documentaba las
+/// rutas, pero no decía **quién las usa**.  Aquí se mide contra el HTML
+/// que el daemon está sirviendo de verdad: las rutas de la v2 salen de la
+/// tabla autoritativa y las de la v1 del propio fuente del servidor.
+pub fn inventario_api() -> Value {
+    let (html, origen) = ui_html_servido();
+    let pedidas = fetch_paths(&html);
+    let descripciones = route_descriptions();
+
+    let mut v2 = vec![];
+    let mut v2_usadas = 0;
+    for (method, path) in api_v2_routes() {
+        let usada = pedidas.iter().any(|a| a == path);
+        if usada {
+            v2_usadas += 1;
+        }
+        let desc = descripciones
+            .iter()
+            .find(|(_, p, _)| *p == path)
+            .map(|(_, _, d)| d.to_string())
+            .unwrap_or_default();
+        v2.push(json!({
+            "method": method,
+            "path": path,
+            "descripcion": desc,
+            "usada_por_ui": usada,
+        }));
+    }
+
+    let mut v1 = vec![];
+    let mut v1_usadas = 0;
+    for (method, path) in v1_routes_desde_fuente(SOURCE_COCKPIT) {
+        let usada = pedidas.iter().any(|a| a == path);
+        if usada {
+            v1_usadas += 1;
+        }
+        v1.push(json!({
+            "method": method,
+            "path": path,
+            "metodo_inferido": true,
+            "usada_por_ui": usada,
+        }));
+    }
+    let huerfanas: Vec<&Value> = v1.iter().filter(|r| r["usada_por_ui"] == json!(false)).collect();
+
+    json!({
+        "ok": true,
+        "generated_at": now_iso(),
+        "ui": {
+            "origen": origen,
+            "bytes": html.len(),
+            "rutas_pedidas": pedidas.len(),
+            "nota": "origen = disk (plantilla desplegada) | embedded (dentro del binario)",
+        },
+        "v2": { "total": v2.len(), "usadas_por_ui": v2_usadas, "rutas": v2 },
+        "v1": {
+            "total": v1.len(),
+            "usadas_por_ui": v1_usadas,
+            "huerfanas": huerfanas.len(),
+            "nota": "rutas v1 que la UI NO pide con fetch(): su contenido puede estar visible bajo otra URL (/api/v2/…); el metodo se infiere del brazo del match (heuristica declarada)",
+            "rutas": v1,
         },
     })
 }
@@ -4866,6 +5017,8 @@ pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
         ("GET", "/api/v2/instrumentacion") => instrumentacion_view(),
         ("POST", "/api/v2/instrumentacion") => instrumentacion_apply(&b),
         ("GET", "/api/v2/backups") => backups_view(),
+        ("GET", "/api/v2/inventario") => inventario_api(),
+        ("GET", "/api/v2/devlog") => crate::devlog::leer(),
         ("GET", "/api/v2/antigravity/tasks") => antigravity_tasks(),
         ("GET", "/api/v2/market") => work_market(),
         ("GET", "/api/v2/mesh_findings") => mesh_findings(query),
@@ -5129,6 +5282,30 @@ mod tests {
                 p
             );
         }
+    }
+
+    #[test]
+    fn el_inventario_marca_las_rutas_que_la_ui_usa() {
+        let inv = inventario_api();
+        assert_eq!(inv["ok"], json!(true));
+        let v2 = inv["v2"].as_object().expect("v2");
+        assert_eq!(
+            v2["total"].as_u64().unwrap_or(0),
+            api_v2_routes().len() as u64,
+            "el inventario debe listar exactamente las rutas de la tabla"
+        );
+        assert_eq!(
+            v2["usadas_por_ui"].as_u64().unwrap_or(0),
+            v2["total"].as_u64().unwrap_or(0),
+            "toda ruta v2 debe estar consumida por la UI (si no, el inventario lo delata)"
+        );
+        let v1 = inv["v1"].as_object().expect("v1");
+        assert!(
+            v1["total"].as_u64().unwrap_or(0) > 0,
+            "deben detectarse rutas v1 en el fuente del servidor"
+        );
+        let origen = inv["ui"]["origen"].as_str().unwrap_or("");
+        assert!(origen == "disk" || origen == "embedded", "origen raro: {}", origen);
     }
 
     #[test]

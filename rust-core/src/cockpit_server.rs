@@ -1853,7 +1853,11 @@ fn handle_client(mut stream: TcpStream) {
             "/api/multiplatform" => send_json(&mut stream, &read_json_file_fallback("multiplatform_memory_telemetry.json", json!({}))),
             "/api/symbolic" => send_json(&mut stream, &read_json_file_fallback("symbolic_execution_report.json", json!({}))),
             "/api/retro_hook" => send_json(&mut stream, &read_json_file_fallback("retro_frida_symbolic_telemetry.json", json!({}))),
-            "/api/devlog" => send_json(&mut stream, &read_json_file_fallback("devlog.json", json!([]))),
+            // MEDIDO (2026-11-23): esto devolvía SIEMPRE [] porque
+            // `read_json_file_fallback` acepta sólo objetos y devlog.json es
+            // (y debe ser) un ARRAY.  Ahora usa el lector de la bitácora,
+            // que acepta ambos formatos.
+            "/api/devlog" => send_json(&mut stream, &crate::devlog::leer()),
             "/api/roadmap" => send_json(&mut stream, &read_json_file_fallback("roadmap.json", json!({"items": []}))),
             "/api/minidaemon" => {
                 let mut md = read_json_file_fallback(
