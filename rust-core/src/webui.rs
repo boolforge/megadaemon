@@ -122,6 +122,12 @@ pub fn api_v2_routes() -> Vec<(&'static str, &'static str)> {
         ("GET", "/api/v2/instrumentacion"),
         ("POST", "/api/v2/instrumentacion"),
         ("GET", "/api/v2/backups"),
+        // MEDIDO (2026-11-23): estas dos se añadieron al dispatcher y a la
+        // tabla de descripciones, pero NO a la tabla autoritativa
+        // (`api_v2_routes`) ⇒ el test `la_ui_no_llama_a_rutas_inexistentes`
+        // falló en el CI: la UI las pedía y la tabla no las conocía.
+        ("GET", "/api/v2/inventario"),
+        ("GET", "/api/v2/devlog"),
     ]
 }
 

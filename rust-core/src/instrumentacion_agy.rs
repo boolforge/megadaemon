@@ -114,7 +114,16 @@ pub fn estado() -> Value {
             "estado": endpoint,
         },
         "so_falso": {
-            "activo": falso.get("activo").and_then(|v| v.as_bool()).unwrap_or(false),
+            // MEDIDO (2026-11-23): aquí se leía "activo", pero
+            // `antigravity_fake_so::estado()` devuelve el campo
+            // "falso_instalado" ⇒ la UI pintaba «.so sin aplicar» SIEMPRE,
+            // aunque el binario de la app fuera el falso (sha256 medido:
+            // a25b406f… en ambos).  Se leen los dos nombres.
+            "activo": falso
+                .get("falso_instalado")
+                .or_else(|| falso.get("activo"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
             "estado": falso,
         },
         "modelo": {
