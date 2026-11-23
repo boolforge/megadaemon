@@ -366,11 +366,12 @@ pub struct ConversationSummary {
 /// también una lista por si el servidor cambiara de forma.
 pub fn conversation_summaries_from(v: &Value) -> Vec<ConversationSummary> {
     let mut out = Vec::new();
-    let src = v
-        .get("trajectorySummaries")
-        .unwrap_or(v)
-        .get("trajectorySummaries")
-        .unwrap_or(v);
+    // MEDIDO: la respuesta real es `{"trajectorySummaries":{"<cascadeId>":{…}}}`;
+    // el servidor también la envuelve en `{"response":{…}}`. Antes de mirar
+    // `trajectorySummaries` hay que DESEMPAQUETAR `response`, porque si no el
+    // mapa `trajectorySummaries` se tomaba por una conversación entera.
+    let resp = v.get("response").unwrap_or(v);
+    let src = resp.get("trajectorySummaries").unwrap_or(resp);
     match src {
         Value::Object(map) => {
             for (cid, s) in map {
