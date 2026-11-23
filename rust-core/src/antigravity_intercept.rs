@@ -109,6 +109,13 @@ pub struct Objetivo {
     pub direccion: u64,
 }
 
+impl Objetivo {
+    /// Nombre corto del hook (lo que ve el payload en el NDJSON).
+    pub fn id(&self) -> &str {
+        self.simbolo.rsplit('.').next().unwrap_or(&self.simbolo)
+    }
+}
+
 /// Parsea una dirección hexadecimal del pclntab (`"0x66a2f78"`).
 pub fn va_de_hex(s: &str) -> Option<u64> {
     let t = s.trim();
@@ -177,6 +184,35 @@ pub fn plan(objetivos: &[Objetivo], base: u64) -> Value {
             "bytes": o.bytes,
         })).collect::<Vec<_>>(),
     })
+}
+
+/// El plan en el **formato que lee el payload** (texto, tabulado).
+///
+/// Una línea por hook:
+///
+/// ```text
+/// RUTA_DEL_MODULO<TAB>VA_ELF_HEX<TAB>ID<TAB>TAREA
+/// ```
+///
+/// El payload (frida-gum) lo lee, busca el módulo en el proceso vivo y
+/// engancha `base + va_elf`.  Texto y no JSON a propósito: el payload no
+/// depende de serde.
+///
+/// ⚠️ `va_elf` es la dirección del **pclntab** (la del ELF), no la del
+/// índice de Ghidra: aquel está 1 MiB por encima (medido, 93 % de las
+/// funciones) ⇒ un plan hecho con Ghidra apunta 1 MiB equivocado.
+pub fn plan_txt(objetivos: &[Objetivo], modulo: &str) -> String {
+    let mut out = String::new();
+    for o in objetivos {
+        out.push_str(&format!(
+            "{}\t0x{:x}\t{}\t{}\n",
+            modulo,
+            o.va_elf,
+            o.id(),
+            o.tarea
+        ));
+    }
+    out
 }
 
 /// Ruta del plan en el móvil (la misma carpeta donde vive el payload).
@@ -253,6 +289,22 @@ mod tests {
             Some(0x7f00_2000)
         );
         assert_eq!(hooks[0].get("id").and_then(|i| i.as_str()), Some("Foo"));
+    }
+
+    #[test]
+    fn el_plan_txt_usa_tabuladores_y_va_en_hex() {
+        let objs = vec![Objetivo {
+            simbolo: "pkg.getURL".into(),
+            tarea: SUSTITUIR_URL,
+            va_elf: 0x66a2f78,
+            bytes: 32,
+            direccion: 0x1000,
+        }];
+        let t = plan_txt(&objs, "liblanguage_server.so");
+        assert_eq!(
+            t,
+            "liblanguage_server.so\t0x66a2f78\tgetURL\tsustituir_url\n"
+        );
     }
 
     #[test]
