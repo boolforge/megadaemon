@@ -47,3 +47,6 @@ artifacts/re/libro-completo.json
 artifacts/re/language-server-desensamblado.asm
 artifacts/re/LIBRO-COMPLETO.md
 tools/re_fusion-harness/target/
+
+# Target-dir local de las pruebas en el sandbox (no se sube).
+rust-core/target-test/
