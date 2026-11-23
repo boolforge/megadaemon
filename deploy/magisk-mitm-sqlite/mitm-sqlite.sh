@@ -77,6 +77,14 @@ json_esc() {
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' | tr -d '\r\n'
 }
 
+# MEDIDO (2026-11-23, movil): `json_esc` escapa el CONTENIDO pero no pone
+# las comillas => con un valor VACIO el JSON quedaba roto
+# (`"estado_previo":}`) y el daemon decia "el helper no devolvio JSON".
+# `json_str` mete las comillas: un valor vacio da `""` (JSON valido).
+json_str() {
+  printf '"%s"' "$(json_esc "$1")"
+}
+
 # ¿Existe ya un punto de montaje en ESTA ruta?
 es_montado() {
   awk -v p="$1" '$5==p {f=1} END{exit !f}' /proc/self/mountinfo 2>/dev/null
@@ -226,10 +234,10 @@ do_estado() {
   montado=0
   [ -n "$orig" ] && es_montado "$orig" && montado=1
   st="$(leer_estado)"
-  printf '{"ok":true,"accion":"estado","original":"%s","served":"%s","montado":%s,"served_existe":%s,"estado_previo":%s}\n' \
-    "$(json_esc "$orig")" "$(json_esc "$SERVED")" "$montado" \
+  printf '{"ok":true,"accion":"estado","original":%s,"served":%s,"montado":%s,"served_existe":%s,"estado_previo":%s}\n' \
+    "$(json_str "$orig")" "$(json_str "$SERVED")" "$montado" \
     "$([ -f "$SERVED" ] && echo true || echo false)" \
-    "$(json_esc "${st:-}")"
+    "$(json_str "${st:-}")"
   return 0
 }
 
