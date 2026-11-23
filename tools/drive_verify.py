@@ -17,6 +17,7 @@ import argparse
 import hashlib
 import json
 import os
+import tempfile
 import sys
 import urllib.request
 import urllib.parse
@@ -92,22 +93,72 @@ def main():
             "id": f.get("id"),
         }
         if args.sha256:
-            req = urllib.request.Request(
-                FILE_URL.format(file_id=f["id"]),
-                headers={"Authorization": f"Bearer {tok}"},
+            # MEDIDO (2026-11-23): la descarga se cortaba a mitad (la
+            # conexión cae) y el bucle `while True` salía como si nada: el
+            # verificador decía «sha256_ok: true» SIEMPRE (el `or True` de
+            # la línea anterior lo hacia vacuo) y comparaba el sha256 con el
+            # md5 de Drive (que son algoritmos distintos).
+            #
+            # Ahora: se reintenta hasta leer el tamaño completo, se calcula
+            # el MD5 de lo descargado y se compara con el `md5Checksum` que
+            # Drive calculó sobre el fichero entero.  Eso SÍ es la
+            # verificación byte a byte.
+            # Reanudación por rangos: la conexión con Drive se cae a mitad
+            # de los ficheros grandes; con `Range: bytes=N-` se continúa
+            # donde se quedó (si el servidor responde 206).
+            objetivo = row["size"]
+            intentos = 0
+            tmp = os.path.join(
+                tempfile.gettempdir(), "md_drive_verify_%s.bin" % f["id"]
             )
-            h = hashlib.sha256()
             n = 0
-            with urllib.request.urlopen(req, timeout=900) as r:
+            with open(tmp, "wb") as fh:
+                while intentos < 12 and n < objetivo:
+                    intentos += 1
+                    headers = {"Authorization": f"Bearer {tok}"}
+                    if n:
+                        headers["Range"] = "bytes=%d-" % n
+                    req = urllib.request.Request(
+                        FILE_URL.format(file_id=f["id"]), headers=headers
+                    )
+                    try:
+                        with urllib.request.urlopen(req, timeout=900) as r:
+                            if n and r.status != 206:
+                                # El servidor no reanudó: se reinicia.
+                                n = 0
+                                fh.seek(0)
+                                fh.truncate()
+                            while True:
+                                chunk = r.read(256 * 1024)
+                                if not chunk:
+                                    break
+                                fh.write(chunk)
+                                n += len(chunk)
+                    except Exception as exc:  # noqa: BLE001
+                        row["error_descarga"] = str(exc)
+                    if n < objetivo:
+                        row["descargas_reintentadas"] = intentos
+            h = hashlib.sha256()
+            m = hashlib.md5()
+            with open(tmp, "rb") as fh:
                 while True:
-                    chunk = r.read(256 * 1024)
+                    chunk = fh.read(256 * 1024)
                     if not chunk:
                         break
                     h.update(chunk)
-                    n += len(chunk)
+                    m.update(chunk)
             row["sha256"] = h.hexdigest()
+            row["md5_descargado"] = m.hexdigest()
             row["bytes_leidos"] = n
-            row["sha256_ok"] = row["sha256"] == row.get("md5_drive") or True
+            row["completo"] = n == objetivo
+            # La comparación REAL: el md5 de lo descargado contra el que
+            # Drive calculó para el fichero entero.
+            row["md5_ok"] = bool(
+                row["completo"]
+                and row["md5_drive"]
+                and row["md5_descargado"] == row["md5_drive"]
+            )
+            row["sha256_ok"] = row["md5_ok"]
         if expect:
             want = expect.get(f.get("name"))
             if want is not None:

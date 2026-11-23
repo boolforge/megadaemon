@@ -115,6 +115,40 @@ def create_folder(name: str, parent: str, token: str) -> str:
         return json.load(resp)["id"]
 
 
+def find_file(name: str, parent: str, token: str) -> str | None:
+    """Id del fichero con ese nombre dentro de la carpeta (si existe).
+
+    MEDIDO (2026-11-23): la subida creaba SIEMPRE una copia nueva, así que
+    la carpeta privada acabó con 28 ficheros (11 reales duplicados 2-3
+    veces).  Una sola fuente de verdad: si el fichero existe, se ACTUALIZA.
+    """
+    q = "name = '%s' and '%s' in parents and trashed = false" % (
+        name.replace("'", r"\'"),
+        parent,
+    )
+    url = "https://www.googleapis.com/drive/v3/files?q=" + urllib.parse.quote(
+        q
+    ) + "&fields=files(id,name,size,md5Checksum)"
+    data = api_get(url, token)
+    files = data.get("files", [])
+    if not files:
+        return None
+    # Si hay copias (subidas anteriores), se queda la primera y se borran
+    # las demás: la carpeta no se llena de duplicados.
+    for sobrante in files[1:]:
+        try:
+            req = urllib.request.Request(
+                "https://www.googleapis.com/drive/v3/files/" + sobrante["id"],
+                method="DELETE",
+            )
+            req.add_header("Authorization", "Bearer " + token)
+            urllib.request.urlopen(req, timeout=60).read()
+            print("  duplicado borrado: %s" % sobrante.get("name"))
+        except Exception as exc:  # noqa: BLE001
+            print("  no se pudo borrar el duplicado: %s" % exc)
+    return files[0]["id"]
+
+
 def upload(path: str, name: str, mime: str, parent: str, token: str, attempts: int = 3) -> dict:
     """Subida resumible en trozos de 8 MiB, con md5 y reintentos."""
     size = os.path.getsize(path)
@@ -126,12 +160,30 @@ def upload(path: str, name: str, mime: str, parent: str, token: str, attempts: i
         # OJO: `md5Checksum` NO es escribible en el insert de Drive
         # (403 fieldNotWritable). Se omite y se verifica con el que devuelve.
     }
+    # Si ya existe un fichero con ese nombre, se BORRA y se sube el nuevo:
+    # el PATCH de Drive con la API v3 da 403 (no admite tocar 'parents' en
+    # la misma petición), y lo que importa es que quede UNA copia por
+    # nombre (medido: la carpeta tenía 28 ficheros por duplicar las subidas).
+    existente = find_file(name, parent, token)
+    if existente:
+        try:
+            req = urllib.request.Request(
+                "https://www.googleapis.com/drive/v3/files/" + existente,
+                method="DELETE",
+            )
+            req.add_header("Authorization", "Bearer " + token)
+            urllib.request.urlopen(req, timeout=60).read()
+            print("  sustituido (borrado el anterior): %s" % name)
+        except Exception as exc:  # noqa: BLE001
+            print("  no se pudo borrar el anterior: %s" % exc)
+    url_subida = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,size,md5Checksum,webViewLink"
+    metodo = "POST"
     for attempt in range(1, attempts + 1):
         try:
             req = urllib.request.Request(
-                "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,size,md5Checksum,webViewLink",
+                url_subida,
                 data=json.dumps(meta).encode(),
-                method="POST",
+                method=metodo,
             )
             req.add_header("Authorization", "Bearer " + token)
             req.add_header("Content-Type", "application/json; charset=UTF-8")
