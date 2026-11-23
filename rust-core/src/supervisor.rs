@@ -34,61 +34,20 @@ use std::path::{Path, PathBuf};
 /// Ruta del servicio Magisk (se ejecuta en cada boot, antes de la app).
 pub const RUTA_SERVICE_D: &str = "/data/adb/service.d/99-megadaemon.sh";
 
-/// El watchdog, en shell. **Fuente única**: de aquí sale
-/// `tools/megadaemon-watchdog.sh`.
-pub const WATCHDOG_SH: &str = r#"#!/system/bin/sh
-# 99-megadaemon.sh — watchdog de MegaDaemon (generado desde
-# rust-core/src/supervisor.rs; NO editar a mano: la fuente es el modulo).
-#
-# Magisk ejecuta este script en cada boot, antes de que arranque la app.
-# Garantiza que:
-#   * el daemon vive (si muere, lo relanza);
-#   * una auto-actualizacion (el daemon sale con codigo 10) entra en servicio;
-#   * el parche del endpoint del language server se mantiene;
-#   * los montajes del MITM siguen en su sitio.
-PREFIX="${MD_PREFIX:-/data/local/tmp/megadaemon}"
-BIN="$PREFIX/megadaemon-core"
-STATE="$PREFIX/state"
-LOG="$STATE/watchdog.log"
-INTERVALO="${MD_WATCHDOG_INTERVAL:-30}"
-
-log() {
-    mkdir -p "$STATE" 2>/dev/null
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >>"$LOG" 2>/dev/null
-}
-
-vivo() {
-    # el daemon expone /health sin credencial: es la forma fiable de saberlo
-    if command -v curl >/dev/null 2>&1; then
-        curl -s -m 3 http://127.0.0.1:9090/health 2>/dev/null | grep -q '"status":"ok"' && return 0
-    fi
-    # sin curl (moviles sin curl): pgrep
-    pgrep -f "megadaemon-core" >/dev/null 2>&1
-}
-
-arrancar() {
-    [ -x "$BIN" ] || { log "no existe $BIN"; return 1; }
-    mkdir -p "$STATE" 2>/dev/null
-    log "arrancando el daemon"
-    # setsid para que sobreviva a la salida de este script
-    if command -v setsid >/dev/null 2>&1; then
-        setsid "$BIN" >>"$STATE/daemon.out" 2>&1 &
-    else
-        "$BIN" >>"$STATE/daemon.out" 2>&1 &
-    fi
-    sleep 3
-    vivo && log "el daemon esta vivo" || log "el daemon NO respondio"
-}
-
-while true; do
-    if vivo; then
-        :
-    else
-        arrancar
-    fi
-    sleep "$INTERVALO"
-done
-"#;
+/// El watchdog, en shell. **Fuente unica**: el fichero real del repo
+/// `deploy/99-megadaemon.sh` se incrusta tal cual con `include_str!`.
+///
+/// MEDIDO (2026-11-23): antes el modulo llevaba una copia ENLINEA de 1,6 KB
+/// que **no era** el supervisor que ya corria en el movil (50 KB, con
+/// auto-rollback, politica de energia, sondeo de `/health` y gestion del
+/// tunel). Al arrancar, el daemon instalaba su copia ENLINEA y **sobrescribia
+/// el supervisor bueno**, ademas de arrancar el daemon sin `cockpit 9090` y
+/// sin leer `megadaemon.env` (el bug medido el 2026-11-21: el estado y la
+/// key se dispersaban y todo el enjambre recibia 403).
+///
+/// Con `include_str!` es imposible que vuelvan a divergir: lo que instala el
+/// daemon es **exactamente** lo que se despliega desde el repo.
+pub const WATCHDOG_SH: &str = include_str!("../../deploy/99-megadaemon.sh");
 
 /// ¿Estamos en Android (y por tanto el watchdog tiene sentido)?
 pub fn es_android() -> bool {
@@ -138,10 +97,34 @@ pub fn instalar() -> Value {
     }
     // el script se escribe tal cual (shebang de Magisk / toybox, no bash)
     let cuerpo = WATCHDOG_SH.to_string();
-    if let Err(e) = std::fs::write(&ruta, cuerpo.as_bytes()) {
-        return json!({"ok": false, "motivo": format!("escribir {}: {e}", ruta.display())});
+    // Si ya es identico NO se reescribe: se evita tocar el fichero que Magisk
+    // puede estar ejecutando en este mismo instante.
+    if let Ok(actual) = std::fs::read(&ruta) {
+        if actual == cuerpo.as_bytes() {
+            let copia = crate::cockpit_server::state_dir() + "/watchdog.sh";
+            let _ = std::fs::write(&copia, cuerpo.as_bytes());
+            return json!({
+                "ok": true,
+                "ruta": ruta.display().to_string(),
+                "copia": copia,
+                "ya_instalado": true,
+                "bytes": cuerpo.len(),
+            });
+        }
     }
-    set_exec(&ruta);
+    // Instalacion ATOMICA: se escribe a un temporal, se marca ejecutable y
+    // se renombra.  Si el daemon muere a mitad de la escritura, Magisk no se
+    // encuentra un watchdog TRUNCADO en el siguiente boot (un supervisor a
+    // medias deja el movil sin daemon y sin supervisor).
+    let tmp = ruta.with_extension("sh.tmp");
+    if let Err(e) = std::fs::write(&tmp, cuerpo.as_bytes()) {
+        return json!({"ok": false, "motivo": format!("escribir {}: {e}", tmp.display())});
+    }
+    set_exec(&tmp);
+    if let Err(e) = std::fs::rename(&tmp, &ruta) {
+        let _ = std::fs::remove_file(&tmp);
+        return json!({"ok": false, "motivo": format!("renombrar {}: {e}", ruta.display())});
+    }
     // copia legible en el state dir (para poder inspeccionarla sin root)
     let copia = crate::cockpit_server::state_dir() + "/watchdog.sh";
     let _ = std::fs::write(&copia, cuerpo.as_bytes());
@@ -226,5 +209,23 @@ mod tests {
         let v = estado();
         assert!(v.get("instalado").is_some());
         assert!(v.get("ruta").is_some());
+    }
+
+    #[test]
+    fn el_watchdog_embebido_es_exactamente_el_del_repo() {
+        // Una sola fuente de verdad: si esto falla, alguien ha vuelto a copiar
+        // el script a mano y el daemon volveria a sobrescribir el supervisor
+        // bueno del movil con una version mas pobre.
+        assert_eq!(WATCHDOG_SH, include_str!("../../deploy/99-megadaemon.sh"));
+    }
+
+    #[test]
+    fn el_watchdog_arranca_el_daemon_con_el_cockpit_y_el_env() {
+        // Regresion medida el 2026-11-23: la copia en linea arrancaba el
+        // daemon SIN argumentos (cockpit mudo) y SIN leer megadaemon.env
+        // (estado y key dispersados => 403 global al enjambre).
+        assert!(WATCHDOG_SH.contains("cockpit"));
+        assert!(WATCHDOG_SH.contains("megadaemon.env"));
+        assert!(WATCHDOG_SH.contains("megadaemon-core.prev"));
     }
 }
