@@ -46,7 +46,21 @@ pub const CLON: &str = "/data/user/0/com.agy/files/megadaemon";
 /// Runtime (binarios) de Antigravity.
 pub const RUNTIME: &str = "/data/user/0/com.agy/files/runtime/bin";
 /// Binario canónico del daemon (root).
-pub const BIN_CANONICO: &str = "/data/local/tmp/megadaemon/megadaemon-core";
+///
+/// MEDIDO (2026-11-23): estaba en `/data/local/tmp/megadaemon/...`, que es
+/// una ruta **VOLÁTIL** (el sistema la limpia al reiniciar) ⇒ era
+/// precisamente la causa de que el móvil se quedara sin binario en servicio
+/// y el supervisor entrara en bucle.  Ahora vive en el prefijo PERSISTENTE
+/// (`/data/adb/megadaemon`), que sobrevive a los reinicios.
+pub const BIN_CANONICO: &str = "/data/adb/megadaemon/megadaemon-core";
+
+/// Ruta del binario canónico respetando `MEGADAEMON_PREFIX`.
+///
+/// Es la MISMA ruta que usa el reparador de entorno
+/// ([`crate::reparar_entorno::Config::binario`]) ⇒ una sola fuente de verdad.
+pub fn bin_canonico() -> String {
+    crate::reparar_entorno::Config::del_entorno().binario()
+}
 /// Repositorio público.
 pub const REPO: &str = "boolforge/megadaemon";
 /// UID de la app Antigravity (`u0_a1573` ⇒ 100000 + 1573).
@@ -113,8 +127,8 @@ pub struct EstadoAntigravity {
 pub fn estado() -> EstadoAntigravity {
     let clon = estado_clon();
     let runtime = estado_runtime();
-    let canonico = sha256_de(Path::new(BIN_CANONICO));
-    let canonico_bytes = std::fs::metadata(BIN_CANONICO).map(|m| m.len()).unwrap_or(0);
+    let canonico = sha256_de(Path::new(&bin_canonico()));
+    let canonico_bytes = std::fs::metadata(bin_canonico()).map(|m| m.len()).unwrap_or(0);
     let commit_esperado = std::fs::read_to_string(estado_dir().join("main_commit"))
         .ok()
         .map(|s| s.trim().to_string())
@@ -194,7 +208,7 @@ pub fn estado_runtime() -> EstadoRuntime {
         e.bytes = md.len();
         e.sha256 = sha256_de(&bin);
         e.uid = uid_de(&bin);
-        if let Some(c) = sha256_de(Path::new(BIN_CANONICO)) {
+        if let Some(c) = sha256_de(Path::new(&bin_canonico())) {
             e.igual_que_canonico = Some(c == e.sha256.clone().unwrap_or_default());
         }
     }
@@ -226,9 +240,9 @@ pub struct ReporteUnificar {
 /// **el mismo binario** que el daemon, con la misma versión y el mismo
 /// auto-update.  Se hace copia del anterior (`.prev`) antes de sustituir.
 pub fn unificar_runtime() -> Result<ReporteUnificar, String> {
-    let canonico = Path::new(BIN_CANONICO);
+    let canonico = PathBuf::from(bin_canonico());
     if !canonico.exists() {
-        return Err(format!("no existe el binario canónico {BIN_CANONICO}"));
+        return Err(format!("no existe el binario canónico {}", bin_canonico()));
     }
     let dir = Path::new(RUNTIME);
     std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {RUNTIME}: {e}"))?;
@@ -247,7 +261,7 @@ pub fn unificar_runtime() -> Result<ReporteUnificar, String> {
         rep.copia_anterior = Some(previo.to_string_lossy().to_string());
     }
 
-    let datos = std::fs::read(canonico).map_err(|e| format!("leer el canónico: {e}"))?;
+    let datos = std::fs::read(&canonico).map_err(|e| format!("leer el canónico: {e}"))?;
     std::fs::write(&dest, &datos).map_err(|e| format!("escribir {dest:?}: {e}"))?;
     #[cfg(unix)]
     {
@@ -266,7 +280,7 @@ pub fn unificar_runtime() -> Result<ReporteUnificar, String> {
     let sha = sha256_de(&dest);
     rep.bytes = datos.len() as u64;
     rep.sha256 = sha.clone();
-    rep.igual_que_canonico = Some(sha == sha256_de(canonico));
+    rep.igual_que_canonico = Some(sha == sha256_de(&canonico));
     rep.aplicado = true;
     rep.detalle = format!(
         "binario canónico copiado al runtime de Antigravity (sha256 {})",
@@ -444,7 +458,7 @@ mod tests {
     fn unificar_exige_el_binario_canonico() {
         // Sin el móvil, `unificar_runtime` debe fallar con un mensaje claro,
         // no con un panic.
-        if !Path::new(BIN_CANONICO).exists() {
+        if !Path::new(&bin_canonico()).exists() {
             let e = unificar_runtime().unwrap_err();
             assert!(e.contains("canónico"), "mensaje: {e}");
         }
