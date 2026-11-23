@@ -192,7 +192,8 @@ fn metodo_motor(o: &OpcionesFusion) -> Metodo {
     let mut m = Metodo::nuevo("motor (re_engine)");
     let t = Instant::now();
 
-    let ana = crate::re_engine::analizar(&o.binario, &crate::re_engine::OpcionesAnalisis::default());
+    let ana =
+        crate::re_engine::analizar(&o.binario, &crate::re_engine::OpcionesAnalisis::default());
     match ana {
         Ok(v) => {
             m.ok = true;
@@ -328,7 +329,10 @@ fn metodo_rizin(o: &OpcionesFusion) -> Metodo {
         "strings": lista_strings,
     });
     let p = o.out_dir.join("rizin.json");
-    let _ = std::fs::write(&p, serde_json::to_string_pretty(&combinado).unwrap_or_default());
+    let _ = std::fs::write(
+        &p,
+        serde_json::to_string_pretty(&combinado).unwrap_or_default(),
+    );
     m.artefacto(&p);
     m.ms = t.elapsed().as_millis();
     m
@@ -388,7 +392,8 @@ fn metodo_ghidra(o: &OpcionesFusion) -> Metodo {
                         m.ok = true;
                     }
                     let p = o.out_dir.join("ghidra_symbols.json");
-                    let _ = std::fs::write(&p, serde_json::to_string_pretty(&r).unwrap_or_default());
+                    let _ =
+                        std::fs::write(&p, serde_json::to_string_pretty(&r).unwrap_or_default());
                     m.artefacto(&p);
                 }
                 Err(e) => m.nota = format!("symbols: {e}"),
@@ -406,7 +411,10 @@ fn metodo_ghidra(o: &OpcionesFusion) -> Metodo {
                     m.pseudocodigo = d.files.len();
                     m.ok = true;
                     let p = o.out_dir.join("ghidra_decompile.json");
-                    let _ = std::fs::write(&p, serde_json::to_string_pretty(&d.report).unwrap_or_default());
+                    let _ = std::fs::write(
+                        &p,
+                        serde_json::to_string_pretty(&d.report).unwrap_or_default(),
+                    );
                     m.artefacto(&p);
                 }
                 Err(e) => m.nota = format!("decompile: {e}"),
@@ -505,7 +513,11 @@ pub fn leer_simbolos(tsv: &Path) -> Vec<Simbolo> {
         if p.len() < 2 {
             continue;
         }
-        let addr = match p[0].trim().strip_prefix("0x").and_then(|h| u64::from_str_radix(h, 16).ok()) {
+        let addr = match p[0]
+            .trim()
+            .strip_prefix("0x")
+            .and_then(|h| u64::from_str_radix(h, 16).ok())
+        {
             Some(a) => a,
             None => continue,
         };
@@ -564,7 +576,9 @@ pub fn fusionar(o: &OpcionesFusion, metodos: &[Metodo]) -> Value {
         strings.len()
     ));
     md.push_str("Cada bloque es **pseudocódigo de Ghidra** + el **nombre Go y el fichero:línea original**\n");
-    md.push_str("del pclntab (el binario no está ofuscado: los nombres son los del código original).\n\n");
+    md.push_str(
+        "del pclntab (el binario no está ofuscado: los nombres son los del código original).\n\n",
+    );
 
     let mut con_origen = 0usize;
     for (addr, ruta, path, sym_go, origen_c) in &pseudo {
@@ -574,11 +588,17 @@ pub fn fusionar(o: &OpcionesFusion, metodos: &[Metodo]) -> Value {
         if sym.is_some() {
             con_origen += 1;
         }
-        let nombre = sym
-            .map(|s| s.nombre.clone())
-            .unwrap_or_else(|| if sym_go.is_empty() { format!("0x{addr:x}") } else { sym_go.clone() });
+        let nombre = sym.map(|s| s.nombre.clone()).unwrap_or_else(|| {
+            if sym_go.is_empty() {
+                format!("0x{addr:x}")
+            } else {
+                sym_go.clone()
+            }
+        });
         md.push_str(&format!("\n## `{}`\n\n", nombre));
-        let origen_txt = sym.map(|s| s.origen.clone()).unwrap_or_else(|| origen_c.clone());
+        let origen_txt = sym
+            .map(|s| s.origen.clone())
+            .unwrap_or_else(|| origen_c.clone());
         if !origen_txt.is_empty() {
             md.push_str(&format!("Origen: `{}`\n\n", origen_txt));
         }

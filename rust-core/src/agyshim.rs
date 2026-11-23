@@ -159,7 +159,10 @@ pub fn guardar() {
 
 /// Reglas actuales.
 pub fn reglas() -> Vec<Regla> {
-    reglas_mapa().lock().unwrap_or_else(|p| p.into_inner()).clone()
+    reglas_mapa()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
 }
 
 /// Añade o reemplaza una regla (por id).
@@ -215,7 +218,13 @@ pub fn redacta() -> bool {
 /// Redacta lo que parece una credencial.
 pub fn redactar(texto: &str) -> String {
     let mut out = texto.to_string();
-    for pat in ["api_key", "apiKey", "Authorization", "bearer ", "x-goog-api-key"] {
+    for pat in [
+        "api_key",
+        "apiKey",
+        "Authorization",
+        "bearer ",
+        "x-goog-api-key",
+    ] {
         if let Some(i) = out.find(pat) {
             let fin = out[i..]
                 .find(|c: char| c == '"' || c == ',' || c == '\n')
@@ -325,7 +334,9 @@ pub fn set_json(v: &mut Value, ruta: &str, valor: Value) {
 /// Registra una entrada (NDJSON) y actualiza estadísticas.
 pub fn registrar(e: &Entrada) {
     {
-        let mut s = estadisticas_mapa().lock().unwrap_or_else(|p| p.into_inner());
+        let mut s = estadisticas_mapa()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         s.peticiones += 1;
         s.bytes += e.bytes_cuerpo as u64;
         if e.regla.is_some() {
@@ -354,7 +365,10 @@ pub fn registrar(e: &Entrada) {
 
 /// Estadísticas actuales.
 pub fn estadisticas() -> Estadisticas {
-    estadisticas_mapa().lock().unwrap_or_else(|p| p.into_inner()).clone()
+    estadisticas_mapa()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
 }
 
 /// Últimas entradas del log (para el agente).
@@ -489,19 +503,25 @@ mod tests {
     #[test]
     fn la_condicion_se_evalua_bien() {
         assert!(cumple(
-            &Condicion::RutaContiene { texto: "v1internal".into() },
+            &Condicion::RutaContiene {
+                texto: "v1internal".into()
+            },
             "/v1internal/generateContent",
             None,
             ""
         ));
         assert!(cumple(
-            &Condicion::Modelo { nombre: "megadaemon".into() },
+            &Condicion::Modelo {
+                nombre: "megadaemon".into()
+            },
             "/x",
             Some("megadaemon"),
             ""
         ));
         assert!(!cumple(
-            &Condicion::CuerpoContiene { texto: "zzz".into() },
+            &Condicion::CuerpoContiene {
+                texto: "zzz".into()
+            },
             "/x",
             None,
             "abc"
@@ -564,7 +584,12 @@ mod tests {
             veces: 0,
         })
         .unwrap();
-        let (st, c, r) = decidir("POST", "/v1internal/generateContent", "{}", r#"{"model":"real"}"#);
+        let (st, c, r) = decidir(
+            "POST",
+            "/v1internal/generateContent",
+            "{}",
+            r#"{"model":"real"}"#,
+        );
         assert_eq!(st, 200);
         assert!(c.contains("megadaemon"));
         assert_eq!(r.as_deref(), Some(id.as_str()));

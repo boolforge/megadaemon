@@ -421,6 +421,35 @@ pub fn aplicar(ruta_bin: &Path) -> Result<Resultado, String> {
     })
 }
 
+/// SHA-256 del binario **en ejecución**.
+///
+/// MEDIDO: el móvil sirve `/health` sin credencial, así que publicar aquí el
+/// hash permite comprobar (desde fuera y sin key) si el móvil ya corre el
+/// build nuevo.  Es la forma de verificar una auto-actualización.
+pub fn build_sha() -> String {
+    static CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| std::fs::read(p).ok())
+                .map(|d| sha256_hex(&d))
+                .unwrap_or_else(|| "desconocido".to_string())
+        })
+        .clone()
+}
+
+/// Información del build en servicio: hash del binario + short del commit
+/// publicado (si el auto-actualizador ya lo sabe).
+pub fn build_info() -> Value {
+    let short = crate::cockpit_server::state_dir() + "/build_short";
+    let publicado = std::fs::read_to_string(&short).ok().map(|s| s.trim().to_string());
+    json!({
+        "sha256": build_sha(),
+        "short": publicado,
+    })
+}
+
 /// Ejecuta `megadaemon-core update` desde la línea de órdenes.
 pub fn cli(ruta_bin: &Path, solo_comprobar: bool) -> i32 {
     if solo_comprobar {

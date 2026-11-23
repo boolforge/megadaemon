@@ -51,3 +51,9 @@ rust-core/src/crypto_scan.rs:push('漢');
 # - "seeglob"     = "see" + "glob":     es un identificador, no una fusión.
 docs/ANTIGRAVITY_BACKLOG.md:decompiled
 docs/DNS_DIAG_20261120.md:seeglob
+# --- palabras reales (ingles/español) que el heuristico confunde ---
+rust-core/src/ghidra.rs:envenen
+rust-core/src/drive_native.rs:deleting
+rust-core/src/backup_apps.rs:decoupled
+docs/GO_REVERSE_ENGINEERING.md:debugger
+docs/RECONSTRUCCION_MULTI_METODO.md:desincroniza

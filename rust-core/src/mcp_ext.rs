@@ -660,6 +660,27 @@ pub fn tool_definitions() -> Value {
             }
         },
 {
+            "name": "supervisor",
+            "description": "WATCHDOG de Android: instala (o consulta) el supervisor en /data/adb/service.d/99-megadaemon.sh, que Magisk ejecuta en cada boot. Garantiza que el daemon siga vivo, que la auto-actualizacion entre en servicio (el daemon sale con codigo 10 y el watchdog lo relanza) y que el parche del endpoint y los montajes se mantengan. Acciones: estado | instalar | desinstalar | watchdog (el texto del script).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "accion": { "type": "string", "description": "estado | instalar | desinstalar | watchdog" }
+                }
+            }
+        },
+{
+            "name": "frida_hooks",
+            "description": "Hooks de Frida para OBSERVAR Antigravity sin tocar sus datos: sqlite (que tablas/consultas toca la app, con credenciales redactadas), red (a que hosts conecta: sirve para verificar el parche del endpoint) y ficheros (que ficheros abre o borra). Acciones: listar | obtener.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "accion": { "type": "string", "description": "listar | obtener" },
+                    "nombre": { "type": "string", "description": "sqlite | red | ficheros" }
+                }
+            }
+        },
+{
             "name": "phone_backup",
             "description": "Motor de backup nativo de apps (Rust puro, sin curl ni shell): inventario de apps del movil, contenedor cifrado AEGIS-256 por segmentos con manifiesto sha256 por fichero, verificacion del AEAD, restauracion (simulacro por defecto, exige confirm=true) y SUBIDA PIPELINING a Drive (sube cada segmento ya cerrado mientras se recoge el siguiente; mide MiB/s y ETA). Anti-congelacion: nice/ionice de la clase mas baja, sleep entre lotes y descanso si la carga del sistema se dispara. Acciones: inventory | create | list | verify | restore | upload. create/restore/upload escriben o publican en Drive: exigen confirm=true.",
             "inputSchema": {
@@ -2367,6 +2388,44 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         }
         // Reconstruccion multi-motor: Ghidra + Rizin + DiE + motor propio
         // + pclntab.  Compara los metodos y fusiona lo mejor de cada uno.
+        // Watchdog (supervisor) de Android: el daemon se instala a si mismo
+        // en /data/adb/service.d para Magisk, de modo que la
+        // auto-actualizacion (el daemon sale con codigo 10) entra en servicio.
+        "supervisor" => {
+            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("estado");
+            match accion {
+                "instalar" => crate::supervisor::instalar(),
+                "desinstalar" => crate::supervisor::desinstalar(),
+                "estado" => crate::supervisor::estado(),
+                "watchdog" => json!({
+                    "ok": true,
+                    "script": crate::supervisor::WATCHDOG_SH,
+                    "ruta_destino": crate::supervisor::RUTA_SERVICE_D,
+                }),
+                _ => json!({"ok": false, "error": "accion desconocida: usa estado|instalar|desinstalar|watchdog"}),
+            }
+        }
+        // Hooks de Frida para observar Antigravity (SQLite, red, ficheros).
+        "frida_hooks" => {
+            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("listar");
+            match accion {
+                "listar" => {
+                    let hooks: Vec<Value> = crate::frida_hooks::hooks_disponibles()
+                        .into_iter()
+                        .map(|(n, s)| json!({"nombre": n, "bytes": s.len()}))
+                        .collect();
+                    json!({"ok": true, "hooks": hooks})
+                }
+                "obtener" => {
+                    let n = args.get("nombre").and_then(|v| v.as_str()).unwrap_or("");
+                    match crate::frida_hooks::hook_por_nombre(n) {
+                        Some(s) => json!({"ok": true, "nombre": n, "script": s}),
+                        None => json!({"ok": false, "error": format!("hook desconocido: {n}")}),
+                    }
+                }
+                _ => json!({"ok": false, "error": "accion desconocida: usa listar|obtener"}),
+            }
+        }
         "re_fusion" => {
             let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("compare");
             let s = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();

@@ -1484,6 +1484,10 @@ fn handle_client(mut stream: TcpStream) {
                         // NO es la key: no sirve para autenticarse).
                         "key_fp": api_key::fingerprint(&cfg.key),
                         "cuota": crate::quota_guard::snapshot_compacto(),
+                        // v19: el hash del binario EN SERVICIO.  Permite
+                        // verificar desde fuera (sin credencial) si el movil
+                        // ya corre el build nuevo de la release.
+                        "build": crate::self_update::build_info(),
                     }),
                 );
             }
@@ -1496,6 +1500,7 @@ fn handle_client(mut stream: TcpStream) {
                 m["requests_rate_limited"] = json!(REQ_RATE_LIMITED.load(std::sync::atomic::Ordering::Relaxed));
                 m["api_key_active"] = json!(cfg.enabled);
                 m["version"] = json!(env!("CARGO_PKG_VERSION"));
+                m["build"] = crate::self_update::build_info();
                 send_json(&mut stream, &m);
             }
             "/api/ping" => {

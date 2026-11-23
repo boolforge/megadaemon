@@ -31,9 +31,8 @@ pub fn ruta_db_propia() -> PathBuf {
 
 /// La DB de Antigravity (sólo lectura).
 pub fn ruta_db_antigravity() -> PathBuf {
-    let dir = std::env::var("MEGADAEMON_AGY_DIR").unwrap_or_else(|_| {
-        "/data/user/0/com.agy/files/.gemini/antigravity-app".to_string()
-    });
+    let dir = std::env::var("MEGADAEMON_AGY_DIR")
+        .unwrap_or_else(|_| "/data/user/0/com.agy/files/.gemini/antigravity-app".to_string());
     PathBuf::from(dir).join("conversations/conversation_summaries.db")
 }
 
@@ -143,11 +142,7 @@ pub fn leer_conversaciones(
     tabla: &str,
     limite: usize,
 ) -> Result<Vec<Conversacion>, String> {
-    let sql = format!(
-        "SELECT * FROM {} LIMIT {}",
-        tabla.replace('"', ""),
-        limite
-    );
+    let sql = format!("SELECT * FROM {} LIMIT {}", tabla.replace('"', ""), limite);
     let mut st = con.prepare(&sql).map_err(|e| format!("prepare: {e}"))?;
     let cols: Vec<String> = st.column_names().iter().map(|s| s.to_string()).collect();
     let filas = st
@@ -324,10 +319,7 @@ pub fn generar_db_servida(
         tabla, tabla
     );
     // copiamos el esquema real con sus columnas
-    let cols: Vec<String> = filas
-        .first()
-        .map(|_| Vec::new())
-        .unwrap_or_default();
+    let cols: Vec<String> = filas.first().map(|_| Vec::new()).unwrap_or_default();
     let _ = cols;
     // creamos la tabla con el mismo esquema leyendo de la original
     let src2 = abrir_antigravity_ro()?;
@@ -348,7 +340,12 @@ pub fn generar_db_servida(
 
     let nombres: Vec<String> = filas
         .first()
-        .map(|f| f.meta.as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default())
+        .map(|f| {
+            f.meta
+                .as_object()
+                .map(|o| o.keys().cloned().collect())
+                .unwrap_or_default()
+        })
         .unwrap_or_default();
     if nombres.is_empty() {
         return Err("no hay filas que servir".to_string());
@@ -396,14 +393,10 @@ pub fn generar_db_servida(
                 other => rusqlite::types::Value::Text(other.to_string().into()),
             });
         }
-        let ps: Vec<&dyn rusqlite::ToSql> = vals
-            .iter()
-            .map(|v| v as &dyn rusqlite::ToSql)
-            .collect();
+        let ps: Vec<&dyn rusqlite::ToSql> =
+            vals.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
         tx.execute(
-            &format!(
-                "INSERT OR REPLACE INTO {tabla} ({cols_sql}) VALUES ({placeholders})"
-            ),
+            &format!("INSERT OR REPLACE INTO {tabla} ({cols_sql}) VALUES ({placeholders})"),
             ps.as_slice(),
         )
         .map_err(|e| format!("insert: {e}"))?;

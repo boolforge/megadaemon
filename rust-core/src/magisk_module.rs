@@ -1581,7 +1581,7 @@ pub fn install_module_zip(zip_path: &str, enable: bool, dry_run: bool) -> Value 
     })
 }
 
-/// Datos de Shamiko: repo oficial, última release yasset de Zygisk.
+/// Datos de Shamiko: repo oficial, última release y assets de Zygisk.
 ///
 /// No descarga nada: el **PC** es quien tiene red. El dispositivo recibe el
 /// ZIP ya verificado por `install_module_zip`.

@@ -97,8 +97,7 @@ pub fn parsear_linea(linea: &str) -> Option<Funcion> {
 
 /// Lee todas las funciones del TSV.
 pub fn leer_tsv(ruta: &Path) -> Result<Vec<Funcion>, String> {
-    let txt = std::fs::read_to_string(ruta)
-        .map_err(|e| format!("leer {}: {e}", ruta.display()))?;
+    let txt = std::fs::read_to_string(ruta).map_err(|e| format!("leer {}: {e}", ruta.display()))?;
     let mut out = Vec::new();
     for l in txt.lines() {
         if l.trim().is_empty() {
@@ -204,17 +203,17 @@ pub fn esqueleto(funciones: &[Funcion], filtro_fichero: &str, limite_funciones: 
     let f = filtro_fichero.to_ascii_lowercase();
     for x in funciones {
         if f.is_empty() || x.fichero.to_ascii_lowercase().contains(&f) {
-            por_fichero
-                .entry(x.fichero.clone())
-                .or_default()
-                .push(x);
+            por_fichero.entry(x.fichero.clone()).or_default().push(x);
         }
     }
     let mut out = String::new();
     let mut total = 0usize;
     for (fichero, mut fs) in por_fichero {
         fs.sort_by_key(|x| (x.linea, x.addr));
-        out.push_str(&format!("\n// ===== {fichero} ({} funciones) =====\n", fs.len()));
+        out.push_str(&format!(
+            "\n// ===== {fichero} ({} funciones) =====\n",
+            fs.len()
+        ));
         for x in fs {
             if total >= limite_funciones {
                 out.push_str("\n// ... (truncado)\n");
@@ -335,7 +334,8 @@ mod tests {
     #[test]
     fn buscar_encuentra_por_nombre() {
         let fs = vec![
-            parsear_linea("0x1\tmain.GetAvailableModels\tgo: main.GetAvailableModels | main.go:1").unwrap(),
+            parsear_linea("0x1\tmain.GetAvailableModels\tgo: main.GetAvailableModels | main.go:1")
+                .unwrap(),
             parsear_linea("0x2\tmain Otro\tgo: main.Otro | main.go:2").unwrap(),
         ];
         let r = buscar(&fs, "getavailablemodels", 10);

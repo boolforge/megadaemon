@@ -109,8 +109,17 @@ fn main() {
                 });
                 megadaemon_core::self_update::lanzar_auto_actualizador(
                     std::path::PathBuf::from(ruta),
-                    360,
+                    // 30 min: el movil esta al dia con la ultima build sin
+                    // depender de reinicios.  Se puede alargar con
+                    // MD_AUTO_UPDATE_INTERVAL_MIN.
+                    30,
                 );
+                // El watchdog se instala SOLO (el daemon corre como root en
+                // /data/local/tmp): Magisk lo ejecuta en cada boot y relanza
+                // el daemon cuando la auto-actualizacion lo deja con
+                // codigo 10.  Sin esto, la actualizacion se instala pero no
+                // entra en servicio hasta el siguiente reinicio.
+                megadaemon_core::supervisor::asegurar_supervisor();
                 // v18: sincroniza el runtime unificado de Antigravity al arrancar.
                 if let Err(e) = megadaemon_core::antigravity_clone::unificar_runtime() {
                     eprintln!("antigravity: runtime no unificado: {e}");

@@ -63,7 +63,7 @@ impl Formato {
 pub struct Identificacion {
     pub formato: Formato,
     pub bytes: u64,
-    /// Magics/heurísticas que lo determinan (con su偏移 en el fichero).
+    /// Magics/heurísticas que lo determinan (con su desplazamiento en el fichero).
     pub evidencia: Vec<String>,
     pub bits: u32,
     pub endian: String,
