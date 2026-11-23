@@ -19,6 +19,18 @@ pub fn tool_definitions() -> Value {
     // para que la CLI, el MCP y el agente hablen del mismo codigo.
     let base = json!([
         {
+            "name": "instrumentacion_agy",
+            "description": "Instrumentación de Antigravity (com.agy) en el móvil: el .so del language server apuntando al gateway local de MegaDaemon (modo 'falso': el daemon posee el original; o 'in situ': parcheado), MegaDaemon registrado como modelo, el puente MCP dentro de Antigravity y el MITM (bind-mount) de la DB de conversaciones. Es idempotente y se aplica SOLO cada 60 s si falta algo. Acciones: estado (qué hay aplicado ahora), plan (qué se haría), aplicar (aplica lo que diga la configuración), restore (deja el .so original y desmonta el MITM).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "accion": { "type": "string", "enum": ["estado", "plan", "aplicar", "restore"], "default": "estado" },
+                    "confirmar": { "type": "boolean", "default": false, "description": "Confirmación explícita para tocar el .so de la app (destructivo, pero reversible)" },
+                    "puerto": { "type": "integer", "description": "Puerto local del gateway de MegaDaemon (defecto 9090)" }
+                }
+            }
+        },
+        {
             "name": "antigravity",
             "description": "Puente contra la IDE agéntica Antigravity (com.agy) que corre en el móvil: su language server local (127.0.0.1:45157, HTTPS autofirmado) habla Connect RPC y se abre con el token CSRF que el SPA publica en window.__APP_CONFIG__.csrfToken (cabecera x-codeium-csrf-token). Acciones: status | catalog | models | conversations | search | conversation | tasks | enqueue. catalog/models devuelven el catalogo REAL de modelos con su id real y su id ofuscado (MODEL_PLACEHOLDER_*). enqueue mete trabajo en el agente de Antigravity: consume cuota y crea una conversacion, por eso exige confirm=true.",
             "inputSchema": {
@@ -936,6 +948,15 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
     let r = match name {
         // Puente contra Antigravity (el motor agéntico del móvil).
         // Mismas acciones que el CLI `md-antigravity`: paridad total.
+        "instrumentacion_agy" => {
+            let args = json!({
+                "accion": s("accion"),
+                "confirmar": b("confirmar"),
+                "puerto": args.get("puerto").and_then(|v| v.as_u64()).unwrap_or(9090),
+            });
+            let r = crate::instrumentacion_agy::dispatch(&args);
+            return Some(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&r).unwrap_or_default() }] }));
+        }
         "antigravity" => {
             let cfg = crate::antigravity_bridge::BridgeConfig::default();
             let br = match crate::antigravity_bridge::AntigravityBridge::new(&cfg) {

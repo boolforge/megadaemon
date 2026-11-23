@@ -149,8 +149,21 @@ fn main() {
                 // (Drive) => la flota lo encuentra siempre, aunque el
                 // internet se caiga y la URL cambie al volver.
                 if let Ok(dir) = std::env::var("MEGADAEMON_STATE_DIR") {
-                    let tunel = std::path::Path::new(&dir).join("tunnel.url");
-                    if let Ok(txt) = std::fs::read_to_string(&tunel) {
+                    // MEDIDO (2026-11-23): el supervisor escribe la URL en
+                    // `$PREFIX/tunnel.url` y el daemon la buscaba en
+                    // `$STATE_DIR/tunnel.url` => NUNCA se anunciaba el móvil
+                    // en el tablón => la flota no lo encontraba.
+                    // Se miran los DOS sitios (el del supervisor manda).
+                    let prefijo = std::env::var("MEGADAEMON_PREFIX")
+                        .unwrap_or_else(|_| "/data/adb/megadaemon".to_string());
+                    let candidatas = [
+                        std::path::Path::new(&prefijo).join("tunnel.url"),
+                        std::path::Path::new(&dir).join("tunnel.url"),
+                    ];
+                    for tunel in candidatas.iter() {
+                        let Ok(txt) = std::fs::read_to_string(tunel) else {
+                            continue;
+                        };
                         let url = txt.trim().to_string();
                         if url.starts_with("http") {
                             let cuerpo = serde_json::json!({
@@ -162,6 +175,7 @@ fn main() {
                             {
                                 t.publicar("latido", cuerpo);
                             }
+                            break;
                         }
                     }
                 }

@@ -333,7 +333,15 @@ pub fn bucle_automatico(puerto: u16) {
         for p in piezas {
             let estado = p.get("estado").and_then(|v| v.as_str()).unwrap_or("?");
             let pieza = p.get("pieza").and_then(|v| v.as_str()).unwrap_or("?");
-            eprintln!("instrumentación AGY: {pieza} → {estado}");
+            // El detalle del fallo va al log: si no, el móvil dice «fallo» y
+            // no se sabe por qué (medido el 2026-11-23).
+            let detalle = match p.get("detalle") {
+                Some(Value::String(s)) => s.clone(),
+                Some(v) => v.to_string(),
+                None => String::new(),
+            };
+            let detalle = detalle.chars().take(220).collect::<String>();
+            eprintln!("instrumentación AGY: {pieza} → {estado}{detalle}", if detalle.is_empty() { "" } else { ": " });
         }
     }
 }
