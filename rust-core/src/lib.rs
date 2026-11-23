@@ -77,6 +77,7 @@ pub mod power_policy;
 pub mod profile_analysis;
 pub mod provider_catalog;
 pub mod providers;
+pub mod proto_regen;
 pub mod rea_assistant;
 pub mod repo_updates;
 pub mod rom_locator;
