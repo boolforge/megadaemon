@@ -384,6 +384,18 @@ pub fn registrar_uso(provider: &str, tokens: u64, limite: Option<u64>) {
     }
     e.nivel = peor_nivel(&e.ventanas);
     e.actualizado_at = ahora();
+    // MEDIDO (2026-11-23, auditoría de calidad): esta función NO persistía
+    // ⇒ el uso real que se observa (tokens gastados) se quedaba en
+    // memoria y se perdía en cada reinicio del daemon.  Como el resto de
+    // las funciones del módulo (`registrar_error_cuota`,
+    // `establecer_ventanas`), ahora guarda el estado en disco: el guard de
+    // cuota está para AVISAR ANTES de que se corte, y sin persistir no
+    // sabe cuánto se ha gastado tras un reinicio.
+    //
+    // OJO: hay que soltar el lock ANTES de persistir (`persistir` vuelve a
+    // cogerlo: un `std::sync::Mutex` no es reentrante).
+    drop(m);
+    persistir();
 }
 
 /// Fija las ventanas de cuota de un proveedor (sonda explícita o config).
