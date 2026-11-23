@@ -93,9 +93,16 @@ pub fn estado() -> Value {
     let agy_vivo = proceso_vivo("com.agy");
 
     let modelo_registrado = modelo
-        .get("registrado")
+        .get("modelo_registrado")
+        .and_then(|v| v.get("ok"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let puente_caido = modelo
+        .get("bridge_error")
+        .and_then(|v| v.get("error"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     json!({
         "ok": true,
@@ -112,6 +119,12 @@ pub fn estado() -> Value {
         },
         "modelo": {
             "registrado": modelo_registrado,
+            "puente_caido": !puente_caido.is_empty(),
+            "error_puente": if puente_caido.is_empty() {
+                Value::Null
+            } else {
+                json!(puente_caido)
+            },
             "estado": modelo,
         },
         "mitm_db": {
@@ -256,6 +269,31 @@ pub fn sincronizar_puente_mcp() -> Result<Value, String> {
     }))
 }
 
+/// ¿Está MegaDaemon registrado como modelo en Antigravity?
+///
+/// MEDIDO (2026-11-23): se leía `registrado`, pero la clave real del estado
+/// es `modelo_registrado.ok` ⇒ el modelo se daba SIEMPRE por pendiente y el
+/// ciclo automático lo reintentaba cada minuto (y fallaba, porque la app no
+/// está en marcha).
+///
+/// Devuelve `(registrado, puente_caido)`: si el puente está caído, no se
+/// puede ni comprobar ni registrar ⇒ no es un fallo, es un APLAZAMIENTO.
+fn estado_modelo() -> (bool, bool) {
+    let m = crate::antigravity_model::integracion_estado();
+    let registrado = m
+        .get("modelo_registrado")
+        .and_then(|v| v.get("ok"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let error_bridge = m
+        .get("bridge_error")
+        .and_then(|v| v.get("error"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let caido = !error_bridge.is_empty();
+    (registrado, caido)
+}
+
 /// **Revisión BARATA**: qué piezas NO están en su sitio.
 ///
 /// Sólo mira metadatos y ficheros pequeños: nunca hashea el `.so` de 181 MB.
@@ -285,13 +323,11 @@ pub fn revision_cheap() -> Vec<String> {
             faltan.push("puente_mcp".to_string());
         }
     }
-    if on("modelo", true) && proceso_vivo("com.agy") {
-        let m = crate::antigravity_model::integracion_estado();
-        if !m
-            .get("registrado")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-        {
+    if on("modelo", true) {
+        let (registrado, puente_caido) = estado_modelo();
+        // Si el puente está caído (la app no está en marcha) no se puede
+        // comprobar el registro: NO es una pieza que falte.
+        if !registrado && !puente_caido {
             faltan.push("modelo".to_string());
         }
     }
@@ -394,7 +430,8 @@ pub fn aplicar(puerto: u16, confirmar: bool) -> Value {
 
     // --- 2) MegaDaemon como modelo -----------------------------------
     if on("modelo", true) {
-        if !proceso_vivo("com.agy") {
+        let (_, puente_caido) = estado_modelo();
+        if puente_caido || !proceso_vivo("com.agy") {
             // La app no esta en marcha: el registro se hace por RPC contra
             // su language server, asi que se APLAZA (no es un fallo: el
             // ciclo automatico lo hara cuando arranque).
