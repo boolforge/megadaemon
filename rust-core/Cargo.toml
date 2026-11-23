@@ -26,6 +26,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha1 = { version = "0.10", features = ["oid"] }  # feature oid: AssociatedOid para RSA PKCS#1 v1.5
 sha2 = "0.10"          # SHA-256 nativo (inventario de APK, dedup, firmados)
+blake3 = "1.8"           # hash mas rapido que SHA-256 para verificar descargas grandes
+url = "2.5"              # parseo WHATWG de URLs (validar, normalizar, nombre de fichero)
+brotli = "9"             # descompresion de respuestas con Content-Encoding: br
 ureq = { version = "3.5.2", features = ["rustls", "json"] }
 zip = { version = "2.2", default-features = false, features = ["deflate"] }  # lectura de APK/DEX
 # zstd: contenedor TAR+zstd (el interior de Swift Backup) y el nuestro.

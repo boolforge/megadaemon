@@ -117,6 +117,20 @@ pub fn parse_messages(messages: &Value) -> Result<(String, Option<String>), Gate
 /// lo soporta y, si no, la respuesta lo dice en `tools_used` (nunca se
 /// finge que se usaron).
 pub fn chat_completions(body: &Value) -> Result<Value, GatewayError> {
+    // v16: la variante de producción (vault de disco + transporte real).
+    let vault = crate::providers::load_vault();
+    let transport = crate::providers::UreqTransport::default();
+    let deps = crate::providers::ChatDeps::new(&vault, &transport);
+    chat_completions_with(body, &deps)
+}
+
+/// Variante **inyectable** de [`chat_completions`].
+///
+/// v16: el gateway se testea sin red (mismo formato, otro vault).
+pub fn chat_completions_with(
+    body: &Value,
+    deps: &crate::providers::ChatDeps<'_>,
+) -> Result<Value, GatewayError> {
     let model = body
         .get("model")
         .and_then(|m| m.as_str())
@@ -138,9 +152,18 @@ pub fn chat_completions(body: &Value) -> Result<Value, GatewayError> {
         Some(model.as_str())
     };
 
-    let res = crate::providers::execute_chat(&prompt, requested, None, system.as_deref(), max_tokens);
+    let res = crate::providers::execute_chat_with(
+        &prompt,
+        requested,
+        None,
+        system.as_deref(),
+        max_tokens,
+        deps,
+    );
 
     let usage = json!({
+        // El proveedor no siempre reporta los tokens de ENTRADA; 0 = "no lo
+        // dice el proveedor" (no se inventa un número).
         "prompt_tokens": 0,
         "completion_tokens": res.tokens_used,
         "total_tokens": res.tokens_used,
@@ -182,13 +205,21 @@ pub fn chat_completions(body: &Value) -> Result<Value, GatewayError> {
             "vendor": res.vendor,
             "latency_ms": res.latency_ms,
             "fallback_used": res.fallback_used,
-            // Lo que pidió el cliente y si se sustituyó.
+            "tokens_used": res.tokens_used,
+            // v16: quién respondió y a quién se saltó (retirado, cuota en
+            // pausa, sin credencial).  Sin esto el `fallback_used` no
+            // explicaba NADA de lo que pasó.
+            "provider_trace": res.provider_trace,
+            // v16: el estado de la cuota viaja DENTRO de la respuesta.
+            "quota": res.quota,
+            // Lo que pidió el cliente y si se sustituyó: el gateway NO
+            // suplanta a nadie — `model` dice el modelo REAL que contestó;
+            // lo pedido va aquí.
             "requested_model": model,
             "substituted": !res.model_id.eq_ignore_ascii_case(&model)
                 && !MEGADAEMON_ALIASES
                     .iter()
-                    .any(|a| a.eq_ignore_ascii_case(&model)),
-        }
+                    .any(|a| a.eq_ignore_ascii_case(&model)),        }
     }))
 }
 
@@ -370,7 +401,29 @@ fn gemini_partes(parts: Option<&Value>) -> String {
 /// Ejecuta una petición Gemini contra el router de MegaDaemon y devuelve
 /// la respuesta **en formato Gemini** (`candidates`/`usageMetadata`).
 pub fn gemini_generate_content(body: &Value) -> Result<Value, GatewayError> {
-    gemini_generate_content_for("", body)
+    // v16: la variante de producción (vault de disco + transporte real).
+    let vault = crate::providers::load_vault();
+    let transport = crate::providers::UreqTransport::default();
+    let deps = crate::providers::ChatDeps::new(&vault, &transport);
+    gemini_generate_content_with(body, &deps)
+}
+
+/// Variante **inyectable** de [`gemini_generate_content`] (v16: permite
+/// testear el gateway SIN red).
+pub fn gemini_generate_content_with(
+    body: &Value,
+    deps: &crate::providers::ChatDeps<'_>,
+) -> Result<Value, GatewayError> {
+    let g = gemini_prompt(body)?;
+    let res = crate::providers::execute_chat_with(
+        &g.prompt,
+        None,
+        None,
+        g.system.as_deref(),
+        g.max_tokens,
+        deps,
+    );
+    Ok(gemini_response(&res, g.tools_requested))
 }
 
 /// Igual que [`gemini_generate_content`] pero sabiendo **qué** modelo pidió
@@ -390,7 +443,17 @@ pub fn gemini_generate_content_for(path: &str, body: &Value) -> Result<Value, Ga
     } else {
         Some(pedido.as_str())
     };
-    let res = crate::providers::execute_chat(&g.prompt, solicitado, None, g.system.as_deref(), g.max_tokens);
+    let vault = crate::providers::load_vault();
+    let transport = crate::providers::UreqTransport::default();
+    let deps = crate::providers::ChatDeps::new(&vault, &transport);
+    let res = crate::providers::execute_chat_with(
+        &g.prompt,
+        solicitado,
+        None,
+        g.system.as_deref(),
+        g.max_tokens,
+        &deps,
+    );
     let mut v = gemini_response(&res, g.tools_requested);
     v["megadaemon"]["requested_model"] = json!(pedido);
     v["megadaemon"]["substituted"] = json!(
@@ -437,6 +500,9 @@ fn gemini_response(res: &crate::providers::ChatResult, tools_requested: usize) -
             "latency_ms": res.latency_ms,
             "fallback_used": res.fallback_used,
             "tools_requested": tools_requested,
+            // v16: la traza de la cascada y el estado de cuota.
+            "provider_trace": res.provider_trace,
+            "quota": res.quota,
         }
     })
 }
@@ -563,6 +629,7 @@ mod tests {
             tools_used: Vec::new(),
             fallback_used: false,
             quota: None,
+            provider_trace: Vec::new(),
         };
         let v = gemini_response(&res, 3);
         assert_eq!(v["candidates"][0]["content"]["parts"][0]["text"], "hola");
@@ -589,6 +656,7 @@ mod tests {
             tools_used: Vec::new(),
             fallback_used: false,
             quota: None,
+            provider_trace: Vec::new(),
         };
         let v = gemini_response(&res, 0);
         assert_eq!(v["modelVersion"], "MiniMax-M3.1-Flash");

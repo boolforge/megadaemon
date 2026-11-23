@@ -1,0 +1,24 @@
+{
+  "_meta": {
+    "id": "google-ai-studio__http_401",
+    "provider": "google-ai-studio",
+    "status": 401,
+    "origen": "SINTETICO",
+    "nota": "Estilo de error de Google AI Studio (el mensaje va en 'error.message' con otro envoltorio). La clave que aparece es FICTICIA."
+  },
+  "body": {
+    "error": {
+      "code": 401,
+      "message": "API key not valid. Please pass a valid API key.",
+      "status": "UNAUTHENTICATED",
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+          "reason": "API_KEY_INVALID",
+          "domain": "googleapis.com",
+          "metadata": { "service": "generativelanguage.googleapis.com" }
+        }
+      ]
+    }
+  }
+}

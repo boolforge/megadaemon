@@ -581,6 +581,81 @@ pub fn tool_definitions() -> Value {
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
+            "name": "task_queue",
+            "description": "Cola de tareas COMPARTIDA de MegaDaemon (movil + PC + agentes). Acciones: list (ver cola), submit (encolar), claim (TOMAR tareas con lease para este nodo), lease (renovar), migrate (pasar el trabajo de un nodo a otro cuando uno falla o se queda sin cuota), pause (pausar por cuota/red), merge (fusionar con lo que hay en Drive). IMPORTANTE: si la cuota esta en 'pausa', claim NO devuelve tareas: termina tu paso actual, guarda tu checkpoint y espera al reset.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "accion": {
+                        "type": "string",
+                        "description": "list | submit | claim | lease | migrate | pause | merge | sync"
+                    },
+                    "nodo": { "type": "string", "description": "Nombre de este nodo (pc, movil, agente-...)." },
+                    "kind": { "type": "string", "description": "Tipo de tarea (para submit)." },
+                    "payload": { "type": "string", "description": "JSON del payload (para submit)." },
+                    "prioridad": { "type": "integer", "description": "Prioridad (0-9, 9 = maxima)." },
+                    "max": { "type": "integer", "description": "Máximo de tareas a tomar (claim)." },
+                    "lease_s": { "type": "integer", "description": "Duración del lease en segundos (defecto 900)." },
+                    "desde": { "type": "string", "description": "Nodo origen (migrate)." },
+                    "hacia": { "type": "string", "description": "Nodo destino (migrate)." },
+                    "until": { "type": "integer", "description": "Epoch hasta el que se pausa (pause)." },
+                    "motivo": { "type": "string", "description": "Motivo de la pausa (cuota, red...)." }
+                }
+            }
+        },
+        {
+            "name": "http_fetch",
+            "description": "Transferencias HTTP nativas (el 'curl' de MegaDaemon, en Rust puro: el movil NO tiene curl/wget). Descarga una URL a fichero (con resume por Range, reintentos y verificacion SHA-256), consulta cabeceras (HEAD), hace GET de texto o POST de un fichero. Tambien acepta una lista de URLs para descargarlas EN PARALELO. Devuelve bytes, sha256, segundos y MB/s reales.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "URL a descargar/consultar (para paralelo, la lista va en 'urls')." },
+                    "urls": { "type": "array", "items": { "type": "string" }, "description": "Varias URLs para descargar en paralelo." },
+                    "destino": { "type": "string", "description": "Ruta del fichero de destino (si se omite, se devuelve el cuerpo en memoria)." },
+                    "method": { "type": "string", "description": "GET (defecto), HEAD o POST/PUT." },
+                    "sha256": { "type": "string", "description": "SHA-256 esperado: si no coincide, NO se da por buena la descarga." },
+                    "workers": { "type": "integer", "description": "Hilos en paralelo (defecto 4)." },
+                    "timeout_s": { "type": "integer", "description": "Timeout global en segundos (defecto 120)." },
+                    "retries": { "type": "integer", "description": "Reintentos (defecto 3)." }
+                }
+            }
+        },
+{
+            "name": "antigravity_sessions",
+            "description": "Estado de las SESIONES de Antigravity en el movil: conversaciones abiertas, sesiones muertas (con el motivo) y las tareas del daemon de Antigravity. Sirve para ver que esta vivo, que esta haciendo y para recuperar el trabajo cuando se queda sin cuota.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "accion": { "type": "string", "description": "estado (defecto) | list | dead | tasks" }
+                }
+            }
+},
+{
+            "name": "re_analyze",
+            "description": "MOTOR DE RE de MegaDaemon (punto de entrada UNICO): identifica el binario (ELF/PE/MachO/DEX/APK/Go/UPX) CON evidencia, extrae cadenas interesting (URLs, rutas, claves, magisk/root/jni), lista secciones y simbolos, y devuelve un informe uniforme. Accion catalogo lista TODAS las capacidades de RE/deofuscacion con el modulo que las implementa (~700 tokens) para que no adivines tool names. NUNCA ejecuta el binario analizado: es analisis estatico.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "accion": { "type": "string", "description": "catalogo | identify | analyze | strings | deobfuscate" },
+                    "ruta": { "type": "string", "description": "Ruta del binario (obligatoria salvo en catalogo)." },
+                    "max_cadenas": { "type": "integer", "description": "Maximo de cadenas interesting (defecto 60)." },
+                    "plat_key": { "type": "string", "description": "Clave de plataforma para descifrar strings." }
+                }
+            }
+},
+{
+            "name": "antigravity_sessions",
+            "description": "Estado de las SESIONES de Antigravity en el movil: conversaciones abiertas, sesiones muertas (con el motivo) y las tareas del daemon de Antigravity. Sirve para ver que esta vivo, que esta haciendo y para recuperar el trabajo cuando se queda sin cuota.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "accion": { "type": "string", "description": "estado (defecto) | list | dead | tasks" }
+                }
+            }
+},
+        {
+            "name": "phone_backup",
+            "description": "Motor de backup nativo de apps (Rust puro, sin curl ni shell): inventario de apps del movil, contenedor cifrado AEGIS-256 por segmentos con manifiesto sha256 por fichero, verificacion del AEAD, restauracion (simulacro por defecto, exige confirm=true) y SUBIDA PIPELINING a Drive (sube cada segmento ya cerrado mientras se recoge el siguiente; mide MiB/s y ETA). Anti-congelacion: nice/ionice de la clase mas baja, sleep entre lotes y descanso si la carga del sistema se dispara. Acciones: inventory | create | list | verify | restore | upload. create/restore/upload escriben o publican en Drive: exigen confirm=true.",
             "name": "quota_status",
             "description": "Estado de la CUOTA de los proveedores/modelos: cuanto queda (%), cuando resetea y en que modo esta (normal/aviso/ahorro/pausa). Respuesta MUY compacta (~70 tokens) para no gastar. En 'pausa' significa que la cuota se agota: termina el paso actual, guarda tu checkpoint y espera al reset; no sigas abriendo tareas nuevas.",
             "inputSchema": {
@@ -741,9 +816,387 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
             json!({ "content": [{ "type": "text", "text": txt }] })
         }
+        "task_queue" => {
+            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("list");
+            let nodo = args.get("nodo").and_then(|v| v.as_str()).unwrap_or("pc");
+            let v = match accion {
+                "list" => {
+                    let t = crate::task_scheduler::list();
+                    json!({ "ok": true, "count": t.len(), "tareas": t.iter().map(|x| json!({
+                        "id": x.id, "kind": x.kind, "state": x.state.as_str(),
+                        "priority": x.priority, "node": x.node,
+                        "resume_after": x.resume_after, "motivo_pausa": x.motivo_pausa,
+                    })).collect::<Vec<_>>() })
+                }
+                "submit" => {
+                    let kind = args.get("kind").and_then(|v| v.as_str()).unwrap_or("generica");
+                    let payload = args.get("payload")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| serde_json::from_str(s).ok())
+                        .unwrap_or(Value::Null);
+                    let prio = args.get("prioridad").and_then(|v| v.as_u64()).unwrap_or(5) as u8;
+                    let id = crate::task_scheduler::submit(&kind, payload, prio, vec![], Default::default());
+                    json!({ "ok": true, "id": id })
+                }
+                "claim" => {
+                    if crate::quota_guard::nivel_global() == crate::quota_guard::Nivel::Pausa {
+                        json!({
+                            "ok": false,
+                            "motivo": "cuota en pausa: termina tu paso actual, guarda el checkpoint y espera al reset",
+                            "aviso": crate::quota_guard::aviso_para_agente(),
+                        })
+                    } else {
+                        let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+                        let lease = args.get("lease_s").and_then(|v| v.as_u64()).unwrap_or(900);
+                        let ids = crate::task_scheduler::repartir_por_nodo(nodo, max, lease);
+                        json!({ "ok": true, "nodo": nodo, "tomadas": ids })
+                    }
+                }
+                "lease" => {
+                    let s = args.get("lease_s").and_then(|v| v.as_u64()).unwrap_or(900);
+                    json!({ "ok": true, "renovadas": crate::task_scheduler::renovar_lease(nodo, s) })
+                }
+                "migrate" => {
+                    let desde = args.get("desde").and_then(|v| v.as_str()).unwrap_or("");
+                    let hacia = args.get("hacia").and_then(|v| v.as_str()).unwrap_or("");
+                    json!({ "ok": true, "migradas": crate::task_scheduler::migrar_tareas(desde, hacia) })
+                }
+                "pause" => {
+                    let until = args.get("until").and_then(|v| v.as_u64());
+                    let motivo = args.get("motivo").and_then(|v| v.as_str()).unwrap_or("cuota");
+                    json!({ "ok": true, "pausadas": crate::task_scheduler::pausar_por_cuota(nodo, until, motivo) })
+                }
+                "sync" => match crate::task_sync::sincronizar_drive() {
+                    Ok(r) => r,
+                    Err(e) => json!({ "ok": false, "error": e }),
+                },
+                "merge" => {
+                    let export = crate::task_scheduler::export_all_tasks(nodo);
+                    json!({ "ok": true, "export": export })
+                }
+                _ => json!({ "ok": false, "error": format!("accion desconocida: {accion}") }),
+            };
+            let txt = serde_json::to_string(&v).unwrap_or_default();
+            json!({ "content": [{ "type": "text", "text": txt }] })
+        }
+        "http_fetch" => {
+            let mut o = crate::http_transfer::Opciones::default();
+            if let Some(t) = args.get("timeout_s").and_then(|v| v.as_u64()) {
+                o.timeout_s = t;
+            }
+            if let Some(r) = args.get("retries").and_then(|v| v.as_u64()) {
+                o.reintentos = r as u32;
+            }
+            if let Some(s) = args.get("sha256").and_then(|v| v.as_str()) {
+                o.sha256_esperado = Some(s.to_string());
+            }
+            if let Some(d) = args.get("destino").and_then(|v| v.as_str()) {
+                if !d.is_empty() {
+                    o.destino = Some(std::path::PathBuf::from(d));
+                }
+            }
+            let method = args.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
+            let urls: Vec<String> = args
+                .get("urls")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let v = if !urls.is_empty() {
+                // Paralelo.
+                let workers = args.get("workers").and_then(|x| x.as_u64()).unwrap_or(4) as usize;
+                let dir = o
+                    .destino
+                    .clone()
+                    .unwrap_or_else(|| std::path::PathBuf::from("/data/local/tmp/megadaemon/downloads"));
+                let _ = std::fs::create_dir_all(&dir);
+                crate::http_transfer::descargar_paralelo(&urls, &dir, workers, &o)
+            } else {
+                let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                if url.is_empty() {
+                    json!({ "content": [{ "type": "text", "text": "http_fetch necesita 'url' o 'urls'" }] })
+                } else if method.eq_ignore_ascii_case("HEAD") {
+                    match crate::http_transfer::head(url, &o) {
+                        Ok(h) => serde_json::to_value(h).unwrap_or(Value::Null),
+                        Err(e) => json!({ "error": e }),
+                    }
+                } else if method.eq_ignore_ascii_case("GET") && o.destino.is_none() {
+                    match crate::http_transfer::get_texto(url, &o) {
+                        Ok((st, t)) => json!({ "status": st, "body": t.chars().take(4000).collect::<String>() }),
+                        Err(e) => json!({ "error": e }),
+                    }
+                } else if method.eq_ignore_ascii_case("POST") || method.eq_ignore_ascii_case("PUT") {
+                    let f = o.destino.clone().unwrap_or_default();
+                    match crate::http_transfer::subir(url, &f, &o, method) {
+                        Ok(r) => serde_json::to_value(r).unwrap_or(Value::Null),
+                        Err(e) => json!({ "error": e }),
+                    }
+                } else {
+                    match crate::http_transfer::descargar_con_reintentos(url, &o) {
+                        Ok(r) => serde_json::to_value(r).unwrap_or(Value::Null),
+                        Err(e) => json!({ "error": e }),
+                    }
+                }
+            };
+            let txt = serde_json::to_string(&v).unwrap_or_default();
+            json!({ "content": [{ "type": "text", "text": txt }] })
+        }
+                "phone_backup" => {
+                    // Motor de backup nativo de apps: la MISMA libreria que el
+                    // binario `md-backup` (paridad CLI <-> MCP <-> agent_coding).
+                    let action = {
+                        let a = s("action");
+                        if a.trim().is_empty() { "inventory".to_string() } else { a }
+                    };
+                    let st = crate::cockpit_server::state_dir();
+                    let root = std::path::PathBuf::from({
+                        let r = s("root");
+                        if r.is_empty() { "/".to_string() } else { r }
+                    });
+                    let packages = sa("packages");
+                    // `create`, `restore` y `upload` escriben o publican: exigen
+                    // `confirm: true` (misma politica que el resto de tools).
+                    let needs_confirm = matches!(action.as_str(), "create" | "restore" | "upload");
+                    if needs_confirm && !b("confirm") {
+                        json!({ "content": [{ "type": "text", "text": format!("phone_backup {action} exige confirm=true") }], "isError": true })
+                    } else {
+                        let res: Result<Value, String> = match action.as_str() {
+                            "inventory" => {
+                                let opts = crate::backup_apps::InventoryOptions {
+                                    root: root.clone(),
+                                    packages: packages.clone(),
+                                    measure: b("measure"),
+                                    ..Default::default()
+                                };
+                                crate::backup_apps::inventory(&opts).map(|apps| {
+                                    json!({
+                                        "ok": true,
+                                        "packages": apps.len(),
+                                        "apps": apps,
+                                    })
+                                })
+                            }
+                            "list" => {
+                                let out = s("out");
+                                if out.is_empty() {
+                                    Err("phone_backup list necesita 'out'".to_string())
+                                } else {
+                                    crate::backup_apps::list(std::path::Path::new(&out)).map(|v| {
+                                        json!({ "ok": true, "containers": v })
+                                    })
+                                }
+                            }
+                            "verify" => {
+                                let out = s("out");
+                                if out.is_empty() {
+                                    Err("phone_backup verify necesita 'out'".to_string())
+                                } else {
+                                    let key = match s("key") {
+                                        p if p.trim().is_empty() => Ok(None),
+                                        p => crate::backup_apps::read_key_file(std::path::Path::new(&p)).map(Some),
+                                    };
+                                    match key {
+                                        Err(e) => Err(e),
+                                        Ok(key) => crate::backup_apps::verify(std::path::Path::new(&out), key.as_deref()).map(|r| {
+                                            json!({ "ok": r.ok, "report": r })
+                                        }),
+                                    }
+                                }
+                            }
+                            "create" => {
+                                let out = s("out");
+                                if out.is_empty() {
+                                    Err("phone_backup create necesita 'out'".to_string())
+                                } else {
+                                    let opts = crate::backup_apps::CreateOptions {
+                                        root: root.clone(),
+                                        out: std::path::PathBuf::from(&out),
+                                        packages: packages.clone(),
+                                        segment_bytes: if n("segment_bytes") > 0 { n("segment_bytes") } else { crate::backup_apps::DEFAULT_SEGMENT_BYTES },
+                                        passphrase: s("password").into(),
+                                        key_out: {
+                                            let k = s("key_out");
+                                            if k.is_empty() { None } else { Some(std::path::PathBuf::from(k)) }
+                                        },
+                                        ..Default::default()
+                                    };
+                                    let mut sink = crate::backup_apps::NullSink;
+                                    crate::backup_apps::create(&opts, &mut sink).map(|r| json!({ "ok": true, "report": r }))
+                                }
+                            }
+                            "restore" => {
+                                let out = s("out");
+                                if out.is_empty() {
+                                    Err("phone_backup restore necesita 'out'".to_string())
+                                } else {
+                                    let key = match s("key") {
+                                        p if p.trim().is_empty() => Ok(None),
+                                        p => crate::backup_apps::read_key_file(std::path::Path::new(&p)).map(Some),
+                                    };
+                                    let key = match key {
+                                        Err(e) => return Some(json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true })),
+                                        Ok(k) => k,
+                                    };
+                                    let dest = {
+                                        let d = s("dest");
+                                        if d.is_empty() { "/".to_string() } else { d }
+                                    };
+                                    let opts = crate::backup_apps::RestoreOptions {
+                                        dir: std::path::PathBuf::from(&out),
+                                        dest: std::path::PathBuf::from(&dest),
+                                        packages: packages.clone(),
+                                        confirm: b("confirm"),
+                                        overwrite: b("overwrite"),
+                                        key,
+                                    };
+                                    crate::backup_apps::restore(&opts).map(|r| json!({ "ok": r.mismatches.is_empty(), "report": r }))
+                                }
+                            }
+                            "upload" => {
+                                let out = s("out");
+                                let folder = s("folder_id");
+                                if out.is_empty() {
+                                    Err("phone_backup upload necesita 'out'".to_string())
+                                } else if folder.is_empty() {
+                                    Err("phone_backup upload necesita 'folder_id'".to_string())
+                                } else {
+                                    let workers = if n("workers") == 0 { 3usize } else { (n("workers") as usize).clamp(1, 16) };
+                                    let state_dir = {
+                                        let sd = s("state_dir");
+                                        if sd.is_empty() { st.clone() } else { sd }
+                                    };
+                                    // El `?` no vale aquí (esta función devuelve
+                                    // `Option`): la subida va en una clausura que
+                                    // sí devuelve `Result`.
+                                    (|| -> Result<Value, String> {
+                                    // Subcarpeta (p.ej. `P0-apps`): se busca o se crea
+                                    // con el VFS nativo.
+                                    let folder = match s("subfolder") {
+                                        sub if sub.trim().is_empty() => folder.clone(),
+                                        sub => crate::drive_native::ensure_folder(&sub, &folder, Some(&state_dir))?,
+                                    };
+                                    let name = {
+                                        let nm = s("name");
+                                        if nm.is_empty() {
+                                            std::path::Path::new(&out)
+                                                .file_name()
+                                                .map(|x| x.to_string_lossy().to_string())
+                                                .unwrap_or_else(|| "backup".to_string())
+                                        } else { nm }
+                                    };
+                                    let mut up = crate::backup_apps::DriveUploader::new(&folder, &name, workers);
+                                    up.chunk_bytes = if n("chunk_bytes") > 0 { n("chunk_bytes") } else { crate::backup_apps::DRIVE_CHUNK_MIN };
+                                    up.state_dir = Some(state_dir.clone());
+                                    up.delete_after_upload = b("delete_after_upload");
+                                    up.container_dir = Some(std::path::PathBuf::from(&out));
+                                    up.start()?;
+                                    let header = crate::backup_apps::read_header(std::path::Path::new(&out))?;
+                                    for sg in &header.segments {
+                                        let p = std::path::Path::new(&out).join("segments").join(&sg.name);
+                                        if !p.exists() { continue; }
+                                        // `submit` es un método del trait `SegmentSink`:
+                                        // se llama con la ruta completa para no
+                                        // depender del `use`.
+                                        crate::backup_apps::SegmentSink::submit(
+                                            &mut up,
+                                            &crate::backup_apps::SealedSegment {
+                                                index: sg.index,
+                                                path: p,
+                                                info: sg.clone(),
+                                            },
+                                        )?;
+                                    }
+                                    let manifest = crate::backup_apps::read_manifest(std::path::Path::new(&out))?;
+                                    crate::backup_apps::SegmentSink::finish(&mut up, &header, &manifest)?;
+                                    let stats = up.stats();
+                                    let up_ms = stats.ended_ms.saturating_sub(stats.started_ms).max(1);
+                                    Ok(json!({
+                                        "ok": up.errors().is_empty(),
+                                        "segments": stats.segments,
+                                        "bytes": stats.bytes,
+                                        "mib_per_s": (crate::backup_apps::mib_per_s(stats.bytes, up_ms) * 1000.0).round() / 1000.0,
+                                        "eta_s": crate::backup_apps::eta_s(stats.bytes, stats.total_bytes.max(stats.bytes), up_ms).round() as u64,
+                                        "errors": up.errors(),
+                                    }))
+                                    })()
+                                }
+                            }
+                            other => Err(format!("unknown phone_backup action '{}'", other)),
+                        };
+                        match res {
+                            Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
+                            Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+                        }
+                    }
+                }
+        "antigravity_sessions" => {
+            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("estado");
+            let v = match accion {
+                "list" => crate::antigravity_sessions::sesiones().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                "dead" => crate::antigravity_sessions::muertas().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                "tasks" => crate::antigravity_sessions::tareas_daemon(),
+                _ => crate::antigravity_sessions::estado().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+            };
+            let txt = match v {
+                Ok(x) => serde_json::to_string_pretty(&x).unwrap_or_default(),
+                Err(e) => format!("ERROR: {e}"),
+            };
+            json!({ "content": [{ "type": "text", "text": txt }] })
+        }
+        "re_analyze" => {
+            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("catalogo");
+            let ruta = args.get("ruta").and_then(|v| v.as_str()).unwrap_or("");
+            let v = match accion {
+                "catalogo" => crate::re_engine::catalogo(),
+                "identify" => match crate::re_engine::identificar(std::path::Path::new(ruta)) {
+                    Ok(id) => serde_json::to_value(id).unwrap_or(Value::Null),
+                    Err(e) => json!({ "ok": false, "error": e }),
+                },
+                "strings" => match std::fs::read(ruta) {
+                    Ok(d) => json!({
+                        "ok": true,
+                        "cadenas": crate::re_engine::cadenas_interesantes(
+                            &d,
+                            args.get("max_cadenas").and_then(|v| v.as_u64()).unwrap_or(60) as usize,
+                        ),
+                    }),
+                    Err(e) => json!({ "ok": false, "error": format!("leer: {e}") }),
+                },
+                "deobfuscate" => {
+                    let key = args.get("plat_key").and_then(|v| v.as_str()).unwrap_or("");
+                    let rep = crate::deobfuscate::deobfuscate_binary(key, ruta, 500);
+                    serde_json::to_value(rep).unwrap_or(Value::Null)
+                }
+                _ => {
+                    let mut o = crate::re_engine::OpcionesAnalisis::default();
+                    o.max_cadenas = args.get("max_cadenas").and_then(|v| v.as_u64()).unwrap_or(60) as usize;
+                    match crate::re_engine::analizar(std::path::Path::new(ruta), &o) {
+                        Ok(v) => v,
+                        Err(e) => json!({ "ok": false, "error": e }),
+                    }
+                }
+            };
+            let txt = serde_json::to_string(&v).unwrap_or_default();
+            json!({ "content": [{ "type": "text", "text": txt }] })
+        }
+        "antigravity_sessions" => {
+            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("estado");
+            let v = match accion {
+                "list" => crate::antigravity_sessions::sesiones().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                "dead" => crate::antigravity_sessions::muertas().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+                "tasks" => crate::antigravity_sessions::tareas_daemon(),
+                _ => crate::antigravity_sessions::estado().map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
+            };
+            let txt = match v {
+                Ok(x) => serde_json::to_string_pretty(&x).unwrap_or_default(),
+                Err(e) => format!("ERROR: {e}"),
+            };
+            json!({ "content": [{ "type": "text", "text": txt }] })
+        }
         "quota_status" => {
-            // Snapshot COMPACTO por defecto: el objetivo es que el agente
-            // sepa cuanto queda sin gastar tokens de mas.
             let full = args.get("full").and_then(|v| v.as_bool()).unwrap_or(false);
             let provider = args.get("provider").and_then(|v| v.as_str()).unwrap_or("");
             let v = if full {

@@ -298,7 +298,14 @@ jobs:
           fi
           file dist/megadaemon-core-android-arm64 | grep -q "ELF 64-bit LSB.*ARM aarch64" || {
             echo "::error::dist/megadaemon-core-android-arm64 no es un ELF aarch64"; exit 1; }
-          ( cd dist && sha256sum -c megadaemon-core-android-arm64.sha256 ) || exit 1
+          # El manifiesto .sha256 se genera desde la RAÍZ del repo
+          # (`sha256sum dist/<asset> > dist/<asset>.sha256`) ⇒ la ruta que
+          # contiene lleva el prefijo `dist/`.  Verificar desde dentro de
+          # dist/ hacía que sha256sum buscase `dist/dist/<asset>` y el job
+          # fallaba con "No such file or directory" => sin release => el móvil
+          # sin binario.  Se verifica DESDE LA RAÍZ.
+          sha256sum -c dist/megadaemon-core-android-arm64.sha256 || exit 1
+          sha256sum -c "dist/megadaemon-core-android-arm64-${GITHUB_SHA::7}.sha256" || exit 1
           echo "assets ARM64 verificados ✓"
       - name: Publicar el estado del release (manifiesto con SÓLO los assets que existen)
         # El manifiesto se genera DINÁMICO: si una pata de Linux falló, su

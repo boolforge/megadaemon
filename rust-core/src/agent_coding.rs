@@ -1416,7 +1416,9 @@ pub fn call_provider_messages(
     let mut payload = json!({
         "model": provider.model,
         "messages": wire_messages,
-        "max_tokens": max_tokens,
+        // v16: `max_tokens` acotado (igual que en `providers`), para que un
+        // 400 del proveedor no se confunda con un fallo del proveedor.
+        "max_tokens": max_tokens.min(crate::providers::MAX_TOKENS_CAP),
         "temperature": 0.2,
     });
     if let Some(arr) = tools.as_array() {
@@ -1458,13 +1460,25 @@ pub fn call_provider_messages(
     let body_bytes = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
     let resp = req
         .send(body_bytes.as_slice())
-        .map_err(|e| format!("HTTP transport error ({}): {}", provider.id, e))?;
+        // v16 (DEFECTO-02): la clave del proveedor NUNCA viaja en un error
+        // (el cuerpo de error de un proveedor puede ecoarla).
+        .map_err(|e| {
+            crate::providers::redact_secret(
+                &format!("HTTP transport error ({}): {}", provider.id, e),
+                &api_key,
+            )
+        })?;
 
     let status = resp.status().as_u16();
     let text = resp
         .into_body()
         .read_to_string()
-        .map_err(|e| format!("HTTP body read error ({}): {}", provider.id, e))?;
+        .map_err(|e| {
+            crate::providers::redact_secret(
+                &format!("HTTP body read error ({}): {}", provider.id, e),
+                &api_key,
+            )
+        })?;
 
     if status >= 400 {
         let detail = serde_json::from_str::<Value>(text.trim())
@@ -1480,7 +1494,10 @@ pub fn call_provider_messages(
                     .or_else(|| v.get("message").and_then(Value::as_str).map(String::from))
             })
             .unwrap_or_else(|| truncate_utf8_prefix(text.trim(), 200).to_string());
-        return Err(format!("HTTP {} ({}): {}", status, provider.id, detail));
+        return Err(crate::providers::redact_secret(
+            &format!("HTTP {} ({}): {}", status, provider.id, detail),
+            &api_key,
+        ));
     }
 
     let trimmed = text.trim();
@@ -1509,7 +1526,10 @@ pub fn call_provider_messages(
             .and_then(Value::as_str)
             .or_else(|| err_obj.as_str())
             .unwrap_or("API error");
-        return Err(format!("Provider API error ({}): {}", provider.id, msg));
+        return Err(crate::providers::redact_secret(
+            &format!("Provider API error ({}): {}", provider.id, msg),
+            &api_key,
+        ));
     }
 
     let msg_node = &v["choices"][0]["message"];

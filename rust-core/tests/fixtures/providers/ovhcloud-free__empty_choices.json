@@ -1,0 +1,17 @@
+{
+  "_meta": {
+    "id": "ovhcloud-free__empty_choices",
+    "provider": "ovhcloud-free",
+    "status": 200,
+    "origen": "SINTETICO",
+    "nota": "2xx con 'choices' VACIO: el proveedor acepto la peticion pero no devolvio nada utilizable. Debe ser un error con mensaje util (no un panic y no una respuesta vacia)."
+  },
+  "body": {
+    "id": "ovh-example-001",
+    "object": "chat.completion",
+    "created": 1764000006,
+    "model": "qwen3.6-35b-a3b",
+    "choices": [],
+    "usage": { "total_tokens": 0 }
+  }
+}

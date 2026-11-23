@@ -108,6 +108,14 @@ fn heuristic_plan(goal: &str) -> Plan {
             deps: vec![],
         });
     }
+    if has(&["detector", "detect", "rootcheck", "shamiko", "magisk", "su ", "veredicto"]) {
+        tasks.push(PlannedTask {
+            kind: "root.occlusion.audit".into(),
+            payload: json!({ "mode": "audit" }),
+            priority: 5,
+            deps: vec![],
+        });
+    }
     if has(&["alerta", "aviso", "vigila", "monitor", "controla"]) {
         tasks.push(PlannedTask {
             kind: "alerts.check".into(),
@@ -236,6 +244,8 @@ pub fn is_known_kind(kind: &str) -> bool {
         "capabilities.verify",
         "root.stealth.status",
         "root.stealth.apply",
+        "root.occlusion.audit",
+        "magisk.modules",
         "tasks.list",
     ];
     KINDS.contains(&kind)
@@ -385,6 +395,48 @@ pub fn execute(kind: &str, payload: &Value) -> Value {
             let r = crate::root_stealth::apply(scope, confirm);
             json!({ "ok": r["ok"].clone(), "summary": "Perfil de ocultación aplicado", "detail": r })
         }
+        "root.occlusion.audit" => {
+            // Banco de pruebas de ocultación de root, ejecutable desde el
+            // agente: `{"kind":"root.occlusion.audit","payload":{"packages":[...],
+            // "mode":"audit|state|exec|static|csc"}}`.
+            let packages = payload
+                .get("packages")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([]));
+            let package = payload.get("package").and_then(|v| v.as_str()).unwrap_or("");
+            let mode = payload.get("mode").and_then(|v| v.as_str()).unwrap_or("audit");
+            let r = crate::android::root_occlusion_audit(&packages, package, mode);
+            let summary = match mode {
+                "state" => format!(
+                    "{} señales vigiladas",
+                    r["signals"].as_array().map(|a| a.len()).unwrap_or(0)
+                ),
+                "csc" => format!(
+                    "CSC: {} = {}",
+                    crate::csc_verify::FEATURE,
+                    r["value"].as_str().unwrap_or("(ausente)")
+                ),
+                _ => format!(
+                    "{} paquetes auditados (PASS={} FAIL={} PARCIAL={})",
+                    r["audit"]["summary"]["total"].as_u64().unwrap_or(0),
+                    r["audit"]["summary"]["pass"].as_u64().unwrap_or(0),
+                    r["audit"]["summary"]["fail"].as_u64().unwrap_or(0),
+                    r["audit"]["summary"]["parcial"].as_u64().unwrap_or(0)
+                ),
+            };
+            json!({ "ok": true, "summary": summary, "detail": r })
+        }
+        "magisk.modules" => {
+            let action = payload.get("action").and_then(|v| v.as_str()).unwrap_or("list");
+            let module_id = payload.get("module_id").and_then(|v| v.as_str()).unwrap_or("");
+            let zip_path = payload.get("zip_path").and_then(|v| v.as_str()).unwrap_or("");
+            let enable = payload.get("enable").and_then(|v| v.as_bool()).unwrap_or(false);
+            let dry_run = payload.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(true);
+            let r = crate::android::magisk_module(
+                action, module_id, "", "", zip_path, enable, dry_run,
+            );
+            json!({ "ok": r["ok"].clone(), "summary": format!("magisk {}", action), "detail": r })
+        }
         "tasks.list" => {
             let r = crate::task_scheduler::list_json();
             json!({ "ok": true, "summary": format!("{} tareas", r["tasks"].as_array().map(|a| a.len()).unwrap_or(0)), "detail": r })
@@ -425,7 +477,7 @@ pub fn is_known_kind_list() -> Vec<&'static str> {
         "apk.analyze", "updates.plan", "updates.status", "profile.analyze", "profile.briefing",
         "messaging.ingest", "messaging.inventory", "alerts.check", "alerts.list", "device.overview",
         "device.apps", "web.scrape", "capabilities.verify", "root.stealth.status",
-        "root.stealth.apply", "tasks.list",
+        "root.stealth.apply", "root.occlusion.audit", "magisk.modules", "tasks.list",
     ]
 }
 

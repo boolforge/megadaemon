@@ -1,0 +1,16 @@
+{
+  "_meta": {
+    "id": "minimax-m3.1-flash__http_404",
+    "provider": "minimax-m3.1-flash",
+    "status": 404,
+    "origen": "SINTETICO",
+    "nota": "404 = el modelo ya no existe en el proveedor (o se retiro del catalogo). NO se reintenta: reintentar un 404 solo gasta tiempo."
+  },
+  "body": {
+    "error": {
+      "message": "The model 'MiniMax-M2.7' does not exist or you do not have access to it.",
+      "type": "not_found_error",
+      "code": "model_not_found"
+    }
+  }
+}

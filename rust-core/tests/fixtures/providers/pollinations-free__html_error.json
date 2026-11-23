@@ -1,0 +1,10 @@
+{
+  "_meta": {
+    "id": "pollinations-free__html_error",
+    "provider": "pollinations-free",
+    "status": 502,
+    "origen": "SINTETICO",
+    "nota": "502 con cuerpo HTML (un CDN/proxy delante). El cuerpo no es JSON: el daemon no puede parsearlo como error de API, pero tiene que decir el status y un trozo del cuerpo (recortado sin partir UTF-8)."
+  },
+  "raw": "<html><head><title>502 Bad Gateway</title></head><body><center><h1>502 Bad Gateway</h1></center><hr><center>nginx</center></body></html>"
+}

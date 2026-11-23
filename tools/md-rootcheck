@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# md-rootcheck — banco de pruebas de ocultación de root.
+#
+#   md-rootcheck <paquete>[,<paquete>...]   tabla app -> señal -> veredicto
+#   md-rootcheck --state                    qué señales quedan a la vista ahora
+#   md-rootcheck --static <paquete>         sólo el escaneo estático del APK
+#   md-rootcheck --exec <paquete>           arranca la app y captura su logcat
+#   md-rootcheck --csc                      valor real de la feature del CSC
+#
+# Es un envoltorio de `megadaemon-core rootcheck` (el binario MegaDaemon).
+# Si el binario no está en el PATH se busca en los sitios habituales del móvil
+# y del PC.
+set -euo pipefail
+
+find_bin() {
+  if command -v megadaemon-core >/dev/null 2>&1; then
+    command -v megadaemon-core
+    return 0
+  fi
+  for c in \
+    /data/local/tmp/megadaemon/megadaemon-core \
+    /data/local/tmp/megadaemon-core \
+    /usr/local/bin/megadaemon-core \
+    "$HOME/.cargo/bin/megadaemon-core"
+  do
+    [ -x "$c" ] && { echo "$c"; return 0; }
+  done
+  return 1
+}
+
+BIN="$(find_bin)" || {
+  echo "md-rootcheck: no encuentro megadaemon-core (instálalo o ponlo en el PATH)" >&2
+  exit 127
+}
+
+exec "$BIN" rootcheck "$@"

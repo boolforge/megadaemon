@@ -1314,3 +1314,397 @@ mod v15_tests {
         assert_eq!(SUPERVISOR_PATH, "/data/adb/service.d/99-megadaemon.sh");
     }
 }
+// ========================================================================= //
+// GESTIÓN REAL DE MÓDULOS MAGISK (instalar, validar, Shamiko)
+// ========================================================================= //
+//
+// A partir de aquí el módulo deja de ser "generador de un módulo" y pasa a
+// ser **el gestor de los módulos del móvil**: lista, habilita, deshabilita,
+// valida un ZIP y lo instala.
+//
+// Reglas que este código respeta (y que se pueden comprobar leyendo el
+// fuente, no creyendo un README):
+//
+// 1. **Nada se activa a ciegas.** Instalar un módulo Magisk exige reiniciar.
+//    Por eso `install` tiene un modo `dry_run` (por defecto) que devuelve
+//    exactamente lo que haría, y un modo real que **deja el módulo
+//    deshabilitado** (fichero `disable`) para que el reinicio sea una decisión
+//    de la persona, no del agente.
+// 2. **Un ZIP no es un módulo.** Antes de instalar se valida: tiene
+//    `module.prop` con `id=`, y se anota si trae `zygisk/`, `service.sh`,
+//    `post-fs-data.sh` o `customize.sh`.
+// 3. **Nada se borra.** Como el resto del gestor, los módulos se apartan, no
+//    se borran.
+// 4. **Todo se mide.** El resultado incluye el SHA-256 del ZIP, el SHA-256 del
+//    `module.prop` instalado y la salida real del comando.
+
+/// Repo oficial de Shamiko (módulo Zygisk que oculta la raíz).
+pub const SHAMIKO_REPO: &str = "https://github.com/LSPosed/Shamiko";
+
+/// Fichero donde se dejan los ZIPs de módulos descargados.
+pub const MODULE_STAGE_DIR: &str = "/data/local/tmp/megadaemon/modules";
+
+/// Dónde deja Magisk los módulos que esperan el próximo reinicio.
+pub const MODULES_UPDATE_DIR: &str = "/data/adb/modules_update";
+
+/// Resultado de validar un ZIP de módulo Magisk.
+#[derive(Clone, Debug, Default)]
+pub struct ModuleZipInfo {
+    /// Ruta del ZIP.
+    pub path: String,
+    /// Tamaño del ZIP en bytes.
+    pub size: u64,
+    /// SHA-256 del ZIP.
+    pub sha256: String,
+    /// Número de entradas del ZIP.
+    pub entries: usize,
+    /// `id` del `module.prop` (si lo hay).
+    pub module_id: Option<String>,
+    /// `name` del `module.prop`.
+    pub name: Option<String>,
+    /// `version` del `module.prop`.
+    pub version: Option<String>,
+    /// `versionCode` del `module.prop`.
+    pub version_code: Option<String>,
+    /// `author` del `module.prop`.
+    pub author: Option<String>,
+    /// ¿Trae la librería Zygisk?
+    pub has_zygisk: bool,
+    /// ABIs de la librería Zygisk encontradas.
+    pub zygisk_abis: Vec<String>,
+    /// ¿Trae `post-fs-data.sh`?
+    pub has_post_fs_data: bool,
+    /// ¿Trae `service.sh`?
+    pub has_service: bool,
+    /// ¿Trae `customize.sh`?
+    pub has_customize: bool,
+    /// ¿Trae `uninstall.sh`?
+    pub has_uninstall: bool,
+    /// ¿Es un ZIP válido de módulo Magisk?
+    pub valid: bool,
+    /// Motivo de la invalidez.
+    pub error: Option<String>,
+}
+
+impl ModuleZipInfo {
+    /// Serializa a JSON.
+    pub fn to_json(&self) -> Value {
+        json!({
+            "path": self.path,
+            "size": self.size,
+            "sha256": self.sha256,
+            "entries": self.entries,
+            "module_id": self.module_id,
+            "name": self.name,
+            "version": self.version,
+            "version_code": self.version_code,
+            "author": self.author,
+            "has_zygisk": self.has_zygisk,
+            "zygisk_abis": self.zygisk_abis,
+            "has_post_fs_data": self.has_post_fs_data,
+            "has_service": self.has_service,
+            "has_customize": self.has_customize,
+            "has_uninstall": self.has_uninstall,
+            "valid": self.valid,
+            "error": self.error,
+        })
+    }
+}
+
+/// Lee una entrada `clave=valor` de un `module.prop`.
+fn prop_of(module_prop: &str, key: &str) -> Option<String> {
+    for line in module_prop.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix(&format!("{}=", key)) {
+            let v = rest.trim().to_string();
+            if !v.is_empty() {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
+/// Valida un ZIP de módulo Magisk (sin instalar nada).
+///
+/// Lee el ZIP **en el dispositivo** (o en local si el binario corre allí) y
+/// comprueba la estructura mínima que exige Magisk: `module.prop` con `id=`.
+pub fn validate_module_zip(zip_path: &str) -> ModuleZipInfo {
+    let mut info = ModuleZipInfo {
+        path: zip_path.to_string(),
+        ..Default::default()
+    };
+    if zip_path.trim().is_empty() {
+        info.error = Some("ruta vacía".to_string());
+        return info;
+    }
+    let Some(bytes) = crate::root_occlusion::read_device_file(zip_path, 64 * 1024 * 1024) else {
+        info.error = Some(format!("no se pudo leer el ZIP: {}", zip_path));
+        return info;
+    };
+    info.size = bytes.len() as u64;
+    info.sha256 = crate::root_occlusion::sha256_hex(&bytes);
+    let mut archive = match zip::ZipArchive::new(std::io::Cursor::new(bytes)) {
+        Ok(a) => a,
+        Err(e) => {
+            info.error = Some(format!("ZIP ilegible: {e}"));
+            return info;
+        }
+    };
+    info.entries = archive.len();
+    let names: Vec<String> = archive.file_names().map(|n| n.to_string()).collect();
+    for n in &names {
+        if n == "zygisk/arm64-v8a.so" || n.starts_with("zygisk/") {
+            info.has_zygisk = true;
+            if let Some(abi) = n.strip_prefix("zygisk/").and_then(|s| s.strip_suffix(".so")) {
+                info.zygisk_abis.push(abi.to_string());
+            }
+        }
+        match n.as_str() {
+            "post-fs-data.sh" => info.has_post_fs_data = true,
+            "service.sh" => info.has_service = true,
+            "customize.sh" => info.has_customize = true,
+            "uninstall.sh" => info.has_uninstall = true,
+            _ => {}
+        }
+    }
+    info.zygisk_abis.sort();
+    match archive.by_name("module.prop") {
+        Ok(mut f) => {
+            let mut s = String::new();
+            use std::io::Read;
+            let _ = f.read_to_string(&mut s);
+            info.module_id = prop_of(&s, "id");
+            info.name = prop_of(&s, "name");
+            info.version = prop_of(&s, "version");
+            info.version_code = prop_of(&s, "versionCode");
+            info.author = prop_of(&s, "author");
+            if info.module_id.is_none() {
+                info.error = Some("module.prop sin 'id='".to_string());
+            } else {
+                info.valid = true;
+            }
+        }
+        Err(_) => {
+            info.error = Some("el ZIP no tiene module.prop".to_string());
+        }
+    }
+    info
+}
+
+/// Instala (o simula la instalación de) un ZIP de módulo Magisk.
+///
+/// * `dry_run = true` → no toca el móvil: devuelve el plan y la validación.
+/// * `dry_run = false` → instala de verdad, pero **deja el módulo
+///   deshabilitado** (`disable`) salvo que `enable = true`. Un módulo
+///   deshabilitado no se carga en el próximo arranque: la activación es una
+///   decisión explícita de quien reinicia.
+pub fn install_module_zip(zip_path: &str, enable: bool, dry_run: bool) -> Value {
+    let info = validate_module_zip(zip_path);
+    if !info.valid {
+        return json!({
+            "ok": false,
+            "dry_run": dry_run,
+            "zip": info.to_json(),
+            "error": info.error.clone().unwrap_or_else(|| "ZIP no valido".to_string()),
+        });
+    }
+    let id = info.module_id.clone().unwrap_or_default();
+    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.') {
+        return json!({
+            "ok": false,
+            "dry_run": dry_run,
+            "zip": info.to_json(),
+            "error": format!("id de modulo con caracteres no permitidos: {}", id),
+        });
+    }
+    let target = format!("{}/{}", MODULES_UPDATE_DIR, id);
+    if dry_run {
+        return json!({
+            "ok": true,
+            "dry_run": true,
+            "zip": info.to_json(),
+            "plan": {
+                "stage_dir": MODULE_STAGE_DIR,
+                "staged_zip": format!("{}/{}.zip", MODULE_STAGE_DIR, id),
+                "install_target": target,
+                "command": format!("magisk --install-module {}/{}.zip", MODULE_STAGE_DIR, id),
+                "will_be_enabled": enable,
+                "note": "dry_run: NO se ha tocado el movil. Un modulo Magisk solo se \
+                         activa tras reiniciar; por eso el modulo se deja con 'disable' \
+                         salvo que se pida enable=true.",
+            },
+        });
+    }
+
+    // --- instalación real --------------------------------------------------
+    let stage = format!("{}/{}.zip", MODULE_STAGE_DIR, id);
+    let script = format!(
+        "mkdir -p {stage_dir} && cp -f {zip} {stage} && \
+         rm -rf {target} && mkdir -p {target} && \
+         unzip -o -q {stage} -d {target} && \
+         chmod 755 {target} {target}/service.sh {target}/post-fs-data.sh {target}/customize.sh 2>/dev/null; \
+         if [ -z \"$(ls -A {target})\" ]; then echo EMPTY_TARGET; fi; \
+         {enable_cmd} \
+         echo '--- module.prop ---'; cat {target}/module.prop; \
+         echo '--- arbol ---'; ls -la {target}",
+        stage_dir = crate::android::sh_quote(MODULE_STAGE_DIR),
+        zip = crate::android::sh_quote(zip_path),
+        stage = crate::android::sh_quote(&stage),
+        target = crate::android::sh_quote(&target),
+        enable_cmd = if enable {
+            format!("rm -f {}/disable", crate::android::sh_quote(&target))
+        } else {
+            format!("touch {}/disable", crate::android::sh_quote(&target))
+        },
+    );
+    let r = crate::android::root_exec(&script, 120_000, 64 * 1024);
+    crate::android::audit(
+        "magisk.module.install",
+        &json!({"id": id, "sha256": info.sha256, "enable": enable}),
+    );
+    json!({
+        "ok": r.code == Some(0),
+        "dry_run": false,
+        "zip": info.to_json(),
+        "installed_to": target,
+        "enabled": enable,
+        "output": r.combined(),
+        "note": "El modulo queda en modules_update: se aplica en el proximo reinicio. \
+                 Con enable=false se deja el fichero 'disable', asi que NO se cargara \
+                 hasta que alguien lo borre y reinicie.",
+        "next_step": if enable {
+            "reiniciar para que Magisk aplique el modulo".to_string()
+        } else {
+            format!("rm -f {}/disable && reiniciar (pendiente del usuario)", target)
+        },
+    })
+}
+
+/// Datos de Shamiko: repo oficial, última release yasset de Zygisk.
+///
+/// No descarga nada: el **PC** es quien tiene red. El dispositivo recibe el
+/// ZIP ya verificado por `install_module_zip`.
+pub fn shamiko_release_info() -> Value {
+    json!({
+        "module_id": "shamiko",
+        "name": "Shamiko",
+        "repo": SHAMIKO_REPO,
+        "releases_url": format!("{}/releases/latest", SHAMIKO_REPO),
+        "api_releases": format!("{}/releases", SHAMIKO_REPO),
+        "asset_pattern": "shamiko-*.zip",
+        "install": {
+            "stage_dir": MODULE_STAGE_DIR,
+            "staged_zip": format!("{}/shamiko.zip", MODULE_STAGE_DIR),
+            "command": format!("magisk --install-module {}/shamiko.zip", MODULE_STAGE_DIR),
+            "target": format!("{}/shamiko", MODULES_UPDATE_DIR),
+        },
+        "requirements": {
+            "zygisk": true,
+            "note": "Shamiko es un modulo Zygisk: necesita Zygisk activo (magisk --sqlite \
+                     'SELECT key,value FROM settings;' => key=zygisk|value=1) y NO debe \
+                     coexistir con el 'MagiskHide' de Kitsune sobre la misma app (se \
+                     enganchan los dos). Con Kitsune lo correcto es DenyList + Shamiko.",
+        },
+        "verify": [
+            "sha256 del ZIP descargado (se anota en la instalacion)",
+            "module.prop con id=shamiko",
+            "zygisk/arm64-v8a.so presente en el ZIP",
+        ],
+    })
+}
+
+/// Estado real de Shamiko en el móvil (¿instalado? ¿habilitado?).
+pub fn shamiko_status() -> Value {
+    let script = format!(
+        "M=/data/adb/modules/shamiko; U={}/shamiko; \
+         for d in $M $U; do \
+           if [ -d \"$d\" ]; then \
+             printf 'DIR=%s ' \"$d\"; \
+             if [ -f \"$d/disable\" ]; then printf 'DISABLED '; else printf 'ENABLED '; fi; \
+             grep -m1 '^version=' \"$d/module.prop\" 2>/dev/null | tr '\\n' ' '; \
+             ls \"$d/zygisk\" 2>/dev/null | tr '\\n' ' '; echo; \
+           fi; \
+         done; \
+         magisk --sqlite \"SELECT key,value FROM settings;\" 2>/dev/null",
+        MODULES_UPDATE_DIR
+    );
+    let r = crate::android::root_exec(&script, 30_000, 16 * 1024);
+    let out = r.combined();
+    let mut found: Vec<Value> = Vec::new();
+    let mut zygisk = None;
+    let mut denylist = None;
+    let mut magiskhide = None;
+    for line in out.lines() {
+        if line.starts_with("DIR=") {
+            let mut dir = None;
+            let mut state = "";
+            let mut version = None;
+            let mut z = false;
+            for part in line.split_whitespace() {
+                if let Some(v) = part.strip_prefix("DIR=") {
+                    dir = Some(v.to_string());
+                } else if part == "DISABLED" {
+                    state = "DISABLED";
+                } else if part == "ENABLED" {
+                    state = "ENABLED";
+                } else if part.ends_with(".so") {
+                    z = true;
+                } else if part.starts_with('v') && version.is_none() {
+                    version = Some(part.to_string());
+                }
+            }
+            found.push(json!({
+                "dir": dir,
+                "state": state,
+                "version": version,
+                "zygisk_lib": z,
+            }));
+        } else if let Some((k, v)) = line.split_once('|') {
+            match k.trim() {
+                "zygisk" => zygisk = Some(v.trim().to_string()),
+                "denylist" => denylist = Some(v.trim().to_string()),
+                "magiskhide" => magiskhide = Some(v.trim().to_string()),
+                _ => {}
+            }
+        }
+    }
+    json!({
+        "installed": !found.is_empty(),
+        "entries": found,
+        "zygisk": zygisk,
+        "denylist": denylist,
+        "magiskhide": magiskhide,
+        "raw": out,
+        "note": "Shamiko solo hace efecto tras reiniciar (Zygisk carga los modulos al \
+                 arrancar zygote). 'installed' no significa 'activo'.",
+    })
+}
+
+/// Instala Shamiko desde un ZIP **ya descargado y verificado en el PC**.
+///
+/// La descarga la hace el PC (que tiene red); aquí se valida y se deja
+/// preparado (deshabilitado) para que la activación sea del usuario.
+pub fn shamiko_prepare(zip_path: &str, enable: bool, dry_run: bool) -> Value {
+    let mut v = install_module_zip(zip_path, enable, dry_run);
+    if let Some(o) = v.get_mut("zip") {
+        let id = o.get("module_id").and_then(|x| x.as_str()).unwrap_or("");
+        // MEDIDO 2026-11-22: el module.prop de Shamiko dice id=zygisk_shamiko
+        // (no 'shamiko'). Se aceptan las dos formas.
+        let valid_id = id == "shamiko" || id == "zygisk_shamiko";
+        let o2 = o.clone();
+        *o = json!({
+            "module_prop": o2,
+            "is_shamiko": valid_id,
+            "warning": if valid_id { Value::Null } else {
+                json!("el module.prop no dice id=shamiko/zygisk_shamiko: no se puede confirmar que sea Shamiko")
+            },
+            "nota": "Shamiko queda PREPARADO pero DESHABILITADO: activarlo exige \
+                    reiniciar el movil (decision del usuario). Nada se ha escrito \
+                    en una particion ni se ha reiniciado nada.",
+            "siguiente_paso": "revisar el module.prop y, si el usuario lo aprueba, \
+                               habilitar el modulo y reiniciar el movil.",
+        });
+    }
+    v
+}

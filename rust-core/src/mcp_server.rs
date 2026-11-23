@@ -66,7 +66,8 @@ fn tool_definitions_core() -> Value {
                     },
                     "system": { "type": "string", "description": "Optional system instruction." },
                     "attachment_path": { "type": "string", "description": "Optional path to ANY file (.7z, .exe, .elf, .md, .py, .bin) for grounded Rust DiE/Binwalk pre-analysis." },
-                    "max_tokens": { "type": "integer", "default": 1024 }
+                    "max_tokens": { "type": "integer", "default": 1024 },
+                    "include_reasoning": { "type": "boolean", "default": false, "description": "v16: incluir el razonamiento interno (CoT) del modelo. Por defecto NO se devuelve (contamina el contexto del agente y puede filtrar claves)." }
                 },
                 "required": ["prompt"]
             }
@@ -284,13 +285,21 @@ pub fn dispatch_tool(name: &str, args: &Value) -> Value {
             let sys = args["system"].as_str();
             let att = args["attachment_path"].as_str();
             let max_tok = args["max_tokens"].as_u64().unwrap_or(1024) as u32;
+            // v16 (DEFECTO-10): el razonamiento interno (CoT) ya NO se
+            // inyecta en el contexto del agente por defecto: antes
+            // `minimax_chat` devolvía el CoT crudo en <reasoning>…</reasoning>
+            // y el agente se lo tragaba entero en cada llamada.
+            let want_reasoning = args["include_reasoning"].as_bool().unwrap_or(false);
             let res = providers::execute_chat(prompt, Some(model), att, sys, max_tok);
-            let txt = if res.reasoning.is_empty() {
-                format!("[{} | {} ms | {} tok]\n{}", res.model_name, res.latency_ms, res.tokens_used, res.reply)
-            } else {
+            let txt = if want_reasoning && !res.reasoning.trim().is_empty() {
                 format!(
                     "[{} | {} ms | {} tok]\n<reasoning>\n{}\n</reasoning>\n\n{}",
                     res.model_name, res.latency_ms, res.tokens_used, res.reasoning, res.reply
+                )
+            } else {
+                format!(
+                    "[{} | {} ms | {} tok]\n{}",
+                    res.model_name, res.latency_ms, res.tokens_used, res.reply
                 )
             };
             json!({ "content": [{ "type": "text", "text": txt }] })
