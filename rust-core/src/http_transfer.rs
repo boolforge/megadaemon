@@ -171,20 +171,79 @@ pub fn head(url: &str, opts: &Opciones) -> Result<Cabeza, String> {
     })
 }
 
+/// Hashea los primeros `n` bytes de `path`.
+///
+/// Se usa en las descargas **reanudadas**: el prefijo que ya estaba en el
+/// `.part` forma parte del fichero final, así que el sha-256 tiene que
+/// cubrirlo (si no, el sha es sólo el de la cola y nunca puede coincidir
+/// con el del fichero completo).
+fn hashear_prefijo(
+    path: &Path,
+    n: u64,
+    sha: &mut Sha256,
+    hasher3: &mut blake3::Hasher,
+) -> std::io::Result<()> {
+    let mut f = std::fs::File::open(path)?;
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut left = n;
+    while left > 0 {
+        let want = std::cmp::min(left as usize, buf.len());
+        let leidos = f.read(&mut buf[..want])?;
+        if leidos == 0 {
+            break;
+        }
+        sha.update(&buf[..leidos]);
+        hasher3.update(&buf[..leidos]);
+        left -= leidos as u64;
+    }
+    Ok(())
+}
+
 /// Descarga una URL a fichero (o a memoria si `destino` es `None`).
 ///
-/// Con `resume = true` y un destino existente, pide `Range: bytes=N-` ⇒
+/// Con `resume = true` y un `.part` ya existente, pide `Range: bytes=N-` ⇒
 /// **no se pierde lo ya descargado** si la conexión se corta.
+///
+/// El destino final **sólo aparece** cuando la descarga ha terminado Y (si
+/// se pidió) el sha-256 cuadra: un fichero incompleto o corrupto nunca se
+/// publica.
 pub fn descargar(url: &str, opts: &Opciones) -> Result<Resultado, String> {
     let t0 = Instant::now();
     let mut bytes_prev = 0u64;
     let mut resumed = false;
 
+    // 0) ¿Dónde se escribe de verdad?  En `<destino>.part`, SIEMPRE: el
+    //    destino final sólo aparece cuando el contenido está completo y
+    //    verificado.
+    //
+    //    MEDIDO (2026-11-23, auditoría de calidad): antes el "resume" medía
+    //    el tamaño del DESTINO FINAL (`d`), pero la descarga se escribía en
+    //    el `.part` ⇒ dos bugs:
+    //      a) una descarga cortada dejaba el `.part` a medias y el destino
+    //         final no existía => `d.exists()` era falso => NO se pedía
+    //         Range => el `.part` se truncaba y se repetía toda la descarga
+    //         desde cero (el "reanudar" documentado no existía);
+    //      b) si el destino final SÍ existía (una descarga anterior completa)
+    //         y el `.part` no, se pedía `Range: bytes=<len(destino)>` y la
+    //         cola se guardaba en un `.part` VACÍO => luego se renombraba
+    //         encima del destino bueno => fichero corrupto.
+    //    Ahora el tamaño se mide sobre el `.part` (lo único reanudable) y el
+    //    destino final no se toca hasta que el contenido está verificado.
+    let parte: Option<PathBuf> = opts.destino.as_ref().map(|d| {
+        let mut p = d.clone();
+        let nombre = p
+            .file_name()
+            .map(|n| format!("{}.part", n.to_string_lossy()))
+            .unwrap_or_else(|| "descarga.part".to_string());
+        p.set_file_name(nombre);
+        p
+    });
+
     // 1) ¿Cuánto hay ya?
     let mut rango: Option<String> = None;
-    if let Some(d) = &opts.destino {
-        if opts.resume && d.exists() {
-            if let Ok(m) = std::fs::metadata(d) {
+    if let Some(p) = &parte {
+        if opts.resume {
+            if let Ok(m) = std::fs::metadata(p) {
                 bytes_prev = m.len();
                 if bytes_prev > 0 {
                     rango = Some(format!("bytes={bytes_prev}-"));
@@ -258,17 +317,9 @@ pub fn descargar(url: &str, opts: &Opciones) -> Result<Resultado, String> {
     let mut total = bytes_prev;
 
     // Descarga ATOMICA: se escribe en `<destino>.part` y solo se renombra
-    // al terminar bien.  Si se corta, el destino NUNCA queda corrupto: el
-    // `.part` sirve para reanudar (Range) en la siguiente invocacion.
-    let parte: Option<PathBuf> = opts.destino.as_ref().map(|d| {
-        let mut p = d.clone();
-        let nombre = p
-            .file_name()
-            .map(|n| format!("{}.part", n.to_string_lossy()))
-            .unwrap_or_else(|| "descarga.part".to_string());
-        p.set_file_name(nombre);
-        p
-    });
+    // al terminar bien (y con el sha-256 cuadrando).  Si se corta, el
+    // destino NUNCA queda corrupto: el `.part` sirve para reanudar (Range)
+    // en la siguiente invocacion.
 
     match &opts.destino {
         Some(d) => {
@@ -278,6 +329,16 @@ pub fn descargar(url: &str, opts: &Opciones) -> Result<Resultado, String> {
             // Se escribe en el `.part` (o en el destino si no se pudo
             // preparar) y al final se renombra de forma atomica.
             let destino_parcial = parte.clone().unwrap_or_else(|| d.clone());
+            // Si el servidor aceptó el Range, el prefijo que ya está en el
+            // `.part` FORMA PARTE del fichero: se hashea para que el sha-256
+            // sea el del FICHERO COMPLETO.  (MEDIDO 2026-11-23: antes el sha
+            // sólo cubría la cola descargada => con `sha256_esperado` una
+            // descarga reanudada NUNCA podía dar bien, aunque el fichero
+            // estuviera bien.)
+            if resumed && bytes_prev > 0 {
+                hashear_prefijo(&destino_parcial, bytes_prev, &mut sha, &mut hasher3)
+                    .map_err(|e| format!("leer el prefijo {}: {e}", destino_parcial.display()))?;
+            }
             let mut f = std::fs::OpenOptions::new()
                 .create(true)
                 .write(true)
@@ -286,7 +347,21 @@ pub fn descargar(url: &str, opts: &Opciones) -> Result<Resultado, String> {
                 .open(&destino_parcial)
                 .map_err(|e| format!("abrir {}: {e}", destino_parcial.display()))?;
             let mut buf = vec![0u8; 64 * 1024];
-            let mut r = resp.into_body().into_reader();
+            // El MISMO descompresor que en la rama de memoria: si el servidor
+            // contesta con `Content-Encoding: br`, el fichero guardado tiene
+            // que ser el CONTENIDO, no los bytes comprimidos.
+            //
+            // MEDIDO (2026-11-23, auditoría de calidad): la rama de fichero
+            // NO descomprimía (la de memoria sí) => el mismo URL guardado en
+            // disco y pedido en memoria daba dos contenidos distintos, y el
+            // sha-256 se calculaba sobre los bytes comprimidos (o sea, del
+            // fichero que no es el que el usuario cree).
+            let cuerpo = resp.into_body().into_reader();
+            let mut r: Box<dyn Read> = if encoding_br {
+                Box::new(brotli::Decompressor::new(cuerpo, 8192))
+            } else {
+                Box::new(cuerpo)
+            };
             loop {
                 let n = r.read(&mut buf).map_err(|e| format!("leer: {e}"))?;
                 if n == 0 {
@@ -297,17 +372,15 @@ pub fn descargar(url: &str, opts: &Opciones) -> Result<Resultado, String> {
                 f.write_all(&buf[..n]).map_err(|e| format!("escribir: {e}"))?;
                 total += n as u64;
             }
-            f.flush().ok();
-            // Renombrado atomico: el destino solo existe si esta completo.
-            if destino_parcial != *d {
-                std::fs::rename(&destino_parcial, d).map_err(|e| {
-                    format!(
-                        "renombrar {} -> {}: {e}",
-                        destino_parcial.display(),
-                        d.display()
-                    )
-                })?;
-            }
+            f.flush().map_err(|e| format!("volcar {}: {e}", destino_parcial.display()))?;
+            // fsync: el contenido tiene que estar EN DISCO antes de que el
+            // nombre final lo apunte (si no, un corte de luz puede dejar el
+            // destino publicado y vacío).
+            f.sync_all()
+                .map_err(|e| format!("fsync {}: {e}", destino_parcial.display()))?;
+            // OJO: aquí NO se renombra.  El renombrado (publicación) se hace
+            // DESPUÉS de comprobar el sha-256 (ver más abajo): publicar antes
+            // de verificar es lo que dejaba ficheros corruptos publicados.
         }
         None => {
             let mut buf = vec![0u8; 64 * 1024];
@@ -337,6 +410,28 @@ pub fn descargar(url: &str, opts: &Opciones) -> Result<Resultado, String> {
             error = Some(format!(
                 "SHA-256 NO coincide: esperaba {esp}, obtuve {hex}"
             ));
+        }
+    }
+    // PUBLICACIÓN atómica y SÓLO si el contenido es el esperado.
+    //
+    // MEDIDO (2026-11-23, auditoría de calidad): antes el renombrado
+    // `.part` -> destino ocurría ANTES de comparar el sha-256 ⇒ un fichero
+    // que NO cuadra quedaba **publicado** en el destino: el resultado decía
+    // ok=false, pero el fichero roto ya estaba ahí (el agente que sólo mira
+    // si el fichero existe se comía el corrupto, y una re-descarga "reanudaba"
+    // encima del corrupto).  Ahora: si el sha no cuadra, el destino NO se
+    // toca (conserva lo que hubiera) y el `.part` se borra (se sabe que
+    // está mal: dejarlo haría que el siguiente "reanudar" siguiera con un
+    // prefijo corrupto).
+    if let (Some(d), Some(p)) = (&opts.destino, &parte) {
+        if p != d {
+            if error.is_none() {
+                std::fs::rename(p, d).map_err(|e| {
+                    format!("renombrar {} -> {}: {e}", p.display(), d.display())
+                })?;
+            } else {
+                let _ = std::fs::remove_file(p);
+            }
         }
     }
     Ok(Resultado {

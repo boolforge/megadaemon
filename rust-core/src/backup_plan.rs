@@ -479,8 +479,18 @@ pub fn write_plan(path: &Path, decision: &PlanDecision) -> Result<(), String> {
         "decision": decision,
         "hash": decision.hash(),
     });
-    std::fs::write(path, serde_json::to_vec_pretty(&doc).unwrap_or_default())
-        .map_err(|e| format!("no se puede escribir {}: {e}", path.display()))
+    // Escritura ATÓMICA (MEDIDO 2026-11-23, auditoría de calidad): con
+    // `fs::write` el fichero del plan se TRUNCABA antes de escribir ⇒ un
+    // corte a mitad dejaba un plan corrupto y `read_plan` fallaba con
+    // "plan inválido" (el plan decide QUÉ se respalda: perderlo es perder
+    // la decisión).  Con tmp + rename, el plan en disco es siempre el
+    // último completo.
+    crate::util_fs::write_atomic(
+        path,
+        &serde_json::to_vec_pretty(&doc).unwrap_or_default(),
+        0o600,
+    )
+    .map_err(|e| format!("no se puede escribir {}: {e}", path.display()))
 }
 
 /// Lee un plan validado de `path`.

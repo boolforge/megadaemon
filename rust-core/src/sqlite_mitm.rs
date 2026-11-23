@@ -296,6 +296,19 @@ pub fn replicar(limite: usize) -> Result<Value, String> {
     }))
 }
 
+/// Ruta del temporal de la DB "mentirosa" (`<destino>.tmp`).
+///
+/// La DB se genera ahí y sólo se publica (rename) cuando está completa.
+fn ruta_temporal(destino: &Path) -> std::path::PathBuf {
+    let mut p = destino.to_path_buf();
+    let nombre = p
+        .file_name()
+        .map(|n| format!("{}.tmp", n.to_string_lossy()))
+        .unwrap_or_else(|| "db_servida.tmp".to_string());
+    p.set_file_name(nombre);
+    p
+}
+
 /// **La DB "mentirosa"**: una copia de la de Antigravity con las filas que
 /// decidamos.  Se sirve con `mount --bind` (root) sobre la original.
 ///
@@ -312,8 +325,16 @@ pub fn generar_db_servida(
         .unwrap_or_else(|_| "conversation_summaries".to_string());
     let filas = leer_conversaciones(&src, &tabla, 1_000_000)?;
     drop(src);
-    let _ = std::fs::remove_file(destino);
-    let mut dst = Connection::open(destino).map_err(|e| format!("abrir destino: {e}"))?;
+    // MEDIDO (2026-11-23, auditoría de calidad): la DB "mentirosa" se
+    // generaba EN EL SITIO (`remove_file(destino)` + `Connection::open
+    // (destino)`) ⇒ si la generación fallaba a mitad (o el proceso moría),
+    // quedaba una DB CORRUPTA en el destino; y ese destino es justamente el
+    // que se monta (bind) sobre la DB real de Antigravity (`plan_montaje`)
+    // ⇒ la app veía una base de datos rota.  Ahora se genera en un temporal
+    // y sólo se publica cuando está completa.
+    let temporal = ruta_temporal(destino);
+    let _ = std::fs::remove_file(&temporal);
+    let mut dst = Connection::open(&temporal).map_err(|e| format!("abrir destino: {e}"))?;
     let esquema = format!(
         "CREATE TABLE IF NOT EXISTS {} AS SELECT * FROM {} LIMIT 0",
         tabla, tabla
@@ -403,6 +424,12 @@ pub fn generar_db_servida(
         insertadas += 1;
     }
     tx.commit().map_err(|e| format!("commit: {e}"))?;
+    // Publicación ATÓMICA: la DB servida sólo se sustituye cuando la
+    // nueva está completa (si no, el destino conserva la anterior, que es
+    // válida).
+    drop(dst);
+    std::fs::rename(&temporal, destino)
+        .map_err(|e| format!("publicar {}: {e}", destino.display()))?;
     Ok(json!({
         "ok": true,
         "destino": destino.display().to_string(),

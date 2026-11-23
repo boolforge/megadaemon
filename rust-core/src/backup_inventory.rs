@@ -1460,23 +1460,19 @@ impl KeyMaterial {
     }
 
     /// Escribe el fichero de claves con permisos `0600`.
+    ///
+    /// MEDIDO (2026-11-23, auditoría de calidad): antes usaba
+    /// `fs::write` + `set_permissions(0o600)` ⇒ el fichero (que contiene la
+    /// clave MAESTRA y la SENSIBLE en hexadecimal) se creaba con el modo del
+    /// umask (0644) y sólo después seaba restrictivo: hay una ventana en la
+    /// que la credencial está legible por cualquiera.  `util_fs::write_atomic`
+    /// crea el temporal **con** el modo 0600 en el momento de crearlo y lo
+    /// renombra encima del destino.
     pub fn write_secure(&self, path: &Path) -> Result<(), String> {
-        use std::os::unix::fs::PermissionsExt;
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("no se puede serializar el material de claves: {e}"))?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("no se puede crear {}: {e}", parent.display()))?;
-        }
-        std::fs::write(path, json.as_bytes())
-            .map_err(|e| format!("no se puede escribir {}: {e}", path.display()))?;
-        let mut perms = std::fs::metadata(path)
-            .map_err(|e| format!("no se puede ver {}: {e}", path.display()))?
-            .permissions();
-        perms.set_mode(0o600);
-        std::fs::set_permissions(path, perms)
-            .map_err(|e| format!("no se puede poner 0600 a {}: {e}", path.display()))?;
-        Ok(())
+        crate::util_fs::write_atomic(path, json.as_bytes(), 0o600)
+            .map_err(|e| format!("no se puede escribir {}: {e}", path.display()))
     }
 
     /// Lee el fichero de claves (y comprueba los permisos).
@@ -1738,8 +1734,16 @@ pub fn export(
     let sens_cipher = ChunkCipher::own(&sensitive_key)
         .map_err(|e| format!("no se puede crear el cifrador sensible: {e}"))?;
 
-    let mut file = File::create(&container_path)
-        .map_err(|e| format!("no se puede crear {}: {e}", container_path.display()))?;
+    // MEDIDO (2026-11-23, auditoría de calidad): el contenedor se escribía
+    // EN EL SITIO (`File::create(container_path)`) ⇒ si la exportación
+    // fallaba a mitad (disco lleno, proceso muerto), quedaba un contenedor
+    // CORRUPTO en la ruta final y el anterior (si lo había) ya estaba
+    // destruido.  Ahora se escribe en `<contenedor>.tmp` y se publica con
+    // un rename atómico: en la ruta final hay siempre un contenedor
+    // COMPLETO.
+    let contenedor_tmp = container_path.with_extension("mdbinv.tmp");
+    let mut file = File::create(&contenedor_tmp)
+        .map_err(|e| format!("no se puede crear {}: {e}", contenedor_tmp.display()))?;
     file.write_all(INVENTORY_MAGIC)
         .map_err(|e| format!("error escribiendo el magic: {e}"))?;
 
@@ -1805,20 +1809,39 @@ pub fn export(
         .map_err(|e| format!("error escribiendo los flujos: {e}"))?;
     file.flush()
         .map_err(|e| format!("error volcando el contenedor: {e}"))?;
+    // fsync: el contenido tiene que estar en disco antes de publicar el
+    // nombre final (si no, un corte puede dejar el contenedor publicado y
+    // vacío).
+    file.sync_all()
+        .map_err(|e| format!("error sincronizando el contenedor: {e}"))?;
     let bytes = file
         .metadata()
         .map(|m| m.len())
         .map_err(|e| format!("no se puede ver el contenedor: {e}"))?;
+    drop(file);
+    // Publicación ATÓMICA del contenedor.
+    std::fs::rename(&contenedor_tmp, &container_path).map_err(|e| {
+        format!(
+            "no se puede publicar {}: {e}",
+            container_path.display()
+        )
+    })?;
 
     // 5) Manifiesto suelto (JSON, sin valores): es lo que se sube a Drive
     //    junto al contenedor y lo que `verify` usa como referencia.
     let manifest_path = opts
         .out_dir
         .join(format!("{}.manifest.json", opts.level.profile()));
-    std::fs::write(
+    // Escritura ATÓMICA (MEDIDO 2026-11-23, auditoría de calidad): con
+    // `fs::write` el manifiesto se TRUNCABA antes de escribir ⇒ un corte a
+    // mitad dejaba un JSON corrupto, y el manifiesto es la REFERENCIA que
+    // usa `verify` y el restore ("el manifiesto manda"): un manifiesto a
+    // medias hace que todo el backup parezca corrupto.
+    crate::util_fs::write_atomic(
         &manifest_path,
-        serde_json::to_vec_pretty(&manifest)
+        &serde_json::to_vec_pretty(&manifest)
             .map_err(|e| format!("no se puede serializar el manifiesto: {e}"))?,
+        0o600,
     )
     .map_err(|e| format!("no se puede escribir {}: {e}", manifest_path.display()))?;
 
@@ -2361,7 +2384,13 @@ pub fn restore(
                     continue;
                 }
             }
-            std::fs::write(&target, &buf)
+            // Escritura ATÓMICA (MEDIDO 2026-11-23, auditoría de calidad):
+            // `fs::write` TRUNCA el destino antes de escribir ⇒ con
+            // `--overwrite`, un fallo a mitad dejaba un fichero PARCIAL y
+            // el bueno ya estaba destruido.  Con tmp + rename, el destino
+            // queda completo o no se toca.  El fichero nace con 0600: es
+            // dato privado de la app (bases de datos, tokens).
+            crate::util_fs::write_atomic(&target, &buf, 0o600)
                 .map_err(|e| format!("no se puede escribir {}: {e}", target.display()))?;
             bytes += buf.len() as u64;
             written.push(rel.to_string_lossy().to_string());

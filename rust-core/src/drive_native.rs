@@ -368,7 +368,35 @@ pub fn upload_path(
     }
 }
 
+/// Ruta del temporal de una descarga (`<fichero>.part`).
+///
+/// El destino final sólo aparece cuando la descarga ha terminado COMPLETA
+/// (y con el tamaño que declaró el servidor).
+fn ruta_parcial(dest: &Path) -> PathBuf {
+    let mut p = dest.to_path_buf();
+    let nombre = p
+        .file_name()
+        .map(|n| format!("{}.part", n.to_string_lossy()))
+        .unwrap_or_else(|| "descarga.part".to_string());
+    p.set_file_name(nombre);
+    p
+}
+
 /// Descarga un fichero de Drive (`alt=media`) a disco.
+///
+/// MEDIDO (2026-11-23, auditoría de calidad): antes escribía **directamente
+/// en el destino** con `File::create`, que TRUNCA el fichero que hubiera
+/// ahí ⇒ una descarga interrumpida (o que fallaba a mitad) destruía la
+/// copia buena que ya estaba, y la función devolvía `Ok` con los bytes
+/// parciales: el llamante no podía distinguir un fichero completo de uno a
+/// medias (los segmentos de un contenedor de backup, la cola de tareas
+/// sincronizada...).
+///
+/// Ahora la descarga es ATÓMICA:
+/// * se escribe en `<dest>.part` y sólo se renombra al terminar;
+/// * se compara con el `Content-Length` que declara el servidor: si no
+///   cuadra, la descarga está truncada ⇒ error y el destino no se toca;
+/// * el destino anterior se conserva íntegro si algo falla.
 pub fn download_file(
     file_id: &str,
     dest: &Path,
@@ -394,22 +422,64 @@ pub fn download_file(
         }
         return Err(format!("descargar {} devolvió {}: {}", file_id, st, txt));
     }
+    // Tamaño declarado por el servidor (para detectar descargas truncadas).
+    let content_length: Option<u64> = resp
+        .headers()
+        .iter()
+        .find(|(k, _)| k.as_str().eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, v)| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok());
     let mut body = resp.into_body();
     let mut reader = body.as_reader();
-    let mut out = File::create(dest).map_err(|e| format!("crear {}: {}", dest.display(), e))?;
+    let parcial = ruta_parcial(dest);
+    if let Some(dir) = parcial.parent() {
+        if !dir.as_os_str().is_empty() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| format!("crear {}: {}", dir.display(), e))?;
+        }
+    }
+    let mut out = File::create(&parcial).map_err(|e| format!("crear {}: {}", parcial.display(), e))?;
     let mut total = 0u64;
     let mut buf = vec![0u8; 256 * 1024];
     loop {
-        let n = reader
-            .read(&mut buf)
-            .map_err(|e| format!("leer cuerpo: {}", e))?;
+        let n = match reader.read(&mut buf) {
+            Ok(n) => n,
+            Err(e) => {
+                let _ = std::fs::remove_file(&parcial);
+                return Err(format!("leer cuerpo: {}", e));
+            }
+        };
         if n == 0 {
             break;
         }
-        out.write_all(&buf[..n])
-            .map_err(|e| format!("escribir {}: {}", dest.display(), e))?;
+        if let Err(e) = out.write_all(&buf[..n]) {
+            let _ = std::fs::remove_file(&parcial);
+            return Err(format!("escribir {}: {}", parcial.display(), e));
+        }
         total += n as u64;
     }
+    out.flush()
+        .map_err(|e| format!("volcar {}: {}", parcial.display(), e))?;
+    out.sync_all()
+        .map_err(|e| format!("fsync {}: {}", parcial.display(), e))?;
+    // Descarga truncada: el destino NO se toca (conserva lo que hubiera).
+    if let Some(esperado) = content_length {
+        if total != esperado {
+            let _ = std::fs::remove_file(&parcial);
+            return Err(format!(
+                "descarga incompleta de {file_id}: {total} B de {esperado} B"
+            ));
+        }
+    }
+    // Publicación atómica: el destino pasa a ser el fichero COMPLETO.
+    std::fs::rename(&parcial, dest).map_err(|e| {
+        format!(
+            "renombrar {} -> {}: {}",
+            parcial.display(),
+            dest.display(),
+            e
+        )
+    })?;
     Ok(total)
 }
 

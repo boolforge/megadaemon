@@ -120,6 +120,17 @@ fn main() {
                 // codigo 10.  Sin esto, la actualizacion se instala pero no
                 // entra en servicio hasta el siguiente reinicio.
                 megadaemon_core::supervisor::asegurar_supervisor();
+                // MEDIDO (2026-11-23, auditoría de calidad): la cola de tareas
+                // se guardaba en disco (`task_scheduler::persist`) pero
+                // `task_scheduler::restore` NO se llamaba NUNCA en todo el
+                // crate => cada reinicio del daemon (o cada auto-actualización
+                // con código 10) arrancaba con la cola VACÍA.  El trabajo en
+                // curso se perdía en cada reinicio, contra lo que promete el
+                // doc del módulo ("un reinicio no pierde el trabajo en curso").
+                let tareas = megadaemon_core::task_scheduler::restore();
+                if tareas > 0 {
+                    eprintln!("task_scheduler: {tareas} tarea(s) restauradas de la cola en disco");
+                }
                 // v18: sincroniza el runtime unificado de Antigravity al arrancar.
                 if let Err(e) = megadaemon_core::antigravity_clone::unificar_runtime() {
                     eprintln!("antigravity: runtime no unificado: {e}");

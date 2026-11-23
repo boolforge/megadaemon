@@ -380,21 +380,61 @@ pub fn persist() {
         .collect();
     drop(q);
     let _ = std::fs::create_dir_all(crate::cockpit_server::state_dir());
-    let _ = std::fs::write(
-        queue_path(),
-        serde_json::to_string_pretty(&json!({ "tasks": items })).unwrap_or_default(),
-    );
+    let ruta = queue_path();
+    // MEDIDO (2026-11-23, auditoría de calidad): la cola se guardaba con
+    // `fs::write`, que **trunca** el destino.  Si el proceso moría a mitad de
+    // la escritura, `task_queue.json` quedaba corrupto y `restore()` devolvía
+    // 0 tareas sin explicar por qué => el trabajo en curso se perdía en
+    // silencio.  Ahora se escribe de forma ATÓMICA (tmp + rename): el
+    // fichero que hay en disco es siempre el de la última cola COMPLETA.
+    let datos = serde_json::to_string_pretty(&json!({ "tasks": items })).unwrap_or_default();
+    if let Err(e) = crate::util_fs::write_atomic(
+        std::path::Path::new(&ruta),
+        datos.as_bytes(),
+        0o600,
+    ) {
+        eprintln!("[task_scheduler] no se pudo guardar la cola en {ruta}: {e}");
+    }
 }
 
 /// Restaura la cola desde disco.
+///
+/// MEDIDO (2026-11-23, auditoría de calidad): antes `restore()` devolvía 0
+/// tanto si no había cola como si la cola estaba CORRUPTA (JSON inválido) ⇒
+/// el llamante no podía distinguir "no hay nada que restaurar" de "el
+/// trabajo se perdió" (la clase de bug nº4 de los 4 bugs reales del motor
+/// de backup: el llamante necesita el MOTIVO, no un error genérico).
+///
+/// Ahora:
+/// * si el fichero no existe ⇒ 0 (y no es un error);
+/// * si el fichero existe pero no se puede leer ⇒ se avisa por stderr;
+/// * si el fichero está corrupto ⇒ se avisa por stderr y se **conserva**
+///   como `<cola>.corrupto` (el trabajo no se borra: queda para inspección
+///   o rescate manual) y se devuelve 0.
 pub fn restore() -> usize {
-    let Ok(txt) = std::fs::read_to_string(queue_path()) else {
-        return 0;
+    let ruta = queue_path();
+    let txt = match std::fs::read_to_string(&ruta) {
+        Ok(t) => t,
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("[task_scheduler] no se pudo leer la cola {ruta}: {e}");
+            }
+            return 0;
+        }
     };
-    let Ok(v) = serde_json::from_str::<Value>(&txt) else {
-        return 0;
+    let v: Value = match serde_json::from_str(&txt) {
+        Ok(v) => v,
+        Err(e) => {
+            let copia = format!("{ruta}.corrupto");
+            let _ = std::fs::rename(&ruta, &copia);
+            eprintln!(
+                "[task_scheduler] la cola {ruta} está CORRUPTA ({e}); se conservó en {copia}"
+            );
+            return 0;
+        }
     };
     let Some(items) = v["tasks"].as_array() else {
+        eprintln!("[task_scheduler] la cola {ruta} no tiene la lista 'tasks'");
         return 0;
     };
     let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
@@ -778,13 +818,34 @@ pub fn expirar_leases() -> usize {
     let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
     let mut n = 0;
     for t in q.iter_mut() {
-        if t.state == State::Running {
-            if t.lease_expira.map(|e| e <= t0).unwrap_or(false) {
+        // MEDIDO (2026-11-23, auditoría de calidad): `expirar_leases` sólo
+        // miraba las tareas EN CURSO (`Running`).  Una tarea REPARTIDA
+        // (`repartir_por_nodo` la deja en `Pending` con `node` y
+        // `lease_expira` puestos) cuyo nodo moría ANTES de empezarla se
+        // quedaba apuntando a ese nodo para siempre:
+        //   * `expirar_leases` no la tocaba (no estaba `Running`);
+        //   * `repartir_por_nodo` sólo coge tareas con `node` VACÍO;
+        //   => el trabajo NUNCA volvía a repartirse: la tarea se quedaba
+        //      colgada para siempre (trabajo perdido en silencio).
+        // Ahora una lease caducada libera el nodo SIEMPRE, esté la tarea en
+        // curso o pendiente.
+        if !t.lease_expira.map(|e| e <= t0).unwrap_or(false) {
+            continue;
+        }
+        match t.state {
+            State::Running => {
                 t.state = State::Pending;
                 t.node = String::new();
+                t.lease_expira = None;
                 t.motivo_pausa = Some("lease caducado (el nodo no devolvio la tarea)".to_string());
                 n += 1;
             }
+            State::Pending => {
+                t.node = String::new();
+                t.lease_expira = None;
+                n += 1;
+            }
+            _ => {}
         }
     }
     drop(q);

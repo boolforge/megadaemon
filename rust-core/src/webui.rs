@@ -3666,10 +3666,19 @@ fn board_claim_at(path: &str, body: &Value) -> Value {
         return json!({ "ok": false, "error": "board_lock_failed", "reason": e.to_string() });
     }
     let changed = conn.execute(
+        // MEDIDO (2026-11-23, auditoría de calidad): la condición sólo
+        // aceptaba 'queued' o 'claimed' con lease caducada.  Una tarea que
+        // se quedó en **'running'** cuando su agente murió (lease caducada)
+        // NO se podía reclamar NUNCA y `reclaim_expired` tampoco la
+        // liberaba (sólo miraba 'claimed') ⇒ la tarea se quedaba colgada
+        // para siempre y el trabajo se perdía.  `board.rs` (el tablero v1)
+        // ya lo hacía bien: `state IN ('claimed','running')`.  Ahora aquí
+        // se replica ese criterio.
         "UPDATE tasks
             SET owner=?1, status='claimed', lease_expires_at=?2, updated_at=?3
           WHERE id=?4
-            AND (status='queued' OR (status='claimed' AND lease_expires_at < ?3))",
+            AND (status='queued'
+                 OR (status IN ('claimed','running') AND lease_expires_at > 0 AND lease_expires_at < ?3))",
         rusqlite::params![owner, now + lease, now, task_id],
     );
     match changed {

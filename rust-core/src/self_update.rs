@@ -253,15 +253,21 @@ pub fn lanzar_auto_actualizador(ruta_bin: std::path::PathBuf, minutos: u64) {
     std::thread::Builder::new()
         .name("md-auto-update".to_string())
         .spawn(move || loop {
-            // Jitter de hasta 5 minutos: evita que toda la flota golpee a la
+            // Jitter (hasta 1 minuto): evita que toda la flota golpee a la
             // vez la API de GitHub en el mismo instante.
-            let jitter = (ruta_bin
-                .metadata()
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            //
+            // MEDIDO (2026-11-23, auditoría de calidad): (a) el jitter salía
+            // del **mtime del binario**, o sea que era SIEMPRE el mismo
+            // ⇒ todos los nodos con el mismo build preguntaban en el mismo
+            // instante (justo lo que el jitter quería evitar); y (b) el
+            // comentario decía "5 minutos" pero el sueño era
+            // `jitter * 60 / 300` SEGUNDOS, o sea como mucho 1 minuto.
+            // Ahora el jitter sale del reloj (cambia en cada vuelta) y el
+            // comentario dice lo que el código hace.
+            let jitter = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.subsec_nanos() as u64)
-                .unwrap_or(0))
+                .unwrap_or(0)
                 % 300;
             std::thread::sleep(std::time::Duration::from_secs(jitter * 60 / 300));
             let estado = comprobar(&ruta_bin);
@@ -414,11 +420,12 @@ pub fn comprobar(ruta_bin: &Path) -> Estado {
 ///
 /// 1. manifiesto;
 /// 2. asset + su `.sha256`;
-/// 3. **verificación**: el SHA del asset debe coincidir con el `.sha256`; si
-///    el `.sha256` no está, el cálculo se hace sobre lo descargado y se
-///    acepta (se avisa), porque la release siempre lo publica;
-/// 4. instalación atómica: `.new` → verificar → renombrar; el anterior queda
-///    en `.prev` para el rollback.
+/// 3. **verificación OBLIGATORIA**: el SHA del asset debe coincidir con el
+///    `.sha256`; si el `.sha256` no se puede leer o no cuadra, **no se
+///    instala nada** y el binario actual sigue intacto (MEDIDO 2026-11-23:
+///    antes se instalaba sin verificar cuando faltaba el `.sha256`);
+/// 4. instalación atómica: `.new` → verificar → renombrar encima del
+///    destino (el anterior queda copiado en `.prev` para el rollback).
 pub fn aplicar(ruta_bin: &Path) -> Result<Resultado, String> {
     let m = manifiesto()?;
     let base = url_release();
@@ -427,17 +434,38 @@ pub fn aplicar(ruta_bin: &Path) -> Result<Resultado, String> {
 
     let datos = descargar_bytes(&url_asset)?;
 
-    let esperado = match descargar_texto(&url_sha) {
-        Ok(t) => parsear_sha256(&t),
-        Err(_) => None,
-    };
+    // La verificación del SHA-256 es **obligatoria**.
+    //
+    // MEDIDO (2026-11-23, auditoría de calidad): antes, si el `.sha256` no se
+    // podía leer, se instalaba **sin verificar** (el propio comentario lo
+    // admitía: "el cálculo se hace sobre lo descargado y se acepta (se
+    // avisa)") ⇒ un `.sha256` caído por un fallo de red (o una descarga
+    // manipulada) instalaba un binario cualquiera en el móvil y el informe
+    // decía "SIN .sha256: sin verificar".  Eso contradice la garantía que
+    // promete el propio módulo ("verificación obligatoria: si el SHA-256 no
+    // cuadra, no se instala nada y el binario actual sigue intacto").
+    // `comprobar()` ya devuelve `Desconocido` cuando no hay `.sha256` (o
+    // sea: no se toca el móvil); aquí se aplica lo mismo.
+    //
+    // La release publica el `.sha256` del asset versionado (y del normal):
+    // ver `.github/workflows/build.yml` (los dos `sha256sum`).
+    let texto_sha = descargar_texto(&url_sha).map_err(|e| {
+        format!(
+            "no se pudo leer el .sha256 de {} ({e}): no se instala nada",
+            m.asset
+        )
+    })?;
+    let esperado = parsear_sha256(&texto_sha).ok_or_else(|| {
+        format!(
+            "el .sha256 de {} no contiene un sha256 válido: no se instala nada",
+            m.asset
+        )
+    })?;
     let calculado = sha256_hex(&datos);
-    if let Some(ref esperado) = esperado {
-        if *esperado != calculado {
-            return Err(format!(
-                "SHA-256 NO coincide: esperabi {esperado}, obtuve {calculado}. No se instala nada"
-            ));
-        }
+    if esperado != calculado {
+        return Err(format!(
+            "SHA-256 NO coincide: esperaba {esperado}, obtuve {calculado}. No se instala nada"
+        ));
     }
 
     // ¿El binario instalado ES ya el asset de la release?  Se comparan los
@@ -445,7 +473,7 @@ pub fn aplicar(ruta_bin: &Path) -> Result<Resultado, String> {
     // con el commit => nunca coincidía => se reinstalaba SIEMPRE (el bucle
     // de 41 MB medido el 2026-11-23).
     if let Some(h) = sha256_de_fichero(ruta_bin) {
-        if Some(h.as_str()) == esperado.as_deref() {
+        if h.eq_ignore_ascii_case(&esperado) {
             return Ok(Resultado {
                 instalado: false,
                 short: m.short,
@@ -471,10 +499,25 @@ pub fn aplicar(ruta_bin: &Path) -> Result<Resultado, String> {
         return Err("el binario escrito no coincide con el descargado".to_string());
     }
 
+    // Instalación ATÓMICA: el destino NUNCA deja de existir.
+    //
+    // MEDIDO (2026-11-23, auditoría de calidad): antes se RENOMBRABA el
+    // binario actual a `.prev` y LUEGO se renombraba el `.new` al destino:
+    // entre esos dos `rename` hay una ventana en la que el binario **NO
+    // EXISTE**.  Si el proceso moría ahí (móvil sin batería, OOM) o si
+    // fallaba el segundo `rename`, el móvil se quedaba **SIN DAEMON**: el
+    // supervisor ve "no existe el binario" y no lo relanza (es el bug
+    // medido el 2026-07-20: el 502 por un binario ausente).
+    //
+    // Ahora: se COPIA el actual a `.prev` (para el rollback) y se renombra
+    // el `.new` encima del destino.  `rename(2)` sobre un fichero existente
+    // es atómico en Unix: el destino pasa de la versión vieja a la nueva
+    // sin dejar de existir ni un instante.
     let previo = ruta_bin.with_extension("prev");
     if ruta_bin.exists() {
         let _ = std::fs::remove_file(&previo);
-        std::fs::rename(ruta_bin, &previo).map_err(|e| format!("apartar el anterior: {e}"))?;
+        std::fs::copy(ruta_bin, &previo)
+            .map_err(|e| format!("copiar el anterior a {}: {e}", previo.display()))?;
     }
     std::fs::rename(&nuevo, ruta_bin).map_err(|e| format!("instalar: {e}"))?;
 
@@ -490,13 +533,9 @@ pub fn aplicar(ruta_bin: &Path) -> Result<Resultado, String> {
         short: m.short.clone(),
         previo: if previo.exists() { Some(previo) } else { None },
         detalle: format!(
-            "actualizado a {} ({} B){}",
+            "actualizado a {} ({} B) (SHA-256 verificado)",
             m.short,
             datos.len(),
-            match esperado {
-                Some(_) => " (SHA-256 verificado)",
-                None => " (SIN .sha256: sin verificar)",
-            }
         ),
     })
 }

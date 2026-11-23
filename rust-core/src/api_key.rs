@@ -155,10 +155,10 @@ impl ApiKeyConfig {
             // Sincroniza el fichero con el entorno (fuente de verdad del
             // supervisor) para que no vuelvan a divergir.
             if file_key.as_deref() != Some(k.as_str()) {
-                if fs::create_dir_all(state_dir).is_ok()
-                    && fs::write(&path, format!("{}\n", k)).is_ok()
-                {
-                    set_mode_600(&path);
+                if fs::create_dir_all(state_dir).is_ok() {
+                    if let Err(e) = escribir_secreto(&path, &format!("{}\n", k)) {
+                        eprintln!("[api_key] no se pudo sincronizar {path}: {e}");
+                    }
                 }
             }
             return Self { key: k, extra_keys, enabled: true, forced };
@@ -200,8 +200,7 @@ impl ApiKeyConfig {
         let key = format!("mdaemon_sk_live_{}", random_hex(32));
         let path = format!("{}/megadaemon_api.key", state_dir);
         fs::create_dir_all(state_dir).map_err(|e| format!("mkdir {}: {}", state_dir, e))?;
-        fs::write(&path, format!("{}\n", key)).map_err(|e| format!("write {}: {}", path, e))?;
-        set_mode_600(&path);
+        escribir_secreto(&path, &format!("{}\n", key))?;
         Ok(key)
     }
 
@@ -253,8 +252,7 @@ pub fn generate_extra_key(state_dir: &str, label: &str) -> Result<String, String
     out.push_str(&comment);
     out.push_str(&key);
     out.push('\n');
-    fs::write(&path, out).map_err(|e| format!("write {}: {}", path, e))?;
-    set_mode_600(&path);
+    escribir_secreto(&path, &out)?;
     Ok(key)
 }
 
@@ -307,8 +305,7 @@ pub fn revoke_extra_key(state_dir: &str, target: &str) -> Result<bool, String> {
     if !out.is_empty() {
         out.push('\n');
     }
-    fs::write(&path, out).map_err(|e| format!("write {}: {}", path, e))?;
-    set_mode_600(&path);
+    escribir_secreto(&path, &out)?;
     Ok(revoked.is_some())
 }
 
@@ -365,18 +362,25 @@ fn random_hex(nbytes: usize) -> String {
     buf.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-#[cfg(unix)]
-fn set_mode_600(path: &str) {
-    use std::os::unix::fs::PermissionsExt;
-    if let Ok(meta) = fs::metadata(path) {
-        let mut perm = meta.permissions();
-        perm.set_mode(0o600);
-        let _ = fs::set_permissions(path, perm);
-    }
+/// Escribe un fichero de **secreto** con permisos `0600` DESDE EL PRINCIPIO
+/// (y de forma atómica: tmp + rename).
+///
+/// MEDIDO (2026-11-23, auditoría de calidad): el patrón que se usaba en los
+/// cuatro sitios que guardan la key era
+///     fs::write(&path, ...)?;   // crea el fichero con el modo del umask
+///     set_mode_600(&path);       // (además IGNORANDO el error del chmod)
+/// ⇒ (a) entre las dos operaciones la credencial estaba en un fichero
+/// legible por cualquier otro usuario del móvil (0644 con el umask normal),
+/// y (b) si el `chmod` fallaba, el fichero se quedaba legible para siempre
+/// y nadie se enteraba (el error se callaba con `let _ =`).
+///
+/// `util_fs::write_atomic` crea el temporal con el modo pedido (0600) en el
+/// momento de crearlo y lo renombra encima del destino: no hay ni un
+/// instante en el que el secreto exista con otro modo.
+fn escribir_secreto(path: &str, contenido: &str) -> Result<(), String> {
+    crate::util_fs::write_atomic(std::path::Path::new(path), contenido.as_bytes(), 0o600)
+        .map_err(|e| format!("escribir {path}: {e}"))
 }
-
-#[cfg(not(unix))]
-fn set_mode_600(_path: &str) {}
 
 /// ¿La IP es de loopback (exenta de key)?
 pub fn is_loopback(ip: &IpAddr) -> bool {

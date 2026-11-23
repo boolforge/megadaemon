@@ -317,11 +317,26 @@ pub struct DownloadResult {
 ///
 /// No se guarda el contenido en memoria (se va en bloques de 1 MiB) ⇒ sirve
 /// para ficheros de cualquier tamaño con la RAM justa del móvil.
+///
+/// MEDIDO (2026-11-23, auditoría de calidad): escribía DIRECTAMENTE en el
+/// destino (`File::create` trunca) ⇒ una descarga interrumpida dejaba un
+/// fichero a medias en la ruta final y destruía el que hubiera ahí.  Ahora
+/// escribe en `<dest>.part` y **publica** con un rename al terminar (el
+/// mismo patrón que usa `repo_updates` para los APK): el destino final
+/// contiene siempre un fichero completo.
 pub fn download_to_file<R: std::io::Read>(
     mut reader: R,
     dest: &std::path::Path,
 ) -> Result<DownloadResult, String> {
-    let mut f = std::fs::File::create(dest).map_err(|e| format!("no se puede crear {}: {e}", dest.display()))?;
+    let mut p = dest.to_path_buf();
+    let nombre = p
+        .file_name()
+        .map(|n| format!("{}.part", n.to_string_lossy()))
+        .unwrap_or_else(|| "descarga.part".to_string());
+    p.set_file_name(nombre);
+    let parcial = p;
+    let mut f = std::fs::File::create(&parcial)
+        .map_err(|e| format!("no se puede crear {}: {e}", parcial.display()))?;
     let mut h = Sha256::new();
     let mut buf = vec![0u8; 1024 * 1024];
     let mut total = 0u64;
@@ -334,10 +349,22 @@ pub fn download_to_file<R: std::io::Read>(
         }
         h.update(&buf[..n]);
         std::io::Write::write_all(&mut f, &buf[..n])
-            .map_err(|e| format!("error de escritura en {}: {e}", dest.display()))?;
+            .map_err(|e| format!("error de escritura en {}: {e}", parcial.display()))?;
         total += n as u64;
     }
     std::io::Write::flush(&mut f).map_err(|e| format!("no se pudo volcar: {e}"))?;
+    std::io::Write::sync_all(&mut f)
+        .map_err(|e| format!("no se pudo sincronizar {}: {e}", parcial.display()))?;
+    drop(f);
+    // Publicación atómica: el destino final aparece sólo con el fichero
+    // completo.
+    std::fs::rename(&parcial, dest).map_err(|e| {
+        format!(
+            "no se pudo publicar {} -> {}: {e}",
+            parcial.display(),
+            dest.display()
+        )
+    })?;
     Ok(DownloadResult {
         bytes: total,
         sha256: hex(&h.finalize()),

@@ -177,7 +177,18 @@ pub fn persistir() {
     let v = serde_json::to_value(&*m).unwrap_or_else(|_| json!({}));
     drop(m);
     let _ = std::fs::create_dir_all(crate::cockpit_server::state_dir());
-    let _ = std::fs::write(ruta_estado(), serde_json::to_string_pretty(&v).unwrap_or_default());
+    // Escritura ATÓMICA (MEDIDO 2026-11-23, auditoría de calidad): con
+    // `fs::write` el fichero de cuota se TRUNCABA antes de escribir ⇒ un
+    // corte a mitad dejaba un JSON corrupto y `restaurar_en` lo descartaba
+    // en silencio (el daemon se olvidaba de la cuota del proveedor y
+    // gastaba como si no tuviera límite).
+    let ruta = ruta_estado();
+    let datos = serde_json::to_string_pretty(&v).unwrap_or_default();
+    if let Err(e) =
+        crate::util_fs::write_atomic(std::path::Path::new(&ruta), datos.as_bytes(), 0o600)
+    {
+        eprintln!("[quota_guard] no se pudo guardar el estado de cuota en {ruta}: {e}");
+    }
 }
 
 /// Extrae el código HTTP de un mensaje de error del proveedor.
@@ -373,6 +384,18 @@ pub fn registrar_uso(provider: &str, tokens: u64, limite: Option<u64>) {
     }
     e.nivel = peor_nivel(&e.ventanas);
     e.actualizado_at = ahora();
+    // MEDIDO (2026-11-23, auditoría de calidad): esta función NO persistía
+    // ⇒ el uso real que se observa (tokens gastados) se quedaba en
+    // memoria y se perdía en cada reinicio del daemon.  Como el resto de
+    // las funciones del módulo (`registrar_error_cuota`,
+    // `establecer_ventanas`), ahora guarda el estado en disco: el guard de
+    // cuota está para AVISAR ANTES de que se corte, y sin persistir no
+    // sabe cuánto se ha gastado tras un reinicio.
+    //
+    // OJO: hay que soltar el lock ANTES de persistir (`persistir` vuelve a
+    // cogerlo: un `std::sync::Mutex` no es reentrante).
+    drop(m);
+    persistir();
 }
 
 /// Fija las ventanas de cuota de un proveedor (sonda explícita o config).

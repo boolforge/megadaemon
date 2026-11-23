@@ -377,10 +377,21 @@ pub struct ChunkCipher {
 
 impl ChunkCipher {
     /// Crea el cifrador a partir de la clave maestra.
+    ///
+    /// La clave maestra de AEGIS-256 son **exactamente** 32 bytes: es lo que
+    /// exige `crate::aegis` (`if key.len() != KEY_LEN`).  Antes esta
+    /// comprobación era "al menos 32", así que una clave de 33..N bytes
+    /// pasaba la validación y el primer `seal_chunk` **panicaba** (el
+    /// `.expect()` del error de AEGIS) en vez de devolver un error.
+    ///
+    /// MEDIDO (2026-11-23, auditoría de calidad): `backup_apps` reanuda
+    /// leyendo la clave maestra del fichero de claves **sin validarla**
+    /// (`unhex` ⇒ cualquier longitud) ⇒ un fichero de claves corrupto
+    /// tumbaba el daemon con un panic en vez de un error claro.
     pub fn new(master: &[u8], label_nonce: &str, label_aad: &str) -> Result<ChunkCipher, String> {
-        if master.len() < AEGIS_KEY_LEN {
+        if master.len() != AEGIS_KEY_LEN {
             return Err(format!(
-                "la clave maestra debe tener al menos {AEGIS_KEY_LEN} bytes, no {}",
+                "la clave maestra de AEGIS-256 son {AEGIS_KEY_LEN} bytes, no {}",
                 master.len()
             ));
         }
@@ -444,6 +455,11 @@ impl ChunkCipher {
     pub fn seal_chunk(&self, entry: &str, index: u64, plaintext: &[u8]) -> Vec<u8> {
         let nonce = self.nonce(entry, index);
         let aad = self.aad(entry, index, plaintext.len() as u64);
+        // El `expect` es INALCANZABLE: `ChunkCipher::new` ya garantiza una
+        // clave de exactamente `AEGIS_KEY_LEN` bytes y el nonce siempre
+        // mide `AEGIS_NONCE_LEN` (MEDIDO 2026-11-23: antes bastaba con que
+        // la clave tuviera "al menos" 32 bytes ⇒ una clave más larga
+        // provocaba este PANIC en producción).
         let (ct, tag) = crate::aegis::encrypt(&self.master, &nonce, plaintext, &aad, AEGIS_TAG_LEN)
             .expect("AEGIS-256 con clave y nonce de longitudes válidas");
         let mut frame = Vec::with_capacity(4 + AEGIS_NONCE_LEN + ct.len() + AEGIS_TAG_LEN);
@@ -1232,7 +1248,12 @@ pub fn write_swift_backup(
     let mut out_bytes = Vec::new();
     out_bytes.extend_from_slice(page);
     out_bytes.extend_from_slice(&compressed);
-    std::fs::write(out, &out_bytes).map_err(|e| format!("no se puede escribir {out}: {e}"))?;
+    // Escritura ATÓMICA (MEDIDO 2026-11-23, auditoría de calidad): con
+    // `fs::write` el fichero de backup se TRUNCABA antes de escribir ⇒ un
+    // corte a mitad dejaba un .dat corrupto en la ruta final (y el bueno
+    // anterior, si lo había, ya estaba destruido).
+    crate::util_fs::write_atomic(std::path::Path::new(out), &out_bytes, 0o600)
+        .map_err(|e| format!("no se puede escribir {out}: {e}"))?;
 
     Ok(serde_json::json!({
         "ok": true,

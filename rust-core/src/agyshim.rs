@@ -149,12 +149,21 @@ pub fn restaurar(v: &mut Vec<Regla>) -> Result<(), String> {
 }
 
 /// Guarda las reglas.
+///
+/// MEDIDO (2026-11-23, auditoría de calidad): escribía con `fs::write` (que
+/// TRUNCA el destino) y **ignoraba el error** (`let _ =`) ⇒ un corte a
+/// mitad dejaba el fichero de reglas corrupto (y `restaurar` fallaba ⇒ el
+/// shim dejaba de interceptar) sin que nadie se enterara.  Ahora la
+/// escritura es atómica y el error se avisa por stderr.
 pub fn guardar() {
     let m = reglas_mapa().lock().unwrap_or_else(|p| p.into_inner());
     let txt = serde_json::to_string_pretty(&*m).unwrap_or_default();
     drop(m);
     let _ = std::fs::create_dir_all(crate::cockpit_server::state_dir());
-    let _ = std::fs::write(ruta_reglas(), txt);
+    let ruta = ruta_reglas();
+    if let Err(e) = crate::util_fs::write_atomic(&ruta, txt.as_bytes(), 0o600) {
+        eprintln!("[agyshim] no se pudieron guardar las reglas en {ruta}: {e}");
+    }
 }
 
 /// Reglas actuales.
@@ -492,7 +501,22 @@ pub fn procesar(metodo: &str, ruta: &str, cuerpo: &str) -> (u16, String) {
     registrar(&Entrada {
         ts: ahora(),
         metodo: metodo.to_string(),
-        ruta: ruta.to_string(),
+        // MEDIDO (2026-11-23, auditoría de calidad): la RUTA se guardaba en
+        // claro mientras que el cuerpo y la respuesta pasaban por el
+        // redactor.  La ruta de una llamada a la API puede llevar la
+        // credencial (los proveedores la ponen en la query: `?key=...`,
+        // `?api_key=...`) ⇒ el NDJSON del shim acababa con el secreto.
+        // Ahora la ruta pasa por el MISMO redactor que el resto.
+        //
+        // ⚠️ NO VERIFICADO: el redactor actual sólo conoce los formatos
+        // "nombre: valor" (JSON) y "nombre valor"; NO cubre el formato
+        // query-string (`?key=valor`), que se queda como está.  Se deja
+        // anotado en docs/AUDITORIA-CALIDAD-2026-11-23.md.
+        ruta: if redacta {
+            redactar(ruta)
+        } else {
+            ruta.to_string()
+        },
         modelo: modelo_de(cuerpo),
         bytes_cuerpo: cuerpo.len(),
         status,
