@@ -177,7 +177,18 @@ pub fn persistir() {
     let v = serde_json::to_value(&*m).unwrap_or_else(|_| json!({}));
     drop(m);
     let _ = std::fs::create_dir_all(crate::cockpit_server::state_dir());
-    let _ = std::fs::write(ruta_estado(), serde_json::to_string_pretty(&v).unwrap_or_default());
+    // Escritura ATÓMICA (MEDIDO 2026-11-23, auditoría de calidad): con
+    // `fs::write` el fichero de cuota se TRUNCABA antes de escribir ⇒ un
+    // corte a mitad dejaba un JSON corrupto y `restaurar_en` lo descartaba
+    // en silencio (el daemon se olvidaba de la cuota del proveedor y
+    // gastaba como si no tuviera límite).
+    let ruta = ruta_estado();
+    let datos = serde_json::to_string_pretty(&v).unwrap_or_default();
+    if let Err(e) =
+        crate::util_fs::write_atomic(std::path::Path::new(&ruta), datos.as_bytes(), 0o600)
+    {
+        eprintln!("[quota_guard] no se pudo guardar el estado de cuota en {ruta}: {e}");
+    }
 }
 
 /// Extrae el código HTTP de un mensaje de error del proveedor.
