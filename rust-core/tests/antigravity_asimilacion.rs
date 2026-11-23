@@ -195,10 +195,34 @@ fn el_clon_delega_el_pull_en_el_mecanismo_canonico() {
 
 #[test]
 fn la_unificacion_del_runtime_sigue_viva() {
-    // `unificar_runtime` es la operación que **sí** unifica (copia el
-    // binario canónico al runtime de Antigravity): no se toca.
+    // MEDIDO (2026-11-23): el binario canónico **NO** puede ir al runtime de
+    // la app (`files/runtime/bin`): ese directorio lo desempaqueta la app en
+    // cada arranque, y un fichero root dentro (o un directorio root-owned)
+    // impide que la app arranque:
+    //
+    //   "cannot unpack assets/runtime into /data/user/0/com.agy/files/runtime:
+    //    cannot delete .../runtime/etc/antigravity/admin_settings.json"
+    //
+    // Ahora el binario vive en el clon del daemon (`files/megadaemon/bin/`),
+    // que la app no toca, y el intruso del runtime se limpia.
     let e = antigravity_clone::estado_runtime();
-    assert!(e.ruta.contains("runtime/bin"));
+    assert!(
+        !e.ruta.contains("runtime/bin"),
+        "el binario no puede estar en el runtime de la app: {}",
+        e.ruta
+    );
+    assert!(
+        e.ruta.contains("megadaemon/bin"),
+        "el binario debe estar en el clon del daemon: {}",
+        e.ruta
+    );
+    // Y el intruso no puede estar: si lo hay, la app no arranca.
+    let intruso = std::path::Path::new(antigravity_clone::RUNTIME).join("megadaemon-core");
+    assert!(
+        !intruso.exists(),
+        "intruso en el runtime de la app: {}",
+        intruso.display()
+    );
 }
 
 // ---------------------------------------------------------------------------
