@@ -73,6 +73,10 @@ pub fn por_defecto() -> Value {
             "modelo": true,
             "puente_mcp": true,
             "mitm_db": false,
+            // MEDIDO (2026-11-23): tras re-parchear el `.so` hay que
+            // reiniciar la app para que el language server cargue el
+            // binario nuevo (lo tiene en memoria).  Con cooldown de 5 min.
+            "reiniciar_app": true,
             "ocultar": [],
             "reescribir": {}
         },

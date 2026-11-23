@@ -55,6 +55,44 @@ fn modo_so() -> String {
     crate::config_efectiva::string_de("instrumentacion_agy.modo_so", "falso")
 }
 
+/// Reinicia la app de Antigravity para que cargue el binario recién parcheado.
+///
+/// MEDIDO (2026-11-23): el language server se carga EN MEMORIA al arrancar
+/// la app ⇒ aunque el daemon re-parche el `.so`, el LS que está corriendo
+/// sigue con la URL vieja (y sus peticiones al gateway siguen con 403).
+/// Sin este reinicio, la instrumentación «se aplica» pero no se usa.
+///
+/// Se hace con **cooldown** (5 min) para que un fallo del parche no se
+/// convierta en un bucle de reinicios (el bucle de 1644 reinicios que
+/// sufferse el movil en julio), y sólo si la app está en marcha.
+pub fn reiniciar_app_para_el_binario_nuevo() -> Option<Value> {
+    if !on("reiniciar_app", true) {
+        return None;
+    }
+    if !proceso_vivo("com.agy") {
+        return None;
+    }
+    let marca = std::path::PathBuf::from(crate::cockpit_server::state_dir())
+        .join("agy/restart_app.ts");
+    let ahora = crate::webui::now_epoch();
+    if let Ok(txt) = std::fs::read_to_string(&marca) {
+        if let Ok(prev) = txt.trim().parse::<i64>() {
+            if ahora - prev < 300 {
+                return None;
+            }
+        }
+    }
+    let cmd = "am force-stop com.agy; sleep 2; am start -n com.agy/.ui.launcher.LauncherDarkActivity";
+    let r = crate::android::root_exec(cmd, 20_000, 2048);
+    let _ = std::fs::create_dir_all(marca.parent().unwrap());
+    let _ = std::fs::write(&marca, format!("{ahora}\n"));
+    Some(json!({
+        "reiniciado": r.combined().contains("Starting: Intent"),
+        "detalle": r.combined().trim().chars().take(200).collect::<String>(),
+        "ts": ahora,
+    }))
+}
+
 /// Ruta del fichero de estado de la instrumentación.
 pub fn ruta_estado() -> PathBuf {
     PathBuf::from(format!(
@@ -494,6 +532,17 @@ pub fn aplicar(puerto: u16, confirmar: bool) -> Value {
             Err(e) => piezas.push(json!({
                 "pieza": "so", "modo": modo, "estado": "fallo", "detalle": e,
             })),
+        }
+    }
+
+    // --- 1b) El LS corre con el binario EN MEMORIA: si el `.so` se acaba
+    // de parchar, la app tiene que reiniciarse para que lo cargue.
+    if let Some(_p) = piezas.iter().find(|p| {
+        p.get("pieza").and_then(|v| v.as_str()) == Some("so")
+            && p.get("estado").and_then(|v| v.as_str()) == Some("aplicado_ahora")
+    }) {
+        if let Some(r) = reiniciar_app_para_el_binario_nuevo() {
+            piezas.push(json!({ "pieza": "app", "estado": "reiniciada", "detalle": r }));
         }
     }
 
