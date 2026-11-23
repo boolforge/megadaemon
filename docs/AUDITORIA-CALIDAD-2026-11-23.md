@@ -94,8 +94,11 @@ la columna "ahora" es la línea del arreglo en esta rama.
 | E-3 | 1.648 `unwrap()/expect()` en el crate (119 ficheros) | `expect` en rutas de producción | — | **NO VERIFICADO** (cobertura parcial, ver §4) | — | — |
 | E-4 | `http_transfer.rs:282` (`content_length` se calcula y no se usa) | variable muerta: la longitud declarada por el servidor no se comprueba | P3 | **NO VERIFICADO** (ver §3) | — | — |
 
-**Totales: 20 bugs ARREGLADOS (14 de clase A/B de datos, 3 de auto-update,
-2 de secretos, 1 de calidad) · 4 NO VERIFICADOS · 1 descartado.**
+**Totales: 24 hallazgos ARREGLADOS en 20 commits de código** (un commit por
+bug; 4 commits cubren 2 hallazgos del mismo grupo: A-14+E-1, A-12+A-13,
+B-1+B-2, B-3+B-4) **· 5 NO VERIFICADOS (B-5, B-6, D-3, E-3, E-4) · 1
+descartado con motivo (E-2)**. La rama tiene 23 commits en total (20 de
+código + 2 de informe + 1 de bus).
 
 ---
 
