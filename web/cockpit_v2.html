@@ -591,6 +591,55 @@
       </div>
     </section>
 
+    <!-- ─────────── ANTIGRAVITY (motor agéntico del móvil) ─────────── -->
+    <section class="view" id="view-antigravity" role="tabpanel" aria-labelledby="tab-antigravity" tabindex="-1">
+      <div class="view__head">
+        <h1 class="view__title">Antigravity</h1>
+        <span class="view__subtitle">motor agéntico del móvil (com.agy) vía su language server</span>
+      </div>
+
+      <div class="grid grid--stats" id="agy-stats"></div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Estado y catálogo real de modelos</h2>
+          <button class="btn btn--sm btn--ghost" id="btn-agy-refresh">Refrescar</button>
+        </div>
+        <div id="agy-overview"></div>
+        <div class="mt-3" id="agy-models"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Conversaciones (cascadas)</h2></div>
+        <div class="field">
+          <label class="field__label" for="agy-search">Buscar en las conversaciones</label>
+          <div class="btn-row">
+            <input class="input mono" id="agy-search" placeholder="texto a buscar">
+            <button class="btn btn--sm" id="btn-agy-search">Buscar</button>
+          </div>
+        </div>
+        <div class="mt-3" id="agy-conversations"></div>
+        <div class="mt-3" id="agy-conversation"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Cola de tareas del daemon de Antigravity</h2></div>
+        <div id="agy-tasks"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Encolar trabajo en el agente</h2></div>
+        <div class="field">
+          <label class="field__label" for="agy-prompt">Prompt para el agente</label>
+          <textarea class="input mono" id="agy-prompt" rows="3" placeholder="qué quieres que haga Antigravity"></textarea>
+        </div>
+        <div class="btn-row mt-3">
+          <button class="btn btn--sm btn--danger" id="btn-agy-enqueue">Encolar (consume cuota)</button>
+        </div>
+        <div class="mt-3" id="agy-enqueue-out"></div>
+      </div>
+    </section>
+
     <!-- ─────────── 11. SISTEMA ─────────── -->
     <section class="view" id="view-sistema" role="tabpanel" aria-labelledby="tab-sistema" tabindex="-1">
       <div class="view__head">
@@ -719,6 +768,9 @@
     <button class="tabbar__btn" role="tab" id="tab-enjambre" data-view="enjambre" aria-selected="false" aria-controls="view-enjambre">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="4" cy="6" r="2"/><circle cx="20" cy="6" r="2"/><circle cx="12" cy="20" r="2"/><path d="M5.5 7.5 9.5 10M18.5 7.5 14.5 10M12 15v2"/></svg><span>Enjambre</span>
     </button>
+    <button class="tabbar__btn" role="tab" id="tab-antigravity" data-view="antigravity" aria-selected="false" aria-controls="view-antigravity">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2 4 6v6c0 5 3.4 9 8 10 4.6-1 8-5 8-10V6z"/><path d="m9 12 2 2 4-4"/></svg><span>Antigravity</span>
+    </button>
     <button class="tabbar__btn" role="tab" id="tab-sistema" data-view="sistema" aria-selected="false" aria-controls="view-sistema">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></svg><span>Sistema</span>
     </button>
@@ -826,6 +878,7 @@ const VIEW_LOADERS = {
   archivos: loadArchivos,
   reparto: loadReparto,
   enjambre: loadEnjambre,
+  antigravity: loadAntigravity,
   sistema: loadSistema
 };
 
@@ -1954,8 +2007,108 @@ async function loadDelegacion() {
 /* ═══════════════════════════════════════════════════════════════════════════
    VISTA 6 · ALERTAS
    ═══════════════════════════════════════════════════════════════════════════ */
-async function loadAlertas() {
-  const d = await apiCall("/api/v2/alerts", () => fetch("/api/v2/alerts", { cache: "no-store", headers: authHeaders() }));
+/* ─────────── ANTIGRAVITY (motor agéntico del móvil) ───────────
+   MEDIDO (2026-11-23): el panel del peer se había metido en la UI v1
+   (cockpit_template.html) pero la API v2 vive en el cockpit NUEVO
+   (este fichero) => el test `cada_ruta_de_la_api_v2_se_pide_desde_la_ui`
+   fallaba: la ruta /api/v2/antigravity no la pedía nadie.
+   P0-3 del backlog del peer, hecho aquí.                             */
+async function loadAntigravity() {
+  const d = await apiCall("/api/v2/antigravity", () => fetch("/api/v2/antigravity", { cache: "no-store", headers: authHeaders() }));
+  state.data.antigravity = d;
+  const st = d.status || {};
+  const cat = d.catalog || {};
+  $('#agy-stats').innerHTML = [
+    { l: "Language server", v: st.connected ? "vivo" : "caído", cls: st.connected ? "" : "stat--danger" },
+    { l: "Sesión Google", v: st.has_valid_auth ? "válida" : "no" },
+    { l: "Modelos", v: (cat.count || (cat.models || []).length || 0) },
+    { l: "Cuota", v: st.quota || "—" }
+  ].map(function (s) {
+    return '<div class="stat ' + (s.cls || "") + '"><div class="stat__label">' + esc(s.l) + '</div><div class="stat__value stat__value--sm">' + esc(s.v) + "</div></div>";
+  }).join("");
+
+  const ov = [];
+  if (st.version) ov.push(["Versión", st.version]);
+  if (st.model) ov.push(["Modelo por defecto", st.model]);
+  if (st.placeholders) ov.push(["Id ofuscado", st.placeholders]);
+  if (st.error) ov.push(["Error", st.error]);
+  $('#agy-overview').innerHTML = ov.length
+    ? '<dl class="kv">' + ov.map(function (r) { return "<dt>" + esc(r[0]) + "</dt><dd>" + esc(r[1]) + "</dd>"; }).join("") + "</dl>"
+    : '<p class="muted">Sin datos del language server.</p>';
+
+  await loadAntigravityModels();
+  await loadAntigravityConversations();
+  await loadAntigravityTasks();
+}
+
+async function loadAntigravityModels() {
+  const d = await apiCall("/api/v2/antigravity/models", () => fetch("/api/v2/antigravity/models", { cache: "no-store", headers: authHeaders() }));
+  const modelos = d.models || d.items || [];
+  $('#agy-models').innerHTML = modelos.length
+    ? '<table class="table"><thead><tr><th>Modelo</th><th>Ofuscado</th><th>Proveedor</th><th>Cuota</th></tr></thead><tbody>' +
+      modelos.map(function (m) {
+        return "<tr><td>" + esc(m.display_name || m.id || "") + "</td><td class='mono'>" + esc(m.placeholder || "") +
+          "</td><td>" + esc(m.provider || "") + "</td><td>" + esc(m.quota || "—") + "</td></tr>";
+      }).join("") + "</tbody></table>"
+    : '<p class="muted">Sin catálogo.</p>';
+}
+
+async function loadAntigravityConversations() {
+  const d = await apiCall("/api/v2/antigravity/conversations", () => fetch("/api/v2/antigravity/conversations", { cache: "no-store", headers: authHeaders() }));
+  const lista = d.conversations || d.items || [];
+  $('#agy-conversations').innerHTML = lista.length
+    ? '<table class="table"><thead><tr><th>Id</th><th>Título</th><th>Estado</th><th>Pasos</th><th></th></tr></thead><tbody>' +
+      lista.map(function (c) {
+        return "<tr><td class='mono'>" + esc(c.id || c.cascade_id || "") + "</td><td>" + esc(c.title || c.summary || "") +
+          "</td><td>" + esc(c.status || c.state || "") + "</td><td>" + esc(c.step_count || c.steps || 0) +
+          "</td><td><button class='btn btn--sm btn--ghost' data-agy-open='" + esc(c.id || c.cascade_id || "") + "'>Ver</button></td></tr>";
+      }).join("") + "</tbody></table>"
+    : '<p class="muted">Sin conversaciones.</p>';
+  $$("[data-agy-open]").forEach(function (b) {
+    b.addEventListener("click", function () { loadAntigravityConversation(b.getAttribute("data-agy-open")); });
+  });
+}
+
+async function loadAntigravityConversation(id) {
+  if (!id) return;
+  const d = await apiCall("/api/v2/antigravity/conversation?id=", () => fetch("/api/v2/antigravity/conversation?id=" + encodeURIComponent(id), { cache: "no-store", headers: authHeaders() }));
+  $('#agy-conversation').innerHTML = '<pre class="mono">' + esc(JSON.stringify(d, null, 2)) + "</pre>";
+}
+
+async function loadAntigravitySearch() {
+  const q = ($("#agy-search") && $("#agy-search").value) || "";
+  if (!q.trim()) { toast("warn", "Busca algo", "escribe un texto"); return; }
+  const d = await apiCall("/api/v2/antigravity/search?q=", () => fetch("/api/v2/antigravity/search?q=" + encodeURIComponent(q) + "&limit=20", { cache: "no-store", headers: authHeaders() }));
+  const lista = d.conversations || d.results || d.items || [];
+  $('#agy-conversations').innerHTML = lista.length
+    ? '<p class="muted">' + lista.length + " resultado(s) para «" + esc(q) + "»</p>" +
+      '<table class="table"><thead><tr><th>Id</th><th>Título</th><th>Estado</th></tr></thead><tbody>' +
+      lista.map(function (c) {
+        return "<tr><td class='mono'>" + esc(c.id || c.cascade_id || "") + "</td><td>" + esc(c.title || c.summary || "") + "</td><td>" + esc(c.status || c.state || "") + "</td></tr>";
+      }).join("") + "</tbody></table>"
+    : '<p class="muted">Sin resultados.</p>';
+}
+
+async function loadAntigravityTasks() {
+  const d = await apiCall("/api/v2/antigravity/tasks", () => fetch("/api/v2/antigravity/tasks", { cache: "no-store", headers: authHeaders() }));
+  const t = d.tasks || d;
+  $('#agy-tasks').innerHTML = '<pre class="mono">' + esc(JSON.stringify(t, null, 2)) + "</pre>";
+}
+
+async function loadAntigravityEnqueue() {
+  const p = ($("#agy-prompt") && $("#agy-prompt").value) || "";
+  if (!p.trim()) { toast("warn", "Falta el prompt", "escribe qué quieres que haga"); return; }
+  if (!confirm("Encolar trabajo en Antigravity: consume cuota y crea una conversación. ¿Seguir?")) return;
+  const d = await apiCall("/api/v2/antigravity/enqueue", () => fetch("/api/v2/antigravity/enqueue", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ prompt: p, confirm: true })
+  }));
+  $('#agy-enqueue-out').innerHTML = '<pre class="mono">' + esc(JSON.stringify(d, null, 2)) + "</pre>";
+  toast(d && d.ok ? "ok" : "error", "Antigravity", d && d.ok ? "trabajo encolado" : "no se pudo encolar");
+}
+
+async function loadAlertas() {  const d = await apiCall("/api/v2/alerts", () => fetch("/api/v2/alerts", { cache: "no-store", headers: authHeaders() }));
   state.data.alertas = d;
 
   const st = d.status || {};
@@ -3080,6 +3233,10 @@ function bindEvents() {
   $("#btn-apply-adjustments").addEventListener("click", applyAdjustments);
   $("#btn-alerts-check").addEventListener("click", function () { alertAction("check"); });
   $("#btn-re-refresh").addEventListener("click", loadRe);
+  // Antigravity (motor agéntico del móvil)
+  $("#btn-agy-refresh").addEventListener("click", loadAntigravity);
+  $("#btn-agy-search").addEventListener("click", loadAntigravitySearch);
+  $("#btn-agy-enqueue").addEventListener("click", loadAntigravityEnqueue);
   $("#btn-re-analyze").addEventListener("click", async function () {
     const path = $("#re-apk-path").value.trim();
     if (!path) { toast("warn", "Indica la ruta de la APK", ""); return; }
