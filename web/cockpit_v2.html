@@ -3718,17 +3718,22 @@ function paintTelemetria(sys) {
     ["CPU", cpu.uso_pct !== undefined && cpu.uso_pct !== null ? cpu.uso_pct + " %" : "—", (cpu.nucleos || 0) + " núcleos"],
     ["Memoria usada", fmtBytes(mem.used_kb * 1024), "de " + fmtBytes((mem.total_kb || 0) * 1024)],
     ["Batería", bat.capacity_pct !== undefined ? bat.capacity_pct + " %" : "—", bat.health_pct ? "salud " + bat.health_pct + " %" : ""],
-    ["Uptime", d.uptime_human || "—", "build " + String((d.build && d.build.sha) || "—").slice(0, 12)],
+    // MEDIDO (2026-11-23): el build salía como «—» porque se leía
+    // `build.sha` (no existe) en vez de `build.short`; y la carga pintaba
+    // la línea COMPLETA de /proc/loadavg ("20.27 21.74 22.37 8/6071
+    // 14642").  Ahora: el short del build y sólo los 3 promedios.
+    ["Uptime", d.uptime_human || "—", "build " + String((d.build && d.build.short) || (d.build && d.build.commit) || "—").slice(0, 12)],
     ["NPU", npu.available ? "disponible" : (npu.status || "—"), npu.model || ""],
-    ["Carga", sys.carga || "—", "alertas: " + ((sys.alertas && sys.alertas.pendientes) || 0)]
+    ["Carga", String(sys.carga || "—").split(/\s+/).slice(0, 3).join(" "), "alertas: " + ((sys.alertas && sys.alertas.pendientes) || 0)]
   ];
   el.innerHTML = '<div class="grid grid--stats">' + stat.map(function (r) {
     return '<div class="stat"><div class="stat__label">' + esc(r[0]) + "</div>" +
       '<div class="stat__value stat__value--sm">' + esc(r[1]) + "</div>" +
       '<div class="stat__meta">' + esc(r[2] || "") + "</div></div>";
   }).join("") + "</div>" +
-    '<dl class="kv mt-3"><dt>State dir</dt><dd class="mono small">' + esc(d.state_dir || "") + "</dd>" +
-    "<dt>Prefijo</dt><dd class='mono small'>" + esc(d.prefix || "") + "</dd></dl>";
+    '<dl class="kv mt-3"><dt>State dir</dt><dd class="mono small">' + esc(d.state_dir || "—") + "</dd>" +
+    "<dt>Prefijo</dt><dd class='mono small'>" + esc(d.prefix || "—") + "</dd>" +
+    "<dt>Versión</dt><dd class='mono small'>" + esc(d.version || "—") + "</dd></dl>";
 }
 
 /** Cuotas y presupuesto diario. */
@@ -3747,10 +3752,13 @@ function paintCuota(q) {
           "<td class='small muted'>" + esc(m.reset_at || m.resetea || "—") + "</td></tr>";
       }).join("") + "</tbody></table></div>";
   } else {
-    html += '<div class="notice"><div><div class="notice__title">Sin datos de cuota</div><div>' + esc(JSON.stringify(comp).slice(0, 300)) + "</div></div></div>";
+    html += '<div class="notice"><div><div class="notice__title">Sin datos de cuota</div>' +
+      "<div>El daemon todavía no ha consultado la cuota de ningún modelo " +
+      "(la consulta se hace al pedir una llamada real).</div>" +
+      '<div class="mono small muted" style="margin-top:.3rem">' + esc(JSON.stringify(comp).slice(0, 300)) + "</div></div></div>";
   }
   html += '<dl class="kv mt-3"><dt>Presupuesto diario</dt><dd>' + esc(String(pres.usd !== undefined ? pres.usd + " USD" : (pres.spent_usd !== undefined ? pres.spent_usd + " USD gastados" : "—"))) + "</dd>" +
-    "<dt>Aviso al agente</dt><dd>" + esc((q.aviso || "—").slice ? String(q.aviso).slice(0, 200) : String(q.aviso || "—")) + "</dd></dl>";
+    "<dt>Aviso al agente</dt><dd>" + esc(q.aviso ? (String(q.aviso).slice ? String(q.aviso).slice(0, 200) : String(q.aviso)) : "—") + "</dd></dl>";
   el.innerHTML = html;
 }
 
