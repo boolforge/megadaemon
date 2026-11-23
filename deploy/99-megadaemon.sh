@@ -453,8 +453,11 @@ mcp_legacy_stop() {
     done
     # La URL que se dejaba era la de la API de cloudflared
     # (https://api.trycloudflare.com): no es un túnel y confundía a la flota.
-    case "$(cat "$MCP_TUNNEL_URL_FILE" 2>/dev/null)" in
-        https://api.*|https://developers.*|"")
+    _ml_url=$(cat "$MCP_TUNNEL_URL_FILE" 2>/dev/null)
+    case "$_ml_url" in
+        https://api.*|https://developers.*)
+            # Solo se avisa si HABIA una URL obsoleta: si el fichero ya
+            # estaba vacio no se repite el aviso en cada vuelta (ruido).
             : > "$MCP_TUNNEL_URL_FILE" 2>/dev/null
             log "tunel mcp-legacy: URL obsoleta limpiada de $MCP_TUNNEL_URL_FILE"
             ;;

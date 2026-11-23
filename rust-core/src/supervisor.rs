@@ -168,7 +168,15 @@ pub fn instalar_keeper() -> Value {
     let cuerpo = KEEPER_SH.as_bytes();
     if let Ok(actual) = std::fs::read(&ruta) {
         if actual == cuerpo {
-            return json!({"ok": true, "ruta": ruta.display().to_string(), "ya_instalado": true});
+            // MEDIDO (2026-11-23): instalado PERO NO CORRIENDO (Magisk
+            // `service.d` solo lo arranca al boot) => se arranca ahora.
+            let arrancado = arrancar_keeper();
+            return json!({
+                "ok": true,
+                "ruta": ruta.display().to_string(),
+                "ya_instalado": true,
+                "arrancado": arrancado,
+            });
         }
     }
     let tmp = ruta.with_extension("sh.tmp");
@@ -180,8 +188,66 @@ pub fn instalar_keeper() -> Value {
         let _ = std::fs::remove_file(&tmp);
         return json!({"ok": false, "motivo": format!("renombrar {}: {e}", ruta.display())});
     }
-    json!({"ok": true, "ruta": ruta.display().to_string(), "bytes": cuerpo.len()})
+    // MEDIDO (2026-11-23, movil): el guardian se INSTALABA pero no se
+    // ARRANCABA hasta el siguiente boot (Magisk `service.d` solo corre al
+    // arrancar) => entre medias, si el supervisor se caia, NADIE lo
+    // relanzaba: el movil se quedaba sin daemon y sin supervisor.
+    // Ahora, al instalarlo, se arranca YA (desligado del daemon).
+    let arrancado = arrancar_keeper();
+    json!({
+        "ok": true,
+        "ruta": ruta.display().to_string(),
+        "bytes": cuerpo.len(),
+        "arrancado": arrancado,
+    })
 }
+
+/// Arranca el guardian del supervisor si no está corriendo.
+///
+/// Se hace con `setsid nohup` para que sobreviva a la salida del daemon.
+fn arrancar_keeper() -> bool {
+    // MEDIDO (2026-11-23): el patrón del keeper en la línea de comandos.
+    if ya_corre_keeper() {
+        return true;
+    }
+    let ruta = PathBuf::from(RUTA_KEEPER);
+    if !ruta.exists() {
+        return false;
+    }
+    let salida = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "setsid nohup sh {} >/dev/null 2>&1 &",
+            crate::sync::shell_quote(&ruta.display().to_string())
+        ))
+        .status();
+    if salida.is_err() {
+        return false;
+    }
+    // Se comprueba: el guardian duerme 90 s al arrancar, pero el proceso
+    // existe desde el primer momento.
+    for _ in 0..10 {
+        if ya_corre_keeper() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    false
+}
+
+/// ¿Está corriendo el guardian del supervisor?
+fn ya_corre_keeper() -> bool {
+    let salida = std::process::Command::new("pgrep")
+        .arg("-f")
+        .arg("97-megadaemon-keeper.sh")
+        .output();
+    match salida {
+        Ok(o) => o.status.success() && !o.stdout.is_empty(),
+        Err(_) => false,
+    }
+}
+
+
 
 /// Marca el fichero como ejecutable.
 fn set_exec(p: &Path) {
