@@ -40,7 +40,6 @@
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::sync::OnceLock;
 
 /// Endpoint de Cloud Code presente en el LS de Antigravity (42 bytes).
 pub const CLOUCODE_URL: &str = "https://daily-cloudcode-pa.googleapis.com";
@@ -106,7 +105,7 @@ fn descubrir_ls() -> Option<PathBuf> {
     let mut mejor: Option<(u64, PathBuf)> = None;
     let base = PathBuf::from(RAIZ_APP);
     let nombres = ["liblanguage_server.so", "language_server"];
-    let mut visitar = |dir: &Path, prof: usize| {
+    fn visitar(dir: &Path, prof: usize, nombres: &[&str], mejor: &mut Option<(u64, PathBuf)>) {
         if prof > 3 {
             return;
         }
@@ -115,8 +114,7 @@ fn descubrir_ls() -> Option<PathBuf> {
         };
         for e in entradas.flatten() {
             let p = e.path();
-            let nombre = e.file_name();
-            let nombre = nombre.to_string_lossy();
+            let nombre = e.file_name().to_string_lossy().into_owned();
             // Se ignoran los directorios gigantes que no tienen nada que ver.
             if nombre == "google-cloud-sdk"
                 || nombre == "gpui-mobile"
@@ -126,19 +124,22 @@ fn descubrir_ls() -> Option<PathBuf> {
                 continue;
             }
             if p.is_dir() {
-                visitar(&p, prof + 1);
+                visitar(&p, prof + 1, nombres, mejor);
                 continue;
             }
-            if !nombres.contains(&nombre.as_ref()) {
+            if !nombres.contains(&nombre.as_str()) {
                 continue;
             }
-            let tam = e.metadata().map(|m| m.len()).unwrap_or(0);
+            let meta = match e.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let tam = meta.len();
             // El language server real pesa ~180 MB: un symlink o un stub no
-            // sirve.  A igualdad de tamaño, gana el más reciente.
-            let fecha = e
-                .metadata()
+            // sirve.  A igualdad de tamano, gana el mas reciente.
+            let fecha = meta
+                .modified()
                 .ok()
-                .and_then(|m| m.modified().ok())
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
@@ -146,11 +147,11 @@ fn descubrir_ls() -> Option<PathBuf> {
             if tam > 50 * 1024 * 1024
                 && mejor.as_ref().map(|(c, _)| clave > *c).unwrap_or(true)
             {
-                mejor = Some((clave, p.clone()));
+                *mejor = Some((clave, p.clone()));
             }
         }
-    };
-    visitar(&base, 0);
+    }
+    visitar(&base, 0, &nombres, &mut mejor);
     let r = mejor.map(|(_, p)| p);
     let _ = LS_DESCUBIERTO.set(r.clone());
     r
