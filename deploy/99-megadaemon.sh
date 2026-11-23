@@ -46,6 +46,14 @@ fi
 # Sólo las variables NO secretas se exportan a los hijos: la API key se
 # exporta más abajo, sólo al daemon (igual que antes).
 export MEGADAEMON_STATE_DIR="${MEGADAEMON_STATE_DIR:-$PREFIX/state}"
+# MEDIDO (2026-11-23): el daemon tomaba la ruta del binario de una
+# constante hardcodeada que apuntaba a la ruta VOLATIL /data/local/tmp =>
+# el auto-actualizador no encontraba el binario ("no se pudo calcular el
+# sha256") y el movil NUNCA se actualizaba.  Aqui se exportan el prefijo y
+# la ruta real: una sola fuente de verdad para el supervisor, el daemon,
+# el auto-actualizador y el reparador de entorno.
+export MEGADAEMON_PREFIX="$PREFIX"
+export MEGADAEMON_BIN="$PREFIX/megadaemon-core"
 export MEGADAEMON_LISTEN="${MEGADAEMON_LISTEN:-127.0.0.1:9090}"
 LOG=/sdcard/megadaemon.log
 LOG_DIR=/sdcard/megadaemon-logs

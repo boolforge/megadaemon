@@ -100,7 +100,18 @@ fn main() {
             {
                 let ruta = std::env::var("MEGADAEMON_BIN").ok().unwrap_or_else(|| {
                     if cfg!(target_os = "android") {
-                        "/data/local/tmp/megadaemon/megadaemon-core".to_string()
+                        // MEDIDO (2026-11-23, movil): la ruta estaba en
+                        // `/data/local/tmp/megadaemon/megadaemon-core`, que es
+                        // VOLATIL: el binario ya vive en
+                        // `/data/adb/megadaemon/megadaemon-core` => el
+                        // auto-actualizador no encontraba el fichero y
+                        // respondia "no se pudo calcular el sha256 del
+                        // binario instalado" => el movil NO se actualizaba
+                        // nunca (siguió en d7d72f1 con el release de 6d8bc56
+                        // ya publicado).
+                        // Ahora la ruta sale del mismo sitio que el
+                        // supervisor y que el reparador de entorno.
+                        megadaemon_core::reparar_entorno::Config::del_entorno().binario()
                     } else {
                         std::env::current_exe()
                             .map(|p| p.to_string_lossy().to_string())
