@@ -253,15 +253,21 @@ pub fn lanzar_auto_actualizador(ruta_bin: std::path::PathBuf, minutos: u64) {
     std::thread::Builder::new()
         .name("md-auto-update".to_string())
         .spawn(move || loop {
-            // Jitter de hasta 5 minutos: evita que toda la flota golpee a la
+            // Jitter (hasta 1 minuto): evita que toda la flota golpee a la
             // vez la API de GitHub en el mismo instante.
-            let jitter = (ruta_bin
-                .metadata()
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            //
+            // MEDIDO (2026-11-23, auditoría de calidad): (a) el jitter salía
+            // del **mtime del binario**, o sea que era SIEMPRE el mismo
+            // ⇒ todos los nodos con el mismo build preguntaban en el mismo
+            // instante (justo lo que el jitter quería evitar); y (b) el
+            // comentario decía "5 minutos" pero el sueño era
+            // `jitter * 60 / 300` SEGUNDOS, o sea como mucho 1 minuto.
+            // Ahora el jitter sale del reloj (cambia en cada vuelta) y el
+            // comentario dice lo que el código hace.
+            let jitter = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.subsec_nanos() as u64)
-                .unwrap_or(0))
+                .unwrap_or(0)
                 % 300;
             std::thread::sleep(std::time::Duration::from_secs(jitter * 60 / 300));
             let estado = comprobar(&ruta_bin);
