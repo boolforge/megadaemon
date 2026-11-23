@@ -1734,8 +1734,16 @@ pub fn export(
     let sens_cipher = ChunkCipher::own(&sensitive_key)
         .map_err(|e| format!("no se puede crear el cifrador sensible: {e}"))?;
 
-    let mut file = File::create(&container_path)
-        .map_err(|e| format!("no se puede crear {}: {e}", container_path.display()))?;
+    // MEDIDO (2026-11-23, auditoría de calidad): el contenedor se escribía
+    // EN EL SITIO (`File::create(container_path)`) ⇒ si la exportación
+    // fallaba a mitad (disco lleno, proceso muerto), quedaba un contenedor
+    // CORRUPTO en la ruta final y el anterior (si lo había) ya estaba
+    // destruido.  Ahora se escribe en `<contenedor>.tmp` y se publica con
+    // un rename atómico: en la ruta final hay siempre un contenedor
+    // COMPLETO.
+    let contenedor_tmp = container_path.with_extension("mdbinv.tmp");
+    let mut file = File::create(&contenedor_tmp)
+        .map_err(|e| format!("no se puede crear {}: {e}", contenedor_tmp.display()))?;
     file.write_all(INVENTORY_MAGIC)
         .map_err(|e| format!("error escribiendo el magic: {e}"))?;
 
@@ -1801,10 +1809,23 @@ pub fn export(
         .map_err(|e| format!("error escribiendo los flujos: {e}"))?;
     file.flush()
         .map_err(|e| format!("error volcando el contenedor: {e}"))?;
+    // fsync: el contenido tiene que estar en disco antes de publicar el
+    // nombre final (si no, un corte puede dejar el contenedor publicado y
+    // vacío).
+    file.sync_all()
+        .map_err(|e| format!("error sincronizando el contenedor: {e}"))?;
     let bytes = file
         .metadata()
         .map(|m| m.len())
         .map_err(|e| format!("no se puede ver el contenedor: {e}"))?;
+    drop(file);
+    // Publicación ATÓMICA del contenedor.
+    std::fs::rename(&contenedor_tmp, &container_path).map_err(|e| {
+        format!(
+            "no se puede publicar {}: {e}",
+            container_path.display()
+        )
+    })?;
 
     // 5) Manifiesto suelto (JSON, sin valores): es lo que se sube a Drive
     //    junto al contenedor y lo que `verify` usa como referencia.
