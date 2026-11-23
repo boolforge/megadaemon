@@ -33,7 +33,10 @@
 
 mod hooks;
 mod json;
-mod redact;
+// La politica de redaccion vive en `crates/redact` (fuente unica para el
+// shim, el payload de hooks y el payload del inyector).  Aqui solo se
+// reexporta para no cambiar las llamadas.
+pub use megadaemon_redact as redact;
 mod sink;
 mod sys;
 

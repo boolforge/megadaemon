@@ -44,6 +44,11 @@ frida-gum = { version = "=0.17.2", features = [
 # `libc` para el NDJSON (open/write/mkdir): en un interceptor NUNCA se usa
 # `std::fs` (puede bloquear y paniquear).
 libc = "0.2"
+# Politica de redaccion: **la MISMA** que el shim del daemon y el
+# payload del inyector (`crates/redact`).  Antes este paquete tenia una
+# COPIA (con un bug: en texto plano `password=` no se redactaba) => el
+# NDJSON del movil podia filtrar un token que el shim si tapaba.
+megadaemon-redact = { path = "../redact" }
 # Constructores de ELF: el payload se auto-instala al ser cargado (dlopen).
 ctor = "1"
 

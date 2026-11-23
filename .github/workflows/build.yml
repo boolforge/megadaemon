@@ -77,6 +77,11 @@ jobs:
       - name: Clippy (advertencias como aviso, no bloquea)
         working-directory: rust-core
         run: cargo clippy --release --all-targets -- -D warnings || echo "::warning::clippy reportó avisos"
+      - name: "Tests del crate COMPARTIDO de redaccion (fuera del workspace)"
+        # MEDIDO (2026-11-23): `crates/redact` no pertenece al workspace del
+        # daemon => sus tests NUNCA se ejecutaban en el CI, y su bug (en
+        # texto plano `password=` no se redactaba) llego al payload.
+        run: cargo test --manifest-path crates/redact/Cargo.toml --lib
       - name: "Tests: la suite completa (los rojos CONOCIDOS no bloquean; los demás, sí)"
         # AUDIT-CI-02 (medido el 2026-11-21): antes esto era
         # `cargo test --all-targets || echo warning`, es decir, `continue-on-error`
@@ -326,6 +331,15 @@ jobs:
           CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
           RANLIB_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
+          # MEDIDO (2026-11-23): bindgen (frida-gum-sys) usaba el include del
+          # HOST (/usr/include/limits.h) y reventaba con
+          # "bits/libc-header-start.h file not found": el sysroot del NDK y
+          # los includes del TARGET tienen que estar en la ruta de clang.
+          BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android: >-
+            --sysroot=${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot
+            -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
+            -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/aarch64-linux-android
+            -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/aarch64-linux-android/api-level-26
           CARGO_PROFILE_RELEASE_LTO: "false"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
           CARGO_PROFILE_RELEASE_DEBUG: "0"
