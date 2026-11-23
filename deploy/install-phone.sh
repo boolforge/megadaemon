@@ -150,6 +150,11 @@ deploy_files() {
         cp -f "$SRC_BIN" "$BIN" || { fail "no se pudo copiar el binario"; return 1; }
         chmod 755 "$BIN" 2>/dev/null
         [ -f "$REPO_ROOT/web/cockpit_template.html" ] && cp -f "$REPO_ROOT/web/cockpit_template.html" "$TEMPLATE"
+        # La V2 (la que se sirve ahora) va tambien a $WEB_DIR: es el primer
+        # sitio donde mira el supervisor.  MEDIDO (2026-11-23): sin esto, el
+        # movil se queda con la V1 en disco y sirve la UI vieja.
+        [ -f "$REPO_ROOT/web/cockpit_v2.html" ] && cp -f "$REPO_ROOT/web/cockpit_v2.html" "$WEB_DIR/cockpit_v2.html" 2>/dev/null
+        [ -f "$REPO_ROOT/web/webui_v2.css" ]  && cp -f "$REPO_ROOT/web/webui_v2.css"  "$WEB_DIR/webui_v2.css" 2>/dev/null
         mkdir -p "$APP_TEMPLATE_DIR" 2>/dev/null
         [ -f "$REPO_ROOT/web/cockpit_template.html" ] && cp -f "$REPO_ROOT/web/cockpit_template.html" "$APP_TEMPLATE_DIR/cockpit_template.html" 2>/dev/null
         # La UI v2 (/v2 y /webui_v2.css) se sirve de disco si existe (y si no,
@@ -166,6 +171,10 @@ deploy_files() {
         adb shell "mkdir -p $PREFIX $WEB_DIR $STATE" || true
         adb push "$SRC_BIN" "$BIN" >/dev/null || die "adb push del binario falló"
         adb shell "chmod 755 $BIN" || true
+        if [ -f "$REPO_ROOT/web/cockpit_v2.html" ]; then
+            adb_ push "$REPO_ROOT/web/cockpit_v2.html" "$WEB_DIR/cockpit_v2.html" >/dev/null || true
+            adb_ push "$REPO_ROOT/web/webui_v2.css" "$WEB_DIR/webui_v2.css" >/dev/null || true
+        fi
         if [ -f "$REPO_ROOT/web/cockpit_template.html" ]; then
             adb_ push "$REPO_ROOT/web/cockpit_template.html" "$TEMPLATE" >/dev/null || true
             adb_ shell "mkdir -p $APP_TEMPLATE_DIR" >/dev/null 2>&1 || true

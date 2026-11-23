@@ -198,26 +198,38 @@ prune_caches() {
 # el cockpit servía un <h1> de 45 bytes y la UI "no funcionaba" sin que
 # saliera ningún error.  Aquí se copia al primer sitio donde aparezca.
 ensure_web_template() {
+    # MEDIDO (2026-11-23): se servia cockpit_template.html (la V1: 7 vistas,
+    # SIN nodos, SIN logs, SIN configuracion) => "la web UI es lo peor del
+    # proyecto".  Ahora se materializa la **V2** (cockpit_v2.html: 12
+    # vistas) y la V1 se queda disponible en `/legacy`.
+    #
+    # La V2 va embebida en el binario, asi que si no hay ninguna en disco se
+    # sirve la embebida: la UI nunca cae en el placeholder.
+    if [ -f "$PREFIX/web/cockpit_v2.html" ]; then
+        export MEGADAEMON_WEB_TEMPLATE_V2="$PREFIX/web/cockpit_v2.html"
+    else
+        mkdir -p "$PREFIX/web" 2>/dev/null
+        for src in \
+            /data/user/0/com.agy/files/megadaemon/web/cockpit_v2.html \
+            /sdcard/megadaemon/web/cockpit_v2.html \
+            /sdcard/Download/megadaemon/web/cockpit_v2.html
+        do
+            if [ -f "$src" ]; then
+                cp -f "$src" "$PREFIX/web/cockpit_v2.html" 2>/dev/null && {
+                    export MEGADAEMON_WEB_TEMPLATE_V2="$PREFIX/web/cockpit_v2.html"
+                    log "plantilla web V2 copiada desde $src"
+                    break
+                }
+            fi
+        done
+    fi
+    # La V1 (legacy) se deja donde estaba: el daemon la sirve en /legacy.
     if [ -f "$PREFIX/web/cockpit_template.html" ]; then
         export MEGADAEMON_WEB_TEMPLATE="$PREFIX/web/cockpit_template.html"
-        return 0
     fi
-    mkdir -p "$PREFIX/web" 2>/dev/null
-    for src in \
-        /data/user/0/com.agy/files/megadaemon/web/cockpit_template.html \
-        /sdcard/megadaemon/web/cockpit_template.html \
-        /sdcard/Download/megadaemon/web/cockpit_template.html
-    do
-        if [ -f "$src" ]; then
-            cp -f "$src" "$PREFIX/web/cockpit_template.html" 2>/dev/null && {
-                export MEGADAEMON_WEB_TEMPLATE="$PREFIX/web/cockpit_template.html"
-                log "plantilla web copiada desde $src"
-                return 0
-            }
-        fi
-    done
-    log "AVISO: no se encuentra cockpit_template.html; la UI caera en el placeholder"
-    return 1
+    [ -n "${MEGADAEMON_WEB_TEMPLATE_V2:-}" ] && return 0
+    log "AVISO: no hay cockpit_v2.html en disco; se servira la V2 embebida"
+    return 0
 }
 
 # --- deteccion de puertos alias ya servidos ------------------------------

@@ -1318,13 +1318,22 @@ fn handle_client(mut stream: TcpStream) {
                 // Antes se servia la V1 (7 vistas, sin nodos ni logs ni
                 // configuracion) => "la web UI es lo peor del proyecto".
                 // La V1 no se pierde: queda en `/legacy`.
+                // ORDEN DE RESPALDO (importante, MEDIDO 2026-11-23):
+                //   1) la V2 en disco   (lo que materializa el supervisor)
+                //   2) la V2 EMBEBIDA  (siempre presente: viaja en el binario)
+                //   3) la V1 en disco   (respaldo final)
+                //
+                // Antes caia en la V1 **en disco** antes que en la V2
+                // embebida: en el movil, donde `cockpit_template.html` (la V1)
+                // esta presente, se servia la V1 => el arreglo no llegaba.
                 let html = resolve_template_v2()
                     .and_then(|p| fs::read(&p).ok())
+                    .or_else(|| Some(EMBEDDED_V2_HTML.as_bytes().to_vec()))
                     .or_else(|| {
                         resolve_template()
                             .and_then(|p| fs::read(&p).ok())
                     })
-                    .unwrap_or_else(|| EMBEDDED_V2_HTML.as_bytes().to_vec());
+                    .unwrap_or_else(|| b"<html><body>UI no disponible</body></html>".to_vec());
                 // BUG v13.4 (AUDIT-WEB-06 · SEGURIDAD): la página pública
                 // llevaba el token de sesión INCRUSTADO.  Con `GET /` público
                 // (necesario para que el navegador pueda abrir la UI) eso

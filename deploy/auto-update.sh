@@ -107,11 +107,33 @@ NEW_VER="$VERSIONS/$NEW_SHA"
 mkdir -p "$NEW_VER"
 cp -f "$TMP" "$NEW_VER/megadaemon-core"
 chmod 755 "$NEW_VER/megadaemon-core"
+# MEDIDO (2026-11-23): una plantilla web VIEJA en disco tiene prioridad sobre
+# la embebida => tras actualizar el binario, el movil podia seguir sirviendo
+# la UI vieja.  Regla: si la plantilla es mas antigua que el binario nuevo,
+# se borra => el daemon sirve la embebida (que es la del binario nuevo).
+for _tpl in "$PREFIX/web/cockpit_v2.html" "$PREFIX/web/webui_v2.css" "$PREFIX/web/cockpit_template.html"; do
+    if [ -f "$_tpl" ] && [ -f "$NEW_VER/megadaemon-core" ]; then
+        if [ "$_tpl" -ot "$NEW_VER/megadaemon-core" ]; then
+            rm -f "$_tpl" 2>/dev/null || true
+            log "plantilla obsoleta retirada (se sirve la embebida): $_tpl"
+        fi
+    fi
+done
 # La plantilla web embebida va en el binario, pero si existe en disco tiene
 # prioridad: se refresca para que la UI llegue al día.
 if [ -f "$PREFIX/web/cockpit_template.html" ]; then
   mkdir -p "$NEW_VER/web"
   cp -f "$PREFIX/web/cockpit_template.html" "$NEW_VER/web/" 2>/dev/null || true
+fi
+# La V2 (la que se sirve ahora) tambien viaja con la version nueva: si no,
+# el movil se queda con la UI vieja aunque el binario sea nuevo.
+if [ -f "$PREFIX/web/cockpit_v2.html" ]; then
+  mkdir -p "$NEW_VER/web"
+  cp -f "$PREFIX/web/cockpit_v2.html" "$NEW_VER/web/" 2>/dev/null || true
+fi
+if [ -f "$PREFIX/web/webui_v2.css" ]; then
+  mkdir -p "$NEW_VER/web"
+  cp -f "$PREFIX/web/webui_v2.css" "$NEW_VER/web/" 2>/dev/null || true
 fi
 
 PREV=""
