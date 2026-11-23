@@ -189,19 +189,36 @@ cual.
 
 ## 7. Lo que se implementa (y en este orden)
 
-1. **Motor de configuración** (`config_efectiva.rs`) — hecho (`326896a`).
-2. **Lector de logs** (`logs.rs`) — hecho (`326896a`).
-3. **Orquestador de instrumentación AGY** (`instrumentacion_agy.rs`) — hecho
-   (`326896a`).
-4. **Servir la V2** + `/legacy` — hecho.
-5. **API nueva**: `/api/v2/logs`, `/api/v2/config`, `/api/v2/tools`,
-   `/api/v2/nodes/detalle`, `/api/v2/system`, `/api/v2/quota`,
-   `/api/v2/instrumentacion`.
-6. **UI nueva**: vistas `logs`, `config`, `sistema` (real), `tools`,
-   `instrumentacion` (real), y portar de la V1 `chat`, `inspect`, `npu`,
-   `swarm`, `vram`.
-7. **Cableado**: cada vista nueva llama a su endpoint; el test
-   `webui::tests::cada_ruta_de_la_api_v2_se_pide_desde_la_ui` lo exige.
+| # | Pieza | Estado | Commit |
+|---|---|---|---|
+| 1 | **Motor de configuración** (`config_efectiva.rs`): 12 secciones, valores de fábrica, fusión con el entorno, validación y recarga en caliente | **hecho** | `326896a` |
+| 2 | **Lector de logs** (`logs.rs`): 14 fuentes, tail por bloques, filtro por texto y nivel, NDJSON estructurado | **hecho** | `326896a` |
+| 3 | **Orquestador de instrumentación AGY** (`instrumentacion_agy.rs`): las 4 piezas, informe por pieza, estado real | **hecho** | `326896a` |
+| 4 | **Servir la V2** + `/legacy` para la V1 | **hecho** | `326896a`, `f85d269` |
+| 5 | **API v2 ampliada** (10 rutas nuevas: logs, config, tools, nodes/detalle, system, quota, instrumentacion, backups) | **hecho** | `dae933d` |
+| 6 | **UI V2**: vistas `logs`, `config`, `tools` + detalle de nodos, telemetría, cuotas, instrumentación y backups en las vistas existentes | **hecho** | `dae933d` |
+| 7 | **Instrumentación automática**: ciclo de 60 s que re-instrumenta lo que falte; estado barato (metadatos, no hashes de 181 MB) | **hecho** | `64bd6ac` |
+| 8 | **Portar de la V1** `chat`+`swarm`, `inspect`, `npu`, `vram` a la V2 (de forma nativa; la V1 sigue en `/legacy`) | **hecho** | `64bd6ac` |
+| 9 | **Despliegue**: la V2 y su CSS viajan al móvil (instalador + auto-actualizador); una plantilla obsoleta se retira para que mande la embebida | **hecho** | `f85d269` |
+
+### Cableado verificado
+
+El test `webui::tests::cada_ruta_de_la_api_v2_se_pide_desde_la_ui` exige que
+**toda** ruta de la API v2 sea llamada desde la UI. Comprobado sobre el
+código tras los cambios:
+
+```
+rutas v2: 52 | sin llamada: 0
+```
+
+### Lo que queda (aún NO hecho, con honestidad)
+
+| Hueco | Por qué sigue abierto |
+|---|---|
+| Los **71 endpoints v1 agrupados** en familias v2 (`/api/v2/re/…`, `/api/v2/npu/…`, `/api/v2/system/…`, `/api/v2/sync/…`, …) | La V2 llama directamente a los endpoints v1 que necesita (inspect, npu, chat, vision) y a los nuevos de la v2. Agrupar los 71 es una reorganización grande de URL; el **contenido** ya es visible en la UI, lo que falta es la URL canónica. |
+| `/api/v2/devlog` | `/api/devlog` existe y sirve `devlog.json`; no se ha expuesto en la v2 ni pintado en la UI (el contenido del devlog son eventos de desarrollo, no de operación). |
+| Editar la configuración **del supervisor** desde la UI | Deliberado: si el supervisor se rompe, el móvil no vuelve. Se edita a mano y se verifica. |
+| Ghidra (el motor RE) en el móvil | Necesita JDK 21 y GB de RAM: el móvil tiene ~4 GB. La UI muestra su progreso; la ejecución es del PC. |
 
 ---
 
