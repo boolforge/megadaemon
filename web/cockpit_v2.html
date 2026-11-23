@@ -92,6 +92,23 @@
         <div class="card__head"><h2 class="card__title">Dispositivo y energía</h2></div>
         <dl class="kv" id="resumen-dispositivo"></dl>
       </div>
+
+      <div class="grid grid--wide">
+        <div class="card">
+          <div class="card__head">
+            <h2 class="card__title">Instrumentación de Antigravity</h2>
+            <button class="btn btn--sm btn--ghost" data-goto="antigravity">Ver detalle</button>
+          </div>
+          <div id="resumen-instrumentacion"></div>
+        </div>
+        <div class="card">
+          <div class="card__head">
+            <h2 class="card__title">Últimos eventos</h2>
+            <button class="btn btn--sm btn--ghost" data-goto="logs">Ver logs</button>
+          </div>
+          <pre class="logbox mono" id="resumen-eventos">cargando…</pre>
+        </div>
+      </div>
     </section>
 
     <!-- ─────────── 2. NODOS ─────────── -->
@@ -1849,6 +1866,40 @@ async function loadResumen() {
   const d = await apiCall("/api/v2/dashboard", () => fetch("/api/v2/dashboard", { cache: "no-store", headers: authHeaders() }));
   state.data.resumen = d;
   paintHeader(d);
+
+  // Instrumentación y últimas líneas: el resumen debe mostrar ACTIVIDAD,
+  // no sólo cascos vacíos (el usuario: «es un caserón y faltan muchas
+  // cosas»).  Van en paralelo: no bloquean la vista.
+  Promise.all([
+    apiCall("/api/v2/instrumentacion", () => fetch("/api/v2/instrumentacion", { cache: "no-store", headers: authHeaders() })),
+    apiCall("/api/v2/logs?fuente=daemon&lineas=40", () => fetch("/api/v2/logs?fuente=daemon&lineas=40", { cache: "no-store", headers: authHeaders() }))
+  ]).then(function (r) {
+    const inst = r[0], logs = r[1];
+    const chips = [
+      ["AGY", inst.agy_vivo ? "vivo" : "parado"],
+      [".so " + (inst.modo_so || "?"), (inst.so_falso && inst.so_falso.activo) || (inst.endpoint_local && inst.endpoint_local.aplicado) ? "puesto" : "sin poner"],
+      ["modelo", inst.modelo && inst.modelo.registrado ? "registrado" : "no"],
+      ["MCP", inst.puente_mcp && inst.puente_mcp.token_al_dia ? "al día" : "pendiente"],
+      ["MITM", inst.mitm_db && inst.mitm_db.montado ? "montado" : "no"]
+    ];
+    const el = $("#resumen-instrumentacion");
+    if (el) {
+      el.innerHTML = chips.map(function (c) {
+        return '<div class="row" style="justify-content:space-between"><span class="small muted">' + esc(c[0]) + "</span>" +
+          '<span class="chip">' + esc(c[1]) + "</span></div>";
+      }).join("");
+    }
+    const ev = $("#resumen-eventos");
+    if (ev) {
+      const lineas = logs.lineas || [];
+      ev.innerHTML = lineas.length
+        ? lineas.map(function (l) {
+            const cls = l.nivel === "error" ? "logbox__err" : (l.nivel === "warn" ? "logbox__warn" : "logbox__info");
+            return '<span class="' + cls + '">' + esc(l.texto) + "</span>";
+          }).join("\n")
+        : '<span class="logbox__info">(sin líneas todavía)</span>';
+    }
+  }).catch(function () { /* el resumen no depende de esto */ });
 
   const sub = $('#resumen-sub');
   if (sub) sub.textContent = "actualizado " + fmtWhen(d.generated_at) + " · " + (d.daemon.version || "");
