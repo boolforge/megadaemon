@@ -92,6 +92,7 @@ la columna "ahora" es la línea del arreglo en esta rama.
 | E-1 | `util_fs.rs` (no existía helper atómico) | `write_atomic` canónico + `cert_vault` delegando | P2 | ARREGLADO | `9839c76` | `util_fs.rs:26` |
 | E-2 | `llm_gateway.rs:428` (`.expect("parts es un array")`) | `expect` en producción | P3 | **DESCARTADO** (inalcanzable: el `json!` de 4 líneas antes siempre pone un array) | — | — |
 | E-3 | 1.648 `unwrap()/expect()` en el crate (119 ficheros) | `expect` en rutas de producción | — | **NO VERIFICADO** (cobertura parcial, ver §4) | — | — |
+| E-4 | `http_transfer.rs:282` (`content_length` se calcula y no se usa) | variable muerta: la longitud declarada por el servidor no se comprueba | P3 | **NO VERIFICADO** (ver §3) | — | — |
 
 **Totales: 20 bugs ARREGLADOS (14 de clase A/B de datos, 3 de auto-update,
 2 de secretos, 1 de calidad) · 4 NO VERIFICADOS · 1 descartado.**
@@ -167,6 +168,19 @@ El crate tiene **1.648** `unwrap()/expect()` en **119** ficheros. Se han
 revisado los de las rutas de datos, cola, auto-update y secretos (los
 listados arriba). **El resto NO está revisado**: no se puede afirmar que
 estén bien.
+
+### E-4 · `http_transfer.rs:282` — la `Content-Length` se calcula y no se usa
+La descarga calcula el `Content-Length` que declara el servidor y **no lo
+compara** con los bytes leídos ⇒ una descarga **truncada** (corte de red
+sin sha) se acepta como buena (sólo la detecta el sha, si el llamante lo
+pide). En `drive_native::download_file` sí se comprobó (porque ahí el
+destino se publicaba en el sitio).
+**Por qué no se arregla aquí:** con `Content-Encoding: br` los bytes
+leídos (descomprimidos) NO son los del `Content-Length`, y con
+`Transfer-Encoding: chunked` no hay `Content-Length`; sin poder probar
+contra servidores reales, una comprobación mal planteada daría **falsos
+negativos** (descargas buenas marcadas como malas) en el móvil. Es un
+cambio que necesita red, no sólo lectura.
 
 ---
 
