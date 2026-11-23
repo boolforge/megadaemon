@@ -39,14 +39,33 @@ mem_libre_mb() {
 }
 
 otros_actores() {
-    # Cuenta rustc/cargo vivos EXCLUYENDO este script y sus hijos directos.
-    # Los ZOMBIS (estado Z) se ignoran: no tienen RAM ni CPU (ya MURieron,
-    # normalmente por el OOM) y contarlos bloquearia la compilacion para
-    # siempre.  MEDIDO: 15 procesos `cargo` defunct tras los OOM.
-    ps -A -o stat,args 2>/dev/null \
+    # Cuenta rustc/cargo vivos que NO sean de este arbol de procesos.
+    #
+    # MEDIDO (2026-11-23): tres casos reales que hacian que el guardian se
+    # contara a si mismo y vetara siempre:
+    #   1) el shell que invoca `tools/build.sh cargo test ...` tiene "cargo
+    #      test" en su linea de comandos => se contaba como un actor MAS;
+    #   2) los ZOMBIS (estado Z) no tienen RAM ni CPU (ya murieron, casi
+    #      siempre por el OOM) pero seguian contando => 15 `cargo` defunct
+    #      bloqueaban la compilacion para siempre;
+    #   3) el propio guardian aparecia en su propia cuenta.
+    # Aqui se excluyen: los zombies, las lineas con "build.sh" o
+    # "guardia-compilacion", y los antepasados del proceso actual.
+    local ancestros="" p=$$
+    while [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null; do
+        ancestros="$ancestros $p"
+        p=$(awk '{print $4}' "/proc/$p/stat" 2>/dev/null) || break
+        [ -n "$p" ] || break
+    done
+    ps -A -o pid,stat,args 2>/dev/null \
         | grep -E "[r]ustc|[c]argo (build|check|test|clippy|bench)" \
         | grep -v "guardia-compilacion" \
-        | awk '$1 !~ /^Z/ {print}' | wc -l
+        | grep -v "tools/build.sh" \
+        | awk '$2 !~ /^Z/ {print $1}' \
+        | while read -r pid; do
+              case " $ancestros " in *" $pid "*) continue ;; esac
+              echo "$pid"
+          done | wc -l
 }
 
 veredicto() {
