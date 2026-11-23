@@ -53,7 +53,7 @@ veredicto() {
     local libre otros
     libre=$(mem_libre_mb)
     otros=$(otros_actores)
-    if [ -d "$LOCK" ]; then
+    if [ "${MD_BUILD_IGNORE_LOCK:-0}" != "1" ] && [ -d "$LOCK" ]; then
         echo "NO se puede compilar: hay un build en curso (lock $LOCK)."
         echo "   Espera a que termine (o usa tools/build.sh, que ya espera el lock)."
         return 1

@@ -34,6 +34,15 @@ export CARGO_INCREMENTAL=0
 if [ "${1:-}" = "--libre" ]; then rmdir "$LOCK" 2>/dev/null && echo "lock liberado"; exit 0; fi
 if [ "${1:-}" = "--estado" ]; then exec "$GUARDIA"; fi
 
+# --- guardian (RAM + actores) ANTES de coger el candado ----------------------
+# OJO: se consulta con MD_BUILD_IGNORE_LOCK=1 porque todavia no hemos cogido
+# el candado; si se consultase despues, el guardian veria SU PROPIO lock y se
+# vetaria siempre (bug medido el 2026-11-23).
+if ! MD_BUILD_IGNORE_LOCK=1 "$GUARDIA"; then
+  echo "[build] NO se compila: el guardian lo veta (ver arriba)."
+  exit 1
+fi
+
 # --- candado (un solo actor) ------------------------------------------------
 t=0
 while ! mkdir "$LOCK" 2>/dev/null; do
@@ -43,9 +52,9 @@ while ! mkdir "$LOCK" 2>/dev/null; do
 done
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
-# --- guardian (RAM + actores) ----------------------------------------------
-if ! "$GUARDIA"; then
-  echo "[build] NO se compila: el guardian lo veta (ver arriba)."
+# --- segundo control: otro actor puede haber arrancado mientras esperabamos --
+if ! MD_BUILD_IGNORE_LOCK=1 "$GUARDIA"; then
+  echo "[build] NO se compila: aparecio otro actor mientras esperaba el candado."
   exit 1
 fi
 

@@ -50,7 +50,13 @@ fn el_fixture_real_es_un_tar_ustar() {
     );
     assert_eq!(tb::detectar_formato(&bytes), tb::FormatoContenedor::Tar);
     // El magic ustar va en el offset 257 de la cabecera de la 1ª entrada.
-    assert_eq!(&bytes[257..263], tb::MAGIC_USTAR);
+    //
+    // MEDIDO (2026-11-23): este fixture real es un TAR **GNU** ("ustar  \0",
+    // 8 bytes) y no POSIX ("ustar\0", 6).  El motor ya acepta ambos
+    // (`detectar_formato` reconoce GNU y POSIX); el test afirmaba el magic
+    // POSIX sobre un fixture GNU => rojo en el CI.
+    assert_eq!(&bytes[257..265], b"ustar  \0", "el fixture real es un TAR GNU");
+    assert_eq!(&bytes[257..263], b"ustar  ");
 }
 
 #[test]

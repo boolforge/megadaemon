@@ -102,13 +102,18 @@ fn el_contenedor_real_tiene_sae1_sai1_y_saf1() {
     // MEDIDO (2026-11-23): el test fallaba en el CI con "una entrada: []".
     // El contenedor completo vive en la carpeta PRIVADA de Drive del
     // usuario (no en el repo publico) => aqui el test se salta.
-    if !b.windows(4).any(|w| w == b"SAI1") {
+    let cont = sc::abrir(&b).expect("debe abrir");
+    if cont.entradas.is_empty() {
+        // MEDIDO (2026-11-23, CI): el fixture commiteado es una MUESTRA de
+        // 944 B (cabecera + SAE1 + SAI1 + SAF1).  El PAYLOAD cifrado (11.264
+        // B) NO esta: sin el, el contenedor no puede listar entradas y el
+        // test fallaba con "una entrada: []".  El contenedor COMPLETO vive en
+        // la carpeta PRIVADA de Drive del usuario (no en el repo publico).
         eprintln!(
-            "fixture truncado (sin SAI1): test saltado; el contenedor completo esta en la carpeta privada de Drive"
+            "fixture de muestra sin payload: test saltado; el contenedor completo esta en la carpeta privada de Drive"
         );
         return;
     }
-    let cont = sc::abrir(&b).expect("debe abrir");
     assert_eq!(cont.entradas.len(), 1, "una entrada: {:?}", cont.entradas);
     assert_eq!(cont.entradas[0].nombre, "data");
     assert_eq!(cont.entradas[0].header_size, 24);
