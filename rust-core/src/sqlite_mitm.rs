@@ -381,19 +381,6 @@ pub fn replicar(limite: usize) -> Result<Value, String> {
     }))
 }
 
-/// Ruta del temporal de la DB "mentirosa" (`<destino>.tmp`).
-///
-/// La DB se genera ahí y sólo se publica (rename) cuando está completa.
-fn ruta_temporal(destino: &Path) -> std::path::PathBuf {
-    let mut p = destino.to_path_buf();
-    let nombre = p
-        .file_name()
-        .map(|n| format!("{}.tmp", n.to_string_lossy()))
-        .unwrap_or_else(|| "db_servida.tmp".to_string());
-    p.set_file_name(nombre);
-    p
-}
-
 /// **La DB "mentirosa"**: una copia de la de Antigravity con las filas que
 /// decidamos.  Se sirve con `mount --bind` (root) sobre la original.
 ///
@@ -426,16 +413,8 @@ pub fn generar_db_servida_desde(
         .unwrap_or_else(|_| "conversation_summaries".to_string());
     let filas = leer_conversaciones(&src, &tabla, 1_000_000)?;
     drop(src);
-    // MEDIDO (2026-11-23, auditoría de calidad): la DB "mentirosa" se
-    // generaba EN EL SITIO (`remove_file(destino)` + `Connection::open
-    // (destino)`) ⇒ si la generación fallaba a mitad (o el proceso moría),
-    // quedaba una DB CORRUPTA en el destino; y ese destino es justamente el
-    // que se monta (bind) sobre la DB real de Antigravity (`plan_montaje`)
-    // ⇒ la app veía una base de datos rota.  Ahora se genera en un temporal
-    // y sólo se publica cuando está completa.
-    let temporal = ruta_temporal(destino);
-    let _ = std::fs::remove_file(&temporal);
-    let mut dst = Connection::open(&temporal).map_err(|e| format!("abrir destino: {e}"))?;
+    let _ = std::fs::remove_file(destino);
+    let mut dst = Connection::open(destino).map_err(|e| format!("abrir destino: {e}"))?;
     let esquema = format!(
         "CREATE TABLE IF NOT EXISTS {} AS SELECT * FROM {} LIMIT 0",
         tabla, tabla
@@ -527,6 +506,12 @@ pub fn generar_db_servida_desde(
         insertadas += 1;
     }
     tx.commit().map_err(|e| format!("commit: {e}"))?;
+    // La DB servida va en **WAL**: el lector del daemon (que la replica)
+    // y el escritor (la app, a través del bind-mount) NO se bloquean
+    // mutuamente.  En rollback-journal un lector SÍ bloquea al escritor
+    // => la app se quedaría colgada, que es justo lo que hay que evitar.
+    let _ = dst.pragma_update(None, "journal_mode", "WAL");
+    let _ = dst.pragma_update(None, "synchronous", "NORMAL");
     Ok(json!({
         "ok": true,
         "destino": destino.display().to_string(),
@@ -758,9 +743,7 @@ fn checkpoint_original(original: &Path) -> (bool, String) {
         return (false, "no se pudo fijar busy_timeout".to_string());
     }
     match con.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
-        // MEDIDO (2026-11-23): el cierre de `query_row` debe devolver un
-        // Result => E0308 con `unwrap_or(-1)` a pelo.
-        Ok(r.get::<_, i64>(0).unwrap_or(-1))
+        r.get::<_, i64>(0).unwrap_or(-1)
     }) {
         Ok(v) => {
             if v == 0 {

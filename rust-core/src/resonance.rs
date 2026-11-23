@@ -635,7 +635,14 @@ mod tests {
         let (n, bytes) = t.plegar().expect("plegar");
         assert_eq!(n, 2);
         assert!(bytes > 0);
-        assert!(dir.join("foto.json").exists(), "debe quedar la instantánea");
+        // MEDIDO (2026-11-23): la instantánea vive en `<state>/tablon/`
+        // (el subdirectorio del tablón), NO en `<state>/` => el test miraba
+        // en la ruta equivocada y fallaba aunque la escritura fuese buena.
+        assert!(
+            t.dir.join("foto.json").exists(),
+            "debe quedar la instantánea en {:?}",
+            t.dir
+        );
         // Al reabrir, las cartas siguen ahí (el estado no se pierde).
         let t2 = Tablon::abrir(dir.to_str().unwrap()).expect("reabrir");
         assert_eq!(t2.cartas.len(), 2, "la instantánea conserva las cartas");
