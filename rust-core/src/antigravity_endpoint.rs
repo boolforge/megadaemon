@@ -204,13 +204,14 @@ pub const PREFIJO_AGENTE: &str = "/mda";
 pub fn secreto_agente() -> String {
     // Cache: se consulta en CADA petición del agente (el gate lo llama) y
     // el fichero es de 16 bytes: no hace falta leerlo cada vez.
+    //
+    // MEDIDO (2026-11-23): con `get` + `set` dos hilos podían inicializar a
+    // la vez y obtener **secretos DISTINTOS** (el plan B usa el reloj) ⇒ la
+    // URL parcheada y el secreto del gate no cuadraban (y el fichero
+    // acababa con otro valor).  `get_or_init` garantiza una sola
+    // inicialización.
     static CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    if let Some(v) = CACHE.get() {
-        return v.clone();
-    }
-    let v = secreto_agente_real();
-    let _ = CACHE.set(v.clone());
-    v
+    CACHE.get_or_init(secreto_agente_real).clone()
 }
 
 fn secreto_agente_real() -> String {
@@ -234,12 +235,19 @@ fn secreto_agente_real() -> String {
     let hex = if nuevo {
         buf.iter().map(|b| format!("{b:02x}")).collect::<String>()
     } else {
-        // Plan B (sin /dev/urandom): tiempo + pid + una constante.
-        let t = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
-        format!("{:016x}", t ^ (std::process::id() as u64).wrapping_mul(0x9E3779B97F4A7C15))
+        // Plan B (sin /dev/urandom): el commit de la build (estable entre
+        // reinicios ⇒ no obliga a re-patchear los 181 MB en cada arranque).
+        let sha = crate::self_update::build_commit();
+        let t = sha.chars().filter(|c| c.is_ascii_hexdigit()).take(16).collect::<String>();
+        if t.len() == 16 {
+            t
+        } else {
+            let n = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0);
+            format!("{:016x}", n ^ (std::process::id() as u64).wrapping_mul(0x9E3779B97F4A7C15))
+        }
     };
     let _ = std::fs::create_dir_all(&dir);
     let _ = std::fs::write(&ruta, format!("{hex}\n"));
