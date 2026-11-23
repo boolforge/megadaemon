@@ -210,9 +210,37 @@ fn puente_mcp_estado() -> Value {
 
 /// ¿Está el proceso de Antigravity vivo?
 fn proceso_vivo(paquete: &str) -> bool {
-    // `pidof` no existe en todos los Android; `ps` sí.  Se busca el nombre
-    // del proceso de la app.
-    match std::process::Command::new("ps").arg("-A").arg("-o").arg("args").output() {
+    // MEDIDO (2026-11-23): esto usaba `ps -A -o args`, y el `ps` de
+    // toybox (Android) NO tiene la columna `args` ⇒ salía sin ella ⇒ la
+    // comprobación siempre daba false ⇒ el registro del modelo se quedaba
+    // «aplazado» para siempre («Antigravity no esta en marcha» con la app
+    // delante).
+    //
+    // Ahora, en orden de fiabilidad:
+    //   1) `pidof` (lo trae toybox);
+    //   2) `/proc/<pid>/cmdline` (root lo lee; y el nombre del proceso de
+    //      una app de Android es el paquete);
+    //   3) `ps` como último recurso (cualquier columna).
+    if let Ok(o) = std::process::Command::new("pidof").arg(paquete).output() {
+        if o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty() {
+            return true;
+        }
+    }
+    if let Ok(entradas) = std::fs::read_dir("/proc") {
+        for e in entradas.flatten() {
+            let nombre = e.file_name().to_string_lossy().into_owned();
+            if nombre.is_empty() || !nombre.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            if let Ok(b) = std::fs::read(e.path().join("cmdline")) {
+                let txt = String::from_utf8_lossy(&b);
+                if txt.contains(paquete) {
+                    return true;
+                }
+            }
+        }
+    }
+    match std::process::Command::new("ps").arg("-A").output() {
         Ok(o) => {
             let txt = String::from_utf8_lossy(&o.stdout);
             txt.lines().any(|l| l.contains(paquete))

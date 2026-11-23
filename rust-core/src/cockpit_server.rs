@@ -1043,6 +1043,15 @@ fn handle_client(mut stream: TcpStream) {
         Some(idx) => (&raw_uri[..idx], &raw_uri[idx + 1..]),
         None => (raw_uri, ""),
     };
+    // MEDIDO (2026-11-23): el language server de Antigravity, ya
+    // instrumentado, llama al gateway por loopback con el prefijo
+    // "/mda/<secreto>" ⇒ la petición se autentica con ese secreto y se
+    // quita el prefijo para que el shim la enrute (Gemini normal).  Sin
+    // esto el gate la rechazaba con 403 («falta X-Seere-Auth-Token») y la
+    // app no podía usar el modelo de MegaDaemon.
+    let ruta_agente = crate::antigravity_endpoint::quitar_prefijo_agente(path);
+    let es_agente = ruta_agente.is_some();
+    let path: &str = ruta_agente.as_deref().unwrap_or(path);
     let qs = parse_query_params(query);
 
     // ------------------------------------------------------------------
@@ -1187,7 +1196,8 @@ fn handle_client(mut stream: TcpStream) {
     // v13.2 (S08): los endpoints que ejecutan o modifican estado exigen el
     // token.  Sin esto, cualquiera (página web con CORS abierto, o alguien en
     // la LAN) podía hacer POST /api/chat con "$ comando" y obtener RCE root.
-    if requires_auth(path, method, local_browser) && !auth_ok(&header_str) {
+    // El prefijo del agente ya ES la credencial (secreto local).
+    if requires_auth(path, method, local_browser) && !auth_ok(&header_str) && !es_agente {
         // v15 (A-18): el 403 nombra el `state_dir` efectivo y, si el daemon no
         // tiene ninguna key configurada, lo dice con la ruta exacta.
         let body_s = api_key::token_required_body(&state_dir());

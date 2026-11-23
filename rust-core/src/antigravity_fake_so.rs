@@ -295,6 +295,20 @@ pub fn instalado_cheap() -> bool {
         // Sin metadatos guardados: no se puede saber sin hashear.
         return false;
     }
+    // MEDIDO (2026-11-23): el fichero puede estar intacto y aun así estar
+    // OBSOLETO: si cambia la URL destino (p.ej. el prefijo del agente con
+    // su secreto), el falso instalado lleva la URL vieja ⇒ hay que
+    // re-patchear los 181 MB.  La comparación es de una cadena (barata).
+    let url_actual = crate::antigravity_endpoint::url_destino(
+        crate::antigravity_endpoint::PUERTO_GATEWAY,
+    );
+    let url_guardada = guardado
+        .get("url_destino")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if url_guardada != url_actual {
+        return false;
+    }
     bytes == gb && mt == gm
 }
 

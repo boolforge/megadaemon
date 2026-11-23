@@ -180,26 +180,130 @@ pub fn ruta_gate() -> PathBuf {
     PathBuf::from(RAIZ_APP).join("web/generated/main.js")
 }
 
+/// Prefijo de la ruta que usa el **language server** para hablar con el
+/// gateway.
+///
+/// MEDIDO (2026-11-23): con el prefijo anterior (`/v1internal/xxxx…`) las
+/// peticiones del LS al gateway acababan en **403 «falta la cabecera
+/// X-Seere-Auth-Token»**: el LS no lleva nuestro token de sesión (no puede
+/// saberlo) y el gate lo rechazaba antes de llegar al shim ⇒ la app no
+/// podía usar el modelo de MegaDaemon.
+///
+/// Ahora el prefijo lleva un **secreto local**: `/mda/<16 hex>`.  El
+/// daemon valida el secreto, da la petición por autenticada y quita el
+/// prefijo para que el shim la enrute como una petición Gemini normal.
+/// El secreto vive en `<state>/agy_proxy.secret` (0600) y en el binario
+/// de la app (que sólo leen la app y root) ⇒ el túnel público no puede
+/// adivinarlo.
+pub const PREFIJO_AGENTE: &str = "/mda";
+
+/// Secreto local del proxy del agente (16 hex, 0600, estable).
+///
+/// Se crea la primera vez y no cambia: si cambiara, el binario parcheado
+/// dejaría de validar (y habría que re-patchear los 181 MB).
+pub fn secreto_agente() -> String {
+    // Cache: se consulta en CADA petición del agente (el gate lo llama) y
+    // el fichero es de 16 bytes: no hace falta leerlo cada vez.
+    static CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    if let Some(v) = CACHE.get() {
+        return v.clone();
+    }
+    let v = secreto_agente_real();
+    let _ = CACHE.set(v.clone());
+    v
+}
+
+fn secreto_agente_real() -> String {
+    let dir = crate::cockpit_server::state_dir();
+    let ruta = std::path::PathBuf::from(&dir).join("agy_proxy.secret");
+    if let Ok(s) = std::fs::read_to_string(&ruta) {
+        let t = s.trim().to_string();
+        if t.len() == 16 && t.chars().all(|c| c.is_ascii_hexdigit()) {
+            return t;
+        }
+    }
+    // 8 bytes de /dev/urandom en hexadecimal (16 caracteres).
+    let mut buf = [0u8; 8];
+    let nuevo = match std::fs::File::open("/dev/urandom") {
+        Ok(mut f) => {
+            use std::io::Read;
+            f.read_exact(&mut buf).is_ok()
+        }
+        Err(_) => false,
+    };
+    let hex = if nuevo {
+        buf.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    } else {
+        // Plan B (sin /dev/urandom): tiempo + pid + una constante.
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        format!("{:016x}", t ^ (std::process::id() as u64).wrapping_mul(0x9E3779B97F4A7C15))
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(&ruta, format!("{hex}\n"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&ruta, std::fs::Permissions::from_mode(0o600));
+    }
+    hex
+}
+
 /// URL destino para el LS, **de la misma longitud** que [`CLOUCODE_URL`].
 ///
-/// `http://127.0.0.1:<puerto>/v1internal/xxxx…` → 42 bytes con cualquier
-/// puerto de 4 o 5 dígitos (los `x` se ajustan: 12 - nº de dígitos).
+/// `http://127.0.0.1:<puerto>/mda/<16 hex>` → 42 bytes exactos con un
+/// puerto de 4 dígitos (21 + 5 + 16).  Con 5 dígitos hay que ajustar, así
+/// que el puerto canónico es 9090.
 pub fn url_destino(puerto: u16) -> String {
-    let base = format!("http://127.0.0.1:{puerto}/v1internal/");
-    let cible = CLOUCODE_URL.len() - base.len();
-    let x = if cible == 0 {
-        String::new()
+    let base = format!("http://127.0.0.1:{puerto}{PREFIJO_AGENTE}/");
+    let hex = secreto_agente();
+    let mut s = format!("{base}{hex}");
+    if s.len() > CLOUCODE_URL.len() {
+        s.truncate(CLOUCODE_URL.len());
     } else {
-        "x".repeat(cible)
-    };
-    let mut s = format!("{base}{x}");
-    s.truncate(CLOUCODE_URL.len());
+        s.push_str(&"x".repeat(CLOUCODE_URL.len() - s.len()));
+    }
     s
+}
+
+/// ¿Esta ruta viene del language server instrumentado (secreto correcto)?
+///
+/// Si es así, la petición está autenticada por el secreto y hay que
+/// **quitar el prefijo** antes de enrutar.
+pub fn quitar_prefijo_agente(path: &str) -> Option<String> {
+    let p = path.trim();
+    let pref = format!("{PREFIJO_AGENTE}/");
+    let resto = p.strip_prefix(pref.as_str())?;
+    // `get(..16)` devuelve None si no hay 16 bytes o si el 16 no cae en un
+    // borde de carácter (nada de `split_at`, que entra en pánico).
+    let secreto = resto.get(..16)?;
+    let cola = &resto[16..];
+    if !secreto.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    if secreto != secreto_agente() {
+        return None;
+    }
+    if cola.is_empty() {
+        return Some("/".to_string());
+    }
+    // Relleno de 'x' (si el URL quedó corto: el LS añade su ruta detrás).
+    let cola = cola.trim_start_matches('x');
+    if cola.is_empty() {
+        return Some("/".to_string());
+    }
+    if cola.starts_with('/') || cola.starts_with(':') {
+        return Some(cola.to_string());
+    }
+    None
 }
 
 /// ¿La URL destino conserva la longitud exacta de la original?
 pub fn url_destino_valido(puerto: u16) -> bool {
-    url_destino(puerto).len() == CLOUCODE_URL.len()
+    let u = url_destino(puerto);
+    u.len() == CLOUCODE_URL.len() && u.contains(&secreto_agente())
 }
 
 /// Catálogo de modelos en formato Gemini (`GET /v1beta/models`).
@@ -578,16 +682,49 @@ mod tests {
 
     #[test]
     fn url_destino_conserva_longitud() {
-        for p in [9090u16, 50999, 8080, 443] {
+        // El prefijo del agente con su secreto ocupa 21 bytes: con un puerto
+        // de 4 dígitos la URL encaja EXACTA (42 bytes, como la original). Con
+        // 5 dígitos NO cabe el secreto ⇒ `url_destino_valido` lo dice (y el
+        // parche se niega, en vez de escribir una URL rota en el binario).
+        for p in [9090u16, 8080, 443] {
             assert_eq!(url_destino(p).len(), CLOUCODE_URL.len(), "puerto {p}");
-            assert!(url_destino_valido(p));
+            assert!(url_destino_valido(p), "puerto {p}");
         }
+        assert!(!url_destino_valido(50999), "con 5 dígitos no cabe el secreto");
     }
 
     #[test]
     fn url_destino_apunta_al_gateway() {
         let u = url_destino(9090);
-        assert!(u.starts_with("http://127.0.0.1:9090/v1internal/"));
+        assert!(u.starts_with("http://127.0.0.1:9090/mda/"), "{}", u);
+        assert!(u.contains(&secreto_agente()), "la URL debe llevar el secreto");
+    }
+
+    /// MEDIDO (2026-11-23): el LS llama al gateway con el prefijo del
+    /// agente; si el secreto no cuadra, la petición NO está autenticada.
+    #[test]
+    fn el_prefijo_del_agente_autentica_y_se_quita() {
+        let sec = secreto_agente();
+        let ruta = format!("/mda/{sec}/v1internal:generateContent");
+        assert_eq!(
+            quitar_prefijo_agente(&ruta),
+            Some("/v1internal:generateContent".to_string())
+        );
+        // Con el relleno de 'x' (puerto de menos dígitos) también vale.
+        let ruta_x = format!("/mda/{sec}x/v1internal:streamGenerateContent");
+        assert_eq!(
+            quitar_prefijo_agente(&ruta_x),
+            Some("/v1internal:streamGenerateContent".to_string())
+        );
+        // Un secreto equivocado NO autentica.
+        let falsa = if sec == "0123456789abcdef" {
+            "0123456789abcdee".to_string()
+        } else {
+            "0123456789abcdef".to_string()
+        };
+        assert!(quitar_prefijo_agente(&format!("/mda/{falsa}/v1internal:x")).is_none());
+        // Y una ruta normal, tampoco.
+        assert!(quitar_prefijo_agente("/api/v2/dashboard").is_none());
     }
 
     #[test]

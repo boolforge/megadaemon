@@ -153,9 +153,16 @@ pub fn app_state_payload(models: &[(String, Value)]) -> Value {
 
 /// Extrae el mapa de modelos personalizados de un `appState`.
 pub fn custom_models_from_app_state(state: &Value) -> Vec<(String, Value)> {
+    // MEDIDO (2026-11-23): el LS devuelve el estado en JSON con los nombres
+    // EN SNAKE_CASE (`custom_models_config.custom_models`), pero el lector
+    // miraba `customModelsConfig.customModels` ⇒ salía SIEMPRE vacío y la
+    // UI decía «0 modelos» con el modelo registrado de verdad.  Se aceptan
+    // las dos grafías (y las dos variantes con `appState`).
     let src = state
         .pointer("/customModelsConfig/customModels")
-        .or_else(|| state.pointer("/appState/customModelsConfig/customModels"));
+        .or_else(|| state.pointer("/custom_models_config/custom_models"))
+        .or_else(|| state.pointer("/appState/customModelsConfig/customModels"))
+        .or_else(|| state.pointer("/appState/custom_models_config/custom_models"));
     let mut out = Vec::new();
     if let Some(Value::Object(m)) = src {
         for (k, v) in m {
