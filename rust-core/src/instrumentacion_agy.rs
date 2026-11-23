@@ -422,10 +422,14 @@ pub fn aplicar(puerto: u16, confirmar: bool) -> Value {
     // --- 3) puente MCP ------------------------------------------------
     if on("puente_mcp", true) {
         match sincronizar_puente_mcp() {
-            Ok(v) => piezas.push(json!({
-                "pieza": "puente_mcp", "estado": "aplicado_ahora",
-                "detalle": v,
-            })),
+            Ok(v) => {
+                let cambios = v.get("cambios").and_then(|x| x.as_u64()).unwrap_or(0);
+                piezas.push(json!({
+                    "pieza": "puente_mcp",
+                    "estado": if cambios > 0 { "aplicado_ahora" } else { "aplicado" },
+                    "detalle": v,
+                }));
+            }
             Err(e) => piezas.push(json!({
                 "pieza": "puente_mcp", "estado": "fallo", "detalle": e,
             })),
