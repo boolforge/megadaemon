@@ -191,11 +191,12 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "drive_vfs",
-            "description": "Google Drive Virtual Filesystem (ls, stat, read, find, mkdir, write) with SQLite metadata cache for browsing MakeMKV-RE-v6-backup, playground-sdk-research/output, etc.",
+            "description": "Google Drive Virtual Filesystem (ls, stat, read, find, mkdir, write, move) with SQLite metadata cache for browsing MakeMKV-RE-v6-backup, playground-sdk-research/output, etc. 'move' es el motor REAL para organizar el Drive (mover un elemento a otra carpeta).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["ls", "stat", "read", "find", "mkdir", "write"], "default": "ls" },
+                    "action": { "type": "string", "enum": ["ls", "stat", "read", "find", "mkdir", "write", "move"], "default": "ls" },
+                    "to": { "type": "string", "description": "Carpeta destino (para move), p.ej. drive:/MegaDaemon/Projects" },
                     "path": { "type": "string", "description": "VFS path e.g. drive:/MakeMKV-RE-v6-backup" },
                     "query": { "type": "string", "description": "Search substring (find)" },
                     "local_path": { "type": "string", "description": "Local source path (write)" },
@@ -644,6 +645,27 @@ pub fn tool_definitions() -> Value {
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
+            "name": "resonance",
+            "description": "TABLON p2p del enjambre respaldado por Drive (el bus de resiliencia): boletin de anuncios firmado, convergente y con historia. Acciones: estado (que hay en el tablon), publicar (dejar una carta: latido|peticion|aviso|cambio|cierre), sincronizar (traer las cartas de los demas nodos y fusionarlas), plegar (convertir el journal en la instantanea comun). Util cuando el movil o un agente estan caidos: el tablon conserva la informacion y la historia aunque el nodo muera.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "accion": {
+                        "type": "string",
+                        "description": "estado | publicar | sincronizar | plegar"
+                    },
+                    "tipo": {
+                        "type": "string",
+                        "description": "latido | peticion | aviso | cambio | cierre (para publicar)."
+                    },
+                    "cuerpo": {
+                        "type": "string",
+                        "description": "JSON del cuerpo de la carta (para publicar)."
+                    }
+                }
+            }
+        },
+        {
             "name": "task_queue",
             "description": "Cola de tareas COMPARTIDA de MegaDaemon (movil + PC + agentes). Acciones: list (ver cola), submit (encolar), claim (TOMAR tareas con lease para este nodo), lease (renovar), migrate (pasar el trabajo de un nodo a otro cuando uno falla o se queda sin cuota), pause (pausar por cuota/red), merge (fusionar con lo que hay en Drive). IMPORTANTE: si la cuota esta en 'pausa', claim NO devuelve tareas: termina tu paso actual, guarda tu checkpoint y espera al reset.",
             "inputSchema": {
@@ -1028,6 +1050,47 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             };
             let txt = serde_json::to_string(&v).unwrap_or_default();
             json!({ "content": [{ "type": "text", "text": txt }] })
+        }
+        "resonance" => {
+            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("estado");
+            let state = crate::cockpit_server::state_dir();
+            let r = match accion {
+                "estado" => match crate::resonance::Tablon::abrir(&state) {
+                    Ok(t) => json!({"ok": true, "estado": t.estado()}),
+                    Err(e) => json!({"ok": false, "error": e.to_string()}),
+                },
+                "publicar" => {
+                    let tipo = args.get("tipo").and_then(|v| v.as_str()).unwrap_or("cambio");
+                    let cuerpo = args
+                        .get("cuerpo")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                        .unwrap_or_else(|| json!({"texto": args.get("cuerpo").and_then(|v| v.as_str()).unwrap_or("")}));
+                    match crate::resonance::Tablon::abrir(&state) {
+                        Ok(mut t) => {
+                            let c = t.publicar(tipo, cuerpo);
+                            json!({"ok": true, "carta": c.a_json()})
+                        }
+                        Err(e) => json!({"ok": false, "error": e.to_string()}),
+                    }
+                }
+                "sincronizar" => match crate::resonance::sincronizar() {
+                    Ok(v) => v,
+                    Err(e) => json!({"ok": false, "error": e}),
+                },
+                "plegar" => match crate::resonance::Tablon::abrir(&state) {
+                    Ok(mut t) => match t.plegar() {
+                        Ok((n, b)) => json!({
+                            "ok": true, "cartas": n, "bytes": b,
+                            "instantanea": t.dir.join("foto.json").to_string_lossy(),
+                        }),
+                        Err(e) => json!({"ok": false, "error": e.to_string()}),
+                    },
+                    Err(e) => json!({"ok": false, "error": e.to_string()}),
+                },
+                _ => json!({"ok": false, "error": "accion desconocida (estado|publicar|sincronizar|plegar)"}),
+            };
+            json!({ "content": [{ "type": "text", "text": r.to_string() }] })
         }
         "http_fetch" => {
             let mut o = crate::http_transfer::Opciones::default();
@@ -1809,6 +1872,29 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     let lp = s("local_path");
                     let rn = s("remote_name");
                     crate::drive_vfs::write_local_file(std::path::Path::new(&lp), &vpath, &rn, Some(&st))
+                }
+                "move" => {
+                    // El motor REAL de la organizacion de Drive (antes lo
+                    // hacia un script suelto en Python: dos implementaciones
+                    // para lo mismo y, medido, el PATCH sin `Content-Type`
+                    // devolvia 200 SIN mover nada).
+                    //   path = elemento (ruta VFS o id);  to = carpeta destino.
+                    let destino = s("to");
+                    if destino.is_empty() {
+                        Err("falta 'to' (la carpeta destino)".to_string())
+                    } else {
+                        let (file_id, from_id) = if vpath.starts_with("drive:") {
+                            let e = crate::drive_vfs::stat_path(&vpath, Some(&st))?;
+                            let p = crate::drive_vfs::parent_de(&e.id, Some(&st))?;
+                            (e.id, p)
+                        } else {
+                            let p = crate::drive_vfs::parent_de(&vpath, Some(&st))?;
+                            (vpath.clone(), p)
+                        };
+                        let dest_id = crate::drive_vfs::stat_path(&destino, Some(&st))?.id;
+                        crate::drive_vfs::move_item(&file_id, &from_id, &dest_id, Some(&st))?;
+                        json!({"ok": true, "file_id": file_id, "de": from_id, "a": dest_id})
+                    }
                 }
                 other => Err(format!("unknown drive_vfs action '{}'", other)),
             };

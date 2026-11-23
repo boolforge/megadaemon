@@ -165,6 +165,24 @@ pub fn split_vfs_path(vfs_path: &str) -> Vec<String> {
         .collect()
 }
 
+/// Parent folder id of a file/folder (needed to move it: Drive's `move`
+/// takes `addParents` + `removeParents`).
+pub fn parent_de(file_id: &str, state_dir: Option<&str>) -> Result<String, String> {
+    let url = format!(
+        "{}/{}?fields=parents&supportsAllDrives=true",
+        DRIVE_API, file_id
+    );
+    let body = drive_get_retry(&url, state_dir)?;
+    let v: Value = serde_json::from_slice(&body)
+        .map_err(|e| format!("parent_de: JSON invalido: {}", e))?;
+    v["parents"]
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|p| p.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "parent_de: el elemento no tiene padre".to_string())
+}
+
 /// Lists children of a Drive folder ID (`"root"` for My Drive root).
 pub fn list_folder_id(folder_id: &str, state_dir: Option<&str>, limit: usize) -> Result<Vec<VfsEntry>, String> {
     let q = format!("'{}' in parents and trashed = false", folder_id);

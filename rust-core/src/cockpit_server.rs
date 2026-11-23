@@ -1318,6 +1318,15 @@ fn handle_client(mut stream: TcpStream) {
                 };
                 send_json(&mut stream, &v);
             }
+            "/api/resonance" => {
+                // El tablón p2p (Drive): qué sabe el enjambre ahora mismo.
+                let state = crate::cockpit_server::state_dir();
+                let v = match crate::resonance::Tablon::abrir(&state) {
+                    Ok(t) => json!({"ok": true, "estado": t.estado()}),
+                    Err(e) => json!({"ok": false, "error": e.to_string()}),
+                };
+                send_json(&mut stream, &v);
+            }
             "/api/budget" => {
                 if method == "POST" {
                     let body: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);
