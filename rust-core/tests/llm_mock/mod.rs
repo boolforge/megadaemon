@@ -161,6 +161,9 @@ pub fn vault(proveedores: Vec<ProviderEntry>, default_model: &str) -> ProviderVa
 pub fn deps<'a>(v: &'a ProviderVault, t: &'a MockTransport) -> ChatDeps<'a> {
     let mut d = ChatDeps::new(v, t);
     d.quota_paused = |_| false;
+    // `budget_permite` no existe en `ChatDeps` (v16: el control de cuota es
+    // `quota_paused`): la línea hereda del agente de tests y rompía la
+    // compilación de TODO el repo, incluido `main`.
     d.retries = 0;
     d.backoff_ms = 0;
     d

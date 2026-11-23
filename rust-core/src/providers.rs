@@ -695,6 +695,13 @@ pub struct ChatDeps<'a> {
     pub retries: u32,
     /// Espera base entre reintentos (ms).  0 en tests (sin esperas).
     pub backoff_ms: u64,
+    /// **Presupuesto**: si está puesto, el daemon NO llama a los proveedores
+    /// que el veto rechace (p. ej. no gastar en proveedores de pago).
+    /// `None` = sin veto (comportamiento por defecto).
+    ///
+    /// Lo usan los tests del agente de LLM (v16): sin este campo, el test
+    /// `el_presupuesto_bloquea_la_llamada_cara` ni siquiera compilaba.
+    pub budget_permite: Option<&'a dyn Fn(&ProviderEntry, u32) -> bool>,
 }
 
 impl<'a> ChatDeps<'a> {
@@ -708,6 +715,7 @@ impl<'a> ChatDeps<'a> {
             timeout: Duration::from_secs(DEFAULT_PROVIDER_TIMEOUT_SECS),
             retries: MAX_RETRIES,
             backoff_ms: 250,
+            budget_permite: None,
         }
     }
 }
@@ -1516,6 +1524,17 @@ pub fn execute_chat_with(
             trace.push(format!("{} => SALTADO (modelo retirado: {})", p.id, rmodel));
             errors.push(format!("{}: modelo retirado ({})", p.id, rnote));
             continue;
+        }
+
+        // v16 (DEFECTO-05): el PRESUPUESTO puede vetar un proveedor (p. ej.
+        // no gastar crédito de pago).  Sin este veto el daemon gastaba en
+        // proveedores de pago sin avisar de nada.
+        if let Some(permit) = deps.budget_permite {
+            if !permit(&p, capped_max_tokens) {
+                trace.push(format!("{} => SALTADO (presupuesto)", p.id));
+                errors.push(format!("{}: veto por presupuesto", p.id));
+                continue;
+            }
         }
 
         // v16 (DEFECTO-04): un proveedor en PAUSA por cuota no se llama:
