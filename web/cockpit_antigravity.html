@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="es" class="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Jetski × MegaDaemon</title>
+<!--
+  FUSIÓN: el shell visual de Antigravity ("Jetski Web", assets_web_index.html)
+  + el cliente de la API v2 del daemon de MegaDaemon (web/cockpit_v2.html).
+
+  Copy de la GUI de Antigravity: /workspace/agy-intel/assets_web_index.html
+  (el shell; el bundle main.js de 9,9 MB vive en el móvil, en
+   /data/user/0/com.agy/files/... Antigravity/web/).
+
+  Autenticación (2 capas, igual que cockpit_v2.html y como dice docs/API_V2.md §3):
+    1) la API key va en X-API-Key (o Authorization: Bearer);
+    2) POST /api/session/exchange  {api_key} -> {token}; el token va en X-Seere-Auth-Token.
+  El token de sesión ROTA en cada reinicio del daemon => no se cachea nada.
+
+  NO se imprime ni se guarda ninguna credencial en el servidor: la key vive en
+  localStorage del navegador y el token sólo en memoria.
+-->
+<style>
+  :root{
+    --bg-main:#0b0e17; --bg-card:rgba(18,23,38,.75); --accent-glow:#38bdf8;
+    --text-primary:#f1f5f9; --text-secondary:#94a3b8;
+    --edge:rgba(148,163,184,.18); --ok:#34d399; --warn:#fbbf24; --bad:#f87171;
+  }
+  html.light{
+    --bg-main:#ffffff; --bg-card:rgba(255,255,255,.75); --accent-glow:#0284c7;
+    --text-primary:#0f172a; --text-secondary:#64748b;
+    --edge:rgba(15,23,42,.14); --ok:#059669; --warn:#b45309; --bad:#dc2626;
+  }
+  *,*::before,*::after{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:var(--bg-main);color:var(--text-primary);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;overscroll-behavior:none}
+  body{display:flex;flex-direction:column;overflow:hidden}
+  #root{flex:1;min-height:0;display:flex;flex-direction:column}
+
+  header{display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--edge);
+    background:var(--bg-card);backdrop-filter:blur(10px);flex:0 0 auto}
+  .brand{font-weight:700;letter-spacing:.3px}
+  .brand b{color:var(--accent-glow);text-shadow:0 0 18px var(--accent-glow)}
+  .spacer{flex:1}
+  .pill{font-size:11px;padding:3px 9px;border-radius:999px;border:1px solid var(--edge);color:var(--text-secondary)}
+  .pill.on{color:var(--ok);border-color:var(--ok)}
+  .pill.off{color:var(--bad);border-color:var(--bad)}
+  button{font:inherit;font-size:13px;padding:6px 11px;border-radius:8px;cursor:pointer;
+    border:1px solid var(--edge);background:transparent;color:var(--text-primary)}
+  button:hover{border-color:var(--accent-glow)}
+  button.primary{background:var(--accent-glow);color:#04121c;border-color:transparent;font-weight:600}
+  input,textarea,select{font:inherit;font-size:13px;padding:7px 9px;border-radius:8px;
+    border:1px solid var(--edge);background:rgba(0,0,0,.25);color:var(--text-primary);width:100%}
+  html.light input,html.light textarea,html.light select{background:rgba(255,255,255,.7)}
+  textarea{min-height:70px;resize:vertical}
+  label{display:block;font-size:11px;color:var(--text-secondary);margin:9px 0 3px;text-transform:uppercase;letter-spacing:.6px}
+
+  nav{display:flex;gap:4px;padding:8px 12px;border-bottom:1px solid var(--edge);flex:0 0 auto;overflow-x:auto}
+  nav button{border:none;border-bottom:2px solid transparent;border-radius:0;padding:6px 12px;color:var(--text-secondary);white-space:nowrap}
+  nav button.sel{color:var(--text-primary);border-bottom-color:var(--accent-glow)}
+
+  main{flex:1;min-height:0;overflow:auto;padding:14px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+  .card{background:var(--bg-card);border:1px solid var(--edge);border-radius:14px;padding:13px}
+  .card h3{margin:0 0 9px;font-size:13px;letter-spacing:.5px;text-transform:uppercase;color:var(--accent-glow)}
+  .kv{display:flex;justify-content:space-between;gap:10px;padding:4px 0;border-bottom:1px dashed var(--edge);font-size:13px}
+  .kv:last-child{border-bottom:none}
+  .kv span:first-child{color:var(--text-secondary)}
+  .kv span:last-child{text-align:right;font-variant-numeric:tabular-nums}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:5px 7px;border-bottom:1px solid var(--edge)}
+  th{color:var(--text-secondary);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}
+  .muted{color:var(--text-secondary)}
+  .ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)}
+  pre{background:rgba(0,0,0,.35);border:1px solid var(--edge);border-radius:10px;padding:10px;
+    overflow:auto;max-height:340px;font-size:11.5px}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  iframe{width:100%;height:100%;border:1px solid var(--edge);border-radius:12px;background:#fff}
+  #toast{position:fixed;right:14px;bottom:14px;display:flex;flex-direction:column;gap:8px;z-index:50}
+  .toast{background:var(--bg-card);border:1px solid var(--edge);border-left:3px solid var(--accent-glow);
+    border-radius:10px;padding:9px 12px;font-size:12.5px;max-width:380px}
+  .toast.err{border-left-color:var(--bad)}
+  .hidden{display:none!important}
+  .auth{max-width:440px;margin:8vh auto}
+</style>
+</head>
+<body>
+<div id="root">
+  <header>
+    <div class="brand">Jetski <b>×</b> MegaDaemon</div>
+    <span class="pill" id="st-node">nodo: —</span>
+    <span class="pill" id="st-auth">auth: sin clave</span>
+    <span class="pill" id="st-link">bus: —</span>
+    <span class="spacer"></span>
+    <button id="btn-theme" title="claro / oscuro">◐</button>
+    <button id="btn-reload">↻ recargar</button>
+  </header>
+
+  <!-- ---------- login (API key -> token de sesión) ---------- -->
+  <section id="auth" class="auth">
+    <div class="card">
+      <h3>Conectar con MegaDaemon</h3>
+      <p class="muted" style="margin-top:0;font-size:13px">
+        El daemon expone la API v2 (<code>/api/v2/*</code>). La <b>API key</b> se canjea por un
+        <b>token de sesión</b> — el token rota en cada reinicio del daemon, así que no se cachea.
+      </p>
+      <label>API key (X-API-Key)</label>
+      <input id="k" type="password" placeholder="mdaemon_sk_live_…" autocomplete="off" />
+      <div class="row" style="margin-top:10px">
+        <button class="primary" id="btn-connect">Conectar</button>
+        <span class="muted" id="auth-msg" style="font-size:12px"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ---------- app ---------- -->
+  <section id="app" class="hidden" style="display:flex;flex-direction:column;flex:1;min-height:0">
+    <nav>
+      <button data-tab="panel" class="sel">Panel</button>
+      <button data-tab="agentes">Agentes</button>
+      <button data-tab="tareas">Tareas</button>
+      <button data-tab="chat">Chat</button>
+      <button data-tab="llm">LLM</button>
+      <button data-tab="alertas">Alertas</button>
+      <button data-tab="antigravity">Antigravity</button>
+      <button data-tab="api">API</button>
+    </nav>
+    <main>
+      <div id="tab-panel"     class="tab"></div>
+      <div id="tab-agentes"   class="tab hidden"></div>
+      <div id="tab-tareas"    class="tab hidden"></div>
+      <div id="tab-chat"      class="tab hidden"></div>
+      <div id="tab-llm"       class="tab hidden"></div>
+      <div id="tab-alertas"   class="tab hidden"></div>
+      <div id="tab-antigravity" class="tab hidden" style="height:100%"></div>
+      <div id="tab-api"       class="tab hidden"></div>
+    </main>
+  </section>
+</div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+/* ------------------------------------------------------------------ estado */
+const S = { key: localStorage.getItem("md_api_key") || "", token: null, tab: "panel", data: {} };
+const $  = (s, r) => (r || document).querySelector(s);
+const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function toast(msg, err) {
+  const d = document.createElement("div");
+  d.className = "toast" + (err ? " err" : "");
+  d.textContent = msg;
+  $("#toast").appendChild(d);
+  setTimeout(() => d.remove(), 7000);
+}
+
+/* ------------------------------------------------------- autenticación */
+function authHeaders() {
+  const h = {};
+  if (S.key)   h["X-API-Key"] = S.key;
+  if (S.token) h["X-Seere-Auth-Token"] = S.token;
+  return h;
+}
+async function exchange() {
+  if (!S.key) { toast("falta la API key", true); return false; }
+  const res = await fetch("/api/session/exchange", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-API-Key": S.key },
+    body: JSON.stringify({ api_key: S.key })     // la key va EN EL CUERPO
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.token) {
+    $("#auth-msg").textContent = "canje fallido (" + res.status + "): " + (j.error || j.hint || "?");
+    $("#st-auth").className = "pill off"; $("#st-auth").textContent = "auth: 403";
+    return false;
+  }
+  S.token = j.token;                             // sólo en memoria: no se persiste
+  $("#st-auth").className = "pill on";
+  $("#st-auth").textContent = "auth: sesión activa";
+  $("#auth-msg").textContent = "";
+  return true;
+}
+async function api(path, opts) {
+  const o = Object.assign({ headers: authHeaders(), cache: "no-store" }, opts || {});
+  if (o.body && typeof o.body !== "string") {
+    o.headers["Content-Type"] = "application/json";
+    o.body = JSON.stringify(o.body);
+  }
+  const res = await fetch(path, o);
+  const ct = res.headers.get("content-type") || "";
+  const j = ct.includes("json") ? await res.json().catch(() => ({})) : await res.text();
+  if (res.status === 401 || res.status === 403) {
+    $("#st-auth").className = "pill off"; $("#st-auth").textContent = "auth: " + res.status;
+    if (await exchange()) return api(path, opts);   // reintenta una vez con token nuevo
+    throw new Error("no autorizado (" + res.status + ")");
+  }
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return j;
+}
+
+/* --------------------------------------------------------------- render */
+function kv(k, v, cls) {
+  return '<div class="kv"><span>' + esc(k) + '</span><span class="' + (cls || "") + '">' + esc(v) + '</span></div>';
+}
+function card(title, body) {
+  return '<div class="card"><h3>' + esc(title) + '</h3>' + body + '</div>';
+}
+
+async function loadPanel() {
+  const d = await api("/api/v2/dashboard");
+  S.data.dashboard = d;
+  const b = d.board || {}, bus = d.bus || {}, auth = d.auth || {};
+  $("#st-link").className = "pill " + (bus.deployed ? "on" : "off");
+  $("#st-link").textContent = "bus: " + (bus.deployed ? "ok" : (bus.reason || "no desplegado"));
+  $("#tab-panel").innerHTML = '<div class="grid">' +
+    card("Daemon", kv("nodo", d.node_id || d.id || "—") + kv("versión", d.version || "—") +
+                    kv("uptime", d.uptime_s != null ? d.uptime_s + " s" : "—") +
+                    kv("build", d.build || "—")) +
+    card("Tablón", kv("tareas", (b.tasks || []).length) + kv("estado", b.state || "—") +
+                    kv("instancias", (b.instances || []).length) + kv("agentes", (b.agents || []).length)) +
+    card("Bus", kv("desplegado", bus.deployed ? "sí" : "no", bus.deployed ? "ok" : "bad") +
+                  kv("razón", bus.reason || "—")) +
+    card("Auth", kv("tipo", auth.kind || auth.type || "—") +
+                  kv("listo", auth.ready === undefined ? "—" : (auth.ready ? "sí" : "no"))) +
+    "</div>" +
+    '<div class="card" style="margin-top:12px"><h3>Crudo</h3><pre>' +
+      esc(JSON.stringify(d, null, 1).slice(0, 20000)) + "</pre></div>";
+}
+
+async function loadAgentes() {
+  const d = await api("/api/v2/nodes");
+  S.data.nodes = d;
+  const inst = d.instances || d.board_instances || [];
+  const rows = inst.map(i => "<tr><td class='mono'>" + esc(i.id) + "</td><td>" + esc(i.role || "") +
+    "</td><td>" + esc(i.device || "") + "</td><td>" + esc(i.platform || "") +
+    "</td><td class='muted'>" + esc(i.last_seen || "") + "</td></tr>").join("");
+  const sel = inst.map(i => "<option value='" + esc(i.id) + "'>" + esc(i.id) + "</option>").join("");
+  $("#tab-agentes").innerHTML =
+    '<div class="card"><h3>Instancias del bus (' + inst.length + ")</h3>" +
+    (rows ? "<table><thead><tr><th>id</th><th>rol</th><th>dispositivo</th><th>plataforma</th><th>last_seen</th></tr></thead><tbody>" +
+            rows + "</tbody></table>" : '<p class="muted">sin instancias</p>') + "</div>" +
+    '<div class="grid" style="margin-top:12px">' +
+    card("Asignar tarea a un nodo  (POST /api/v2/nodes/assign)",
+      '<label>Nodo</label><select id="as-node">' + (sel || '<option value="">(sin nodos)</option>') + "</select>" +
+      '<label>kind</label><input id="as-kind" value="generic" />' +
+      '<label>capability (opcional)</label><input id="as-cap" placeholder="" />' +
+      '<label>payload (JSON)</label><textarea id="as-payload">{"priority":5,"title":"tarea para el agente"}</textarea>' +
+      '<div class="row" style="margin-top:9px"><button class="primary" id="as-go">Publicar en el bus</button></div>') +
+    card("Enviar mensaje a un nodo  (POST /api/v2/nodes/message)",
+      '<label>Nodo</label><select id="ms-node">' + (sel || '<option value="">(sin nodos)</option>') + "</select>" +
+      '<label>mensaje</label><textarea id="ms-msg">hola</textarea>' +
+      '<label>data_b64 (opcional)</label><textarea id="ms-data" placeholder="base64"></textarea>' +
+      '<div class="row" style="margin-top:9px"><button class="primary" id="ms-go">Enviar</button></div>') +
+    "</div>";
+  const asGo = $("#as-go"), msGo = $("#ms-go");
+  if (asGo) asGo.onclick = async () => {
+    try {
+      const r = await api("/api/v2/nodes/assign", { method: "POST", body: {
+        node: $("#as-node").value, kind: $("#as-kind").value,
+        capability: $("#as-cap").value, payload: JSON.parse($("#as-payload").value || "{}") } });
+      toast(r.ok ? "publicado: " + (r.task_id || r.id || "ok") : "error: " + (r.error || "?"), !r.ok);
+    } catch (e) { toast(String(e.message || e), true); }
+  };
+  if (msGo) msGo.onclick = async () => {
+    try {
+      const r = await api("/api/v2/nodes/message", { method: "POST", body: {
+        node: $("#ms-node").value, message: $("#ms-msg").value, data_b64: $("#ms-data").value } });
+      toast(r.ok ? "mensaje entregado" : "error: " + (r.error || "?"), !r.ok);
+    } catch (e) { toast(String(e.message || e), true); }
+  };
+}
+
+async function loadTareas() {
+  const d = await api("/api/v2/tasks");
+  S.data.tasks = d;
+  const t = d.tasks || d.local || [];
+  const rows = t.map(x => "<tr><td class='mono'>" + esc(x.id) + "</td><td>" + esc(x.title || "").slice(0, 90) +
+    "</td><td>" + esc(x.state || x.status || "") + "</td><td>" + esc(x.owner || "") +
+    "</td><td>" + esc(x.priority) + "</td></tr>").join("");
+  $("#tab-tareas").innerHTML =
+    '<div class="card"><h3>Cola (' + t.length + ")</h3>" +
+    (rows ? "<table><thead><tr><th>id</th><th>título</th><th>estado</th><th>dueño</th><th>prio</th></tr></thead><tbody>" +
+            rows + "</tbody></table>" : '<p class="muted">cola vacía</p>') + "</div>" +
+    '<div class="grid" style="margin-top:12px">' +
+    card("Reclamar / reportar  (POST /api/v2/tasks/claim|report)",
+      '<label>id de tarea</label><input id="tk-id" placeholder="t-…" />' +
+      '<label>owner</label><input id="tk-owner" value="general" />' +
+      '<label>informe</label><textarea id="tk-report">qué: …</textarea>' +
+      '<div class="row" style="margin-top:9px">' +
+      '<button id="tk-claim">reclamar</button>' +
+      '<button id="tk-report-go">reportar ok</button>' +
+      '<button id="tk-release">soltar</button></div>') + "</div>";
+  const call = async (path, extra) => {
+    try {
+      const r = await api(path, { method: "POST", body: Object.assign(
+        { id: $("#tk-id").value, owner: $("#tk-owner").value }, extra || {}) });
+      toast(r.ok ? "ok" : "error: " + (r.error || "?"), !r.ok);
+      loadTareas();
+    } catch (e) { toast(String(e.message || e), true); }
+  };
+  if ($("#tk-claim"))       $("#tk-claim").onclick = () => call("/api/v2/tasks/claim");
+  if ($("#tk-release"))     $("#tk-release").onclick = () => call("/api/v2/tasks/release");
+  if ($("#tk-report-go"))   $("#tk-report-go").onclick = () => call("/api/v2/tasks/report", { report: $("#tk-report").value, ok: true });
+}
+
+/* --------- chat con el agente a través de la API del daemon --------- */
+function renderChat() {
+  if ($("#tab-chat").dataset.ready) return;
+  $("#tab-chat").dataset.ready = "1";
+  $("#tab-chat").innerHTML =
+    '<div class="card"><h3>Chat con el agente (POST /api/chat)</h3>' +
+    '<label>modelo (vacío = el que elija el daemon)</label><input id="ch-model" placeholder="minimax-m3.1-flash" />' +
+    '<label>system (opcional)</label><input id="ch-sys" placeholder="eres el agente de MegaDaemon" />' +
+    '<label>mensaje</label><textarea id="ch-msg" style="min-height:110px">¿qué estado tiene el daemon?</textarea>' +
+    '<div class="row" style="margin-top:9px"><button class="primary" id="ch-go">Enviar</button>' +
+    '<span class="muted" id="ch-state" style="font-size:12px"></span></div>' +
+    '<h3 style="margin-top:14px">Respuesta</h3><pre id="ch-out">(vacía)</pre></div>';
+  $("#ch-go").onclick = async () => {
+    const st = $("#ch-state"); st.textContent = "enviando…"; $("#ch-out").textContent = "…";
+    try {
+      const body = { message: $("#ch-msg").value, max_tokens: 1536 };
+      const m = $("#ch-model").value.trim(); if (m) body.model = m;
+      const sy = $("#ch-sys").value.trim(); if (sy) body.system = sy;
+      const r = await api("/api/chat", { method: "POST", body });
+      st.textContent = "";
+      const txt = (r && (r.reply || r.content || r.text || r.answer || r.message)) || "";
+      $("#ch-out").textContent = txt ? txt : JSON.stringify(r, null, 1).slice(0, 8000);
+      if (r && r.reason) toast("motivo: " + r.reason);
+    } catch (e) { st.textContent = ""; $("#ch-out").textContent = String(e.message || e); }
+  };
+}
+
+async function loadLlm() {
+  const d = await api("/api/v2/llm");
+  S.data.llm = d;
+  const prov = d.providers || d.catalog || [];
+  const rows = (Array.isArray(prov) ? prov : Object.entries(prov).map(([k, v]) => Object.assign({ id: k }, v)))
+    .map(p => "<tr><td>" + esc(p.id || p.name || p.provider) + "</td><td>" + esc(p.model || p.active_model || "") +
+      "</td><td>" + esc(p.active ? "activo" : "") + "</td><td class='muted'>" + esc(p.auth_kind || p.kind || "") + "</td></tr>").join("");
+  $("#tab-llm").innerHTML = '<div class="card"><h3>Proveedores</h3>' +
+    (rows ? "<table><thead><tr><th>proveedor</th><th>modelo</th><th></th><th>auth</th></tr></thead><tbody>" + rows + "</tbody></table>"
+           : '<p class="muted">sin datos</p>') +
+    '<h3 style="margin-top:14px">Consumo</h3><pre>' + esc(JSON.stringify(d.usage || d.consumption || {}, null, 1)) + "</pre></div>";
+}
+
+async function loadAlertas() {
+  const d = await api("/api/v2/alerts");
+  S.data.alerts = d;
+  const a = d.alerts || [];
+  const rows = a.map(x => "<tr><td>" + esc(x.severity || x.level || "") + "</td><td>" + esc(x.text || x.message || x.title || "") +
+    "</td><td class='muted'>" + esc(x.at || x.ts || "") + "</td></tr>").join("");
+  $("#tab-alertas").innerHTML = '<div class="card"><h3>Alertas (' + a.length + ")</h3>" +
+    (rows ? "<table><thead><tr><th>sev</th><th>texto</th><th>cuándo</th></tr></thead><tbody>" + rows + "</tbody></table>"
+           : '<p class="muted">sin alertas</p>') +
+    '<h3 style="margin-top:14px">Canal webhook</h3><pre>' + esc(JSON.stringify(d.channel || d.webhook || {}, null, 1)) + "</pre></div>";
+}
+
+/* --------- Antigravity: el shell de la IDE dentro de la misma página --------- */
+function loadAntigravity() {
+  $("#tab-antigravity").innerHTML =
+    '<div class="card" style="height:100%;display:flex;flex-direction:column">' +
+    "<h3>Antigravity (Jetski Web)</h3>" +
+    '<p class="muted" style="font-size:12.5px;margin-top:0">' +
+    "El shell de la IDE (copy local: <span class='mono'>/workspace/agy-intel/assets_web_index.html</span>) " +
+    "arrastra <span class='mono'>main.js</span> (9,9 MB), <span class='mono'>bridge.core.js</span> y el tema. " +
+    "En el móvil vive en la app; aquí se sirve el marco y el panel de la API v2 queda accesible en las demás pestañas." +
+    "</p>" +
+    '<div class="row"><input id="ag-src" placeholder="URL del shell de Antigravity (http://…/web/index.html)" style="flex:1;min-width:220px" />' +
+    '<button class="primary" id="ag-go">cargar</button></div>' +
+    '<div style="flex:1;min-height:0;margin-top:10px" id="ag-frame"></div></div>';
+  const go = () => {
+    const u = $("#ag-src").value.trim();
+    if (!u) { toast("falta la URL", true); return; }
+    $("#ag-frame").innerHTML = '<iframe src="' + esc(u) + '" title="Antigravity"></iframe>';
+  };
+  $("#ag-go").onclick = go;
+}
+
+async function loadApi() {
+  const d = await api("/api/v2/routes").catch(() => null);
+  S.data.routes = d;
+  const rows = (d && (d.routes || d)) ? (Array.isArray(d.routes || d) ? (d.routes || d) : [])
+    .map(r => "<tr><td>" + esc(r.method || "") + "</td><td class='mono'>" + esc(r.path || "") +
+      '</td><td class="muted">' + esc(r.description || "") + "</td></tr>").join("") : "";
+  $("#tab-api").innerHTML = '<div class="card"><h3>Rutas de la API v2</h3>' +
+    (rows ? "<table><thead><tr><th>método</th><th>ruta</th><th>qué hace</th></tr></thead><tbody>" + rows + "</tbody></table>"
+           : '<p class="muted">no disponible</p>') +
+    '<h3 style="margin-top:14px">Nodo actual</h3><pre>' +
+    esc(JSON.stringify({ node: S.nodeId || null, has_key: !!S.key, has_token: !!S.token }, null, 1)) + "</pre></div>";
+}
+
+/* ------------------------------------------------------------- pestañas */
+const LOADERS = { panel: loadPanel, agentes: loadAgentes, tareas: loadTareas,
+                  chat: async () => renderChat(),
+                  llm: loadLlm, alertas: loadAlertas, antigravity: loadAntigravity, api: loadApi };
+async function show(tab) {
+  S.tab = tab;
+  $$("nav button").forEach(b => b.classList.toggle("sel", b.dataset.tab === tab));
+  $$(".tab").forEach(t => t.classList.add("hidden"));
+  const el = $("#tab-" + tab);
+  if (el) el.classList.remove("hidden");
+  try { await LOADERS[tab](); }
+  catch (e) { if (el) el.innerHTML = '<div class="card"><h3>Error</h3><pre>' + esc(String(e.message || e)) + "</pre></div>"; }
+}
+
+/* ----------------------------------------------------------------- boot */
+$("#btn-theme").onclick = () => {
+  const h = document.documentElement;
+  h.classList.toggle("light"); h.classList.toggle("dark");
+  localStorage.setItem("md_theme", h.className);
+};
+if (localStorage.getItem("md_theme")) document.documentElement.className = localStorage.getItem("md_theme");
+$("#btn-reload").onclick = () => show(S.tab);
+
+$("#btn-connect").onclick = async () => {
+  S.key = $("#k").value.trim();
+  if (!S.key) { $("#auth-msg").textContent = "pega la API key"; return; }
+  $("#auth-msg").textContent = "canjeando…";
+  if (await exchange()) {
+    localStorage.setItem("md_api_key", S.key);
+    $("#auth").classList.add("hidden");
+    $("#app").classList.remove("hidden");
+    show("panel");
+  }
+};
+$("#k").addEventListener("keydown", e => { if (e.key === "Enter") $("#btn-connect").click(); });
+$$("nav button").forEach(b => b.onclick = () => show(b.dataset.tab));
+
+(async function init() {
+  if (S.key) {
+    $("#k").value = S.key;
+    if (await exchange()) {
+      $("#auth").classList.add("hidden");
+      $("#app").classList.remove("hidden");
+      await show("panel");
+      return;
+    }
+  }
+  $("#auth").classList.remove("hidden");
+})();
+</script>
+</body>
+</html>
