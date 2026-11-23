@@ -525,8 +525,8 @@ pub fn leer(args: &Value) -> Value {
         Some(r) => vec![r.clone()],
         None => candidatas_ndjson(),
     };
-    for c in candidatas {
-        let p = Path::new(&c);
+    for c in &candidatas {
+        let p = Path::new(c);
         if !p.exists() {
             continue;
         }

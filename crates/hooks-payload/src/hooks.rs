@@ -68,7 +68,7 @@ fn mapa_stmt() -> &'static Mutex<HashMap<usize, String>> {
 /// SQL pendiente del `prepare` actual (por hilo: `prepare` y su `leave`
 /// ocurren en el mismo hilo, pero pueden intercalarse con otro hilo).
 thread_local! {
-    static SQL_PENDIENTE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    static SQL_PENDIENTE: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
 }
 
 /// Instala todos los hooks.  Devuelve el informe (qué quedó instalado y qué

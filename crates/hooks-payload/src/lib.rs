@@ -43,6 +43,9 @@ use std::sync::{Mutex, OnceLock};
 use frida_gum::interceptor::Interceptor;
 use frida_gum::Gum;
 
+// El constructor de ELF sólo existe fuera de los tests (en el binario de
+// test el payload no debe auto-instalarse).
+#[cfg(not(test))]
 use ctor::ctor;
 
 /// Versión del payload (para el que lo carga).

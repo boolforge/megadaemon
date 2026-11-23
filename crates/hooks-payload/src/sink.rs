@@ -179,7 +179,7 @@ pub fn ahora_ms() -> u64 {
 
 /// Abre un fichero en modo `O_APPEND|O_CREAT|O_WRONLY|O_CLOEXEC`.
 fn abrir_append(ruta: &str) -> Result<i32, String> {
-    let c = CString::new(ruta).map_err(|_| "ruta con NUL".to_string())?;
+    let c = CString::new(ruta.as_str()).map_err(|_| "ruta con NUL".to_string())?;
     let fd = unsafe {
         libc::open(
             c.as_ptr(),
