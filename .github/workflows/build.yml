@@ -197,7 +197,9 @@ jobs:
           # `md-clipboard` (portapapeles) y `md-dict` (diccionarios) son
           # CLIs que se ejecutan en el movil: sin publicarlos no llegan al
           # dispositivo.
-          for aux in channel-publish duckdns-updater md-lan-listen npu-probe md-clipboard md-dict; do
+          # `md-inject` es el inyector ptrace: sin el, la instrumentacion en
+          # vivo (hooks SQLite/red/ficheros) no se puede hacer en el movil.
+          for aux in channel-publish duckdns-updater md-lan-listen npu-probe md-clipboard md-dict md-inject; do
             if [ -f "target/aarch64-linux-android/release/$aux" ]; then
               cp "target/aarch64-linux-android/release/$aux" "dist/$aux-arm64"
               sha256sum "dist/$aux-arm64" > "dist/$aux-arm64.sha256"
@@ -209,6 +211,78 @@ jobs:
         with:
           name: megadaemon-android-arm64
           path: rust-core/dist/
+          retention-days: 30
+
+  # v16 · PAYLOAD DE HOOKS (la `.so` que se inyecta en la app).
+  #
+  # Job **aparte**: no es `needs` del job `release` a proposito.  Si el
+  # payload no compila (o el NDK falla), el binario ARM64 del daemon (que es
+  # el de la instancia MAESTRA) se publica igual; lo unico que se pierde es
+  # el asset del payload.  Un fallo aqui NO puede tumbar el movil.
+  #
+  # El asset se publica como `hooks-payload-arm64` (+ su `.sha256`) y lo
+  # recoge el job `release` con su `download-artifact` (que descarga TODOS
+  # los artefactos del run) => sale como asset del release.
+  #
+  # NO se anade al manifiesto `latest.json`: ese manifiesto manda la
+  # auto-actualizacion del BINARIO del daemon (ver `self_update.rs` y
+  # `deploy/phone_finalize.sh`).  El payload tiene otro ciclo de vida: se
+  # instala a mano en el movil (tool `inject_hooks`, accion `instalar`) y se
+  # reemplaza cuando cambian los hooks, no cuando cambia el daemon.
+  build-hooks-payload:
+    name: build payload de hooks (ARM64 / NDK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+      - name: Cache de cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-hooks-payload-${{ hashFiles('crates/injector-payload/Cargo.toml', 'crates/redact/Cargo.toml') }}
+      - name: Tests del payload (host x86_64, antes de cross-compilar)
+        # Los tests del payload son puros (no tocan el proceso): comprueban
+        # que los 9 ganchos estan declarados, el filtro de rutas internas y
+        # el escapado del JSON.  Ademas compilan el crate para el host, que
+        # detecta antes los errores de tipo que el cross-compileo.
+        working-directory: crates/injector-payload
+        run: cargo test --release
+      - name: Compilar el payload
+        working-directory: crates/injector-payload
+        env:
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          RANLIB_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
+        run: |
+          cargo build --release --target aarch64-linux-android
+          mkdir -p dist
+          cp target/aarch64-linux-android/release/libmegadaemon_hooks_payload.so dist/hooks-payload-arm64
+          sha256sum dist/hooks-payload-arm64 > dist/hooks-payload-arm64.sha256
+          # Copia VERSIONADA (igual que el binario del daemon): en el movil
+          # se identifica el payload por su sha corto, no por un fichero
+          # sobrescrito a pelo.
+          cp dist/hooks-payload-arm64 dist/hooks-payload-arm64-${GITHUB_SHA::7}
+          sha256sum dist/hooks-payload-arm64-${GITHUB_SHA::7} > dist/hooks-payload-arm64-${GITHUB_SHA::7}.sha256
+          file dist/hooks-payload-arm64 | grep -q "ELF 64-bit LSB shared object.*ARM aarch64" || {
+            echo "::error::el payload no es un ELF aarch64"; exit 1; }
+          sha256sum -c dist/hooks-payload-arm64.sha256
+      - name: Subir artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: megadaemon-hooks-payload-arm64
+          path: crates/injector-payload/dist/
           retention-days: 30
 
   build-linux:
@@ -275,7 +349,12 @@ jobs:
   release:
     name: release (auto-actualización de las instancias)
     runs-on: ubuntu-latest
-    needs: [build-android, build-linux]
+    # `build-hooks-payload` entra en `needs` para que el release **espere** a
+  # que el payload termine (si no, su asset se perderia: `download-artifact`
+  # solo recoge lo que ya ha acabado).  El `if` de abajo es `always()` y solo
+  # exige que `build-android` haya ido bien => que el payload falle NO
+  # impide publicar el binario del daemon (el de la instancia maestra).
+  needs: [build-android, build-linux, build-hooks-payload]
     # Publica en CUALQUIER rama (main y v14-coordination): el tag es v<sha>, así
     # que no chocan entre ramas y el binario ARM64 sale siempre con nombre
     # versionado.

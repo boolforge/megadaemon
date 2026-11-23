@@ -180,7 +180,7 @@ fn instalar(paquete: &str, lib_path: &str, bin_path: &str) -> Value {
     let destino_privado = format!("/data/data/{}/files/megadaemon/hooks-payload-arm64.so", pkg);
     let mut pasos: Vec<Value> = Vec::new();
 
-    match lib_local(lib_path, "hooks-payload-arm64.so") {
+    match lib_local(lib_path) {
         Ok((base64, origen)) => {
             let mut sub = Vec::new();
             for destino in [destino_privado.clone(), PAYLOAD_REMOTO.to_string()] {
@@ -210,7 +210,7 @@ fn instalar(paquete: &str, lib_path: &str, bin_path: &str) -> Value {
     }
 
     // 2) El inyector (`md-inject`): lo ejecuta root.
-    match bin_local(bin_path, "md-inject") {
+    match injector_local(bin_path) {
         Ok((base64, origen)) => {
             let r = fs_write(INYECTOR_REMOTO, &base64, true, PERM_INYECTOR, false);
             let fix = format!(
@@ -387,23 +387,30 @@ fn leer(paquete: &str, lineas: usize) -> Value {
     }
 }
 
-/// Rutas locales donde puede estar el payload.
-fn rutas_lib_local(lib_path: &str, nombre: &str) -> Vec<std::path::PathBuf> {
+/// Rutas locales donde puede estar un artefacto (payload o inyector).
+///
+/// Se acepta un camino explícito; si no, se busca en el directorio de estado
+/// del daemon con **todos** los nombres posibles: el release los publica con
+/// el sufijo del asset (`hooks-payload-arm64`, `md-inject-arm64`) y el
+/// operador puede haberlos renombrado.
+fn rutas_lib_local(lib_path: &str, nombres: &[&str]) -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
     if !lib_path.trim().is_empty() {
         out.push(std::path::PathBuf::from(lib_path.trim()));
         return out;
     }
     let dir = crate::state_dir::state_dir();
-    out.push(std::path::Path::new(&dir).join(nombre));
-    out.push(std::path::Path::new(&dir).join("hooks").join(nombre));
+    for n in nombres {
+        out.push(std::path::Path::new(&dir).join(n));
+        out.push(std::path::Path::new(&dir).join("hooks").join(n));
+    }
     out
 }
 
 /// Carga un fichero local y lo devuelve en base64.
-fn bin_local(ruta: &str, nombre: &str) -> Result<(String, String), String> {
+fn bin_local(ruta: &str, nombres: &[&str]) -> Result<(String, String), String> {
     use base64ct::Encoding;
-    for candidata in rutas_lib_local(ruta, nombre) {
+    for candidata in rutas_lib_local(ruta, nombres) {
         if let Ok(bytes) = std::fs::read(&candidata) {
             let b64 = base64ct::Base64::encode_string(&bytes);
             return Ok((b64, candidata.to_string_lossy().to_string()));
@@ -411,13 +418,18 @@ fn bin_local(ruta: &str, nombre: &str) -> Result<(String, String), String> {
     }
     Err(format!(
         "no se encuentra {} localmente (indica 'lib_path' o 'bin_path')",
-        nombre
+        nombres.join(" / ")
     ))
 }
 
-/// Alias de [`bin_local`] para el payload (mismo formato).
-fn lib_local(ruta: &str, nombre: &str) -> Result<(String, String), String> {
-    bin_local(ruta, nombre)
+/// El payload (`.so` de hooks).
+fn lib_local(ruta: &str) -> Result<(String, String), String> {
+    bin_local(ruta, &["hooks-payload-arm64.so", "hooks-payload-arm64"])
+}
+
+/// El inyector (`md-inject`).
+fn injector_local(ruta: &str) -> Result<(String, String), String> {
+    bin_local(ruta, &["md-inject-arm64", "md-inject"])
 }
 
 /// UID del paquete (para que el fichero quede legible por la app).
