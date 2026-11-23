@@ -274,6 +274,13 @@ pub fn aplicar_endpoint(puerto: u16, confirmar: bool) -> Result<Value, String> {
     }))
 }
 
+/// Actualiza el sha256 del LS en `runtime/manifest.json` (expuesto para
+/// que el módulo del "falso" (`antigravity_fake_so`) reutilice ESTA
+/// función y no duplique la lógica del manifiesto).
+pub fn actualizar_manifesto_publico(sha: &str) -> bool {
+    actualizar_manifesto(sha)
+}
+
 /// Actualiza el sha256 del LS en `runtime/manifest.json`.
 fn actualizar_manifesto(sha: &str) -> bool {
     let ruta = ruta_manifest();

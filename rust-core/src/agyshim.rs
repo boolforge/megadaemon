@@ -93,6 +93,21 @@ pub struct Entrada {
     #[serde(default)]
     pub respuesta: Option<String>,
     pub ms: u64,
+    /// El modelo que pidió el cliente (`megadaemon`, `gemini-2.5-pro`...).
+    ///
+    /// MEDIDO (2026-11-23): sin esto el NDJSON no distinguía "lo que la
+    /// GUI cree que usa" de "lo que de verdad contestó".
+    #[serde(default)]
+    pub requested_model: Option<String>,
+    /// El modelo **real** que contestó (id del proveedor).
+    #[serde(default)]
+    pub real_model: Option<String>,
+    /// ¿El modelo real es DISTINTO del pedido?
+    #[serde(default)]
+    pub substituted: bool,
+    /// ¿La sirvió el shim como proxy real (no sólo interceptada)?
+    #[serde(default)]
+    pub proxy: bool,
 }
 
 /// Estadísticas en memoria.
@@ -105,6 +120,15 @@ pub struct Estadisticas {
     pub bytes: u64,
     /// Modelos pedidos y veces (lo que la GUI cree que usa).
     pub modelos: std::collections::BTreeMap<String, u64>,
+    /// Peticiones servidas como **proxy real** (reenviadas al gateway).
+    #[serde(default)]
+    pub proxys: u64,
+    /// Peticiones en las que el modelo real NO era el pedido.
+    #[serde(default)]
+    pub sustituciones: u64,
+    /// Modelos **reales** que contestaron y veces.
+    #[serde(default)]
+    pub modelos_reales: std::collections::BTreeMap<String, u64>,
 }
 
 fn por_defecto_true() -> bool {
@@ -237,7 +261,6 @@ pub fn redacta() -> bool {
 /// `redacta_credenciales`): la credencial SE FILTRABA al log porque se
 /// redactaba el NOMBRE de la clave pero no su VALOR.
 pub fn redactar(texto: &str) -> String {
-    megadaemon_redact::redactar(texto)
 }
 
 /// Extrae el modelo pedido del cuerpo (JSON o texto).
@@ -350,16 +373,30 @@ pub fn registrar(e: &Entrada) {
                 s.bloqueadas += 1;
             }
         }
+        if e.proxy {
+            s.proxys += 1;
+        }
+        if e.substituted {
+            s.sustituciones += 1;
+        }
         if let Some(m) = &e.modelo {
             *s.modelos.entry(m.clone()).or_insert(0) += 1;
         }
+        if let Some(m) = &e.real_model {
+            *s.modelos_reales.entry(m.clone()).or_insert(0) += 1;
+        }
     }
     let _ = std::fs::create_dir_all(crate::cockpit_server::state_dir());
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(ruta_log())
+    // El NDJSON puede acabar en una superficie compartida (el agente lo
+    // lee): va 0600 y con las credenciales YA redactadas.
+    let mut opciones = std::fs::OpenOptions::new();
+    opciones.create(true).append(true);
+    #[cfg(unix)]
     {
+        use std::os::unix::fs::OpenOptionsExt;
+        opciones.mode(0o600);
+    }
+    if let Ok(mut f) = opciones.open(ruta_log()) {
         if let Ok(txt) = serde_json::to_string(e) {
             let _ = writeln!(f, "{txt}");
         }
@@ -419,6 +456,279 @@ pub fn upstream() -> String {
     std::env::var("AGYSHIM_UPSTREAM").unwrap_or_default()
 }
 
+// =========================================================================
+// PROXY REAL (2026-11-23)
+// =========================================================================
+//
+// HASTA AHORA el shim **interceptaba y registraba**: leía la petición,
+// la anotaba en el NDJSON y devolvía... lo que ya venía.  No reenviaba
+// nada: era un espejo, no un proxy.
+//
+// AHORA el shim **sirve de proxy de verdad**:
+//
+//   Antigravity (language server)
+//        │  POST /v1internal:generateContent   (dialecto Gemini)
+//        ▼
+//   shim (agyshim::proxy)
+//        │  registra (NDJSON, redactado) · aplica las reglas
+//        ▼
+//   GATEWAY CANÓNICO (llm_gateway)
+//        │  decide proveedor · fallback real · credenciales del vault
+//        ▼
+//   proveedor real (Gemini / Claude / OpenAI-compatible)
+//
+// El shim NUNCA ve la credencial del proveedor: la tiene el vault del
+// daemon (0600) y la usa `providers::execute_chat`.  El NDJSON lleva el
+// modelo PEDIDO y el modelo REAL, redactados.
+
+/// El modelo canónico del gateway (el alias que significa "routing completo").
+pub const MODELO_CANONICO: &str = "megadaemon";
+
+/// Prefijos de ruta que el shim sirve como **proxy real**.
+///
+/// MEDIDO (2026-11-22, `liblanguage_server.so`): el language server usa
+/// `/v1internal:generateContent` y `/v1internal:streamGenerateContent`
+/// (dialecto Gemini, `genai` SDK de Google).  `/proxy` es el prefijo
+/// genérico para los clientes que no hablan Gemini.
+pub const PREFIJOS_PROXY: &[&str] = &["/v1internal", "/v1beta", "/proxy"];
+
+/// ¿Esta ruta la sirve el shim como proxy real?
+pub fn es_ruta_proxy(path: &str) -> bool {
+    let p = path.trim();
+    PREFIJOS_PROXY.iter().any(|pref| {
+        let pref = *pref;
+        p == pref || p.starts_with(&format!("{pref}/")) || p.starts_with(&format!("{pref}:"))
+    })
+}
+
+/// Quita el prefijo `/proxy`: `/proxy/v1internal:generateContent` es lo
+/// mismo que `/v1internal:generateContent`.
+pub fn normalizar_ruta_proxy(path: &str) -> String {
+    let p = path.trim();
+    if let Some(r) = p.strip_prefix("/proxy") {
+        if r.is_empty() {
+            return "/".to_string();
+        }
+        if r.starts_with('/') || r.starts_with(':') {
+            return r.to_string();
+        }
+    }
+    p.to_string()
+}
+
+/// El dialecto que habla una ruta.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Dialecto {
+    /// Gemini (`genai`): `/v1internal:generateContent`, `/v1beta/models/x:…`.
+    Gemini,
+    /// OpenAI-compatible: `/proxy/v1/chat/completions`.
+    OpenAi,
+    /// Catálogo de modelos.
+    Catalogo,
+}
+
+/// ¿Qué dialecto habla esta ruta?  `None` = el shim no la sirve.
+pub fn dialecto_de(ruta: &str) -> Option<Dialecto> {
+    let r = normalizar_ruta_proxy(ruta);
+    if r.ends_with(":fetchAvailableModels") || r.ends_with("/models") || r == "/models" {
+        return Some(Dialecto::Catalogo);
+    }
+    if r.contains("/chat/completions") {
+        return Some(Dialecto::OpenAi);
+    }
+    if crate::llm_gateway::gemini_route(&r).is_some() {
+        return Some(Dialecto::Gemini);
+    }
+    None
+}
+
+/// Una petición que entra al shim.
+#[derive(Debug, Clone, Default)]
+pub struct Peticion {
+    pub metodo: String,
+    pub ruta: String,
+    pub cabeceras: Vec<(String, String)>,
+    pub cuerpo: String,
+}
+
+/// La respuesta que el shim devuelve (ya en el dialecto del cliente).
+#[derive(Debug, Clone)]
+pub struct Respuesta {
+    pub status: u16,
+    pub content_type: String,
+    pub cuerpo: String,
+    /// El modelo que pidió el cliente.
+    pub requested_model: String,
+    /// El modelo REAL que contestó (vacío si no se pudo saber).
+    pub real_model: String,
+    /// ¿El modelo real es distinto del pedido?
+    pub substituted: bool,
+    /// La regla que se aplicó (si alguna).
+    pub regla: Option<String>,
+}
+
+/// **Proxy real**: atiende la ruta y la reenvía al proveedor real.
+///
+/// La reenvía **pasando por el gateway canónico** (`llm_gateway`), que es
+/// quien decide el proveedor, hace el *fallback* real y usa las
+/// credenciales del vault (el shim nunca las ve).
+///
+/// Devuelve la respuesta **en el dialecto que pidió el cliente** (Gemini
+/// ⇒ `candidates`, OpenAI ⇒ `choices`) con el bloque de trazabilidad
+/// `megadaemon` (`requested_model`, `real_model`, `substituted`).
+pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
+    let ruta = normalizar_ruta_proxy(&req.ruta);
+    let dialecto = dialecto_de(&req.ruta)
+        .ok_or_else(|| format!("el shim no sirve la ruta {}", req.ruta))?;
+    let t0 = std::time::Instant::now();
+    let cuerpo: Value = serde_json::from_str(&req.cuerpo).unwrap_or(Value::Null);
+
+    let mut requested = MODELO_CANONICO.to_string();
+    let mut real = String::new();
+    let mut sustituido = false;
+    let mut content_type = "application/json".to_string();
+    let mut salida;
+
+    match dialecto {
+        Dialecto::Catalogo => {
+            let v = crate::antigravity_endpoint::catalogo_gemini();
+            salida = v.to_string();
+        }
+        Dialecto::OpenAi => {
+            let mut v = crate::llm_gateway::chat_completions_con_traza(&cuerpo)
+                .map_err(|e| format!("gateway OpenAI: {}", e.message))?;
+            requested = cuerpo
+                .get("model")
+                .and_then(|m| m.as_str())
+                .unwrap_or(MODELO_CANONICO)
+                .trim()
+                .to_string();
+            if requested.is_empty() {
+                requested = MODELO_CANONICO.to_string();
+            }
+            real = v
+                .pointer("/megadaemon/provider_id")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            sustituido = v
+                .pointer("/megadaemon/substituted")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false);
+            salida = v.to_string();
+        }
+        Dialecto::Gemini => {
+            let r = crate::llm_gateway::gemini_route(&ruta);
+            let stream = r.as_ref().map(|x| x.stream).unwrap_or(false);
+            let modelo_ruta = r.as_ref().map(|x| x.model.clone()).unwrap_or_default();
+            requested = if modelo_ruta.trim().is_empty() {
+                MODELO_CANONICO.to_string()
+            } else {
+                modelo_ruta.trim().to_string()
+            };
+            // Si el cliente pide un modelo CONCRETO, ese va primero en la
+            // cascada; si pide el canónico, decide el router.
+            let solicitado: Option<&str> = if crate::llm_gateway::es_alias_megadaemon(&requested) {
+                None
+            } else {
+                Some(requested.as_str())
+            };
+            if stream {
+                let mut v = crate::llm_gateway::gemini_generate_content_con_modelo_for(
+                    &ruta, &cuerpo, solicitado,
+                )
+                .map_err(|e| format!("gateway Gemini: {}", e.message))?;
+                real = v
+                    .pointer("/megadaemon/provider_id")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                sustituido = v
+                    .pointer("/megadaemon/substituted")
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false);
+                let sse = crate::llm_gateway::gemini_a_sse(&v);
+                content_type = "text/event-stream; charset=utf-8".to_string();
+                salida = sse;
+            } else {
+                let mut v = crate::llm_gateway::gemini_generate_content_con_modelo_for(
+                    &ruta, &cuerpo, solicitado,
+                )
+                .map_err(|e| format!("gateway Gemini: {}", e.message))?;
+                real = v
+                    .pointer("/megadaemon/provider_id")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                sustituido = v
+                    .pointer("/megadaemon/substituted")
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false);
+                salida = v.to_string();
+            }
+        }
+    }
+
+    // Las reglas del shim se aplican ENCIMA de la respuesta del gateway:
+    // es el punto donde se puede mentir a la GUI.
+    let (status, cuerpo_final, regla) = decidir(&req.metodo, &req.ruta, &req.cuerpo, &salida);
+
+    let redacta = redacta();
+    registrar(&Entrada {
+        ts: ahora(),
+        metodo: req.metodo.clone(),
+        ruta: req.ruta.clone(),
+        modelo: Some(requested.clone()),
+        bytes_cuerpo: req.cuerpo.len(),
+        status,
+        regla: regla.clone(),
+        cuerpo: if redacta {
+            Some(redactar(&req.cuerpo))
+        } else {
+            None
+        },
+        respuesta: if redacta {
+            Some(redactar(&cuerpo_final))
+        } else {
+            None
+        },
+        ms: t0.elapsed().as_millis() as u64,
+        requested_model: Some(requested.clone()),
+        real_model: if real.is_empty() { None } else { Some(real.clone()) },
+        substituted: sustituido,
+        proxy: true,
+    });
+
+    Ok(Respuesta {
+        status,
+        content_type,
+        cuerpo: cuerpo_final,
+        requested_model: requested,
+        real_model: real,
+        substituted: sustituido,
+        regla,
+    })
+}
+
+/// Estado del proxy para el agente/MCP: qué sabe y qué ha visto.
+pub fn estado_proxy() -> Value {
+    let s = estadisticas();
+    json!({
+        "ok": true,
+        "prefijos_proxy": PREFIJOS_PROXY,
+        "modelo_canonico": MODELO_CANONICO,
+        "upstream_configurado": !upstream().is_empty(),
+        "redacta": redacta(),
+        "peticiones": s.peticiones,
+        "proxys": s.proxys,
+        "sustituciones": s.sustituciones,
+        "modelos_pedidos": s.modelos,
+        "modelos_reales": s.modelos_reales,
+        "reglas": reglas().len(),
+        "nota": "el shim reenvia por el gateway canonico: el proveedor lo elige llm_gateway y la credencial vive en el vault (0600), nunca en el NDJSON.",
+    })
+}
+
 /// Procesa una petición del LS **de punta a punta**:
 /// registra, aplica las reglas y devuelve la respuesta que verá Antigravity.
 ///
@@ -433,7 +743,10 @@ pub fn procesar(metodo: &str, ruta: &str, cuerpo: &str) -> (u16, String) {
         let url = format!("{}{}", up.trim_end_matches('/'), ruta);
         let mut o = crate::http_transfer::Opciones::default();
         o.timeout_s = 300;
-        match crate::http_transfer::get_texto(&url, &o) {
+        // MEDIDO (2026-11-23): era un GET ⇒ un proxy que reenvía un POST
+        // con un GET no funciona.  Ahora es POST de verdad y el status
+        // del upstream se conserva (un 429 ya no se pierde).
+        match crate::http_transfer::post_texto(&url, cuerpo, &o) {
             Ok((st, t)) => {
                 if st >= 400 {
                     format!("{{\"error\":{{\"code\":{st},\"message\":\"upstream {st}\"}}}}")
@@ -612,6 +925,109 @@ mod tests {
         assert!(c.contains("megadaemon"));
         assert_eq!(r.as_deref(), Some(id.as_str()));
         borrar_regla(&id);
+    }
+
+    // -----------------------------------------------------------------
+    // PROXY REAL (2026-11-23)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn el_shim_sirve_las_rutas_del_language_server() {
+        // MEDIDO (2026-11-22, `liblanguage_server.so`).
+        assert!(es_ruta_proxy("/v1internal:generateContent"));
+        assert!(es_ruta_proxy("/v1internal:streamGenerateContent"));
+        assert!(es_ruta_proxy("/v1internal/fetchAvailableModels"));
+        assert!(es_ruta_proxy("/proxy/v1/chat/completions"));
+        assert!(es_ruta_proxy("/v1beta/models/gemini-2.5-pro:generateContent"));
+        // Y NO las que no son suyas.
+        assert!(!es_ruta_proxy("/v1/chat/completions"));
+        assert!(!es_ruta_proxy("/health"));
+        assert!(!es_ruta_proxy("/api/antigravity/sessions"));
+        assert!(!es_ruta_proxy("/proxyxyz"));
+    }
+
+    #[test]
+    fn el_prefijo_proxy_se_normaliza() {
+        assert_eq!(
+            normalizar_ruta_proxy("/proxy/v1internal:generateContent"),
+            "/v1internal:generateContent"
+        );
+        assert_eq!(
+            normalizar_ruta_proxy("/v1internal:generateContent"),
+            "/v1internal:generateContent"
+        );
+    }
+
+    #[test]
+    fn el_dialecto_se_reconoce() {
+        assert_eq!(
+            dialecto_de("/v1internal:generateContent"),
+            Some(Dialecto::Gemini)
+        );
+        assert_eq!(
+            dialecto_de("/v1beta/models/x:streamGenerateContent"),
+            Some(Dialecto::Gemini)
+        );
+        assert_eq!(
+            dialecto_de("/proxy/v1/chat/completions"),
+            Some(Dialecto::OpenAi)
+        );
+        assert_eq!(
+            dialecto_de("/v1internal:fetchAvailableModels"),
+            Some(Dialecto::Catalogo)
+        );
+        assert_eq!(dialecto_de("/otra/cosa"), None);
+    }
+
+    #[test]
+    fn la_redaccion_cubre_las_credenciales_por_forma() {
+        // MEDIDO (2026-11-23): la primera pasada solo conocia los NOMBRES
+        // de los campos; una credencial suelta se colaba en el NDJSON.
+        let t = redactar(r#"{"nota":"key sk-cp-ABCDEFGHIJKLMNOP y token AIzaSyABCDEFGHIJKLMNOP"}"#);
+        assert!(!t.contains("ABCDEFGHIJKLMNOP"), "no debe filtrar: {t}");
+        assert!(t.contains("REDACTADO"));
+        // Y no toca el texto normal.
+        let t2 = redactar("esto es sk-3 corto y AIza algo");
+        assert!(t2.contains("sk-3"), "no debe redaccionar texto normal: {t2}");
+    }
+
+    #[test]
+    fn la_redaccion_por_forma_vive_en_un_modulo_propio() {
+        // El modulo `redact_forma` es el que debe acabar en el crate
+        // compartido `megadaemon-redact` (fuente unica de la politica).
+        let t = crate::redact_forma::redactar_por_forma("token suelta sk-cp-ABCDEFGHIJKLMNOP");
+        assert!(!t.contains("ABCDEFGHIJKLMNOP"));
+    }
+
+    #[test]
+    fn la_traza_del_modelo_distingue_pedido_de_real() {
+        // El alias canonico SIEMPRE es una sustitucion (el alias no es un
+        // modelo: es el router).
+        let mut v = json!({"megadaemon": {"provider_id": "minimax-m3.1-flash"}});
+        crate::llm_gateway::anotar_traza(&mut v, "megadaemon");
+        assert_eq!(v["megadaemon"]["requested_model"], "megadaemon");
+        assert_eq!(v["megadaemon"]["real_model"], "minimax-m3.1-flash");
+        assert_eq!(v["megadaemon"]["substituted"], true);
+
+        // Si el modelo pedido es el que contesta, NO hay sustitucion.
+        let mut v2 = json!({"megadaemon": {"provider_id": "minimax-m3.1-flash"}});
+        crate::llm_gateway::anotar_traza(&mut v2, "minimax-m3.1-flash");
+        assert_eq!(v2["megadaemon"]["substituted"], false);
+
+        // Y si contesto otro, si la hay.
+        let mut v3 = json!({"megadaemon": {"provider_id": "groq-free"}});
+        crate::llm_gateway::anotar_traza(&mut v3, "minimax-m3.1-flash");
+        assert_eq!(v3["megadaemon"]["substituted"], true);
+        assert_eq!(v3["megadaemon"]["real_model"], "groq-free");
+    }
+
+    #[test]
+    fn los_alias_del_gateway_se_reconocen() {
+        assert!(crate::llm_gateway::es_alias_megadaemon("megadaemon"));
+        assert!(crate::llm_gateway::es_alias_megadaemon("MEGADAEMON"));
+        assert!(crate::llm_gateway::es_alias_megadaemon("auto"));
+        assert!(!crate::llm_gateway::es_alias_megadaemon("minimax-m3.1-flash"));
+        assert!(!crate::llm_gateway::es_alias_megadaemon(""));
     }
 
     #[test]

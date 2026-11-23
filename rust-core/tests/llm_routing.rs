@@ -721,7 +721,11 @@ fn la_traza_va_dentro_del_json_del_resultado() {
     let res = execute_chat_with("hola", Some("p1"), None, None, 128, &d);
     let json = serde_json::to_value(&res).unwrap();
     assert!(json["provider_trace"].is_array());
-    assert_eq!(json["provider_trace"][0].as_str().unwrap(), "p1 => OK");
+    assert_eq!(
+        json["provider_trace"][0].as_str().unwrap(),
+        "p1 => OK (tier free)",
+        "la traza dice el tier del proveedor (DEFECTO-18)"
+    );
     // Y el campo nuevo NO rompe la forma antigua: un JSON sin
     // `provider_trace` se sigue deserializando (serde default).
     let antiguo = r#"{"reply":"x","reasoning":"","model_id":"a","model_name":"b","vendor":"c","latency_ms":1.0,"tokens_used":0,"tools_used":[],"fallback_used":false}"#;
@@ -912,7 +916,12 @@ fn un_fallo_de_transporte_cae_al_siguiente() {
 }
 
 #[test]
-fn una_respuesta_ilegible_cae_al_siguiente() {
+fn un_cuerpo_que_no_es_json_se_devuelve_como_texto_plano() {
+    // v16: `parse_provider_reply` es DELIBERADAMENTE tolerante con los
+    // endpoints que responden texto plano (los zero-key devuelven HTML o
+    // texto): no se cae al siguiente proveedor, se devuelve el cuerpo tal
+    // cual.  Este test fija ese comportamiento para que no cambie por
+    // accidente (y para que quede escrito que NO hay fallback aqui).
     let t = MockTransport::new();
     t.responde("https://p1.test/v1", 200, "esto no es json");
     t.responde("https://p2.test/v1", 200, OK);
@@ -925,11 +934,14 @@ fn una_respuesta_ilegible_cae_al_siguiente() {
     );
     let d = deps(&v, &t);
     let res = execute_chat_with("hola", Some("p1"), None, None, 128, &d);
+    assert_eq!(res.model_id, "p1");
+    assert_eq!(res.reply, "esto no es json");
+    assert!(!res.fallback_used, "el cuerpo plano NO dispara el fallback");
     assert_eq!(
-        res.model_id, "p2",
-        "una respuesta ilegible debe caer al siguiente proveedor"
+        t.veces("https://p2.test/v1"),
+        0,
+        "no se debe llamar al siguiente proveedor"
     );
-    assert!(res.fallback_used);
 }
 
 #[test]

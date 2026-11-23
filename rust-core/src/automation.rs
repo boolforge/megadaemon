@@ -621,6 +621,13 @@ pub fn due(rule: &Rule, ev: &Event, now: i64, last_fire: Option<i64>, fires: u32
 /// Devuelve un `Outcome` por acción (incluso si falla) para que el journal
 /// sea completo: un fallo silencioso es la peor forma de automatizar.
 pub fn run_rule(rule: &Rule, ev: &Event, eff: &mut dyn Effector, now: i64) -> Vec<Outcome> {
+    // v16: el FILTRO del evento es parte de la regla: si el evento no casa
+    // (ni el disparador ni las condiciones) la regla NO se ejecuta.  Sin
+    // esta comprobacion, `run_rule` hacia lo mismo que `matches` pero al
+    // reves: disparaba reglas cuyo evento no correspondia.
+    if !matches(rule, ev) {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     for (i, act) in rule.actions.iter().enumerate() {
         if matches!(act, Action::RootCommand { .. }) && !rule.allow_root {

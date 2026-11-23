@@ -25,7 +25,7 @@ fn una_expresion_cron_encuentra_su_siguiente_ejecucion() {
 #[test]
 fn el_calendario_es_exacto_en_un_dia_de_cambio_de_mes() {
     // 2026-02-28 23:59:00 UTC -> el siguiente 0 de marzo.
-    let base = 20_796 * 86_400 + 23 * 3600 + 59 * 60;
+    let base = 20_512 * 86_400 + 23 * 3600 + 59 * 60;
     let e = CronExpr::parse("0 0 * * *").unwrap();
     let n = e.next_after(base, 0).unwrap();
     assert_eq!(cron::civil_from_epoch(n, 0), (2026, 3, 1, 0, 0));
@@ -66,8 +66,16 @@ fn el_planificador_genera_y_recupera_ejecuciones() {
     let now = 20_779 * 86_400 + 3600 * 5;
     let plan = cron::plan(&st, now);
     assert_eq!(plan.len(), 3); // con tope de catch-up
-    assert!(plan.iter().all(|p| p.catch_up));
-    assert_eq!(plan[0].scheduled_at, 20_779 * 86_400);
+    // Las 6 perdidas (T, T+1h ... T+5h) y el tope de 3 se queda con las
+    // MAS RECIENTES: T+3h, T+4h y T+5h (esta ultima es la de AHORA MISMO,
+    // que no es una perdida =&gt; no lleva catch_up).
+    assert!(plan[..2].iter().all(|p| p.catch_up));
+    assert!(
+        !plan[2].catch_up,
+        "la ejecucion de ahora mismo no es un catch-up: {:?}",
+        plan
+    );
+    assert_eq!(plan[0].scheduled_at, 20_779 * 86_400 + 3 * 3600);
 }
 
 #[test]

@@ -818,6 +818,22 @@ start_daemon() {
     pid=$!
     log "megadaemon-core arrancado PID $pid (cockpit en 127.0.0.1:$PORT, instancia=$MEGADAEMON_INSTANCE_NAME/$MEGADAEMON_INSTANCE_ROLE)"
 
+    # --- lmkd / OOM killer: el daemon NO debe ser la primera victima -----
+    # MEDIDO (2026-11-23): el movil se caia de forma DETERMINISTA porque
+    # lmkd mataba al daemon (el que mas RAM usa) y con el caia el tunel
+    # (502 = origen caido) => la flota entera se caia.
+    # `oom_score_adj` negativo lo deja como la ULTIMA victima: el kernel
+    # mata antes a las apps del usuario que al daemon.
+    echo -800 > "/proc/$pid/oom_score_adj" 2>/dev/null \
+        && log "daemon con oom_score_adj=-800 (lmkd lo mata el ultimo)"
+    # El supervisor tampoco debe morir por lo mismo.
+    echo -900 > "/proc/$$/oom_score_adj" 2>/dev/null
+    # glibc (el allocator de Rust) retiene la memoria liberada en su cache:
+    # con estos limites devuelve las paginas al SO antes de que lmkd mire.
+    export MALLOC_ARENA_MAX=2
+    export MALLOC_TRIM_THRESHOLD_=131072
+    export MALLOC_MMAP_THRESHOLD_=131072
+
     # ¿Sigue vivo a los 3 s?  Si muere inmediatamente no es un fallo de red:
     # es un fallo de arranque (binario roto, plantilla que revienta, etc.).
     sleep 3
@@ -889,7 +905,32 @@ ENERGY_SEAL_BELOW=${MEGADAEMON_SEAL_BELOW_PCT:-20}
 ENERGY_BRIGHTNESS_MAX=${MEGADAEMON_BRIGHTNESS_MAX:-60}
 ENERGY_RAM_FLOOR_KB=${MEGADAEMON_RAM_FLOOR_KB:-524288}
 ENERGY_DISK_FLOOR_KB=${MEGADAEMON_DISK_FLOOR_KB:-1048576}
-ENERGY_DAEMON_RSS_MAX_KB=${MEGADAEMON_DAEMON_RSS_MAX_KB:-204800}
+# Tope de RSS del daemon.
+#
+# MEDIDO (2026-11-23): el tope FIJO de 200 MB era la CAUSA de la muerte del
+# móvil.  Con el IDE de Google vivo (language server ~251 MB + app ~156 MB,
+# load average 19,85 y 3,9 GB libres) el daemon roza ese tope con facilidad,
+# y el propio supervisor lo mata (bloque `check_daemon_responsive`:
+# "el daemon usa <rss>kB (tope ...kB): lo reinicio para no empujar al OOM
+# killer").  Con el móvil saturado, el relanzamiento no prosperaba: el
+# origen (127.0.0.1:9090) se quedaba MUERTO mientras `cloudflared` seguía
+# vivo => el túnel respondía 502 y la flota veía el móvil "caído".
+#
+# Ahora el tope es ADAPTATIVO: 1/8 de la RAM libre, acotado a [200 MB,
+# 512 MB].  Se puede fijar con MEGADAEMON_DAEMON_RSS_MAX_KB (entorno o
+# $PREFIX/megadaemon.env, que el supervisor carga al arrancar).
+if [ -z "${MEGADAEMON_DAEMON_RSS_MAX_KB:-}" ]; then
+  _md_mem_free_kb=$(awk '/MemAvailable/{print $2}' /proc/meminfo 2>/dev/null)
+  if [ -n "$_md_mem_free_kb" ] && [ "$_md_mem_free_kb" -gt 0 ]; then
+    ENERGY_DAEMON_RSS_MAX_KB=$(( _md_mem_free_kb / 8 ))
+    [ "$ENERGY_DAEMON_RSS_MAX_KB" -lt 204800 ] && ENERGY_DAEMON_RSS_MAX_KB=204800
+    [ "$ENERGY_DAEMON_RSS_MAX_KB" -gt 512000 ] && ENERGY_DAEMON_RSS_MAX_KB=512000
+  else
+    ENERGY_DAEMON_RSS_MAX_KB=204800
+  fi
+else
+  ENERGY_DAEMON_RSS_MAX_KB="$MEGADAEMON_DAEMON_RSS_MAX_KB"
+fi
 ENERGY_STATE_KEEP=${MEGADAEMON_STATE_KEEP:-2}
 ENERGY_STATE_FILE="$PREFIX/energy_state"
 ENERGY_BRIGHT_SAVED="$PREFIX/brightness_saved"

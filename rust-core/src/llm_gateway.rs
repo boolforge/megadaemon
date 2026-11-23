@@ -35,6 +35,53 @@ use serde_json::{json, Value};
 /// Alias que significan "el modelo es MegaDaemon" (routing completo).
 pub const MEGADAEMON_ALIASES: &[&str] = &["megadaemon", "auto", "default", "megadaemon/router"];
 
+/// El modelo canónico (el alias que significa "routing completo").
+pub const MODELO_CANONICO: &str = "megadaemon";
+
+/// ¿Este nombre es un alias de "el modelo es MegaDaemon"?
+pub fn es_alias_megadaemon(m: &str) -> bool {
+    let t = m.trim();
+    if t.is_empty() {
+        return false;
+    }
+    MEGADAEMON_ALIASES.iter().any(|a| a.eq_ignore_ascii_case(t))
+}
+
+/// **Trazabilidad del MODELO**: qué pidió el cliente y qué contestó de verdad.
+///
+/// MEDIDO (2026-11-23): la respuesta decía QUÉ proveedor atendió
+/// (`provider_id`) pero no decía qué pidió el cliente ⇒ con el alias
+/// `megadaemon` el cliente creía estar hablando con "megadaemon" y de
+/// verdad le había hablado MiniMax, sin que nadie lo supiera.
+///
+/// Añade al bloque `megadaemon`:
+/// * `requested_model`: lo que pidió el cliente.
+/// * `real_model`: el id del modelo que contestó.
+/// * `substituted`: `true` si el que contestar **no** era el pedido
+///   (con el alias `megadaemon` SIEMPRE es `true`: el alias no es un
+///   modelo real, es el router).
+pub fn anotar_traza(v: &mut Value, requested_model: &str) {
+    let req = requested_model.trim();
+    let real = v
+        .pointer("/megadaemon/provider_id")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let alias = es_alias_megadaemon(req);
+    let sustituido = if real.is_empty() {
+        false
+    } else if alias {
+        true
+    } else {
+        !real.eq_ignore_ascii_case(req)
+    };
+    if let Some(m) = v.get_mut("megadaemon").and_then(|m| m.as_object_mut()) {
+        m.insert("requested_model".into(), json!(req));
+        m.insert("real_model".into(), json!(real));
+        m.insert("substituted".into(), json!(sustituido));
+    }
+}
+
 /// Error del gateway con su código HTTP.
 #[derive(Debug)]
 pub struct GatewayError {
@@ -223,6 +270,26 @@ pub fn chat_completions_with(
     }))
 }
 
+/// La misma respuesta de [`chat_completions_with`] pero con la
+/// **trazabilidad del modelo** escrita (`requested_model`/`real_model`/
+/// `substituted`).
+pub fn chat_completions_con_traza(body: &Value) -> Result<Value, GatewayError> {
+    let mut v = chat_completions(body)?;
+    let requested = body
+        .get("model")
+        .and_then(|m| m.as_str())
+        .unwrap_or(MODELO_CANONICO)
+        .trim()
+        .to_string();
+    let requested = if requested.is_empty() {
+        MODELO_CANONICO.to_string()
+    } else {
+        requested
+    };
+    anotar_traza(&mut v, &requested);
+    Ok(v)
+}
+
 // =========================================================================
 // GEMINI / BYOM: el idioma que habla el language server de Antigravity
 // =========================================================================
@@ -398,6 +465,20 @@ fn gemini_partes(parts: Option<&Value>) -> String {
     out.join("\n")
 }
 
+/// El modelo que pide la RUTA (si la ruta lo nombra).
+///
+/// `/v1internal:generateContent` ⇒ `None` (el router decide).
+/// `/v1beta/models/gemini-2.5-pro:generateContent` ⇒ `Some("gemini-2.5-pro")`.
+pub fn modelo_de_la_ruta(path: &str) -> Option<String> {
+    let r = gemini_route(path)?;
+    let m = r.model.trim().to_string();
+    if m.is_empty() {
+        None
+    } else {
+        Some(m)
+    }
+}
+
 /// Ejecuta una petición Gemini contra el router de MegaDaemon y devuelve
 /// la respuesta **en formato Gemini** (`candidates`/`usageMetadata`).
 pub fn gemini_generate_content(body: &Value) -> Result<Value, GatewayError> {
@@ -408,22 +489,11 @@ pub fn gemini_generate_content(body: &Value) -> Result<Value, GatewayError> {
     gemini_generate_content_with(body, &deps)
 }
 
-/// Variante **inyectable** de [`gemini_generate_content`] (v16: permite
-/// testear el gateway SIN red).
 pub fn gemini_generate_content_with(
     body: &Value,
     deps: &crate::providers::ChatDeps<'_>,
 ) -> Result<Value, GatewayError> {
-    let g = gemini_prompt(body)?;
-    let res = crate::providers::execute_chat_with(
-        &g.prompt,
-        None,
-        None,
-        g.system.as_deref(),
-        g.max_tokens,
-        deps,
-    );
-    Ok(gemini_response(&res, g.tools_requested))
+    gemini_generate_content_con_modelo_with("", body, None, deps)
 }
 
 /// Igual que [`gemini_generate_content`] pero sabiendo **qué** modelo pidió
@@ -511,12 +581,6 @@ fn gemini_response(res: &crate::providers::ChatResult, tools_requested: usize) -
 ///
 /// con la respuesta entera, porque el daemon no hace streaming fino).
 pub fn gemini_stream_sse(body: &Value) -> Result<String, GatewayError> {
-    gemini_stream_sse_for("", body)
-}
-
-/// Variante *streaming* que sabe qué modelo pidió el cliente.
-pub fn gemini_stream_sse_for(path: &str, body: &Value) -> Result<String, GatewayError> {
-    let v = gemini_generate_content_for(path, body)?;
     let texto = v["candidates"][0]["content"]["parts"]
         .as_array()
         .map(|ps| {
@@ -532,9 +596,10 @@ pub fn gemini_stream_sse_for(path: &str, body: &Value) -> Result<String, Gateway
             "finishReason": "STOP",
             "index": 0,
         }],
-        "modelVersion": "megadaemon",
+        "modelVersion": MODELO_CANONICO,
+        "megadaemon": v.get("megadaemon").cloned().unwrap_or(Value::Null),
     });
-    Ok(format!("data: {}\n\ndata: [DONE]\n\n", chunk))
+    format!("data: {}\n\ndata: [DONE]\n\n", chunk)
 }
 
 fn now_secs() -> u64 {

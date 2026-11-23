@@ -36,7 +36,12 @@ fn el_comando_de_termux_usa_el_servicio_medido() {
     let t = detect(&instalado());
     let termux = t.iter().find(|x| x.package == "com.termux").unwrap();
     let cmd = command_for(termux, "run_command", &[]).unwrap();
-    assert!(cmd.starts_with("am startservice"));
+    // OJO: el comando se arma con `to_shell()`, que COTIZA cada argumento
+    // (`am 'startservice' -a 'com.termux.RUN_COMMAND' ...`): no se puede
+    // comparar con una cadena plana.  Se parsea con el parser del crate.
+    let parsed = megadaemon_core::automation_bridge::parse_command(&cmd).unwrap();
+    assert_eq!(parsed.program, "am");
+    assert_eq!(parsed.args[0], "startservice");
     assert!(cmd.contains("com.termux.RUN_COMMAND"));
     assert!(cmd.contains("com.termux/.app.RunCommandService"));
 }

@@ -141,6 +141,8 @@ fn main() -> ExitCode {
             "model" => cmd_model(&cfg, json_out),
             "env" => cmd_env(json_out),
             "endpoint" => cmd_endpoint(json_out),
+            "integrar" | "integracion" => cmd_integrar(json_out),
+            "fake" | "falso" => cmd_fake(json_out),
             "enqueue" => {
                 let text = argv[2..].join(" ");
                 if text.trim().is_empty() {
@@ -170,7 +172,7 @@ fn main() -> ExitCode {
 /// Mensaje de uso.
 fn usage() {
     eprintln!(
-        "uso: md-antigravity <status|catalog|conversations|search|conversation|tasks|model|env|endpoint|enqueue> [args]\n\
+        "uso: md-antigravity <status|catalog|conversations|search|conversation|tasks|model|env|endpoint|integrar|fake|enqueue> [args]\n\
          \n\
          subcomandos de asimilación:\n\
          \x20 model                       lista los modelos personalizados (BYOM) de la IDE\n\
@@ -582,6 +584,65 @@ fn cmd_enqueue(cfg: &BridgeConfig, text: &str, json_out: bool) -> Result<(), Str
 /// * `endpoint apply --confirm` → aplica el parche del binario (+ manifiesto).
 /// * `endpoint apply-gate --confirm` → aplica el parche del bundle web.
 /// * `endpoint restore --confirm`    → vuelve a los respaldos.
+/// `md-antigravity integrar [--confirm]`
+///
+/// FUSIONA el MegaDaemon con la GUI de Antigravity: parchea el gate que
+/// habilita los modelos personalizados en Android, parchea el endpoint del
+/// language server, registra el modelo `megadaemon` y lo deja seleccionado.
+///
+/// `md-antigravity integrar --estado` NO escribe nada: audita los 4 puntos.
+fn cmd_integrar(json_out: bool) -> Result<(), String> {
+    use megadaemon_core::antigravity_model as am;
+    let args: Vec<String> = std::env::args().collect();
+    let confirm = args.iter().any(|a| a == "--confirm");
+    let solo_estado = args.iter().any(|a| a == "--estado" || a == "--state");
+    let v = if solo_estado {
+        am::integracion_estado()
+    } else {
+        match am::integrar(confirm) {
+            Ok(v) => v,
+            Err(e) => json!({"ok": false, "error": e}),
+        }
+    };
+    emit(json_out, &v, |v| {
+        println!("{}", serde_json::to_string_pretty(v).unwrap_or_default());
+    });
+    Ok(())
+}
+
+/// `md-antigravity fake [plan|activar|desactivar|estado] [--confirm] [--puerto=N]`
+///
+/// El FICHERO FALSO del language server: el daemon se queda con el
+/// ORIGINAL (fuera del dir de la app) y pone en su lugar un falso con la
+/// URL del proveedor sustituida por la del gateway local.
+fn cmd_fake(json_out: bool) -> Result<(), String> {
+    use megadaemon_core::antigravity_fake_so as fs;
+    let args: Vec<String> = std::env::args().collect();
+    let sub = args.get(2).cloned().unwrap_or_default().trim_start_matches('-').to_string();
+    let confirm = args.iter().any(|a| a == "--confirm");
+    let puerto: u16 = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--puerto="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(9090);
+    let v = match sub.as_str() {
+        "plan" => fs::plan(puerto),
+        "activar" | "apply" => match fs::activar(puerto, confirm) {
+            Ok(v) => v,
+            Err(e) => json!({"ok": false, "error": e}),
+        },
+        "desactivar" | "restore" => match fs::desactivar(confirm) {
+            Ok(v) => v,
+            Err(e) => json!({"ok": false, "error": e}),
+        },
+        _ => fs::estado(),
+    };
+    emit(json_out, &v, |v| {
+        println!("{}", serde_json::to_string_pretty(v).unwrap_or_default());
+    });
+    Ok(())
+}
+
 fn cmd_endpoint(json_out: bool) -> Result<(), String> {
     use megadaemon_core::antigravity_endpoint as ae;
     let args: Vec<String> = std::env::args().collect();

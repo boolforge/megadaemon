@@ -301,7 +301,7 @@ impl CronExpr {
                         continue;
                     }
                     if day_off == 0
-                        && (h < hh0 as usize || (h == hh0 as usize && mi <= mm0 as usize))
+                        && (h < hh0 as usize || (h == hh0 as usize && mi < mm0 as usize))
                     {
                         continue;
                     }

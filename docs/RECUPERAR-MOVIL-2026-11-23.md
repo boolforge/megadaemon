@@ -1,0 +1,199 @@
+# RECUPERAR EL MÓVIL — 2026-11-23
+
+> El S21 Ultra del usuario está **CAÍDO**.  Este documento es el plan de
+> recuperación, con **un comando** por vía.  Todo lo que hay aquí está
+> **medido** (2026-11-23, 07:45) o marcado `NO VERIFICADO`.
+
+---
+
+## 1. Diagnóstico (medido)
+
+| # | Hecho | Cómo se ha medido |
+|---|---|---|
+| 1 | `mdtmfnc.duckdns.org` resuelve a **47.253.152.120** | DoH de Cloudflare (`cloudflare-dns.com/dns-query`) |
+| 2 | Mi IP de salida del sandbox es **47.253.4.207** | `api.ipify.org` |
+| 3 | ⇒ el A record apunta al **NAT del datacenter**, **no** a casa | 1 vs 2: mismo bloque 47.253.x.x, y la IP pública de casa no puede ser la del datacenter |
+| 4 | ElDominio estable (dominio → router → PC → móvil) está **roto** | consecuencia de 3 |
+| 5 | Desde el sandbox el móvil es **inalcanzable por ruta directa** | `curl` al túnel desde el sandbox ⇒ `http=000`; `connect()` a IPs privadas "acepta y resetea" ⇒ falso positivo del proxy de salida.  **PERO** el túnel SÍ responde desde fuera (ver 9) |
+| 9 | **El túnel rápido responde 502 Bad Gateway** ⇒ **`cloudflared` vivo en el móvil ⇒ el móvil está ENCENDIDO**; lo único muerto es el daemon (el origen 9090) | `curl -s -o /dev/null -w '%{http_code}' https://graphical-subscriber-sys-oil.trycloudflare.com/health` ⇒ **502**, con TLS OK contra el edge de Cloudflare y cuerpo "502 Bad Gateway".  Un túnel *desconectado* daría 530/error 1033 |
+| 6 | El **A record lo tiene que publicar el MÓVIL** (su IP pública SÍ es la de casa) | `docs/RESCATE_20261122.md` §2 punto 7 + el propio instalador (`instalador-megadaemon.sh`, bloque "5b) DuckDNS: A record desde el movil") |
+| 7 | La release ARM64 **existe** y es descargable | `HTTP 200` en `releases/latest/download/megadaemon-core-android-arm64` + `.sha256` oficial |
+| 8 | El token de DuckDNS **existe** en el sandbox | `/workspace/md-secrets/duckdns.token` (36 B, 0600) — **no se ha usado**: desde aquí publicaría la IP del datacenter |
+
+> ⚠ **NADIE debe llamar a `duckdns.org/update` desde un nodo/sandbox**: eso
+> es exactamente lo que secuestró el dominio (documentado en
+> `docs/RESCATE_20261122.md` §1.5).  El `OK` de la API **no prueba nada**:
+> hay que **verificar por DoH** después.
+
+---
+
+## 2. Las tres vías (una sola basta)
+
+### VÍA A — Desde el PC (con el móvil por USB o ADB TCP en la LAN)  ⭐ recomendada
+
+Un comando.  Sube el instalador y el token al móvil, lo ejecuta **como
+root** y **verifica** desde el PC (que tiene la red de casa de verdad):
+
+```bash
+sh deploy/phone-recover-from-pc.sh
+```
+
+Variantes:
+
+```bash
+sh deploy/phone-recover-from-pc.sh --diagnostico            # sólo informa
+sh deploy/phone-recover-from-pc.sh --serie=192.168.1.124:5555
+sh deploy/phone-recover-from-pc.sh --token-ruta ~/.mavis/duckdns.token
+```
+
+Qué hace, en orden:
+
+1. Detecta el móvil (`adb devices` → USB; si no, `adb connect 192.168.1.124:5555`).
+2. Diagnostica: ¿root? ¿daemon vivo? ¿`channel.json` publicado?
+3. Sube `deploy/instalador-megadaemon.sh` a `/data/local/tmp/megadaemon/`.
+4. Sube el **token de DuckDNS** (0600) para que el móvil pueda publicar
+   el A record **con su IP real**.
+5. Ejecuta en el móvil, como root:
+   `su -mm -c 'sh /data/local/tmp/megadaemon/instalador-megadaemon.sh --instalar --movil'`
+   ⇒ baja el ARM64 (sha256 verificado), unifica la key, instala el trío
+   `service.d` (supervisor + cloudflared + watchdog), escribe la URL del
+   túnel en los 3 sitios, publica el canal y **actualiza DuckDNS desde el
+   móvil + lo verifica por DoH**.
+6. **Verifica**: A record por DoH, `/health` por el dominio y por el
+   túnel rápido, y el estado del daemon.
+
+**No reinicia el móvil y no borra nada.**
+
+### VÍA A-bis — RÁPIDA: relanzar SÓLO el daemon (sin reinstalar nada)  ⭐⭐ la primera que hay que intentar
+
+**MEDIDO (2026-11-23, 07:5x)**: el túnel rápido
+`https://graphical-subscriber-sys-oil.trycloudflare.com` responde
+**HTTP 502 Bad Gateway** en `/health`, `/api/status`, `/mcp` y `/`, con el
+TLS bien hecho contra el edge de Cloudflare.
+
+**502 = túnel CONECTADO con el ORIGEN caído.**  Un quick-tunnel
+*desconectado* devuelve **530 / error 1033**, no 502.  Por tanto:
+
+* `cloudflared` **está corriendo en el móvil** ⇒ **el móvil está encendido**,
+  con red y con root.
+* Lo que está muerto es **el daemon** (el origen `127.0.0.1:9090` al que
+  apunta `98-cloudflared.sh`, variable `CFT_TARGET`).
+* **El hostname del túnel NO ha cambiado** ⇒ en cuanto el daemon levante,
+  **la URL que ya tiene la flota vuelve a funcionar** (no hay que buscar ni
+  republicar ninguna URL).
+
+⇒ **NO reinicies el móvil**: un reinicio mata `cloudflared` ⇒ hostname
+nuevo ⇒ hay que republicar el canal.  Relanza sólo el daemon:
+
+```bash
+sh deploy/phone-recover-from-pc.sh --solo-daemon
+```
+
+o, a pelo, desde el PC con ADB:
+
+```bash
+adb shell su -mm -c 'sh /data/adb/service.d/99-megadaemon.sh'
+```
+
+o, en Termux del propio móvil:
+
+```sh
+su -mm -c 'sh /data/adb/service.d/99-megadaemon.sh'
+```
+
+El modo rápido además **sondea el túnel** hasta 12 veces (5 s) y dice si el
+móvil vuelve a contestar por la MISMA URL.  Si el daemon no levanta, el
+siguiente paso es la Vía A completa (el binario puede estar roto: un
+auto-update pudo matarlo sin dejar replacement ⇒ `repo_updates.rs:1675`
+hace `killall megadaemon-core`).
+
+#### Por qué murió (medido en el repo, no es misterio)
+
+`deploy/99-megadaemon.sh` tiene **dos autofuniles** contra su propio daemon:
+
+| # | Dónde | Qué hace |
+|---|---|---|
+| a | `99-megadaemon.sh:892` + `:699-701` | Tope de RSS **fijo de 200 MB**: si el daemon lo pasa ⇒ `pkill` + reinicio ("lo reinicio para no empujar al OOM killer").  Con el IDE de Google vivo (load 19,85, 3,9 GB libres) el daemon roza ese tope ⇒ **se mataba a sí mismo** |
+| b | `99-megadaemon.sh:686-692` | 3 sondas de `/health` fallidas seguidas ⇒ `pkill` + reinicio ("puede ser un mutex envenenado por un panic") |
+
+Y `deploy/97-megadaemon-keeper.sh` (creado hoy) documenta el desenlace exacto
+de este mismo incidente: *"1644 reinicios del daemon por un falso positivo
+del watchdog, y después **el supervisor murió sin dejar NADIE que lo
+resucitara** ⇒ móvil inalcanzable hasta un reinicio manual"*.  El móvil no
+ha reiniciado desde que el guardián existe ⇒ **nadie lo va a relanzar solo**.
+
+**Arreglo de raíz (ya en mi rama)**: el tope de RSS pasa a ser **adaptativo**
+(1/8 de la RAM libre, acotado a [200 MB, 512 MB]) en vez de un número fijo
+⇒ el supervisor deja de matar al daemon por RAM.
+
+**Y el kit además**:
+1. lee el log del supervisor (la línea literal
+   `el daemon usa <rss>kB (tope ...kB): lo reinicio…` dice cuál de los dos
+   autofuniles fue) **antes** de tocar nada;
+2. sube `MEGADAEMON_DAEMON_RSS_MAX_KB` en
+   `/data/local/tmp/megadaemon/megadaemon.env` (que el supervisor **carga**
+   al arrancar ⇒ sin `sed`, reversible y sobrevive a reinicios);
+3. **instala el guardián** `97-megadaemon-keeper.sh` en
+   `/data/adb/service.d/` ⇒ si el supervisor vuelve a morir, el guardián lo
+   resucita;
+4. relanza el supervisor **sin tocar `cloudflared`** ⇒ el hostname no cambia.
+
+### VÍA B — Desde el móvil (Termux), sin PC
+
+```sh
+pkg install curl -y >/dev/null 2>&1
+mkdir -p /data/local/tmp/megadaemon
+curl -fsSL https://raw.githubusercontent.com/boolforge/megadaemon/main/deploy/instalador-megadaemon.sh \
+  -o /data/local/tmp/megadaemon/instalador-megadaemon.sh
+su -mm -c 'sh /data/local/tmp/megadaemon/instalador-megadaemon.sh --instalar --movil'
+```
+
+* El token de DuckDNS tiene que estar en el móvil, en
+  `~/.mavis/duckdns.token` **o** en `/data/local/tmp/megadaemon/duckdns.token`
+  (0600).  Sin él, el móvil publica **sólo** el túnel rápido (que cambia
+  de hostname en cada reinicio ⇒ la flota hay que buscarlo).
+* Si el móvil no tiene internet (o no hay `curl`), el camino corto es:
+  `su -mm -c 'sh /data/local/tmp/megadaemon/phone-recover.sh'` (ya está en
+  el móvil; es idempotente y **no reinicia**).
+
+### VÍA C — El relay del PC (si el móvil está vivo pero su daemon, no)
+
+```bash
+sudo ./deploy/relay-pc.sh --instalar      # Caddy en el PC: dominio → PC → móvil:3000
+sudo ./deploy/relay-pc.sh --diagnostico
+```
+
+El PC publica el A record (también está en casa ⇒ su IP pública es la
+correcta) y hace de relay al puerto 3000 del móvil en la LAN.
+**No arregla un daemon muerto**: sólo el camino.
+
+### Si el móvil está APAGADO
+
+Ninguna vía remota lo enciende.  Encenderlo (y conectarlo al cargador)
+basta: con el `service.d` instalado, el daemon, el supervisor y el
+túnel **levantan solos** en el arranque.  Después, Vía A o B.
+
+---
+
+## 3. Qué hago yo en cuanto vuelva
+
+1. **Verificar desde fuera** (el sandbox no llega al móvil: se verifica con
+   un fetch externo y con el A record por DoH).
+2. **Ejecutar los 9 puntos NO VERIFICADO** de `docs/MITM-SQLITE-Y-PROXY.md`
+   §4 (V1–V9), cada uno con su comando exacto: el bind-mount de la DB, la
+   captura, el re-merge, el proxy `/v1internal:generateContent`, la traza
+   del modelo, la fusión con la GUI y el **fichero falso** del `.so`.
+3. **Soltar el aviso de "NO VERIFICADO"** de la entrega del MITM.
+
+---
+
+## 4. Coordinación (hecho)
+
+* **Jefe (root)**: informado del diagnóstico (dominio secuestrado, móvil
+  inalcanzable, el A record sólo desde el móvil/PC) y de que **nadie
+  publique DuckDNS desde un nodo**.  Preguntado por el dueño del build
+  ARM64 y del push, para no pisarle.
+* **Otro agente (instrumentación de Antigravity)**: avisado de lo mismo y
+  preguntado por un canal vivo hacia el móvil (ADB USB/TCP, KDE Connect) y
+  por un ARM64 recién compilado.  Acordado: **nadie hace push al móvil
+  sin avisar** (no quiero dos pushes al mismo dispositivo).
