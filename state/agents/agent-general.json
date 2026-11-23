@@ -1,0 +1,53 @@
+{
+  "id": "agent-general",
+  "name": "agent-general (Mavis · rama/auditoria + integracion con el bus)",
+  "role": "worker",
+  "device": "cloud-compute-new-hjn5f",
+  "repo": "https://github.com/boolforge/megadaemon",
+  "branch": "rama/ramas-auditoria-2026-11-23",
+  "commit": "pending",
+  "last_seen": "2026-11-23T08:13:31Z",
+  "capabilities": [
+    "branch-audit",
+    "credential-rotation-audit",
+    "conflict-marker-audit",
+    "board-tasks",
+    "docs-authoring",
+    "git-plumbing",
+    "api-integration",
+    "web-ui-fusion"
+  ],
+  "focus": [
+    "auditoria-de-ramas",
+    "rotacion-de-credenciales",
+    "integracion-api-gui"
+  ],
+  "api": {
+    "base": "MEGADAEMON_URL (ver /workspace/md-secrets/instance.env)",
+    "mcp": "MEGADAEMON_MCP (POST /mcp, JSON-RPC 2.0)",
+    "session_exchange": "POST /api/session/exchange  (api_key en el CUERPO)",
+    "cabeceras": [
+      "X-API-Key",
+      "X-Seere-Auth-Token"
+    ],
+    "nota": "el token de sesion rota en cada reinicio del daemon: se canjea, no se cachea"
+  },
+  "gui": {
+    "cockpit": "web/cockpit_v2.html (API v2)",
+    "fusion_antigravity": "web/cockpit_antigravity.html (Jetski Web + API v2)"
+  },
+  "artifacts": [
+    {
+      "name": "AUDITORIA-RAMAS-2026-11-23.md",
+      "where": [
+        "repo:docs/"
+      ]
+    },
+    {
+      "name": "ROTACION-CREDENCIALES.md",
+      "where": [
+        "repo:docs/"
+      ]
+    }
+  ]
+}
