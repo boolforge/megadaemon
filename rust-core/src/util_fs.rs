@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 
 /// Escribe `data` en `path` de forma **atomica**.
 ///
-/// * se escribe en `<path>.tmp` (nunca en el destino final);
+/// * se escribe en `<path>.tmp-<pid>` (nunca en el destino final).  El
+///   sufijo con el PID evita que dos procesos (el daemon y la CLI) se pisen
+///   el mismo temporal;
 /// * el temporal se crea **con el modo pedido** (`0600` para secretos): no
 ///   existe ni un instante con el modo por defecto del umask;
 /// * `fsync` antes de renombrar (el contenido está en disco antes de ser
@@ -31,8 +33,11 @@ pub fn write_atomic(path: &Path, data: &[u8], mode: u32) -> Result<(), String> {
         }
     }
     let tmp = path.with_extension(format!(
-        "{}.tmp",
-        path.extension().and_then(|e| e.to_str()).unwrap_or("tmp")
+        "{}.tmp-{}",
+        path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("tmp"),
+        std::process::id()
     ));
     {
         let mut f = crear_con_modo(&tmp, mode)
@@ -40,19 +45,23 @@ pub fn write_atomic(path: &Path, data: &[u8], mode: u32) -> Result<(), String> {
         // Por si el temporal ya existía de una ejecución anterior: `mode` en
         // `OpenOptions` sólo se aplica al CREAR el fichero.
         set_mode(&tmp, mode);
-        f.write_all(data)
-            .map_err(|e| format!("escribir {}: {}", tmp.display(), e))?;
-        f.sync_all()
-            .map_err(|e| format!("fsync {}: {}", tmp.display(), e))?;
+        if let Err(e) = f
+            .write_all(data)
+            .and_then(|_| f.sync_all())
+        {
+            let _ = fs::remove_file(&tmp);
+            return Err(format!("escribir {}: {}", tmp.display(), e));
+        }
     }
-    fs::rename(&tmp, path).map_err(|e| {
-        format!(
+    if let Err(e) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!(
             "renombrar {} -> {}: {}",
             tmp.display(),
             path.display(),
             e
-        )
-    })?;
+        ));
+    }
     set_mode(path, mode);
     Ok(())
 }
