@@ -1087,6 +1087,20 @@ mod tests {
     }
 
     #[test]
+    fn las_rutas_de_cuenta_se_pasan_al_backend_real() {
+        // MEDIDO (2026-11-24): el LS pide `/v1internal/buildWithGooglePlugins`
+        // (la cascada del agente) y `/v1internal/` (loadCodeAssist): son
+        // rutas de CUENTA, no de modelo ⇒ pasan tal cual a Google.
+        assert!(dialecto_de("/v1internal/buildWithGooglePlugins").is_none());
+        assert!(es_ruta_passthrough("/v1internal/buildWithGooglePlugins"));
+        assert!(es_ruta_passthrough("/v1internal/loadCodeAssist"));
+        // Las de MODELO las intercepta el gateway (nunca pasan a Google).
+        assert!(dialecto_de("/v1internal:generateContent").is_some());
+        assert!(dialecto_de("/v1internal:streamGenerateContent").is_some());
+        assert!(dialecto_de("/v1internal:fetchAvailableModels").is_some());
+    }
+
+    #[test]
     fn la_redaccion_cubre_las_credenciales_por_forma() {
         // MEDIDO (2026-11-23): la primera pasada solo conocia los NOMBRES
         // de los campos; una credencial suelta se colaba en el NDJSON.
