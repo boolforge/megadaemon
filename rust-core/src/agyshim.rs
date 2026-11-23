@@ -261,6 +261,10 @@ pub fn redacta() -> bool {
 /// `redacta_credenciales`): la credencial SE FILTRABA al log porque se
 /// redactaba el NOMBRE de la clave pero no su VALOR.
 pub fn redactar(texto: &str) -> String {
+    // UNION (2026-11-23): el crate COMPARTIDO (`crates/redact`, que ya es la
+    // fuente unica para el shim, el payload de hooks y el del inyector) MAS
+    // la segunda pasada por FORMA de token que aporta la rama del MITM.
+    crate::redact_forma::redactar_por_forma(&megadaemon_redact::redactar(texto))
 }
 
 /// Extrae el modelo pedido del cuerpo (JSON o texto).
@@ -762,6 +766,12 @@ pub fn procesar(metodo: &str, ruta: &str, cuerpo: &str) -> (u16, String) {
     registrar(&Entrada {
         ts: ahora(),
         metodo: metodo.to_string(),
+        // Campos nuevos (2026-11-23, rama del MITM): el modelo pedido, el
+        // REAL que contesto, si se sustituyo y si el shim sirvio de proxy.
+        requested_model: None,
+        real_model: None,
+        substituted: false,
+        proxy: false,
         // MEDIDO (2026-11-23, auditoría de calidad): la RUTA se guardaba en
         // claro mientras que el cuerpo y la respuesta pasaban por el
         // redactor.  La ruta de una llamada a la API puede llevar la

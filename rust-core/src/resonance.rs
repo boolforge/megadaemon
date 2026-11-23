@@ -301,7 +301,8 @@ impl Tablon {
         // Escritura ATÓMICA: primero a `.tmp`, luego rename ⇒ un corte de
         // luz no deja una instantánea corrupta (que rompería el tablón).
         let tmp = self.dir.join("foto.json.tmp");
-        crate::util_fs::write_atomic(&tmp, txt.as_bytes(), 0o600)?;
+        crate::util_fs::write_atomic(&tmp, txt.as_bytes(), 0o600)
+            .map_err(|e| std::io::Error::other(e))?;
         std::fs::rename(&tmp, &foto)?;
         // El journal local se vacía (ya está en la instantánea).
         let j = self.dir.join(format!("cartas-{}.jsonl", self.nodo));
@@ -530,10 +531,14 @@ fn cargar_o_crear_clave(dir: &Path, nodo: &str) -> std::io::Result<(String, Stri
     let bytes = pkcs8.as_ref().to_vec();
     let kp = ring::signature::Ed25519KeyPair::from_pkcs8_maybe_unchecked(&bytes)
         .map_err(|e| std::io::Error::other(format!("leer clave: {e}")))?;
+    // MEDIDO (2026-11-23): en ring 0.17 `public_key()` es un metodo del
+    // trait `KeyPair` (no un campo) => hay que importar el trait.
+    use ring::signature::KeyPair as _;
     let pub_hex = hex_bytes_of(kp.public_key().as_ref());
     let priv_hex = hex_bytes_of(&bytes);
     // 0600: la clave privada es de este nodo y nadie más.
-    crate::util_fs::write_atomic(&ruta, format!("{pub_hex}\n{priv_hex}\n").as_bytes(), 0o600)?;
+    crate::util_fs::write_atomic(&ruta, format!("{pub_hex}\n{priv_hex}\n").as_bytes(), 0o600)
+        .map_err(|e| std::io::Error::other(e))?;
     Ok((pub_hex, priv_hex))
 }
 
@@ -542,8 +547,10 @@ fn firmar(priv_hex: &str, datos: &[u8]) -> Option<String> {
     let bytes = hex_bytes(priv_hex).ok()?;
     let kp = ring::signature::Ed25519KeyPair::from_pkcs8_maybe_unchecked(&bytes).ok()?;
     use ring::signature::KeyPair;
-    let sig = kp.sign(datos).ok()?;
-    Some(hex_bytes_of(&sig))
+    // MEDIDO (2026-11-23): en ring 0.17 `sign` devuelve `Signature` (no un
+    // Result) => `.ok()` no existe (E0599).
+    let sig = kp.sign(datos);
+    Some(hex_bytes_of(sig.as_ref()))
 }
 
 #[cfg(test)]

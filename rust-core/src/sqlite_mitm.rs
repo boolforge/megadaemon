@@ -758,7 +758,9 @@ fn checkpoint_original(original: &Path) -> (bool, String) {
         return (false, "no se pudo fijar busy_timeout".to_string());
     }
     match con.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
-        r.get::<_, i64>(0).unwrap_or(-1)
+        // MEDIDO (2026-11-23): el cierre de `query_row` debe devolver un
+        // Result => E0308 con `unwrap_or(-1)` a pelo.
+        Ok(r.get::<_, i64>(0).unwrap_or(-1))
     }) {
         Ok(v) => {
             if v == 0 {

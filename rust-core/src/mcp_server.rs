@@ -371,7 +371,9 @@ pub fn dispatch_tool(name: &str, args: &Value) -> Value {
             // v16 (asimilación de Antigravity): mismas reglas de contrato
             // (content + structuredContent + isError).
             if let Some(r) = crate::antigravity_fake_so::dispatch(name, args) {
-                return Some(r);
+                // MEDIDO (2026-11-23): esta fn devuelve `Value`, no
+                // `Option<Value>` => E0308 con `return Some(r)`.
+                return r;
             }
             if let Some(r) = crate::antigravity_model::dispatch(name, args) {
                 let text = serde_json::to_string_pretty(&r).unwrap_or_default();
