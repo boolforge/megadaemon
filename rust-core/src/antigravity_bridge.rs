@@ -18,10 +18,34 @@
 //! **nunca** se escribe en el repo, en el log ni en el chat: de él sólo se
 //! publica su `sha16` (identificador, no reversible).
 //!
-//! MEDIDAS REALES (Samsung S21 Ultra del usuario, 2026-11-21/22)
+//! MEDIDAS REALES (Samsung S21 Ultra del usuario, 2026-11-22 14:0x)
 //! -----------------------------------------------------------
+//! **Autenticación (medida, no inferida)**: el language server **no** pide
+//! OAuth de Google para su API local. Pide **un único token CSRF** que el
+//! propio SPA publica en `window.__APP_CONFIG__.csrfToken`, y lo exige en la
+//! cabecera **`x-codeium-csrf-token`** (nombre EXACTO: `X-CSRF-Token` o
+//! `Authorization` **no** valen).
+//!
+//! | petición | resultado medido |
+//! |---|---|
+//! | sin cabecera | **401** `{"code":"unauthenticated","message":"unauthenticated: missing CSRF token"}` |
+//! | `x-codeium-csrf-token: <csrf del SPA>` | **200** + JSON del método |
+//!
+//! La sesión de Google **sí** existe y es otra cosa: `GetAuthStatus` → **200**
+//! `{"authResult":{"hasValidAuth":true,…}}`, y el token OAuth vive en
+//! `/data/user/0/com.agy/files/.gemini/jetski-standalone-oauth-token`
+//! (1740 B, sha16 `1028cbc50fe6b8db`). Ese token **no** es lo que abre la API
+//! local del language server.
+//!
 //! * `GetStatus` → **200** `{}`; `GetCapabilities` → **200**
 //!   `{"supportsHookResultProtoBytes":true}`.
+//! * `GetAvailableModels {}` → **200** con **36 modelos** reales (Claude Opus
+//!   5.5, Claude Sonnet 5.5, Gemini 3.x/4.x, GPT-OSS 120B…) y su
+//!   `defaultAgentModelId=gemini-4-neon-high`.
+//! * `GetCascadeModelConfigData {}` → **200** con `clientModelConfigs`.
+//! * `GetUserSettings {}` → **501** `unimplemented` (no existe en este build).
+//! * `SetUserSettings {}` → **501** `unimplemented` (no se puede escribir el
+//!   catálogo por RPC).
 //! * `SearchConversations {"query":"README","limit":3}` → **200** con
 //!   `{"results":[{"cascadeId":…,"title":…,"workspaceName":…,"snippet":…}]}`.
 //! * `GetAllCascadeTrajectories {"exclude_subtrajectories":true}` → **200**
@@ -34,6 +58,12 @@
 //! * `SendUserCascadeMessage {"cascadeId":…,"items":[{"text":…}]}` → **200** `{}`.
 //! * `GetConversationMetadata {}` → **400**
 //!   `invalid_argument: conversation_id is required` (error Connect real).
+//!
+//! **Traducción de ids**: el catálogo trae el id real (`gemini-4-hydrogen-medium`)
+//! y, dentro, el `model` ofuscado (`MODEL_PLACEHOLDER_M526`). El estado del
+//! móvil guarda el **ofuscado** (`last_selected_agent_model`), así que este
+//! módulo resuelve los dos sentidos con el catálogo vivo (ver
+//! [`model_catalog_from`]).
 //!
 //! REGLAS
 //! ------
@@ -336,16 +366,11 @@ pub struct ConversationSummary {
 /// también una lista por si el servidor cambiara de forma.
 pub fn conversation_summaries_from(v: &Value) -> Vec<ConversationSummary> {
     let mut out = Vec::new();
-    // MEDIDO 2026-11-22: la version anterior encadenaba DOS `.get` seguidos
-    // con `.unwrap_or(v)`: al encontrar "trajectorySummaries" en la raiz
-    // tomaba el mapa, y al buscar la clave DENTRO del mapa (que no existe)
-    // volvia a caer en el objeto raiz => se iteraba sobre las claves de la
-    // raiz y "trajectorySummaries" salia como si fuera un id de conversacion.
-    // Ahora se desenvuelve UNA vez y, si viene con doble envoltura, otra.
-    let mut src: &Value = v.get("trajectorySummaries").unwrap_or(v);
-    if let Some(inner) = src.get("trajectorySummaries") {
-        src = inner;
-    }
+    let src = v
+        .get("trajectorySummaries")
+        .unwrap_or(v)
+        .get("trajectorySummaries")
+        .unwrap_or(v);
     match src {
         Value::Object(map) => {
             for (cid, s) in map {
@@ -408,6 +433,129 @@ fn summary_from(cid: &str, s: &Value) -> ConversationSummary {
             .to_string(),
         workspaces,
     }
+}
+
+/// Un modelo del catálogo **real** de Antigravity (`GetAvailableModels`).
+///
+/// El servidor manda dos identificadores: la **clave** del mapa `models`
+/// (el id real, `gemini-4-hydrogen-medium`) y dentro el campo `model`
+/// (el id **ofuscado** por Google, `MODEL_PLACEHOLDER_M526`). El estado del
+/// móvil guarda el ofuscado ⇒ hace falta traducir en los dos sentidos.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ModelEntry {
+    /// Id real (clave del mapa `models`).
+    pub id: String,
+    /// Nombre que enseña la UI.
+    pub display_name: String,
+    /// Id ofuscado (`MODEL_PLACEHOLDER_M526`).
+    pub placeholder: String,
+    /// `MODEL_PROVIDER_GOOGLE`, `MODEL_PROVIDER_ANTHROPIC`…
+    pub provider: String,
+    /// `apiProvider` del catálogo (a veces distinto de `provider`).
+    pub api_provider: String,
+    /// Id del modelo en Vertex (`claude-opus-5-5@default`).
+    pub vertex_model_id: String,
+    /// El catálogo lo marca como recomendado.
+    pub recommended: bool,
+    pub supports_images: bool,
+    pub supports_thinking: bool,
+    pub max_tokens: u64,
+    pub max_output_tokens: u64,
+    /// Fracción de cuota restante (0..1) si el servidor la manda.
+    pub quota_remaining_fraction: Option<f64>,
+    /// Cuándo se renueva la cuota (RFC 3339), si viene.
+    pub quota_reset_time: String,
+}
+
+/// Convierte la respuesta de `GetAvailableModels` en la lista de modelos.
+///
+/// Acepta las dos envolturas que usa el servidor (`{"response":{…}}` y el
+/// objeto plano) para no depender de una forma concreta.
+pub fn model_catalog_from(v: &Value) -> Vec<ModelEntry> {
+    let resp = v.get("response").unwrap_or(v);
+    let models = resp.get("models").and_then(|m| m.as_object());
+    let mut out = Vec::new();
+    if let Some(map) = models {
+        for (id, m) in map {
+            let quota = m.get("quotaInfo");
+            out.push(ModelEntry {
+                id: id.clone(),
+                display_name: m
+                    .get("displayName")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                placeholder: m
+                    .get("model")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                provider: m
+                    .get("modelProvider")
+                    .and_then(|x| x.as_str())
+                    .or_else(|| m.get("apiProvider").and_then(|x| x.as_str()))
+                    .unwrap_or("")
+                    .to_string(),
+                api_provider: m
+                    .get("apiProvider")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                vertex_model_id: m
+                    .get("vertexModelId")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                recommended: m.get("recommended").and_then(|x| x.as_bool()).unwrap_or(false),
+                supports_images: m
+                    .get("supportsImages")
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false),
+                supports_thinking: m
+                    .get("supportsThinking")
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false),
+                max_tokens: m.get("maxTokens").and_then(|x| x.as_u64()).unwrap_or(0),
+                max_output_tokens: m.get("maxOutputTokens").and_then(|x| x.as_u64()).unwrap_or(0),
+                quota_remaining_fraction: quota
+                    .and_then(|q| q.get("remainingFraction"))
+                    .and_then(|x| x.as_f64()),
+                quota_reset_time: quota
+                    .and_then(|q| q.get("resetTime"))
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            });
+        }
+    }
+    out.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+    out
+}
+
+/// El modelo por defecto que declara el catálogo (`defaultAgentModelId`).
+pub fn default_model_from(v: &Value) -> Option<String> {
+    let resp = v.get("response").unwrap_or(v);
+    resp.get("defaultAgentModelId")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Traduce un id **ofuscado** (`MODEL_PLACEHOLDER_M526`) al id **real**
+/// (`gemini-4-hydrogen-medium`) usando el catálogo vivo.
+pub fn real_id_for_placeholder(catalog: &[ModelEntry], placeholder: &str) -> Option<String> {
+    catalog
+        .iter()
+        .find(|m| m.placeholder == placeholder && !m.placeholder.is_empty())
+        .map(|m| m.id.clone())
+}
+
+/// Traduce un id **real** al **ofuscado** (lo que entiende `StartCascade`).
+pub fn placeholder_for_real_id(catalog: &[ModelEntry], real_id: &str) -> Option<String> {
+    catalog
+        .iter()
+        .find(|m| m.id == real_id)
+        .map(|m| m.placeholder.clone())
+        .filter(|p| !p.is_empty())
 }
 
 /// Un paso (step) de una trayectoria.
@@ -606,6 +754,35 @@ impl AntigravityBridge {
         self.rpc("GetCapabilities", &json!({}))
     }
 
+    /// `GetAvailableModels`: el catálogo **real** de modelos (medido: 36).
+    ///
+    /// Es la única vía para saber qué modelos existen y con qué ids reales:
+    /// el resto de la app sólo guarda el id **ofuscado**.
+    pub fn model_catalog(&self) -> BridgeResult<Value> {
+        self.rpc("GetAvailableModels", &json!({}))
+    }
+
+    /// El catálogo ya parseado en [`ModelEntry`].
+    pub fn models(&self) -> BridgeResult<Vec<ModelEntry>> {
+        Ok(model_catalog_from(&self.model_catalog()?))
+    }
+
+    /// El modelo por defecto que declara el catálogo.
+    pub fn default_model(&self) -> BridgeResult<Option<String>> {
+        Ok(default_model_from(&self.model_catalog()?))
+    }
+
+    /// `GetCascadeModelConfigData`: la configuración de modelo por cascada
+    /// (etiqueta, modelo, tiers permitidos y cuota).
+    pub fn cascade_model_configs(&self) -> BridgeResult<Value> {
+        self.rpc("GetCascadeModelConfigData", &json!({}))
+    }
+
+    /// `GetAuthStatus`: si la sesión de Google del móvil es válida.
+    pub fn auth_status(&self) -> BridgeResult<Value> {
+        self.rpc("GetAuthStatus", &json!({}))
+    }
+
     /// `GetMcpServerStates`: los servidores MCP que Antigravity tiene
     /// cargados, con su estado vivo y su error (si lo tienen).
     pub fn catalog(&self) -> BridgeResult<Value> {
@@ -707,14 +884,33 @@ impl AntigravityBridge {
         let status = self.status()?;
         let user = self.rpc("GetUserStatus", &json!({})).unwrap_or(Value::Null);
         let convs = self.conversations().map(|c| c.len()).unwrap_or(0);
+        let auth = self.auth_status().unwrap_or(Value::Null);
+        let models = self.models().unwrap_or_default();
+        let default_model = self.default_model().unwrap_or(None);
         Ok(json!({
             "language_server": status,
             "user": user,
+            "auth": auth,
             "conversations": convs,
             "model": self.model,
+            "model_real_id": real_id_for_placeholder(&models, &self.model),
+            "default_model": default_model,
+            "model_count": models.len(),
             "csrf_sha16": self.csrf_sha16(),
             "base": self.base,
         }))
+    }
+
+    /// La cola de tareas del daemon de Antigravity (`daemon/tasks.json`).
+    ///
+    /// Es **disco**, no API: el daemon planificador guarda ahí sus hooks.
+    /// Los campos vienen del mismo parseo que usa el inventario
+    /// (`antigravity_intel::parse_daemon_tasks`).
+    pub fn tasks(&self) -> BridgeResult<Vec<crate::antigravity_intel::HookInfo>> {
+        let raw = std::fs::read_to_string(AGY_TASKS).map_err(|e| {
+            BridgeError::Transport(format!("no se pudo leer {AGY_TASKS}: {e}"))
+        })?;
+        Ok(crate::antigravity_intel::parse_daemon_tasks(&raw))
     }
 
     /// Catálogo de tools MCP: el estado vivo (por API) + las definiciones
@@ -799,12 +995,149 @@ fn fetch_text(agent: &ureq::Agent, url: &str) -> BridgeResult<String> {
 }
 
 /// Traduce el error de `ureq` a un mensaje entendible.
+///
+/// `ureq` 3.x no tiene variante `Transport`: el transporte se descompone en
+/// `Io`, `Protocol`, `Timeout`, `Tls`… (medido al compilar contra 3.5.2).
 fn describe_ureq(e: &ureq::Error) -> String {
-    // MEDIDO 2026-11-22: ureq 3.5.2 NO tiene variante `Transport` (la
-    // tiene ureq 2.x).  Se matchea solo el codigo HTTP y el resto se
-    // delega en su Display, que no cambia entre versiones.
     match e {
         ureq::Error::StatusCode(c) => format!("código HTTP {c}"),
+        ureq::Error::Io(io) => format!("E/S: {io}"),
+        ureq::Error::Protocol(p) => format!("protocolo: {p}"),
+        ureq::Error::Timeout(t) => format!("timeout: {t}"),
+        ureq::Error::Tls(t) => format!("TLS: {t}"),
+        ureq::Error::BadUri(u) => format!("URL inválida: {u}"),
+        ureq::Error::HostNotFound => "no se resuelve el host".to_string(),
+        ureq::Error::ConnectionFailed => "fallo de conexión".to_string(),
+        ureq::Error::Http(h) => format!("HTTP: {h}"),
+        ureq::Error::RedirectFailed => "redirección fallida".to_string(),
+        ureq::Error::InvalidProxyUrl => "URL de proxy inválida".to_string(),
+        ureq::Error::TooManyRedirects => "demasiadas redirecciones".to_string(),
+        ureq::Error::BodyExceedsLimit(n) => format!("cuerpo demasiado grande: {n}"),
         other => format!("{other}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests (todo el parseo es puro: sin red, sin móvil)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// El SPA real de Antigravity (medido): el token sale de
+    /// `window.__APP_CONFIG__`.
+    const SPA: &str = r#"<!doctype html>
+<html><head>
+<script>window.__APP_CONFIG__ = {"productName":"antigravity-app","csrfToken":"TOKEN-DE-PRUEBA","appVersion":"2.11.0","releaseChannel":"stable","devMode":false};</script>
+</head><body>hola</body></html>"#;
+
+    #[test]
+    fn extrae_el_csrf_del_spa() {
+        assert_eq!(csrf_from_html(SPA).as_deref(), Some("TOKEN-DE-PRUEBA"));
+    }
+
+    #[test]
+    fn el_csrf_va_en_la_cabecera_correcta() {
+        // MEDIDO: `X-CSRF-Token` NO vale; `x-codeium-csrf-token` SÍ.
+        assert_eq!(CSRF_HEADER, "x-codeium-csrf-token");
+    }
+
+    #[test]
+    fn spa_sin_config_no_inventa_token() {
+        assert!(csrf_from_html("<html><body>sin config</body></html>").is_none());
+    }
+
+    #[test]
+    fn parsea_el_error_connect_real() {
+        // MEDIDO: `unauthenticated: missing CSRF token`.
+        let (code, msg) = parse_connect_error(
+            r#"{"code":"unauthenticated","message":"unauthenticated: missing CSRF token"}"#,
+        )
+        .expect("debe parsear");
+        assert_eq!(code, "unauthenticated");
+        assert_eq!(msg, "unauthenticated: missing CSRF token");
+    }
+
+    #[test]
+    fn lee_el_modelo_del_estado() {
+        // MEDIDO: `last_selected_agent_model: MODEL_PLACEHOLDER_M526`.
+        let txt = "post_onboarding: {}\nlast_selected_agent_model: MODEL_PLACEHOLDER_M526\n";
+        assert_eq!(model_from_state(txt).as_deref(), Some("MODEL_PLACEHOLDER_M526"));
+    }
+
+    /// Catálogo con la forma REAL medida (`GetAvailableModels`).
+    const CATALOG: &str = r#"{"response":{"models":{
+        "gemini-4-hydrogen-medium":{"displayName":"Gemini 4 Hydrogen (Medium)","model":"MODEL_PLACEHOLDER_M526","modelProvider":"MODEL_PROVIDER_GOOGLE","apiProvider":"MODEL_PROVIDER_GOOGLE","recommended":true,"supportsImages":true,"supportsThinking":true,"maxTokens":1048576,"maxOutputTokens":65536,"quotaInfo":{"remainingFraction":0.6177,"resetTime":"2026-11-22T15:37:22Z"}},
+        "claude-opus-5-5-high":{"displayName":"Claude Opus 5.5 (High)","model":"MODEL_PLACEHOLDER_M402","modelProvider":"MODEL_PROVIDER_ANTHROPIC","apiProvider":"MODEL_PROVIDER_ANTHROPIC","vertexModelId":"claude-opus-5-5@default","maxTokens":1000000,"maxOutputTokens":128000}
+        },"defaultAgentModelId":"gemini-4-neon-high"}}"#;
+
+    #[test]
+    fn parsea_el_catalogo_real() {
+        let v: Value = serde_json::from_str(CATALOG).expect("json válido");
+        let cat = model_catalog_from(&v);
+        assert_eq!(cat.len(), 2);
+        let h = cat.iter().find(|m| m.id == "gemini-4-hydrogen-medium").unwrap();
+        assert_eq!(h.placeholder, "MODEL_PLACEHOLDER_M526");
+        assert_eq!(h.display_name, "Gemini 4 Hydrogen (Medium)");
+        assert!(h.recommended);
+        assert_eq!(h.max_tokens, 1_048_576);
+        assert_eq!(h.quota_remaining_fraction, Some(0.6177));
+        let c = cat.iter().find(|m| m.id == "claude-opus-5-5-high").unwrap();
+        assert_eq!(c.vertex_model_id, "claude-opus-5-5@default");
+        assert_eq!(default_model_from(&v).as_deref(), Some("gemini-4-neon-high"));
+    }
+
+    #[test]
+    fn traduce_placeholders_en_los_dos_sentidos() {
+        let v: Value = serde_json::from_str(CATALOG).expect("json válido");
+        let cat = model_catalog_from(&v);
+        // El estado guarda el ofuscado; la UI usa el real.
+        assert_eq!(
+            real_id_for_placeholder(&cat, "MODEL_PLACEHOLDER_M526").as_deref(),
+            Some("gemini-4-hydrogen-medium")
+        );
+        assert_eq!(
+            placeholder_for_real_id(&cat, "claude-opus-5-5-high").as_deref(),
+            Some("MODEL_PLACEHOLDER_M402")
+        );
+        assert!(real_id_for_placeholder(&cat, "MODEL_PLACEHOLDER_M999").is_none());
+    }
+
+    #[test]
+    fn parsea_las_conversaciones() {
+        let v = json!({"trajectorySummaries":{
+            "cascade-1":{"summary":"Hola","trajectoryId":"t-1","status":"CASCADE_STATUS_COMPLETED","stepCount":7,"lastModifiedTime":"2026-11-22T10:00:00Z","workspaces":[{"workspaceFolderAbsoluteUri":"file:///data/user/0/com.agy/files"}]},
+            "cascade-2":{"summary":"Adios","trajectoryId":"t-2","status":"CASCADE_STATUS_RUNNING","stepCount":1,"lastModifiedTime":"2026-11-23T10:00:00Z"}
+        }});
+        let convs = conversation_summaries_from(&v);
+        assert_eq!(convs.len(), 2);
+        // Ordenados por última modificación (el más nuevo primero).
+        assert_eq!(convs[0].cascade_id, "cascade-2");
+        let c1 = convs.iter().find(|c| c.cascade_id == "cascade-1").unwrap();
+        assert_eq!(c1.step_count, 7);
+        assert_eq!(c1.workspaces.len(), 1);
+    }
+
+    #[test]
+    fn resumen_de_pasos_no_inventa_texto() {
+        let v = json!({"trajectory":{"steps":[
+            {"type":"user_input","metadata":{"status":"DONE"},"userInput":{"text":"hola"}},
+            {"type":"agent_message","metadata":{"status":"ERROR"},"errorMessage":{"shortError":"boom"}}
+        ]}});
+        let steps = step_summaries_from(&v);
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].text, "hola");
+        assert_eq!(steps[1].error, "boom");
+    }
+
+    #[test]
+    fn url_de_metodo_bien_formada() {
+        let cfg = BridgeConfig::default();
+        assert_eq!(
+            cfg.base(),
+            "https://127.0.0.1:45157",
+            "el language server vive en el loopback del móvil"
+        );
     }
 }
