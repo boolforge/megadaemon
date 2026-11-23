@@ -318,7 +318,7 @@ pub fn inventario_api() -> Value {
     let mut v2 = vec![];
     let mut v2_usadas = 0;
     for (method, path) in api_v2_routes() {
-        let usada = pedidas.iter().any(|a| a == path);
+        let usada = pedidas.iter().any(|a| a.as_str() == path);
         if usada {
             v2_usadas += 1;
         }
@@ -338,7 +338,7 @@ pub fn inventario_api() -> Value {
     let mut v1 = vec![];
     let mut v1_usadas = 0;
     for (method, path) in v1_routes_desde_fuente(SOURCE_COCKPIT) {
-        let usada = pedidas.iter().any(|a| a == path);
+        let usada = pedidas.iter().any(|a| a.as_str() == path);
         if usada {
             v1_usadas += 1;
         }

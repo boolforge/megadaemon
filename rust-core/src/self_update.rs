@@ -535,7 +535,7 @@ pub fn aplicar(ruta_bin: &Path) -> Result<Resultado, String> {
             "short": m.short,
             "bytes": datos.len(),
             "sha256_verificado": true,
-            "anterior": crate::build_commit(),
+            "anterior": build_commit(),
         }),
     );
 

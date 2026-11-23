@@ -366,7 +366,7 @@ pub fn bucle_automatico(puerto: u16) {
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default();
-        for p in piezas {
+        for p in &piezas {
             let estado = p.get("estado").and_then(|v| v.as_str()).unwrap_or("?");
             let pieza = p.get("pieza").and_then(|v| v.as_str()).unwrap_or("?");
             // El detalle del fallo va al log: si no, el móvil dice «fallo» y
