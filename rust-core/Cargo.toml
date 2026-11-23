@@ -6,6 +6,10 @@ authors = ["MegaDaemon Engineering Team <megadaemon@agy.internal>"]
 description = "MegaDaemon v13.0 Zenith — Pure Rust Multi-OS RE Workbench (DiE, Binwalk, Tile Molester, ImHex/Kaitai, CIRX v3.4 SSA, MBA, Rizin/Frida, Exynos NPU/CV, Parasitic LLM Swarm & Antigravity MCP Server)"
 
 [dependencies]
+# Política de redacción de credenciales: **fuente única** compartida con el
+# payload de hooks que se inyecta en el móvil (`crates/injector-payload`).
+# Sin dependencias externas (ver `crates/redact/Cargo.toml`).
+megadaemon-redact = { path = "../crates/redact" }
 # KDF del motor de backup: **Argon2id** (RFC 9106), el mismo KDF que mide
 # Swift Backup. `default-features = false` + `alloc` deja fuera `password-hash`
 # y `rand` => **cero dependencias de entropía del sistema** (Android no siempre

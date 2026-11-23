@@ -1,0 +1,17 @@
+[package]
+name = "megadaemon-redact"
+version = "1.0.0"
+edition = "2021"
+description = "Redaccion de credenciales: fuente unica para el shim del daemon y el payload de hooks que se inyecta en el movil"
+license = "MIT"
+
+# SIN DEPENDENCIAS.
+#
+# Motivo (medido): este crate lo usan DOS consumidores con perfiles opuestos:
+#   * el daemon (`megadaemon-core`), que ya tiene ~200 dependencias;
+#   * el payload de hooks (`megadaemon-hooks-payload`), que se compila para
+#     `aarch64-linux-android` con el NDK y se inyecta dentro de una app de
+#     terceros: ahí cada dependencia son bytes y una oportunidad mas de que
+#     el enlazado falle en el NDK.
+# Una funcion de redaccion no necesita nada del ecosistema: `core` basta.
+[dependencies]
