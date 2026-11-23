@@ -108,3 +108,35 @@ nunca se confunda con el objetivo principal.
 | `43ba571` | MITM real de la DB (bind-mount, WAL, re-merge) + módulo Magisk |
 | `ebedeb17` | El shim pasa a ser proxy real + trazabilidad del modelo + `antigravity_sessions` ampliada |
 | `2a7ce7cd` | La fusión de MegaDaemon con la GUI de Antigravity (`integrar`) |
+| `cb2e1a41` | El shim sirve también el catálogo por GET + ajustes |
+| `ef650896` | La segunda pasada de redacción va a su propio módulo (para que no se pierda al fusionar con `megadaemon-redact`) |
+| `f3c18105` | El **`.so` instrumentado con un FICHERO FALSO** que el daemon posee |
+
+---
+
+## P3 — «hazlo también con el `.so`, que hará falta un fichero falso y que poseas el original»
+
+**Lo pedido**: el mismo tratamiento MITM para el binario del language
+server (`liblanguage_server.so`), instrumentándolo con un **fichero
+falso**, y que el **daemon posea el original**.
+
+**Hecho** (`rust-core/src/antigravity_fake_so.rs`):
+
+| Paso | Qué |
+|---|---|
+| 1 | El daemon **posee el ORIGINAL**: copia el `.so` prístino a su state dir (`<state>/agy/lib/liblanguage_server.so.original`) ⇒ fuera del alcance de la app |
+| 2 | **Fabrica el FALSO** desde el original (URL del proveedor → URL local, **misma longitud** ⇒ mismo layout del ELF) ⇒ `liblanguage_server.so.fake`, artefacto aparte |
+| 3 | Lo **instala en el sitio** escribiendo **encima** (mismo inode ⇒ conserva etiqueta SELinux, dueño y permisos) |
+| 4 | `desactivar` **restaura** el original byte a byte y verifica el sha256 |
+
+Superficies: tool MCP `antigravity_fake_so` (`plan`/`activar`/`desactivar`/
+`estado`) y CLI `md-antigravity fake`.
+
+**NO VERIFICADO** (móvil caído): el parche en sí ya estaba medido el
+2026-11-22; lo nuevo (la propiedad del original, el falso como artefacto y
+la instalación conservando el inode) no.  Comando exacto en
+`docs/MITM-SQLITE-Y-PROXY.md` §3-bis y punto V9.
+
+**Lo que sigue**: que el LS arranque **con el falso** (⇒ `am force-stop
+com.agy` + `am start` y ver si el `SPA → HTTP 200` sigue igual) y que su
+tráfico pase por `/v1internal:generateContent` del gateway.
