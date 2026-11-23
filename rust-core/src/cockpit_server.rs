@@ -3008,6 +3008,11 @@ pub fn run_server(port: u16) -> Result<(), String> {
     println!("  Hardware:  Exynos 2100 NPU (/dev/vertex10) + KleidiAI Cores 4-7");
     println!("==================================================================");
 
+    // Los puertos YA enlazados se calculan ANTES de mover `listeners`
+    // (el `for` de abajo lo consume).  MEDIDO 2026-11-23: el CI (build
+    // Linux x86_64, run 45102553768) fallaba con E0382 "borrow of moved
+    // value: `listeners`" en esta linea => main NO compilaba.
+    let ya: Vec<u16> = listeners.iter().map(|(p, _)| *p).collect();
     for (_, listener) in listeners {
         spawn_listener_thread(listener);
     }
@@ -3021,7 +3026,6 @@ pub fn run_server(port: u16) -> Result<(), String> {
     // cuanto salen, los sirve: el movil se autorepara sin reinicios.
     {
         let esperados: Vec<u16> = ports.clone();
-        let ya: Vec<u16> = listeners.iter().map(|(p, _)| *p).collect();
         let faltan: Vec<u16> = esperados.into_iter().filter(|p| !ya.contains(p)).collect();
         if !faltan.is_empty() {
             std::thread::spawn(move || {
