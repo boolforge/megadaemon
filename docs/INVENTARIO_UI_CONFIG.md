@@ -14,13 +14,13 @@
 | Módulos Rust | **194** ficheros en `rust-core/src/` | `ls rust-core/src/*.rs` |
 | Tools MCP expuestas | **62** (+10 en `mcp_server`) | `mcp_ext.rs` |
 | Endpoints HTTP v1 | **91** (`/api/*`) | `cockpit_server.rs` |
-| Endpoints HTTP v2 | **40** (`/api/v2/*`) | `webui.rs` |
+| Endpoints HTTP v2 | **54** (`/api/v2/*`) | `webui.rs` (`api_v2_routes()`) |
 | Variables de entorno | **91** distintas | `env::var(...)` en `rust-core/src` |
 | Ficheros de estado/nombreados en el código | **315** nombres distintos | barrido de literales |
 | Endpoints v1 **sin ninguna UI** | **85 de 91 (93 %)** | cruce endpoint ↔ `fetch()` en la UI |
-| Endpoints v2 con UI | **39 de 40** | ídem |
+| Endpoints v2 con UI | **54 de 54** (verificado por `api_v2_routes()` y por `/api/v2/inventario` en vivo) | ídem |
 | Vistas de la UI que se servía (V1) | **7** | `web/cockpit_template.html` |
-| Vistas de la UI V2 (no se servía) | **12** | `web/cockpit_v2.html` |
+| Vistas de la UI V2 | **19** | `web/cockpit_v2.html` |
 
 **La frase corta:** el daemon tiene **muchísimo** más de lo que la Web UI
 muestra. La UI no es "pobre": es **desconectada**. Hay 85 endpoints
@@ -44,7 +44,9 @@ ni una ruta que la entregara.
 `MEGADAEMON_WEB_TEMPLATE_V2`.
 
 ### 2.2 La V2 habla con la API v2, y la API v2 es el 30 % del daemon
-La V2 usa 39 endpoints `/api/v2/*`. El daemon tiene además **91 endpoints
+La V2 usa **54** endpoints `/api/v2/*` (medido el 2026-11-23 sobre
+`api_v2_routes()`; antes eran 39 y quedaban 15 sin UI).  El daemon tiene
+además **91 endpoints
 `/api/*` v1** donde vive el grueso de las capacidades (motor RE, NPU,
 telemetría de hardware, conversaciones, brain, devlog, métricas, backup,
 voz, VLA, visión, firma, sincronización…). **Ninguno** está en la UI.
@@ -243,11 +245,11 @@ ciclo automático     → 315 B de log en 90 s (NO hay bucle)
 
 | Hueco | Por qué sigue abierto |
 |---|---|
-| Los **71 endpoints v1 agrupados** en familias v2 (`/api/v2/re/…`, `/api/v2/npu/…`, `/api/v2/system/…`, `/api/v2/sync/…`, …) | La V2 llama directamente a los endpoints v1 que necesita (inspect, npu, chat, vision) y a los nuevos de la v2. Agrupar los 71 es una reorganización grande de URL; el **contenido** ya es visible en la UI, lo que falta es la URL canónica. |
-| `/api/v2/devlog` | `/api/devlog` existe y sirve `devlog.json`; no se ha expuesto en la v2 ni pintado en la UI (el contenido del devlog son eventos de desarrollo, no de operación). |
+| Los **71 endpoints v1 agrupados** en familias v2 (`/api/v2/re/…`, `/api/v2/npu/…`, `/api/v2/system/…`, `/api/v2/sync/…`, …) | La V2 llama directamente a los endpoints v1 que necesita (inspect, npu, chat, vision) y a los nuevos de la v2. Agrupar los 71 es una reorganización grande de URL; el **contenido** ya es visible en la UI, lo que falta es la URL canónica. **Ahora se puede MEDIR**: `/api/v2/inventario` lista las rutas v1 y v2 y marca cuáles las consume la UI (`usada_por_ui`), contra el HTML que el daemon está sirviendo de verdad. La UI lo pinta en *Sistema*. |
+| ~~`/api/v2/devlog`~~ **HECHO (2026-11-23)** | Existe `/api/v2/devlog` y la UI lo pinta en la vista *Sistema*.  De paso se arregló que `/api/devlog` devolvía **siempre** `[]` (el lector sólo aceptaba objetos y el fichero es un array; además nada lo escribía): ahora hay un módulo propio (`rust-core/src/devlog.rs`) con escritor y lector, y el daemon escribe eventos reales (auto-actualización e instrumentación). |
 | Editar la configuración **del supervisor** desde la UI | Deliberado: si el supervisor se rompe, el móvil no vuelve. Se edita a mano y se verifica. |
 | Ghidra (el motor RE) en el móvil | Necesita JDK 21 y GB de RAM: el móvil tiene ~4 GB. La UI muestra su progreso; la ejecución es del PC. |
-| Las **320 funciones** que Ghidra no convierte | Son las de ensamblador de Go (`.s`: `cmpbody`, `crosscall2_trampoline`…) y unas pocas de la stdlib. Ghidra las procesa pero no produce pseudocódigo: se registran como «sin pseudocódigo» en `NO-DECOMPIADAS.tsv`. |
+| Las **230 funciones** que Ghidra no convierte (medido 2026-11-23) | Son las de ensamblador de Go (`.s`: `cmpbody`, `crosscall2_trampoline`…) y unas pocas de la stdlib. Ghidra las procesa pero no produce pseudocódigo: se registran como «sin pseudocódigo» en `NO-DECOMPIADAS.tsv`. |
 | El **MITM de la DB** de Antigravity | Desactivado por defecto en la configuración (`mitm_db: false`): toca el fichero de la app. Se activa desde la UI o desde `config.json` cuando se quiere. |
 
 ---
