@@ -609,12 +609,41 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
-            "name": "antigravity_sessions",
-            "description": "Instrumentacion completa (solo lectura) de las sesiones de Antigravity: estado agregado, lista, sub-agentes muertos/colgados, arbol padre->hijos, detalle con transcript y tasks/log del daemon.",
+            "name": "sqlite_mitm",
+            "description": "MITM REAL de la base de datos de Antigravity. 'estado' dice que esta montado y que se ha capturado; 'activar' genera la DB servida (WAL) y MONTA el bind-mount (la app escribe en la copia, la original queda intacta); 'desactivar' desmonta y RE-MERGEA (no se pierde ninguna conversacion); 'capturar' replica ahora mismo lo que la app ha escrito en la DB canonica; 'servida' genera la copia sin montarla; 'montaje' devuelve el comando exacto. La replica es de SOLO LECTURA con busy_timeout 2000 ms: nunca bloquea a la app.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "accion": { "type": "string", "description": "estado (defecto) | list | dead | stalled | tree | detail | log | tasks" },
+                    "accion": { "type": "string", "description": "estado (defecto) | activar | desactivar | capturar | replicar | servida | montaje" },
+                    "ocultar": { "type": "array", "items": { "type": "string" }, "description": "IDs de conversaciones que NO deben verse en la DB servida (se ocultan del todo)." },
+                    "reescribir": { "type": "array", "items": { "type": "string" }, "description": "Sustituciones 'DE=A' en la columna state (para mentir sobre el estado de una sesion)." },
+                    "destino": { "type": "string", "description": "Ruta de la DB servida (por defecto <state_dir>/mitm/antigravity_servida.db)." },
+                    "limite": { "type": "integer", "description": "Maximo de filas a replicar (defecto 5000)." }
+                }
+            }
+        },
+        {
+            "name": "agyshim",
+            "description": "SHIM/PROXY de Antigravity. 'estado' dice que rutas sirve y que ha visto (modelos pedidos y reales, sustituciones); 'reglas' lista las reglas de intercepcion/mentira (add/remove/activate); 'log' devuelve las ultimas entradas del NDJSON (CREDENCIALES REDACTADAS); 'proxy' hace una llamada de prueba por el shim y devuelve la respuesta del gateway con la traza del modelo (megadaemon.requested_model / real_model / substituted).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "accion": { "type": "string", "description": "estado (defecto) | reglas | log | proxy" },
+                    "id": { "type": "string", "description": "ID de la regla (para add/remove/activate)." },
+                    "regla": { "type": "object", "description": "Regla a anadir: {id, cuando:{tipo,texto|nombre}, hacer:{accion,...}, activa}." },
+                    "tail": { "type": "integer", "description": "Numero de entradas del NDJSON a devolver (defecto 20)." },
+                    "ruta": { "type": "string", "description": "Ruta de prueba (defecto /v1internal:generateContent)." },
+                    "cuerpo": { "type": "string", "description": "Cuerpo JSON de la peticion de prueba." }
+                }
+            }
+        },
+        {
+            "name": "antigravity_sessions",
+            "description": "Instrumentacion completa (SOLO LECTURA, busy_timeout 2000 ms: nunca bloquea a Antigravity) de las sesiones: estado agregado, lista, sub-agentes muertos/colgados, arbol padre->hijos, detalle con transcript y tasks/log del daemon, TOKENS y MODELO en uso (lectura defensiva: el esquema de conversations/<id>.db no esta medido y se reporta el que se encuentra) y CORRELACION con el NDJSON del shim (que modelo pidio la GUI y que modelo contesto de verdad).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "accion": { "type": "string", "description": "estado (defecto) | list | dead | stalled | tree | detail | log | tasks | tokens | correlacion" },
                     "conversation_id": { "type": "string", "description": "ID de conversacion para detail o raiz opcional para tree." },
                     "tail": { "type": "integer", "description": "Numero de lineas/pasos finales para detail o log (defecto 20)." },
                     "app_dir": { "type": "string", "description": "Directorio alternativo de datos de Antigravity (opcional)." }
@@ -1217,6 +1246,10 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 "log" => crate::antigravity_sessions::daemon_log_en(dir, tail)
                     .map(|lines| json!({ "lines": lines })),
                 "tasks" => crate::antigravity_sessions::tareas_daemon_en(dir),
+                // v16 (2026-11-23): tokens, modelo en uso y correlacion con
+                // el NDJSON del shim.
+                "tokens" => crate::antigravity_sessions::tokens_y_modelo_en(dir, conv_id),
+                "correlacion" => crate::antigravity_sessions::correlacion_shim_en(dir, tail),
                 _ => crate::antigravity_sessions::estado_en(dir)
                     .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
             };
@@ -1226,21 +1259,126 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             };
             json!({ "content": [{ "type": "text", "text": txt }] })
         }
+        "agyshim" => {
+            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("estado");
+            let tail = args.get("tail").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+            match accion {
+                "reglas" => {
+                    let sub = args.get("subaccion").and_then(|v| v.as_str()).unwrap_or("list");
+                    let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    match sub {
+                        "add" => match args.get("regla") {
+                            None => json!({ "ok": false, "error": "falta 'regla'" }),
+                            Some(r) => match serde_json::from_value::<crate::agyshim::Regla>(r.clone()) {
+                                Ok(regla) => match crate::agyshim::poner_regla(regla) {
+                                    Ok(()) => json!({ "ok": true, "accion": "regla anadida", "reglas": crate::agyshim::reglas().len() }),
+                                    Err(e) => json!({ "ok": false, "error": e }),
+                                },
+                                Err(e) => json!({ "ok": false, "error": format!("regla invalida: {e}") }),
+                            },
+                        },
+                        "remove" => json!({ "ok": crate::agyshim::borrar_regla(&id), "id": id }),
+                        "activate" | "deactivate" => {
+                            let activa = sub == "activate";
+                            match crate::agyshim::activar_regla(&id, activa) {
+                                Ok(true) => json!({ "ok": true, "id": id, "activa": activa }),
+                                Ok(false) => json!({ "ok": false, "error": "no existe esa regla", "id": id }),
+                                Err(e) => json!({ "ok": false, "error": e }),
+                            }
+                        }
+                        _ => json!({
+                            "ok": true,
+                            "reglas": crate::agyshim::reglas(),
+                        }),
+                    }
+                }
+                "log" => json!({
+                    "ok": true,
+                    "entradas": crate::agyshim::ultimas(tail),
+                    "nota": "los cuerpos van REDACTADOS: ninguna credencial sale del NDJSON.",
+                }),
+                "proxy" => {
+                    let ruta = args.get("ruta").and_then(|v| v.as_str()).unwrap_or("/v1internal:generateContent");
+                    let cuerpo = args.get("cuerpo").and_then(|v| v.as_str()).unwrap_or(
+                        r#"{"contents":[{"role":"user","parts":[{"text":"ping"}]}]}"#,
+                    );
+                    let peticion = crate::agyshim::Peticion {
+                        metodo: "POST".to_string(),
+                        ruta: ruta.to_string(),
+                        cabeceras: Vec::new(),
+                        cuerpo: cuerpo.to_string(),
+                    };
+                    match crate::agyshim::proxy(&peticion) {
+                        Ok(r) => json!({
+                            "ok": true,
+                            "status": r.status,
+                            "requested_model": r.requested_model,
+                            "real_model": r.real_model,
+                            "substituted": r.substituted,
+                            "regla": r.regla,
+                            "cuerpo": r.cuerpo,
+                        }),
+                        Err(e) => json!({ "ok": false, "error": e }),
+                    }
+                }
+                _ => crate::agyshim::estado_proxy(),
+            }
+        }
         "sqlite_mitm" => {
             let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("estado");
             let s = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
             match accion {
-                "estado" => {
-                    let a = crate::sqlite_mitm::ruta_db_antigravity();
-                    let p = crate::sqlite_mitm::ruta_db_propia();
-                    let sz = |x: &std::path::Path| std::fs::metadata(x).map(|m| m.len()).unwrap_or(0);
-                    json!({
-                        "ok": true,
-                        "antigravity": {"ruta": a.display().to_string(), "bytes": sz(&a),
-                                        "modo": "SOLO LECTURA (busy_timeout 2s): Antigravity puede escribir"},
-                        "megadaemon": {"ruta": p.display().to_string(), "bytes": sz(&p),
-                                       "modo": "escritura propia (WAL, indexada)"},
-                    })
+                // ---- MITM REAL (2026-11-23) -------------------------------
+                // `activar`   : genera la DB servida y MONTA el bind-mount
+                //                (la app escribe en la copia; la original
+                //                queda intacta).
+                // `desactivar`: DESMONTA y re-mergea (no se pierde nada).
+                // `estado`    : qué está montado, qué hay en disco, qué
+                //                capturó la réplica.
+                // `capturar`  : replica AHORA lo que la app ha escrito.
+                "activar" => {
+                    let ocultar: Vec<String> = args
+                        .get("ocultar")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                        .unwrap_or_default();
+                    let reescribir: Vec<(String, String)> = args
+                        .get("reescribir")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| x.as_str())
+                                .filter_map(|t| t.split_once('=').map(|(a, b)| (a.to_string(), b.to_string())))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    match crate::sqlite_mitm::activar(&ocultar, &reescribir) {
+                        Ok(v) => v,
+                        Err(e) => json!({"ok": false, "error": e}),
+                    }
+                }
+                "desactivar" => match crate::sqlite_mitm::desactivar() {
+                    Ok(v) => v,
+                    Err(e) => json!({"ok": false, "error": e}),
+                },
+                "capturar" => {
+                    let limite = args.get("limite").and_then(|v| v.as_u64()).unwrap_or(5000) as usize;
+                    match crate::sqlite_mitm::capturar(limite) {
+                        Ok(v) => v,
+                        Err(e) => json!({"ok": false, "error": e}),
+                    }
+                }
+                "estado" => match crate::sqlite_mitm::estado_mitm() {
+                    Ok(v) => v,
+                    Err(e) => json!({"ok": false, "error": e}),
+                },
+                "montaje" | "plan" => {
+                    let dest = std::path::PathBuf::from(if s("destino").is_empty() {
+                        crate::sqlite_mitm::ruta_db_servida().display().to_string()
+                    } else {
+                        s("destino")
+                    });
+                    crate::sqlite_mitm::plan_montaje(&dest)
                 }
                 "replicar" => {
                     let limite = args.get("limite").and_then(|v| v.as_u64()).unwrap_or(5000) as usize;
@@ -1276,15 +1414,7 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         Err(e) => json!({"ok": false, "error": e}),
                     }
                 }
-                "montaje" => {
-                    let dest = std::path::PathBuf::from(if s("destino").is_empty() {
-                        format!("{}/antigravity_servida.db", crate::cockpit_server::state_dir())
-                    } else {
-                        s("destino")
-                    });
-                    crate::sqlite_mitm::plan_montaje(&dest)
-                }
-                _ => json!({"ok": false, "error": "accion desconocida: usa estado|replicar|servida|montaje"}),
+                _ => json!({"ok": false, "error": "accion desconocida: usa estado|activar|desactivar|capturar|replicar|servida|montaje"}),
             }
         }
         "re_analyze" => {

@@ -60,6 +60,18 @@ pub struct ResumenSesion {
     pub ganadora: Option<String>,
     pub ultimo_input: String,
     pub ultimo_input_paso: i64,
+    /// Estado **normalizado** (EN_CURSO / IDLE / COLGADA / MUERTA).
+    ///
+    /// MEDIDO (2026-11-23): el estado crudo (`CASCADE_RUN_STATUS_*`) obliga
+    /// a cada consumidor a reimplementar las reglas; aquí se decide una vez.
+    #[serde(default)]
+    pub estado_norm: String,
+    /// Tokens de la conversación (0 si la DB no los trae o no se pudo leer).
+    #[serde(default)]
+    pub tokens: i64,
+    /// Modelo en uso (cadena vacía si no se pudo determinar).
+    #[serde(default)]
+    pub modelo: String,
 }
 
 /// Resumen agregado del estado de las sesiones.
@@ -137,6 +149,31 @@ fn es_inactiva_24h(s: &ResumenSesion, now_secs: u64) -> bool {
         .unwrap_or(false)
 }
 
+/// Estado normalizado de una sesión.
+///
+/// Las reglas (MEDIDAS sobre el estado crudo `CASCADE_RUN_STATUS_*`):
+/// * `killed == 1`               ⇒ **MUERTA** (el sub-agente fue matado).
+/// * `IDLE` + `not_fully_idle=1` ⇒ **COLGADA** (dice idle pero tiene trabajo).
+/// * `IDLE`                      ⇒ **IDLE** (de verdad parado).
+/// * activa y sin tocar en 24 h   ⇒ **COLGADA** (zombie).
+/// * resto                       ⇒ **EN_CURSO**.
+pub fn estado_normalizado(estado: &str, killed: i64, no_idle: i64, inactiva_24h: bool) -> &'static str {
+    if killed == 1 {
+        return "MUERTA";
+    }
+    let idle = estado.contains("IDLE");
+    if idle {
+        if no_idle == 1 {
+            return "COLGADA";
+        }
+        return "IDLE";
+    }
+    if inactiva_24h {
+        return "COLGADA";
+    }
+    "EN_CURSO"
+}
+
 fn es_colgada(s: &ResumenSesion, now_secs: u64) -> bool {
     let is_idle = s.estado.contains("IDLE");
     s.killed == 1 || (is_idle && s.no_idle == 1) || (!is_idle && es_inactiva_24h(s, now_secs))
@@ -195,11 +232,23 @@ pub fn sesiones_en(app_dir: &Path) -> Result<Vec<ResumenSesion>, String> {
                     .unwrap_or_default()
                     .unwrap_or_default(),
                 ultimo_input_paso: r.get::<_, Option<i64>>(15).unwrap_or_default().unwrap_or(-1),
+                estado_norm: String::new(),
+                tokens: 0,
+                modelo: String::new(),
             })
         })
         .map_err(|e| format!("query: {e}"))?;
     let mut out = Vec::new();
+    let ahora = now_unix_secs();
     for f in filas.flatten() {
+        let mut f = f;
+        f.estado_norm = estado_normalizado(
+            &f.estado,
+            f.killed,
+            f.no_idle,
+            es_inactiva_24h(&f, ahora),
+        )
+        .to_string();
         out.push(f);
     }
     Ok(out)
@@ -432,13 +481,246 @@ pub fn detalle_sesion_en(app_dir: &Path, conversation_id: &str, tail: usize) -> 
             "path": transcript_path.display().to_string(),
             "total_steps": transcript_lines,
             "tail": transcript_tail,
-        }
+        },
+        // v16 (2026-11-23): tokens y modelo en uso.  El esquema de la DB
+        // de la conversacion NO esta medido (movil caido) => el lector es
+        // defensivo y lo dice.
+        "tokens_y_modelo": tokens_y_modelo_en(app_dir, id),
+        // La traza del shim que cae dentro de la vida de la conversion.
+        "shim": correlacion_shim_en(app_dir, 200).unwrap_or(Value::Null),
     }))
 }
 
 /// Detalle completo de una sesión en el directorio por defecto.
 pub fn detalle_sesion(conversation_id: &str, tail: usize) -> Result<Value, String> {
     detalle_sesion_en(&default_app_dir(), conversation_id, tail)
+}
+
+// =========================================================================
+// TOKENS, MODELO EN USO Y CORRELACIÓN CON EL NDJSON DEL SHIM
+// =========================================================================
+//
+// MEDIDO (2026-11-23): el detalle de sesión decía el estado, los pasos y
+// el transcript, pero NO decía **cuántos tokens** lleva la conversación ni
+// **qué modelo** está contestando, que es justo lo que hace falta para
+// "leer el estado real de Antigravity sin bloquearla".
+//
+// El esquema de `conversations/<id>.db` **NO se ha podido medir** (el móvil
+// está caído desde el 2026-11-23) ⇒ el lector es **defensivo**: lista lo que
+// encuentra, suma lo que parece tokens y NO falla si el esquema es otro.
+// Lo que no se pudo leer se marca y se dice el comando exacto de
+// verificación en `docs/MITM-SQLITE-Y-PROXY.md`.
+
+/// Ruta del NDJSON del shim (el registro público del tráfico).
+pub fn ruta_ndjson_shim() -> PathBuf {
+    if let Ok(v) = std::env::var("MEGADAEMON_AGYSHIM_NDJSON") {
+        let t = v.trim();
+        if !t.is_empty() {
+            return PathBuf::from(t);
+        }
+    }
+    PathBuf::from(crate::cockpit_server::state_dir()).join("agyshim.ndjson")
+}
+
+/// Tokens y modelo en uso de una conversación.
+///
+/// Lee `conversations/<id>.db` en **SOLO LECTURA** con `busy_timeout`:
+/// nunca bloquea a Antigravity.
+///
+/// Devuelve además el **esquema** que ha encontrado (tablas y columnas):
+/// es lo que permite descubrir la forma real de la DB en el dispositivo
+/// sin tener que inventarla.
+pub fn tokens_y_modelo_en(app_dir: &Path, conversation_id: &str) -> Value {
+    let id = conversation_id.trim();
+    if id.is_empty() {
+        return json!({ "ok": false, "motivo": "conversation_id vacio" });
+    }
+    let db = app_dir.join("conversations").join(format!("{id}.db"));
+    if !db.exists() {
+        return json!({
+            "ok": false,
+            "motivo": format!("no existe {}", db.display()),
+            "tokens": 0,
+            "modelo": "",
+        });
+    }
+    let con = match open_readonly(&db) {
+        Ok(c) => c,
+        Err(e) => {
+            return json!({ "ok": false, "motivo": e, "tokens": 0, "modelo": "" });
+        }
+    };
+
+    // 1) Tablas
+    let tablas: Vec<String> = match con.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    ) {
+        Ok(mut st) => match st.query_map([], |r| r.get::<_, String>(0)) {
+            Ok(f) => f.flatten().collect(),
+            Err(e) => return json!({ "ok": false, "motivo": format!("query tablas: {e}") }),
+        },
+        Err(e) => return json!({ "ok": false, "motivo": format!("prepare tablas: {e}") }),
+    };
+
+    // 2) Columnas de cada tabla (y qué parece token / qué parece modelo)
+    let mut esquema = Vec::new();
+    let mut tokens = 0i64;
+    let mut modelo = String::new();
+    for t in &tablas {
+        let cols: Vec<String> = match con.prepare(&format!("PRAGMA table_info(\"{t}\")")) {
+            Ok(mut st) => match st.query_map([], |r| r.get::<_, String>(1)) {
+                Ok(f) => f.flatten().collect(),
+                Err(_) => Vec::new(),
+            },
+            Err(_) => Vec::new(),
+        };
+        let col_token: Vec<&String> = cols
+            .iter()
+            .filter(|c| {
+                let l = c.to_lowercase();
+                l.contains("token") || l.contains("usage")
+            })
+            .collect();
+        let col_modelo: Vec<&String> = cols
+            .iter()
+            .filter(|c| c.to_lowercase().contains("model"))
+            .collect();
+        esquema.push(json!({
+            "tabla": t,
+            "columnas": cols,
+            "columnas_token": col_token,
+            "columnas_modelo": col_modelo,
+        }));
+
+        // Tokens: suma de las columnas enteras que parecen tokens.
+        for c in &col_token {
+            let sql = format!("SELECT COALESCE(SUM(CAST(\"{c}\" AS INTEGER)),0) FROM \"{t}\"");
+            if let Ok(v) = con.query_row(&sql, [], |r| r.get::<_, i64>(0)) {
+                tokens += v;
+            }
+        }
+        // Modelo: el último valor no vacío de las columnas que parecen modelo.
+        for c in &col_modelo {
+            let sql = format!(
+                "SELECT \"{c}\" FROM \"{t}\" WHERE \"{c}\" IS NOT NULL AND \"{c}\" <> '' LIMIT 1"
+            );
+            if let Ok(v) = con.query_row(&sql, [], |r| r.get::<_, String>(0)) {
+                if !v.trim().is_empty() {
+                    modelo = v.trim().to_string();
+                    break;
+                }
+            }
+        }
+    }
+
+    json!({
+        "ok": true,
+        "conversation_id": id,
+        "db": db.display().to_string(),
+        "tokens": tokens,
+        "modelo": modelo,
+        "esquema": esquema,
+        "modo": "SOLO LECTURA con busy_timeout 2000 ms",
+        "aviso": "el esquema de conversations/<id>.db NO esta medido (movil caido): los tokens son la suma de las columnas que PARECEN de tokens y el modelo, el de las que PARECEN de modelo.",
+    })
+}
+
+/// Tokens y modelo en uso en el directorio por defecto.
+pub fn tokens_y_modelo(conversation_id: &str) -> Value {
+    tokens_y_modelo_en(&default_app_dir(), conversation_id)
+}
+
+/// Correlación entre las sesiones de Antigravity y el NDJSON del shim.
+///
+/// El NDJSON del shim tiene `ts` (unix) y el modelo pedido/real; las
+/// sesiones tienen `last_user_input_time` y `last_modified_time` (RFC3339).
+/// Se cruzan por **ventana temporal**: losentries del shim que caen dentro
+/// de la vida de la conversación.
+///
+/// No bloquea nada: los dos ficheros se leen del disco.
+pub fn correlacion_shim_en(app_dir: &Path, tail: usize) -> Result<Value, String> {
+    correlacion_shim_de(app_dir, &ruta_ndjson_shim(), tail)
+}
+
+/// Correlación con un NDJSON **concreto** (testeable sin el móvil).
+pub fn correlacion_shim_de(
+    app_dir: &Path,
+    ndjson: &Path,
+    tail: usize,
+) -> Result<Value, String> {
+    let Ok(txt) = std::fs::read_to_string(ndjson) else {
+        return Ok(json!({
+            "ok": true,
+            "entradas": 0,
+            "nota": "todavia no hay NDJSON del shim (o no se puede leer)",
+            "ruta_ndjson": ndjson.display().to_string(),
+        }));
+    };
+    let entradas: Vec<Value> = txt
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .collect();
+    let lista = sesiones_en(app_dir)?;
+
+    let mut por_sesion = Vec::new();
+    for s in &lista {
+        let fin = parse_iso_utc_secs(&s.ultima_modificacion).unwrap_or(0);
+        let ini = parse_iso_utc_secs(&s.ultimo_input).unwrap_or(fin.saturating_sub(3600));
+        let dentro: Vec<&Value> = entradas
+            .iter()
+            .filter(|e| {
+                let ts = e.get("ts").and_then(|v| v.as_u64()).unwrap_or(0);
+                ts >= ini && ts <= fin.max(ini)
+            })
+            .collect();
+        if dentro.is_empty() {
+            continue;
+        }
+        let mut pedidos: Vec<String> = Vec::new();
+        let mut reales: Vec<String> = Vec::new();
+        let mut sustituciones = 0u64;
+        for e in &dentro {
+            if let Some(m) = e.get("requested_model").and_then(|v| v.as_str()) {
+                if !pedidos.contains(&m.to_string()) {
+                    pedidos.push(m.to_string());
+                }
+            }
+            if let Some(m) = e.get("real_model").and_then(|v| v.as_str()) {
+                if !reales.contains(&m.to_string()) {
+                    reales.push(m.to_string());
+                }
+            }
+            if e.get("substituted").and_then(|v| v.as_bool()).unwrap_or(false) {
+                sustituciones += 1;
+            }
+        }
+        por_sesion.push(json!({
+            "conversation_id": s.conversation_id,
+            "titulo": s.titulo,
+            "estado": s.estado,
+            "estado_norm": s.estado_norm,
+            "ventana": { "desde": ini, "hasta": fin },
+            "entradas_shim": dentro.len(),
+            "modelos_pedidos": pedidos,
+            "modelos_reales": reales,
+            "sustituciones": sustituciones,
+        }));
+    }
+
+    Ok(json!({
+        "ok": true,
+        "ruta_ndjson": ndjson.display().to_string(),
+        "entradas_totales": entradas.len(),
+        "tail": tail,
+        "sesiones_con_traza": por_sesion.len(),
+        "correlacion": por_sesion,
+    }))
+}
+
+/// Correlación con el NDJSON del shim en el directorio por defecto.
+pub fn correlacion_shim(tail: usize) -> Result<Value, String> {
+    correlacion_shim_en(&default_app_dir(), tail)
 }
 
 /// Estado del planificador interno de Antigravity (`daemon/tasks.json`).
@@ -611,6 +893,88 @@ mod tests {
         let logs = daemon_log_en(&dir, 2).unwrap();
         assert_eq!(logs, vec!["l2".to_string(), "l3".to_string()]);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn el_estado_normalizado_cubre_los_casos() {
+        assert_eq!(estado_normalizado("CASCADE_RUN_STATUS_IDLE", 1, 0, false), "MUERTA");
+        assert_eq!(estado_normalizado("CASCADE_RUN_STATUS_IDLE", 0, 1, false), "COLGADA");
+        assert_eq!(estado_normalizado("CASCADE_RUN_STATUS_IDLE", 0, 0, false), "IDLE");
+        assert_eq!(estado_normalizado("CASCADE_RUN_STATUS_RUNNING", 0, 0, true), "COLGADA");
+        assert_eq!(estado_normalizado("CASCADE_RUN_STATUS_RUNNING", 0, 0, false), "EN_CURSO");
+    }
+
+    #[test]
+    fn los_tokens_y_el_modelo_se_leen_sin_bloquear() {
+        let dir = temp_app_dir("tokens");
+        seed_db(&dir);
+        std::fs::create_dir_all(dir.join("conversations")).unwrap();
+        {
+            let con = rusqlite::Connection::open(dir.join("conversations/root-1.db")).unwrap();
+            con.execute_batch(
+                "CREATE TABLE usage (id INTEGER, prompt_tokens INTEGER, completion_tokens INTEGER, model TEXT);
+                 INSERT INTO usage VALUES (1, 1200, 340, 'gemini-2.5-pro');
+                 INSERT INTO usage VALUES (2, 800, 120, 'gemini-2.5-pro');",
+            )
+            .unwrap();
+        }
+        let v = tokens_y_modelo_en(&dir, "root-1");
+        assert_eq!(v["ok"], true);
+        // 1200+340+800+120 = 2460 (las dos columnas que parecen tokens).
+        assert_eq!(v["tokens"], 2460);
+        assert_eq!(v["modelo"], "gemini-2.5-pro");
+        // Y devuelve el esquema que ha encontrado (para poder medirlo).
+        assert!(v["esquema"].as_array().unwrap().len() >= 1);
+
+        // Una conversacion sin DB: NO es un error, se dice el motivo.
+        let v2 = tokens_y_modelo_en(&dir, "no-existe");
+        assert_eq!(v2["ok"], false);
+        assert_eq!(v2["tokens"], 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn la_correlacion_con_el_ndjson_del_shim_cruza_por_ventana() {
+        let dir = temp_app_dir("corr");
+        seed_db(&dir);
+        // Una sesion con ventana CONOCIDA (2026-11-22 22:30:21 UTC = 1795386621).
+        {
+            let con = rusqlite::Connection::open(dir.join("conversation_summaries.db")).unwrap();
+            con.execute(
+                "INSERT INTO conversation_summaries (conversation_id, title, step_count, last_modified_time, last_user_input_time, status, agent_name, parent_conversation_id, nesting_depth, not_fully_idle, killed)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '', 0, 0, 0)",
+                rusqlite::params!["root-2026", "De 2026", 7, "2026-11-22 22:35:21+00:00", "2026-11-22 22:30:21+00:00", "CASCADE_RUN_STATUS_RUNNING", ""],
+            )
+            .unwrap();
+        }
+        // El NDJSON del shim: una entrada dentro de la vida de root-2026 y
+        // otra fuera de toda ventana.
+        let nd = dir.join("agyshim.ndjson");
+        std::fs::write(
+            &nd,
+            concat!(
+                r#"{"ts":1795386621,"metodo":"POST","ruta":"/v1internal:generateContent","requested_model":"megadaemon","real_model":"minimax-m3.1-flash","substituted":true,"proxy":true}"#,
+                "\n",
+                r#"{"ts":1000000000,"metodo":"POST","ruta":"/v1internal:generateContent","requested_model":"megadaemon","real_model":"otro","substituted":true,"proxy":true}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let v = correlacion_shim_de(&dir, &nd, 50).expect("correlacion");
+        assert_eq!(v["entradas_totales"], 2);
+        // Las sesiones de 2020 y la de 2099 quedan FUERA de la ventana.
+        let corr = v["correlacion"].as_array().unwrap();
+        assert_eq!(corr.len(), 1, "solo una sesion cae en la ventana");
+        let r0 = &corr[0];
+        assert_eq!(r0["conversation_id"], "root-2026");
+        assert_eq!(r0["sustituciones"], 1);
+        assert!(r0["entradas_shim"].as_u64().unwrap() >= 1);
+        assert!(r0["modelos_reales"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m == "minimax-m3.1-flash"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

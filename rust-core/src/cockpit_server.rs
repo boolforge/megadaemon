@@ -1367,6 +1367,8 @@ fn handle_client(mut stream: TcpStream) {
                     "detail" => crate::antigravity_sessions::detalle_sesion(&conv_id, tail),
                     "log" => crate::antigravity_sessions::daemon_log(tail).map(|lines| json!({ "lines": lines })),
                     "tasks" => crate::antigravity_sessions::tareas_daemon(),
+                    "tokens" => crate::antigravity_sessions::tokens_y_modelo(&conv_id),
+                    "correlacion" => crate::antigravity_sessions::correlacion_shim(tail),
                     _ => crate::antigravity_sessions::estado()
                         .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
                 };
@@ -1392,6 +1394,59 @@ fn handle_client(mut stream: TcpStream) {
                             }),
                         );
                     }
+                }
+            }
+            // =================================================================
+            // PROXY REAL (agyshim) — 2026-11-23
+            // =================================================================
+            //
+            // MEDIDO (2026-11-22, `liblanguage_server.so`): el language
+            // server de Antigravity habla el protocolo **Gemini** (`genai`)
+            // con las rutas `/v1internal:generateContent` y
+            // `/v1internal:streamGenerateContent` (proveedor
+            // `API_PROVIDER_GOOGLE_EVERGREEN`).
+            //
+            // HASTA AHORA estas rutas las servía el gateway **directly**:
+            // el shim (`agyshim`) interceptaba y registraba, pero no
+            // reenviaba nada ⇒ era un espejo, no un proxy.
+            //
+            // AHORA el **shim** es el proxy de verdad:
+            //   Antigravity → shim (registra NDJSON, aplica reglas) →
+            //   gateway canónico (elige proveedor, fallback, credenciales
+            //   del vault) → proveedor real.
+            //
+            // La traza del modelo (pedido / real / sustituido) viaja en el
+            // bloque `megadaemon` de la respuesta y en el NDJSON.
+            //
+            // La autenticación NO cambia: estas rutas pasan por el gate
+            // global de API key que hay antes de este `match` ⇒ el túnel
+            // público sigue exigiendo credencial.
+            p if crate::agyshim::es_ruta_proxy(p) => {
+                let peticion = crate::agyshim::Peticion {
+                    metodo: method.to_string(),
+                    ruta: p.to_string(),
+                    cabeceras: Vec::new(),
+                    cuerpo: String::from_utf8_lossy(body_slice).to_string(),
+                };
+                match crate::agyshim::proxy(&peticion) {
+                    Ok(r) => {
+                        send_http_response(
+                            &mut stream,
+                            r.status,
+                            &r.content_type,
+                            r.cuerpo.as_bytes(),
+                        )
+                    }
+                    Err(e) => send_json(
+                        &mut stream,
+                        &json!({
+                            "error": {
+                                "message": e,
+                                "code": 502,
+                                "status": "SHIM_PROXY_ERROR",
+                            }
+                        }),
+                    ),
                 }
             }
             // Catalogo de modelos en dialecto GEMINI.

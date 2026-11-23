@@ -508,6 +508,36 @@ pub fn descargar_paralelo(
     })
 }
 
+/// **POST** de texto ⇒ lo usa el proxy del shim para reenviar al upstream
+/// las peticiones del language server (que son POST).
+///
+/// MEDIDO (2026-11-23): el shim reenviaba TODO con `get_texto` ⇒ un proxy
+/// que manda un POST con un GET no funciona; y el `ureq` por defecto
+/// convierte 4xx/5xx en error, así que un 429 del proveedor se perdía
+/// como "fallo de transporte" (el status era imprescindible).
+pub fn post_texto(url: &str, cuerpo: &str, opts: &Opciones) -> Result<(u16, String), String> {
+    let ag = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(opts.timeout_s)))
+        .timeout_connect(Some(Duration::from_secs(opts.timeout_conexion_s)))
+        .user_agent(opts.user_agent.clone())
+        .http_status_as_error(false)
+        .build()
+        .new_agent();
+    let mut req = ag.post(url);
+    for (k, v) in &opts.cabeceras {
+        req = req.header(k.as_str(), v.as_str());
+    }
+    let resp = req
+        .send(cuerpo.as_bytes())
+        .map_err(|e| format!("POST {url}: {e}"))?;
+    let status = resp.status().as_u16();
+    let t = resp
+        .into_body()
+        .read_to_string()
+        .map_err(|e| format!("leer cuerpo: {e}"))?;
+    Ok((status, t))
+}
+
 /// GET de texto (con reintentos) ⇒ útil para JSON de estado.
 pub fn get_texto(url: &str, opts: &Opciones) -> Result<(u16, String), String> {
     let ag = agente(opts);
