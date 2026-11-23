@@ -127,13 +127,14 @@ def escribir_fixture(dir_base: Path, tsv: str = TSV_EJEMPLO, indice: str = INDIC
     return dir_base
 
 
-def ejecutar(base: Path, out: Path, tsv: Path = None) -> int:
+def ejecutar(base: Path, out: Path, tsv: Path = None, indice: str = "ruta") -> int:
     """Ejecuta la herramienta sobre la fixture."""
     o = regenerar.Opciones()
     o.tsv = tsv or (base / "funcs.tsv")
     o.pseudo = base / "pseudo"
     o.out = out
     o.chunk = 1000
+    o.indice = indice
     return regenerar.run(o)
 
 
@@ -409,7 +410,6 @@ class TestHerramienta(unittest.TestCase):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     # ---------------- agrupado por paquete ----------------
-
     def test_agrupa_por_paquete(self):
         # 5 funciones -> 3 paquetes: el directorio del fichero original.
         self.assertTrue((self.out / "codigo/third_party/go/gc/src/internal/abi/README.md").is_file())
@@ -582,6 +582,65 @@ class TestColisiones(unittest.TestCase):
             self.assertIn("identificadores Go que colisionaron (con sufijo) | 1 |", resumen)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestIndiceDelPseudocodigo(unittest.TestCase):
+    """El indice del arbol de pseudocodigo se puede hacer de dos formas.
+
+    ``ruta``     deduce la clave de la ruta del ``.c`` (rapido: no abre NINGUN
+                 fichero para indexar).
+    ``cabecera`` lee la cabecera ``/* <ruta.go> -- ... */`` de cada ``.c``.
+
+    Los dos tienen que dar el MISMO mapa, y ademas se verifica que la
+    cabecera que declara Ghidra coincide con la ruta deducida.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix="test-regenerar-indice-"))
+        cls.base = escribir_fixture(cls.tmp / "base")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_los_dos_modos_dan_el_mismo_mapa(self):
+        por_ruta, idx_ruta = regenerar.indexar_pseudocodigo(self.base / "pseudo", "ruta")
+        por_cab, idx_cab = regenerar.indexar_pseudocodigo(self.base / "pseudo", "cabecera")
+        self.assertEqual(sorted(map(str, por_ruta)), sorted(map(str, por_cab)))
+        self.assertEqual(
+            sorted(str(i) for i in idx_ruta), sorted(str(i) for i in idx_cab)
+        )
+
+    def test_el_modo_ruta_no_abre_ningun_fichero_para_indexar(self):
+        # el mapa sale de la RUTA: no hace falta leer ninguna cabecera
+        por_ruta, _ = regenerar.indexar_pseudocodigo(self.base / "pseudo", "ruta")
+        self.assertIn("third_party/go/gc/src/internal/abi/abi.go", por_ruta)
+        self.assertIn("third_party/jetski/language_server/server.go", por_ruta)
+
+    def test_el_resumen_cuenta_las_cabeceras_que_no_coinciden(self):
+        # se falsea la cabecera de un fichero: el resumen debe contarlo
+        base2 = escribir_fixture(self.tmp / "base2")
+        c = base2 / "pseudo/third_party/go/gc/src/internal/abi/abi.c"
+        c.write_text(
+            PSEUDO_ABI.replace(
+                "/* third_party/go/gc/src/internal/abi/abi.go -- pseudocodigo",
+                "/* otro/fichero.go -- pseudocodigo",
+            ),
+            encoding="utf-8",
+        )
+        out = self.tmp / "out2"
+        rc = ejecutar(base2, out)
+        assert rc == 0, "la herramienta devolvio %d" % rc
+        resumen = (out / "RESUMEN.md").read_text(encoding="utf-8")
+        self.assertIn("cabeceras que NO coinciden con la ruta deducida | 1 |", resumen)
+
+    def test_el_resumen_dice_como_se_indexo(self):
+        out = self.tmp / "out3"
+        rc = ejecutar(self.base, out)
+        assert rc == 0, "la herramienta devolvio %d" % rc
+        resumen = (out / "RESUMEN.md").read_text(encoding="utf-8")
+        self.assertIn("| indice del pseudocodigo | `ruta` |", resumen)
 
 
 if __name__ == "__main__":
