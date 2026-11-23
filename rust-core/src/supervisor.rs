@@ -49,6 +49,18 @@ pub const RUTA_SERVICE_D: &str = "/data/adb/service.d/99-megadaemon.sh";
 /// daemon es **exactamente** lo que se despliega desde el repo.
 pub const WATCHDOG_SH: &str = include_str!("../../deploy/99-megadaemon.sh");
 
+/// Guardián del supervisor (`service.d/97-megadaemon-keeper.sh`).
+///
+/// MEDIDO (2026-11-23, móvil): el supervisor es lo único que relanza el
+/// daemon, y si el supervisor ALSO muere el móvil se queda sin daemon Y sin
+/// supervisor (el túnel sigue vivo pero responde 502 para siempre, sin que
+/// nadie reinstale nada).  Este script, hermano de `service.d`, comprueba
+/// cada 60 s que el supervisor siga vivo y lo relanza si no.
+pub const KEEPER_SH: &str = include_str!("../../deploy/97-megadaemon-keeper.sh");
+
+/// Ruta del guardián en el móvil.
+pub const RUTA_KEEPER: &str = "/data/adb/service.d/97-megadaemon-keeper.sh";
+
 /// ¿Estamos en Android (y por tanto el watchdog tiene sentido)?
 pub fn es_android() -> bool {
     cfg!(target_os = "android")
@@ -128,12 +140,47 @@ pub fn instalar() -> Value {
     // copia legible en el state dir (para poder inspeccionarla sin root)
     let copia = crate::cockpit_server::state_dir() + "/watchdog.sh";
     let _ = std::fs::write(&copia, cuerpo.as_bytes());
+    // El guardian del supervisor se instala junto a el (misma fuente unica).
+    let keeper = instalar_keeper();
     json!({
         "ok": true,
         "ruta": ruta.display().to_string(),
         "copia": copia,
+        "keeper": keeper,
         "nota": "Magisk lo ejecutara en cada boot; el daemon sale con codigo 10 tras autoactualizarse y el watchdog lo relanza",
     })
+}
+
+/// Instala (de forma ATOMICA) el guardian del supervisor.
+///
+/// Es idempotente: si el fichero ya es identico, no se toca (Magisk puede
+/// estar ejecutandolo en ese mismo instante).
+pub fn instalar_keeper() -> Value {
+    let ruta = PathBuf::from(RUTA_KEEPER);
+    if !es_android() {
+        return json!({"ok": false, "motivo": "no es android"});
+    }
+    if let Some(p) = ruta.parent() {
+        if let Err(e) = std::fs::create_dir_all(p) {
+            return json!({"ok": false, "motivo": format!("crear {}: {e}", p.display())});
+        }
+    }
+    let cuerpo = KEEPER_SH.as_bytes();
+    if let Ok(actual) = std::fs::read(&ruta) {
+        if actual == cuerpo {
+            return json!({"ok": true, "ruta": ruta.display().to_string(), "ya_instalado": true});
+        }
+    }
+    let tmp = ruta.with_extension("sh.tmp");
+    if let Err(e) = std::fs::write(&tmp, cuerpo) {
+        return json!({"ok": false, "motivo": format!("escribir {}: {e}", tmp.display())});
+    }
+    set_exec(&tmp);
+    if let Err(e) = std::fs::rename(&tmp, &ruta) {
+        let _ = std::fs::remove_file(&tmp);
+        return json!({"ok": false, "motivo": format!("renombrar {}: {e}", ruta.display())});
+    }
+    json!({"ok": true, "ruta": ruta.display().to_string(), "bytes": cuerpo.len()})
 }
 
 /// Marca el fichero como ejecutable.
@@ -194,6 +241,14 @@ pub fn asegurar_supervisor() {
         return;
     }
     let r = instalar();
+    // El guardian tambien se auto-repara (si el movil lo borro, se reinstala).
+    if let Ok(k) = instalar_keeper() {
+        if k.get("ok").and_then(|v| v.as_bool()) == Some(true)
+            && k.get("ya_instalado").and_then(|v| v.as_bool()) != Some(true)
+        {
+            eprintln!("guardian del supervisor instalado en {RUTA_KEEPER}");
+        }
+    }
     if r.get("ok").and_then(|v| v.as_bool()) == Some(true) {
         if st.get("desfasado").and_then(|v| v.as_bool()) == Some(true) {
             eprintln!(
@@ -222,6 +277,15 @@ mod tests {
         // el watchdog tiene que relanzar el daemon tras una autoactualizacion
         // (el daemon sale con codigo 10) y mantener vivo el daemon
         assert!(WATCHDOG_SH.contains("arrancar"));
+    }
+
+    #[test]
+    fn el_guardian_del_supervisor_es_shell_valido() {
+        assert!(KEEPER_SH.starts_with("#!/system/bin/sh"));
+        assert!(KEEPER_SH.contains("while true"));
+        assert!(KEEPER_SH.contains("99-megadaemon.sh"));
+        // NO debe reiniciar el daemon: de eso se encarga el supervisor.
+        assert!(!KEEPER_SH.contains("megadaemon-core cockpit"));
     }
 
     #[test]
