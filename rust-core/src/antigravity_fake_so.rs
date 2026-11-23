@@ -212,6 +212,12 @@ pub fn activar(puerto: u16, confirmar: bool) -> Result<Value, String> {
         "original_nuevo": original_nuevo,
         "cambios": cambios,
         "manifiesto_actualizado": manifiesto,
+        // Metadatos del fichero instalado: permiten comprobar en un ciclo
+        // automatico si la app ha restaurado el original SIN releer los
+        // 181 MB (medido: hashear 3 veces el .so cuesta varios segundos y
+        // el movil va con 4 GB de RAM).
+        "app_bytes": std::fs::metadata(&ruta).map(|m| m.len()).unwrap_or(0),
+        "app_mtime": mtime(&ruta),
     });
     escribir_estado(&estado)?;
 
@@ -260,25 +266,92 @@ pub fn desactivar(confirmar: bool) -> Result<Value, String> {
     }))
 }
 
+/// mtime del fichero en segundos Unix (0 si no existe).
+pub fn mtime(ruta: &std::path::Path) -> u64 {
+    std::fs::metadata(ruta)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// **Comprobación BARATA**: ¿sigue instalado nuestro `.so` falso?
+///
+/// No lee el fichero: compara (tamaño, mtime) con lo que se guardó al
+/// instalar.  Si la app restaura su `.so` original, el mtime cambia ⇒
+/// hay que re-instrumentar.  Si no cambió, es el nuestro.
+pub fn instalado_cheap() -> bool {
+    let ruta = ruta_ls();
+    if !ruta.exists() {
+        return false;
+    }
+    let guardado = leer_estado().unwrap_or(Value::Null);
+    let bytes = std::fs::metadata(&ruta).map(|m| m.len()).unwrap_or(0);
+    let mt = mtime(&ruta);
+    let gb = guardado.get("app_bytes").and_then(|v| v.as_u64()).unwrap_or(0);
+    let gm = guardado.get("app_mtime").and_then(|v| v.as_u64()).unwrap_or(0);
+    if gb == 0 || gm == 0 {
+        // Sin metadatos guardados: no se puede saber sin hashear.
+        return false;
+    }
+    bytes == gb && mt == gm
+}
+
 /// Estado: qué hay instalado, quién tiene el original y sus sha256.
+///
+/// MEDIDO (2026-11-23): hashear las tres copias del `.so` (181 MB cada una)
+/// cuesta varios segundos y jeringa RAM en un móvil de 4 GB.  Ahora el sha256
+/// del `.so` de la app **sólo** se calcula cuando los metadatos indican que
+/// algo ha cambiado; en el caso normal no se lee el fichero.
 pub fn estado() -> Value {
     let ruta = ruta_ls();
-    let sha_app = std::fs::read(&ruta)
-        .ok()
-        .map(|d| sha256_hex(&d))
-        .unwrap_or_default();
-    let sha_original = std::fs::read(ruta_original())
-        .ok()
-        .map(|d| sha256_hex(&d))
-        .unwrap_or_default();
-    let sha_falsa = std::fs::read(ruta_falsa())
-        .ok()
-        .map(|d| sha256_hex(&d))
-        .unwrap_or_default();
-    let instalado = if sha_app.is_empty() || sha_falsa.is_empty() {
-        false
+    let guardado = leer_estado().unwrap_or(Value::Null);
+    let barato_ok = instalado_cheap();
+    // En el caso normal (metadatos intactos) NO se lee el .so.
+    let (sha_app, instalado) = if barato_ok {
+        (
+            guardado
+                .get("sha256_falso")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            true,
+        )
     } else {
-        sha_app == sha_falsa
+        let s = std::fs::read(&ruta).ok().map(|d| sha256_hex(&d)).unwrap_or_default();
+        let sf = std::fs::read(ruta_falsa())
+            .ok()
+            .map(|d| sha256_hex(&d))
+            .unwrap_or_default();
+        let inst = !s.is_empty() && !sf.is_empty() && s == sf;
+        (s, inst)
+    };
+    let sha_original = guardado
+        .get("sha256_original")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let sha_falsa = guardado
+        .get("sha256_falso")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let sha_original = if sha_original.is_empty() && !barato_ok {
+        std::fs::read(ruta_original())
+            .ok()
+            .map(|d| sha256_hex(&d))
+            .unwrap_or_default()
+    } else {
+        sha_original
+    };
+    let sha_falsa = if sha_falsa.is_empty() && !barato_ok {
+        std::fs::read(ruta_falsa())
+            .ok()
+            .map(|d| sha256_hex(&d))
+            .unwrap_or_default()
+    } else {
+        sha_falsa
     };
     json!({
         "ok": true,
@@ -296,7 +369,8 @@ pub fn estado() -> Value {
             "sha256": sha_falsa,
         },
         "falso_instalado": instalado,
-        "estado_guardado": leer_estado().unwrap_or(Value::Null),
+        "estado_guardado": guardado,
+        "comprobacion_barata": barato_ok,
         "nota": "el daemon posee el ORIGINAL (fuera del dir de la app) y el FALSO es lo que la app carga.",
     })
 }

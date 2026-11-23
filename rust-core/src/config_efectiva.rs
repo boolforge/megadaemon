@@ -67,6 +67,8 @@ pub fn por_defecto() -> Value {
         },
         "instrumentacion_agy": {
             "activa": true,
+            "automatica": true,
+            "intervalo_s": 60,
             "modo_so": "falso",
             "modelo": true,
             "puente_mcp": true,

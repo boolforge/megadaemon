@@ -255,6 +255,88 @@ pub fn sincronizar_puente_mcp() -> Result<Value, String> {
     }))
 }
 
+/// **Revisión BARATA**: qué piezas NO están en su sitio.
+///
+/// Sólo mira metadatos y ficheros pequeños: nunca hashea el `.so` de 181 MB.
+/// Es lo que hace el ciclo automático (cada minuto) sin coste.
+pub fn revision_cheap() -> Vec<String> {
+    let mut faltan: Vec<String> = Vec::new();
+    let modo = modo_so();
+    if modo == "falso" {
+        if !crate::antigravity_fake_so::instalado_cheap() {
+            faltan.push("so".to_string());
+        }
+    } else if modo == "in situ" {
+        let e = crate::antigravity_endpoint::estado();
+        if !e
+            .get("aplicado")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            faltan.push("so".to_string());
+        }
+    }
+    if on("puente_mcp", true) {
+        let p = puente_mcp_estado();
+        let existe = p.get("existe").and_then(|v| v.as_bool()).unwrap_or(false);
+        let al_dia = p.get("token_al_dia").and_then(|v| v.as_bool()).unwrap_or(false);
+        if existe && !al_dia {
+            faltan.push("puente_mcp".to_string());
+        }
+    }
+    if on("modelo", true) && proceso_vivo("com.agy") {
+        let m = crate::antigravity_model::integracion_estado();
+        if !m
+            .get("registrado")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            faltan.push("modelo".to_string());
+        }
+    }
+    faltan
+}
+
+/// **Ciclo automático**: comprueba cada `intervalo_s` y re-instrumenta lo que
+/// falte.
+///
+/// Éste es el motivo de que la instrumentación sea "automática y total": si
+/// Antigravity restaura su `.so` (al reinstalarse, al actualizarse o al
+/// detectar la manipulación), el daemon vuelve a poner el suyo sin que nadie
+/// toque nada.  Es idempotente y barato: en el caso normal no hace nada.
+pub fn bucle_automatico(puerto: u16) {
+    let intervalo = crate::config_efectiva::u64_de(
+        "instrumentacion_agy.intervalo_s",
+        60,
+    )
+    .clamp(15, 3600);
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(intervalo));
+        if !on("automatica", true) {
+            continue;
+        }
+        let faltan = revision_cheap();
+        if faltan.is_empty() {
+            continue;
+        }
+        eprintln!(
+            "instrumentación AGY: faltan {} → se aplica",
+            faltan.join(", ")
+        );
+        let r = aplicar(puerto, true);
+        let piezas = r
+            .get("piezas")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        for p in piezas {
+            let estado = p.get("estado").and_then(|v| v.as_str()).unwrap_or("?");
+            let pieza = p.get("pieza").and_then(|v| v.as_str()).unwrap_or("?");
+            eprintln!("instrumentación AGY: {pieza} → {estado}");
+        }
+    }
+}
+
 /// **Aplica** la instrumentación según la configuración.
 ///
 /// Devuelve un informe por pieza: `aplicado` (lo estaba), `aplicado_ahora`
@@ -303,13 +385,23 @@ pub fn aplicar(puerto: u16, confirmar: bool) -> Value {
 
     // --- 2) MegaDaemon como modelo -----------------------------------
     if on("modelo", true) {
-        match crate::antigravity_model::integrar(confirmar) {
-            Ok(v) => piezas.push(json!({
-                "pieza": "modelo", "estado": "aplicado_ahora", "detalle": v,
-            })),
-            Err(e) => piezas.push(json!({
-                "pieza": "modelo", "estado": "fallo", "detalle": e,
-            })),
+        if !proceso_vivo("com.agy") {
+            // La app no esta en marcha: el registro se hace por RPC contra
+            // su language server, asi que se APLAZA (no es un fallo: el
+            // ciclo automatico lo hara cuando arranque).
+            piezas.push(json!({
+                "pieza": "modelo", "estado": "aplazado",
+                "detalle": "Antigravity no esta en marcha; se registrara cuando arranque",
+            }));
+        } else {
+            match crate::antigravity_model::integrar(confirmar) {
+                Ok(v) => piezas.push(json!({
+                    "pieza": "modelo", "estado": "aplicado_ahora", "detalle": v,
+                })),
+                Err(e) => piezas.push(json!({
+                    "pieza": "modelo", "estado": "fallo", "detalle": e,
+                })),
+            }
         }
     } else {
         piezas.push(json!({

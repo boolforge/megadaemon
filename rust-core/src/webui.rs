@@ -4633,7 +4633,6 @@ pub fn backups_view() -> Value {
         "inventario": inventario_backups(),
         "jobs": jobs_recientes(),
         "config": crate::config_efectiva::valor("drive"),
-        "config": crate::config_efectiva::valor("drive"),
     })
 }
 

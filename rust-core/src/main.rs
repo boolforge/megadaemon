@@ -169,6 +169,32 @@ fn main() {
                 if let Err(e) = megadaemon_core::antigravity_clone::unificar_runtime() {
                     eprintln!("antigravity: runtime no unificado: {e}");
                 }
+                // v19: la instrumentacion de Antigravity es AUTOMATICA.
+                // El daemon comprueba cada minuto (barato: metadatos, no
+                // hashes de 181 MB) y vuelve a instrumentar lo que falte:
+                // si la app restaura su `.so`, se repone sin que nadie toque
+                // nada.  Es lo que faltaba para que "arrancar Antigravity"
+                // se notase (queja del usuario, 2026-11-23).
+                if megadaemon_core::config_efectiva::bool_de(
+                    "instrumentacion_agy.automatica",
+                    true,
+                ) {
+                    let puerto = megadaemon_core::config_efectiva::u64_de(
+                        "general.puerto_gateway",
+                        9090,
+                    ) as u16;
+                    std::thread::Builder::new()
+                        .name("instrumentacion-agy".to_string())
+                        .spawn(move || {
+                            megadaemon_core::instrumentacion_agy::bucle_automatico(puerto)
+                        })
+                        .map(|_| {
+                            eprintln!("instrumentación AGY: ciclo automático cada 60 s (configurable)");
+                        })
+                        .map_err(|e| {
+                            eprintln!("instrumentación AGY: no se pudo arrancar el ciclo: {e}");
+                        });
+                }
             }
             if let Err(e) = cockpit_server::run_server(port) {
                 eprintln!("Cockpit server error: {}", e);

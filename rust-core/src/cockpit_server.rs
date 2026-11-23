@@ -263,6 +263,7 @@ fn requires_auth(path: &str, _method: &str, local_browser: bool) -> bool {
     // v15 (W1): la página, su CSS y `/channel.json` (público, payload
     // mínimo: URLs del canal + ts; ni credenciales ni IP ni pids).
     if path == "/" || path == "/index.html" || path == "/v2" || path == "/ui"
+        || path == "/legacy" || path == "/v1"
         || path == "/webui_v2.css"
         || path == "/channel.json"
     {
@@ -340,6 +341,46 @@ pub fn channel_public_payload(v: &Value) -> Value {
 ///   3. <dir del binario>/web/cockpit_template.html
 ///   4. ./web/cockpit_template.html
 ///   5. el path de Android de siempre
+/// Plantilla del cockpit **V2** (la buena): nodos, tablero, RE, reparto,
+/// enjambre, logs y configuracion.
+///
+/// MEDIDO (2026-11-23, queja del usuario): el movil servia la V1
+/// (`cockpit_template.html`), que tiene 7 vistas y **no tiene ni nodos ni
+/// logs ni configuracion** => "la web UI es lo peor del proyecto".  La V2
+/// tiene 12 vistas y es la que hay que servir.
+///
+/// Se resuelve aparte de la V1 para poder dejar la V1 en `/legacy` (no se
+/// pierde nada) y para que el health diga que UI se esta sirviendo.
+pub fn resolve_template_v2() -> Option<String> {
+    let mut cands: Vec<String> = Vec::new();
+    if let Ok(p) = std::env::var("MEGADAEMON_WEB_TEMPLATE_V2") {
+        cands.push(p);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            cands.push(dir.join("../../web/cockpit_v2.html").to_string_lossy().into());
+            cands.push(dir.join("../web/cockpit_v2.html").to_string_lossy().into());
+            cands.push(dir.join("web/cockpit_v2.html").to_string_lossy().into());
+        }
+    }
+    cands.push("web/cockpit_v2.html".to_string());
+    cands.push("../web/cockpit_v2.html".to_string());
+    cands.push(format!("{}/web/cockpit_v2.html", instance_dir()));
+    for c in cands {
+        if Path::new(&c).exists() {
+            return Some(c);
+        }
+    }
+    None
+}
+
+/// Plantilla HTML embebida del cockpit V2.
+pub const EMBEDDED_V2_HTML: &str = include_str!("../../web/cockpit_v2.html");
+
+/// Ruta del template de la UI LEGACY (v1), que se sirve en `/legacy`.
+///
+/// MEDIDO (2026-11-23): se conserva porque tiene vistas que la V2 aun no
+/// tiene (inspect, npu, swarm, vram) y la pagina de chat del agente.
 pub fn resolve_template() -> Option<String> {
     let mut cands: Vec<String> = Vec::new();
     if let Ok(p) = std::env::var("MEGADAEMON_WEB_TEMPLATE") {
@@ -366,18 +407,6 @@ pub fn resolve_template() -> Option<String> {
     None
 }
 
-/// Plantilla HTML embebida en el binario.
-///
-/// BUG v13.4 (AUDIT-WEB-01): la UI "no funcionaba" en el PC del usuario
-/// (localhost:3000) porque `resolve_template()` sólo miraba en disco y el
-/// binario del PC no tenía `web/` al lado.  Con el `include_str!` el binario
-/// es autosuficiente en cualquier plataforma; el fichero en disco sigue
-/// teniendo prioridad para poder parchear la UI sin recompilar.
-pub const EMBEDDED_TEMPLATE: &str = include_str!("../../web/cockpit_template.html");
-
-/// v15 (W1): la UI v2 (`web/cockpit_v2.html` + `web/webui_v2.css`) embebida,
-/// para que el binario sea autosuficiente como la v1 (el móvil no tiene assets).
-pub const EMBEDDED_V2_HTML: &str = include_str!("../../web/cockpit_v2.html");
 pub const EMBEDDED_V2_CSS: &str = include_str!("../../web/webui_v2.css");
 
 /// Ruta del HTML de la UI v2 **desplegado en disco** (si existe).
@@ -457,13 +486,18 @@ pub fn local_ips() -> Vec<String> {
 /// escucha, qué puertos están vivos, qué plantilla se sirve, si el token
 /// está materializado y qué URLs exactas hay que abrir.
 pub fn web_diagnostics() -> Value {
-    let template_path = resolve_template();
-    let template_source = if template_path.is_some() {
-        "file"
-    } else if EMBEDDED_TEMPLATE.trim().is_empty() {
+    // MEDIDO (2026-11-23): el movil servia la V1 (7 vistas, sin nodos ni
+    // logs ni configuracion).  Ahora se sirve la V2 (12 vistas) y la V1
+    // queda en `/legacy`.  El health lo dice explicitamente.
+    let template_path = resolve_template_v2().or_else(resolve_template);
+    let template_source = if resolve_template_v2().is_some() {
+        "file:v2"
+    } else if template_path.is_some() {
+        "file:v1"
+    } else if EMBEDDED_V2_HTML.trim().is_empty() {
         "NINGUNA"
     } else {
-        "embedded"
+        "embedded:v2"
     };
     let template_bytes = template_path
         .as_ref()
@@ -1263,10 +1297,34 @@ fn handle_client(mut stream: TcpStream) {
             return;
         }
         match path {
-            "/" | "/index.html" => {
+            "/legacy" | "/v1" => {
+                // La UI V1 (7 vistas) se conserva aqui: tiene vistas que la V2
+                // aun no tiene (inspect, npu, swarm, vram) y la pagina de
+                // chat del agente.
                 let html = resolve_template()
                     .and_then(|p| fs::read(&p).ok())
                     .unwrap_or_else(|| EMBEDDED_TEMPLATE.as_bytes().to_vec());
+                let html = String::from_utf8_lossy(&html).into_owned();
+                send_http_response(
+                    &mut stream,
+                    200,
+                    "text/html; charset=utf-8",
+                    html.as_bytes(),
+                );
+            }
+            "/" | "/index.html" => {
+                // MEDIDO (2026-11-23): se sirve el cockpit **V2** (12 vistas:
+                // nodos, tablero, RE, reparto, enjambre, logs, configuracion).
+                // Antes se servia la V1 (7 vistas, sin nodos ni logs ni
+                // configuracion) => "la web UI es lo peor del proyecto".
+                // La V1 no se pierde: queda en `/legacy`.
+                let html = resolve_template_v2()
+                    .and_then(|p| fs::read(&p).ok())
+                    .or_else(|| {
+                        resolve_template()
+                            .and_then(|p| fs::read(&p).ok())
+                    })
+                    .unwrap_or_else(|| EMBEDDED_V2_HTML.as_bytes().to_vec());
                 // BUG v13.4 (AUDIT-WEB-06 · SEGURIDAD): la página pública
                 // llevaba el token de sesión INCRUSTADO.  Con `GET /` público
                 // (necesario para que el navegador pueda abrir la UI) eso
