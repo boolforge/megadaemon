@@ -492,7 +492,22 @@ pub fn procesar(metodo: &str, ruta: &str, cuerpo: &str) -> (u16, String) {
     registrar(&Entrada {
         ts: ahora(),
         metodo: metodo.to_string(),
-        ruta: ruta.to_string(),
+        // MEDIDO (2026-11-23, auditoría de calidad): la RUTA se guardaba en
+        // claro mientras que el cuerpo y la respuesta pasaban por el
+        // redactor.  La ruta de una llamada a la API puede llevar la
+        // credencial (los proveedores la ponen en la query: `?key=...`,
+        // `?api_key=...`) ⇒ el NDJSON del shim acababa con el secreto.
+        // Ahora la ruta pasa por el MISMO redactor que el resto.
+        //
+        // ⚠️ NO VERIFICADO: el redactor actual sólo conoce los formatos
+        // "nombre: valor" (JSON) y "nombre valor"; NO cubre el formato
+        // query-string (`?key=valor`), que se queda como está.  Se deja
+        // anotado en docs/AUDITORIA-CALIDAD-2026-11-23.md.
+        ruta: if redacta {
+            redactar(ruta)
+        } else {
+            ruta.to_string()
+        },
         modelo: modelo_de(cuerpo),
         bytes_cuerpo: cuerpo.len(),
         status,
