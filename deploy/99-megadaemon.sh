@@ -16,7 +16,14 @@
 # v13.2.5 — https://github.com/boolforge/megadaemon
 # =====================================================================
 
-PREFIX=/data/local/tmp/megadaemon
+# MEDIDO (2026-11-23, movil): `/data/local/tmp` es VOLATIL: al reiniciar el
+# movil desaparece el binario => el supervisor se quedaba relanzando y
+# fallando con "no existe megadaemon-core" (sin daemon, sin tunel, sin
+# nada).  Ahora todo vive en `/data/adb/megadaemon` (persistente, root).
+PREFIX=/data/adb/megadaemon
+# Si el movil tiene el binario en la ruta antigua (instalado a mano), se
+# migra en el primer arranque.
+LEGACY_PREFIX=/data/local/tmp/megadaemon
 BIN="$PREFIX/megadaemon-core"
 # v15: binario anterior conocido-bueno (para auto-rollback si el nuevo no arranca).
 PREV_BIN="$PREFIX/megadaemon-core.prev"
@@ -38,7 +45,7 @@ fi
 # board.sqlite se dispersaban => 403 global y /channel.json sin 'quick'.
 # Sólo las variables NO secretas se exportan a los hijos: la API key se
 # exporta más abajo, sólo al daemon (igual que antes).
-export MEGADAEMON_STATE_DIR="${MEGADAEMON_STATE_DIR:-/data/local/tmp/megadaemon/state}"
+export MEGADAEMON_STATE_DIR="${MEGADAEMON_STATE_DIR:-$PREFIX/state}"
 export MEGADAEMON_LISTEN="${MEGADAEMON_LISTEN:-127.0.0.1:9090}"
 LOG=/sdcard/megadaemon.log
 LOG_DIR=/sdcard/megadaemon-logs
@@ -787,6 +794,15 @@ start_daemon() {
     # lo deja en 644), el daemon no arranca nunca y el supervisor dice
     # "no existe", que manda el diagnostico por donde no es.  Ahora se
     # AUTO-REPARA y el log dice la verdad.
+    # Migracion: si el binario esta en la ruta VOLATIL antigua (instalado
+    # a mano) y el prefijo nuevo esta vacio, se copia (el movil se reinicio
+    # y se llevo el binario).
+    if [ ! -f "$BIN" ] && [ -f "$LEGACY_PREFIX/megadaemon-core" ]; then
+        mkdir -p "$PREFIX" 2>/dev/null
+        cp -f "$LEGACY_PREFIX/megadaemon-core" "$BIN.new" 2>/dev/null && \
+            chmod 755 "$BIN.new" 2>/dev/null && mv -f "$BIN.new" "$BIN" 2>/dev/null && \
+            log "migrado el binario de $LEGACY_PREFIX a $PREFIX (ruta persistente)"
+    fi
     if [ ! -f "$BIN" ]; then
         # v15 (W5): durante una instalacion el binario puede estar AUSENTE
         # (el `mv` de megadaemon-core.new -> megadaemon-core deja una
@@ -1142,7 +1158,8 @@ try_update() {
 
 i=0
 last_update=0
-write_state "ARRANCANDO: supervisor activo, puerto $PORT"
+mkdir -p "$PREFIX" "$STATE" 2>/dev/null
+write_state "ARRANCANDO: supervisor activo, puerto $PORT (prefijo $PREFIX)"
 # Los túneles se levantan ANTES de arrancar el daemon: la URL pública (y la
 # del MCP legacy) no dependen de que el cockpit esté listo, y así el túnel
 # ya está cuando el daemon tarda unos segundos.
