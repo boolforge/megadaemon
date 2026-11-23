@@ -95,3 +95,21 @@
 | G7 | **Cerrar el `verified: false`** de las 6 plataformas (ps1 14.494 func, saturn 0, pce 0, msx2 256 paletas, pc88 7 ports, segacd 53.110) | ⏳ | el motor declara mucho y **no ha verificado nada** |
 | G8 | **Rotar el bearer de Google en claro** de `agy_standalone/probe.log` | ⛔ | requisito previo al catch-up de `task_553653` (`bootstrap_core.sh` escribe ahí) |
 | G9 | **Bajar la carga del móvil** antes de reactivar el bucle de 300 s | ⏳ | medido: `MemFree` 466 MB, swap 3.341/4.095 MB, load 22 ⇒ el ciclo es un trabajo pesado |
+
+## H. El agente DENTRO de MegaDaemon — API + interfaz (2026-11-23)
+
+> Puesto por el jefe el 2026-11-23 («no usas el sistema de MegaDaemon … te
+> integras dentro de mi software para poder usarte con la API … con un GUI o
+> interfaz web … podrías fusionarte con una copia del GUI de Antigravity»).
+> Detalle, riesgos y puertas de aceptación: `docs/BACKLOG_AGENTE_EN_MEGADAEMON.md`.
+> **Esta lista NO sustituye a la tarea principal** (auditoría de chat/LLM:
+> `docs/AUDIT_LLM_V16.md`).
+
+| # | idea | estado | detalle |
+|---|---|---|---|
+| H1 | Poder usar al agente con la **API de MegaDaemon** | ✅ la API ya está | `POST /v1/chat/completions` cableado (`rust-core/src/cockpit_server.rs:1378`) + dialecto Gemini `/v1internal:*` (`:1416`) + `/api/chat` (`:2292`) |
+| H2 | Una **interfaz** (web o GUI) para hablar con el agente | ⏳ | `rust-core/src/webui.rs` no tiene página de chat con el agente: hoy hay que usar `curl` |
+| H3 | **Fusionarse con una copia del GUI de Antigravity** | ⏳ | el cliente está en `core/*.py` (**Python**) y el móvil NO tiene `python3` ni `node` (medido: `docs/SOFTWARE_INSTALLED.md`) ⇒ hay que portarlo a Rust y hacerlo hablar con `/v1/chat/completions` |
+| H4 | Que el agente trabaje **por** el daemon (tools MCP propias) | ⏳ | board/bus/backup/automation como herramientas del daemon, no scripts sueltos |
+| H5 | Que la interfaz explique **por qué** no hubo respuesta | ✅/⏳ | el veto de presupuesto ya está en el camino del chat; falta que la UI muestre el `reason` del `provider_trace` |
+| H6 | **Gasto de pago visible** en la traza del proveedor | ✅ | la traza dice ahora `p => OK (tier paid)` (DEFECTO-18 de `docs/AUDIT_LLM_V16.md`) |
