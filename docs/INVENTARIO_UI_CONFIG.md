@@ -211,6 +211,34 @@ código tras los cambios:
 rutas v2: 52 | sin llamada: 0
 ```
 
+## 9. Bugs reales encontrados al conectar la UI con el daemon (2026-11-23)
+
+Todos estos se **midieron en el móvil** (no son hipótesis):
+
+| # | Síntoma en la UI | Causa real | Arreglo |
+|---|---|---|---|
+| 1 | «Bus de coordinación no desplegado» en todas las instancias | `Mesh::attach` **no lo llamaba nadie**: el fichero `mesh_board.json` no se creaba nunca | `mesh::desplegar_bus()` al arrancar + latido cada 45 s (`30d5cf6`) |
+| 2 | «Sin instancias conectadas» | el tablero del bus es un fichero LOCAL (sólo se comparte si comparten state dir); la vía real es el tablón de Drive | la vista de nodos lista también los **anunciados en Drive** |
+| 3 | «Sin cuentas / No hay cuentas de proveedor cargadas» | la vista leía `delegate_state.json`, un fichero que nadie crea; las cuentas reales están en el **vault de proveedores** | la vista muestra el vault (14 cuentas reales) |
+| 4 | El gasto no se analizaba por proveedor (MiniMax, Google…) | el gasto vivía **sólo en memoria** (`DailyBudgetState`): se perdía al reiniciar y no había desglose | `spend_ledger.json` persistente + informe por proveedor (`33c2fae`) |
+| 5 | La instrumentación decía «fallo» cada minuto | se leía la clave equivocada del estado (`registrado` en vez de `modelo_registrado.ok`) y la app cerrada se contaba como fallo | `estado_modelo()` ⇒ (registrado, puente_caido): con la app cerrada es **aplazado**, no fallo (`1dadeb8`) |
+| 6 | `activar` fallaba con «sin_cambios» | el `.so` **ya** llevaba la URL local y se re-hacía el trabajo | `ya_tiene_url()` + `activar` idempotente (`79a9ac9`) |
+| 7 | «leer .../runtime/bin/liblanguage_server.so: No such file or directory» | **Antigravity se actualizó y movió su runtime** (`standalone_runtime/bin/language_server`; el symlink de `agy_standalone` quedó roto) | `ruta_ls()` descubre el binario en vez de hardcodearlo (`8597320`, `30d5cf6`) |
+| 8 | La app «restauraba» su runtime y se perdía la instrumentación | el manifiesto declaraba el sha del `.so` original ⇒ la app lo reponía | el manifiesto se actualiza con el sha del falso, en **todas** las claves que hablen de «language_server» |
+| 9 | El móvil no se anunciaba en el tablón (nadie lo encontraba) | el supervisor escribe la URL en `$PREFIX/tunnel.url` y el daemon la buscaba en `$STATE_DIR/tunnel.url` | se miran los dos sitios (`36301fd`) |
+| 10 | `/health` decía `file:v1` mientras servía la V2 embebida | el diagnóstico miraba «qué fichero existe», no «qué se sirve» | el diagnóstico reproduce el orden real de resolución (`b6972eb`) |
+
+**Estado medido en el móvil tras los arreglos** (build `30d5cf6`):
+
+```
+/health              → 200, ui_servida=v2, template_source=embedded:v2
+nodos/detalle        → 1 nodo (el local, master, vivo)
+instrumentacion      → agy_vivo=true, so aplicado, puente_mcp al día
+language_server      → contiene 127.0.0.1:9090 (el tráfico va a MegaDaemon)
+original + falso     → en el state dir del daemon (181.358.800 B cada uno)
+ciclo automático     → 315 B de log en 90 s (NO hay bucle)
+```
+
 ### Lo que queda (aún NO hecho, con honestidad)
 
 | Hueco | Por qué sigue abierto |
@@ -219,6 +247,8 @@ rutas v2: 52 | sin llamada: 0
 | `/api/v2/devlog` | `/api/devlog` existe y sirve `devlog.json`; no se ha expuesto en la v2 ni pintado en la UI (el contenido del devlog son eventos de desarrollo, no de operación). |
 | Editar la configuración **del supervisor** desde la UI | Deliberado: si el supervisor se rompe, el móvil no vuelve. Se edita a mano y se verifica. |
 | Ghidra (el motor RE) en el móvil | Necesita JDK 21 y GB de RAM: el móvil tiene ~4 GB. La UI muestra su progreso; la ejecución es del PC. |
+| Las **320 funciones** que Ghidra no convierte | Son las de ensamblador de Go (`.s`: `cmpbody`, `crosscall2_trampoline`…) y unas pocas de la stdlib. Ghidra las procesa pero no produce pseudocódigo: se registran como «sin pseudocódigo» en `NO-DECOMPIADAS.tsv`. |
+| El **MITM de la DB** de Antigravity | Desactivado por defecto en la configuración (`mitm_db: false`): toca el fichero de la app. Se activa desde la UI o desde `config.json` cuando se quiere. |
 
 ---
 
