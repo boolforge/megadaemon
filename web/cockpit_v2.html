@@ -1167,6 +1167,14 @@ function esc(v) {
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
+/** Temperatura con UNA decimal: el f32 de Rust llega como 32.200000762. */
+function tempC(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  const n = Number(v);
+  if (!isFinite(n)) return "—";
+  return (Math.round(n * 10) / 10).toString() + " °C";
+}
+
 function fmtBytes(n) {
   if (n === null || n === undefined) return "—";
   const u = ["B", "KiB", "MiB", "GiB"];
@@ -1247,7 +1255,9 @@ async function loadLogs() {
       const marca = f.existe ? (f.bytes + " B") : "sin fichero";
       return '<option value="' + esc(f.id) + '">' + esc(f.nombre) + " · " + esc(marca) + "</option>";
     }).join("");
-    const resumen = cat.resumen || [];
+    // OJO: /api/v2/logs devuelve {ok, fuentes, resumen:{ok, resumen:[...]}}
+    // (el resumen va anidado: `logs::listar` + `logs::resumen`).
+    const resumen = (cat.resumen && cat.resumen.resumen) || [];
     $('#logs-resumen').innerHTML = resumen.length
       ? resumen.map(function (r) {
           const clase = r.errores > 0 ? "stat--danger" : (r.avisos > 0 ? "stat--warn" : "");
@@ -1306,7 +1316,7 @@ async function loadConfig() {
     out.push('<div class="cfg__sec">' + esc(sec) + "</div>");
     cfgRender((data.efectiva || {})[sec], sec, data.editado || [], out);
   });
-  $('#config-form').innerHTML = out.join("");
+  $('#config-form').innerHTML = '<div class="cfg">' + out.join("") + "</div>";
   $('#config-sub').textContent = (data.editado || []).length + " claves editadas · " + data.ruta;
   $('#config-estado').innerHTML = '<div class="notice"><div><div class="notice__title">' +
     esc(data.existe ? "Fichero de configuración" : "Sin fichero todavía (se usan los valores de fábrica)") +
@@ -1710,6 +1720,14 @@ async function ensureSession() {
  */
 async function apiCall(path, fn) {
   let res = await fn();
+  // MEDIDO (2026-11-23): el daemon reinició (build nuevo) ⇒ el token de
+  // sesión caducó y el gateway responde **403** (no 401): «falta la cabecera
+  // X-Seere-Auth-Token».  La UI sólo se recuperaba de un 401 ⇒ se quedaba
+  // muerta con un error en cada vista.
+  //
+  // Ahora: 401 sin sesión ⇒ se pide la clave; 401/403 con sesión ⇒ se
+  // re-canjea la clave que ya tenemos (transparente para el usuario) y se
+  // reintenta UNA vez.
   if (res.status === 401 && !state.keyAsked && !hasSession()) {
     state.keyAsked = true;
     const key = await askApiKey();
@@ -1719,6 +1737,11 @@ async function apiCall(path, fn) {
     } else {
       state.keyFailed = true;
     }
+  } else if ((res.status === 401 || res.status === 403) && state.apiKey && !state.retrying) {
+    state.retrying = true;
+    const ok = await exchangeToken(state.apiKey);
+    state.retrying = false;
+    if (ok) res = await fn();
   }
   let body = null;
   try { body = await res.json(); } catch (e) { body = null; }
@@ -1919,7 +1942,7 @@ async function loadResumen() {
     { label: "CPU", value: pct((d.system || {}).cpu_pct), meta: "muestra de 120 ms", cls: "stat--info" },
     { label: "RAM usada", value: pct((((d.system || {}).mem) || {}).used_pct), meta: fmtBytes((((d.system || {}).mem) || {}).used_kb * 1024) + " / " + fmtBytes((((d.system || {}).mem) || {}).total_kb * 1024), cls: "" },
     { label: "Batería", value: (d.power && d.power.capacity_pct !== null && d.power.capacity_pct !== undefined) ? d.power.capacity_pct + " %" : "—", meta: d.power && d.power.charging ? "cargando" : "sin cargador", cls: (d.power && d.power.capacity_pct < 20) ? "stat--warn" : "stat--accent" },
-    { label: "Temperatura", value: (d.power && d.power.battery_temp_c !== null && d.power.battery_temp_c !== undefined) ? d.power.battery_temp_c + " °C" : "—", meta: d.power && d.power.thermal_hot ? "térmico alta" : "CPU " + ((d.power && d.power.cpu_temp_c) || "—") + " °C", cls: (d.power && d.power.thermal_hot) ? "stat--danger" : "" },
+    { label: "Temperatura", value: (d.power && d.power.battery_temp_c !== null && d.power.battery_temp_c !== undefined) ? tempC(d.power.battery_temp_c) : "—", meta: d.power && d.power.thermal_hot ? "térmico alta" : "CPU " + tempC((d.power && d.power.cpu_temp_c)) , cls: (d.power && d.power.thermal_hot) ? "stat--danger" : "" },
     { label: "NPU", value: (d.npu && d.npu.offload_implemented) ? "activa" : "sin offload", meta: (d.npu && d.npu.soc) || "—", cls: (d.npu && d.npu.offload_implemented) ? "stat--accent" : "" },
     { label: "Alertas", value: (d.alerts && d.alerts.active) || 0, meta: ((d.alerts && d.alerts.crit) || 0) + " crit · " + ((d.alerts && d.alerts.warn) || 0) + " warn", cls: ((d.alerts && d.alerts.crit) || 0) > 0 ? "stat--danger" : "" },
     { label: "Cola", value: (d.queue && d.queue.total) || 0, meta: Object.keys((d.queue && d.queue.by_state) || {}).map(function (k) { return k + ":" + d.queue.by_state[k]; }).join(" "), cls: "stat--info" },
@@ -2835,11 +2858,30 @@ async function instrumentacionAccion(accion) {
 }
 
 async function loadAntigravity() {
-  const d = await apiCall("/api/v2/antigravity", () => fetch("/api/v2/antigravity", { cache: "no-store", headers: authHeaders() }));
-  state.data.antigravity = d;
-  const inst = await apiCall("/api/v2/instrumentacion", () => fetch("/api/v2/instrumentacion", { cache: "no-store", headers: authHeaders() }));
+  // MEDIDO (2026-11-23): si UNA llamada falla (p.ej. el language server de
+  // Antigravity está parado ⇒ /api/v2/antigravity da error), la vista se
+  // quedaba COMPLETAMENTE VACÍA.  Ahora cada bloque va por separado: lo
+  // que funciona se muestra y lo que no, dice por qué.
+  const inst = await apiCall("/api/v2/instrumentacion", () => fetch("/api/v2/instrumentacion", { cache: "no-store", headers: authHeaders() }))
+    .catch(function (e) {
+      const el = $("#agy-instrumentacion");
+      if (el) el.innerHTML = '<div class="notice notice--danger"><div>' + esc(String(e && e.message || e)) + "</div></div>";
+      return null;
+    });
   state.data.instrumentacion = inst;
-  paintInstrumentacion(inst);
+  if (inst) paintInstrumentacion(inst);
+
+  const d = await apiCall("/api/v2/antigravity", () => fetch("/api/v2/antigravity", { cache: "no-store", headers: authHeaders() }))
+    .catch(function (e) {
+      const msg = String(e && e.message || e);
+      ["#agy-overview", "#agy-models", "#agy-conversations", "#agy-conversation"].forEach(function (sel) {
+        const el = $(sel);
+        if (el) el.innerHTML = '<div class="notice notice--warn"><div><div class="notice__title">Antigravity no responde</div><div>' + esc(msg) + "</div></div></div>";
+      });
+      return null;
+    });
+  if (!d) return;
+  state.data.antigravity = d;
   const st = d.status || {};
   const cat = d.catalog || {};
   $('#agy-stats').innerHTML = [
@@ -3534,7 +3576,7 @@ function downloadPrompt() {
 async function refreshVoice() {
   const chip = $("#chip-voz");
   try {
-    const res = await fetch("/mcp", {
+    const pedir = () => fetch("/mcp", {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
@@ -3542,6 +3584,12 @@ async function refreshVoice() {
         params: { name: "megadaemon_voice", arguments: { action: "status" } }
       })
     });
+    let res = await pedir();
+    // El token de sesión caduca cuando el daemon reinicia: el MCP responde
+    // 403.  Se re-canjea la clave y se reintenta una vez.
+    if ((res.status === 401 || res.status === 403) && state.apiKey) {
+      if (await exchangeToken(state.apiKey)) res = await pedir();
+    }
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
     const sc = (data.result && data.result.structuredContent) || null;
