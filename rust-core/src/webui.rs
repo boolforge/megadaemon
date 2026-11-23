@@ -104,6 +104,13 @@ pub fn api_v2_routes() -> Vec<(&'static str, &'static str)> {
         ("POST", "/api/v2/admin/install_apk"),
         ("POST", "/api/v2/admin/shell"),
         ("GET", "/api/v2/routes"),
+        ("GET", "/api/v2/antigravity"),
+        ("GET", "/api/v2/antigravity/models"),
+        ("GET", "/api/v2/antigravity/conversations"),
+        ("GET", "/api/v2/antigravity/search"),
+        ("GET", "/api/v2/antigravity/conversation"),
+        ("GET", "/api/v2/antigravity/tasks"),
+        ("POST", "/api/v2/antigravity/enqueue"),
     ]
 }
 
@@ -145,6 +152,13 @@ fn route_descriptions() -> Vec<(&'static str, &'static str, &'static str)> {
         ("POST", "/api/v2/admin/install_apk", "Instala un APK en el dispositivo con root (pm install -r). Exige confirm:true."),
         ("POST", "/api/v2/admin/shell", "Ejecuta una orden con root en el dispositivo. Exige confirm:true; queda auditada."),
         ("GET", "/api/v2/routes", "Tabla de rutas v2 autogenerada + política de auth (la UI se valida contra esto)."),
+        ("GET", "/api/v2/antigravity", "Antigravity (motor agéntico del móvil): estado del language server, sesión de Google, catálogo real de modelos y cola de tareas. 1 fetch por vista."),
+        ("GET", "/api/v2/antigravity/models", "Catálogo REAL de modelos de Antigravity: id real, id ofuscado (MODEL_PLACEHOLDER_*), proveedor, cuota y tokens."),
+        ("GET", "/api/v2/antigravity/conversations", "Conversaciones (cascadas) del agente de Antigravity: id, título, estado, pasos y workspaces."),
+        ("GET", "/api/v2/antigravity/search", "Busca en las conversaciones de Antigravity. Parámetro ?q= (obligatorio) y &limit=."),
+        ("GET", "/api/v2/antigravity/conversation", "Lee una conversación completa de Antigravity. Parámetro ?id= (cascadeId)."),
+        ("GET", "/api/v2/antigravity/tasks", "Cola de tareas del daemon de Antigravity (daemon/tasks.json): hooks, trigger e intervalo."),
+        ("POST", "/api/v2/antigravity/enqueue", "Encola trabajo en el agente de Antigravity (consume cuota y crea una conversación): exige confirm=true."),
         ("POST", "/api/v2/tasks/claim", "Reclama una tarea del tablero del bus bajo lock (BEGIN IMMEDIATE) con lease y rol; won=false si otro se adelantó."),
         ("POST", "/api/v2/tasks/release", "Devuelve una tarea a `queued`; sólo quien la tiene puede soltarla."),
         ("POST", "/api/v2/tasks/report", "Reporta el resultado de una tarea (hecha/fallida) con su informe."),
@@ -4047,6 +4061,220 @@ pub fn admin_restart(body: &Value) -> Value {
 ///
 /// Los errores se devuelven con `"ok": false` y un `error` legible; el
 /// servidor HTTP decide el status (401/403 los pone la capa de auth).
+// ---------------------------------------------------------------------------
+// Antigravity: el motor agéntico del móvil, desde la API de MegaDaemon
+// ---------------------------------------------------------------------------
+
+/// Configuración del puente: `127.0.0.1:45157` por defecto; se puede
+/// redirigir con `MD_ANTIGRAVITY_URL` (host:puerto) para cuando el daemon
+/// corre en otro nodo.
+fn antigravity_cfg() -> crate::antigravity_bridge::BridgeConfig {
+    let mut cfg = crate::antigravity_bridge::BridgeConfig::default();
+    if let Ok(url) = std::env::var("MD_ANTIGRAVITY_URL") {
+        let url = url.trim();
+        let (host, port) = match url.rsplit_once(':') {
+            Some((h, p)) => (h.to_string(), p.parse::<u16>().unwrap_or(cfg.port)),
+            None => (url.to_string(), cfg.port),
+        };
+        cfg.host = host;
+        cfg.port = port;
+    }
+    if let Ok(t) = std::env::var("MD_ANTIGRAVITY_TIMEOUT") {
+        if let Ok(v) = t.parse::<u64>() {
+            cfg.timeout_secs = v;
+        }
+    }
+    cfg
+}
+
+/// Abre el puente; si falla, devuelve el error como JSON (nunca panic).
+fn antigravity_bridge() -> Result<crate::antigravity_bridge::AntigravityBridge, Value> {
+    crate::antigravity_bridge::AntigravityBridge::new(&antigravity_cfg())
+        .map_err(|e| json!({ "ok": false, "error": e.to_string() }))
+}
+
+/// Panel Antigravity en un fetch: estado + catálogo + tareas.
+fn antigravity_overview() -> Value {
+    let br = match antigravity_bridge() {
+        Ok(b) => b,
+        Err(e) => return e,
+    };
+    let status = br.agent_status().unwrap_or(json!({}));
+    let raw = br.model_catalog().unwrap_or(json!({}));
+    let cat = crate::antigravity_bridge::model_catalog_from(&raw);
+    let tasks = br.tasks().unwrap_or_default();
+    json!({
+        "ok": true,
+        "status": status,
+        "models": cat.iter().map(antigravity_model_json).collect::<Vec<Value>>(),
+        "model_count": cat.len(),
+        "default_model": crate::antigravity_bridge::default_model_from(&raw),
+        "tasks": tasks.iter().map(|t| json!({
+            "id": t.id,
+            "name": t.name,
+            "trigger": t.trigger_type,
+            "interval_sec": t.interval_sec,
+            "enabled": t.enabled,
+            "last_run_status": t.last_run_status,
+        })).collect::<Vec<Value>>(),
+    })
+}
+
+/// Un modelo en JSON (mismo formato en la API, el MCP y la CLI).
+fn antigravity_model_json(m: &crate::antigravity_bridge::ModelEntry) -> Value {
+    json!({
+        "id": m.id,
+        "display_name": m.display_name,
+        "placeholder": m.placeholder,
+        "provider": m.provider,
+        "api_provider": m.api_provider,
+        "vertex_model_id": m.vertex_model_id,
+        "recommended": m.recommended,
+        "supports_images": m.supports_images,
+        "supports_thinking": m.supports_thinking,
+        "max_tokens": m.max_tokens,
+        "max_output_tokens": m.max_output_tokens,
+        "quota_remaining_fraction": m.quota_remaining_fraction,
+        "quota_reset_time": m.quota_reset_time,
+    })
+}
+
+/// Catálogo real de modelos.
+fn antigravity_models() -> Value {
+    let br = match antigravity_bridge() {
+        Ok(b) => b,
+        Err(e) => return e,
+    };
+    let raw = match br.model_catalog() {
+        Ok(r) => r,
+        Err(e) => return json!({ "ok": false, "error": e.to_string() }),
+    };
+    let cat = crate::antigravity_bridge::model_catalog_from(&raw);
+    json!({
+        "ok": true,
+        "models": cat.iter().map(antigravity_model_json).collect::<Vec<Value>>(),
+        "model_count": cat.len(),
+        "default_model": crate::antigravity_bridge::default_model_from(&raw),
+    })
+}
+
+/// Conversaciones del agente de Antigravity.
+fn antigravity_conversations() -> Value {
+    let br = match antigravity_bridge() {
+        Ok(b) => b,
+        Err(e) => return e,
+    };
+    let convs = match br.conversations() {
+        Ok(c) => c,
+        Err(e) => return json!({ "ok": false, "error": e.to_string() }),
+    };
+    json!({
+        "ok": true,
+        "conversations": convs.iter().map(|c| json!({
+            "cascade_id": c.cascade_id,
+            "title": c.title,
+            "trajectory_id": c.trajectory_id,
+            "status": c.status,
+            "step_count": c.step_count,
+            "last_modified": c.last_modified,
+            "workspaces": c.workspaces,
+        })).collect::<Vec<Value>>(),
+        "count": convs.len(),
+    })
+}
+
+/// Búsqueda en las conversaciones.
+fn antigravity_search(q: &str, limit: u32) -> Value {
+    if q.trim().is_empty() {
+        return json!({ "ok": false, "error": "falta el parámetro q" });
+    }
+    let br = match antigravity_bridge() {
+        Ok(b) => b,
+        Err(e) => return e,
+    };
+    match br.search(q, limit) {
+        Ok(v) => json!({ "ok": true, "results": v.get("results").cloned().unwrap_or(json!([])) }),
+        Err(e) => json!({ "ok": false, "error": e.to_string() }),
+    }
+}
+
+/// Una conversación completa (pasos resumidos).
+fn antigravity_conversation(id: &str) -> Value {
+    if id.trim().is_empty() {
+        return json!({ "ok": false, "error": "falta el parámetro id" });
+    }
+    let br = match antigravity_bridge() {
+        Ok(b) => b,
+        Err(e) => return e,
+    };
+    match br.conversation(id) {
+        Ok(t) => {
+            let steps = crate::antigravity_bridge::step_summaries_from(&t);
+            json!({
+                "ok": true,
+                "cascade_id": t.pointer("/trajectory/cascadeId").and_then(|x| x.as_str()).unwrap_or(id),
+                "status": t.get("status").and_then(|x| x.as_str()).unwrap_or(""),
+                "num_total_steps": t.get("numTotalSteps").and_then(|x| x.as_u64()).unwrap_or(0),
+                "steps": steps.iter().map(|s| json!({
+                    "kind": s.kind, "status": s.status, "text": s.text, "error": s.error
+                })).collect::<Vec<Value>>(),
+            })
+        }
+        Err(e) => json!({ "ok": false, "error": e.to_string() }),
+    }
+}
+
+/// Cola de tareas del daemon de Antigravity.
+fn antigravity_tasks() -> Value {
+    let br = match antigravity_bridge() {
+        Ok(b) => b,
+        Err(e) => return e,
+    };
+    match br.tasks() {
+        Ok(tasks) => json!({
+            "ok": true,
+            "tasks": tasks.iter().map(|t| json!({
+                "id": t.id,
+                "name": t.name,
+                "trigger": t.trigger_type,
+                "interval_sec": t.interval_sec,
+                "enabled": t.enabled,
+                "command_preview": t.command_preview,
+                "last_run_status": t.last_run_status,
+                "last_run_duration": t.last_run_duration,
+            })).collect::<Vec<Value>>(),
+            "count": tasks.len(),
+        }),
+        Err(e) => json!({ "ok": false, "error": e.to_string() }),
+    }
+}
+
+/// Encola trabajo en el agente de Antigravity.
+///
+/// Modifica el estado de la cuenta del usuario (crea una conversación y
+/// consume cuota) ⇒ exige `confirm=true`, como el resto de acciones que
+/// escriben en el dispositivo.
+fn antigravity_enqueue(prompt: &str, workspaces: &[String], confirm: bool) -> Value {
+    if prompt.trim().is_empty() {
+        return json!({ "ok": false, "error": "falta prompt" });
+    }
+    if !confirm {
+        return json!({
+            "ok": false,
+            "error": "antigravity enqueue exige confirm=true",
+            "hint": "encola trabajo real en el agente de Antigravity (consume cuota y crea una conversación)",
+        });
+    }
+    let br = match antigravity_bridge() {
+        Ok(b) => b,
+        Err(e) => return e,
+    };
+    match br.enqueue(prompt, workspaces) {
+        Ok(cid) => json!({ "ok": true, "cascade_id": cid, "model": br.model() }),
+        Err(e) => json!({ "ok": false, "error": e.to_string() }),
+    }
+}
+
 pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
     let (route, query) = split_query(path);
     let m = method.to_ascii_uppercase();
@@ -4079,6 +4307,21 @@ pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
         ("GET", "/api/v2/agentic") => agentic_loop_status(),
         ("GET", "/api/v2/share") => shared_files(),
         ("GET", "/api/v2/routes") => routes_doc(),
+        ("GET", "/api/v2/antigravity") => antigravity_overview(),
+        ("GET", "/api/v2/antigravity/models") => antigravity_models(),
+        ("GET", "/api/v2/antigravity/conversations") => antigravity_conversations(),
+        ("GET", "/api/v2/antigravity/search") => {
+            let q = query_get(query, "q").unwrap_or_default();
+            let limit = query_get(query, "limit")
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(20);
+            antigravity_search(&q, limit)
+        }
+        ("GET", "/api/v2/antigravity/conversation") => {
+            let id = query_get(query, "id").unwrap_or_default();
+            antigravity_conversation(&id)
+        }
+        ("GET", "/api/v2/antigravity/tasks") => antigravity_tasks(),
         ("GET", "/api/v2/market") => work_market(),
         ("GET", "/api/v2/mesh_findings") => mesh_findings(query),
         ("GET", "/api/v2/prompt_external") => prompt_external(false, ""),
@@ -4121,6 +4364,16 @@ pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
         ("POST", "/api/v2/admin/restart") => admin_restart(&b),
         ("POST", "/api/v2/admin/install_apk") => admin_install_apk(&b),
         ("POST", "/api/v2/admin/shell") => admin_shell(&b),
+        ("POST", "/api/v2/antigravity/enqueue") => {
+            let prompt = s("prompt");
+            let confirm = b.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false);
+            let ws: Vec<String> = b
+                .get("workspaces")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+            antigravity_enqueue(&prompt, &ws, confirm)
+        }
         ("POST", "/api/v2/delegation/apply") => {
             let adj = b.get("adjustments").cloned().unwrap_or(json!([]));
             delegation_apply(&adj)

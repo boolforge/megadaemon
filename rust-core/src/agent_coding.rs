@@ -682,6 +682,28 @@ pub fn tool_definitions() -> Value {
                     "required": ["tool_name"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "antigravity",
+                "description": "Drive the Antigravity agentic IDE running on the phone (com.agy) through its local language server (Connect RPC on 127.0.0.1:45157, self-signed TLS). Actions: status | catalog | models | conversations | search | conversation | tasks | enqueue. 'catalog'/'models' return the REAL model catalog (real id + obfuscated MODEL_PLACEHOLDER_* id). 'enqueue' asks the Antigravity agent to work on a prompt (consumes quota, creates a conversation).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["status", "catalog", "models", "conversations", "search", "conversation", "tasks", "enqueue"],
+                            "description": "Operation to run against the Antigravity language server."
+                        },
+                        "query": { "type": "string", "description": "Search text (action=search)." },
+                        "cascade_id": { "type": "string", "description": "Conversation id (action=conversation)." },
+                        "prompt": { "type": "string", "description": "Prompt to enqueue in the agent (action=enqueue)." },
+                        "limit": { "type": "integer", "description": "Max results (action=search, default 20)." }
+                    },
+                    "required": ["action"]
+                }
+            }
         }
     ])
 }
@@ -1276,6 +1298,88 @@ fn read_capped_stream<R: Read>(stream: Option<R>, cap: usize) -> (String, bool) 
     (String::from_utf8_lossy(&collected).to_string(), truncated)
 }
 
+/// Drives the Antigravity language server of the phone (see
+/// `antigravity_bridge`): same actions as the `md-antigravity` CLI and the
+/// `antigravity` MCP tool.
+pub fn tool_antigravity(args: &Value) -> Result<String, String> {
+    let cfg = crate::antigravity_bridge::BridgeConfig::default();
+    let br = crate::antigravity_bridge::AntigravityBridge::new(&cfg).map_err(|e| e.to_string())?;
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("status")
+        .to_string();
+    let sget = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let out: Value = match action.as_str() {
+        "status" => br.agent_status().map_err(|e| e.to_string())?,
+        "catalog" | "models" => {
+            let raw = br.model_catalog().map_err(|e| e.to_string())?;
+            let cat = crate::antigravity_bridge::model_catalog_from(&raw);
+            json!({
+                "models": cat.iter().map(|m| json!({
+                    "id": m.id,
+                    "display_name": m.display_name,
+                    "placeholder": m.placeholder,
+                    "provider": m.provider,
+                    "recommended": m.recommended,
+                    "max_tokens": m.max_tokens,
+                })).collect::<Vec<Value>>(),
+                "model_count": cat.len(),
+                "default_model": crate::antigravity_bridge::default_model_from(&raw),
+            })
+        }
+        "conversations" => {
+            let convs = br.conversations().map_err(|e| e.to_string())?;
+            json!({
+                "conversations": convs.iter().map(|c| json!({
+                    "cascade_id": c.cascade_id,
+                    "title": c.title,
+                    "status": c.status,
+                    "step_count": c.step_count,
+                })).collect::<Vec<Value>>(),
+                "count": convs.len(),
+            })
+        }
+        "search" => {
+            let q = sget("query");
+            if q.trim().is_empty() {
+                return Err("antigravity search: falta query".into());
+            }
+            br.search(&q, 20).map_err(|e| e.to_string())?
+        }
+        "conversation" => {
+            let id = sget("cascade_id");
+            if id.trim().is_empty() {
+                return Err("antigravity conversation: falta cascade_id".into());
+            }
+            br.conversation(&id).map_err(|e| e.to_string())?
+        }
+        "tasks" => {
+            let hooks = br.tasks().map_err(|e| e.to_string())?;
+            json!({
+                "tasks": hooks.iter().map(|h| json!({
+                    "id": h.id,
+                    "name": h.name,
+                    "trigger": h.trigger_type,
+                    "interval_sec": h.interval_sec,
+                    "enabled": h.enabled,
+                })).collect::<Vec<Value>>(),
+                "count": hooks.len(),
+            })
+        }
+        "enqueue" => {
+            let prompt = sget("prompt");
+            if prompt.trim().is_empty() {
+                return Err("antigravity enqueue: falta prompt".into());
+            }
+            let cid = br.enqueue(&prompt, &[]).map_err(|e| e.to_string())?;
+            json!({ "ok": true, "cascade_id": cid, "model": br.model() })
+        }
+        other => return Err(format!("antigravity: accion desconocida '{}'", other)),
+    };
+    serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolExecResult {
     pub ok: bool,
@@ -1335,6 +1439,7 @@ pub fn dispatch_tool(
         "search_code" => tool_search_code(workspace, allow_outside, args),
         "list_dir" => tool_list_dir(workspace, allow_outside, args),
         "run_command" => tool_run_command(workspace, allow_outside, args),
+        "antigravity" => tool_antigravity(args),
         "ast_symbols" => {
             let raw_path = args
                 .get("path")

@@ -19,6 +19,23 @@ pub fn tool_definitions() -> Value {
     // para que la CLI, el MCP y el agente hablen del mismo codigo.
     let base = json!([
         {
+            "name": "antigravity",
+            "description": "Puente contra la IDE agéntica Antigravity (com.agy) que corre en el móvil: su language server local (127.0.0.1:45157, HTTPS autofirmado) habla Connect RPC y se abre con el token CSRF que el SPA publica en window.__APP_CONFIG__.csrfToken (cabecera x-codeium-csrf-token). Acciones: status | catalog | models | conversations | search | conversation | tasks | enqueue. catalog/models devuelven el catalogo REAL de modelos con su id real y su id ofuscado (MODEL_PLACEHOLDER_*). enqueue mete trabajo en el agente de Antigravity: consume cuota y crea una conversacion, por eso exige confirm=true.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["status", "catalog", "models", "conversations", "search", "conversation", "tasks", "enqueue"], "default": "status" },
+                    "query": { "type": "string", "description": "Texto a buscar en las conversaciones (action=search)" },
+                    "cascade_id": { "type": "string", "description": "Id de la conversacion (action=conversation)" },
+                    "prompt": { "type": "string", "description": "Texto a encolar en el agente (action=enqueue)" },
+                    "workspaces": { "type": "array", "items": { "type": "string" }, "description": "URIs de workspace para el agente (opcional)" },
+                    "limit": { "type": "integer", "description": "Maximo de resultados (search, por defecto 20)" },
+                    "confirm": { "type": "boolean", "default": false }
+                },
+                "required": ["action"]
+            }
+        },
+        {
             "name": "drive_backup",
             "description": "Google Drive desde el propio MegaDaemon: sube un fichero o un directorio ENTERO (se comprime en ZIP) con subida resumible en trozos de 256 KiB, SHA-256 verificado en local y credenciales OAuth leidas del fichero 0600. Sin curl, sin dd, sin scripts: todo en Rust. Acciones: upload | download | status. Subir publica el contenido en un remoto: exige confirm=true.",
             "inputSchema": {
@@ -903,6 +920,132 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
     }
 
     let r = match name {
+        // Puente contra Antigravity (el motor agéntico del móvil).
+        // Mismas acciones que el CLI `md-antigravity`: paridad total.
+        "antigravity" => {
+            let cfg = crate::antigravity_bridge::BridgeConfig::default();
+            let br = match crate::antigravity_bridge::AntigravityBridge::new(&cfg) {
+                Ok(b) => b,
+                Err(e) => {
+                    return Some(json!({ "content": [{ "type": "text", "text": format!("antigravity: no se pudo abrir el puente: {e}") }], "isError": true }))
+                }
+            };
+            let action = {
+                let a = s("action");
+                if a.trim().is_empty() { "status".to_string() } else { a }
+            };
+            let out: Result<Value, String> = (|| {
+                match action.as_str() {
+                    "status" => br.agent_status().map_err(|e| e.to_string()),
+                    "catalog" | "models" => {
+                        let raw = br.model_catalog().map_err(|e| e.to_string())?;
+                        let models: Vec<Value> = crate::antigravity_bridge::model_catalog_from(&raw)
+                            .iter()
+                            .map(|m| json!({
+                                "id": m.id,
+                                "display_name": m.display_name,
+                                "placeholder": m.placeholder,
+                                "provider": m.provider,
+                                "api_provider": m.api_provider,
+                                "vertex_model_id": m.vertex_model_id,
+                                "recommended": m.recommended,
+                                "supports_images": m.supports_images,
+                                "supports_thinking": m.supports_thinking,
+                                "max_tokens": m.max_tokens,
+                                "max_output_tokens": m.max_output_tokens,
+                                "quota_remaining_fraction": m.quota_remaining_fraction,
+                                "quota_reset_time": m.quota_reset_time,
+                            }))
+                            .collect();
+                        let mut v = json!({
+                            "models": models,
+                            "model_count": crate::antigravity_bridge::model_catalog_from(&raw).len(),
+                            "default_model": crate::antigravity_bridge::default_model_from(&raw),
+                        });
+                        if action == "catalog" {
+                            v["mcp"] = br.tool_catalog().unwrap_or(json!({"servers": [], "tools": []}));
+                        }
+                        Ok(v)
+                    }
+                    "conversations" => {
+                        let convs = br.conversations().map_err(|e| e.to_string())?;
+                        Ok(json!({
+                            "conversations": convs.iter().map(|c| json!({
+                                "cascade_id": c.cascade_id,
+                                "title": c.title,
+                                "trajectory_id": c.trajectory_id,
+                                "status": c.status,
+                                "step_count": c.step_count,
+                                "last_modified": c.last_modified,
+                                "workspaces": c.workspaces,
+                            })).collect::<Vec<Value>>(),
+                            "count": convs.len(),
+                        }))
+                    }
+                    "search" => {
+                        let q = s("query");
+                        if q.trim().is_empty() {
+                            return Ok(json!({ "ok": false, "error": "falta query" }));
+                        }
+                        let limit = if n("limit") > 0 { n("limit") } else { 20 };
+                        br.search(&q, limit as u32).map_err(|e| e.to_string())
+                    }
+                    "conversation" => {
+                        let id = s("cascade_id");
+                        if id.trim().is_empty() {
+                            return Ok(json!({ "ok": false, "error": "falta cascade_id" }));
+                        }
+                        let t = br.conversation(&id).map_err(|e| e.to_string())?;
+                        let steps = crate::antigravity_bridge::step_summaries_from(&t);
+                        Ok(json!({
+                            "cascade_id": t.pointer("/trajectory/cascadeId").and_then(|x| x.as_str()).unwrap_or(&id),
+                            "status": t.get("status").and_then(|x| x.as_str()).unwrap_or(""),
+                            "num_total_steps": t.get("numTotalSteps").and_then(|x| x.as_u64()).unwrap_or(0),
+                            "steps": steps.iter().map(|s| json!({
+                                "kind": s.kind, "status": s.status, "text": s.text, "error": s.error
+                            })).collect::<Vec<Value>>(),
+                        }))
+                    }
+                    "tasks" => {
+                        let hooks = br.tasks().map_err(|e| e.to_string())?;
+                        Ok(json!({
+                            "tasks": hooks.iter().map(|h| json!({
+                                "id": h.id,
+                                "name": h.name,
+                                "trigger": h.trigger_type,
+                                "interval_sec": h.interval_sec,
+                                "enabled": h.enabled,
+                                "command_preview": h.command_preview,
+                                "last_run_status": h.last_run_status,
+                                "last_run_duration": h.last_run_duration,
+                            })).collect::<Vec<Value>>(),
+                            "count": hooks.len(),
+                        }))
+                    }
+                    "enqueue" => {
+                        let prompt = s("prompt");
+                        if prompt.trim().is_empty() {
+                            return Ok(json!({ "ok": false, "error": "falta prompt" }));
+                        }
+                        if !b("confirm") {
+                            return Ok(json!({
+                                "ok": false,
+                                "error": "antigravity enqueue exige confirm=true",
+                                "hint": "encola trabajo real en el agente de Antigravity del móvil (consume cuota y crea una conversacion)",
+                            }));
+                        }
+                        let ws = sa("workspaces");
+                        let cid = br.enqueue(&prompt, &ws).map_err(|e| e.to_string())?;
+                        Ok(json!({ "ok": true, "cascade_id": cid, "model": br.model() }))
+                    }
+                    other => Ok(json!({ "ok": false, "error": format!("accion desconocida: {other}") })),
+                }
+            })();
+            match out {
+                Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
+                Err(e) => json!({ "content": [{ "type": "text", "text": format!("antigravity: {e}") }], "isError": true }),
+            }
+        }
         "drive_backup" => {
             // Toda la ruta Drive del daemon (token OAuth + subida resumible)
             // vive en Rust: aqui no se shella a curl ni se invoca Python.

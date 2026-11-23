@@ -1,0 +1,108 @@
+<!-- ===========================================================================
+     PANEL ANTIGRAVITY (motor agentico del movil) para el cockpit de MegaDaemon.
+
+     QUE ES
+     -------
+     La vista "ANTIG" del cockpit web: habla con el language server de la IDE
+     agentica de Google que corre en el movil (`com.agy`) a traves de la API
+     del propio daemon (`/api/v2/antigravity*`), sin nada de Python ni Node en
+     el movil (el panel es JS puro servido por el daemon).
+
+     MEDIDO (S21 Ultra, 2026-11-22): el language server local abre con el token
+     CSRF que publica el SPA del IDE (`window.__APP_CONFIG__.csrfToken`) en la
+     cabecera `x-codeium-csrf-token`; sin ella responde 401
+     "unauthenticated: missing CSRF token". El catalogo real son 36 modelos y
+     el estado del movil guarda el id ofuscado (MODEL_PLACEHOLDER_M526 =
+     gemini-4-hydrogen-medium).
+
+     COMO SE ENCHUFA (3 pasos, sobre la plantilla vigente)
+     ----------------------------------------------------
+     1. Copiar el <section> de este fichero dentro de `<main class="views-wrap">`
+        de `web/cockpit_template.html`.
+     2. Copiar el `<button class="nav-btn">` dentro de `<nav class="bottom-nav">`.
+     3. Copiar `antigravity_panel.js` dentro del `<script>` principal y anadir
+        una linea en `switchView()`:
+            if (viewId === "view-antigravity") { loadAntigravity(); }
+
+     ESTADO: **ya aplicado** a `web/cockpit_template.html` (rama
+     `agent/antigravity-instrumentado`, commit `a997273` + el de la pagina de
+     chat). Este fichero se queda como **pieza de referencia** para reaplicarlo
+     en otra plantilla (o para rehacerlo si la plantilla se rediseña otra vez):
+     son 3 pasos y el JS no depende de nada del resto del cockpit.
+     =========================================================================== -->
+    <!-- ========================================================== -->
+    <section id="view-antigravity" class="view">
+      <div class="card">
+        <div class="section-title">
+          <span>◈ ANTIGRAVITY — MOTOR AGÉNTICO DEL MÓVIL (com.agy)</span>
+          <div class="row">
+            <button class="btn sm cyan" onclick="loadAntigravity()">SYNC</button>
+          </div>
+        </div>
+        <div class="grid-4">
+          <div class="stat-box"><div class="stat-label">Language server</div><div class="stat-val mono" id="agyLs">--</div></div>
+          <div class="stat-box"><div class="stat-label">Sesión Google</div><div class="stat-val mono" id="agyAuth">--</div></div>
+          <div class="stat-box"><div class="stat-label">Modelo en uso</div><div class="stat-val mono" id="agyModel">--</div></div>
+          <div class="stat-box"><div class="stat-label">Conversaciones</div><div class="stat-val mono" id="agyConvCount">--</div></div>
+        </div>
+        <div class="row" style="margin-top:9px;">
+          <span class="pill mono" id="agyCsrf">CSRF --</span>
+          <span class="pill mono" id="agyDefault">DEFAULT --</span>
+          <span class="pill violet mono" id="agyModelCount">MODELOS --</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><span>◈ CATÁLOGO REAL DE MODELOS</span>
+          <span class="pill" id="agyModelsInfo">--</span>
+        </div>
+        <table class="data-table mono">
+          <thead><tr><th>ID REAL</th><th>ID OFUSCADO</th><th>NOMBRE</th><th>PROVEEDOR</th><th>CUOTA</th></tr></thead>
+          <tbody id="agyModelsBody"><tr><td colspan="5" style="color:var(--ink-3)">sin datos</td></tr></tbody>
+        </table>
+        <div class="rule-why" id="agyModelsNote"></div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><span>◈ CONVERSACIONES DEL AGENTE</span>
+          <div class="row">
+            <input type="text" id="agySearchBox" placeholder="buscar en el historial" style="flex:1 1 auto;">
+            <button class="btn sm" onclick="agySearch()">BUSCAR</button>
+            <button class="btn sm ghost" onclick="agyConversations()">TODAS</button>
+          </div>
+        </div>
+        <table class="data-table mono">
+          <thead><tr><th>CASCADE ID</th><th>TÍTULO</th><th>ESTADO</th><th>PASOS</th></tr></thead>
+          <tbody id="agyConvBody"><tr><td colspan="4" style="color:var(--ink-3)">sin datos</td></tr></tbody>
+        </table>
+        <div class="rule-why" id="agyConvNote"></div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><span>◈ ENCOLAR TRABAJO EN EL AGENTE</span>
+          <span class="pill violet" id="agyEnqModel">MODELO --</span>
+        </div>
+        <textarea id="agyPrompt" rows="3" placeholder="prompt para el agente de Antigravity" style="width:100%;"></textarea>
+        <div class="row" style="margin-top:9px;">
+          <button class="btn sm primary" onclick="agyEnqueue()">ENCOLAR (confirm=true)</button>
+          <span class="pill" id="agyEnqState">inactivo</span>
+        </div>
+        <div class="rule-why" id="agyEnqNote"></div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><span>◈ COLA DE TAREAS DEL DAEMON DE ANTIGRAVITY</span>
+          <span class="pill" id="agyTasksInfo">--</span>
+        </div>
+        <table class="data-table mono">
+          <thead><tr><th>ID</th><th>NOMBRE</th><th>TRIGGER</th><th>CADA</th><th>ESTADO</th></tr></thead>
+          <tbody id="agyTasksBody"><tr><td colspan="5" style="color:var(--ink-3)">sin datos</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+
+    <button class="nav-btn" data-view="view-antigravity" onclick="switchView('view-antigravity', this)">
+      <svg viewBox="0 0 24 24"><path d="M12 2l2.4 6.2L21 10l-5.4 3.4L17 21l-5-3.6L7 21l1.4-7.6L3 10l6.6-1.8z"/></svg>
+      <span>ANTIG</span>
+    </button>

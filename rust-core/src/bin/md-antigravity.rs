@@ -223,8 +223,65 @@ fn cmd_status(cfg: &BridgeConfig, json_out: bool) -> Result<(), String> {
 
 fn cmd_catalog(cfg: &BridgeConfig, json_out: bool) -> Result<(), String> {
     let b = connect(cfg).map_err(|e| e.to_string())?;
-    let cat = b.tool_catalog().map_err(|e| e.to_string())?;
+    // Catalogo REAL de modelos (GetAvailableModels): es lo unico que dice que
+    // modelos existen y con que ids (los del estado van ofuscados).
+    let raw = b.model_catalog().map_err(|e| e.to_string())?;
+    let models = antigravity_bridge::model_catalog_from(&raw);
+    let default_model = antigravity_bridge::default_model_from(&raw);
+    let tools = b
+        .tool_catalog()
+        .unwrap_or(serde_json::json!({"servers": [], "tools": []}));
+    let cat = json!({
+        "models": models.iter().map(model_json).collect::<Vec<Value>>(),
+        "model_count": models.len(),
+        "default_model": default_model,
+        "mcp": tools,
+    });
     emit(json_out, &cat, |v| {
+        println!(
+            "modelos: {}   por defecto: {}",
+            v.get("model_count").and_then(|x| x.as_u64()).unwrap_or(0),
+            v.get("default_model").and_then(|x| x.as_str()).unwrap_or("?")
+        );
+        if let Some(arr) = v.get("models").and_then(|m| m.as_array()) {
+            for m in arr {
+                println!(
+                    "  {:<34} {:<28} {:<28}{}",
+                    m.get("id").and_then(|x| x.as_str()).unwrap_or("?"),
+                    m.get("display_name").and_then(|x| x.as_str()).unwrap_or(""),
+                    m.get("placeholder").and_then(|x| x.as_str()).unwrap_or(""),
+                    if m.get("recommended").and_then(|x| x.as_bool()).unwrap_or(false) { " *" } else { "" }
+                );
+            }
+        }
+        let v_mcp = v.get("mcp").cloned().unwrap_or(json!({}));
+        emit_mcp(&v_mcp);
+    });
+    Ok(())
+}
+
+/// Un modelo del catalogo en JSON (para CLI y MCP).
+fn model_json(m: &antigravity_bridge::ModelEntry) -> Value {
+    json!({
+        "id": m.id,
+        "display_name": m.display_name,
+        "placeholder": m.placeholder,
+        "provider": m.provider,
+        "api_provider": m.api_provider,
+        "vertex_model_id": m.vertex_model_id,
+        "recommended": m.recommended,
+        "supports_images": m.supports_images,
+        "supports_thinking": m.supports_thinking,
+        "max_tokens": m.max_tokens,
+        "max_output_tokens": m.max_output_tokens,
+        "quota_remaining_fraction": m.quota_remaining_fraction,
+        "quota_reset_time": m.quota_reset_time,
+    })
+}
+
+/// Imprime la parte de servidores/tools MCP del catalogo.
+fn emit_mcp(v: &Value) {
+    {
         let servers = v.get("servers").and_then(|s| s.as_array());
         println!(
             "servidores MCP: {}   tools: {}",
@@ -252,9 +309,9 @@ fn cmd_catalog(cfg: &BridgeConfig, json_out: bool) -> Result<(), String> {
                 );
             }
         }
-    });
-    Ok(())
+    }
 }
+
 
 fn cmd_conversations(cfg: &BridgeConfig, json_out: bool) -> Result<(), String> {
     let b = connect(cfg).map_err(|e| e.to_string())?;

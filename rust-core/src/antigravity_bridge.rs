@@ -366,27 +366,37 @@ pub struct ConversationSummary {
 /// también una lista por si el servidor cambiara de forma.
 pub fn conversation_summaries_from(v: &Value) -> Vec<ConversationSummary> {
     let mut out = Vec::new();
-    // BUG MEDIDO (2026-11-23, CI `antigravity_bridge_smoke`):
-    // la cadena era `.get("trajectorySummaries").unwrap_or(v).get("trajectorySummaries").unwrap_or(v)`
-    // =>, cuando la respuesta SÍ trae "trajectorySummaries", el segundo
-    // `.get()` (sobre el mapa INTERIOR) devolvia None y el `.unwrap_or(v)`
-    // caia al objeto **EXTERIOR** => se iteraba una clave que se llama
-    // "trajectorySummaries" como si fuera un cascade_id:
-    //     assertion `left == right` failed
-    //       left: "trajectorySummaries"
-    //      right: "9dfa200c-b4cf-408f-9f67-d9bee2bd61a4"
+    // UNION (2026-11-23) de dos arreglos:
+    //
+    // (a) BUG MEDIDO (CI `antigravity_bridge_smoke`): la cadena era
+    //     `.get("trajectorySummaries").unwrap_or(v).get("trajectorySummaries").unwrap_or(v)`
+    //     =>, cuando la respuesta SÍ trae "trajectorySummaries", el segundo
+    //     `.get()` (sobre el mapa INTERIOR) devolvia None y el `.unwrap_or(v)`
+    //     caia al objeto **EXTERIOR** => se iteraba una clave que se llama
+    //     "trajectorySummaries" como si fuera un cascade_id:
+    //         assertion `left == right` failed
+    //           left: "trajectorySummaries"
+    //          right: "9dfa200c-b4cf-408f-9f67-d9bee2bd61a4"
+    //
+    // (b) MEDIDO (peer `cc584b2`): el servidor también envuelve la
+    //     respuesta en `{"response":{…}}` => hay que DESEMPAQUETAR
+    //     `response` ANTES de mirar `trajectorySummaries`, porque si no
+    //     se tomaba el mapa (o la clave "response") por una conversación
+    //     entera.
     //
     // Ahora se eligen las claves EN ORDEN y se cae al valor de dentro:
     //   1) doble envuelto  {"trajectorySummaries":{"trajectorySummaries":{…}}}
     //   2) forma real      {"trajectorySummaries":{…}}        (medido 2026-11-22)
     //   3) mapa suelto     {…}
-    // VERIFICADO con un programa standalone (rustc, sin cargo): las 4
-    // formas (real, doble, suelta y vacia) eligen el mapa correcto.
-    let src = v
+    //   4) con `response`  {"response":{"trajectorySummaries":{…}}}
+    // VERIFICADO con un programa standalone (rustc, sin cargo): las 5
+    // formas (real, doble, suelta, vacia y envuelta) eligen el mapa correcto.
+    let resp = v.get("response").unwrap_or(v);
+    let src = resp
         .get("trajectorySummaries")
         .and_then(|inner| inner.get("trajectorySummaries"))
-        .or_else(|| v.get("trajectorySummaries"))
-        .unwrap_or(v);
+        .or_else(|| resp.get("trajectorySummaries"))
+        .unwrap_or(resp);
     match src {
         Value::Object(map) => {
             for (cid, s) in map {
@@ -1163,6 +1173,14 @@ mod tests {
         assert_eq!(conversation_summaries_from(&s).len(), 1);
         // Vacio: ninguna conversacion.
         assert!(conversation_summaries_from(&json!({})).is_empty());
+        // MEDIDO (peer `cc584b2`, 2026-11-23): el servidor tambien
+        // envuelve la respuesta en {"response":{…}} => hay que
+        // desenvolver `response` antes de mirar `trajectorySummaries`.
+        let envuelto = json!({"response": v});
+        let ce = conversation_summaries_from(&envuelto);
+        assert_eq!(ce.len(), 1);
+        assert_eq!(ce[0].cascade_id, "9dfa200c-b4cf-408f-9f67-d9bee2bd61a4");
+        assert_eq!(ce[0].step_count, 20560);
     }
 
     #[test]

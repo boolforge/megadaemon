@@ -1,7 +1,14 @@
 //! MegaDaemon v15 — Rust Core (biblioteca unificada).
 //!
 //! Lib unificada con todos los módulos de MegaDaemon v15.
-#![recursion_limit = "256"]
+//!
+//! El limite de recursion se sube a 4096 porque el catalogo MCP
+//! (`mcp_ext::tool_definitions`) es un unico `json!([...])` con ~100
+//! tools: su expansion supera el limite por defecto del compilador.
+//! (MEDIDO: con 256 el CI falla al compilar; el atributo va a nivel de
+//! crate, que es donde rustc lo lee. OJO: sólo puede aparecer UNA vez
+//! por crate — dos `#![recursion_limit]` son un error de compilacion.)
+#![recursion_limit = "4096"]
 
 pub mod accelerator_policy;
 pub mod adb_client;
