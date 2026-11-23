@@ -257,32 +257,47 @@ fn markers(bytes: &[u8], magic: &[u8; 4]) -> Vec<usize> {
 
 /// Lee una entrada `SAE1` que empieza en `pos`.
 ///
-/// Layout medido (24 B de cabecera):
+/// Layout **medido** sobre el `.dat` real (`com.letsappbuilder.dat`, 944 B),
+/// sección `SAE1` en el offset 144:
 ///
 /// ```text
-/// +0   u32 headerSize (=24)
-/// +4   u32 ?
-/// +8   u16 ?
-/// +10  u16 longitud del nombre (=4 en "data")
-/// +12  u32 ?
-/// +16  u32 ?      ┐
-/// +20  u32 ?      ┘ relleno
+/// +0   "SAE1"      (4 B de magic)
+/// +4   u16 headerSize (=24)   ┐ igual que en SAI1 (u16, 16) y SAF1 (u16, 32)
+/// +6   u16 ?                  ┘
+/// +8   u32 ?   (=23)
+/// +12  u16 longitud del nombre (=4 en "data")
+/// +14  u32 ?
+/// +18  u32 ?      ┐
+/// +22  u16 ?      ┘ relleno
 /// +24  nombre (sin NUL) y, detrás, el payload
 /// ```
 ///
-/// La longitud del nombre está **explícita** en el offset 10 de la cabecera;
-/// si no cuadra (bytes no imprimibles, longitud absurda) se cae al criterio
-/// alternativo (nombre hasta el primer byte no imprimible).
+/// MEDIDO 2026-11-23 (test `el_contenedor_real_tiene_sae1_sai1_y_saf1`): el
+/// `headerSize` de `SAE1` es un **u16 BE en +4**, igual que en `SAI1` y
+/// `SAF1`.  Leerlo como u32 BE daba `0x00180000` (1638400) => la entrada se
+/// descartaba => **TODO contenedor real salía con 0 entradas** (el aviso
+/// "el contenedor no tiene entradas (SAE1)").  La longitud del nombre está
+/// en **+12** (no en +10).  Si el nombre no cuadra (bytes no imprimibles,
+/// longitud absurda) se cae al criterio alternativo (nombre hasta el primer
+/// byte no imprimible).
 fn leer_entrada(bytes: &[u8], pos: usize) -> Result<Entrada, String> {
     if pos + 8 > bytes.len() {
         return Err("la cabecera de la entrada se sale del fichero".to_string());
     }
-    let header_size = u32::from_be_bytes([
+    // `headerSize`: **u16 BE en +4** (lo medido).  Se acepta también el u32 BE
+    // por si apareciera otra variante del formato.
+    let header16 = u16::from_be_bytes([bytes[pos + 4], bytes[pos + 5]]) as u32;
+    let header32 = u32::from_be_bytes([
         bytes[pos + 4],
         bytes[pos + 5],
         bytes[pos + 6],
         bytes[pos + 7],
     ]);
+    let header_size = if (16..=4096).contains(&header16) {
+        header16
+    } else {
+        header32
+    };
     if !(16..=4096).contains(&header_size) {
         return Err(format!("headerSize inverosímil: {header_size}"));
     }
@@ -290,9 +305,9 @@ fn leer_entrada(bytes: &[u8], pos: usize) -> Result<Entrada, String> {
     if inicio > bytes.len() {
         return Err("el nombre de la entrada se sale del fichero".to_string());
     }
-    // Longitud del nombre declarada en la cabecera (offset 10).
-    let declarada = if pos + 12 <= bytes.len() {
-        Some(u16::from_be_bytes([bytes[pos + 10], bytes[pos + 11]]) as usize)
+    // Longitud del nombre declarada en la cabecera (offset 12, MEDIDO).
+    let declarada = if pos + 14 <= bytes.len() {
+        Some(u16::from_be_bytes([bytes[pos + 12], bytes[pos + 13]]) as usize)
     } else {
         None
     };

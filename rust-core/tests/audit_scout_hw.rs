@@ -27,9 +27,48 @@ use std::time::{Duration, Instant};
 const SHM_PATH: &str = "/data/user/0/com.agy/files/snatcher_vla_shm.bin";
 const SHM_SIZE: usize = 1_048_576;
 const FRAME_OFFSET: usize = 32824;
-const STATE_DIR: &str = "/data/user/0/com.agy/files/megadaemon/state";
-const PROVIDERS_PATH: &str = "/data/user/0/com.agy/files/megadaemon/state/providers.json";
 const APP_USR_LIB: &str = "/data/user/0/com.agy/files/usr/lib";
+
+/// Directorio de estado de los TESTS (no el del móvil).
+///
+/// MEDIDO 2026-11-23: la ruta estaba FIJA en el móvil
+/// (`/data/user/0/com.agy/files/megadaemon/state`), que en el runner del CI
+/// no existe y no se puede crear sin root => la bóveda y el fichero de
+/// estado no se podían escribir y estos tests morían por el ENTORNO, no por
+/// el defecto que auditan.  Ahora el estado vive en un directorio temporal
+/// propio y el daemon lo encuentra por `MEGADAEMON_STATE_DIR` (la misma
+/// variable que el daemon usa en el móvil).
+fn state_dir() -> String {
+    static DIR: OnceLock<String> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let estado = std::env::temp_dir()
+            .join(format!("md_scout_hw_{}", std::process::id()))
+            .join("state");
+        let _ = std::fs::create_dir_all(&estado);
+        std::env::set_var("MEGADAEMON_STATE_DIR", estado.to_string_lossy().to_string());
+        estado.to_string_lossy().to_string()
+    })
+    .clone()
+}
+
+/// Ruta de la bóveda de proveedores (la que usa el daemon).
+fn providers_path() -> String {
+    format!("{}/providers.json", state_dir())
+}
+
+/// ¿Se puede usar el SHM del dispositivo?  Su ruta la tiene FIJA el daemon
+/// (`shm::SHM_PATH`): en un runner sin root no existe y no se puede crear
+/// => los tests que lo necesitan se SALTAN (con su motivo) en vez de
+/// fallar por el entorno.
+fn shm_disponible() -> bool {
+    std::path::Path::new(SHM_PATH).exists()
+}
+
+/// ¿Existe el directorio de librerías de la app?  También tiene la ruta
+/// FIJA (`npu_bridge` la usa para el KleidiAI).
+fn librerias_app_disponibles() -> bool {
+    std::path::Path::new(APP_USR_LIB).is_dir()
+}
 
 /// Serializa los tests que comparten estado global (SHM, vault, cockpit).
 fn global_lock() -> &'static Mutex<()> {
@@ -145,6 +184,9 @@ fn http_raw_auth(
 
 /// Arranca el cockpit en un hilo y espera a que acepte conexiones.
 fn start_cockpit(port: u16) {
+    // ANTES de arrancar: el daemon lee `MEGADAEMON_STATE_DIR` al arrancar
+    // (de ahí sale el token y la bóveda) => hay que fijarlo antes.
+    let _ = state_dir();
     std::thread::spawn(move || {
         let _ = megadaemon_core::cockpit_server::run_server(port);
     });
@@ -230,8 +272,8 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 
 /// Escribe un vault de providers con un único proveedor que apunta a `port`.
 fn write_vault(endpoint: &str, api_key: &str) -> Backup {
-    std::fs::create_dir_all(STATE_DIR).unwrap();
-    let backup = Backup::take(PROVIDERS_PATH);
+    std::fs::create_dir_all(state_dir()).unwrap();
+    let backup = Backup::take(&providers_path());
     let vault = serde_json::json!({
         "default_model": "scout-p1",
         "providers": [{
@@ -246,7 +288,7 @@ fn write_vault(endpoint: &str, api_key: &str) -> Backup {
             "enabled": true
         }]
     });
-    std::fs::write(PROVIDERS_PATH, serde_json::to_string_pretty(&vault).unwrap()).unwrap();
+    std::fs::write(providers_path(), serde_json::to_string_pretty(&vault).unwrap()).unwrap();
     backup
 }
 
@@ -313,8 +355,8 @@ fn run_child(test_name: &str, extra_env: &[(&str, &str)], limit: Duration) -> Op
 #[test]
 fn hw01_status_handler_no_debe_panicar_con_estado_corrupto() {
     let _g = lock_guard();
-    let state_file = format!("{}/megadaemon_state.json", STATE_DIR);
-    std::fs::create_dir_all(STATE_DIR).unwrap();
+    let state_file = format!("{}/megadaemon_state.json", state_dir());
+    std::fs::create_dir_all(state_dir()).unwrap();
     let backup = Backup::take(&state_file);
     // JSON válido pero NO objeto: lo que deja un fichero de estado a medias.
     std::fs::write(&state_file, "[]").unwrap();
@@ -577,6 +619,16 @@ fn hw06_su_sin_timeout_no_cuelga_la_sonda() {
 fn hw07_cabecera_shm_no_puede_forzar_12gb() {
     let _g = lock_guard();
 
+    if !shm_disponible() {
+        eprintln!(
+            "[SKIP] hw07: el SHM del dispositivo ({}) no existe.  Su ruta la tiene FIJA el \
+             daemon (shm::SHM_PATH): en un runner sin Android no se puede crear, asi que el \
+             test se salta en vez de fallar por el entorno.",
+            SHM_PATH
+        );
+        return;
+    }
+
     if std::env::var("SCOUT_CHILD").is_ok() {
         // Hijo: limita el segmento de datos/heap a 1 GiB (en Android Bionic,
         // Scudo reserva ~64 GiB de espacio de direcciones virtual no-residente
@@ -631,6 +683,15 @@ fn hw07_cabecera_shm_no_puede_forzar_12gb() {
 #[test]
 fn hw08_shm_frame_bmp_no_panea() {
     let _g = lock_guard();
+    if !shm_disponible() {
+        eprintln!(
+            "[SKIP] hw08: el SHM del dispositivo ({}) no existe.  Su ruta la tiene FIJA el \
+             daemon (shm::SHM_PATH): en un runner sin Android no se puede crear, asi que el \
+             test se salta en vez de fallar por el entorno.",
+            SHM_PATH
+        );
+        return;
+    }
     let backup = Backup::take(SHM_PATH);
     // 1000x1000x3 = 3 MB de frame en un fichero de 1 MB.
     write_shm(1000, 1000, 0xAB);
@@ -700,6 +761,15 @@ fn hw09_max_turns_no_altera_la_consulta() {
 #[test]
 fn hw10_telemetria_no_declara_kleidiai_sin_cargar_la_lib() {
     let _g = lock_guard();
+    if !librerias_app_disponibles() {
+        eprintln!(
+            "[SKIP] hw10: el directorio de librerías de la app ({}) no existe.  npu_bridge lo \
+             usa con ruta FIJA: en un runner sin Android no se puede crear, asi que el test se \
+             salta en vez de fallar por el entorno.",
+            APP_USR_LIB
+        );
+        return;
+    }
     std::fs::create_dir_all(APP_USR_LIB).unwrap();
     let fake_so = format!("{}/libggml-cpu.so", APP_USR_LIB);
     let backup = Backup::take(&fake_so);
@@ -735,6 +805,16 @@ fn hw10_telemetria_no_declara_kleidiai_sin_cargar_la_lib() {
 #[test]
 fn hw11_primer_frame_no_inventa_movimiento() {
     let _g = lock_guard();
+
+    if !shm_disponible() {
+        eprintln!(
+            "[SKIP] hw11: el SHM del dispositivo ({}) no existe.  Su ruta la tiene FIJA el \
+             daemon (shm::SHM_PATH): en un runner sin Android no se puede crear, asi que el \
+             test se salta en vez de fallar por el entorno.",
+            SHM_PATH
+        );
+        return;
+    }
 
     if std::env::var("SCOUT_CHILD").is_ok() {
         // Hijo: estado limpio (PREV_LUMA vacío).

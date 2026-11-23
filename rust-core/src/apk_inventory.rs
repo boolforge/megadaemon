@@ -3510,6 +3510,20 @@ mod tests {
             .unwrap_or_else(|_| std::path::PathBuf::from("target"));
         let dir = base.join("apk_inventory_tests");
         let _ = std::fs::create_dir_all(&dir);
+        // MEDIDO 2026-11-23 (CI): `analyze_apk` exige una ruta **ABSOLUTA**
+        // (por seguridad: `una_ruta_relativa_se_rechaza` lo afirma) y, sin
+        // `CARGO_TARGET_DIR` en el entorno, `target/apk_inventory_tests/...`
+        // es RELATIVA => los tres tests de la APK sintética recibian
+        // `ok: false` (error `bad_path`) y el del escaner reventaba con un
+        // `unwrap` sobre `None`.  Aqui la ruta se hace ABSOLUTA.
+        let dir = if dir.is_absolute() {
+            dir
+        } else {
+            match std::env::current_dir() {
+                Ok(cwd) => cwd.join(&dir),
+                Err(_) => dir,
+            }
+        };
         dir.join(name)
     }
 
