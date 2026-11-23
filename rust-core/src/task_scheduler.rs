@@ -398,14 +398,43 @@ pub fn persist() {
 }
 
 /// Restaura la cola desde disco.
+///
+/// MEDIDO (2026-11-23, auditoría de calidad): antes `restore()` devolvía 0
+/// tanto si no había cola como si la cola estaba CORRUPTA (JSON inválido) ⇒
+/// el llamante no podía distinguir "no hay nada que restaurar" de "el
+/// trabajo se perdió" (la clase de bug nº4 de los 4 bugs reales del motor
+/// de backup: el llamante necesita el MOTIVO, no un error genérico).
+///
+/// Ahora:
+/// * si el fichero no existe ⇒ 0 (y no es un error);
+/// * si el fichero existe pero no se puede leer ⇒ se avisa por stderr;
+/// * si el fichero está corrupto ⇒ se avisa por stderr y se **conserva**
+///   como `<cola>.corrupto` (el trabajo no se borra: queda para inspección
+///   o rescate manual) y se devuelve 0.
 pub fn restore() -> usize {
-    let Ok(txt) = std::fs::read_to_string(queue_path()) else {
-        return 0;
+    let ruta = queue_path();
+    let txt = match std::fs::read_to_string(&ruta) {
+        Ok(t) => t,
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("[task_scheduler] no se pudo leer la cola {ruta}: {e}");
+            }
+            return 0;
+        }
     };
-    let Ok(v) = serde_json::from_str::<Value>(&txt) else {
-        return 0;
+    let v: Value = match serde_json::from_str(&txt) {
+        Ok(v) => v,
+        Err(e) => {
+            let copia = format!("{ruta}.corrupto");
+            let _ = std::fs::rename(&ruta, &copia);
+            eprintln!(
+                "[task_scheduler] la cola {ruta} está CORRUPTA ({e}); se conservó en {copia}"
+            );
+            return 0;
+        }
     };
     let Some(items) = v["tasks"].as_array() else {
+        eprintln!("[task_scheduler] la cola {ruta} no tiene la lista 'tasks'");
         return 0;
     };
     let mut q = queue().lock().unwrap_or_else(|p| p.into_inner());
