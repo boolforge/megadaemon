@@ -2930,7 +2930,9 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         }
         "github" => {
             let cfg = crate::github_connector::GitHubConfig::with_token_ref(
-                crate::github_connector::DEFAULT_TOKEN_PATH,
+                &crate::github_connector::token_path_por_defecto()
+                    .to_string_lossy()
+                    .to_string(),
             );
             let client = crate::github_connector::UreqClient::new(cfg.token_ref.as_str());
             let repo = if s("repo").is_empty() {

@@ -103,11 +103,23 @@
 //! del kernel y qué alternativas reales existen.
 //! ---------------------------------------------------------------------------
 
+use crate::android::sh_quote;
 use serde_json::json;
 use std::path::Path;
 
-/// Directorio de estado por defecto del daemon en el móvil.
-pub const STATE_DIR: &str = "/data/local/tmp/megadaemon/state";
+/// Directorio de estado LEGADO del daemon en el móvil (VOLÁTIL).
+pub const STATE_DIR_LEGADO: &str = "/data/local/tmp/megadaemon/state";
+
+/// Directorio de estado del daemon (state dir canónico).
+///
+/// MEDIDO (2026-11-23): era `/data/local/tmp/megadaemon/state`, que en
+/// Android se borra al reiniciar ⇒ la política de energía (y todo lo que
+/// el daemon guarda ahí) se perdía.  Ahora es el state dir canónico
+/// (`MEGADAEMON_STATE_DIR`, y en el móvil `/data/adb/megadaemon/state`).
+pub fn state_dir() -> String {
+    crate::state_dir::state_dir()
+}
+
 
 /// Temperatura de batería (°C) a partir de la cual la política se endurece.
 pub const THERMAL_WARN_C: f32 = 42.0;
@@ -510,7 +522,7 @@ impl Action {
     pub fn is_destructive(&self) -> bool {
         match self {
             Action::Shell { reversible, .. } => !reversible,
-            Action::File { path, .. } => !path.starts_with(STATE_DIR),
+            Action::File { path, .. } => !path.starts_with(state_dir().as_str()),
             Action::SetProp { .. } => false,
             Action::Notice { .. } => false,
         }
@@ -807,7 +819,7 @@ pub fn plan(profile: &PowerProfile, snap: &BatterySnapshot, charging: bool) -> V
             cmd: format!(
                 "for p in $(cat {}/standby_targets.txt 2>/dev/null); do \
                  am set-standby-bucket \"$p\" {} 2>/dev/null; done",
-                STATE_DIR, r.bucket
+                state_dir(), r.bucket
             ),
             reversible: true,
         });
@@ -820,7 +832,7 @@ pub fn plan(profile: &PowerProfile, snap: &BatterySnapshot, charging: bool) -> V
                 "for p in $(cat {}/bg_targets.txt 2>/dev/null); do \
                  cmd appops set \"$p\" RUN_ANY_IN_BACKGROUND ignore 2>/dev/null; done; \
                  cmd appops write-settings",
-                STATE_DIR
+                state_dir()
             ),
             reversible: true,
         });
@@ -857,7 +869,7 @@ pub fn plan(profile: &PowerProfile, snap: &BatterySnapshot, charging: bool) -> V
 
     // 7) Política efectiva dentro del directorio de estado (no destructivo).
     out.push(Action::File {
-        path: format!("{}/power_policy.json", STATE_DIR),
+        path: format!("{}/power_policy.json", state_dir()),
         content: policy_json(&r, profile, snap, charging),
     });
 
@@ -936,7 +948,7 @@ pub fn apply_with(actions: &[Action], ex: &mut dyn Executor, confirm: bool) -> V
                 }
             }
             Action::File { path, content } => {
-                if !path.starts_with(STATE_DIR) && !confirm {
+                if !path.starts_with(state_dir().as_str()) && !confirm {
                     (
                         false,
                         format!(
@@ -1494,7 +1506,7 @@ mod tests {
         // Y el fichero de política dentro del estado NO es destructivo.
         let dentro = acts
             .iter()
-            .find(|a| matches!(a, Action::File { path, .. } if path.starts_with(STATE_DIR)))
+            .find(|a| matches!(a, Action::File { path, .. } if path.starts_with(state_dir().as_str())))
             .expect("debe haber la política en el estado");
         assert!(!dentro.is_destructive());
     }
@@ -1517,7 +1529,7 @@ mod tests {
         assert!(!fuera.exists(), "la simulación no puede escribir ficheros");
 
         // Un fichero DENTRO del directorio de estado se simula (no se escribe).
-        let dentro = format!("{}/power_policy.json", STATE_DIR);
+        let dentro = format!("{}/power_policy.json", state_dir());
         let res2 = apply(&[Action::File {
             path: dentro.clone(),
             content: "{}".to_string(),
@@ -1967,7 +1979,7 @@ pub fn device_plan(st: &DeviceState, th: &Thresholds) -> Vec<DeviceAction> {
         out.push(DeviceAction::new(
             "prune_state",
             "prune_state_keep 2",
-            "du -sk /data/local/tmp/megadaemon/state 2>/dev/null",
+            &format!("du -sk {d} 2>/dev/null", d = sh_quote(&state_dir())),
             true,
         ));
     }

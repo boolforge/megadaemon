@@ -380,6 +380,10 @@ fn instalador_canonico() -> Option<String> {
     for cand in [
         "/data/local/tmp/megadaemon/instalador-megadaemon.sh",
         "/data/user/0/com.agy/files/megadaemon/deploy/instalador-megadaemon.sh",
+        // MEDIDO (2026-11-23): el directorio base canónico del daemon (en el
+        // móvil, `/data/adb/megadaemon`, persistente) es donde se despliega
+        // el instalador.
+        "/data/adb/megadaemon/instalador-megadaemon.sh",
     ] {
         if Path::new(cand).exists() {
             return Some(cand.to_string());

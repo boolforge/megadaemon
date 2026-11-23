@@ -32,11 +32,26 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// Endpoint de DuckDNS. Es estable por diseño (a diferencia del quick tunnel).
 pub const DUCKDNS_UPDATE_URL: &str = "https://www.duckdns.org/update";
 
-/// Fichero por defecto del token (0600). NUNCA en el repo.
+/// Fichero LEGADO del token (0600). NUNCA en el repo.
+///
+/// MEDIDO (2026-11-23): `/data/local/tmp` es VOLÁTIL en Android ⇒ el token
+/// de DuckDNS se perdía en cada reinicio.  Ahora el fichero por defecto
+/// está en el state dir canónico (persistente en el móvil) y el legado sólo
+/// se usa como alternativa de lectura.
 pub const DEFAULT_TOKEN_FILE: &str = "/data/local/tmp/megadaemon/duckdns.token";
 
-/// Fichero por defecto del estado local.
+/// Fichero LEGADO del estado local.
 pub const DEFAULT_STATE_FILE: &str = "/data/local/tmp/megadaemon/duckdns.state.json";
+
+/// Fichero del token en el state dir canónico.
+pub fn token_file() -> PathBuf {
+    PathBuf::from(crate::state_dir::state_dir()).join("duckdns.token")
+}
+
+/// Fichero de estado en el state dir canónico.
+pub fn state_file() -> PathBuf {
+    PathBuf::from(crate::state_dir::state_dir()).join("duckdns.state.json")
+}
 
 /// Dominio por defecto si `instance.json` no lo trae.
 pub const DEFAULT_DOMAIN: &str = "mdtmfnc.duckdns.org";
@@ -48,15 +63,25 @@ const HTTP_TIMEOUT: u64 = 8;
 fn token_path(explicit: Option<&str>) -> PathBuf {
     match explicit {
         Some(p) if !p.is_empty() => PathBuf::from(p),
-        _ => PathBuf::from(DEFAULT_TOKEN_FILE),
+        _ => token_file(),
     }
+}
+
+/// Candidatas para LEER el token: la canónica y la legada.
+fn token_candidates(explicit: Option<&str>) -> Vec<PathBuf> {
+    let mut v = vec![token_path(explicit)];
+    let leg = PathBuf::from(DEFAULT_TOKEN_FILE);
+    if !v.contains(&leg) {
+        v.push(leg);
+    }
+    v
 }
 
 /// Ruta del fichero de estado.
 fn state_path(explicit: Option<&str>) -> PathBuf {
     match explicit {
         Some(p) if !p.is_empty() => PathBuf::from(p),
-        _ => PathBuf::from(DEFAULT_STATE_FILE),
+        _ => state_file(),
     }
 }
 

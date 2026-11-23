@@ -25,6 +25,7 @@
 
 pub use crate::util_text::now_iso;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use serde_json::{json, Value};
 
 /// Base por defecto de la API de GitHub.
@@ -38,6 +39,30 @@ pub const USER_AGENT: &str = "MegaDaemon/15 (+https://github.com/boolforge/megad
 /// Es una **ruta**, no el token: el fichero se lee (0600) justo antes de
 /// enviar y nunca se copia al catálogo, al tablón ni a las peticiones.
 pub const DEFAULT_TOKEN_PATH: &str = "/data/user/0/com.agy/files/megadaemon/state/github.token";
+
+/// Ruta del token en el state dir **canónico** (persistente en el móvil).
+///
+/// MEDIDO (2026-11-23): el token vivía en el directorio de la app; el
+/// state dir canónico (en el móvil `/data/adb/megadaemon/state`) es la ruta
+/// persistente que usa el resto del daemon.  La ruta antigua se conserva
+/// como alternativa de lectura.
+pub fn token_path_por_defecto() -> PathBuf {
+    PathBuf::from(crate::state_dir::state_dir()).join("github.token")
+}
+
+/// Candidatas para LEER el token: la indicada, la canónica y la heredada.
+pub fn token_candidates(explicit: &str) -> Vec<String> {
+    let mut v = vec![explicit.to_string()];
+    let canon = token_path_por_defecto().to_string_lossy().to_string();
+    if !v.contains(&canon) {
+        v.push(canon);
+    }
+    let legado = DEFAULT_TOKEN_PATH.to_string();
+    if !v.contains(&legado) {
+        v.push(legado);
+    }
+    v
+}
 
 /// Configuración del conector.
 ///
@@ -189,10 +214,18 @@ impl UreqClient {
     /// Lee el token del fichero (trim).  Si no hay fichero, se sigue **sin
     /// credencial** (las rutas públicas de la API no la necesitan).
     fn token(&self) -> Option<String> {
-        std::fs::read_to_string(&self.token_path)
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
+        // MEDIDO (2026-11-23): el token vivía en el directorio de la app
+        // (volátil en cuanto el daemon se muda al prefijo persistente).  Se
+        // prueban la ruta indicada, la canónica y la heredada.
+        for p in token_candidates(&self.token_path) {
+            if let Ok(s) = std::fs::read_to_string(&p) {
+                let t = s.trim().to_string();
+                if !t.is_empty() {
+                    return Some(t);
+                }
+            }
+        }
+        None
     }
 }
 

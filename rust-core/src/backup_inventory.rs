@@ -197,6 +197,39 @@ pub struct PackageRule {
     pub sensitive: bool,
 }
 
+/// Rutas REALES del daemon en este dispositivo (persistentes).
+///
+/// MEDIDO (2026-11-23): la matriz tenía fijas rutas de `/data/local/tmp/…`,
+/// que en Android son VOLÁTILES y además ya no son donde vive el daemon
+/// (ahora `/data/adb/megadaemon`).  Sin esto, el inventario de respaldo
+/// P0 se llevaba una API key y una URL de túnel que ya no existen.
+///
+/// Se calculan UNA vez (OnceLock) y se filtran con `Box::leak` porque la
+/// estructura de reglas usa `&'static [&'static str]`.
+fn rutas_del_daemon() -> &'static [&'static str] {
+    static CACHE: std::sync::OnceLock<&'static [&'static str]> = std::sync::OnceLock::new();
+    *CACHE.get_or_init(|| {
+        let fuga = |x: String| -> &'static str { Box::leak(x.into_boxed_str()) };
+        let state = crate::state_dir::state_dir();
+        let inst = crate::cockpit_server::instance_dir();
+        let v: Vec<&'static str> = vec![
+            // Las rutas REALES del daemon (las de ahora).
+            fuga(format!("{}/megadaemon_api.key", state)),
+            fuga(format!("{}/megadaemon_api.keys", state)),
+            fuga(format!("{}/tunnel.url", inst)),
+            fuga(format!("{}/channel.json", inst)),
+            fuga(format!("{}/tunnel.url", state)),
+            fuga(format!("{}/channel.json", state)),
+            // Las heredadas (por si un dispositivo antiguo las tiene ahí).
+            "/data/local/tmp/megadaemon/state/megadaemon_api.key",
+            "/data/local/tmp/megadaemon/state/megadaemon_api.keys",
+            "/data/local/tmp/megadaemon/tunnel.url",
+            "/data/local/tmp/megadaemon/channel.json",
+        ];
+        Box::leak(v.into_boxed_slice())
+    })
+}
+
 /// La matriz completa del plan.
 pub fn matrix() -> Vec<Rule> {
     vec![
@@ -318,12 +351,10 @@ pub fn matrix() -> Vec<Rule> {
             id: "p0.megadaemon",
             level: Level::P0,
             label: "Token de sesión propio de MegaDaemon",
-            paths: &[
-                "/data/local/tmp/megadaemon/state/megadaemon_api.key",
-                "/data/local/tmp/megadaemon/state/megadaemon_api.keys",
-                "/data/local/tmp/megadaemon/tunnel.url",
-                "/data/local/tmp/megadaemon/channel.json",
-            ],
+            // Las rutas REALES del daemon (las de ahora, no las de
+            // `/data/local/tmp`, que en Android son volátiles) + las
+            // heredadas por si un dispositivo antiguo las tiene ahí.
+            paths: rutas_del_daemon(),
             walk: false,
             max_depth: 0,
             sensitive: true,

@@ -29,6 +29,10 @@ pub const SANDBOX_FILES: &[&str] = &["/data/user/0/com.agy/files/snatcher_vla_sh
 
 pub const SANDBOX_ROOTS: &[&str] = &[
     "/data/user/0/com.agy/files/megadaemon",
+    // MEDIDO (2026-11-23): el daemon ahora vive en `/data/adb/megadaemon`
+    // (estado persistente).  Sin esta raíz, el congelador de memoria
+    // bloqueaba las escrituras del propio daemon en su state dir.
+    "/data/adb/megadaemon",
     "/data/user/0/com.agy/files/snatcher",
     "/data/user/0/com.agy/files/usr",
 ];

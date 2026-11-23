@@ -23,14 +23,40 @@
 use crate::android::{audit, fs_write, root_exec, sh_quote};
 use serde_json::{json, Value};
 
-/// Directorio de trabajo en el móvil.
-pub const DIR_REMOTO: &str = "/data/local/tmp/megadaemon";
+/// Directorio de trabajo LEGADO en el móvil (VOLÁTIL: `/data/local/tmp`).
+///
+/// MEDIDO (2026-11-23): `/data/local/tmp` se borra al reiniciar Android ⇒ el
+/// payload de hooks, el inyector y el NDJSON de eventos se perdían en cada
+/// reinicio del móvil.  Ahora se usa el directorio **base de la instancia**
+/// (en el móvil, `/data/adb/megadaemon`, que es persistente) y el state dir
+/// canónico para los datos.
+pub const DIR_REMOTO_LEGADO: &str = "/data/local/tmp/megadaemon";
+/// Payload (la `.so` de hooks) LEGADO.
+pub const PAYLOAD_REMOTO_LEGADO: &str = "/data/local/tmp/megadaemon/hooks-payload-arm64.so";
+/// Inyector (`md-inject`) LEGADO.
+pub const INYECTOR_REMOTO_LEGADO: &str = "/data/local/tmp/megadaemon/md-inject";
+/// NDJSON de hooks LEGADO.
+pub const NDJSON_REMOTO_LEGADO: &str = "/data/local/tmp/megadaemon/state/hooks.ndjson";
+
+/// Directorio de trabajo en el móvil (persistente).
+pub fn dir_remoto() -> String {
+    crate::cockpit_server::instance_dir()
+}
+
 /// Payload (la `.so` de hooks) en su ruta de referencia.
-pub const PAYLOAD_REMOTO: &str = "/data/local/tmp/megadaemon/hooks-payload-arm64.so";
+pub fn payload_remoto() -> String {
+    format!("{}/hooks-payload-arm64.so", dir_remoto())
+}
+
 /// Inyector (`md-inject`) en el móvil.
-pub const INYECTOR_REMOTO: &str = "/data/local/tmp/megadaemon/md-inject";
+pub fn inyector_remoto() -> String {
+    format!("{}/md-inject", dir_remoto())
+}
+
 /// NDJSON de hooks (ruta de referencia; el payload puede usar otra).
-pub const NDJSON_REMOTO: &str = "/data/local/tmp/megadaemon/state/hooks.ndjson";
+pub fn ndjson_remoto() -> String {
+    format!("{}/hooks.ndjson", crate::state_dir::state_dir())
+}
 /// Paquete por defecto (el que se busca si no se dice otro).
 pub const PAQUETE_POR_DEFECTO: &str = "com.google.antigravity";
 /// Permisos del payload (el proceso de la app tiene que poder LEERLO).
@@ -141,9 +167,9 @@ ls -lZ {n} 2>&1 | head -2
 echo '--- PROCESOS ---'
 ps -A -o PID,NAME 2>/dev/null | grep -i antigravity | head -5
 "#,
-        p = sh_quote(PAYLOAD_REMOTO),
-        i = sh_quote(INYECTOR_REMOTO),
-        n = sh_quote(NDJSON_REMOTO),
+        p = sh_quote(&payload_remoto()),
+        i = sh_quote(&inyector_remoto()),
+        n = sh_quote(&ndjson_remoto()),
     );
     let r = root_exec(&script, 40_000, 32 * 1024);
     let salida = r.combined();
@@ -162,9 +188,9 @@ ps -A -o PID,NAME 2>/dev/null | grep -i antigravity | head -5
         "payload_presente": tiene_payload,
         "inyector_presente": tiene_inyector,
         "frida_server_presente": tiene_frida,
-        "payload_esperado": PAYLOAD_REMOTO,
-        "inyector_esperado": INYECTOR_REMOTO,
-        "ndjson_esperado": NDJSON_REMOTO,
+        "payload_esperado": payload_remoto(),
+        "inyector_esperado": inyector_remoto(),
+        "ndjson_esperado": ndjson_remoto(),
         "informe": salida,
     })
 }
@@ -183,7 +209,7 @@ fn instalar(paquete: &str, lib_path: &str, bin_path: &str) -> Value {
     match lib_local(lib_path) {
         Ok((base64, origen)) => {
             let mut sub = Vec::new();
-            for destino in [destino_privado.clone(), PAYLOAD_REMOTO.to_string()] {
+            for destino in [destino_privado.clone(), payload_remoto()] {
                 let r = fs_write(&destino, &base64, true, PERM_PAYLOAD, false);
                 let ok = r.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
                 sub.push(json!({"destino": destino, "ok": ok, "detalle": r}));
@@ -212,10 +238,10 @@ fn instalar(paquete: &str, lib_path: &str, bin_path: &str) -> Value {
     // 2) El inyector (`md-inject`): lo ejecuta root.
     match injector_local(bin_path) {
         Ok((base64, origen)) => {
-            let r = fs_write(INYECTOR_REMOTO, &base64, true, PERM_INYECTOR, false);
+            let r = fs_write(&inyector_remoto(), &base64, true, PERM_INYECTOR, false);
             let fix = format!(
                 "restorecon {i} 2>&1; chmod {perm} {i} 2>&1; ls -lZ {i} 2>&1",
-                i = sh_quote(INYECTOR_REMOTO),
+                i = sh_quote(&inyector_remoto()),
                 perm = PERM_INYECTOR,
             );
             let r2 = root_exec(&fix, 30_000, 4096);
@@ -245,7 +271,7 @@ fn inyectar(paquete: &str, pid: i64, via: &str) -> Value {
 
     // ¿Está el inyector en el móvil?
     let check = root_exec(
-        &format!("ls -l {i} 2>&1", i = sh_quote(INYECTOR_REMOTO)),
+        &format!("ls -l {i} 2>&1", i = sh_quote(&inyector_remoto())),
         20_000,
         2048,
     );
@@ -254,7 +280,7 @@ fn inyectar(paquete: &str, pid: i64, via: &str) -> Value {
             "falta_inyector",
             &format!(
                 "no hay inyector en {} (instálalo con la acción 'instalar'): {}",
-                INYECTOR_REMOTO,
+                inyector_remoto(),
                 check.combined().trim()
             ),
         );
@@ -266,7 +292,7 @@ fn inyectar(paquete: &str, pid: i64, via: &str) -> Value {
         &format!(
             "for f in {a} {b}; do [ -f \"$f\" ] && echo $f; done",
             a = sh_quote(&payload_privado),
-            b = sh_quote(PAYLOAD_REMOTO),
+            b = sh_quote(&payload_remoto()),
         ),
         20_000,
         2048,
@@ -278,7 +304,7 @@ fn inyectar(paquete: &str, pid: i64, via: &str) -> Value {
                 "falta_payload",
                 &format!(
                     "no hay payload en {} ni en {} (instálalo con la acción 'instalar')",
-                    payload_privado, PAYLOAD_REMOTO
+                    payload_privado, payload_remoto()
                 ),
             )
         }
@@ -320,7 +346,7 @@ fn inyectar(paquete: &str, pid: i64, via: &str) -> Value {
 
     let cmd = format!(
         "{i} inject {pid} {lib} {via} 2>&1",
-        i = sh_quote(INYECTOR_REMOTO),
+        i = sh_quote(&inyector_remoto()),
         pid = pid_real,
         lib = sh_quote(&ruta_payload),
         via = via_arg,
@@ -349,7 +375,7 @@ fn inyectar(paquete: &str, pid: i64, via: &str) -> Value {
 fn leer(paquete: &str, lineas: usize) -> Value {
     let pkg = descubrir_paquete(paquete);
     let candidatos = [
-        NDJSON_REMOTO.to_string(),
+        ndjson_remoto(),
         format!("/data/data/{}/files/megadaemon/hooks.ndjson", pkg),
         format!("/data/user/0/{}/files/megadaemon/hooks.ndjson", pkg),
     ];

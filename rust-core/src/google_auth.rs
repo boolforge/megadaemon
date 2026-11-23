@@ -30,6 +30,16 @@ pub const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 pub const ENV_CREDENTIALS: &str = "MEGADAEMON_GDRIVE_CREDENTIALS";
 /// Ruta por defecto en el móvil (dentro del `state_dir`).
 pub const DEFAULT_CREDENTIALS: &str = "/data/local/tmp/megadaemon/state/gdrive_credentials.json";
+
+/// Ruta LEGADA de las credenciales.
+///
+/// MEDIDO (2026-11-23): `/data/local/tmp` es VOLÁTIL en Android (se borra al
+/// reiniciar el móvil) ⇒ las credenciales de Drive desaparecían y el
+/// daemon se quedaba sin acceso a Drive hasta volver a instalarlas.  Ahora
+/// el valor por defecto es el **state dir canónico** (en el móvil,
+/// `/data/adb/megadaemon/state`, persistente) y esta ruta sólo se usa como
+/// alternativa de LECTURA.
+pub const LEGACY_CREDENTIALS: &str = DEFAULT_CREDENTIALS;
 /// Margen: se refresca antes de que caduque.
 const RENEW_MARGIN_SECS: u64 = 60;
 
@@ -69,8 +79,23 @@ pub fn credentials_path(state_dir: Option<&str>) -> PathBuf {
     }
     match state_dir {
         Some(d) if !d.trim().is_empty() => PathBuf::from(d).join("gdrive_credentials.json"),
-        _ => PathBuf::from(DEFAULT_CREDENTIALS),
+        // Sin state_dir explícito: el state dir CANÓNICO (que respeta
+        // MEGADAEMON_STATE_DIR).  Antes era `/data/local/tmp/…`, volátil.
+        _ => PathBuf::from(crate::state_dir::state_dir()).join("gdrive_credentials.json"),
     }
+}
+
+/// Candidatas para **leer** las credenciales: la canónica y la legada.
+///
+/// Se leen en orden: si la canónica no está, se usa la legada (para no
+/// romper un móvil que aún tenga las credenciales en el sitio viejo).
+pub fn credentials_candidates(state_dir: Option<&str>) -> Vec<PathBuf> {
+    let mut v = vec![credentials_path(state_dir)];
+    let leg = PathBuf::from(LEGACY_CREDENTIALS);
+    if !v.contains(&leg) {
+        v.push(leg);
+    }
+    v
 }
 
 /// Percent-encoding de un valor de formulario (form-urlencoded).
@@ -185,7 +210,14 @@ pub fn token(state_dir: Option<&str>) -> Result<GoogleToken, String> {
             return Ok(t.clone());
         }
     }
-    let path = credentials_path(state_dir);
+    // La credencial puede estar en la ruta canónica o en la legada
+    // (MEDIDO 2026-11-23): se prueban en orden.
+    let candidatas = credentials_candidates(state_dir);
+    let path = candidatas
+        .iter()
+        .find(|p| p.exists())
+        .cloned()
+        .unwrap_or_else(|| candidatas[0].clone());
     let t = if path.exists() {
         refresh_from_file(&path)?
     } else if let Some(tok) = fallback_rclone_token() {
@@ -224,7 +256,12 @@ pub fn credentials_fingerprint(path: &Path) -> String {
 
 /// Estado del acceso a Google (para la tool y para los informes).
 pub fn status(state_dir: Option<&str>) -> Value {
-    let path = credentials_path(state_dir);
+    let candidatas = credentials_candidates(state_dir);
+    let path = candidatas
+        .iter()
+        .find(|p| p.exists())
+        .cloned()
+        .unwrap_or_else(|| candidatas[0].clone());
     let fp = credentials_fingerprint(&path);
     let (has_file, size) = match std::fs::metadata(&path) {
         Ok(m) => (true, m.len()),
