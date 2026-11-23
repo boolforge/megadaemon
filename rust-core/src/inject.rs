@@ -692,3 +692,919 @@ mod tests {
         );
     }
 }
+
+// ========================================================================= //
+// ptrace: registros, memoria y llamada remota
+// ========================================================================= //
+
+use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant};
+
+/// Números de `ptrace` (los del kernel).  Se redefinen aquí para no depender
+/// de que `libc` los exponga con el mismo tipo en todas las plataformas
+/// (`c_uint` en glibc/x86_64, `c_int` en Android y musl).
+const PTRACE_PEEKDATA: i32 = 2;
+const PTRACE_POKEDATA: i32 = 5;
+const PTRACE_CONT: i32 = 7;
+const PTRACE_GETREGSET: i32 = 0x4204;
+const PTRACE_SETREGSET: i32 = 0x4205;
+const PTRACE_ATTACH: i32 = 16;
+const PTRACE_DETACH: i32 = 17;
+/// Tipo de la nota de `ptrace` que lleva los registros generales.
+const NT_PRSTATUS: i32 = 1;
+
+/// `RTLD_NOW | RTLD_GLOBAL`: la `.so` se resuelve **completa** (si le falta un
+/// símbolo, falla en vez de dejar un hole) y entra en el **espacio global**
+/// de nombres (necesario para que el intercepteo por definición de símbolo
+/// tenga efecto en las librerías que se carguen después).
+const RTLD_NOW_GLOBAL: u64 = 0x2 | 0x100;
+
+/// Dirección "mágica" a la que vuelve la llamada remota.
+///
+/// La dirección **0** no está mapeada en ningún proceso (el kernel no mapea
+/// nunca la página 0: `mmap_min_addr` es 4096) ⇒ al volver ahí el proceso
+/// recibe un `SIGSEGV` que el inyector captura y **se traga** (no se le
+/// entrega a la app: la app sigue viva).
+const RETORNO_MAGICO: u64 = 0;
+
+/// Distancia bajo el `SP` donde se escribe la ruta de la `.so`.
+///
+/// 4 KB: por debajo del `SP` no hay datos vivos de la app (la pila crece
+/// hacia abajo) y de sobra para la trama de señal que el kernel empuja al
+/// parar el proceso (`siginfo`/`ucontext`: ~1 KB en arm64, 512 B en x86_64).
+const OFFSET_AUXILIAR: u64 = 0x1000;
+
+/// Separación entre la ruta escrita y la ranura de retorno.
+const OFFSET_RANURA: u64 = 0x100;
+
+/// Vía de escritura en la memoria del proceso objetivo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViaMemoria {
+    /// `PTRACE_POKEDATA`/`PEEKDATA` (la principal).
+    Ptrace,
+    /// `write(2)` sobre `/proc/<pid>/mem` (la alternativa).
+    ProcMem,
+}
+
+impl ViaMemoria {
+    /// Nombre corto para los informes.
+    pub fn nombre(&self) -> &'static str {
+        match self {
+            ViaMemoria::Ptrace => "ptrace-pokedata",
+            ViaMemoria::ProcMem => "proc-mem",
+        }
+    }
+
+    /// Convierte el texto de la opción `--mem`.
+    pub fn desde_texto(t: &str) -> Option<ViaMemoria> {
+        match t.trim().to_lowercase().as_str() {
+            "" | "ptrace" | "pokedata" => Some(ViaMemoria::Ptrace),
+            "mem" | "procmem" | "proc-mem" | "/proc" => Some(ViaMemoria::ProcMem),
+            _ => None,
+        }
+    }
+}
+
+// --- Registros del proceso objetivo ------------------------------------- //
+
+/// Registros generales del proceso objetivo.
+///
+/// El diseño replica **exactamente** la disposición del kernel
+/// (`struct user_pt_regs` en arm64, `struct user_regs_struct` en x86_64):
+/// el `PTRACE_GETREGSET` copia bytes crudos, así que el orden de los campos
+/// es parte del contrato.
+#[cfg(target_arch = "aarch64")]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Registros {
+    pub x: [u64; 31],
+    pub sp: u64,
+    pub pc: u64,
+    pub pstate: u64,
+}
+
+/// Registros generales del proceso objetivo (x86_64).
+#[cfg(target_arch = "x86_64")]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Registros {
+    pub r15: u64,
+    pub r14: u64,
+    pub r13: u64,
+    pub r12: u64,
+    pub rbp: u64,
+    pub rbx: u64,
+    pub r11: u64,
+    pub r10: u64,
+    pub r9: u64,
+    pub r8: u64,
+    pub rax: u64,
+    pub rcx: u64,
+    pub rdx: u64,
+    pub rsi: u64,
+    pub rdi: u64,
+    pub orig_rax: u64,
+    pub rip: u64,
+    pub cs: u64,
+    pub eflags: u64,
+    pub rsp: u64,
+    pub ss: u64,
+    pub fs_base: u64,
+    pub gs_base: u64,
+    pub ds: u64,
+    pub es: u64,
+    pub fs: u64,
+    pub gs: u64,
+}
+
+/// `SP` actual del objetivo (el pivote de la llamada remota).
+pub fn sp_actual(r: &Registros) -> u64 {
+    #[cfg(target_arch = "aarch64")]
+    {
+        r.sp
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        r.rsp
+    }
+}
+
+/// `PC` actual del objetivo.
+pub fn pc_actual(r: &Registros) -> u64 {
+    #[cfg(target_arch = "aarch64")]
+    {
+        r.pc
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        r.rip
+    }
+}
+
+/// Valor devuelto por la última función llamada (x0 en arm64, rax en x86_64).
+pub fn valor_devuelto(r: &Registros) -> u64 {
+    #[cfg(target_arch = "aarch64")]
+    {
+        r.x[0]
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        r.rax
+    }
+}
+
+/// Pila de retorno de la llamada (x30 en arm64).  Se informa en el informe
+/// pero NO se usa para decidir si la llamada volvió (eso se decide por el PC).
+#[allow(dead_code)]
+fn pila_de_retorno(r: &Registros) -> u64 {
+    #[cfg(target_arch = "aarch64")]
+    {
+        r.x[30]
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        0
+    }
+}
+
+/// La llamada remota que se va a preparar.
+///
+/// Es una estructura **pura** (no toca nada): se puede construir y comprobar
+/// en un test sin proceso detrás.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LlamadaRemota {
+    /// Dirección de la función a llamar (`dlopen` en el objetivo).
+    pub pc: u64,
+    /// Primer argumento (la ruta de la `.so`).
+    pub arg0: u64,
+    /// Segundo argumento (`RTLD_NOW|RTLD_GLOBAL`).
+    pub arg1: u64,
+    /// Nuevo `SP`/`RSP` del objetivo.
+    pub sp: u64,
+    /// Dirección donde hay que escribir la dirección de retorno (x86_64).
+    /// En arm64 no hace falta (la dirección de retorno va en `x30`).
+    pub ranura_retorno: u64,
+    /// Dirección de retorno (mágica: 0, no mapeada).
+    pub magico: u64,
+}
+
+/// Prepara la llamada remota `dlopen(ruta, flags)` sobre los registros dados.
+///
+/// * Escribe la ruta en la pila del objetivo (`sp - 4 KB`), que es memoria
+///   libre (la pila crece hacia abajo).
+/// * Deja el `SP` apuntando a la ranura de retorno.
+/// * En x86_64 deja la dirección de retorno en la pila (como un `call`).
+/// * En arm64 la deja en `x30` (el `LR`).
+pub fn preparar_llamada(r: &Registros, dir_dlopen: u64, dir_ruta: u64) -> LlamadaRemota {
+    let sp_original = sp_actual(r);
+    let scratch = sp_original.saturating_sub(OFFSET_AUXILIAR) & !0xF;
+    let ranura = scratch + OFFSET_RANURA;
+    #[cfg(target_arch = "aarch64")]
+    let sp = ranura;
+    #[cfg(target_arch = "x86_64")]
+    let sp = ranura + 8; // tras un `call`, el RSP es ≡ 8 (mod 16)
+    LlamadaRemota {
+        pc: dir_dlopen,
+        arg0: dir_ruta,
+        arg1: RTLD_NOW_GLOBAL,
+        sp,
+        ranura_retorno: {
+            #[cfg(target_arch = "aarch64")]
+            {
+                0
+            }
+            #[cfg(target_arch = "x86_64")]
+            {
+                ranura + 8
+            }
+        },
+        magico: RETORNO_MAGICO,
+    }
+}
+
+impl LlamadaRemota {
+    /// Aplica la llamada a los registros del objetivo.
+    pub fn aplicar(&self, r: &mut Registros) {
+        #[cfg(target_arch = "aarch64")]
+        {
+            r.x[0] = self.arg0;
+            r.x[1] = self.arg1;
+            r.x[30] = self.magico;
+            r.sp = self.sp;
+            r.pc = self.pc;
+        }
+        #[cfg(target_arch = "x86_64")]
+        {
+            r.rdi = self.arg0;
+            r.rsi = self.arg1;
+            r.rax = 0;
+            r.rsp = self.sp;
+            r.rip = self.pc;
+        }
+    }
+}
+
+// --- Envoltorio de ptrace ------------------------------------------------ //
+
+/// `errno` actual del proceso.
+fn errno_actual() -> i32 {
+    std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+}
+
+/// Pone `errno` a 0 (para distinguir "el peek devolvió -1" de "falló").
+fn limpiar_errno() {
+    unsafe {
+        *libc::__errno_location() = 0;
+    }
+}
+
+/// Texto legible de un `errno`.
+fn texto_errno(e: i32) -> String {
+    format!("{} (errno {})", std::io::Error::from_raw_os_error(e), e)
+}
+
+/// Llama a `ptrace` con el tipo correcto para cada plataforma.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+unsafe fn ptrace_raw(req: i32, pid: i32, addr: *mut libc::c_void, data: *mut libc::c_void) -> libc::c_long {
+    libc::ptrace(req as libc::c_uint, pid, addr, data)
+}
+
+/// Llama a `ptrace` con el tipo correcto para cada plataforma.
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+unsafe fn ptrace_raw(req: i32, pid: i32, addr: *mut libc::c_void, data: *mut libc::c_void) -> libc::c_long {
+    libc::ptrace(req as libc::c_int, pid, addr, data)
+}
+
+/// Adjunta el proceso al inyector (`PTRACE_ATTACH`) y espera a que pare.
+pub fn adjuntar(pid: i32) -> Result<(), String> {
+    unsafe {
+        limpiar_errno();
+        let r = ptrace_raw(
+            PTRACE_ATTACH,
+            pid,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        if r == -1 {
+            let e = errno_actual();
+            let pista = match e {
+                libc::EPERM => {
+                    "EPERM: el objetivo no permite ptrace. En Android con SELinux en Enforcing \
+                     prueba: magiskpolicy --live \"allow magisk tracer trace:process\" \
+                     (y que el proceso NO sea de otra app con dumpable=0)"
+                }
+                libc::ESRCH => "ESRCH: el proceso no existe (¿ha muerto?)",
+                _ => "",
+            };
+            return Err(format!(
+                "PTRACE_ATTACH(pid={}) falló: {}{}",
+                pid,
+                texto_errno(e),
+                if pista.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {}", pista)
+                }
+            ));
+        }
+    }
+    let status = esperar(pid, 5_000)?;
+    if !libc::WIFSTOPPED(status) {
+        return Err(format!(
+            "el proceso {} no se ha parado tras PTRACE_ATTACH (status={})",
+            pid, status
+        ));
+    }
+    Ok(())
+}
+
+/// Suelta el proceso (lo deja seguir como estaba).
+pub fn soltar(pid: i32) {
+    unsafe {
+        ptrace_raw(
+            PTRACE_DETACH,
+            pid,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+    }
+}
+
+/// Reanuda el proceso **sin** entregarle ninguna señal.
+fn continuar(pid: i32) -> Result<(), String> {
+    unsafe {
+        limpiar_errno();
+        let r = ptrace_raw(
+            PTRACE_CONT,
+            pid,
+            std::ptr::null_mut(),
+            0usize as *mut libc::c_void,
+        );
+        if r == -1 {
+            return Err(format!(
+                "PTRACE_CONT(pid={}) falló: {}",
+                pid,
+                texto_errno(errno_actual())
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Espera a que el proceso se pare otra vez (con tope de tiempo).
+fn esperar(pid: i32, timeout_ms: u64) -> Result<i32, String> {
+    let limite = Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        let mut status: i32 = 0;
+        let r = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        if r == pid {
+            return Ok(status);
+        }
+        if r == -1 {
+            let e = errno_actual();
+            if e == libc::EINTR {
+                continue;
+            }
+            return Err(format!(
+                "waitpid({}) falló: {}",
+                pid,
+                texto_errno(e)
+            ));
+        }
+        if Instant::now() >= limite {
+            return Err(format!(
+                "el proceso {} no se ha parado en {} ms",
+                pid, timeout_ms
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// Lee los registros generales del objetivo.
+pub fn leer_registros(pid: i32) -> Result<Registros, String> {
+    let mut regs = Registros::default();
+    let mut iov = libc::iovec {
+        iov_base: &mut regs as *mut Registros as *mut libc::c_void,
+        iov_len: std::mem::size_of::<Registros>(),
+    };
+    unsafe {
+        limpiar_errno();
+        let r = ptrace_raw(
+            PTRACE_GETREGSET,
+            pid,
+            NT_PRSTATUS as *mut libc::c_void,
+            &mut iov as *mut libc::iovec as *mut libc::c_void,
+        );
+        if r == -1 {
+            return Err(format!(
+                "PTRACE_GETREGSET(pid={}) falló: {}",
+                pid,
+                texto_errno(errno_actual())
+            ));
+        }
+    }
+    Ok(regs)
+}
+
+/// Escribe los registros generales del objetivo.
+pub fn escribir_registros(pid: i32, regs: &Registros) -> Result<(), String> {
+    let mut iov = libc::iovec {
+        iov_base: regs as *const Registros as *mut libc::c_void,
+        iov_len: std::mem::size_of::<Registros>(),
+    };
+    unsafe {
+        limpiar_errno();
+        let r = ptrace_raw(
+            PTRACE_SETREGSET,
+            pid,
+            NT_PRSTATUS as *mut libc::c_void,
+            &mut iov as *mut libc::iovec as *mut libc::c_void,
+        );
+        if r == -1 {
+            return Err(format!(
+                "PTRACE_SETREGSET(pid={}) falló: {}",
+                pid,
+                texto_errno(errno_actual())
+            ));
+        }
+    }
+    Ok(())
+}
+
+// --- Memoria del proceso objetivo ---------------------------------------- //
+
+/// Escritor sobre la memoria de otro proceso.
+///
+/// Hay **dos** vías y se pueden conmutar (ver el módulo):
+/// * [`ViaMemoria::Ptrace`]: `PTRACE_POKEDATA`/`PEEKDATA`.
+/// * [`ViaMemoria::ProcMem`]: `write(2)`/`read(2)` sobre `/proc/<pid>/mem`.
+pub struct Memoria {
+    pid: i32,
+    via: ViaMemoria,
+    fd: Option<std::fs::File>,
+}
+
+impl Memoria {
+    /// Abre la vía de escritura indicada.
+    pub fn abrir(pid: i32, via: ViaMemoria) -> Result<Self, String> {
+        let fd = match via {
+            ViaMemoria::Ptrace => None,
+            ViaMemoria::ProcMem => {
+                let ruta = format!("/proc/{}/mem", pid);
+                let f = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&ruta)
+                    .map_err(|e| format!("no se puede abrir {}: {}", ruta, e))?;
+                Some(f)
+            }
+        };
+        Ok(Memoria { pid, via, fd })
+    }
+
+    /// La vía usada.
+    pub fn via(&self) -> ViaMemoria {
+        self.via
+    }
+
+    /// Lee `len` bytes de la memoria del objetivo.
+    pub fn leer(&mut self, addr: u64, len: usize) -> Result<Vec<u8>, String> {
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        match self.via {
+            ViaMemoria::Ptrace => {
+                let mut out = Vec::with_capacity(len);
+                let mut leidos = 0usize;
+                while leidos < len {
+                    let base = (addr + leidos as u64) & !0x7;
+                    let palabra = leer_palabra(self.pid, base)?;
+                    let bytes = palabra.to_le_bytes();
+                    let dentro = (addr + leidos as u64) - base;
+                    let dentro = dentro as usize;
+                    let copiar = std::cmp::min(8 - dentro, len - leidos);
+                    out.extend_from_slice(&bytes[dentro..dentro + copiar]);
+                    leidos += copiar;
+                }
+                Ok(out)
+            }
+            ViaMemoria::ProcMem => {
+                use std::os::unix::fs::FileExt;
+                let f = self
+                    .fd
+                    .as_ref()
+                    .ok_or_else(|| "el fichero /proc/<pid>/mem no está abierto".to_string())?;
+                let mut buf = vec![0u8; len];
+                let n = f
+                    .read_at(&mut buf, addr)
+                    .map_err(|e| format!("read(/proc/{}/mem, 0x{:x}) falló: {}", self.pid, addr, e))?;
+                buf.truncate(n);
+                Ok(buf)
+            }
+        }
+    }
+
+    /// Escribe `datos` en la memoria del objetivo.
+    pub fn escribir(&mut self, addr: u64, datos: &[u8]) -> Result<(), String> {
+        if datos.is_empty() {
+            return Ok(());
+        }
+        match self.via {
+            ViaMemoria::Ptrace => {
+                let mut escritos = 0usize;
+                while escritos < datos.len() {
+                    let dir = addr + escritos as u64;
+                    let base = dir & !0x7;
+                    let dentro = (dir - base) as usize;
+                    let copiar = std::cmp::min(8 - dentro, datos.len() - escritos);
+                    let mut palabra = if dentro == 0 && copiar == 8 {
+                        0u64
+                    } else {
+                        let previo = leer_palabra(self.pid, base)?;
+                        previo
+                    };
+                    let mut bytes = palabra.to_le_bytes();
+                    bytes[dentro..dentro + copiar]
+                        .copy_from_slice(&datos[escritos..escritos + copiar]);
+                    palabra = u64::from_le_bytes(bytes);
+                    escribir_palabra(self.pid, base, palabra)?;
+                    escritos += copiar;
+                }
+                Ok(())
+            }
+            ViaMemoria::ProcMem => {
+                use std::os::unix::fs::FileExt;
+                let f = self
+                    .fd
+                    .as_ref()
+                    .ok_or_else(|| "el fichero /proc/<pid>/mem no está abierto".to_string())?;
+                f.write_at(datos, addr).map_err(|e| {
+                    format!(
+                        "write(/proc/{}/mem, 0x{:x}, {} B) falló: {}",
+                        self.pid,
+                        addr,
+                        datos.len(),
+                        e
+                    )
+                })?;
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Lee una palabra (8 bytes) de la memoria del objetivo con `PTRACE_PEEKDATA`.
+fn leer_palabra(pid: i32, addr: u64) -> Result<u64, String> {
+    unsafe {
+        limpiar_errno();
+        let v = ptrace_raw(
+            PTRACE_PEEKDATA,
+            pid,
+            addr as *mut libc::c_void,
+            std::ptr::null_mut(),
+        );
+        if v == -1 {
+            let e = errno_actual();
+            if e != 0 {
+                return Err(format!(
+                    "PTRACE_PEEKDATA(0x{:x}) falló: {}",
+                    addr,
+                    texto_errno(e)
+                ));
+            }
+        }
+        Ok(v as u64)
+    }
+}
+
+/// Escribe una palabra en la memoria del objetivo con `PTRACE_POKEDATA`.
+fn escribir_palabra(pid: i32, addr: u64, valor: u64) -> Result<(), String> {
+    unsafe {
+        limpiar_errno();
+        let v = ptrace_raw(
+            PTRACE_POKEDATA,
+            pid,
+            addr as *mut libc::c_void,
+            valor as usize as *mut libc::c_void,
+        );
+        if v == -1 {
+            let e = errno_actual();
+            if e != 0 {
+                return Err(format!(
+                    "PTRACE_POKEDATA(0x{:x}) falló: {}",
+                    addr,
+                    texto_errno(e)
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+// --- Informe ------------------------------------------------------------- //
+
+/// Informe de una inyección.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Informe {
+    /// ¿La carga se ha verificado?
+    pub ok: bool,
+    pub pid: i32,
+    /// Nombre del proceso objetivo.
+    pub proceso: String,
+    /// Ruta de la `.so` inyectada.
+    pub biblioteca: String,
+    /// ¿Se pudo adjuntar con `ptrace`?
+    pub adjunto: bool,
+    /// ¿`dlopen` devolvió un handle distinto de cero?
+    pub handle_valido: bool,
+    /// ¿La `.so` aparece en `/proc/<pid>/maps`? (verificación real)
+    pub cargada: bool,
+    /// Dirección de `dlopen` en el objetivo (hex).
+    pub dlopen_addr: Option<String>,
+    /// Vía de escritura usada en la memoria.
+    pub via_memoria: String,
+    /// Error exacto (con `errno`) si algo falló.
+    pub error: Option<String>,
+    /// Traza de los pasos (para depurar en el móvil).
+    pub pasos: Vec<String>,
+}
+
+impl Informe {
+    fn nuevo(pid: i32, proceso: &str, biblioteca: &str, via: ViaMemoria) -> Self {
+        Informe {
+            ok: false,
+            pid,
+            proceso: proceso.to_string(),
+            biblioteca: biblioteca.to_string(),
+            adjunto: false,
+            handle_valido: false,
+            cargada: false,
+            dlopen_addr: None,
+            via_memoria: via.nombre().to_string(),
+            error: None,
+            pasos: Vec::new(),
+        }
+    }
+
+    fn paso(&mut self, texto: &str) {
+        self.pasos.push(texto.to_string());
+    }
+}
+
+/// Inyecta `biblioteca` en el proceso `pid`.
+///
+/// Devuelve siempre un informe: el error (si lo hay) va en `error` con el
+/// `errno` cuando lo hay.
+pub fn inyectar(pid: i32, biblioteca: &str, via: ViaMemoria) -> Informe {
+    let mut inf = Informe::nuevo(pid, "", biblioteca, via);
+    let proceso = leer_cmdline(pid).unwrap_or_default();
+    inf.proceso = proceso.split_whitespace().next().unwrap_or("").to_string();
+
+    if !std::path::Path::new(biblioteca).exists() {
+        inf.error = Some(format!("la biblioteca {} no existe", biblioteca));
+        inf.paso("la biblioteca no existe");
+        return inf;
+    }
+
+    // 1) Adjuntar.
+    match adjuntar(pid) {
+        Ok(()) => {
+            inf.adjunto = true;
+            inf.paso("PTRACE_ATTACH correcto");
+        }
+        Err(e) => {
+            inf.error = Some(e);
+            inf.paso("PTRACE_ATTACH falló");
+            return inf;
+        }
+    }
+
+    // A partir de aquí el proceso está parado: hay que soltarlo siempre.
+    //
+    // Los registros originales se leen UNA vez y se restauran SIEMPRE al
+    // final (éxito o error): si no, la app se queda con el PC en la
+    // dirección mágica (0) y se muere con un SIGSEGV al continuar.
+    let regs_originales = match leer_registros(pid) {
+        Ok(r) => r,
+        Err(e) => {
+            inf.error = Some(e);
+            inf.paso("no se pudieron leer los registros del objetivo");
+            let _ = continuar(pid);
+            soltar(pid);
+            return inf;
+        }
+    };
+
+    let resultado = inyectar_parado(pid, biblioteca, via, &mut inf, &regs_originales);
+    if let Err(e) = resultado {
+        if inf.error.is_none() {
+            inf.error = Some(e);
+        }
+    }
+    // Restaurar SIEMPRE el contexto original y soltarlo.
+    let _ = escribir_registros(pid, &regs_originales);
+    let _ = continuar(pid);
+    soltar(pid);
+    inf
+}
+
+/// El núcleo de la inyección: el proceso ya está parado.
+fn inyectar_parado(
+    pid: i32,
+    biblioteca: &str,
+    via: ViaMemoria,
+    inf: &mut Informe,
+    regs_originales: &Registros,
+) -> Result<(), String> {
+    // 2) Resolver `dlopen` DENTRO del objetivo.
+    let dir_dlopen = match resolver_dlopen(pid) {
+        Ok(d) => d,
+        Err(e) => {
+            inf.paso(format!("no se pudo resolver dlopen: {}", e));
+            return Err(e);
+        }
+    };
+    inf.dlopen_addr = Some(format!("0x{:x}", dir_dlopen));
+    inf.paso(format!("dlopen en el objetivo: 0x{:x}", dir_dlopen));
+
+    // 3) Registros originales (los restaura el llamante, siempre).
+    let sp_original = sp_actual(regs_originales);
+
+    // 4) Zona auxiliar en la pila del objetivo: tiene que ser escribible.
+    let mapas = leer_maps(pid);
+    let scratch = sp_original.saturating_sub(OFFSET_AUXILIAR) & !0xF;
+    let ranura = scratch + OFFSET_RANURA;
+    let zona_ok = mapas
+        .iter()
+        .any(|m| m.escribible() && m.contiene(scratch) && m.contiene(ranura + 16));
+    if !zona_ok {
+        let e = format!(
+            "no se ha encontrado una zona escribible en la pila del objetivo (sp=0x{:x}, \
+             se buscaría 0x{:x}); el mapa de pila puede estar protegido",
+            sp_original, scratch
+        );
+        inf.paso(e.clone());
+        return Err(e);
+    }
+
+    // 5) Escribir la ruta de la `.so` (con `\0`) y preparar la llamada.
+    let mut memoria = Memoria::abrir(pid, via)?;
+    let mut ruta = biblioteca.as_bytes().to_vec();
+    ruta.push(0);
+    if ruta.len() > OFFSET_RANURA as usize {
+        let e = format!("la ruta de la biblioteca es demasiado larga ({} B)", ruta.len());
+        inf.paso(e.clone());
+        return Err(e);
+    }
+    memoria.escribir(scratch, &ruta)?;
+    inf.paso(format!("ruta escrita en 0x{:x} ({} B)", scratch, ruta.len()));
+
+    let llamada = preparar_llamada(regs_originales, dir_dlopen, scratch);
+    if llamada.ranura_retorno != 0 {
+        memoria.escribir(llamada.ranura_retorno, &llamada.magico.to_le_bytes())?;
+    }
+    let mut regs = *regs_originales;
+    llamada.aplicar(&mut regs);
+    escribir_registros(pid, &regs)?;
+    inf.paso(format!(
+        "llamada preparada: pc=0x{:x} sp=0x{:x} retorno=0x{:x}",
+        llamada.pc, llamada.sp, llamada.magico
+    ));
+
+    // 6) Ejecutar: el proceso vuelve de `dlopen` a la dirección mágica (0) y
+    //    recibe un SIGSEGV que nos lo señala.
+    let status = match esperar(pid, 15_000) {
+        Ok(s) => s,
+        Err(e) => {
+            inf.paso(format!("la llamada remota no ha vuelto: {}", e));
+            return Err(e);
+        }
+    };
+    let regs_vuelta = leer_registros(pid)?;
+    let pc_vuelta = pc_actual(&regs_vuelta);
+    let senal = if libc::WIFSTOPPED(status) {
+        libc::WSTOPSIG(status)
+    } else {
+        0
+    };
+
+    // Ha vuelto a la dirección mágica si el PC está en 0 (el CPU intentó
+    // ejecutar ahí y el kernel paró el proceso con un SIGSEGV).
+    if pc_vuelta != RETORNO_MAGICO {
+        // No es nuestra vuelta: `dlopen` ha petado por dentro.
+        let e = format!(
+            "la llamada remota no ha vuelto a la dirección mágica (pc=0x{:x}, señal={}): \
+             dlopen ha fallado dentro del objetivo",
+            pc_vuelta, senal
+        );
+        inf.paso(e.clone());
+        return Err(e);
+    }
+
+    let handle = valor_devuelto(&regs_vuelta);
+    inf.handle_valido = handle != 0;
+    inf.paso(format!(
+        "dlopen ha vuelto: handle=0x{:x} (señal={})",
+        handle, senal
+    ));
+
+    // 7) Verificación REAL: la `.so` tiene que aparecer en los mapas.
+    let mapas_post = leer_maps(pid);
+    let nombre_fichero = std::path::Path::new(biblioteca)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let cargada = mapas_post
+        .iter()
+        .any(|m| !m.ruta.is_empty() && m.ruta.ends_with(&nombre_fichero));
+    inf.cargada = cargada;
+    if cargada {
+        inf.paso(format!(
+            "VERIFICADO: {} aparece en /proc/{}/maps",
+            nombre_fichero, pid
+        ));
+    } else {
+        inf.paso(format!(
+            "AVISO: {} NO aparece en /proc/{}/maps (la carga no se puede dar por buena)",
+            nombre_fichero, pid
+        ));
+    }
+
+    // 8) Restaurar el contexto original (el proceso sigue exactamente igual).
+    escribir_registros(pid, regs_originales)?;
+    inf.paso("registros originales restaurados");
+    inf.ok = cargada && inf.handle_valido;
+    if !inf.ok {
+        inf.error = Some(
+            "la carga no se ha podido verificar: dlopen no ha devuelto handle o la .so no \
+             aparece en los mapas del objetivo"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod pruebas_llamada {
+    use super::*;
+
+    #[test]
+    fn la_llamada_es_pura_y_no_toca_nada() {
+        let r = Registros::default();
+        let l = preparar_llamada(&r, 0xdeadbeef, 0x1234);
+        assert_eq!(l.pc, 0xdeadbeef);
+        assert_eq!(l.arg0, 0x1234);
+        assert_eq!(l.arg1, RTLD_NOW_GLOBAL);
+        assert_eq!(l.magico, RETORNO_MAGICO);
+        // La ruta se escribe POR DEBAJO del SP original.
+        assert!(l.arg0 < sp_actual(&r));
+    }
+
+    #[test]
+    fn la_llamada_pisa_los_registros_correctos() {
+        let mut r = Registros::default();
+        let l = preparar_llamada(&r, 0xdeadbeef, 0x1234);
+        l.aplicar(&mut r);
+        assert_eq!(pc_actual(&r), 0xdeadbeef);
+        assert_eq!(sp_actual(&r), l.sp);
+        #[cfg(target_arch = "aarch64")]
+        {
+            assert_eq!(r.x[0], 0x1234);
+            assert_eq!(r.x[1], RTLD_NOW_GLOBAL);
+            assert_eq!(r.x[30], RETORNO_MAGICO);
+            assert_eq!(l.ranura_retorno, 0);
+        }
+        #[cfg(target_arch = "x86_64")]
+        {
+            assert_eq!(r.rdi, 0x1234);
+            assert_eq!(r.rsi, RTLD_NOW_GLOBAL);
+            assert_eq!(l.ranura_retorno, l.sp);
+        }
+    }
+
+    #[test]
+    fn el_sp_nuevo_esta_alineado() {
+        let mut r = Registros::default();
+        #[cfg(target_arch = "aarch64")]
+        {
+            r.sp = 0x7fff_1234_5678;
+        }
+        #[cfg(target_arch = "x86_64")]
+        {
+            r.rsp = 0x7fff_1234_5678;
+        }
+        let l = preparar_llamada(&r, 1, 2);
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!(l.sp % 16, 0, "el SP de arm64 tiene que estar alineado a 16");
+        #[cfg(target_arch = "x86_64")]
+        assert_eq!(l.sp % 16, 8, "tras un call, el RSP de x86_64 es ≡ 8 (mod 16)");
+    }
+
+    #[test]
+    fn las_vias_de_memoria_se_convierten_desde_texto() {
+        assert_eq!(ViaMemoria::desde_texto("ptrace"), Some(ViaMemoria::Ptrace));
+        assert_eq!(ViaMemoria::desde_texto(""), Some(ViaMemoria::Ptrace));
+        assert_eq!(ViaMemoria::desde_texto("mem"), Some(ViaMemoria::ProcMem));
+        assert_eq!(ViaMemoria::desde_texto("PROC-MEM"), Some(ViaMemoria::ProcMem));
+        assert_eq!(ViaMemoria::desde_texto("xyz"), None);
+    }
+}
