@@ -131,6 +131,29 @@ fn main() {
                 if tareas > 0 {
                     eprintln!("task_scheduler: {tareas} tarea(s) restauradas de la cola en disco");
                 }
+                // MEDIDO (2026-11-23): la URL del tunel publico es EFIMERA
+                // (trycloudflare cambia en cada arranque) y quien coordina
+                // desde fuera no tiene forma de encontrarla.  El movil se
+                // ANUNCIA aqui: publica un "latido" con su URL en el tablon
+                // (Drive) => la flota lo encuentra siempre, aunque el
+                // internet se caiga y la URL cambie al volver.
+                if let Ok(dir) = std::env::var("MEGADAEMON_STATE_DIR") {
+                    let tunel = std::path::Path::new(&dir).join("tunnel.url");
+                    if let Ok(txt) = std::fs::read_to_string(&tunel) {
+                        let url = txt.trim().to_string();
+                        if url.starts_with("http") {
+                            let cuerpo = serde_json::json!({
+                                "url": url,
+                                "puerto": 9090,
+                            });
+                            if let Ok(mut t) =
+                                megadaemon_core::resonance::Tablon::abrir(&dir)
+                            {
+                                t.publicar("latido", cuerpo);
+                            }
+                        }
+                    }
+                }
                 // v18: sincroniza el runtime unificado de Antigravity al arrancar.
                 if let Err(e) = megadaemon_core::antigravity_clone::unificar_runtime() {
                     eprintln!("antigravity: runtime no unificado: {e}");
