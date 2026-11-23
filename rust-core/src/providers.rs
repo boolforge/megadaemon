@@ -857,8 +857,19 @@ pub fn load_vault() -> ProviderVault {
                 // defecto y el siguiente save_vault() SOBRESCRIBÍA el
                 // fichero, perdiendo TODAS las API keys del usuario.
                 // Ahora se hace una copia .corrupt-<ts> y se avisa.
+                //
+                // MEDIDO (2026-11-23, auditoría de calidad): la copia se
+                // escribía con `fs::write` (modo del umask: 0644) ⇒ una
+                // copia de TODAS las API keys del usuario legible por
+                // cualquiera, y el error se callaba con `let _ =`.
                 let bak = format!("{}.corrupt-{}", path, ts_now());
-                let _ = fs::write(&bak, &raw);
+                if let Err(be) = crate::util_fs::write_atomic(
+                    std::path::Path::new(&bak),
+                    raw.as_bytes(),
+                    0o600,
+                ) {
+                    eprintln!("[providers] no se pudo copiar el providers.json corrupto a {bak}: {be}");
+                }
                 eprintln!(
                     "[providers] providers.json corrupto ({}); copia en {}; se usa el catálogo por defecto",
                     e, bak
@@ -890,13 +901,16 @@ pub fn save_vault(vault: &ProviderVault) -> Result<(), String> {
     // (o un OOM kill) en mitad dejaba un `providers.json` truncado ⇒
     // `load_vault` lo declaraba corrupto y el daemon se quedaba SIN las
     // API keys del usuario (y el siguiente `save_vault` las pisaba).
-    let tmp = format!("{}.tmp-{}", path, std::process::id());
-    fs::write(&tmp, text.as_bytes()).map_err(|e| format!("no se pudo escribir {}: {}", tmp, e))?;
-    if let Err(e) = fs::rename(&tmp, &path) {
-        let _ = fs::remove_file(&tmp);
-        return Err(format!("no se pudo renombrar {} -> {}: {}", tmp, path, e));
-    }
-    Ok(())
+    //
+    // MEDIDO (2026-11-23, auditoría de calidad): el fichero se creaba con
+    // el modo del UMASK (0644) ⇒ **todas las API keys del usuario eran
+    // legibles por cualquier otro proceso del móvil** (el daemon corre como
+    // root y el state dir puede estar en `/data/local/tmp`, que es
+    // traversable).  Ahora el temporal se crea con 0600 y se renombra:
+    // el `providers.json` nace con 0600 y no hay ni un instante en el que
+    // las claves estén en otro modo.
+    crate::util_fs::write_atomic(std::path::Path::new(&path), text.as_bytes(), 0o600)
+        .map_err(|e| format!("no se pudo escribir {path}: {e}"))
 }
 
 /// Valida el endpoint de un proveedor.
