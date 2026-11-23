@@ -393,3 +393,43 @@ El release+LTO con `codegen-units=1` **mata el sandbox por OOM** (3 GB).
 - 2026-11-21 16:0x · agente General (contrato v15.1 + Drive/boot) · **QUÉ: (1) todo el trabajo pendiente de la flota ya está commiteado y mergeado en `main` (`76674bf`, 111 ficheros, +34.979 líneas; merge de 3 vías diff3: 35 limpios, 16 con conflicto donde gana `main` para no perder los fixes medidos); (2) Google Drive NATIVO en Rust, sin curl/Python/shell: `google_auth.rs` (OAuth2 refresh_token→access_token, caché y refresco automático, huella sha16) + `drive_native.rs` (subida resumible en Rust en trozos de 256 KiB con SHA-256 verificado, descarga en streaming, directorio→ZIP) + tool MCP `drive_backup` (upload|download|status) ⇒ cada agente hace su backup de entorno a través de MegaDaemon; (3) `deploy/bootstrap_megadaemon.sh`: instala la ÚLTIMA build de Android (sha256 verificado, instalación atómica) sólo si el CI está verde, deja la URL FIJA de DuckDNS (no caduca), publica el canal y mantiene el daemon SIEMPRE vivo (sonda: 3 fallos seguidos, 30 s, espera activa 45 s al reiniciar ⇒ sin tormenta de reinicios) con rollback a la build anterior** · TOQUE: `rust-core/src/{google_auth,drive_native}.rs`, `rust-core/src/mcp_ext.rs` (tool `drive_backup`), `rust-core/src/lib.rs` (2 `pub mod`), `rust-core/src/{backup_crypto,backup_engine,backup_formats,rom_migration,api_key,call_recorder}.rs` (6 errores de compilación del trabajo pendiente), `deploy/bootstrap_megadaemon.sh`, `docs/COORDINATION.md` · BLOQUEA: (a) el móvil sigue SIN su key en el `<state_dir>` (403 ≠ key caducada) ⇒ hace falta un nodo con **LAN real** para copiar `megadaemon_api.key` (al tablón, sólo sha16 `d1753c2d9126b86b` de la credencial de Drive); (b) `mdtmfnc.duckdns.org` resuelve pero no responde en 80/443 ⇒ relay del PC caído (`sudo ./deploy/relay-pc.sh --instalar`); (c) la red de agents: `origin/main` lo integra el principal.
 
 - 2026-11-21 16:0x · agente General · **F-01 (P1) — Board v1: un solo tablón de tareas** (diseño + código, todo en **un** commit para que un revert parcial no pueda dejarlo huérfano). El enjambre tenía **tres** tableros (`coordination` SQLite, `mesh` JSON, `task_scheduler` JSON) con tres formatos, tres espacios de ids y tres modelos de bloqueo, y el cockpit **sólo enseñaba el tercero** ⇒ el trabajo real del enjambre era invisible para el usuario; además `task_scheduler` persiste con un `fs::write` de todo el fichero (dos procesos se pisan) y los leases usan el reloj local (un nodo atrasado puede robar una tarea). Entrego `rust-core/src/board.rs` (**un** tablón SQLite, **un** tipo `Task`, **una** máquina de estados con `can_transition` como único sitio donde se decide, bloqueo = `lease` + `deps`, WAL/DELETE según el FS, `busy_timeout` + backoff, **reloj monótono del tablón**, snapshot + restauración ante corrupción, **modo degradado** con WAL ndjson, eventos como rastro de auditoría, almacén tras un **trait** para no cerrar la puerta a otro backend) + `rust-core/src/bin/md-board.rs` (CLI con `--help`: tasks/ready/stats/events/add/claim/start/report/renew/reclaim/**migrate --dry-run**/snapshot/doctor) + `tools/md-board.sh` + `docs/BOARD_V1_DESIGN.md` (126 líneas: plan de migración **idempotente** de los tres legacy sin borrar los originales, riesgos y reversión). **12 tests** que fijan los invariantes. **No toco** `coordination.rs`, `mesh.rs`, `task_scheduler.rs` ni `cockpit_server.rs`: son de sus dueños y el doc lleva el plan de migración ⇒ **mi commit es aditivo** (si un merge lo revierte, se revierte entero, no a medias).
+
+### Entrega de `rama/frida-gum-2026-11-23` — 2026-11-23T06:26:18Z
+Payload de instrumentacion NATIVO en Rust con frida-gum (bindings OFICIALES de Frida) + tool MCP hooks_payload + job de CI + doc.
+
+QUE HE HECHO (5 commits + 1 fix del root):
+- 'crates/hooks-payload/' (crate AISLADO, cdylib, [workspace] propio): hooks de
+  SQLite (open_v2/prepare_v2/step/finalize), red (connect/sendto/getaddrinfo) y
+  ficheros (open/openat/unlink) con frida-gum 0.17.2; NDJSON con libc::open+write
+  (O_APPEND), redaccion con el criterio de agyshim::redactar, catch_unwind en
+  cada hook, guard de re-entrada (sin deadlock) y mutex envenenado-tolerante.
+- 'rust-core/src/hooks_payload.rs' + tool MCP 'hooks_payload' en mcp_ext.rs:
+  estado | instalar (asset del release + sha256 + modo 0700, atomico) |
+  activar (frida-server con Module.load, o modulo Zygisk, por root_exec) | leer.
+  SIN gum en el crate principal.
+- '.github/workflows/build.yml': jobs 'build-hooks-payload' (publica
+  hooks-payload-arm64 + .sha256) y 'hooks-payload-test' (host).  El payload
+  entra en needs del release pero su fallo NO tumba la release; NO entra en
+  latest.json (justificado en el comentario).
+- 'docs/INYECCION-HOOKS.md' (+ indice en docs/README.md).
+
+API REAL usada (leida del .crate 0.17.2, no de memoria):
+Gum::obtain / Interceptor::obtain(&gum) / Process::obtain(&gum).find_module_by_name /
+Module::find_export_by_name / Module::find_global_export_by_name /
+Interceptor::attach(ptr,&mut listener) / InvocationContext::arg(n),thread_id().
+OJO: Module::get y Function::by_name son del crate 'frida' (cliente remoto),
+NO de gum embebido; por eso el Cargo.toml fija '=0.17.2' exacto.
+
+REQUISITOS DE BUILD DE GUM PARA ANDROID (medidos): libclang-dev (bindgen
+0.72.1), clang del NDK (shims en C), linker del NDK, y RED (frida-build baja
+el devkit PRECOMPILADO frida-gum-devkit-17.9.5-android-arm64.tar.xz, 9,5 MB,
+HTTP 200) => SIN meson ni ninja.
+
+BLOQUEA / PENDIENTE: el payload NO se ha compilado ni inyectado aqui (sandbox
+de 3 GB con 3 JVM de Ghidra: compilar lo mata por OOM).  La via frida-server
+NO se ha probado en el movil (el movil no tiene cliente frida) y el modulo
+Zygisk NO esta escrito.  Todo marcado NO VERIFICADO en el doc con su comando
+de verificacion.
+- ficheros: crates/hooks-payload/Cargo.toml crates/hooks-payload/src/lib.rs crates/hooks-payload/src/hooks.rs crates/hooks-payload/src/sink.rs crates/hooks-payload/src/redact.rs crates/hooks-payload/src/sys.rs crates/hooks-payload/src/json.rs crates/hooks-payload/README.md rust-core/src/hooks_payload.rs rust-core/src/lib.rs rust-core/src/mcp_ext.rs .github/workflows/build.yml docs/INYECCION-HOOKS.md docs/README.md .gitignore
+- rama: `rama/frida-gum-2026-11-23` · SHA: `6556a7d`
+- **NO compilado aqui**: lo compila y testea el root (sandbox de 3 GB).
