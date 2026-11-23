@@ -333,13 +333,81 @@ fn ahora() -> String {
     crate::util_text::now_iso()
 }
 
+/// SHA-256 de un fichero, **en streaming** (no lo carga entero en memoria:
+/// el binario del móvil son 41 MB y el sandbox tiene 3 GB).
+pub fn sha256_de_fichero(ruta: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let mut f = std::fs::File::open(ruta).ok()?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 256 * 1024];
+    loop {
+        let n = std::io::Read::read(&mut f, &mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Some(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// SHA-256 que publica la release para su asset (`<asset>.sha256`).
+pub fn sha_esperado_del_asset(m: &Manifiesto) -> Option<String> {
+    let url = format!("{}/{}.sha256", url_release(), m.asset);
+    descargar_texto(&url).ok().and_then(|t| parsear_sha256(&t))
+}
+
+/// Decisión **por hash de artefacto**: ¿el binario instalado es exactamente
+/// el que publica la release?
+///
+/// MEDIDO (2026-11-23, móvil): la comparación anterior era "sha256 del
+/// FICHERO" contra "commit del manifiesto" (`c8ab17e`).  Son identificadores
+/// distintos: NUNCA coinciden, así que el daemon se reinstalaba a sí mismo
+/// en bucle (41 MB por vuelta) y el supervisor lo relanzaba sin parar.
+/// Ahora se comparan los dos sha256 **del mismo artefacto**.
+pub fn decidir_por_sha(instalado: Option<&str>, esperado: Option<&str>) -> Estado {
+    match (instalado, esperado) {
+        (Some(i), Some(e)) if i.eq_ignore_ascii_case(e) => Estado::Actual,
+        (Some(i), Some(e)) => Estado::Actualizable {
+            short: format!(
+                "{} -> {}",
+                &i[..7.min(i.len())],
+                &e[..7.min(e.len())]
+            ),
+        },
+        (None, _) => Estado::Desconocido {
+            motivo: "no se pudo calcular el sha256 del binario instalado".to_string(),
+        },
+        (_, None) => Estado::Desconocido {
+            motivo: "la release no publica el sha256 del asset".to_string(),
+        },
+    }
+}
+
+/// Comprobación **sin red** (test): el binario instalado es el de la release.
+
 /// Comprueba si hay una versión nueva.  **No descarga el binario.**
 pub fn comprobar(ruta_bin: &Path) -> Estado {
     let m = match manifiesto() {
         Ok(m) => m,
         Err(e) => return Estado::Desconocido { motivo: e },
     };
-    decidir(Manifiesto::short_de_binario(ruta_bin).as_deref(), &m.short)
+    // MEDIDO (2026-11-23, móvil): antes se comparaba el sha256 del FICHERO
+    // con el COMMIT del manifiesto ('c8ab17e') => nunca coincidían => el
+    // daemon se reinstalaba a sí mismo en bucle (41 MB por vuelta) y el
+    // supervisor lo relanzaba sin parar (el móvil se caía cada 30 min).
+    // Ahora se comparan los dos sha256 DEL MISMO artefacto: el del binario
+    // instalado y el que publica la release en '<asset>.sha256'.
+    // Si el .sha256 no se puede leer => Desconocido => NO se toca el móvil.
+    let esperado = match sha_esperado_del_asset(&m) {
+        Some(s) => s,
+        None => {
+            return Estado::Desconocido {
+                motivo: format!("no se pudo leer el .sha256 de {} en la release", m.asset),
+            }
+        }
+    };
+    let instalado = sha256_de_fichero(ruta_bin);
+    decidir_por_sha(instalado.as_deref(), Some(esperado.as_str()))
 }
 
 /// Descarga, verifica e instala la última release.
@@ -372,14 +440,19 @@ pub fn aplicar(ruta_bin: &Path) -> Result<Resultado, String> {
         }
     }
 
-    let actual = Manifiesto::short_de_binario(ruta_bin).unwrap_or_default();
-    if actual == m.short {
-        return Ok(Resultado {
-            instalado: false,
-            short: m.short,
-            previo: None,
-            detalle: "ya estaba instalado".to_string(),
-        });
+    // ¿El binario instalado ES ya el asset de la release?  Se comparan los
+    // dos sha256 DEL MISMO artefacto.  Antes se comparaba el sha del fichero
+    // con el commit => nunca coincidía => se reinstalaba SIEMPRE (el bucle
+    // de 41 MB medido el 2026-11-23).
+    if let Some(h) = sha256_de_fichero(ruta_bin) {
+        if Some(h.as_str()) == esperado.as_deref() {
+            return Ok(Resultado {
+                instalado: false,
+                short: m.short,
+                previo: None,
+                detalle: "ya estaba instalado (sha256 igual al de la release)".to_string(),
+            });
+        }
     }
 
     // Instalación atómica.
@@ -404,6 +477,13 @@ pub fn aplicar(ruta_bin: &Path) -> Result<Resultado, String> {
         std::fs::rename(ruta_bin, &previo).map_err(|e| format!("apartar el anterior: {e}"))?;
     }
     std::fs::rename(&nuevo, ruta_bin).map_err(|e| format!("instalar: {e}"))?;
+
+    // Se deja el short publicado para que /health pueda decir qué build es
+    // (si el binario no lo trae embebido).
+    {
+        let ruta = crate::cockpit_server::state_dir() + "/build_short";
+        let _ = std::fs::write(&ruta, format!("{}\n", m.short));
+    }
 
     Ok(Resultado {
         instalado: true,
@@ -439,14 +519,35 @@ pub fn build_sha() -> String {
         .clone()
 }
 
-/// Información del build en servicio: hash del binario + short del commit
-/// publicado (si el auto-actualizador ya lo sabe).
+/// Commit con el que se compiló este binario.
+///
+/// Lo inyecta el CI como `MEGADAEMON_BUILD_SHA` en el momento de compilar
+/// (`option_env!` lo resuelve en tiempo de compilación).  Si el binario se
+/// compiló a mano y sin esa variable, devuelve "desconocido" y el resto del
+/// sistema sigue funcionando (sólo se pierde esta comprobación).
+pub fn build_commit() -> &'static str {
+    option_env!("MEGADAEMON_BUILD_SHA").unwrap_or("desconocido")
+}
+
+/// Información del build en servicio: hash del binario + short del commit.
+///
+/// MEDIDO (2026-11-23): `short` salía SIEMPRE a null porque el fichero
+/// `state/build_short` sólo lo escribía el auto-actualizador y nunca se
+/// creaba.  Ahora se prioriza el commit EMBEBIDO en el binario (el CI lo
+/// inyecta al compilar) y, si no lo hay, el que dejó el auto-actualizador.
 pub fn build_info() -> Value {
-    let short = crate::cockpit_server::state_dir() + "/build_short";
-    let publicado = std::fs::read_to_string(&short).ok().map(|s| s.trim().to_string());
+    let commit = build_commit();
+    let short_embebido = if commit == "desconocido" {
+        None
+    } else {
+        Some(commit[..7.min(commit.len())].to_string())
+    };
+    let ruta = crate::cockpit_server::state_dir() + "/build_short";
+    let publicado = std::fs::read_to_string(&ruta).ok().map(|s| s.trim().to_string());
     json!({
         "sha256": build_sha(),
-        "short": publicado,
+        "short": short_embebido.or(publicado),
+        "commit": commit,
     })
 }
 
@@ -578,6 +679,60 @@ mod tests {
         }
         // Sin sha del binario => desconocido (nunca "actualizable" a ciegas).
         assert!(matches!(decidir(None, "abc1234"), Estado::Desconocido { .. }));
+    }
+
+    #[test]
+    fn la_decision_por_sha_no_confunde_el_commit_con_el_hash() {
+        // REGRESION (2026-11-23): el movil se reinstalaba en bucle porque se
+        // comparaba el sha256 del FICHERO con el COMMIT del manifiesto.
+        let sha_fichero = "fa27914a33a29b8bd84cbf74a0aa84616609a401894225f7284e6c0c47b1c67c";
+        let commit = "c8ab17e";
+        // Comparar commit contra hash: NUNCA es Actual (que era el bug).
+        assert!(!matches!(
+            decidir_por_sha(Some(sha_fichero), Some(commit)),
+            Estado::Actual
+        ));
+        // Comparar hash contra hash: si son el mismo artefacto, Actual.
+        assert!(matches!(
+            decidir_por_sha(Some(sha_fichero), Some(sha_fichero)),
+            Estado::Actual
+        ));
+        // Hash distinto => Actualizable, y el mensaje dice los dos.
+        let otro = "917f4410403896a34f53f9a844c413cd66ae47180079c047c571b836db777e91";
+        match decidir_por_sha(Some(sha_fichero), Some(otro)) {
+            Estado::Actualizable { short } => {
+                assert!(short.contains("fa27914a"), "{short}");
+                assert!(short.contains("917f441"), "{short}");
+            }
+            otro_estado => panic!("se esperaba Actualizable, came {otro_estado:?}"),
+        }
+    }
+
+    #[test]
+    fn sin_sha_esperado_no_se_toca_nada() {
+        // Fail-safe: si la release no publica el .sha256, el estado es
+        // Desconocido => el auto-actualizador NO descarga ni instala.
+        assert!(matches!(
+            decidir_por_sha(Some("aa"), None),
+            Estado::Desconocido { .. }
+        ));
+        assert!(matches!(
+            decidir_por_sha(None, Some("aa")),
+            Estado::Desconocido { .. }
+        ));
+    }
+
+    #[test]
+    fn el_sha_de_un_fichero_es_el_mismo_que_el_del_contenido() {
+        let dir = std::env::temp_dir().join(format!("md-sha-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("datos.bin");
+        let contenido: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&f, &contenido).unwrap();
+        let por_fichero = sha256_de_fichero(&f).unwrap();
+        let por_memoria = sha256_hex(&contenido);
+        assert_eq!(por_fichero, por_memoria);
+        let _ = std::fs::remove_file(&f);
     }
 
     #[test]

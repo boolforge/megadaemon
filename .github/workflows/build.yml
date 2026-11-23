@@ -164,6 +164,9 @@ jobs:
       - name: Compilar
         working-directory: rust-core
         env:
+          # El commit se EMBEBE en el binario: /health publica build.short y
+          # asi se puede comprobar desde fuera qué build sirve el movil.
+          MEGADAEMON_BUILD_SHA: ${{ github.sha }}
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
           CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
@@ -241,6 +244,7 @@ jobs:
       - name: Compilar
         working-directory: rust-core
         env:
+          MEGADAEMON_BUILD_SHA: ${{ github.sha }}
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
           AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
