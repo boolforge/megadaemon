@@ -413,8 +413,13 @@ pub fn generar_db_servida_desde(
         .unwrap_or_else(|_| "conversation_summaries".to_string());
     let filas = leer_conversaciones(&src, &tabla, 1_000_000)?;
     drop(src);
-    let _ = std::fs::remove_file(destino);
-    let mut dst = Connection::open(destino).map_err(|e| format!("abrir destino: {e}"))?;
+    // MEDIDO (2026-11-23): se escribe en un TEMPORAL y se renombra al
+    // final => la DB servida solo se sustituye cuando la nueva esta
+    // COMPLETA (si se corta a mitad, el destino conserva la anterior).
+    let temporal = destino.with_extension("tmp");
+    let _ = std::fs::remove_file(&temporal);
+    let mut dst =
+        Connection::open(&temporal).map_err(|e| format!("abrir destino: {e}"))?;
     let esquema = format!(
         "CREATE TABLE IF NOT EXISTS {} AS SELECT * FROM {} LIMIT 0",
         tabla, tabla
@@ -512,6 +517,10 @@ pub fn generar_db_servida_desde(
     // => la app se quedaría colgada, que es justo lo que hay que evitar.
     let _ = dst.pragma_update(None, "journal_mode", "WAL");
     let _ = dst.pragma_update(None, "synchronous", "NORMAL");
+    // Publicacion ATOMICA: soltar el WAL y renombrar el temporal.
+    drop(dst);
+    std::fs::rename(&temporal, destino)
+        .map_err(|e| format!("publicar {}: {e}", destino.display()))?;
     Ok(json!({
         "ok": true,
         "destino": destino.display().to_string(),
@@ -743,7 +752,9 @@ fn checkpoint_original(original: &Path) -> (bool, String) {
         return (false, "no se pudo fijar busy_timeout".to_string());
     }
     match con.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
-        r.get::<_, i64>(0).unwrap_or(-1)
+        // MEDIDO (2026-11-23): el cierre de `query_row` debe devolver un
+        // Result => E0308 con `unwrap_or(-1)` a pelo.
+        Ok(r.get::<_, i64>(0).unwrap_or(-1))
     }) {
         Ok(v) => {
             if v == 0 {
