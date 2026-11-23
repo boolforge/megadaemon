@@ -728,6 +728,109 @@
       </div>
     </section>
 
+    <!-- ========================================================== -->
+    <!-- VIEW: AGENT CHAT (gateway OpenAI-compatible del daemon)   -->
+    <!-- ========================================================== -->
+    <section id="view-chat" class="view">
+      <div class="card">
+        <div class="section-title">
+          <span>&#9672; AGENTE — CHAT CONTRA EL GATEWAY DEL DAEMON</span>
+          <div class="row">
+            <select id="chatModel" aria-label="Modelo" style="flex:1 1 auto;"></select>
+            <button class="btn sm cyan" onclick="loadChatModels()">MODELOS</button>
+            <button class="btn sm primary" id="btnChatSend" onclick="chatSend()">ENVIAR</button>
+          </div>
+        </div>
+        <textarea id="chatPrompt" rows="4" placeholder="escribe al agente..." style="width:100%;"></textarea>
+        <div class="row" style="margin-top:9px;">
+          <span class="pill mono" id="chatStatus">inactivo</span>
+          <span class="pill mono" id="chatProvider">--</span>
+          <span class="pill mono" id="chatLatency">--</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><span>&#9672; RESPUESTA</span>
+          <span class="pill" id="chatMeta">--</span>
+        </div>
+        <div class="msg bot" id="chatAnswer" style="margin-top:6px;">
+          <div class="msg-meta mono"><span>(sin respuesta todavia)</span></div>
+        </div>
+        <div class="rule-why" id="chatTrace"></div>
+      </div>
+    </section>
+
+    <!-- ========================================================== -->
+    <section id="view-antigravity" class="view">
+      <div class="card">
+        <div class="section-title">
+          <span>◈ ANTIGRAVITY — MOTOR AGÉNTICO DEL MÓVIL (com.agy)</span>
+          <div class="row">
+            <button class="btn sm cyan" onclick="loadAntigravity()">SYNC</button>
+          </div>
+        </div>
+        <div class="grid-4">
+          <div class="stat-box"><div class="stat-label">Language server</div><div class="stat-val mono" id="agyLs">--</div></div>
+          <div class="stat-box"><div class="stat-label">Sesión Google</div><div class="stat-val mono" id="agyAuth">--</div></div>
+          <div class="stat-box"><div class="stat-label">Modelo en uso</div><div class="stat-val mono" id="agyModel">--</div></div>
+          <div class="stat-box"><div class="stat-label">Conversaciones</div><div class="stat-val mono" id="agyConvCount">--</div></div>
+        </div>
+        <div class="row" style="margin-top:9px;">
+          <span class="pill mono" id="agyCsrf">CSRF --</span>
+          <span class="pill mono" id="agyDefault">DEFAULT --</span>
+          <span class="pill violet mono" id="agyModelCount">MODELOS --</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><span>◈ CATÁLOGO REAL DE MODELOS</span>
+          <span class="pill" id="agyModelsInfo">--</span>
+        </div>
+        <table class="data-table mono">
+          <thead><tr><th>ID REAL</th><th>ID OFUSCADO</th><th>NOMBRE</th><th>PROVEEDOR</th><th>CUOTA</th></tr></thead>
+          <tbody id="agyModelsBody"><tr><td colspan="5" style="color:var(--ink-3)">sin datos</td></tr></tbody>
+        </table>
+        <div class="rule-why" id="agyModelsNote"></div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><span>◈ CONVERSACIONES DEL AGENTE</span>
+          <div class="row">
+            <input type="text" id="agySearchBox" placeholder="buscar en el historial" style="flex:1 1 auto;">
+            <button class="btn sm" onclick="agySearch()">BUSCAR</button>
+            <button class="btn sm ghost" onclick="agyConversations()">TODAS</button>
+          </div>
+        </div>
+        <table class="data-table mono">
+          <thead><tr><th>CASCADE ID</th><th>TÍTULO</th><th>ESTADO</th><th>PASOS</th></tr></thead>
+          <tbody id="agyConvBody"><tr><td colspan="4" style="color:var(--ink-3)">sin datos</td></tr></tbody>
+        </table>
+        <div class="rule-why" id="agyConvNote"></div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><span>◈ ENCOLAR TRABAJO EN EL AGENTE</span>
+          <span class="pill violet" id="agyEnqModel">MODELO --</span>
+        </div>
+        <textarea id="agyPrompt" rows="3" placeholder="prompt para el agente de Antigravity" style="width:100%;"></textarea>
+        <div class="row" style="margin-top:9px;">
+          <button class="btn sm primary" onclick="agyEnqueue()">ENCOLAR (confirm=true)</button>
+          <span class="pill" id="agyEnqState">inactivo</span>
+        </div>
+        <div class="rule-why" id="agyEnqNote"></div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><span>◈ COLA DE TAREAS DEL DAEMON DE ANTIGRAVITY</span>
+          <span class="pill" id="agyTasksInfo">--</span>
+        </div>
+        <table class="data-table mono">
+          <thead><tr><th>ID</th><th>NOMBRE</th><th>TRIGGER</th><th>CADA</th><th>ESTADO</th></tr></thead>
+          <tbody id="agyTasksBody"><tr><td colspan="5" style="color:var(--ink-3)">sin datos</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
   </main>
 
   <!-- FIXED BOTTOM THUMB NAVIGATION BAR (Bottom Comfort Zone, 4 Tabs) -->
@@ -751,6 +854,14 @@
     <button class="nav-btn" data-view="view-system" onclick="switchView('view-system', this)">
       <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/></svg>
       <span>SYSTEM</span>
+    </button>
+    <button class="nav-btn" data-view="view-chat" onclick="switchView('view-chat', this)">
+      <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      <span>CHAT</span>
+    </button>
+    <button class="nav-btn" data-view="view-antigravity" onclick="switchView('view-antigravity', this)">
+      <svg viewBox="0 0 24 24"><path d="M12 2l2.4 6.2L21 10l-5.4 3.4L17 21l-5-3.6L7 21l1.4-7.6L3 10l6.6-1.8z"/></svg>
+      <span>ANTIG</span>
     </button>
   </nav>
 </div>
@@ -877,6 +988,197 @@ async function mdFetch(url, opts) {
   return res;
 }
 
+
+/* ===========================================================================
+   AGENT CHAT: la pagina habla con el AGENTE por el gateway del daemon.
+   El cuerpo sale por `POST /v1/chat/completions` (compatible con OpenAI) =>
+   la puerta de aceptacion se puede comprobar en el LOG DEL DAEMON, no en el
+   navegador. Cuando el proveedor rechaza, la UI explica el motivo con la
+   `provider_trace` (que el gateway mete en `megadaemon.provider_trace`).
+   =========================================================================== */
+async function loadChatModels() {
+  try {
+    var d = await apiGet("/api/v2/llm");
+    var sel = document.getElementById("chatModel");
+    if (!sel || !d) return;
+    var ps = d.providers || [];
+    var html = "";
+    if (d.default_model) {
+      html += '<option value="' + d.default_model + '">' + d.default_model + ' (por defecto)</option>';
+    }
+    for (var i = 0; i < ps.length; i++) {
+      var p = ps[i];
+      var mid = p.model || p.id;
+      if (!mid) continue;
+      var label = (p.name || p.id || mid) + (p.free ? " [free]" : "") + (p.ready === false ? " (sin credencial)" : "");
+      html += '<option value="' + mid + '">' + label + '</option>';
+    }
+    sel.innerHTML = html || '<option value="megadaemon">megadaemon</option>';
+  } catch (e) {
+    var sel2 = document.getElementById("chatModel");
+    if (sel2 && !sel2.innerHTML) sel2.innerHTML = '<option value="megadaemon">megadaemon</option>';
+  }
+}
+
+async function chatSend() {
+  var box = document.getElementById("chatPrompt");
+  var sel = document.getElementById("chatModel");
+  var prompt = (box && box.value) || "";
+  if (!prompt.trim()) { agyText("chatStatus", "falta el prompt"); return; }
+  var model = (sel && sel.value) || "megadaemon";
+  agyText("chatStatus", "enviando...");
+  agyText("chatTrace", "");
+  try {
+    var res = await mdFetch("/v1/chat/completions", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        model: model,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 1024
+      })
+    });
+    var raw = await res.text();
+    var d;
+    try { d = JSON.parse(raw); } catch (e) { d = { error: raw }; }
+    if (!res.ok) {
+      agyText("chatStatus", "HTTP " + res.status);
+      agyText("chatTrace", raw.slice(0, 400));
+      return;
+    }
+    var answer = "";
+    try { answer = d.choices[0].message.content || ""; } catch (e) { answer = ""; }
+    var md = d.megadaemon || {};
+    var trace = md.provider_trace || [];
+    var ans = document.getElementById("chatAnswer");
+    if (ans) {
+      ans.innerHTML = '<div class="msg-meta mono"><span>' + (md.provider_name || model) + '</span></div><div>' +
+        String(answer).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>") + '</div>';
+    }
+    agyText("chatStatus", "ok");
+    agyText("chatProvider", md.provider_name || md.provider_id || "--");
+    agyText("chatLatency", md.latency_ms !== undefined ? (md.latency_ms + " ms") : "--");
+    agyText("chatMeta", (md.tokens_used !== undefined ? md.tokens_used + " tok" : "--") +
+      (md.substituted ? " (sustituido: pidio " + (md.requested_model || model) + ")" : ""));
+    // P2-2: el motivo de un rechazo viaja en la traza (cadenas legibles).
+    var t = "";
+    for (var i = 0; i < trace.length; i++) { t += "\u2022 " + trace[i] + "\n"; }
+    if (!answer && !t) { t = "(respuesta vacia y sin traza)"; }
+    agyText("chatTrace", t);
+  } catch (e) {
+    agyText("chatStatus", "error");
+    agyText("chatTrace", String(e));
+  }
+}
+
+/* ===========================================================================
+   ANTIGRAVITY: el motor agéntico del móvil, servido por la API de MegaDaemon.
+   Las rutas las sirve el daemon (rust-core/src/webui.rs) y hablan con el
+   language server local de Antigravity (127.0.0.1:45157, HTTPS autofirmado)
+   usando el token CSRF que publica el SPA del propio IDE.
+   =========================================================================== */
+function agyText(el, v) { var n = document.getElementById(el); if (n) n.textContent = (v === undefined || v === null || v === "") ? "--" : String(v); }
+
+async function loadAntigravity() {
+  try {
+    var d = await apiGet("/api/v2/antigravity");
+    if (!d || d.ok === false) { agyText("agyLs", "ERROR"); agyText("agyModelsInfo", d && d.error ? d.error : "error"); return; }
+    var st = d.status || {};
+    agyText("agyLs", st.language_server ? "vivo" : "--");
+    agyText("agyAuth", st.auth && st.auth.authResult && st.auth.authResult.hasValidAuth ? "valida" : "no");
+    agyText("agyModel", st.model || "--");
+    agyText("agyConvCount", st.conversations !== undefined ? st.conversations : "--");
+    agyText("agyCsrf", "CSRF " + (st.csrf_sha16 || "--"));
+    agyText("agyDefault", "DEFAULT " + (d.default_model || "--"));
+    agyText("agyModelCount", "MODELOS " + (d.model_count || 0));
+    agyText("agyEnqModel", "MODELO " + (st.model || "--"));
+    agyRenderModels(d.models || []);
+    agyRenderTasks(d.tasks || []);
+    if (!(window.__agyConvLoaded)) { await agyConversations(); }
+  } catch (e) {
+    agyText("agyLs", "SIN SEÑAL");
+    agyText("agyModelsInfo", String(e));
+  }
+}
+
+function agyRenderModels(models) {
+  var tb = document.getElementById("agyModelsBody");
+  if (!tb) return;
+  if (!models.length) { tb.innerHTML = '<tr><td colspan="5" style="color:var(--ink-3)">catálogo vacío</td></tr>'; return; }
+  var html = "";
+  for (var i = 0; i < models.length; i++) {
+    var m = models[i];
+    var q = (m.quota_remaining_fraction === null || m.quota_remaining_fraction === undefined) ? "--" : (Math.round(m.quota_remaining_fraction * 100) + "%");
+    var name = (m.display_name || "") + (m.recommended ? " ★" : "");
+    html += "<tr><td>" + (m.id || "?") + "</td><td>" + (m.placeholder || "-") + "</td><td>" + name + "</td><td>" + (m.provider || "-") + "</td><td>" + q + "</td></tr>";
+  }
+  tb.innerHTML = html;
+  agyText("agyModelsInfo", models.length + " modelos");
+}
+
+function agyRenderTasks(tasks) {
+  var tb = document.getElementById("agyTasksBody");
+  if (!tb) return;
+  if (!tasks.length) { tb.innerHTML = '<tr><td colspan="5" style="color:var(--ink-3)">sin tareas</td></tr>'; agyText("agyTasksInfo", "0"); return; }
+  var html = "";
+  for (var i = 0; i < tasks.length; i++) {
+    var t = tasks[i];
+    html += "<tr><td>" + (t.id || "?") + "</td><td>" + (t.name || "") + "</td><td>" + (t.trigger || "-") + "</td><td>" + (t.interval_sec || "-") + "s</td><td>" + (t.enabled ? "activo" : "parado") + "</td></tr>";
+  }
+  tb.innerHTML = html;
+  agyText("agyTasksInfo", tasks.length + " tareas");
+}
+
+async function agyConversations() {
+  try {
+    var d = await apiGet("/api/v2/antigravity/conversations");
+    if (!d || d.ok === false) { agyText("agyConvNote", (d && d.error) || "error"); return; }
+    window.__agyConvLoaded = true;
+    var arr = d.conversations || [];
+    var tb = document.getElementById("agyConvBody");
+    var html = "";
+    for (var i = 0; i < arr.length; i++) {
+      var c = arr[i];
+      html += "<tr><td>" + (c.cascade_id || "?") + "</td><td>" + (c.title || "") + "</td><td>" + (c.status || "") + "</td><td>" + (c.step_count || 0) + "</td></tr>";
+    }
+    tb.innerHTML = html || '<tr><td colspan="4" style="color:var(--ink-3)">sin conversaciones</td></tr>';
+    agyText("agyConvNote", arr.length + " conversaciones");
+    agyText("agyConvCount", arr.length);
+  } catch (e) { agyText("agyConvNote", String(e)); }
+}
+
+async function agySearch() {
+  var q = (document.getElementById("agySearchBox") || {}).value || "";
+  if (!q.trim()) { agyText("agyConvNote", "falta el texto de búsqueda"); return; }
+  try {
+    var d = await apiGet("/api/v2/antigravity/search?q=" + encodeURIComponent(q) + "&limit=20");
+    if (!d || d.ok === false) { agyText("agyConvNote", (d && d.error) || "error"); return; }
+    var arr = d.results || [];
+    var tb = document.getElementById("agyConvBody");
+    var html = "";
+    for (var i = 0; i < arr.length; i++) {
+      var c = arr[i];
+      html += "<tr><td>" + (c.cascadeId || c.cascade_id || "?") + "</td><td>" + (c.title || "") + "</td><td>" + (c.workspaceName || "") + "</td><td></td></tr>";
+    }
+    tb.innerHTML = html || '<tr><td colspan="4" style="color:var(--ink-3)">sin resultados</td></tr>';
+    agyText("agyConvNote", arr.length + " resultados para «" + q + "»");
+  } catch (e) { agyText("agyConvNote", String(e)); }
+}
+
+async function agyEnqueue() {
+  var p = (document.getElementById("agyPrompt") || {}).value || "";
+  if (!p.trim()) { agyText("agyEnqState", "falta el prompt"); return; }
+  agyText("agyEnqState", "encolando...");
+  try {
+    var d = await apiPost("/api/v2/antigravity/enqueue", { prompt: p, confirm: true });
+    if (!d || d.ok === false) { agyText("agyEnqState", "error"); agyText("agyEnqNote", (d && d.error) || "error"); return; }
+    agyText("agyEnqState", "encolado");
+    agyText("agyEnqNote", "cascade_id=" + (d.cascade_id || "?"));
+    await agyConversations();
+  } catch (e) { agyText("agyEnqState", "error"); agyText("agyEnqNote", String(e)); }
+}
+
+
 async function apiGet(url) {
   const res = await mdFetch(url, { headers: authHeaders() });
   if (!res.ok) throw new Error("HTTP " + res.status);
@@ -907,6 +1209,8 @@ function switchView(viewId, btnEl) {
   if (btnEl) btnEl.classList.add("active");
   if (viewId === "view-npu") { refreshNpuView(); loadAccelPolicy(); }
   if (viewId === "view-system") { refreshHardware(); }
+  if (viewId === "view-chat") { loadChatModels(); }
+  if (viewId === "view-antigravity") { loadAntigravity(); }
   try { history.replaceState(null, "", "#" + viewId); } catch (e) {}
 }
 

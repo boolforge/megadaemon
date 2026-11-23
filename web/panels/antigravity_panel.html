@@ -24,9 +24,11 @@
         una linea en `switchView()`:
             if (viewId === "view-antigravity") { loadAntigravity(); }
 
-     Este fichero va aparte A PROPOSITO: la plantilla del cockpit esta siendo
-     rediseñada (commit `e81fade1` "Rediseño web y API"), asi que el panel se
-     entrega como pieza independiente y no se solapa con ese trabajo.
+     ESTADO: **ya aplicado** a `web/cockpit_template.html` (rama
+     `agent/antigravity-instrumentado`, commit `a997273` + el de la pagina de
+     chat). Este fichero se queda como **pieza de referencia** para reaplicarlo
+     en otra plantilla (o para rehacerlo si la plantilla se rediseña otra vez):
+     son 3 pasos y el JS no depende de nada del resto del cockpit.
      =========================================================================== -->
     <!-- ========================================================== -->
     <section id="view-antigravity" class="view">
