@@ -3,7 +3,8 @@
 //! Auto-respuestas, reenvíos, registro de llamadas y bitácora de todo lo que
 //! pasa. Este módulo es la parte "de rottenura" de la automatización: el
 //! usuario decide qué se hace y este código lo hace **de verdad**, sin
-//! dry-run, sin bloqueos implícitos y sinermission para escribir mensajes.
+//! dry-run, sin bloqueos implícitos y con los permisos ya concedidos para
+//! escribir mensajes.
 //!
 //! ## Autorización
 //!

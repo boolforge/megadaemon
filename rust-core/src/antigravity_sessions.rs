@@ -634,7 +634,7 @@ pub fn tokens_y_modelo(conversation_id: &str) -> Value {
 ///
 /// El NDJSON del shim tiene `ts` (unix) y el modelo pedido/real; las
 /// sesiones tienen `last_user_input_time` y `last_modified_time` (RFC3339).
-/// Se cruzan por **ventana temporal**: losentries del shim que caen dentro
+/// Se cruzan por **ventana temporal**: los entries del shim que caen dentro
 /// de la vida de la conversación.
 ///
 /// No bloquea nada: los dos ficheros se leen del disco.
