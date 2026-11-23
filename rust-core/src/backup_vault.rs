@@ -1053,8 +1053,28 @@ pub fn seal_with_iterations(
                 .map_err(|e| format!("creación de {}: {}", parent.display(), e))?;
         }
     }
-    fs::write(out, &buf).map_err(|e| format!("escritura de {}: {}", out, e))?;
+    // MEDIDO (2026-11-23, auditoría de calidad): la bóveda se escribía EN EL
+    // SITIO (`fs::write`) ⇒ un corte a mitad dejaba una bóveda CORRUPTA en
+    // la ruta final (y la anterior, si la había, ya estaba destruida): una
+    // bóveda a medias no se puede abrir ni verificar, y el fichero bueno
+    // ya no está.  Ahora se escribe en `<out>.tmp` y se publica con un
+    // rename atómico.
+    let tmp = tmp_de(out);
+    fs::write(&tmp, &buf).map_err(|e| format!("escritura de {}: {}", tmp.display(), e))?;
+    fs::rename(&tmp, out).map_err(|e| format!("publicación de {}: {}", out, e))?;
     Ok(manifest)
+}
+
+/// Ruta temporal de una escritura: `<fichero>.tmp` (mismo directorio ⇒ el
+/// rename es atómico: misma partición).
+fn tmp_de(out: &str) -> std::path::PathBuf {
+    let mut p = std::path::PathBuf::from(out);
+    let nombre = p
+        .file_name()
+        .map(|n| format!("{}.tmp", n.to_string_lossy()))
+        .unwrap_or_else(|| "boveda.tmp".to_string());
+    p.set_file_name(nombre);
+    p
 }
 
 // ---------------------------------------------------------------------------
@@ -1542,7 +1562,8 @@ pub fn seal_dir_streaming(
                 .map_err(|e| format!("creación de {}: {}", parent.display(), e))?;
         }
     }
-    let mut f = fs::File::create(out).map_err(|e| format!("escritura de {}: {}", out, e))?;
+    let tmp = tmp_de(out);
+    let mut f = fs::File::create(&tmp).map_err(|e| format!("escritura de {}: {}", tmp.display(), e))?;
 
     // Cabecera + manifiesto.
     let mut head: Vec<u8> = Vec::with_capacity(VAULT_HEADER_LEN + manifest_bytes.len());
@@ -1587,6 +1608,12 @@ pub fn seal_dir_streaming(
     }
     f.flush()
         .map_err(|e| format!("escritura de {}: {}", out, e))?;
+    // fsync + publicación atómica: en la ruta final hay siempre una bóveda
+    // COMPLETA (MEDIDO 2026-11-23, auditoría de calidad).
+    f.sync_all()
+        .map_err(|e| format!("sincronización de {}: {}", out, e))?;
+    drop(f);
+    fs::rename(&tmp, out).map_err(|e| format!("publicación de {}: {}", out, e))?;
     Ok(manifest)
 }
 
