@@ -72,6 +72,81 @@ pub const BIN_CLON: &str = "/data/user/0/com.agy/files/megadaemon/bin/megadaemon
 /// (`/data/adb/megadaemon`), que sobrevive a los reinicios.
 pub const BIN_CANONICO: &str = "/data/adb/megadaemon/megadaemon-core";
 
+/// Configuración de permisos del agente de Antigravity (`.gemini/config`).
+///
+/// MEDIDO (2026-11-24, móvil): aquí viven los *grants* de permisos que el
+/// language server se auto-concede para ejecutar comandos.  Si la forma es
+/// inválida, el LS lo registra en su log y **la app lo pinta en la UI**
+/// ("ignoring invalid allow entry ..."), que es el "muro de texto" que veía
+/// el usuario.
+pub const CONFIG_PERMISOS: &str = "/data/user/0/com.agy/files/.gemini/config/config.json";
+
+/// **Sanea** los grants de permisos de Antigravity.
+///
+/// MEDIDO (2026-11-24): el LS sólo acepta dos formas de grant:
+///
+/// * `command(<cmd>)`  → dentro del sandbox
+/// * `n(<cmd>)`        → fuera del sandbox
+///
+/// y el comodín exacto `unsandboxed(*)`.  Cualquier otra forma (por ejemplo
+/// `unsandboxed(python3 -c "...")`) la rechaza el LS una y otra vez ⇒
+/// flood de logs ⇒ la UI muestra el error largo.
+///
+/// El daemon no es quien escribe esos grants (los escribe el agente), pero
+/// puede **sanearlos** en cuanto aparecen: así el flood no puede volver
+/// aunque el emisor sea otro.
+///
+/// Devuelve cuántas entradas se corrigieron (0 = nada que hacer).
+pub fn sanear_grants_permisos() -> Result<usize, String> {
+    let ruta = std::path::Path::new(CONFIG_PERMISOS);
+    let crudo = match std::fs::read_to_string(ruta) {
+        Ok(c) => c,
+        Err(_) => return Ok(0),
+    };
+    let mut v: serde_json::Value = match serde_json::from_str(&crudo) {
+        Ok(v) => v,
+        Err(_) => return Ok(0),
+    };
+    let mut corregidas = 0usize;
+    sanear_valor(&mut v, &mut corregidas);
+    if corregidas == 0 {
+        return Ok(0);
+    }
+    let nuevo = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
+    // Escritura atómica (mismo directorio) para que el LS no lea medio
+    // fichero: `.tmp` + rename.
+    let tmp = ruta.with_extension("json.tmp-megadaemon");
+    std::fs::write(&tmp, nuevo.as_bytes()).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, ruta).map_err(|e| format!("{}: {e}", ruta.display()))?;
+    Ok(corregidas)
+}
+
+/// Recorre el JSON y corrige las formas de grant inválidas.
+fn sanear_valor(v: &mut serde_json::Value, corregidas: &mut usize) {
+    match v {
+        serde_json::Value::Object(m) => {
+            for (_k, val) in m.iter_mut() {
+                sanear_valor(val, corregidas);
+            }
+        }
+        serde_json::Value::Array(a) => {
+            for val in a.iter_mut() {
+                sanear_valor(val, corregidas);
+            }
+        }
+        serde_json::Value::String(s) => {
+            // `unsandboxed(...)` => `n(...)`, salvo el comodín `unsandboxed(*)`.
+            if s.starts_with("unsandboxed(") && s != "unsandboxed(*)" {
+                let dentro = s.trim_start_matches("unsandboxed(");
+                let dentro = dentro.strip_suffix(')').unwrap_or(dentro);
+                *s = format!("n({dentro})");
+                *corregidas += 1;
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Ruta del binario canónico respetando `MEGADAEMON_PREFIX`.
 ///
 /// Es la MISMA ruta que usa el reparador de entorno
@@ -532,6 +607,23 @@ fn medir(base: &Path) -> (usize, u64) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn los_grants_solo_dejan_las_formas_que_el_ls_acepta() {
+        // MEDIDO (2026-11-24): el LS acepta `command(...)` y `n(...)`, y el
+        // comodín exacto `unsandboxed(*)`.  Cualquier otra forma la
+        // rechaza (flood de logs + el error pintado en la UI de la app).
+        let mut v: serde_json::Value = serde_json::from_str(
+            r#"{"allow":["unsandboxed(python3 -c \"print(1)\")","command(ls)","unsandboxed(*)"],"otro":{"x":"unsandboxed(a b c)"}}"#,
+        )
+        .unwrap();
+        let mut n = 0;
+        super::sanear_valor(&mut v, &mut n);
+        assert_eq!(n, 2, "debía corregir 2 grants: {v}");
+        let arr = v.get("allow").and_then(|a| a.as_array()).unwrap();
+        assert_eq!(arr[0].as_str().unwrap(), "n(python3 -c \"print(1)\")");
+        assert_eq!(arr[1].as_str().unwrap(), "command(ls)");
+        assert_eq!(arr[2].as_str().unwrap(), "unsandboxed(*)");
+    }
     use super::*;
 
     #[test]

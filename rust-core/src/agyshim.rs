@@ -602,33 +602,51 @@ pub fn passthrough(req: &Peticion) -> Result<Respuesta, String> {
     let url = format!("{}{}", BACKEND_REAL, ruta);
     let agente = agente_passthrough();
     let metodo = req.metodo.trim().to_ascii_uppercase();
-    let tiene_cuerpo = !req.cuerpo.is_empty();
-    let mut p = match metodo.as_str() {
-        "GET" => agente.get(&url),
-        "PUT" => agente.put(&url),
-        "PATCH" => agente.patch(&url),
-        "DELETE" => agente.delete(&url),
-        _ => agente.post(&url),
-    };
-    for (k, v) in &req.cabeceras {
-        let kl = k.to_ascii_lowercase();
-        // Cabeceras de salto (hop-by-hop) y de framing: las pone ureq.
-        if matches!(
-            kl.as_str(),
-            "host" | "content-length" | "connection" | "transfer-encoding" | "accept-encoding"
-        ) {
-            continue;
-        }
-        p = p.header(k, v);
+    // Cabeceras que se reenvían (las de salto las pone ureq).
+    let cabeceras: Vec<(&str, &str)> = req
+        .cabeceras
+        .iter()
+        .filter(|(k, _)| {
+            !matches!(
+                k.to_ascii_lowercase().as_str(),
+                "host" | "content-length" | "connection" | "transfer-encoding" | "accept-encoding"
+            )
+        })
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    // MEDIDO (2026-11-24, error E0308 del CI): en ureq 3 el builder tiene
+    // TIPADO POR ESTADO (`WithBody` / `WithoutBody`) ⇒ los métodos con cuerpo
+    // y sin cuerpo NO se pueden mezclar en un mismo `match`.  Cada rama va
+    // por su cuenta.
+    macro_rules! con_cabeceras {
+        ($req:expr) => {{
+            let mut p = $req;
+            for (k, v) in &cabeceras {
+                p = p.header(*k, *v);
+            }
+            p
+        }};
     }
-    let resp = if tiene_cuerpo {
-        p.send(req.cuerpo.as_bytes())
-    } else {
-        p.call()
+    let resp = match metodo.as_str() {
+        "GET" => con_cabeceras!(agente.get(&url)).call(),
+        "DELETE" => con_cabeceras!(agente.delete(&url)).call(),
+        "PUT" => con_cabeceras!(agente.put(&url)).send(req.cuerpo.as_bytes()),
+        "PATCH" => con_cabeceras!(agente.patch(&url)).send(req.cuerpo.as_bytes()),
+        // MEDIDO (2026-11-24, error E0599): en ureq 3 el builder de POST es
+        // `WithBody` y NO tiene `.call()`: siempre se envía (el cuerpo vacío
+        // es un POST sin cuerpo ✔).
+        _ => con_cabeceras!(agente.post(&url)).send(req.cuerpo.as_bytes()),
     }
     .map_err(|e| format!("passthrough a {}: {}", BACKEND_REAL, e))?;
     let status = resp.status().as_u16();
-    let content_type = resp.content_type().to_string();
+    // MEDIDO (2026-11-24, error E0599): en ureq 3 no hay `resp.content_type()`;
+    // la cabecera se lee de `headers()`.
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/json")
+        .to_string();
     let cuerpo = resp
         .into_body()
         .read_to_string()
@@ -639,7 +657,7 @@ pub fn passthrough(req: &Peticion) -> Result<Respuesta, String> {
         cuerpo,
         requested_model: MODELO_CANONICO.to_string(),
         real_model: String::new(),
-        sustituido: false,
+        substituted: false,
         regla: Some("passthrough".to_string()),
     })
 }

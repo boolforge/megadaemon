@@ -82,6 +82,10 @@ pub fn por_defecto() -> Value {
             // eso se mata el LS (que la app relanza solo) para que cargue el
             // binario parcheado sin tumbar la UI.
             "relanzar_ls": true,
+            // Sanea los grants de permisos de Antigravity: el LS sólo
+            // acepta `command(...)` y `n(...)`; si no, la app pinta el
+            // error en la UI (medido 2026-11-24).
+            "sanear_grants": true,
             "ocultar": [],
             "reescribir": {}
         },

@@ -706,6 +706,20 @@ pub fn aplicar(puerto: u16, confirmar: bool) -> Value {
         }));
     }
 
+    // --- 5) Los grants de permisos: el LS sólo acepta `command(...)` y
+    // `n(...)`.  Cualquier otra forma la rechaza y **la app la pinta en la
+    // UI** (el "muro de texto").  Se sanean en cuanto aparecen.
+    if on("sanear_grants", true) {
+        match crate::antigravity_clone::sanear_grants_permisos() {
+            Ok(0) => {}
+            Ok(n) => piezas.push(json!({
+                "pieza": "grants", "estado": "aplicado_ahora",
+                "detalle": format!("{n} grants de permisos saneados (unsandboxed( -> n()"),
+            })),
+            Err(e) => piezas.push(json!({ "pieza": "grants", "estado": "fallo", "detalle": e })),
+        }
+    }
+
     let fallos = piezas
         .iter()
         .filter(|p| p.get("estado").and_then(|e| e.as_str()) == Some("fallo"))
