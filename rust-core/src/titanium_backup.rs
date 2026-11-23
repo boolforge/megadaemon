@@ -416,7 +416,14 @@ pub fn extraer_paquete(ruta: &Path, destino: &Path) -> Result<Extraccion, String
             std::fs::create_dir_all(dir)
                 .map_err(|x| format!("no se pudo crear {}: {x}", dir.display()))?;
         }
-        std::fs::write(&destino_final, &tar[e.offset..fin])
+        // Escritura ATÓMICA (MEDIDO 2026-11-23, auditoría de calidad):
+        // `fs::write` TRUNCA el destino antes de escribir ⇒ al restaurar
+        // sobre una extracción anterior, un fallo a mitad dejaba un
+        // fichero PARCIAL y el bueno ya estaba destruido (pérdida de datos
+        // silenciosa).  Con tmp + rename, el destino final queda completo
+        // o no se toca.  Además el fichero nace con 0600: es dato privado
+        // de la app (bases de datos, tokens).
+        crate::util_fs::write_atomic(&destino_final, &tar[e.offset..fin], 0o600)
             .map_err(|x| format!("no se pudo escribir {}: {x}", destino_final.display()))?;
         ficheros.push(limpio);
     }
