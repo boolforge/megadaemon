@@ -65,3 +65,14 @@ o, si el cuerpo del proveedor **no** es JSON:
 ```
 
 El índice que usan los tests está en `fixtures/mod.rs` (`FIXTURES`).
+
+## `re/` (fixtures binarios del RE)
+
+Los ficheros `.bin` de `tests/fixtures/re/` son **fragmentos binarios**
+extraídos del `liblanguage_server.so` real y **no se commitean**
+(`.gitignore`: `*.bin`) porque el repositorio es público.
+
+Los tests de `tests/re_motor_real.rs` que los necesitan **se saltan** si no
+están: se ejecutan sólo en una copia local que tenga los fixtures (los tiene
+el workspace de RE, junto al binario real). El resto de tests del fichero ya
+seguían esa política (`leer()` devuelve `None` y el test se salta).

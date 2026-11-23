@@ -290,7 +290,21 @@ fn el_codigo_arm64_real_se_desensambla_y_da_un_cfg() {
 fn los_fixtures_son_pequenos_y_tienen_su_desplazamiento() {
     for (nombre, _, off) in FIXTURES {
         let ruta = fixture(nombre);
-        let meta = std::fs::metadata(&ruta).expect("falta el fixture");
+        // Los fixtures son fragmentos BINARIOS del binario propietario y NO
+        // se commitean (.gitignore: *.bin).  Este test sólo puede ejecutarse
+        // en una copia que los tenga; sin ellos se salta, igual que el resto
+        // de tests de este fichero (que usan `leer()`).
+        // MEDIDO (2026-11-23): el test fallaba siempre en el CI con "falta el
+        // fixture" y bloqueaba el job `calidad`.
+        let meta = match std::fs::metadata(&ruta) {
+            Ok(m) => m,
+            Err(_) => {
+                eprintln!(
+                    "fixture ausente ({nombre}): test saltado (los .bin del binario real no se commitean)"
+                );
+                return;
+            }
+        };
         let tam = meta.len();
         assert!(
             (1..=8192).contains(&tam),

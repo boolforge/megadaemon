@@ -30,6 +30,11 @@ pub use crate::backup_crypto::sha256_hex;
 
 /// Magic **ustar**: va en el offset 257 de la cabecera de cada entrada TAR.
 pub const MAGIC_USTAR: &[u8] = b"ustar\0";
+/// Magic **GNU** de tar: "ustar  \0" (GNU tar escribe dos espacios y un NUL;
+/// sus 6 primeros bytes son "ustar ").  `tar` por defecto genera este
+/// formato, asi que un contenedor real de Titanium/Neo Backup puede venir
+/// en POSIX o en GNU.
+pub const MAGIC_USTAR_GNU: &[u8] = b"ustar ";
 
 /// Tamaño de un bloque TAR (cabecera o datos).
 const BLOQUE: usize = 512;
@@ -159,8 +164,16 @@ pub fn detectar_formato(bytes: &[u8]) -> FormatoContenedor {
         }
         return FormatoContenedor::Desconocido;
     }
-    if bytes.len() > 262 && &bytes[257..263] == MAGIC_USTAR {
-        return FormatoContenedor::Tar;
+    if bytes.len() > 262 {
+        let magic = &bytes[257..263];
+        // POSIX ("ustar\0") y GNU ("ustar  \0"): el tar de GNU es el que
+        // genera 'tar' por defecto.
+        // MEDIDO (2026-11-23): con el magic POSIX estricto, un tar GNU real
+        // se clasificaba como 'Desconocido' => el contenedor de backup REAL
+        // no se reconocia (test rojo el_fixture_real_es_un_tar_ustar).
+        if magic == MAGIC_USTAR || magic == MAGIC_USTAR_GNU {
+            return FormatoContenedor::Tar;
+        }
     }
     FormatoContenedor::Desconocido
 }

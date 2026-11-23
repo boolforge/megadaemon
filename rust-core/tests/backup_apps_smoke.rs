@@ -23,21 +23,29 @@ fn phone() -> &'static FakePhone {
         let base = std::env::temp_dir().join(format!("md-backup-smoke-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let root = base.join("root");
-        let bin = base.join("bin");
+        // El 'pm' del doble va DENTRO de la raiz (como /system/bin en el
+        // dispositivo): el motor lo busca en `<root>/bin/<cmd>` cuando la
+        // raiz no es "/" (medido el 2026-11-23: con el 'pm' fuera de la raiz
+        // el inventario salia vacio y el contenedor se creaba vacio).
+        let bin = root.join("bin");
         fs::create_dir_all(&root).unwrap();
         fs::create_dir_all(&bin).unwrap();
 
         // `pm` falso: responde como el del S21 Ultra (formato medido
         // `package:<apk>=<pkg> uid:<uid>`).
-        let pm = format!(
-            r#"#!/bin/sh
-ROOT="{root}"
+        // El `pm` real imprime la RUTA DE DISPOSITIVO (medido en el S21:
+        // 'package:/data/app/~~abc==/com.x-y==/base.apk=com.x uid:10342') y
+        // es el motor quien le antepone la raiz.  Este doble hacia lo mismo.
+        // MEDIDO (2026-11-23): imprimia la ruta ya prefijada con la raiz del
+        // doble => el motor la prefijaba otra vez y no encontraba nada
+        // (contenedor vacio).
+        let pm = r#"#!/bin/sh
 if [ "$1" = "list" ] && [ "$2" = "packages" ]; then
   case "$3" in
     -s) exit 0 ;;
     -d) exit 0 ;;
-    -f) echo "package:$ROOT/data/app/com.test.app/base.apk=com.test.app uid:10123"
-        echo "package:$ROOT/data/app/com.test.other/base.apk=com.test.other uid:10124"
+    -f) echo "package:/data/app/com.test.app/base.apk=com.test.app uid:10123"
+        echo "package:/data/app/com.test.other/base.apk=com.test.other uid:10124"
         exit 0 ;;
     -u) echo "package:com.test.app uid:10123"
         echo "package:com.test.other uid:10124"
@@ -46,14 +54,12 @@ if [ "$1" = "list" ] && [ "$2" = "packages" ]; then
 fi
 if [ "$1" = "path" ]; then
   case "$2" in
-    com.test.app) echo "package:$ROOT/data/app/com.test.app/base.apk"; exit 0 ;;
-    com.test.other) echo "package:$ROOT/data/app/com.test.other/base.apk"; exit 0 ;;
+    com.test.app) echo "package:/data/app/com.test.app/base.apk"; exit 0 ;;
+    com.test.other) echo "package:/data/app/com.test.other/base.apk"; exit 0 ;;
   esac
 fi
 exit 1
-"#,
-            root = root.display()
-        );
+"#;
         let pm_path = bin.join("pm");
         fs::write(&pm_path, pm).unwrap();
         #[cfg(unix)]
@@ -76,6 +82,10 @@ exit 1
         write("/data/user/0/com.test.app/code_cache/x.bin", b"basura-code-cache");
         write("/data/user/0/com.test.app/no_backup/y.bin", b"basura-no-backup");
         write("/data/user/0/com.test.other/files/other.txt", b"contenido-other");
+        // Un fichero grande (> 256 KiB = el minimo de segmento de Drive)
+        // para que el doble produzca VARIOS segmentos: sin el, el
+        // pipelining y el "corte" no se pueden observar (medido 2026-11-23).
+        write("/data/user/0/com.test.app/files/big.bin", &vec![7u8; 700 * 1024]);
         write("/data/app/com.test.app/base.apk", b"APK-FALSO-1");
         write("/data/app/com.test.other/base.apk", b"APK-FALSO-2");
 
@@ -207,11 +217,13 @@ fn el_inventario_no_escribe_nada_en_disco() {
     assert_eq!(before, after, "el inventario escribió algo en el móvil");
     assert!(apps.iter().any(|a| a.package == "com.test.app"));
     let app = apps.iter().find(|a| a.package == "com.test.app").unwrap();
-    // La medición excluye lo regenerable.
+    // La medición excluye lo regenerable (cache, code_cache, no_backup).
     let measured = app.data_bytes.unwrap();
-    let solo_datos = "contenido-db-1".len() + "<prefs/>".len();
+    // El doble incluye un fichero grande (700 KiB) para que el motor
+    // produzca varios segmentos (pipelining y reanudar) => también cuenta.
+    let solo_datos = "contenido-db-1".len() + "<prefs/>".len() + 700 * 1024;
     assert_eq!(measured, solo_datos as u64, "se midió la basura regenerable");
-    assert_eq!(app.file_count.unwrap(), 2);
+    assert_eq!(app.file_count.unwrap(), 3);
 }
 
 #[test]
@@ -272,7 +284,8 @@ fn el_manifiesto_lleva_el_sha256_de_cada_fichero() {
         .find(|e| e.path.ends_with("databases/app.db"))
         .expect("no está el fichero de datos");
     assert_eq!(e.sha256, sha256_hex(b"contenido-db-1"));
-    assert_eq!(e.size, 13);
+    // MEDIDO (2026-11-23): el test afirmaba 13 y el contenido son 14 B.
+    assert_eq!(e.size, 14);
     // La cabecera guarda el hash del manifiesto.
     let h = backup_apps::read_header(&out).unwrap();
     assert_eq!(h.manifest_sha256, manifest.hash());

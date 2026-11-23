@@ -252,7 +252,19 @@ impl Default for InventoryOptions {
 
 /// Ejecuta un comando y devuelve su stdout (vacío si falla).
 fn run_capture(root: &Path, cmd: &[&str]) -> Option<String> {
-    let mut c = std::process::Command::new(cmd[0]);
+    // Con una raiz distinta de "/" (el doble de movil de los tests, o un
+    // dispositivo con root donde la herramienta no esta en el PATH) el
+    // binario se busca DENTRO de la raiz: `<root>/bin/<cmd>`.
+    // MEDIDO (2026-11-23): sin esto el motor no encontraba el 'pm' del doble
+    // => el inventario salia vacio => el contenedor se creaba SIN ficheros.
+    let mut c = {
+        let local = root.join("bin").join(cmd[0]);
+        if root != Path::new("/") && local.is_file() {
+            std::process::Command::new(local)
+        } else {
+            std::process::Command::new(cmd[0])
+        }
+    };
     for a in &cmd[1..] {
         c.arg(a);
     }
@@ -1406,6 +1418,16 @@ pub fn create(opts: &CreateOptions, sink: &mut dyn SegmentSink) -> Result<Create
 
     // 1) Claves.
     let (master, kdf, key_check, key_source) = build_master_key(opts)?;
+    // La clave se escribe ANTES de sellar ningún segmento: si la creación
+    // falla a medias (un corte de red), el fichero de claves tiene que estar
+    // ya en disco para que la REANUDACIÓN reutilice la MISMA clave y los
+    // segmentos anteriores se puedan abrir.
+    // MEDIDO (2026-11-23): la clave se escribía al final => tras un corte no
+    // había fichero => la reanudación generaba otra clave => el contenedor
+    // reanudado quedaba corrupto.
+    if let Some(p) = opts.key_out.as_ref() {
+        write_key_file(p, &master, &kdf, &key_check, &key_source)?;
+    }
     let cipher = Some(ChunkCipher::new(
         &master,
         LABEL_SEGMENT_NONCE,
@@ -1519,7 +1541,13 @@ pub fn create(opts: &CreateOptions, sink: &mut dyn SegmentSink) -> Result<Create
         if skipped.contains_key(&src.inside) {
             continue;
         }
-        let full = join_root(&opts.root, Path::new(&src.device_path));
+        // `device_path` ya es la ruta ABSOLUTA en disco (incluye la raiz):
+        // `collect_sources` la construye con `join_root`.  Prefijarle la
+        // raiz otra vez producia una ruta DOBLE ('<root>/<root>/data/...')
+        // => el fichero no existia => el contenedor se creaba VACIO.
+        // MEDIDO (2026-11-23): 'ficheros respaldados: 0' en todos los tests
+        // de backup y en los contenedores reales de Drive (0 B).
+        let full = PathBuf::from(&src.device_path);
         let md = match fs::symlink_metadata(&full) {
             Ok(m) => m,
             Err(_) => continue,
@@ -1615,11 +1643,6 @@ pub fn create(opts: &CreateOptions, sink: &mut dyn SegmentSink) -> Result<Create
             serde_json::to_vec_pretty(&header).unwrap_or_default(),
         )
         .map_err(|e| format!("no se puede escribir la cabecera: {e}"))?;
-        // La clave sale del contenedor: vive en un fichero `0600` aparte
-        // (el contenedor se sube a Drive; la clave no).
-        if let Some(p) = opts.key_out.as_ref() {
-            write_key_file(p, &master, &kdf, &key_check, &key_source)?;
-        }
         // El plan aplicado queda **en el contenedor**: qué propuso la IA, qué
         // se aceptó y qué se rechazó.
         if let (Some(pv), Some(p)) = (plan_value.as_ref(), opts.plan.as_ref()) {
@@ -1684,6 +1707,39 @@ pub fn now_epoch() -> u64 {
 /// * Sin contraseña: clave **aleatoria** del CSPRNG (la que sea, se guarda en
 ///   el fichero de claves `0600`; nunca en el repo ni en el contenedor).
 fn build_master_key(opts: &CreateOptions) -> Result<(Vec<u8>, KdfParams, String, String), String> {
+    // REANUDACIÓN: si ya hay fichero de claves, se REUTILIZA (misma sal,
+    // misma clave maestra).  Si se generase una nueva, los segmentos ya
+    // sellados con la anterior NO se podrían abrir => el contenedor
+    // reanudado quedaría corrupto ("la etiqueta no cuadra").
+    // MEDIDO (2026-11-23): el motor generaba sal y clave nuevas en cada
+    // pasada, y el verify tras reanudar fallaba.
+    if let Some(path) = &opts.key_out {
+        if path.exists() {
+            if let Ok(data) = fs::read_to_string(path) {
+                if let Ok(obj) = serde_json::from_str::<Value>(&data) {
+                    let hexkey = obj.get("master_key_hex").and_then(|v| v.as_str());
+                    let kdf_json = obj.get("kdf").cloned();
+                    if let (Some(hexkey), Some(kdf_json)) = (hexkey, kdf_json) {
+                        if let Ok(master) = backup_crypto::unhex(hexkey) {
+                            if let Ok(kdf) = serde_json::from_value::<KdfParams>(kdf_json) {
+                                let kc = obj
+                                    .get("key_check")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let src = obj
+                                    .get("key_source")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("reanudada")
+                                    .to_string();
+                                return Ok((master, kdf, kc, src));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     let mut kdf = KdfParams::default_params();
     kdf.salt = backup_inventory_random(kdf.salt.len().max(16))?;
     match &opts.passphrase {
@@ -2067,7 +2123,15 @@ pub fn verify(dir: &Path, key: Option<&[u8]>) -> Result<VerifyReport, String> {
         let entry = match tar.next_entry() {
             Ok(Some(e)) => e,
             Ok(None) => break,
-            Err(e) => return Err(format!("tar ilegible: {e}")),
+            Err(e) => {
+                // Un contenedor CORRUPTO no es un fallo del programa: se
+                // informa con `ok = false` y el motivo en `mismatches`.
+                // MEDIDO (2026-11-23): antes devolvia Err y el llamante
+                // (MCP, CLI) no podia distinguir "contenedor roto" de
+                // "no se pudo leer".
+                report.mismatches.push(format!("tar ilegible: {e}"));
+                break;
+            }
         };
         hasher = Sha256::new();
         current_path = entry.name.clone();
@@ -2077,8 +2141,12 @@ pub fn verify(dir: &Path, key: Option<&[u8]>) -> Result<VerifyReport, String> {
                 hasher: &mut hasher,
                 written: 0,
             };
-            tar.copy_data(&mut sink)
-                .map_err(|e| format!("no se puede leer el contenido de {}: {e}", entry.name))?;
+            if let Err(e) = tar.copy_data(&mut sink) {
+                report
+                    .mismatches
+                    .push(format!("no se puede leer el contenido de {}: {e}", entry.name));
+                break;
+            }
         }
         let sha = hasher
             .finalize()
@@ -2118,7 +2186,7 @@ pub fn verify(dir: &Path, key: Option<&[u8]>) -> Result<VerifyReport, String> {
     Ok(report)
 }
 
-/// escritor que sólo hashea (no escribe en disco).
+/// Escritor que sólo hashea (para **verificar**: ahí no hay fichero).
 struct HashingWriter<'a> {
     hasher: &'a mut Sha256,
     written: u64,
@@ -2132,6 +2200,30 @@ impl Write for HashingWriter<'_> {
     }
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+/// Escritor en **tee**: escribe en el fichero Y calcula el SHA-256.
+///
+/// MEDIDO (2026-11-23): el escritor anterior sólo hasheaba (`HashingWriter`)
+/// y NUNCA escribía en el fichero ⇒ el restore creaba ficheros VACÍOS y, aun
+/// así, daba la verificación por buena (el hash era el del flujo copiado, no
+/// el del fichero en disco) ⇒ **pérdida silenciosa de datos al restaurar**.
+struct TeeWriter<'a> {
+    file: &'a mut File,
+    hasher: &'a mut Sha256,
+    written: u64,
+}
+
+impl Write for TeeWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.file.write_all(buf)?;
+        self.hasher.update(buf);
+        self.written += buf.len() as u64;
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
     }
 }
 
@@ -2250,12 +2342,17 @@ pub fn restore(opts: &RestoreOptions) -> Result<RestoreReport, String> {
         {
             let mut f = File::create(&tmp).map_err(|e| format!("no se puede crear {}: {e}", tmp.display()))?;
             let mut hasher = Sha256::new();
-            let mut hw = HashingWriter {
-                hasher: &mut hasher,
-                written: 0,
-            };
-            tar.copy_data(&mut hw)
-                .map_err(|e| format!("no se puede escribir {}: {e}", tmp.display()))?;
+            {
+                // Escribe en el temporal y hashea a la vez: el SHA que se
+                // comprueba después es el del CONTENIDO REAL en disco.
+                let mut hw = TeeWriter {
+                    file: &mut f,
+                    hasher: &mut hasher,
+                    written: 0,
+                };
+                tar.copy_data(&mut hw)
+                    .map_err(|e| format!("no se puede escribir {}: {e}", tmp.display()))?;
+            }
             let sha = hasher
                 .finalize()
                 .iter()
