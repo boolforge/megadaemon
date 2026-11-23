@@ -150,13 +150,25 @@ fn set_exec(p: &Path) {
 pub fn estado() -> Value {
     let ruta = PathBuf::from(RUTA_SERVICE_D);
     let existe = ruta.exists();
-    let coincide = existe
-        && std::fs::read_to_string(&ruta)
-            .map(|t| t.contains("99-megadaemon.sh"))
-            .unwrap_or(false);
+    let contenido = std::fs::read(&ruta).ok();
+    // MEDIDO (2026-11-23): 'vigente' era "el fichero contiene 99-megadaemon.sh"
+    // => un watchdog de una version ANTERIOR contaba como vigente y el daemon
+    // NUNCA lo actualizaba: el movil se quedaba con un supervisor viejo para
+    // siempre (por eso seguia el de 44 KB con el repo ya en 50 KB).
+    // Ahora 'vigente' significa IDENTICO al watchdog embebido en este build;
+    // si no, el daemon lo reinstala (y 'desfasado' lo deja explicito).
+    let identico = contenido.as_deref() == Some(WATCHDOG_SH.as_bytes());
+    let parece_watchdog = contenido
+        .as_deref()
+        .map(|b| String::from_utf8_lossy(b).contains("while true"))
+        .unwrap_or(false);
     json!({
         "instalado": existe,
-        "vigente": coincide,
+        "vigente": identico,
+        "parece_watchdog": parece_watchdog,
+        "desfasado": existe && !identico,
+        "bytes_instalado": contenido.as_ref().map(|c| c.len()).unwrap_or(0),
+        "bytes_este_build": WATCHDOG_SH.len(),
         "ruta": ruta.display().to_string(),
         "android": es_android(),
         "con_permisos": puede_instalar(),
@@ -183,7 +195,15 @@ pub fn asegurar_supervisor() {
     }
     let r = instalar();
     if r.get("ok").and_then(|v| v.as_bool()) == Some(true) {
-        eprintln!("watchdog: instalado en {RUTA_SERVICE_D}");
+        if st.get("desfasado").and_then(|v| v.as_bool()) == Some(true) {
+            eprintln!(
+                "watchdog: estaba DESFASADO ({} B) y se actualiza al de este build ({} B) en {RUTA_SERVICE_D}",
+                st.get("bytes_instalado").and_then(|v| v.as_u64()).unwrap_or(0),
+                WATCHDOG_SH.len(),
+            );
+        } else {
+            eprintln!("watchdog: instalado en {RUTA_SERVICE_D}");
+        }
     } else if let Some(m) = r.get("motivo").and_then(|v| v.as_str()) {
         eprintln!("watchdog: no instalado ({m})");
     }
@@ -209,6 +229,22 @@ mod tests {
         let v = estado();
         assert!(v.get("instalado").is_some());
         assert!(v.get("ruta").is_some());
+    }
+
+    #[test]
+    fn el_estado_distingue_inexistente_de_desfasado() {
+        let v = estado();
+        assert!(v.get("instalado").is_some());
+        assert!(v.get("ruta").is_some());
+        assert!(v.get("vigente").is_some());
+        assert!(v.get("desfasado").is_some());
+        // 'vigente' = IDENTICO al embebido; 'desfasado' = instalado pero otro.
+        let instalado = v.get("instalado").and_then(|x| x.as_bool()).unwrap_or(false);
+        if instalado {
+            let vigente = v.get("vigente").and_then(|x| x.as_bool()).unwrap_or(false);
+            let desfasado = v.get("desfasado").and_then(|x| x.as_bool()).unwrap_or(false);
+            assert_ne!(vigente, desfasado, "vigente y desfasado son excluyentes");
+        }
     }
 
     #[test]
