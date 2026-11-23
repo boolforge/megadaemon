@@ -346,7 +346,7 @@ pub fn unificar_runtime() -> Result<ReporteUnificar, String> {
     // El fichero tiene que ser legible por la app: se le da su UID.
     #[cfg(unix)]
     {
-        let uid = uid_de(dir).unwrap_or(UID_ANTIGRAVITY);
+        let uid = uid_de(&dir).unwrap_or(UID_ANTIGRAVITY);
         let _ = std::os::unix::fs::chown(&dest, Some(uid), None);
         rep.uid = uid_de(&dest);
     }
