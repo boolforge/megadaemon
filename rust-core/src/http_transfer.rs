@@ -347,7 +347,21 @@ pub fn descargar(url: &str, opts: &Opciones) -> Result<Resultado, String> {
                 .open(&destino_parcial)
                 .map_err(|e| format!("abrir {}: {e}", destino_parcial.display()))?;
             let mut buf = vec![0u8; 64 * 1024];
-            let mut r = resp.into_body().into_reader();
+            // El MISMO descompresor que en la rama de memoria: si el servidor
+            // contesta con `Content-Encoding: br`, el fichero guardado tiene
+            // que ser el CONTENIDO, no los bytes comprimidos.
+            //
+            // MEDIDO (2026-11-23, auditoría de calidad): la rama de fichero
+            // NO descomprimía (la de memoria sí) => el mismo URL guardado en
+            // disco y pedido en memoria daba dos contenidos distintos, y el
+            // sha-256 se calculaba sobre los bytes comprimidos (o sea, del
+            // fichero que no es el que el usuario cree).
+            let cuerpo = resp.into_body().into_reader();
+            let mut r: Box<dyn Read> = if encoding_br {
+                Box::new(brotli::Decompressor::new(cuerpo, 8192))
+            } else {
+                Box::new(cuerpo)
+            };
             loop {
                 let n = r.read(&mut buf).map_err(|e| format!("leer: {e}"))?;
                 if n == 0 {
