@@ -366,10 +366,22 @@ pub struct ConversationSummary {
 /// también una lista por si el servidor cambiara de forma.
 pub fn conversation_summaries_from(v: &Value) -> Vec<ConversationSummary> {
     let mut out = Vec::new();
+    // MEDIDO 2026-11-23 (CI, job `calidad`): esto era
+    //   v.get("trajectorySummaries").unwrap_or(v).get("trajectorySummaries").unwrap_or(v)
+    // y el SEGUNDO `unwrap_or(v)` se comía el mapa entero: como el mapa de
+    // conversaciones no tiene dentro una clave "trajectorySummaries" (lo
+    // normal), `src` acababa siendo el `v` de arriba y se iteraba UNA sola
+    // entrada ("trajectorySummaries") en vez de las N conversaciones.
+    //   - `conversations_se_resumen_desde_el_mapa_real` (smoke): el id salía
+    //     "trajectorySummaries" en vez del uuid de la conversación.
+    //   - `parsea_las_conversaciones` (unit): salía 1 conversación en vez de 2.
+    //
+    // La API real puede anidar el mapa en dos niveles, así que se busca en
+    // los dos y, si no está en ninguno, se usa el propio `v`.
     let src = v
         .get("trajectorySummaries")
-        .unwrap_or(v)
-        .get("trajectorySummaries")
+        .and_then(|t| t.get("trajectorySummaries"))
+        .or_else(|| v.get("trajectorySummaries"))
         .unwrap_or(v);
     match src {
         Value::Object(map) => {
