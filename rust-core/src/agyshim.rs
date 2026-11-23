@@ -488,6 +488,27 @@ pub fn upstream() -> String {
 /// El modelo canónico del gateway (el alias que significa "routing completo").
 pub const MODELO_CANONICO: &str = "megadaemon";
 
+/// Backend REAL de Antigravity (MEDIDO en `liblanguage_server.so`: el
+/// `baseUrl` por defecto es `https://daily-cloudcode-pa.googleapis.com`).
+///
+/// MEDIDO (2026-11-24): el language server pide, además de las rutas de
+/// MODELO, rutas de **cuenta/sesión** (`/v1internal/buildWithGooglePlugins`,
+/// `/v1internal/loadCodeAssist`, `/v1internal/userInfo`…).  Esas NO son
+/// del modelo: son la cuenta de Google del usuario.  Si el shim las
+/// rechaza con 404, la app no puede ni cargar su cascada ⇒ el modelo de
+/// MegaDaemon nunca llega a usarse.
+///
+/// Para ésas se hace **passthrough**: se reenvía la petición al backend
+/// real TAL CUAL (con el `Authorization` que ya envía la app) y se devuelve
+/// la respuesta verbatim.  Se intercepta el MODELO, no la cuenta.
+pub const BACKEND_REAL: &str = "https://daily-cloudcode-pa.googleapis.com";
+
+/// ¿Esta ruta se pasa tal cual al backend real?
+pub fn es_ruta_passthrough(ruta: &str) -> bool {
+    let r = normalizar_ruta_proxy(ruta);
+    r.starts_with("/v1internal") || r.starts_with("/v1beta")
+}
+
 /// Prefijos de ruta que el shim sirve como **proxy real**.
 ///
 /// MEDIDO (2026-11-22, `liblanguage_server.so`): el language server usa
@@ -571,6 +592,73 @@ pub struct Respuesta {
     pub regla: Option<String>,
 }
 
+/// Reenvía la petición al backend real de Antigravity y devuelve la
+/// respuesta tal cual.
+///
+/// La autenticación la pone la APP (cabecera `Authorization` propia): el
+/// daemon no guarda ni ve credenciales de Google, sólo las reenvía.
+pub fn passthrough(req: &Peticion) -> Result<Respuesta, String> {
+    let ruta = normalizar_ruta_proxy(&req.ruta);
+    let url = format!("{}{}", BACKEND_REAL, ruta);
+    let agente = agente_passthrough();
+    let metodo = req.metodo.trim().to_ascii_uppercase();
+    let tiene_cuerpo = !req.cuerpo.is_empty();
+    let mut p = match metodo.as_str() {
+        "GET" => agente.get(&url),
+        "PUT" => agente.put(&url),
+        "PATCH" => agente.patch(&url),
+        "DELETE" => agente.delete(&url),
+        _ => agente.post(&url),
+    };
+    for (k, v) in &req.cabeceras {
+        let kl = k.to_ascii_lowercase();
+        // Cabeceras de salto (hop-by-hop) y de framing: las pone ureq.
+        if matches!(
+            kl.as_str(),
+            "host" | "content-length" | "connection" | "transfer-encoding" | "accept-encoding"
+        ) {
+            continue;
+        }
+        p = p.header(k, v);
+    }
+    let resp = if tiene_cuerpo {
+        p.send(req.cuerpo.as_bytes())
+    } else {
+        p.call()
+    }
+    .map_err(|e| format!("passthrough a {}: {}", BACKEND_REAL, e))?;
+    let status = resp.status().as_u16();
+    let content_type = resp.content_type().to_string();
+    let cuerpo = resp
+        .into_body()
+        .read_to_string()
+        .map_err(|e| format!("passthrough: lectura del cuerpo: {e}"))?;
+    Ok(Respuesta {
+        status,
+        content_type,
+        cuerpo,
+        requested_model: MODELO_CANONICO.to_string(),
+        real_model: String::new(),
+        sustituido: false,
+        regla: Some("passthrough".to_string()),
+    })
+}
+
+/// Agente HTTP para el passthrough (TLS verificado: es Google de verdad).
+fn agente_passthrough() -> ureq::Agent {
+    use std::time::Duration;
+    let tls = ureq::tls::TlsConfig::builder()
+        .provider(ureq::tls::TlsProvider::Rustls)
+        .build();
+    let cfg = ureq::Agent::config_builder()
+        .tls_config(tls)
+        .timeout_global(Some(Duration::from_secs(90)))
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .http_status_as_error(false)
+        .build();
+    ureq::Agent::new_with_config(cfg)
+}
+
 /// **Proxy real**: atiende la ruta y la reenvía al proveedor real.
 ///
 /// La reenvía **pasando por el gateway canónico** (`llm_gateway`), que es
@@ -582,8 +670,17 @@ pub struct Respuesta {
 /// `megadaemon` (`requested_model`, `real_model`, `substituted`).
 pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
     let ruta = normalizar_ruta_proxy(&req.ruta);
-    let dialecto = dialecto_de(&req.ruta)
-        .ok_or_else(|| format!("el shim no sirve la ruta {}", req.ruta))?;
+    let dialecto = match dialecto_de(&req.ruta) {
+        Some(d) => d,
+        None => {
+            // Ruta de cuenta/sesión (no de modelo): passthrough al backend
+            // real con las credenciales que ya envía la app.
+            if es_ruta_passthrough(&req.ruta) {
+                return passthrough(req);
+            }
+            return Err(format!("el shim no sirve la ruta {}", req.ruta));
+        }
+    };
     let t0 = std::time::Instant::now();
     let cuerpo: Value = serde_json::from_str(&req.cuerpo).unwrap_or(Value::Null);
 

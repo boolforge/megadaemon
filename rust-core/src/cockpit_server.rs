@@ -989,8 +989,19 @@ fn handle_client(mut stream: TcpStream) {
     let mut content_length = 0usize;
     let mut origin = String::new();
     let mut host = String::new();
+    // MEDIDO (2026-11-24): el passthrough del shim necesita TODAS las
+    // cabeceras (la de `Authorization` es la que autentica a la app contra
+    // el backend real de Google).  Antes se descartaban.
+    let mut cabeceras_peticion: Vec<(String, String)> = Vec::new();
     for line in lines {
         let low = line.to_lowercase();
+        if let Some(pos) = line.find(':') {
+            let nombre = line[..pos].trim().to_string();
+            let valor = line[pos + 1..].trim().to_string();
+            if !nombre.is_empty() {
+                cabeceras_peticion.push((nombre, valor));
+            }
+        }
         if low.starts_with("content-length:") {
             content_length = low["content-length:".len()..].trim().parse().unwrap_or(0);
         } else if low.starts_with("origin:") {
@@ -1298,8 +1309,8 @@ fn handle_client(mut stream: TcpStream) {
                 let peticion = crate::agyshim::Peticion {
                     metodo: method.to_string(),
                     ruta: p.to_string(),
-                    cabeceras: Vec::new(),
-                    cuerpo: String::new(),
+                    cabeceras: cabeceras_peticion.clone(),
+                    cuerpo: String::from_utf8_lossy(body_slice).into_owned(),
                 };
                 match crate::agyshim::proxy(&peticion) {
                     Ok(r) => send_http_response(
@@ -1573,7 +1584,7 @@ fn handle_client(mut stream: TcpStream) {
                 let peticion = crate::agyshim::Peticion {
                     metodo: method.to_string(),
                     ruta: p.to_string(),
-                    cabeceras: Vec::new(),
+                    cabeceras: cabeceras_peticion.clone(),
                     cuerpo: String::from_utf8_lossy(body_slice).to_string(),
                 };
                 match crate::agyshim::proxy(&peticion) {
