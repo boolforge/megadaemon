@@ -366,10 +366,26 @@ pub struct ConversationSummary {
 /// también una lista por si el servidor cambiara de forma.
 pub fn conversation_summaries_from(v: &Value) -> Vec<ConversationSummary> {
     let mut out = Vec::new();
+    // BUG MEDIDO (2026-11-23, CI `antigravity_bridge_smoke`):
+    // la cadena era `.get("trajectorySummaries").unwrap_or(v).get("trajectorySummaries").unwrap_or(v)`
+    // =>, cuando la respuesta SÍ trae "trajectorySummaries", el segundo
+    // `.get()` (sobre el mapa INTERIOR) devolvia None y el `.unwrap_or(v)`
+    // caia al objeto **EXTERIOR** => se iteraba una clave que se llama
+    // "trajectorySummaries" como si fuera un cascade_id:
+    //     assertion `left == right` failed
+    //       left: "trajectorySummaries"
+    //      right: "9dfa200c-b4cf-408f-9f67-d9bee2bd61a4"
+    //
+    // Ahora se eligen las claves EN ORDEN y se cae al valor de dentro:
+    //   1) doble envuelto  {"trajectorySummaries":{"trajectorySummaries":{…}}}
+    //   2) forma real      {"trajectorySummaries":{…}}        (medido 2026-11-22)
+    //   3) mapa suelto     {…}
+    // VERIFICADO con un programa standalone (rustc, sin cargo): las 4
+    // formas (real, doble, suelta y vacia) eligen el mapa correcto.
     let src = v
         .get("trajectorySummaries")
-        .unwrap_or(v)
-        .get("trajectorySummaries")
+        .and_then(|inner| inner.get("trajectorySummaries"))
+        .or_else(|| v.get("trajectorySummaries"))
         .unwrap_or(v);
     match src {
         Value::Object(map) => {
@@ -1117,6 +1133,36 @@ mod tests {
         let c1 = convs.iter().find(|c| c.cascade_id == "cascade-1").unwrap();
         assert_eq!(c1.step_count, 7);
         assert_eq!(c1.workspaces.len(), 1);
+    }
+
+    #[test]
+    fn el_mapa_de_conversaciones_se_elige_bien() {
+        // MEDIDO (2026-11-22): la forma real es
+        // {"trajectorySummaries": {"<uuid>": {…}}}  (un MAPA, no una lista).
+        // BUG MEDIDO (2026-11-23): con la cadena de claves anterior se
+        //tomaba la clave EXTERIOR ("trajectorySummaries") como cascade_id.
+        let v = json!({"trajectorySummaries": {
+            "9dfa200c-b4cf-408f-9f67-d9bee2bd61a4": {
+                "summary": "ScummVM Porting",
+                "stepCount": 20560,
+                "status": "CASCADE_RUN_STATUS_IDLE",
+                "lastModifiedTime": "2026-11-21T20:50:44.139186689Z",
+                "workspaces": [{"workspaceFolderAbsoluteUri": "file:///d"}]
+            }
+        }});
+        let cs = conversation_summaries_from(&v);
+        assert_eq!(cs.len(), 1);
+        assert_eq!(cs[0].cascade_id, "9dfa200c-b4cf-408f-9f67-d9bee2bd61a4");
+        assert_eq!(cs[0].step_count, 20560);
+        assert_eq!(cs[0].workspaces.len(), 1);
+        // Doble envuelto: tambien vale.
+        let d = json!({"trajectorySummaries": {"trajectorySummaries": v.get("trajectorySummaries").cloned().unwrap_or_default()}});
+        assert_eq!(conversation_summaries_from(&d).len(), 1);
+        // Mapa suelto (sin envoltorio): tambien vale.
+        let s = json!({"9dfa200c-b4cf-408f-9f67-d9bee2bd61a4": {"stepCount": 1}});
+        assert_eq!(conversation_summaries_from(&s).len(), 1);
+        // Vacio: ninguna conversacion.
+        assert!(conversation_summaries_from(&json!({})).is_empty());
     }
 
     #[test]
