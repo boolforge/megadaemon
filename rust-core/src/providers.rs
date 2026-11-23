@@ -6,6 +6,7 @@
 use crate::{binwalk_die, cirx_rtl, kaitai_imhex, npu_bridge, provider_catalog, seere_v11};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -813,7 +814,148 @@ pub fn record_daily_spend(
     } else {
         g.unpriced_calls = g.unpriced_calls.saturating_add(1);
     }
+    // Libro por proveedor (persistente): el gasto por proveedor tiene que
+    // sobrevivir a un reinicio.
+    registrar_gasto(_provider_id, model, tokens_in, tokens_out, total_tokens, cost.usd);
     cost.usd
+}
+
+/// **Libro de gasto por proveedor** (persistente).
+///
+/// MEDIDO (2026-11-23): el gasto se llevaba sólo en memoria (el
+/// `DailyBudgetState`), así que al reiniciar se perdía y no había
+/// desglose por proveedor: la UI no podía decir «MiniMax: 0,42 USD, 8
+/// llamadas» ni «Google: ...».  El usuario lo pidió explícitamente.
+///
+/// Es un JSON pequeño (`<state>/spend_ledger.json`) con una entrada por
+/// proveedor.  Se escribe en cada llamada registrada: son unos cientos de
+/// bytes, no compensa un journal.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SpendEntry {
+    /// Llamadas registradas.
+    #[serde(default)]
+    pub calls: u64,
+    /// Tokens de entrada.
+    #[serde(default)]
+    pub tokens_in: u64,
+    /// Tokens de salida.
+    #[serde(default)]
+    pub tokens_out: u64,
+    /// Tokens totales.
+    #[serde(default)]
+    pub tokens_total: u64,
+    /// Coste acumulado en USD (0 si el modelo no tiene precio conocido).
+    #[serde(default)]
+    pub usd: f64,
+    /// Epoch de la última llamada.
+    #[serde(default)]
+    pub last_at: u64,
+}
+
+/// Ruta del libro de gasto.
+pub fn spend_ledger_path() -> String {
+    format!("{}/spend_ledger.json", crate::cockpit_server::state_dir())
+}
+
+/// Carga el libro de gasto (si no hay, vacío).
+pub fn load_spend_ledger() -> BTreeMap<String, SpendEntry> {
+    std::fs::read_to_string(spend_ledger_path())
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+/// Guarda el libro de gasto (atómico).
+fn save_spend_ledger(led: &BTreeMap<String, SpendEntry>) {
+    let ruta = spend_ledger_path();
+    if let Some(p) = std::path::Path::new(&ruta).parent() {
+        let _ = std::fs::create_dir_all(p);
+    }
+    if let Ok(txt) = serde_json::to_string_pretty(led) {
+        let _ = crate::util_fs::write_atomic(
+            std::path::Path::new(&ruta),
+            txt.as_bytes(),
+            0o600,
+        );
+    }
+}
+
+/// **Informe de gasto por proveedor** (para la UI y el agente).
+///
+/// Incluye el desglose por proveedor, el total y los modelos **sin precio
+/// conocido** (que es donde se escapa el dinero sin que se note).
+pub fn spend_report() -> Value {
+    let led = load_spend_ledger();
+    let daily = daily_budget_snapshot();
+    let mut por_proveedor: Vec<Value> = led
+        .iter()
+        .map(|(id, e)| {
+            let modelo = load_vault()
+                .providers
+                .iter()
+                .find(|p| &p.id == id)
+                .map(|p| p.model.clone())
+                .unwrap_or_default();
+            json!({
+                "id": id,
+                "calls": e.calls,
+                "tokens_in": e.tokens_in,
+                "tokens_out": e.tokens_out,
+                "tokens_total": e.tokens_total,
+                "usd": (e.usd * 1e6).round() / 1e6,
+                "modelo": modelo,
+                "precio_conocido": crate::price_table::fleet_cost(&modelo, 0, 0).usd.is_some(),
+                "last_at": e.last_at,
+            })
+        })
+        .collect();
+    // De más caro a más barato: lo primero que se ve es lo que duele.
+    por_proveedor.sort_by(|a, b| {
+        let au = a.get("usd").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let bu = b.get("usd").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        bu.partial_cmp(&au).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let total_usd: f64 = led.values().map(|e| e.usd).sum();
+    let total_calls: u64 = led.values().map(|e| e.calls).sum();
+    let total_tokens: u64 = led.values().map(|e| e.tokens_total).sum();
+    json!({
+        "ok": true,
+        "ruta": spend_ledger_path(),
+        "por_proveedor": por_proveedor,
+        "total_usd": (total_usd * 1e6).round() / 1e6,
+        "total_calls": total_calls,
+        "total_tokens": total_tokens,
+        "hoy": daily,
+        "precios": crate::delegate::pricing_report(30),
+    })
+}
+
+/// Registra una llamada en el libro de gasto por proveedor.
+fn registrar_gasto(
+    provider_id: &str,
+    model: &str,
+    tokens_in: u64,
+    tokens_out: u64,
+    total_tokens: u64,
+    usd: Option<f64>,
+) {
+    let mut led = load_spend_ledger();
+    let e = led.entry(provider_id.to_string()).or_default();
+    e.calls = e.calls.saturating_add(1);
+    e.tokens_in = e.tokens_in.saturating_add(tokens_in);
+    e.tokens_out = e.tokens_out.saturating_add(tokens_out);
+    e.tokens_total = e.tokens_total.saturating_add(total_tokens);
+    if let Some(v) = usd {
+        e.usd += v;
+    }
+    e.last_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // El modelo se guarda aparte para poder mostrarlo y saber si el precio
+    // es conocido (el id del proveedor no siempre es el nombre del modelo).
+    let _ = model;
+    save_spend_ledger(&led);
 }
 
 /// Snapshot JSON del presupuesto y gasto diario actual.

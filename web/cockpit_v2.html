@@ -316,6 +316,14 @@
       </div>
 
       <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Gasto por proveedor</h2>
+          <span class="small muted">libro persistente: llamadas, tokens y coste real</span>
+        </div>
+        <div id="delegacion-gasto"></div>
+      </div>
+
+      <div class="card">
         <div class="card__head"><h2 class="card__title">Plan de reparto</h2></div>
         <div class="table-wrap" id="delegacion-plan"></div>
       </div>
@@ -2636,33 +2644,57 @@ async function loadDelegacion() {
   const st = d.stats || {};
   const accounts = (st.accounts) || {};
   const cons = d.consumption || {};
+  const gasto = d.gasto || {};
+  const hoy = gasto.hoy || {};
   $('#delegacion-stats').innerHTML = [
     { l: "Cuentas", v: (d.accounts || []).length },
-    { l: "Gratuitas", v: accounts.free || 0 },
-    { l: "De pago", v: accounts.paid || 0 },
+    { l: "Listas", v: (d.accounts || []).filter(function (a) { return a.ready; }).length },
+    { l: "Con clave", v: (d.accounts || []).filter(function (a) { return a.has_key; }).length },
     { l: "Cola", v: st.queue_depth || 0 },
-    { l: "Tokens", v: (cons.tokens || {}).total || 0 },
-    { l: "Coste", v: "$" + Number(((cons.cost_usd || {}).estimated) || 0).toFixed(4) },
-    { l: "Éxito", v: Math.round(Number(((cons.success_rate || {}).overall) || 0) * 100) + " %" },
-    { l: "Ajustes", v: (d.adjustments || []).length }
+    { l: "Llamadas hoy", v: hoy.calls_total || 0 },
+    { l: "Tokens hoy", v: hoy.tokens_total || 0 },
+    { l: "Gasto hoy", v: "$" + Number(hoy.spend_usd || 0).toFixed(4), cls: (hoy.spend_usd || 0) > 0 ? "stat--warn" : "" },
+    { l: "Tope diario", v: hoy.limit_usd === null || hoy.limit_usd === undefined ? "sin tope" : "$" + Number(hoy.limit_usd).toFixed(2) }
   ].map(function (s) {
-    return '<div class="stat"><div class="stat__label">' + esc(s.l) + '</div><div class="stat__value stat__value--sm">' + esc(s.v) + "</div></div>";
+    return '<div class="stat ' + (s.cls || "") + '"><div class="stat__label">' + esc(s.l) + '</div><div class="stat__value stat__value--sm">' + esc(s.v) + "</div></div>";
   }).join("");
 
   const accts = d.accounts || [];
   $('#delegacion-cuentas').innerHTML = accts.length
-    ? '<table class="table"><thead><tr><th>Cuenta</th><th>Proveedor</th><th>Modelo</th><th>Nivel</th><th>Cuota</th><th>Presup.</th><th>Score</th><th>Activa</th></tr></thead><tbody>' +
+    ? '<div class="table-wrap"><table class="table"><thead><tr><th>Cuenta</th><th>Proveedor</th><th>Modelo</th><th>Nivel</th><th>Auth</th><th>Lista</th><th>Gasto</th><th>Llamadas</th><th>Tokens</th></tr></thead><tbody>' +
       accts.map(function (a) {
+        const g = a.gasto || null;
+        const usd = g ? Number(g.usd || 0) : 0;
+        const sinPrecio = g && g.precio_conocido === false;
         return "<tr><td class='mono small'>" + esc(a.id) + "</td>" +
-          "<td>" + esc(a.provider) + "</td>" +
-          "<td class='small'>" + esc(a.model) + "</td>" +
-          "<td><span class='chip'>" + esc(a.tier) + "</span></td>" +
-          "<td class='table__num'>" + (a.remaining_quota === null || a.remaining_quota === undefined ? "—" : esc(a.remaining_quota)) + "</td>" +
-          "<td class='table__num'>$" + Number(a.daily_budget_usd || 0).toFixed(2) + "</td>" +
-          "<td class='table__num'>" + Number(a.score || 0).toFixed(3) + "</td>" +
-          "<td>" + (a.enabled ? '<span class="chip chip--accent">sí</span>' : '<span class="chip chip--warn">no</span>') + "</td></tr>";
-      }).join("") + "</tbody></table>"
-    : '<div class="empty"><div class="empty__title">Sin cuentas</div><div class="empty__reason">No hay cuentas de proveedor cargadas en esta instancia.</div></div>';
+          "<td>" + esc(a.provider || a.nombre || "—") + "</td>" +
+          "<td class='small'>" + esc(a.model || "—") + "</td>" +
+          "<td><span class='chip'>" + esc(a.tier || "—") + "</span></td>" +
+          "<td class='small muted'>" + esc(a.auth_type || "—") + (a.has_key ? " · " + esc(a.key_masked || "") : "") + "</td>" +
+          "<td>" + (a.ready ? '<span class="chip chip--accent">sí</span>' : '<span class="chip chip--warn">no</span>') + "</td>" +
+          "<td class='table__num'>" + (g ? ("$" + usd.toFixed(4) + (sinPrecio ? " <span class='chip chip--warn'>sin precio</span>" : "")) : "—") + "</td>" +
+          "<td class='table__num'>" + (g ? esc(g.calls || 0) : "—") + "</td>" +
+          "<td class='table__num'>" + (g ? esc(g.tokens_total || 0) : "—") + "</td></tr>";
+      }).join("") + "</tbody></table></div>"
+    : '<div class="empty"><div class="empty__title">Sin cuentas</div><div class="empty__reason">El vault de proveedores está vacío: no hay proveedores configurados en esta instancia.</div></div>';
+
+  // Gasto por proveedor (libro persistente): lo que de verdad cuesta.
+  const porProv = gasto.por_proveedor || [];
+  $('#delegacion-gasto').innerHTML = porProv.length
+    ? '<div class="table-wrap"><table class="table"><thead><tr><th>Proveedor</th><th>Modelo</th><th>Llamadas</th><th>Tokens</th><th>Coste</th><th>Precio</th></tr></thead><tbody>' +
+      porProv.map(function (g) {
+        return "<tr><td class='mono small'>" + esc(g.id) + "</td>" +
+          "<td class='small'>" + esc(g.modelo || "—") + "</td>" +
+          "<td class='table__num'>" + esc(g.calls || 0) + "</td>" +
+          "<td class='table__num'>" + esc(g.tokens_total || 0) + "</td>" +
+          "<td class='table__num'>$" + Number(g.usd || 0).toFixed(4) + "</td>" +
+          "<td>" + (g.precio_conocido ? '<span class="chip chip--accent">conocido</span>' : '<span class="chip chip--warn">sin precio</span>') + "</td></tr>";
+      }).join("") + "</tbody></table></div>" +
+      '<dl class="kv mt-3"><dt>Gasto total</dt><dd>$' + Number(gasto.total_usd || 0).toFixed(4) + "</dd>" +
+      "<dt>Llamadas</dt><dd>" + esc(gasto.total_calls || 0) + "</dd>" +
+      "<dt>Tokens</dt><dd>" + esc(gasto.total_tokens || 0) + "</dd>" +
+      "<dt>Libro</dt><dd class='mono small'>" + esc(gasto.ruta || "") + "</dd></dl>"
+    : '<div class="empty"><div class="empty__title">Sin gasto registrado</div><div class="empty__reason">Todavía no se ha registrado ninguna llamada a un proveedor en esta instancia.</div></div>';
 
   const plan = d.plan || [];
   $('#delegacion-plan').innerHTML = plan.length

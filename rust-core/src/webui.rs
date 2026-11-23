@@ -1291,19 +1291,75 @@ fn delegate_state_from_engine(engine: &crate::delegate::DelegateEngine) -> Value
 
 /// Vista de delegación: cuentas, cuota, presupuesto, score, plan y ajustes.
 pub fn delegation() -> Value {
+    // Las CUENTAS reales son las del vault de proveedores (el catálogo de
+    // fábrica: MiniMax, Google, SEERE local, ...), no las del motor de
+    // delegación: aquel es un planificador opcional y su fichero de estado
+    // no lo crea nadie.
+    //
+    // MEDIDO (2026-11-23): la vista decía "Sin cuentas / No hay cuentas de
+    // proveedor cargadas en esta instancia" mientras el vault tenía el
+    // catálogo entero ⇒ la UI mentía por un fichero que no se creaba.
+    let vault = crate::providers::list_providers_redacted();
+    let gasto = crate::providers::spend_report();
+    let gasto_por_id: serde_json::Map<String, Value> = gasto
+        .get("por_proveedor")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| {
+                    x.get("id")
+                        .and_then(|i| i.as_str())
+                        .map(|i| (i.to_string(), x.clone()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let cuentas_reales: Vec<Value> = vault
+        .get("providers")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .map(|p| {
+                    let id = p.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let g = gasto_por_id.get(&id);
+                    json!({
+                        "id": id,
+                        "provider": p.get("vendor").cloned().unwrap_or(Value::Null),
+                        "nombre": p.get("name").cloned().unwrap_or(Value::Null),
+                        "model": p.get("model").cloned().unwrap_or(Value::Null),
+                        "tier": p.get("tier").cloned().unwrap_or(Value::Null),
+                        "auth_type": p.get("auth_type").cloned().unwrap_or(Value::Null),
+                        "endpoint": p.get("endpoint").cloned().unwrap_or(Value::Null),
+                        "enabled": p.get("enabled").cloned().unwrap_or(Value::Null),
+                        "ready": p.get("ready").cloned().unwrap_or(Value::Null),
+                        "has_key": p.get("has_key").cloned().unwrap_or(Value::Null),
+                        "key_masked": p.get("key_masked").cloned().unwrap_or(Value::Null),
+                        "free": crate::provider_catalog::tier_free(
+                            p.get("tier").and_then(|v| v.as_str()).unwrap_or("")
+                        ),
+                        "gasto": g.cloned().unwrap_or(Value::Null),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let Some(state) = load_delegate_state() else {
         return json!({
             "ok": true,
             "deployed": false,
             "reason": format!(
-                "no hay estado de delegación en {}: el motor todavía no tiene cuentas cargadas",
+                "no hay plan de delegación en {}: se muestran las cuentas reales del vault",
                 delegate_state_path().to_string_lossy()
             ),
-            "accounts": [],
+            "accounts": cuentas_reales,
+            "ajustes": [],
             "adjustments": [],
             "plan": [],
             "consumption": { "available": false },
-            "hint": "crea el fichero con la lista de cuentas (id, provider, model, tier, capabilities) para activar el reparto",
+            "gasto": gasto,
+            "catalogo": vault.get("retired").cloned().unwrap_or(Value::Array(vec![])),
+            "hint": "las cuentas son las del vault de proveedores; el planificador de delegación es opcional (delegate_state.json)",
         });
     };
     let engine = build_delegate_engine(&state);
@@ -1336,6 +1392,8 @@ pub fn delegation() -> Value {
         "ok": true,
         "deployed": true,
         "generated_at": now_iso(),
+        "cuentas_reales": cuentas_reales,
+        "gasto": gasto,
         "state_path": delegate_state_path().to_string_lossy(),
         "accounts": accounts,
         "account_stats": stats,
