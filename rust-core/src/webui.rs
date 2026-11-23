@@ -111,6 +111,17 @@ pub fn api_v2_routes() -> Vec<(&'static str, &'static str)> {
         ("GET", "/api/v2/antigravity/conversation"),
         ("GET", "/api/v2/antigravity/tasks"),
         ("POST", "/api/v2/antigravity/enqueue"),
+        // ── Superficie nueva (2026-11-23): la UI refleja de verdad el daemon
+        ("GET", "/api/v2/logs"),
+        ("GET", "/api/v2/config"),
+        ("POST", "/api/v2/config"),
+        ("GET", "/api/v2/tools"),
+        ("GET", "/api/v2/nodes/detalle"),
+        ("GET", "/api/v2/system"),
+        ("GET", "/api/v2/quota"),
+        ("GET", "/api/v2/instrumentacion"),
+        ("POST", "/api/v2/instrumentacion"),
+        ("GET", "/api/v2/backups"),
     ]
 }
 
@@ -165,6 +176,16 @@ fn route_descriptions() -> Vec<(&'static str, &'static str, &'static str)> {
         ("GET", "/api/v2/voice", "Estado real de la voz del daemon (identidad, cooldown, presupuesto, bucle autónomo) + rol e id de la instancia."),
         ("POST", "/api/v2/voice", "Acción de la voz: status | whoami | plan | act | speak."),
         ("POST", "/api/v2/admin/restart", "Reinicia la instancia (confirm:true): el daemon sale y el supervisor lo relanza."),
+        ("GET", "/api/v2/logs", "Fuentes de log del nodo (14) y tail en vivo de una: ?fuente=daemon&lineas=200&filtro=error&nivel=warn. Sin 'fuente' devuelve el catalogo con el resumen de errores."),
+        ("GET", "/api/v2/config", "Configuracion efectiva del daemon (12 secciones), valores de fabrica y que claves se han editado."),
+        ("POST", "/api/v2/config", "Aplica cambios de configuracion en caliente. Valida antes de escribir (puertos, umbrales termicos, coherencia de cuotas)."),
+        ("GET", "/api/v2/tools", "Catalogo de las tools MCP con su descripcion, su esquema y su agrupacion funcional: la UI las ejecuta sin salir de la pagina."),
+        ("GET", "/api/v2/nodes/detalle", "Ficha completa de cada nodo del enjambre: identidad, rol, capacidades, latido, si esta vivo, su URL publica (el movil se anuncia con la suya) y su estado vivo local."),
+        ("GET", "/api/v2/system", "Telemetria real del nodo: CPU, memoria, bateria, energia, NPU, alertas, uptime, build y state dir."),
+        ("GET", "/api/v2/quota", "Cuota de cada modelo/proveedor, aviso al agente, presupuesto diario en USD y la configuracion de cuotas."),
+        ("GET", "/api/v2/instrumentacion", "Estado vivo de la instrumentacion de Antigravity: .so (falso o in situ), modelo tras MegaDaemon, puente MCP y MITM de la DB."),
+        ("POST", "/api/v2/instrumentacion", "Aplica, planifica o restaura la instrumentacion de Antigravity (accion=aplicar|plan|restore, confirmar=bool)."),
+        ("GET", "/api/v2/backups", "Estado de Drive y de los respaldos: si hay credenciales, inventario real en disco y ultimos jobs de la cola durable."),
     ]
 }
 
@@ -4275,6 +4296,347 @@ fn antigravity_enqueue(prompt: &str, workspaces: &[String], confirm: bool) -> Va
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// VISTAS NUEVAS (2026-11-23): la UI refleja de verdad el daemon.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **Logs**: catálogo de las fuentes (`sin` `fuente`) o el tail de una.
+///
+/// `?fuente=daemon&lineas=200&filtro=error&nivel=warn`
+pub fn logs_view(query: &str) -> Value {
+    let fuente = query_get(query, "fuente").unwrap_or_default();
+    if fuente.is_empty() {
+        let mut v = crate::logs::listar();
+        if let Some(o) = v.as_object_mut() {
+            o.insert("resumen".to_string(), crate::logs::resumen());
+        }
+        return v;
+    }
+    let lineas = query_get(query, "lineas")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(100);
+    let filtro = query_get(query, "filtro").unwrap_or_default();
+    let nivel = query_get(query, "nivel").unwrap_or_default();
+    let desde = query_get(query, "desde")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+    crate::logs::tail(&fuente, lineas, &filtro, &nivel, desde)
+}
+
+/// **Configuración**: informe completo (valores, fábrica, qué se editó).
+pub fn config_view() -> Value {
+    crate::config_efectiva::informe()
+}
+
+/// **Configuración**: aplica cambios (valida antes de escribir).
+pub fn config_apply(body: &Value) -> Value {
+    // Formato admitido: {"cambios": {...}} o el objeto plano.
+    let cambios = body.get("cambios").cloned().unwrap_or_else(|| body.clone());
+    if !cambios.is_object() || cambios.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+        return json!({"ok": false, "error": "no hay cambios que aplicar"});
+    }
+    if let Err(e) = crate::config_efectiva::validar(&cambios) {
+        return json!({"ok": false, "error": e});
+    }
+    match crate::config_efectiva::escribir(&cambios) {
+        Ok(cfg) => json!({
+            "ok": true,
+            "aplicado": cambios,
+            "efectiva": cfg,
+            "aviso": "los cambios se aplican en caliente; hay que reiniciar el daemon para los ajustes de arranque",
+        }),
+        Err(e) => json!({"ok": false, "error": e}),
+    }
+}
+
+/// **Catálogo de tools**: las 62 tools con su descripción y su esquema.
+///
+/// Es lo que convierte la UI en un explorador real del daemon: cada tool
+/// tiene su formulario y se puede ejecutar sin salir de la página.
+pub fn tools_catalogo() -> Value {
+    let defs = crate::mcp_ext::tool_definitions();
+    let mcp = crate::mcp_server::tool_definitions();
+    let mut todas: Vec<Value> = Vec::new();
+    for f in [defs, mcp] {
+        if let Some(a) = f.as_array() {
+            for t in a {
+                todas.push(t.clone());
+            }
+        }
+    }
+    // Agrupadas por prefijo funcional: así la UI puede hacer secciones.
+    let mut grupos: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for t in &todas {
+        let n = t.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+        let grupo = if n.starts_with("antigravity") || n.contains("agy") || n.contains("mitm") {
+            "antigravity"
+        } else if n.starts_with("re_") || n.contains("ghidra") || n.contains("go_retool") || n.contains("daad") {
+            "reverse"
+        } else if n.starts_with("backup") || n.contains("drive") || n.contains("swift") || n.contains("titanium") {
+            "backup"
+        } else if n.starts_with("root_") {
+            "root"
+        } else if n.contains("task") || n.contains("job") || n.contains("queue") || n.contains("cron") {
+            "cola"
+        } else if n.contains("quota") || n.contains("provider") || n.contains("llm") || n.contains("bus") {
+            "modelos"
+        } else if n.contains("energy") || n.contains("battery") || n.contains("power") {
+            "energia"
+        } else if n.contains("sync") || n.contains("conversation") || n.contains("chat") || n.contains("message") {
+            "sync"
+        } else if n.contains("mesh") || n.contains("resonance") || n.contains("node") || n.contains("peer") || n.contains("delegate") {
+            "enjambre"
+        } else {
+            "core"
+        };
+        grupos.entry(grupo.to_string()).or_default().push(n.to_string());
+    }
+    json!({
+        "ok": true,
+        "total": todas.len(),
+        "tools": todas,
+        "grupos": grupos,
+    })
+}
+
+/// **Detalle de los nodos**: la ficha completa de cada nodo conectado.
+///
+/// Cada nodo lleva: su identidad (rol, host, plataforma, versión,
+/// capacidades, dirección), su latido, si está vivo, su URL (del tablón, con
+/// el túnel del móvil incluido) y — si se puede — su **estado vivo**
+/// (build, uptime, RAM, batería, cola) leído por HTTP.
+pub fn nodes_detalle() -> Value {
+    let board = mesh_snapshot();
+    let mut lista: Vec<Value> = Vec::new();
+    let mut urls: std::collections::BTreeMap<String, String> = Default::default();
+
+    // Las URLs las publica el tablón de resonancia (el móvil se anuncia con
+    // la suya: es lo que permite localizarlo sin ADB).  Las cartas de tipo
+    // "latido" llevan {url, puerto}.
+    if let Ok(mut t) = crate::resonance::Tablon::abrir(&cockpit_state_dir()) {
+        let _ = t.cargar_local();
+        for c in &t.cartas {
+            if c.tipo != "latido" {
+                continue;
+            }
+            let url = c
+                .cuerpo
+                .get("url")
+                .and_then(|u| u.as_str())
+                .unwrap_or("")
+                .to_string();
+            if !url.is_empty() {
+                urls.insert(c.nodo.clone(), url);
+            }
+        }
+    }
+
+    if let Some(b) = &board {
+        if let Some(me) = b.get("me") {
+            let mut n = me.clone();
+            if let Some(o) = n.as_object_mut() {
+                o.insert("kind".to_string(), json!("local"));
+                o.insert("es_yo".to_string(), json!(true));
+            }
+            lista.push(n);
+        }
+        if let Some(peers) = b.get("peers").and_then(|v| v.as_array()) {
+            for p in peers {
+                let mut n = p.clone();
+                if let Some(o) = n.as_object_mut() {
+                    o.insert("kind".to_string(), json!("peer"));
+                    o.insert("es_yo".to_string(), json!(false));
+                }
+                lista.push(n);
+            }
+        }
+    }
+
+    let ahora = now_epoch();
+    let ventana = std::env::var("MEGADAEMON_MESH_STALE_SECS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(90);
+    for n in lista.iter_mut() {
+        let id = n.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let last_seen = n.get("last_seen").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let vivo = if n.get("es_yo").and_then(|v| v.as_bool()).unwrap_or(false) {
+            true
+        } else {
+            !last_seen.is_empty()
+                && crate::mesh::iso_to_epoch(&last_seen)
+                    .map(|t| ahora - t <= ventana)
+                    .unwrap_or(false)
+        };
+        if let Some(o) = n.as_object_mut() {
+            o.insert("vivo".to_string(), json!(vivo));
+            o.insert(
+                "url".to_string(),
+                json!(urls.get(&id).cloned().unwrap_or_default()),
+            );
+            o.insert("edad_s".to_string(), json!(crate::mesh::iso_to_epoch(&last_seen)
+                .map(|t| ahora - t)
+                .unwrap_or(-1)));
+        }
+    }
+
+    // Estado vivo del nodo local (barato: todo es local).
+    if let Some(o) = lista
+        .iter_mut()
+        .find(|n| n.get("es_yo").and_then(|v| v.as_bool()).unwrap_or(false))
+        .and_then(|n| n.as_object_mut())
+    {
+        o.insert("vivo_local".to_string(), json!({
+            "uptime_sec": process_uptime_secs(),
+            "uptime_human": human_duration(process_uptime_secs()),
+            "cpu_pct": cpu_usage_pct(),
+            "mem": mem_info(),
+            "build": crate::self_update::actual().ok(),
+            "cola": crate::task_scheduler::stats(),
+        }));
+    }
+
+    json!({
+        "ok": true,
+        "generated_at": now_iso(),
+        "nodos": lista,
+        "urls_publicadas": urls,
+        "ventana_stale_s": ventana,
+    })
+}
+
+/// **Sistema**: telemetría real del nodo (no lo que el daemon cree).
+pub fn sistema_view() -> Value {
+    let (pstate, pol) = crate::power_policy::current_policy();
+    let bat = crate::battery_advanced::read_battery();
+    json!({
+        "ok": true,
+        "generated_at": now_iso(),
+        "daemon": {
+            "pid": std::process::id(),
+            "uptime_sec": process_uptime_secs(),
+            "uptime_human": human_duration(process_uptime_secs()),
+            "build": crate::self_update::actual().ok(),
+            "version": env!("CARGO_PKG_VERSION"),
+            "state_dir": cockpit_state_dir(),
+            "prefix": std::env::var("MEGADAEMON_PREFIX").unwrap_or_default(),
+        },
+        "cpu": {
+            "uso_pct": cpu_usage_pct(),
+            "nucleos": std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0),
+        },
+        "memoria": mem_info(),
+        "bateria": bat,
+        "energia": {
+            "politica": pol,
+            "estado": pstate,
+            "perfiles": perfiles_energia(),
+        },
+        "npu": crate::npu_bridge::probe_exynos_npu_cached(),
+        "alertas": crate::alerts::status(),
+        "carga": std::fs::read_to_string("/proc/loadavg").unwrap_or_default().trim().to_string(),
+    })
+}
+
+/// **Cuotas**: cuánto queda de cada modelo y del presupuesto diario.
+pub fn quota_view() -> Value {
+    json!({
+        "ok": true,
+        "compacto": crate::quota_guard::snapshot_compacto(),
+        "estado": crate::quota_guard::estado(None),
+        "aviso": crate::quota_guard::aviso_para_agente(),
+        "presupuesto": crate::providers::daily_budget_snapshot(),
+        "config": crate::config_efectiva::valor("cuota"),
+    })
+}
+
+/// **Instrumentación AGY**: estado vivo de cada pieza.
+pub fn instrumentacion_view() -> Value {
+    crate::instrumentacion_agy::estado()
+}
+
+/// **Instrumentación AGY**: aplica (o restaura) lo que diga la configuración.
+pub fn instrumentacion_apply(body: &Value) -> Value {
+    let confirmar = body
+        .get("confirmar")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let accion = body
+        .get("accion")
+        .and_then(|v| v.as_str())
+        .unwrap_or("aplicar")
+        .to_string();
+    let puerto = body
+        .get("puerto")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(crate::instrumentacion_agy::PUERTO_GATEWAY as u64) as u16;
+    match accion.as_str() {
+        "aplicar" => crate::instrumentacion_agy::aplicar(puerto, confirmar),
+        "plan" => crate::instrumentacion_agy::plan(),
+        "restore" => crate::instrumentacion_agy::dispatch(&json!({"accion": "restore", "confirmar": confirmar})),
+        other => json!({"ok": false, "error": format!("accion desconocida: {other}")}),
+    }
+}
+
+/// Perfiles de energía: los de fábrica + los guardados por el usuario.
+fn perfiles_energia() -> Value {
+    let mut p = crate::energy_automation::builtin_profiles();
+    let ruta = format!("{}/energy_profiles.json", cockpit_state_dir());
+    let guardados = crate::energy_automation::load_profiles(&ruta);
+    if !guardados.is_empty() {
+        p = guardados;
+    }
+    json!(p
+        .iter()
+        .map(|x| crate::energy_automation::profile_to_json(x))
+        .collect::<Vec<_>>())
+}
+
+/// Inventario de backups (lo que hay realmente en el state dir).
+fn inventario_backups() -> Value {
+    let items = crate::backup_full::inventory(&cockpit_state_dir());
+    json!({
+        "total": items.len(),
+        "items": items
+            .iter()
+            .map(|i| json!({
+                "id": i.id,
+                "status": crate::backup_full::status_of(i),
+                "ruta": i.path,
+                "bytes": i.bytes,
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// Últimos jobs de la cola durable.
+fn jobs_recientes() -> Value {
+    let db = format!("{}/megadaemon_jobs.db", cockpit_state_dir());
+    match crate::job_queue::JobQueue::open(std::path::Path::new(&db)) {
+        Ok(q) => match q.list(20) {
+            Ok(jobs) => json!({"ok": true, "jobs": jobs}),
+            Err(e) => json!({"ok": false, "error": e}),
+        },
+        Err(e) => json!({"ok": false, "error": e}),
+    }
+}
+
+/// **Backups y Drive**: estado real del almacén y de los últimos respaldos.
+pub fn backups_view() -> Value {
+    json!({
+        "ok": true,
+        "generated_at": now_iso(),
+        "drive": {
+            "configurado": std::path::Path::new(&std::env::var("MEGADAEMON_GDRIVE_CREDENTIALS").unwrap_or_default()).exists(),
+            "raiz": crate::config_efectiva::string_de("drive.raiz", "MegaDaemon"),
+        },
+        "inventario": inventario_backups(),
+        "jobs": jobs_recientes(),
+        "config": crate::config_efectiva::valor("drive"),
+        "config": crate::config_efectiva::valor("drive"),
+    })
+}
+
 pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
     let (route, query) = split_query(path);
     let m = method.to_ascii_uppercase();
@@ -4321,6 +4683,16 @@ pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
             let id = query_get(query, "id").unwrap_or_default();
             antigravity_conversation(&id)
         }
+        ("GET", "/api/v2/logs") => logs_view(query),
+        ("GET", "/api/v2/config") => config_view(),
+        ("POST", "/api/v2/config") => config_apply(&b),
+        ("GET", "/api/v2/tools") => tools_catalogo(),
+        ("GET", "/api/v2/nodes/detalle") => nodes_detalle(),
+        ("GET", "/api/v2/system") => sistema_view(),
+        ("GET", "/api/v2/quota") => quota_view(),
+        ("GET", "/api/v2/instrumentacion") => instrumentacion_view(),
+        ("POST", "/api/v2/instrumentacion") => instrumentacion_apply(&b),
+        ("GET", "/api/v2/backups") => backups_view(),
         ("GET", "/api/v2/antigravity/tasks") => antigravity_tasks(),
         ("GET", "/api/v2/market") => work_market(),
         ("GET", "/api/v2/mesh_findings") => mesh_findings(query),

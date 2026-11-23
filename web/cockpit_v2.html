@@ -112,6 +112,14 @@
       </div>
 
       <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Detalle de nodos</h2>
+          <span class="small muted">identidad, vida, URL pública y estado vivo</span>
+        </div>
+        <div id="nodos-detalle"></div>
+      </div>
+
+      <div class="card">
         <div class="card__head"><h2 class="card__title">Acciones sobre el bus</h2></div>
 
         <div class="tabs" role="tablist" aria-label="Acción del bus">
@@ -419,6 +427,14 @@
 
       <div class="card">
         <div class="card__head">
+          <h2 class="card__title">Backups y Drive</h2>
+          <span class="small muted">inventario real en disco</span>
+        </div>
+        <div id="archivos-backups"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
           <h2 class="card__title">Inventario del vault</h2>
           <button class="btn btn--sm btn--ghost" id="btn-share-refresh">Recargar</button>
         </div>
@@ -602,6 +618,18 @@
 
       <div class="card">
         <div class="card__head">
+          <h2 class="card__title">Instrumentación</h2>
+          <div class="btn-row">
+            <button class="btn btn--sm btn--ghost" id="btn-inst-refresh">Ver estado</button>
+            <button class="btn btn--sm btn--primary" id="btn-inst-apply">Aplicar</button>
+            <button class="btn btn--sm btn--danger" id="btn-inst-restore">Restaurar</button>
+          </div>
+        </div>
+        <div id="agy-instrumentacion"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
           <h2 class="card__title">Estado y catálogo real de modelos</h2>
           <button class="btn btn--sm btn--ghost" id="btn-agy-refresh">Refrescar</button>
         </div>
@@ -648,8 +676,24 @@
       </div>
 
       <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Telemetría del nodo</h2>
+          <span class="small muted">medida, no estimada</span>
+        </div>
+        <div id="sistema-telemetria"></div>
+      </div>
+
+      <div class="card">
         <div class="card__head"><h2 class="card__title">Bucle agéntico local</h2></div>
         <div id="sistema-ciclo"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Cuotas y presupuesto</h2>
+          <span class="small muted">queda por modelo y presupuesto diario</span>
+        </div>
+        <div id="sistema-cuota"></div>
       </div>
 
       <div class="grid grid--wide">
@@ -734,6 +778,95 @@
       </div>
     </section>
 
+    <!-- ══════════════════ LOGS ══════════════════ -->
+    <section class="view" id="view-logs" role="tabpanel" aria-labelledby="tab-logs" tabindex="-1">
+      <div class="view__head">
+        <h1 class="view__title">Logs</h1>
+        <span class="view__subtitle" id="logs-sub">las 14 fuentes del nodo, en vivo</span>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Fuente</h2>
+          <div class="row gap-2">
+            <select class="input input--sm" id="logs-fuente" aria-label="Fuente de log"></select>
+            <input class="input input--sm" id="logs-filtro" type="search" placeholder="filtro de texto" aria-label="Filtro de texto">
+            <select class="input input--sm" id="logs-nivel" aria-label="Nivel mínimo">
+              <option value="">todos</option>
+              <option value="error">error</option>
+              <option value="warn">warn</option>
+              <option value="info">info</option>
+              <option value="debug">debug</option>
+            </select>
+            <input class="input input--sm" id="logs-lineas" type="number" min="20" max="2000" value="200" aria-label="Número de líneas" style="width:80px">
+            <button class="btn btn--sm btn--ghost" id="logs-auto" aria-pressed="false">Auto</button>
+            <button class="btn btn--sm btn--primary" id="logs-refresh">Recargar</button>
+          </div>
+        </div>
+        <div id="logs-resumen" class="grid grid--stats"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title" id="logs-titulo">Salida</h2></div>
+        <pre class="logbox mono" id="logs-salida">elige una fuente…</pre>
+      </div>
+    </section>
+
+    <!-- ══════════════════ CONFIGURACIÓN ══════════════════ -->
+    <section class="view" id="view-config" role="tabpanel" aria-labelledby="tab-config" tabindex="-1">
+      <div class="view__head">
+        <h1 class="view__title">Configuración</h1>
+        <span class="view__subtitle" id="config-sub">la configuración viva del daemon</span>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Ajustes</h2>
+          <div class="row gap-2">
+            <button class="btn btn--sm btn--ghost" id="config-reload">Recargar</button>
+            <button class="btn btn--sm btn--primary" id="config-save">Guardar cambios</button>
+          </div>
+        </div>
+        <div class="field">
+          <label class="field__label" for="config-json">Cambios (JSON)</label>
+          <textarea class="textarea mono" id="config-json" rows="10" spellcheck="false" placeholder='{"instrumentacion_agy": {"mitm_db": true}}'></textarea>
+          <span class="field__hint">Se validan antes de escribir (puertos, umbrales térmicos, coherencia de cuotas). Los cambios se aplican en caliente.</span>
+        </div>
+        <div id="config-estado" class="mt-3"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Valor actual</h2></div>
+        <div id="config-form"></div>
+      </div>
+    </section>
+
+    <!-- ══════════════════ TOOLS ══════════════════ -->
+    <section class="view" id="view-tools" role="tabpanel" aria-labelledby="tab-tools" tabindex="-1">
+      <div class="view__head">
+        <h1 class="view__title">Tools</h1>
+        <span class="view__subtitle" id="tools-sub">catálogo de las herramientas del daemon</span>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Ejecutar una tool</h2>
+          <select class="input input--sm" id="tools-nombre" aria-label="Tool"></select>
+        </div>
+        <div class="field">
+          <label class="field__label" for="tools-args">Argumentos (JSON)</label>
+          <textarea class="textarea mono" id="tools-args" rows="5" spellcheck="false">{}</textarea>
+        </div>
+        <button class="btn btn--sm btn--primary" id="tools-run">Ejecutar</button>
+        <div id="tools-out" class="mt-3"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Catálogo</h2></div>
+        <div id="tools-catalogo"></div>
+      </div>
+    </section>
+
   </main>
 
   <!-- ══════════════════ NAVEGACIÓN ══════════════════ -->
@@ -770,6 +903,15 @@
     </button>
     <button class="tabbar__btn" role="tab" id="tab-antigravity" data-view="antigravity" aria-selected="false" aria-controls="view-antigravity">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2 4 6v6c0 5 3.4 9 8 10 4.6-1 8-5 8-10V6z"/><path d="m9 12 2 2 4-4"/></svg><span>Antigravity</span>
+    </button>
+    <button class="tabbar__btn" role="tab" id="tab-logs" data-view="logs" aria-selected="false" aria-controls="view-logs">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M7 9h10M7 13h6"/></svg><span>Logs</span>
+    </button>
+    <button class="tabbar__btn" role="tab" id="tab-config" data-view="config" aria-selected="false" aria-controls="view-config">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Config</span>
+    </button>
+    <button class="tabbar__btn" role="tab" id="tab-tools" data-view="tools" aria-selected="false" aria-controls="view-tools">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m14.7 6.3 3 3M4 20l9-9M14 4l6 6-3 3-6-6z"/></svg><span>Tools</span>
     </button>
     <button class="tabbar__btn" role="tab" id="tab-sistema" data-view="sistema" aria-selected="false" aria-controls="view-sistema">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></svg><span>Sistema</span>
@@ -879,8 +1021,161 @@ const VIEW_LOADERS = {
   reparto: loadReparto,
   enjambre: loadEnjambre,
   antigravity: loadAntigravity,
-  sistema: loadSistema
+  sistema: loadSistema,
+  logs: loadLogs,
+  config: loadConfig,
+  tools: loadTools
 };
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LOGS — las 14 fuentes del nodo
+   ═══════════════════════════════════════════════════════════════════════════ */
+const logsState = { auto: false, timer: null, fuentes: [] };
+
+async function loadLogs() {
+  const sel = $('#logs-fuente');
+  if (!logsState.fuentes.length) {
+    const cat = await apiCall("/api/v2/logs", () => fetch("/api/v2/logs", { cache: "no-store", headers: authHeaders() }));
+    logsState.fuentes = (cat.fuentes || []).filter(function (f) { return f.existe; });
+    const todos = cat.fuentes || [];
+    if (!logsState.fuentes.length) logsState.fuentes = todos;
+    sel.innerHTML = todos.map(function (f) {
+      const marca = f.existe ? (f.bytes + " B") : "sin fichero";
+      return '<option value="' + esc(f.id) + '">' + esc(f.nombre) + " · " + esc(marca) + "</option>";
+    }).join("");
+    const resumen = cat.resumen || [];
+    $('#logs-resumen').innerHTML = resumen.length
+      ? resumen.map(function (r) {
+          const clase = r.errores > 0 ? "stat--danger" : (r.avisos > 0 ? "stat--warn" : "");
+          return '<div class="stat ' + clase + '"><div class="stat__label">' + esc(r.id) + "</div>" +
+            '<div class="stat__value stat__value--sm">' + esc(r.errores) + " err</div>" +
+            '<div class="stat__meta">' + esc(r.avisos) + " avisos · " + esc(r.lineas_muestreadas) + " líneas</div></div>";
+        }).join("")
+      : '<div class="empty"><div class="empty__title">Sin logs todavía</div><div class="empty__reason">El daemon aún no ha escrito en ninguna fuente.</div></div>';
+  }
+  const fuente = sel.value || (logsState.fuentes[0] && logsState.fuentes[0].id) || "daemon";
+  const linea = parseInt($('#logs-lineas').value || "200", 10);
+  const filtro = $('#logs-filtro').value || "";
+  const nivel = $('#logs-nivel').value || "";
+  const q = "/api/v2/logs?fuente=" + encodeURIComponent(fuente) +
+    "&lineas=" + encodeURIComponent(isNaN(linea) ? 200 : linea) +
+    "&filtro=" + encodeURIComponent(filtro) +
+    "&nivel=" + encodeURIComponent(nivel);
+  const data = await apiCall(q, () => fetch(q, { cache: "no-store", headers: authHeaders() }));
+  $('#logs-titulo').textContent = data.nombre || (data.ruta || fuente);
+  const lineas = data.lineas || [];
+  $('#logs-salida').innerHTML = lineas.length
+    ? lineas.map(function (l) {
+        const cls = l.nivel === "error" ? "logbox__err" : (l.nivel === "warn" ? "logbox__warn" : (l.nivel === "debug" ? "logbox__dbg" : "logbox__info"));
+        return '<span class="' + cls + '">' + esc(l.texto) + "</span>";
+      }).join("\n")
+    : '<span class="logbox__info">(sin líneas para este filtro)</span>';
+  const salida = $('#logs-salida');
+  if (salida) salida.scrollTop = salida.scrollHeight;
+  $('#logs-sub').textContent = fuente + " · " + lineas.length + " líneas · " + (data.existe ? "en vivo" : "sin fichero");
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CONFIGURACIÓN — la configuración viva del daemon
+   ═══════════════════════════════════════════════════════════════════════════ */
+function cfgRender(v, prefijo, editados, out) {
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    Object.keys(v).forEach(function (k) {
+      cfgRender(v[k], prefijo ? prefijo + "." + k : k, editados, out);
+    });
+    return;
+  }
+  const ruta = prefijo;
+  const editado = editados.indexOf(ruta) >= 0;
+  const tipo = Array.isArray(v) ? "lista" : typeof v;
+  out.push(
+    '<div class="cfg__key' + (editado ? " cfg__key--editado" : "") + '" title="' + esc(tipo) + '">' + esc(ruta) + "</div>" +
+    '<div class="cfg__val">' + (v === null ? '<span class="muted">null</span>' : esc(Array.isArray(v) ? JSON.stringify(v) : String(v))) +
+    (editado ? ' <span class="chip chip--warn">editado</span>' : "") + "</div>"
+  );
+}
+
+async function loadConfig() {
+  const data = await apiCall("/api/v2/config", () => fetch("/api/v2/config", { cache: "no-store", headers: authHeaders() }));
+  const out = [];
+  (data.secciones || []).forEach(function (sec) {
+    out.push('<div class="cfg__sec">' + esc(sec) + "</div>");
+    cfgRender((data.efectiva || {})[sec], sec, data.editado || [], out);
+  });
+  $('#config-form').innerHTML = out.join("");
+  $('#config-sub').textContent = (data.editado || []).length + " claves editadas · " + data.ruta;
+  $('#config-estado').innerHTML = '<div class="notice"><div><div class="notice__title">' +
+    esc(data.existe ? "Fichero de configuración" : "Sin fichero todavía (se usan los valores de fábrica)") +
+    "</div><div>" + esc(data.ruta) + "</div></div></div>";
+}
+
+async function configGuardar() {
+  let cambios;
+  try {
+    cambios = JSON.parse($('#config-json').value || "{}");
+  } catch (e) {
+    toast("error", "JSON inválido", String(e && e.message || e));
+    return;
+  }
+  const res = await apiCall("/api/v2/config", () => fetch("/api/v2/config", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ cambios: cambios })
+  }));
+  if (res.ok) {
+    toast("ok", "Configuración guardada", "se aplica en caliente");
+    await loadConfig();
+  } else {
+    toast("error", "No se pudo guardar", res.error || "error desconocido");
+    $('#config-estado').innerHTML = '<div class="notice notice--danger"><div>' + esc(res.error || "") + "</div></div>";
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TOOLS — catálogo y ejecución
+   ═══════════════════════════════════════════════════════════════════════════ */
+const toolsState = { catalogo: [] };
+
+async function loadTools() {
+  const data = await apiCall("/api/v2/tools", () => fetch("/api/v2/tools", { cache: "no-store", headers: authHeaders() }));
+  toolsState.catalogo = data.tools || [];
+  $('#tools-sub').textContent = (data.total || 0) + " herramientas · " + Object.keys(data.grupos || {}).length + " grupos";
+  const sel = $('#tools-nombre');
+  if (!sel.options.length) {
+    sel.innerHTML = toolsState.catalogo.map(function (t) {
+      return '<option value="' + esc(t.name) + '">' + esc(t.name) + "</option>";
+    }).join("");
+  }
+  const grupos = data.grupos || {};
+  $('#tools-catalogo').innerHTML = Object.keys(grupos).map(function (g) {
+    const lista = grupos[g];
+    return '<div class="cfg__sec">' + esc(g) + " (" + lista.length + ")</div>" + lista.map(function (n) {
+      const t = toolsState.catalogo.filter(function (x) { return x.name === n; })[0];
+      return '<div class="cfg__key">' + esc(n) + "</div>" +
+        '<div class="cfg__val">' + esc(t && t.description ? t.description.slice(0, 220) : "") + "</div>";
+    }).join("");
+  }).join("");
+}
+
+async function toolsEjecutar() {
+  const nombre = $('#tools-nombre').value;
+  if (!nombre) return;
+  let args;
+  try {
+    args = JSON.parse($('#tools-args').value || "{}");
+  } catch (e) {
+    toast("error", "JSON inválido", String(e && e.message || e));
+    return;
+  }
+  const ruta = "/api/tool/" + nombre;
+  const res = await apiCall(ruta, () => fetch(ruta, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(args)
+  }));
+  $('#tools-out').innerHTML = '<pre class="logbox mono">' + esc(JSON.stringify(res, null, 2)) + "</pre>";
+}
 
 /* ── Autenticación ──────────────────────────────────────────────────────── */
 function authHeaders(extra) {
@@ -1274,9 +1569,45 @@ async function loadResumen() {
 /* ═══════════════════════════════════════════════════════════════════════════
    VISTA 2 · NODOS
    ═══════════════════════════════════════════════════════════════════════════ */
+/** Ficha completa de cada nodo: identidad, vida, URL y estado vivo local. */
+function paintNodosDetalle(det) {
+  const el = $("#nodos-detalle");
+  if (!el) return;
+  const nodos = det.nodos || [];
+  if (!nodos.length) {
+    el.innerHTML = '<div class="empty"><div class="empty__title">Sin nodos</div><div class="empty__reason">El bus todavía no tiene instancias registradas.</div></div>';
+    return;
+  }
+  el.innerHTML = '<div class="table-wrap"><table class="table"><thead><tr>' +
+    "<th>Nodo</th><th>Rol</th><th>Estado</th><th>URL</th><th>Build</th><th>Latido</th>" +
+    "</tr></thead><tbody>" +
+    nodos.map(function (n) {
+      const vivo = n.vivo === true;
+      const vivoLocal = n.vivo_local || {};
+      const build = (vivoLocal.build && (vivoLocal.build.sha || vivoLocal.build.version)) || n.version || "—";
+      const chip = vivo
+        ? '<span class="chip chip--accent">vivo</span>'
+        : '<span class="chip chip--warn">sin latido</span>';
+      return "<tr><td class='mono small'>" + esc(n.id || n.hostname || "—") +
+        (n.es_yo ? ' <span class="chip chip--info">yo</span>' : "") + "</td>" +
+        "<td class='small'>" + esc(n.role || "—") + "</td>" +
+        "<td class='small'>" + chip + "</td>" +
+        "<td class='small mono'>" + (n.url ? '<a href="' + esc(n.url) + '" target="_blank" rel="noopener">' + esc(n.url) + "</a>" : "—") + "</td>" +
+        "<td class='small mono'>" + esc(String(build).slice(0, 12)) + "</td>" +
+        "<td class='small muted'>" + (n.edad_s >= 0 ? esc(n.edad_s + " s") : "—") + "</td></tr>";
+    }).join("") + "</tbody></table></div>" +
+    '<dl class="kv mt-3">' +
+    "<dt>Ventana de latido</dt><dd>" + esc(det.ventana_stale_s || 90) + " s</dd>" +
+    "<dt>URLs publicadas</dt><dd>" + esc(Object.keys(det.urls_publicadas || {}).length) + "</dd>" +
+    "</dl>";
+}
+
 async function loadNodos() {
   const d = await apiCall("/api/v2/nodes", () => fetch("/api/v2/nodes", { cache: "no-store", headers: authHeaders() }));
+  const det = await apiCall("/api/v2/nodes/detalle", () => fetch("/api/v2/nodes/detalle", { cache: "no-store", headers: authHeaders() }));
   state.data.nodos = d;
+  state.data.nodosDetalle = det;
+  paintNodosDetalle(det);
   paintHeader({ bus: d.bus, nodes: d.nodes });
 
   $('#nodos-sub').textContent = d.node_count + " instancia(s) · " + fmtWhen(d.generated_at);
@@ -2013,9 +2344,66 @@ async function loadDelegacion() {
    (este fichero) => el test `cada_ruta_de_la_api_v2_se_pide_desde_la_ui`
    fallaba: la ruta /api/v2/antigravity no la pedía nadie.
    P0-3 del backlog del peer, hecho aquí.                             */
+/** Estado vivo de la instrumentación de Antigravity. */
+function paintInstrumentacion(inst) {
+  const el = $("#agy-instrumentacion");
+  if (!el) return;
+  const piezas = [
+    ["Agente vivo", inst.agy_vivo ? "sí" : "no", inst.agy_vivo ? "" : "stat--warn"],
+    [".so (" + (inst.modo_so || "?") + ")", inst.so_falso && inst.so_falso.activo ? "activo" : (inst.endpoint_local && inst.endpoint_local.aplicado ? "parcheado" : "sin aplicar"), (inst.so_falso && inst.so_falso.activo) || (inst.endpoint_local && inst.endpoint_local.aplicado) ? "" : "stat--warn"],
+    ["Modelo tras MegaDaemon", inst.modelo && inst.modelo.registrado ? "registrado" : "no", inst.modelo && inst.modelo.registrado ? "" : "stat--warn"],
+    ["Puente MCP", inst.puente_mcp && inst.puente_mcp.token_al_dia ? "token al día" : (inst.puente_mcp && inst.puente_mcp.existe ? "token obsoleto" : "sin config"), inst.puente_mcp && inst.puente_mcp.token_al_dia ? "" : "stat--warn"],
+    ["MITM de la DB", inst.mitm_db && inst.mitm_db.montado ? "montado" : "desmontado", inst.mitm_db && inst.mitm_db.montado ? "" : "stat--warn"]
+  ];
+  let html = '<div class="grid grid--stats">' + piezas.map(function (p) {
+    return '<div class="stat ' + (p[2] || "") + '"><div class="stat__label">' + esc(p[0]) + "</div>" +
+      '<div class="stat__value stat__value--sm">' + esc(p[1]) + "</div></div>";
+  }).join("") + "</div>";
+  const cfg = inst.config || {};
+  html += '<dl class="kv mt-3">' +
+    "<dt>Modo del .so</dt><dd>" + esc(inst.modo_so || "—") + "</dd>" +
+    "<dt>URL del endpoint</dt><dd class='mono small'>" + esc((inst.endpoint_local && inst.endpoint_local.url) || "—") + "</dd>" +
+    "<dt>Config</dt><dd class='mono small'>" + esc(JSON.stringify(cfg)) + "</dd></dl>";
+  el.innerHTML = html;
+}
+
+/** Aplica (o restaura) la instrumentación. */
+async function instrumentacionAccion(accion) {
+  const confirmar = accion !== "plan";
+  if (confirmar) {
+    const ok = await confirmModal(
+      accion === "restore" ? "Restaurar la instrumentación" : "Aplicar la instrumentación",
+      accion === "restore"
+        ? "<p>Se monta el .so original de Antigravity y se desmonta el MITM de la DB. Es reversible.</p>"
+        : "<p>Se aplica lo que diga la configuración: .so (falso o in situ), modelo tras MegaDaemon, puente MCP y MITM de la DB. Es idempotente.</p>",
+      "Aplicar"
+    );
+    if (!ok) return;
+  }
+  const res = await apiCall("/api/v2/instrumentacion", () => fetch("/api/v2/instrumentacion", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ accion: accion, confirmar: confirmar })
+  }));
+  const piezas = res.piezas || [];
+  const html = piezas.length
+    ? '<div class="table-wrap"><table class="table"><thead><tr><th>Pieza</th><th>Estado</th><th>Detalle</th></tr></thead><tbody>' +
+      piezas.map(function (p) {
+        return "<tr><td class='small'>" + esc(p.pieza) + "</td>" +
+          "<td class='small'>" + esc(p.estado) + "</td>" +
+          "<td class='small muted'>" + esc(JSON.stringify(p.detalle).slice(0, 220)) + "</td></tr>";
+      }).join("") + "</tbody></table></div>"
+    : '<pre class="logbox mono">' + esc(JSON.stringify(res, null, 2)) + "</pre>";
+  $("#agy-instrumentacion").innerHTML = html;
+  toast(res.ok === false ? "error" : "ok", "Instrumentación", res.ok === false ? (res.error || "falló") : (piezas.length + " piezas revisadas"));
+}
+
 async function loadAntigravity() {
   const d = await apiCall("/api/v2/antigravity", () => fetch("/api/v2/antigravity", { cache: "no-store", headers: authHeaders() }));
   state.data.antigravity = d;
+  const inst = await apiCall("/api/v2/instrumentacion", () => fetch("/api/v2/instrumentacion", { cache: "no-store", headers: authHeaders() }));
+  state.data.instrumentacion = inst;
+  paintInstrumentacion(inst);
   const st = d.status || {};
   const cat = d.catalog || {};
   $('#agy-stats').innerHTML = [
@@ -2203,9 +2591,37 @@ async function loadRe() {
 /* ═══════════════════════════════════════════════════════════════════════════
    VISTA 8 · ARCHIVOS COMPARTIDOS
    ═══════════════════════════════════════════════════════════════════════════ */
+/** Backups y Drive: lo que hay realmente en disco. */
+function paintBackups(bk) {
+  const el = $("#archivos-backups");
+  if (!el) return;
+  const drive = bk.drive || {};
+  const inv = bk.inventario || {};
+  const jobs = bk.jobs || {};
+  let html = '<div class="grid grid--stats">' +
+    '<div class="stat"><div class="stat__label">Drive</div><div class="stat__value stat__value--sm">' +
+    esc(drive.configurado ? "configurado" : "sin credenciales") + "</div><div class='stat__meta'>" + esc(drive.raiz || "") + "</div></div>" +
+    '<div class="stat"><div class="stat__label">Piezas</div><div class="stat__value stat__value--sm">' + esc(inv.total || 0) + "</div></div>" +
+    '<div class="stat"><div class="stat__label">Jobs</div><div class="stat__value stat__value--sm">' + esc((jobs.jobs || []).length) + "</div></div>" +
+    "</div>";
+  const items = inv.items || [];
+  if (items.length) {
+    html += '<div class="table-wrap mt-3"><table class="table"><thead><tr><th>Id</th><th>Estado</th><th>Tamaño</th></tr></thead><tbody>' +
+      items.slice(0, 30).map(function (i) {
+        return "<tr><td class='mono small'>" + esc(i.id || "—") + "</td>" +
+          "<td class='small'>" + esc(i.status || "—") + "</td>" +
+          "<td class='small muted'>" + esc(fmtBytes(i.bytes || 0)) + "</td></tr>";
+      }).join("") + "</tbody></table></div>";
+  }
+  el.innerHTML = html;
+}
+
 async function loadArchivos() {
   const d = await apiCall("/api/v2/share", () => fetch("/api/v2/share", { cache: "no-store", headers: authHeaders() }));
   state.data.share = d;
+  const bk = await apiCall("/api/v2/backups", () => fetch("/api/v2/backups", { cache: "no-store", headers: authHeaders() }));
+  state.data.backups = bk;
+  paintBackups(bk);
 
   $('#archivos-stats').innerHTML = [
     { l: "Ficheros", v: d.total_files || 0 },
@@ -2761,13 +3177,68 @@ function paintVoice() {
 /* ═══════════════════════════════════════════════════════════════════════════
    VISTA 11 · SISTEMA
    ═══════════════════════════════════════════════════════════════════════════ */
+/** Telemetría real del nodo. */
+function paintTelemetria(sys) {
+  const el = $("#sistema-telemetria");
+  if (!el) return;
+  const d = sys.daemon || {};
+  const cpu = sys.cpu || {};
+  const mem = sys.memoria || {};
+  const bat = sys.bateria || {};
+  const npu = sys.npu || {};
+  const stat = [
+    ["CPU", cpu.uso_pct !== undefined && cpu.uso_pct !== null ? cpu.uso_pct + " %" : "—", (cpu.nucleos || 0) + " núcleos"],
+    ["Memoria usada", fmtBytes(mem.used_kb * 1024), "de " + fmtBytes((mem.total_kb || 0) * 1024)],
+    ["Batería", bat.capacity_pct !== undefined ? bat.capacity_pct + " %" : "—", bat.health_pct ? "salud " + bat.health_pct + " %" : ""],
+    ["Uptime", d.uptime_human || "—", "build " + String((d.build && d.build.sha) || "—").slice(0, 12)],
+    ["NPU", npu.available ? "disponible" : (npu.status || "—"), npu.model || ""],
+    ["Carga", sys.carga || "—", "alertas: " + ((sys.alertas && sys.alertas.pendientes) || 0)]
+  ];
+  el.innerHTML = '<div class="grid grid--stats">' + stat.map(function (r) {
+    return '<div class="stat"><div class="stat__label">' + esc(r[0]) + "</div>" +
+      '<div class="stat__value stat__value--sm">' + esc(r[1]) + "</div>" +
+      '<div class="stat__meta">' + esc(r[2] || "") + "</div></div>";
+  }).join("") + "</div>" +
+    '<dl class="kv mt-3"><dt>State dir</dt><dd class="mono small">' + esc(d.state_dir || "") + "</dd>" +
+    "<dt>Prefijo</dt><dd class='mono small'>" + esc(d.prefix || "") + "</dd></dl>";
+}
+
+/** Cuotas y presupuesto diario. */
+function paintCuota(q) {
+  const el = $("#sistema-cuota");
+  if (!el) return;
+  const comp = q.compacto || {};
+  const filas = comp.modelos || comp.proveedores || [];
+  const pres = q.presupuesto || {};
+  let html = "";
+  if (Array.isArray(filas) && filas.length) {
+    html += '<div class="table-wrap"><table class="table"><thead><tr><th>Modelo</th><th>Queda</th><th>Resetea</th></tr></thead><tbody>' +
+      filas.map(function (m) {
+        return "<tr><td class='small'>" + esc(m.nombre || m.modelo || m.id || "—") + "</td>" +
+          "<td class='small'>" + esc(String(m.queda_pct !== undefined ? m.queda_pct + " %" : (m.remaining !== undefined ? m.remaining : "—"))) + "</td>" +
+          "<td class='small muted'>" + esc(m.reset_at || m.resetea || "—") + "</td></tr>";
+      }).join("") + "</tbody></table></div>";
+  } else {
+    html += '<div class="notice"><div><div class="notice__title">Sin datos de cuota</div><div>' + esc(JSON.stringify(comp).slice(0, 300)) + "</div></div></div>";
+  }
+  html += '<dl class="kv mt-3"><dt>Presupuesto diario</dt><dd>' + esc(String(pres.usd !== undefined ? pres.usd + " USD" : (pres.spent_usd !== undefined ? pres.spent_usd + " USD gastados" : "—"))) + "</dd>" +
+    "<dt>Aviso al agente</dt><dd>" + esc((q.aviso || "—").slice ? String(q.aviso).slice(0, 200) : String(q.aviso || "—")) + "</dd></dl>";
+  el.innerHTML = html;
+}
+
 async function loadSistema() {
-  const [loop, routes] = await Promise.all([
+  const [loop, routes, sys, quota] = await Promise.all([
     apiCall("/api/v2/agentic", () => fetch("/api/v2/agentic", { cache: "no-store", headers: authHeaders() })),
-    apiCall("/api/v2/routes", () => fetch("/api/v2/routes", { cache: "no-store", headers: authHeaders() }))
+    apiCall("/api/v2/routes", () => fetch("/api/v2/routes", { cache: "no-store", headers: authHeaders() })),
+    apiCall("/api/v2/system", () => fetch("/api/v2/system", { cache: "no-store", headers: authHeaders() })),
+    apiCall("/api/v2/quota", () => fetch("/api/v2/quota", { cache: "no-store", headers: authHeaders() }))
   ]);
   state.data.agentic = loop;
   state.data.routes = routes;
+  state.data.system = sys;
+  state.data.quota = quota;
+  paintTelemetria(sys);
+  paintCuota(quota);
 
   const cycle = loop.cycle || [];
   $('#sistema-ciclo').innerHTML =
@@ -3270,6 +3741,50 @@ function bindEvents() {
   $("#btn-load-rules").addEventListener("click", function () { loadRules(); });
   $("#btn-share-upload").addEventListener("click", function () { uploadShare(true); });
   $("#btn-share-upload-one").addEventListener("click", function () { uploadShare(false); });
+  // ── Logs ────────────────────────────────────────────────────────────────
+  $("#btn-inst-refresh").addEventListener("click", function () { loadAntigravity(); });
+  $("#btn-inst-apply").addEventListener("click", function () { instrumentacionAccion("aplicar"); });
+  $("#btn-inst-restore").addEventListener("click", function () { instrumentacionAccion("restore"); });
+
+  $("#logs-refresh").addEventListener("click", loadLogs);
+  $("#logs-fuente").addEventListener("change", loadLogs);
+  $("#logs-filtro").addEventListener("input", function () { clearTimeout(logsState.t); logsState.t = setTimeout(loadLogs, 350); });
+  $("#logs-nivel").addEventListener("change", loadLogs);
+  $("#logs-lineas").addEventListener("change", loadLogs);
+  $("#logs-auto").addEventListener("click", function () {
+    logsState.auto = !logsState.auto;
+    this.setAttribute("aria-pressed", logsState.auto ? "true" : "false");
+    this.className = logsState.auto ? "btn btn--sm btn--primary" : "btn btn--sm btn--ghost";
+    if (logsState.timer) { clearInterval(logsState.timer); logsState.timer = null; }
+    if (logsState.auto) {
+      logsState.timer = setInterval(function () {
+        if (state.view === "logs" && document.visibilityState === "visible") loadLogs();
+      }, 5000);
+    }
+  });
+
+  // ── Configuración ───────────────────────────────────────────────────────
+  $("#config-reload").addEventListener("click", loadConfig);
+  $("#config-save").addEventListener("click", configGuardar);
+
+  // ── Tools ───────────────────────────────────────────────────────────────
+  $("#tools-run").addEventListener("click", toolsEjecutar);
+  $("#tools-nombre").addEventListener("change", function () {
+    const t = toolsState.catalogo.filter(function (x) { return x.name === this.value; }.bind(this))[0];
+    const sch = t && t.inputSchema ? t.inputSchema : null;
+    const props = sch && sch.properties ? Object.keys(sch.properties) : [];
+    if (!props.length) { $("#tools-args").value = "{}"; return; }
+    const ejemplo = {};
+    props.forEach(function (k) {
+      const p = sch.properties[k];
+      if (p && p.default !== undefined) ejemplo[k] = p.default;
+      else if (p && p.type === "boolean") ejemplo[k] = false;
+      else if (p && p.type === "string") ejemplo[k] = "";
+      else if (p && p.type === "integer") ejemplo[k] = 0;
+    });
+    $("#tools-args").value = JSON.stringify(ejemplo, null, 2);
+  });
+
   $("#btn-routes-refresh").addEventListener("click", loadSistema);
   $("#btn-voice-refresh").addEventListener("click", function () { refreshVoice(); });
 
