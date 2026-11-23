@@ -681,6 +681,20 @@ pub fn tool_definitions() -> Value {
             }
         },
 {
+            "name": "hooks_payload",
+            "description": "PAYLOAD DE INSTRUMENTACION en Rust con frida-gum (los bindings OFICIALES de Frida, no un inyector artesanal): una .so que se carga en el proceso objetivo (Antigravity) y registra SQLITE (fichero/tabla/consulta), RED (host:puerto, para verificar el parche del endpoint) y FICHEROS (ruta y accion) en un NDJSON, con las credenciales redactadas. Acciones: estado (existe el payload? sha256? proceso objetivo vivo? cargadores disponibles?) | instalar (descarga el asset del release, verifica el sha256 y lo deja en /data/local/tmp/megadaemon/hooks-payload.so con modo 0700) | activar (carga el payload en el proceso objetivo por root_exec: cliente frida con Module.load, o modulo Magisk/Zygisk) | leer (las ultimas lineas del NDJSON).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "accion": { "type": "string", "enum": ["estado", "instalar", "activar", "leer"], "default": "estado", "description": "estado | instalar | activar | leer" },
+                    "paquete": { "type": "string", "description": "Paquete del proceso objetivo (por defecto com.agy)." },
+                    "cargador": { "type": "string", "enum": ["auto", "frida", "zygisk", "manual"], "default": "auto", "description": "auto | frida | zygisk | manual (manual solo devuelve los comandos)." },
+                    "n": { "type": "integer", "description": "Numero de lineas del NDJSON a leer (por defecto 50)." },
+                    "ruta": { "type": "string", "description": "Ruta concreta del NDJSON (opcional; por defecto se prueban las candidatas)." }
+                }
+            }
+        },
+{
             "name": "phone_backup",
             "description": "Motor de backup nativo de apps (Rust puro, sin curl ni shell): inventario de apps del movil, contenedor cifrado AEGIS-256 por segmentos con manifiesto sha256 por fichero, verificacion del AEAD, restauracion (simulacro por defecto, exige confirm=true) y SUBIDA PIPELINING a Drive (sube cada segmento ya cerrado mientras se recoge el siguiente; mide MiB/s y ETA). Anti-congelacion: nice/ionice de la clase mas baja, sleep entre lotes y descanso si la carga del sistema se dispara. Acciones: inventory | create | list | verify | restore | upload. create/restore/upload escriben o publican en Drive: exigen confirm=true.",
             "inputSchema": {
@@ -2425,6 +2439,17 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 }
                 _ => json!({"ok": false, "error": "accion desconocida: usa listar|obtener"}),
             }
+        }
+        // Payload de instrumentacion en Rust con frida-gum (bindings
+        // oficiales de Frida): instalar, activar y leer el NDJSON.
+        "hooks_payload" => {
+            let accion = args
+                .get("accion")
+                .and_then(|v| v.as_str())
+                .unwrap_or("estado")
+                .trim()
+                .to_string();
+            crate::hooks_payload::dispatch(&accion, args)
         }
         "re_fusion" => {
             let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("compare");
