@@ -24,7 +24,6 @@ audit_scout_hw
 # espera).  PENDIENTE: lo arregla quien hizo la rama (el agente General);
 # aqui NO se toca su codigo.  En cuanto su test pase, se borra esta linea.
 antigravity_bridge_smoke
-# `word_fusion_lint` (2026-11-23): el lint encuentra fusiones/CJK en los
 # comentarios que trajeron las ramas del MITM y de Antigravity.  PENDIENTE:
 # una pasada de limpieza sobre esos comentarios.  El lint EJECUTABLE
 # (`tools/word-fusion-lint`) pasa en verde sobre el repo.
