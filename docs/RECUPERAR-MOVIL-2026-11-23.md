@@ -14,7 +14,8 @@
 | 2 | Mi IP de salida del sandbox es **47.253.4.207** | `api.ipify.org` |
 | 3 | ⇒ el A record apunta al **NAT del datacenter**, **no** a casa | 1 vs 2: mismo bloque 47.253.x.x, y la IP pública de casa no puede ser la del datacenter |
 | 4 | ElDominio estable (dominio → router → PC → móvil) está **roto** | consecuencia de 3 |
-| 5 | Desde el sandbox el móvil es **inalcanzable** | `curl` al túnel ⇒ `http=000`; `connect()` a IPs privadas "acepta y resetea" ⇒ falso positivo del proxy de salida |
+| 5 | Desde el sandbox el móvil es **inalcanzable por ruta directa** | `curl` al túnel desde el sandbox ⇒ `http=000`; `connect()` a IPs privadas "acepta y resetea" ⇒ falso positivo del proxy de salida.  **PERO** el túnel SÍ responde desde fuera (ver 9) |
+| 9 | **El túnel rápido responde 502 Bad Gateway** ⇒ **`cloudflared` vivo en el móvil ⇒ el móvil está ENCENDIDO**; lo único muerto es el daemon (el origen 9090) | `curl -s -o /dev/null -w '%{http_code}' https://graphical-subscriber-sys-oil.trycloudflare.com/health` ⇒ **502**, con TLS OK contra el edge de Cloudflare y cuerpo "502 Bad Gateway".  Un túnel *desconectado* daría 530/error 1033 |
 | 6 | El **A record lo tiene que publicar el MÓVIL** (su IP pública SÍ es la de casa) | `docs/RESCATE_20261122.md` §2 punto 7 + el propio instalador (`instalador-megadaemon.sh`, bloque "5b) DuckDNS: A record desde el movil") |
 | 7 | La release ARM64 **existe** y es descargable | `HTTP 200` en `releases/latest/download/megadaemon-core-android-arm64` + `.sha256` oficial |
 | 8 | El token de DuckDNS **existe** en el sandbox | `/workspace/md-secrets/duckdns.token` (36 B, 0600) — **no se ha usado**: desde aquí publicaría la IP del datacenter |
@@ -62,6 +63,49 @@ Qué hace, en orden:
    túnel rápido, y el estado del daemon.
 
 **No reinicia el móvil y no borra nada.**
+
+### VÍA A-bis — RÁPIDA: relanzar SÓLO el daemon (sin reinstalar nada)  ⭐⭐ la primera que hay que intentar
+
+**MEDIDO (2026-11-23, 07:5x)**: el túnel rápido
+`https://graphical-subscriber-sys-oil.trycloudflare.com` responde
+**HTTP 502 Bad Gateway** en `/health`, `/api/status`, `/mcp` y `/`, con el
+TLS bien hecho contra el edge de Cloudflare.
+
+**502 = túnel CONECTADO con el ORIGEN caído.**  Un quick-tunnel
+*desconectado* devuelve **530 / error 1033**, no 502.  Por tanto:
+
+* `cloudflared` **está corriendo en el móvil** ⇒ **el móvil está encendido**,
+  con red y con root.
+* Lo que está muerto es **el daemon** (el origen `127.0.0.1:9090` al que
+  apunta `98-cloudflared.sh`, variable `CFT_TARGET`).
+* **El hostname del túnel NO ha cambiado** ⇒ en cuanto el daemon levante,
+  **la URL que ya tiene la flota vuelve a funcionar** (no hay que buscar ni
+  republicar ninguna URL).
+
+⇒ **NO reinicies el móvil**: un reinicio mata `cloudflared` ⇒ hostname
+nuevo ⇒ hay que republicar el canal.  Relanza sólo el daemon:
+
+```bash
+sh deploy/phone-recover-from-pc.sh --solo-daemon
+```
+
+o, a pelo, desde el PC con ADB:
+
+```bash
+adb shell su -mm -c 'sh /data/adb/service.d/99-megadaemon.sh'
+```
+
+o, en Termux del propio móvil:
+
+```sh
+su -mm -c 'sh /data/adb/service.d/99-megadaemon.sh'
+```
+
+El modo rápido además **sondea el túnel** hasta 12 veces (5 s) y dice si el
+móvil vuelve a contestar por la MISMA URL.  Si el daemon no levanta, el
+siguiente paso es la Vía A completa (el binario puede estar roto: un
+auto-update pudo matarlo sin dejar replacement ⇒ `repo_updates.rs:1675`
+hace `killall megadaemon-core`).
 
 ### VÍA B — Desde el móvil (Termux), sin PC
 

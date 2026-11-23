@@ -34,6 +34,7 @@
 # ---
 #   sh deploy/phone-recover-from-pc.sh                 # recupera
 #   sh deploy/phone-recover-from-pc.sh --diagnostico   # sólo informa
+#   sh deploy/phone-recover-from-pc.sh --solo-daemon   # relanza SÓLO el daemon
 #   sh deploy/phone-recover-from-pc.sh --serie=192.168.1.124:5555
 #   sh deploy/phone-recover-from-pc.sh --token-ruta ~/.mavis/duckdns.token
 #
@@ -61,6 +62,7 @@ die()  { printf '[recuperar %s] ERROR: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; ex
 for a in "$@"; do
   case "$a" in
     --diagnostico) MODO=diagnostico ;;
+    --solo-daemon) MODO=solo_daemon ;;
     --serie=*)     SERIE="${a#*=}" ;;
     --token-ruta=*) TOKEN_RUTA="${a#*=}" ;;
     --token-ruta)   shift; TOKEN_RUTA="${1:-}" ;;
@@ -111,6 +113,42 @@ printf '%s\n' "$DIAG_MOVIL" | sed 's/^/    /'
 if [ "$MODO" = diagnostico ]; then
   say "modo diagnóstico: no se toca nada. Fin."
   exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# MODO RÁPIDO: relanzar SOLO el daemon
+# ---------------------------------------------------------------------------
+# MEDIDO (2026-11-23): el túnel rápido contesta **502 Bad Gateway** ⇒
+# `cloudflared` está vivo en el móvil y lo que está caído es el ORIGIN
+# (127.0.0.1:9090 = el daemon).  Relanzar el daemon:
+#   * NO toca `cloudflared` (es otro script de service.d) ⇒ el hostname
+#     del túnel NO cambia ⇒ la URL de la flota sigue valiendo;
+#   * NO reinicia el móvil.
+if [ "$MODO" = solo_daemon ]; then
+  say "MODO RÁPIDO: relanzar sólo el daemon (el túnel NO se toca)"
+  BIN_INFO="$("${ADB[@]}" shell "ls -l /data/local/tmp/megadaemon/megadaemon-core 2>/dev/null; head -c 4 /data/local/tmp/megadaemon/megadaemon-core 2>/dev/null | od -An -tx1" 2>/dev/null | tr -d '\r')"
+  say "binario en el móvil:"
+  printf '%s\n' "$BIN_INFO" | sed 's/^/    /'
+  say "relanzando el supervisor (99-megadaemon.sh) como root..."
+  "${ADB[@]}" shell "su -mm -c 'sh /data/adb/service.d/99-megadaemon.sh'" 2>&1 | tail -12
+  # Verificar por el TÚNEL (el mismo camino que usa la flota).
+  TUNEL_ANTES="${MD_TUNEL_URL:-https://graphical-subscriber-sys-oil.trycloudflare.com}"
+  say "esperando a que el daemon conteste por el túnel ($TUNEL_ANTES)..."
+  OK=0
+  for i in $(seq 1 12); do
+    sleep 5
+    C="$(curl -s -o /dev/null -w '%{http_code}' -m 15 "$TUNEL_ANTES/health" 2>/dev/null)"
+    say "  intento $i: HTTP ${C:-000}"
+    if [ "$C" = "200" ]; then OK=1; break; fi
+  done
+  if [ "$OK" = "1" ]; then
+    say "LISTO: el móvil vuelve a responder por el MISMO túnel (no hay que cambiar ninguna URL)."
+    exit 0
+  fi
+  warn "el daemon no responde todavia por el túnel."
+  warn "siguiente paso: el binario puede estar roto (un auto-update lo mató y no dejó replacement)."
+  warn "  => ejecuta el modo COMPLETO:  sh deploy/phone-recover-from-pc.sh"
+  exit 2
 fi
 
 # ---------------------------------------------------------------------------
