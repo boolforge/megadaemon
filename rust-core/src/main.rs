@@ -169,6 +169,34 @@ fn main() {
                 if let Err(e) = megadaemon_core::antigravity_clone::unificar_runtime() {
                     eprintln!("antigravity: runtime no unificado: {e}");
                 }
+                // v20: el BUS DE COORDINACION se despliega al arrancar.
+                // MEDIDO (2026-11-23): `Mesh::attach` no lo llamaba nadie =>
+                // el fichero `mesh_board.json` no se creaba nunca y TODAS las
+                // instancias decian "Bus de coordinacion no desplegado": el
+                // enjambre no existia aunque el codigo del bus estuviera
+                // entero.  Ahora arrancar el daemon ES desplegar el bus.
+                {
+                    let dir = std::env::var("MEGADAEMON_STATE_DIR")
+                        .unwrap_or_else(|_| megadaemon_core::cockpit_server::state_dir());
+                    match megadaemon_core::mesh::desplegar_bus(&dir) {
+                        Ok(v) => eprintln!(
+                            "bus: desplegado (instancia {}, rol {})",
+                            v.get("instancia").and_then(|x| x.as_str()).unwrap_or("?"),
+                            v.get("rol").and_then(|x| x.as_str()).unwrap_or("?")
+                        ),
+                        Err(e) => eprintln!("bus: no se pudo desplegar: {e}"),
+                    }
+                    // Latido: cada 45 s se renueva la presencia en el tablero,
+                    // para que los demas nodos vean a esta instancia viva.
+                    std::thread::Builder::new()
+                        .name("mesh-latido".to_string())
+                        .spawn(move || loop {
+                            std::thread::sleep(std::time::Duration::from_secs(45));
+                            let _ = megadaemon_core::mesh::latido(&dir);
+                        })
+                        .map_err(|e| eprintln!("bus: no se pudo arrancar el latido: {e}"));
+                }
+
                 // v19: la instrumentacion de Antigravity es AUTOMATICA.
                 // El daemon comprueba cada minuto (barato: metadatos, no
                 // hashes de 181 MB) y vuelve a instrumentar lo que falte:

@@ -384,6 +384,57 @@ pub fn load_local_instance(caps: Vec<String>) -> InstanceInfo {
     }
 }
 
+/// **Despliega el bus de coordinación** en el estado local.
+///
+/// MEDIDO (2026-11-23): `Mesh::attach` no lo llamaba NADIE, así que el
+/// fichero `mesh_board.json` no se creaba nunca y la UI decía, en todas las
+/// instancias, "Bus de coordinación no desplegado" ⇒ el enjambre no existia
+/// aunque el código del bus estuviera entero.
+///
+/// Esta función:
+///  1) publica la instancia local en el tablero (crea el fichero si no hay);
+///  2) renueva su latido.
+///
+/// Es idempotente y barata (un JSON pequeño), así que se puede llamar en
+/// cada arranque y en cada latido.
+pub fn desplegar_bus(state_dir: &str) -> Result<Value, String> {
+    let board = board_path(state_dir);
+    // La identidad guardada (instance.json) manda: asi el rol y las
+    // capacidades se pueden cambiar sin que el tablero losing la guardia.
+    let inst_path = instance_path(state_dir);
+    let mut me = load_instance(&inst_path).unwrap_or_else(|| load_local_instance(capacidades()));
+    me.last_seen = now_iso();
+    me.load = current_load();
+    let _ = save_instance(&inst_path, &me);
+    let mut mesh = Mesh::attach(&board.to_string_lossy(), me.clone())?;
+    let snap = mesh.snapshot();
+    Ok(json!({
+        "ok": true,
+        "tablero": board.to_string_lossy(),
+        "instancia": me.id,
+        "rol": me.role,
+        "maestra": me.master,
+        "nodos": snap.get("peers_alive").and_then(|v| v.as_u64()).unwrap_or(0),
+    }))
+}
+
+/// Capacidades declaradas por esta instancia (las del catálogo, con las
+/// dependencias realmente satisfechas).
+fn capacidades() -> Vec<String> {
+    crate::capability::registry()
+        .iter()
+        .map(|c| c.id.to_string())
+        .collect()
+}
+
+/// **Latido**: renueva la presencia de esta instancia en el tablero.
+///
+/// Si el tablero no existe, lo crea (despliega el bus).  Así, arrancar el
+/// daemon en cualquier instancia la conecta al enjambre.
+pub fn latido(state_dir: &str) -> Result<Value, String> {
+    desplegar_bus(state_dir)
+}
+
 /// Marca (o desmarca) esta instancia como maestra en su `instance.json`.
 pub fn set_master(state_dir: &str, master: bool) -> Result<(), String> {
     fs::create_dir_all(state_dir).map_err(|e| format!("create {}: {}", state_dir, e))?;

@@ -4478,6 +4478,40 @@ pub fn nodes_detalle() -> Value {
         }
     }
 
+    // Nodos ANUNCIADOS en el tablón de Drive (resonance): el movil se
+    // anuncia con su URL y los demas se anuncian igual.  Esta es la via
+    // real de connexion entre el movil y el PC: el tablero del bus es un
+    // fichero LOCAL (compartido solo si comparten state dir), el tablón de
+    // Drive es compartido de verdad.
+    //
+    // MEDIDO (2026-11-23): sin esto, el movil decia "Sin nodos" aunque el
+    // PC estuviese vivo y anunciado.
+    let ya_conocidos: Vec<String> = lista
+        .iter()
+        .filter_map(|n| n.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .collect();
+    for (nodo, url) in urls.iter() {
+        if ya_conocidos.iter().any(|i| i == nodo) {
+            continue;
+        }
+        lista.push(json!({
+            "id": nodo,
+            "role": "worker",
+            "hostname": "",
+            "platform": "",
+            "version": "",
+            "capabilities": [],
+            "addr": "",
+            "master": false,
+            "kind": "anunciado",
+            "es_yo": false,
+            "url": url,
+            "vivo": true,
+            "origen": "tablón de Drive (latido)",
+            "edad_s": -1,
+        }));
+    }
+
     let ahora = now_epoch();
     let ventana = std::env::var("MEGADAEMON_MESH_STALE_SECS")
         .ok()

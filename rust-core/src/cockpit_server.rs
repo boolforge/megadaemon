@@ -492,21 +492,30 @@ pub fn web_diagnostics() -> Value {
     // MEDIDO (2026-11-23): el movil servia la V1 (7 vistas, sin nodos ni
     // logs ni configuracion).  Ahora se sirve la V2 (12 vistas) y la V1
     // queda en `/legacy`.  El health lo dice explicitamente.
-    let template_path = resolve_template_v2().or_else(resolve_template);
-    let template_source = if resolve_template_v2().is_some() {
-        "file:v2"
-    } else if template_path.is_some() {
-        "file:v1"
-    } else if EMBEDDED_V2_HTML.trim().is_empty() {
-        "NINGUNA"
+    // El diagnostico debe decir lo que se SIRVE de verdad, no lo que existe
+    // en disco.  El orden real de resolucion es:
+    //   1) V2 en disco  2) V2 embebida  3) V1 en disco  4) V1 embebida
+    // MEDIDO (2026-11-23): el diagnostico decia "file:v1" en el movil mien-
+    // tras se estaba sirviendo la V2 embebida => mentia.
+    let (template_source, template_path, template_bytes) = if let Some(p) = resolve_template_v2() {
+        let b = fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+        ("file:v2".to_string(), Some(p), b)
+    } else if !EMBEDDED_V2_HTML.trim().is_empty() {
+        (
+            "embedded:v2".to_string(),
+            None,
+            EMBEDDED_V2_HTML.len() as u64,
+        )
+    } else if let Some(p) = resolve_template() {
+        let b = fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+        ("file:v1".to_string(), Some(p), b)
     } else {
-        "embedded:v2"
+        (
+            "embedded:v1".to_string(),
+            None,
+            EMBEDDED_TEMPLATE.len() as u64,
+        )
     };
-    let template_bytes = template_path
-        .as_ref()
-        .and_then(|p| fs::metadata(p).ok())
-        .map(|m| m.len())
-        .unwrap_or(EMBEDDED_TEMPLATE.len() as u64);
     let token_path = format!("{}/cockpit_token", state_dir());
     let token_materialized = Path::new(&token_path).exists();
     let mut ports_open = OPEN_PORTS.get().cloned().unwrap_or_default();
@@ -544,6 +553,7 @@ pub fn web_diagnostics() -> Value {
         // Que UI se sirve de verdad (y donde esta la V1).  El sondeo de
         // nodos lo usa para decir si un par sirve la V2 o la V1.
         "ui_servida": if template_source.contains("v2") { "v2" } else { "v1" },
+        "ui_orden_resolucion": "v2-disco > v2-embebida > v1-disco > v1-embebida",
         "ui_v2_path": resolve_template_v2(),
         "ui_v1_path": resolve_template(),
         "ui_v2_bytes": EMBEDDED_V2_HTML.len(),
