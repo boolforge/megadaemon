@@ -12,6 +12,25 @@ pub const VERSION: &str = "v11.0-rust-apex";
 pub const STATE_DIR: &str = "/data/user/0/com.agy/files/megadaemon/state";
 pub const SHM_PATH: &str = "/data/user/0/com.agy/files/snatcher_vla_shm.bin";
 pub const ACTION_MAX_TOK: u32 = 256;
+
+/// Directorio de estado EFECTIVO de la instancia (`MEGADAEMON_STATE_DIR`).
+///
+/// MEDIDO 2026-11-23 (CI rojo, auditoría S14): la cola de tickets
+/// delegadas se escribía en la ruta FIJA de la app en Android
+/// ([`STATE_DIR`]).  En el CI (y en un escritorio) esa ruta NO existe y no se
+/// puede crear sin root => el `fs::write` fallaba y su error se tragaba
+/// (`let _ =`) => **la tarea delegada se perdía en silencio**, que es
+/// exactamente lo que S14 vigila.
+///
+/// Ahora el ticket va al directorio de estado EFECTIVO: el mismo donde viven
+/// la bóveda de proveedores, el tablero, los peers y la auditoría (una sola
+/// fuente de verdad).  En el móvil es `/data/local/tmp/megadaemon/state`
+/// (lo exporta el supervisor) y sin `MEGADAEMON_STATE_DIR` es el valor por
+/// defecto de siempre.
+pub fn state_dir() -> String {
+    crate::state_dir::state_dir()
+}
+
 /// v13.2 (S09): el presupuesto por turno NO puede superar el de la política
 /// más restrictiva (crítica = 256); si no, el agente podría gastar más de lo
 /// que la política de energía permite en el peor caso.
@@ -1647,7 +1666,10 @@ impl Arsenal {
         }
 
         // Offline fallback: queue ticket in delegated_tasks.json
-        let del_file = format!("{}/delegated_tasks.json", STATE_DIR);
+        // MEDIDO 2026-11-23: el ticket va al directorio de estado EFECTIVO
+        // (el mismo de la bóveda), NO a la ruta fija de la app en Android:
+        // allí no existe (ni se puede crear sin root) y el ticket se perdía.
+        let del_file = format!("{}/delegated_tasks.json", state_dir());
         let mut tasks: Vec<Value> = fs::read_to_string(&del_file)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
@@ -1664,7 +1686,17 @@ impl Arsenal {
             "status": "QUEUED_OFFLINE",
             "origin": "SEERE_V12_RUST_HARNESS"
         }));
-        let _ = fs::write(&del_file, serde_json::to_string_pretty(&tasks).unwrap_or_default());
+        // La tarea delegada NO se pierde: el DIRECTORIO se crea antes de
+        // escribir y, si la escritura falla, se DICE (antes el error se
+        // tragaba con `let _ =` y nadie se enteraba de nada).
+        if let Some(parent) = Path::new(&del_file).parent() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                return format!("ERR_QUEUE_DIR:{}: {}", parent.display(), e);
+            }
+        }
+        if let Err(e) = fs::write(&del_file, serde_json::to_string_pretty(&tasks).unwrap_or_default()) {
+            return format!("ERR_QUEUE_WRITE:{}: {}", del_file, e);
+        }
         format!("EXT_QUEUED:{} -> {}", task_id, del_file)
     }
 
