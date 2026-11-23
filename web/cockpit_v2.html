@@ -1601,7 +1601,27 @@ function askApiKey() {
  *  sin `token` NO es un canje válido (fallo UI-16).  Si no hay token, la
  * exchange se considera fallida y se avisa.
  */
+let _exchangeEnCurso = null;   // MEDIDO (2026-11-23): al reiniciar el daemon
+                                 // el token caduca y VARIAS peticiones a la vez
+                                 // obtienen 403 ⇒ cada una canjeaba por su cuenta
+                                 // (3 canjes en paralelo medidos) ⇒ la vista
+                                 // tardaba 8 s en pintarse.  Ahora hay UN canje
+                                 // en vuelo y todas las que lo necesitan lo
+                                 // comparten.
+/** Canjea la clave por un token de sesión (uno solo a la vez). */
 async function exchangeToken(apiKey) {
+  if (_exchangeEnCurso) return _exchangeEnCurso;
+  _exchangeEnCurso = _exchangeTokenReal(apiKey).then(function (ok) {
+    _exchangeEnCurso = null;
+    return ok;
+  }, function () {
+    _exchangeEnCurso = null;
+    return false;
+  });
+  return _exchangeEnCurso;
+}
+
+async function _exchangeTokenReal(apiKey) {
   try {
     const res = await fetch("/api/session/exchange", {
       method: "POST",
@@ -2862,6 +2882,11 @@ async function loadAntigravity() {
   // Antigravity está parado ⇒ /api/v2/antigravity da error), la vista se
   // quedaba COMPLETAMENTE VACÍA.  Ahora cada bloque va por separado: lo
   // que funciona se muestra y lo que no, dice por qué.
+  //
+  // Y MEDIDO: el panel tardaba 8 s en pintarse ⇒ parecía roto.  Ahora se
+  // pinta un esqueleto de inmediato y las llamadas van EN PARALELO.
+  const esq = $("#agy-instrumentacion");
+  if (esq && !esq.innerHTML.trim()) esq.innerHTML = '<div class="notice"><div>cargando estado de la instrumentación…</div></div>';
   const inst = await apiCall("/api/v2/instrumentacion", () => fetch("/api/v2/instrumentacion", { cache: "no-store", headers: authHeaders() }))
     .catch(function (e) {
       const el = $("#agy-instrumentacion");
@@ -2902,9 +2927,12 @@ async function loadAntigravity() {
     ? '<dl class="kv">' + ov.map(function (r) { return "<dt>" + esc(r[0]) + "</dt><dd>" + esc(r[1]) + "</dd>"; }).join("") + "</dl>"
     : '<p class="muted">Sin datos del language server.</p>';
 
-  await loadAntigravityModels();
-  await loadAntigravityConversations();
-  await loadAntigravityTasks();
+  // En paralelo: cada bloque es independiente y tardaba lo suyo en serie.
+  await Promise.all([
+    loadAntigravityModels(),
+    loadAntigravityConversations(),
+    loadAntigravityTasks()
+  ]);
 }
 
 async function loadAntigravityModels() {
