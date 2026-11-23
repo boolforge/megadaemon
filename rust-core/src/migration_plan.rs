@@ -174,8 +174,26 @@ pub fn plan_base(entradas: &[EntradaInventario], tope_bytes_extra: u64) -> PlanM
                     (Decision::Copiar, "metadatos pequeños: se copian".to_string())
                 }
             }
+            // La politica DOCUMENTADA (linea 144) dice: '.extra / .splits /
+            // .wfi / .cls / .msg => copiar SOLO si son pequenos; si no,
+            // excluir por peso'.  La implementacion los copiaba siempre =>
+            // el tope de bytes extra no se respetaba (test rojo
+            // la_ia_no_puede_ampliar, medido el 2026-11-23).
             ClaseBackup::SwiftCallsSms | ClaseBackup::SwiftWifi => {
-                (Decision::Copiar, "registros del sistema (SMS/llamadas/Wi-Fi)".to_string())
+                if e.bytes > tope_bytes_extra {
+                    (
+                        Decision::Excluir,
+                        format!(
+                            "pesa {} y el tope de extra no lo cubre",
+                            crate::backup_catalog::bytes_legibles(e.bytes)
+                        ),
+                    )
+                } else {
+                    (
+                        Decision::Copiar,
+                        "registros del sistema (SMS/llamadas/Wi-Fi)".to_string(),
+                    )
+                }
             }
             ClaseBackup::SwiftWalls => (Decision::Excluir, "fondos: se regeneran".to_string()),
             ClaseBackup::Apk => (Decision::Copiar, "APK suelto".to_string()),
@@ -215,7 +233,19 @@ pub fn plan_base(entradas: &[EntradaInventario], tope_bytes_extra: u64) -> PlanM
 fn orden_base(reglas: &[Regla]) -> Vec<String> {
     let mut copia: Vec<&Regla> = reglas.iter().filter(|r| r.decision == Decision::Copiar).collect();
     copia.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.paquete.cmp(&b.paquete)));
-    copia.into_iter().map(|r| r.paquete.clone()).collect()
+    // El orden es de PAQUETES, no de ficheros: una app puede tener varias
+    // reglas (datos, APK, .cls...) y el paquete aparece UNA vez.
+    // MEDIDO (2026-11-23): sin esta deduplicacion el orden era
+    // ["com.foo.bar","com.foo.bar","v3.1"] y la reordenacion que proponia la
+    // IA se rechazaba con "1 paquetes por delante del orden base" (el mismo
+    // paquete duplicado hacia que el orden real != el orden de la IA).
+    let mut orden: Vec<String> = Vec::new();
+    for r in copia {
+        if !orden.iter().any(|p| p == &r.paquete) {
+            orden.push(r.paquete.clone());
+        }
+    }
+    orden
 }
 
 /// Deduce el paquete del nombre de un fichero de backup.
