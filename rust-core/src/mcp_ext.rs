@@ -686,7 +686,7 @@ pub fn tool_definitions() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "description": "inventory | create | list | verify | restore | upload" },
+                    "action": { "type": "string", "enum": ["inventory", "create", "list", "verify", "restore", "upload"], "default": "inventory", "description": "inventory | create | list | verify | restore | upload" },
                     "out": { "type": "string", "description": "Directorio/ruta del contenedor." },
                     "folder_id": { "type": "string", "description": "ID de carpeta en Drive (para upload)." },
                     "packages": { "type": "array", "items": { "type": "string" } },
