@@ -695,10 +695,6 @@ pub struct ChatDeps<'a> {
     pub retries: u32,
     /// Espera base entre reintentos (ms).  0 en tests (sin esperas).
     pub backoff_ms: u64,
-    /// **Presupuesto**: si está puesto, el daemon NO llama a los proveedores
-    /// que el veto rechace (p. ej. no gastar en proveedores de pago).
-    /// `None` = sin veto (comportamiento por defecto).
-    ///
 }
 
 impl<'a> ChatDeps<'a> {
