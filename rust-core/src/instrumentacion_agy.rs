@@ -93,6 +93,72 @@ pub fn reiniciar_app_para_el_binario_nuevo() -> Option<Value> {
     }))
 }
 
+/// Relanza el **language server** para que cargue el `.so` recién parcheado.
+///
+/// MEDIDO (2026-11-24, móvil): la app de Antigravity **re-extrae su
+/// runtime en cada arranque** (`files/runtime/`), así que reiniciar la app
+/// se come el parche del `.so` (medido: el sha volvió al original).  Pero el
+/// LS **se relanza solo cuando muere**: medido — matando `libloader.so`, la
+/// app lo vuelve a lanzar en ~1 s y el LS nuevo carga el `.so` YA PARCHEADO
+/// (sus peticiones pasaron de 403 a 200 al gateway).
+///
+/// Por eso, tras re-parchear, se mata el LS (NO la app): la UI no se cae y
+/// el modelo de MegaDaemon entra en vigor sin tocar al usuario.
+///
+/// Con **cooldown** de 2 min para que un bucle no mate el LS cada 60 s.
+pub fn relanzar_ls_para_el_binario_nuevo() -> Option<Value> {
+    if !on("relanzar_ls", true) {
+        return None;
+    }
+    if !proceso_vivo("com.agy") {
+        return None;
+    }
+    let pid = pid_del_language_server()?;
+    let marca = std::path::PathBuf::from(crate::cockpit_server::state_dir())
+        .join("agy/relanzar_ls.ts");
+    let ahora = crate::webui::now_epoch();
+    if let Ok(txt) = std::fs::read_to_string(&marca) {
+        if let Ok(prev) = txt.trim().parse::<i64>() {
+            if ahora - prev < 120 {
+                return None;
+            }
+        }
+    }
+    let _ = std::fs::create_dir_all(marca.parent().unwrap());
+    let _ = std::fs::write(&marca, format!("{ahora}\n"));
+    let r = crate::android::root_exec(&format!("kill -9 {pid}"), 5_000, 1_024);
+    Some(json!({
+        "pid": pid,
+        "ok": !r.combined().to_lowercase().contains("no such process"),
+        "detalle": r.combined().trim().chars().take(160).collect::<String>(),
+        "ts": ahora,
+    }))
+}
+
+/// PID del proceso del language server (el que tiene el `.so` en memoria).
+///
+/// MEDIDO (2026-11-24): la cmdline es
+/// `runtime/bin/libloader.so --library-path runtime/lib --preload
+///  runtime/lib/liblse_compat.so runtime/bin/liblanguage_server.so
+///  --standalone --override_ide_name antigravity --subclient_type hub -`
+fn pid_del_language_server() -> Option<u32> {
+    let dir = std::fs::read_dir("/proc").ok()?;
+    for e in dir.flatten() {
+        let nombre = e.file_name().to_string_lossy().to_string();
+        let Ok(pid) = nombre.parse::<u32>() else {
+            continue;
+        };
+        let Ok(cmd) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+            continue;
+        };
+        let s = String::from_utf8_lossy(&cmd).replace('\0', " ");
+        if s.contains("liblanguage_server.so") {
+            return Some(pid);
+        }
+    }
+    None
+}
+
 /// Ruta del fichero de estado de la instrumentación.
 pub fn ruta_estado() -> PathBuf {
     PathBuf::from(format!(
@@ -545,7 +611,13 @@ pub fn aplicar(puerto: u16, confirmar: bool) -> Value {
         p.get("pieza").and_then(|v| v.as_str()) == Some("so")
             && p.get("estado").and_then(|v| v.as_str()) == Some("aplicado_ahora")
     }) {
-        if let Some(r) = reiniciar_app_para_el_binario_nuevo() {
+        // MEDIDO (2026-11-24): primero el LS (la app NO se reinicia: reextrae
+        // su runtime y se comería el parche).  Si el LS no está en marcha
+        // (la app está arrancando), no se hace nada: el siguiente ciclo del
+        // bucle (60 s) lo finds y lo relanza.
+        if let Some(r) = relanzar_ls_para_el_binario_nuevo() {
+            piezas.push(json!({ "pieza": "ls", "estado": "relanzado", "detalle": r }));
+        } else if let Some(r) = reiniciar_app_para_el_binario_nuevo() {
             piezas.push(json!({ "pieza": "app", "estado": "reiniciada", "detalle": r }));
         }
     }

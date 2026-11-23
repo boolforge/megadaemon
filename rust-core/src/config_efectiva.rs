@@ -77,6 +77,11 @@ pub fn por_defecto() -> Value {
             // reiniciar la app para que el language server cargue el
             // binario nuevo (lo tiene en memoria).  Con cooldown de 5 min.
             "reiniciar_app": true,
+            // MEDIDO (2026-11-24): la app re-extrae su runtime en cada
+            // arranque ⇒ reiniciarla se come el parche del `.so`.  En vez de
+            // eso se mata el LS (que la app relanza solo) para que cargue el
+            // binario parcheado sin tumbar la UI.
+            "relanzar_ls": true,
             "ocultar": [],
             "reescribir": {}
         },
