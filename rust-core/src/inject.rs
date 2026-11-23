@@ -737,6 +737,19 @@ const OFFSET_AUXILIAR: u64 = 0x1000;
 /// Separación entre la ruta escrita y la ranura de retorno.
 const OFFSET_RANURA: u64 = 0x100;
 
+/// Directorio donde el payload escribe el NDJSON de hooks.
+///
+/// **Aviso (importante)**: el proceso de una app de terceros **no puede
+/// escribir en `/data/local/tmp`** (etiqueta `shell_data_file`, y
+/// `untrusted_app` no tiene permiso).  Por eso el payload tiene una lista
+/// de rutas candidatas y usa la **primera que puede abrir**; la que haya
+/// usado se escribe en la propia primera línea del NDJSON
+/// (`"fichero"`).  El daemon (root) las lee todas.
+pub const DIR_HOOKS: &str = "/data/local/tmp/megadaemon/state";
+
+/// Ruta principal del NDJSON de hooks.
+pub const NDJSON_HOOKS: &str = "/data/local/tmp/megadaemon/state/hooks.ndjson";
+
 /// Vía de escritura en la memoria del proceso objetivo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViaMemoria {
