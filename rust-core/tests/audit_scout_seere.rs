@@ -36,6 +36,7 @@ use megadaemon_core::seere_v11 as S;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
@@ -943,31 +944,46 @@ fn s13b_no_queda_truncado_por_bytes_sobre_str() {
 fn s14_la_tarea_delegada_no_se_pierde() {
     let _g = serial();
 
-    // Bóveda VACÍA => no hay a quién delegar => la tarea DEBE encolarse.
-    let vault_path = megadaemon_core::providers::PROVIDERS_PATH;
-    let backup = std::fs::read_to_string(vault_path).ok();
-    std::fs::write(
-        vault_path,
-        r#"{"default_model":"local-seere","providers":[]}"#,
-    )
-    .expect("escribir bóveda vacía");
+    // La bóveda y la cola de tickets viven en el directorio de estado
+    // EFECTIVO (`MEGADAEMON_STATE_DIR`).  En el CI (y en un escritorio) la
+    // ruta FIJA de la app en Android (`/data/user/0/com.agy/...`) no existe
+    // y no se puede crear sin root => el test usa un directorio propio.
+    let dir = std::env::temp_dir().join(format!("seere_s14_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let prev_state = std::env::var("MEGADAEMON_STATE_DIR").ok();
+    std::env::set_var("MEGADAEMON_STATE_DIR", dir.to_string_lossy().to_string());
 
-    let queue = format!("{}/delegated_tasks.json", S::STATE_DIR);
+    // Bóveda VACÍA => no hay a quién delegar => la tarea DEBE encolarse.
+    // El que escribe la bóveda es `providers::save_vault`, que CREA el
+    // directorio padre ANTES de escribir.  MEDIDO 2026-11-23: el test
+    // escribía a pelo con `fs::write` y el directorio no existía =>
+    // "escribir bóveda vacía: No such file or directory" y el test
+    // reventaba ANTES de comprobar nada.
+    let vault_path = megadaemon_core::providers::providers_path();
+    let vault = megadaemon_core::providers::ProviderVault {
+        default_model: "local-seere".to_string(),
+        providers: Vec::new(),
+    };
+    megadaemon_core::providers::save_vault(&vault).expect("escribir bóveda vacía");
+    assert!(
+        Path::new(&vault_path).parent().map(|p| p.is_dir()).unwrap_or(false),
+        "[S14] DEFECTO: el escritor de la bóveda NO creó el directorio padre de {}",
+        vault_path
+    );
+
+    let queue = format!("{}/delegated_tasks.json", S::state_dir());
     let _ = std::fs::remove_file(&queue);
 
     let a = S::Arsenal::new(false, false, true);
     let out = a.dispatch("DELEGATE_LLM", "S14_TASK_MARKER resume", false);
     let after = std::fs::read_to_string(&queue).unwrap_or_default();
 
-    // Restaurar la bóveda.
-    match backup {
-        Some(b) => {
-            let _ = std::fs::write(vault_path, b);
-        }
-        None => {
-            let _ = std::fs::remove_file(vault_path);
-        }
+    // Restaurar el entorno (el directorio de estado efectivo) y limpiar.
+    match prev_state {
+        Some(p) => std::env::set_var("MEGADAEMON_STATE_DIR", p),
+        None => std::env::remove_var("MEGADAEMON_STATE_DIR"),
     }
+    let _ = std::fs::remove_dir_all(&dir);
 
     println!("[S14] dispatch(DELEGATE_LLM) -> {}", out);
     println!("[S14] cola offline = {} bytes", after.len());
