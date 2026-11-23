@@ -37,7 +37,13 @@ import time
 ROOT = "/workspace/agy-re/tools-out"
 MAESTRO = os.path.join(ROOT, "go.funcs.real.tsv")
 TODO = os.path.join(ROOT, "todo")
-SCRIPTS = os.path.join(ROOT, "scripts")
+# MEDIDO (2026-11-23): Ghidra canonicaliza la ruta del SCRIPT pero no la
+# del directorio de scripts.  Si /workspace es un enlace a otro sitio
+# (p.ej. /run/csi/mount-root/...), el script se busca en la ruta canónica y
+# el directorio en la no canónica => «Failed to find script in any script
+# directory» => 0 funciones convertidas y ningun error visible.
+# Se canonicaliza TODO lo que se le pasa a Ghidra.
+SCRIPTS = os.path.realpath(os.path.join(ROOT, "scripts"))
 GHIDRA = os.path.join(ROOT, "ghidra_11.2.1_PUBLIC")
 JAVA = os.path.join(ROOT, "jdk21")
 BINARIO = "/workspace/agy-re/liblanguage_server.so"

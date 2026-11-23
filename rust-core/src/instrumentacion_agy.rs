@@ -377,7 +377,15 @@ pub fn bucle_automatico(puerto: u16) {
                 None => String::new(),
             };
             let detalle = detalle.chars().take(220).collect::<String>();
-            eprintln!("instrumentación AGY: {pieza} → {estado}{detalle}", if detalle.is_empty() { "" } else { ": " });
+            // OJO: el sufijo va como argumento POSICIONAL: `{detalle}` en el
+            // formato sin pasarlo es un error de compilacion (el CI lo
+            // detectó: «argument never used»).
+            let sufijo = if detalle.is_empty() {
+                String::new()
+            } else {
+                format!(": {detalle}")
+            };
+            eprintln!("instrumentación AGY: {pieza} → {estado}{sufijo}");
         }
     }
 }
