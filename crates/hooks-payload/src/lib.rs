@@ -31,7 +31,8 @@
 //! * **nunca deadlock**: el escritor NDJSON tiene un guardián de re-entrada;
 //! * **sin `std::fs` en el camino caliente**: `libc::open` + `libc::write`.
 
-mod hooks;
+pub mod hooks;
+pub mod plan;
 mod json;
 // La politica de redaccion vive en `crates/redact` (fuente unica para el
 // shim, el payload de hooks y el payload del inyector).  Aqui solo se
@@ -152,6 +153,9 @@ pub fn instalar() -> Result<hooks::Informe, String> {
     // 2) Los hooks.
     let mut inter = interceptor_bloqueado();
     let mut informe = hooks::instalar(&mut inter.0, g);
+    // 2b) Los hooks del PLAN: funciones Go del .so por direccion (pclntab).
+    //     El .so real no se toca: gum intercepta en memoria.
+    hooks::instala_plan(&mut inter.0, g, &crate::plan::ruta(), &mut informe);
     informe.ndjson = ruta.clone();
     // 3) El evento de arranque (con el informe completo).
     //    OJO: el escritor ya pone `ts`, `pid` y `tid` ⇒ aquí no se repiten.

@@ -538,3 +538,116 @@ mod tests {
         assert_eq!(tabla_de("SELECT 1").as_deref(), None);
     }
 }
+
+
+// ---------------------------------------------------------------------------
+// PLAN DE HOOKS GO (direcciones del pclntab)
+// ---------------------------------------------------------------------------
+
+/// Listener de un hook del plan: registra la llamada (argumentos y retorno)
+/// en el NDJSON.  **No toca el flujo**: el `.so` real sigue ejecutándose
+/// igual (esto es "dejar pasar" al original).
+pub struct PlanListener {
+    /// Nombre corto del hook (sale en el NDJSON).
+    pub id: String,
+    /// Qué se hace con la llamada (`observar`, `sustituir_url`).
+    pub tarea: String,
+}
+
+impl InvocationListener for PlanListener {
+    fn on_enter(&mut self, ctx: InvocationContext) {
+        if sink::en_escritura() {
+            return;
+        }
+        let tid = ctx.thread_id();
+        let id = self.id.clone();
+        let tarea = self.tarea.clone();
+        protegido(|| {
+            let args: Vec<String> = (0..6).map(|i| format!("0x{:x}", ctx.arg(i))).collect();
+            let extra = vec![
+                json::campo("id", &id),
+                json::campo("tarea", &tarea),
+                json::campo("args", &args.join(" ")),
+            ];
+            evento(tid, "plan", &id, &extra);
+        });
+    }
+
+    fn on_leave(&mut self, ctx: InvocationContext) {
+        if sink::en_escritura() {
+            return;
+        }
+        let tid = ctx.thread_id();
+        let id = self.id.clone();
+        let tarea = self.tarea.clone();
+        protegido(|| {
+            let extra = vec![
+                json::campo("id", &id),
+                json::campo("tarea", &tarea),
+                json::campo("ret", &format!("0x{:x}", ctx.return_value())),
+            ];
+            evento(tid, "plan", &id, &extra);
+        });
+    }
+}
+
+/// Instala los hooks del plan: cada línea dice en qué módulo está la
+/// función y su VA en el ELF; aquí se le suma el base del módulo **en el
+/// proceso vivo** (el bias de carga) y se engancha con gum.
+///
+/// El `.so` original **no se modifica**: gum intercepta en memoria, así que
+/// la app sigue usando su binario intacto.
+pub fn instala_plan(
+    interceptor: &mut Interceptor,
+    gum: &Gum,
+    ruta_plan: &str,
+    informe: &mut Informe,
+) {
+    let objetivos = crate::plan::lee(ruta_plan);
+    if objetivos.is_empty() {
+        return;
+    }
+    let process = frida_gum::Process::obtain(gum);
+    let mods = process.enumerate_modules();
+    for o in objetivos {
+        let base_nombre = o.modulo.rsplit('/').next().unwrap_or(&o.modulo).to_string();
+        let Some(m) = mods
+            .iter()
+            .find(|m| m.path() == o.modulo)
+            .or_else(|| mods.iter().find(|m| m.name() == base_nombre))
+        else {
+            informe.ganchos.push(InformeGancho {
+                simbolo: o.id.clone(),
+                modulo: o.modulo.clone(),
+                estado: "modulo ausente".to_string(),
+            });
+            continue;
+        };
+        // frida-gum 0.17: `NativePointer` no tiene `add`; es un newtype
+        // sobre `*mut c_void` => se desplaza en aritmética de 64 bits.
+        let base = m.range().base_address().0 as u64;
+        let addr = frida_gum::NativePointer((base + o.va_elf) as *mut libc::c_void);
+        let mut boxed: Box<PlanListener> = Box::new(PlanListener {
+            id: o.id.clone(),
+            tarea: o.tarea.clone(),
+        });
+        match interceptor.attach(addr, &mut *boxed) {
+            Ok(handle) => {
+                std::mem::forget(handle);
+                let _ = Box::leak(boxed);
+                informe.ganchos.push(InformeGancho {
+                    simbolo: o.id.clone(),
+                    modulo: m.path(),
+                    estado: format!("instalado en 0x{:x}", addr),
+                });
+            }
+            Err(e) => {
+                informe.ganchos.push(InformeGancho {
+                    simbolo: o.id.clone(),
+                    modulo: m.path(),
+                    estado: format!("error: {e}"),
+                });
+            }
+        }
+    }
+}
