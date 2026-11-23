@@ -50,7 +50,12 @@ fn el_fixture_real_es_un_tar_ustar() {
     );
     assert_eq!(tb::detectar_formato(&bytes), tb::FormatoContenedor::Tar);
     // El magic ustar va en el offset 257 de la cabecera de la 1ª entrada.
-    assert_eq!(&bytes[257..263], tb::MAGIC_USTAR);
+    // MEDIDO 2026-11-23 (CI): el fixture REAL (el script de la app en el S21
+    // Ultra) escribe el magic **GNU** ("ustar  \0"), no el POSIX ("ustar\0"):
+    // el `tar` de Android es el de toybox/BSD.  El codigo de produccion lo
+    // acepta ambos (`MAGIC_USTAR` | `MAGIC_USTAR_GNU`); aqui se afirma el que
+    // trae el fixture de verdad (su sha256 esta congelado justo encima).
+    assert_eq!(&bytes[257..263], tb::MAGIC_USTAR_GNU);
 }
 
 #[test]
