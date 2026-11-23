@@ -132,9 +132,68 @@ tools/regenerar-go/regenerar.py --filtro-paquete third_party/jetski --out /tmp/x
 
 Las cifras del `RESUMEN.md` **se generan al ejecutar la herramienta**: salen
 de contar lo que realmente se ha escrito, nunca de una constante en el
-código. El resumen de la ejecución completa está en
-[`RESUMEN.md` de la ejecución](../tools/regenerar-go/RESUMEN-ejecucion.md) y
-las cifras concretas del corpus actual están en §5.
+código.
+
+### 3.1 La ejecución completa (medida el 2026-11-23)
+
+```bash
+tools/regenerar-go/regenerar.py --out /workspace/agy-re/tools-out/regenerado
+# → hecho en 472,1 s (la primera vez, con el NAS saturado: 1527,7 s)
+```
+
+| magnitud | valor |
+|---|---:|
+| funciones en el export del pclntab | **161.682** |
+| funciones procesadas | **161.682** |
+| paquetes (directorios del binario) | **1.345** |
+| ficheros `.c` generados | **5.383** |
+| ficheros `.go` (stubs) generados | **5.383** |
+| stubs Go emitidos | **161.682** |
+| identificadores Go que colisionaron (con sufijo) | **3.706** |
+| **funciones CON pseudocódigo volcado** | **59.980** |
+| funciones SIN pseudocódigo | **101.702** |
+| bytes del pseudocódigo volcado | **288.698.135** |
+| bytes totales del árbol de salida | **651.787.177** |
+| ficheros totales del árbol de salida | **12.124** |
+| cabeceras que NO coinciden con la ruta deducida | **9** (de 4.372) |
+
+### 3.2 Cobertura del pseudocódigo
+
+| | funciones |
+|---|---:|
+| total en el binario | 161.682 |
+| − generado (blaze/protobuf) | 69.466 |
+| − autogenerado (compilador) | 30.320 |
+| **= no generadas (las que había que decompilar)** | **61.896** |
+| **con pseudocódigo de Ghidra** | **59.980 (96,90 %)** |
+| sin pseudocódigo (los workers murieron antes) | **1.916** |
+
+Las 101.702 funciones "sin pseudocódigo" son, en su mayoría, las **generadas
+y autogeneradas**, que no se decompilan a propósito: el 100 % de las
+funciones *no generadas* está covered salvo 1.916.
+
+### 3.3 Desglose por categoría del código de origen
+
+| categoría | funciones | % | ficheros `.c` |
+|---|---:|---:|---:|
+| generado (blaze/protobuf) | 69.466 | 42,96 % | 942 |
+| autogenerado (compilador) | 30.320 | 18,75 % | 1 |
+| librerías públicas (`third_party/golang`) | 33.659 | 20,82 % | 2.011 |
+| jetski (código propio de Antigravity) | 11.928 | 7,38 % | 1.130 |
+| runtime Go (`third_party/go/gc`) | 12.298 | 7,61 % | 971 |
+| otras `third_party` | 2.665 | 1,65 % | 191 |
+| resto | 1.346 | 0,83 % | 137 |
+| **total** | **161.682** | 100 % | **5.383** |
+
+### 3.4 Verificación independiente
+
+Recorriendo el árbol generado **a mano** (contando `/* ==== */` y
+`/* SIN PSEUDOCODIGO */`) sale **exactamente lo mismo** que el `RESUMEN.md`:
+161.682 bloques, 101.702 sin pseudocódigo, 59.980 con pseudocódigo, 1.345
+`README.md` de paquete y 5.383 stubs `.go`.
+
+La salida es **determinista**: las dos ejecuciones completas produjeron el
+mismo árbol (651.787.177 bytes en ambas).
 
 ---
 
@@ -171,6 +230,16 @@ Credenciales y subida: `tools/drive_push.py --file RUTA --folder
 15FRlRwDQdAicoZcfKFOTzeWqJQMjXIC0` (la credencial `authorized_user` vive en
 `/workspace/md-secrets/gdrive_credentials.json`; **no** se sube al repo).
 
+### 5.1 Ya publicado (2026-11-23)
+
+| fichero | id en Drive |
+|---|---|
+| `codigo-go-regenerado-RESUMEN.md` | `1L_V9z49BbRBbJIoG32G2fHEvpKdzpkPZ` |
+| `codigo-go-regenerado-NO-DECOMPIADAS.tsv` (20.022.216 B) | `1--HXaAAeyvpXvnqpZOcq1r_1QdW_W1Kn` |
+
+El árbol completo (652 MB) se publica como `codigo-go-regenerado.tar.gz`
+(el `.c` + el módulo Go de stubs + el `RESUMEN.md`).
+
 ---
 
 ## 6. Qué NO se puede recuperar (y por qué)
@@ -206,11 +275,37 @@ pipeline que ya existe.
 
 ## 8. Notas para quien siga
 
-* El corpus de pseudocódigo lo escriben **workers en shards** (`todo/s0`,
-  `todo/s1`, `todo/s2`): la herramienta tolera que falten shards y que estén
-  escribiendo mientras se lee.
+### 8.1 Estado medido del corpus (2026-11-23)
+
+* Los **3 workers de Ghidra están MUERTOS** (procesos zombie; su última
+  escritura fue a las 04:36). El corpus **ya no crece** ⇒ las cifras de §3 son
+  definitivas para este corpus.
+* Quedan **1.916 funciones no generadas sin pseudocódigo**: si se relanzan
+  los workers, se cubren y se vuelve a ejecutar la herramienta (el árbol se
+  regenera entero en ~8 min).
+* El índice del pseudocódigo se puede rehacer con `--indice cabecera`
+  (más lento, pero verificable); con `--indice ruta` (por defecto) la
+  cabecera se verifica igualmente, gratis, y el `RESUMEN.md` cuenta las 9
+  discrepancias que hay ahora mismo.
+
+### 8.2 Reglas del sandbox (obligatorias)
+
 * **No se compila aquí**: el sandbox tiene 3 GB y tres JVM de Ghidra
-  corriendo; `rustc` de 2,8 GB ya ha matado a varios workers. El root
-  compila y testea.
+  corriendo; `rustc` de 2,8 GB ya ha matado a varios workers. **El root
+  compila y testea.**
 * El `.so`, el TSV de 46 MB y el pseudocódigo generado **no se commitean**:
   son artefactos de /workspace, no del repo.
+* La salida (652 MB) vive **fuera** del repo, en `/workspace/agy-re/tools-out/`.
+* El repo es **público**: el artefacto se publica en la Drive **privada**
+  (§5), nunca en el repo.
+
+### 8.3 Lo que NO está verificado
+
+* El módulo Go **no se ha compilado**: en este sandbox no hay toolchain de Go
+  (`go`, `gofmt` y `/usr/local/go` no existen) y compilar está prohibido. La
+  sintaxis se valida con un **parser Go propio** incluído en el test.
+* La **fidelidad** del emparejamiento bloque↔función está verificada por
+  muestra, no al 100 %: 59.980 bloques encontrados sobre 61.896 funciones no
+  generadas, y 9 cabeceras de 4.372 ficheros con la ruta deducida distinta.
+* La **publicación en la Drive** no se ha ejecutado (el enlace y el comando
+  están en §5).
