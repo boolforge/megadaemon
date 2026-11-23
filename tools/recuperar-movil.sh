@@ -28,7 +28,11 @@
 # GitHub y el supervisor se genera aquí (es el MISMO que
 # `deploy/99-megadaemon.sh`, y el daemon lo reinstala si difiere).
 # =====================================================================
-set -uo pipefail
+# `set -u` (variables sin definir = error) PERO `pipefail` no es POSIX: con
+# `sh` (dash en Linux, bash en modo sh en macOS) aborta.  MEDIDO (2026-11-23):
+# el script se lanzaba con `sh` y con `set -o pipefail` falla en el primer
+# comando; ademas `ANDROID_HOME` sin definir tumbaba el script entero.
+set -u
 
 REPO_GH="https://github.com/boolforge/megadaemon"
 ASSET="megadaemon-core-android-arm64"
@@ -58,7 +62,7 @@ warn() { printf '[%s] AVISO: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 
 # ── 1) ADB ─────────────────────────────────────────────────────────────
 ADB=""
-for c in adb "$HOME/Android/Sdk/platform-tools/adb" "$ANDROID_HOME/platform-tools/adb"; do
+for c in adb "${HOME:-/root}/Android/Sdk/platform-tools/adb" "${ANDROID_HOME:-/nonexistent}/platform-tools/adb"; do
     [ -n "${c:-}" ] && command -v "$c" >/dev/null 2>&1 && { ADB="$c"; break; }
 done
 [ -z "$ADB" ] && [ -x /usr/lib/android-sdk/platform-tools/adb ] && ADB=/usr/lib/android-sdk/platform-tools/adb
