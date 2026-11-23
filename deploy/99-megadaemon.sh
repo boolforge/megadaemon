@@ -605,12 +605,31 @@ last_resp_check=0
 # Sonda de UNA ruta.  Devuelve 0 si contesta 200.
 # Usa 127.0.0.3 como IP de origen cuando se puede (cubo de rate limit
 # propio: el del túnel es 127.0.0.1).  Si el bind falla, se usa el normal.
-probe_path() {
+# Devuelve el codigo HTTP de la sonda (o "000" si no hubo respuesta).
+probe_code() {
     local port="$1" path="$2" out code
     out=$("$TUNNEL_CURL" -s -m 8 ${PROBE_IFACE:+--interface $PROBE_IFACE} \
         -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port$path" 2>/dev/null)
     code=$(echo "$out" | tr -dc '0-9')
-    [ "$code" = "200" ]
+    [ -n "$code" ] || code=000
+    echo "$code"
+}
+
+probe_path() {
+    local port="$1" path="$2" code
+    code=$(probe_code "$port" "$path")
+    # 200 = OK.  401/403 = el servidor RESPONDIO (pide credencial) => esta
+    # VIVO: no es un fallo de vida.
+    #
+    # BUG MEDIDO (2026-11-23, movil): antes se exigia 200 y la sonda
+    # usaba /api/power, que con la API key obligatoria responde 401 => el
+    # watchdog contaba "el daemon no responde" 3 veces => lo reiniciaba, y
+    # el proceso nuevo no encontraba los puertos alias => la Web UI
+    # quedaba muerta.  Resultado medido: 1644 reinicios en el log.
+    case "$code" in
+        200|401|403) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 # Detecta una sola vez si el interface de sondeo propio está disponible.
@@ -632,7 +651,16 @@ daemon_responsive() {
     # con 200 mientras /api/power revienta: por eso hay que mirar las dos.
     if [ -x "$TUNNEL_CURL" ]; then
         probe_path "$port" "/health" || return 1
-        probe_path "$port" "/api/power" || return 1
+        # /api/live: sonda MINIMA y PUBLICA (no exige API key) que ademas
+        # toca el estado compartido => sigue detectando un mutex envenenado
+        # sin necesitar credenciales.  Si el binario en curso es anterior y
+        # no la tiene, responde 404 y se ignora (no es un fallo de vida).
+        code=$(probe_code "$port" "/api/live")
+        case "$code" in
+            200|401|403) ;;
+            404) ;;
+            *) return 1 ;;
+        esac
         return 0
     fi
     if [ -x /data/data/com.termux/files/usr/bin/python3 ]; then
@@ -684,8 +712,22 @@ check_daemon_responsive() {
         daemon_unreachable=1
         daemon_unresponsive_streak=0
         log "el daemon esta VIVO pero NO responde /health: lo reinicio (puede ser un mutex envenenado por un panic)"
-        pkill -x megadaemon-core 2>/dev/null
-        sleep 3
+        # Muerte inmediata y ESPERA a que el puerto quede libre.
+        #
+        # BUG MEDIDO (2026-11-23): con `pkill` (SIGTERM) + 3 s de espera el
+        # proceso anterior seguia escuchando los puertos alias => el daemon
+        # nuevo no los podia enlazar ("Address already in use") => la Web UI
+        # (3000/3030/8090) quedaba MUERTA.  Ahora: SIGKILL + espera real a
+        # que /proc/net/tcp deje de mostrar el puerto en LISTEN.
+        pkill -9 -x megadaemon-core 2>/dev/null
+        i=0
+        while [ $i -lt 20 ]; do
+            hp=$(printf '%04X' "$port")
+            if ! grep -qiE ":$hp [0-9a-f]{8}:[0-9a-f]{4} 0A" /proc/net/tcp /proc/net/tcp6 2>/dev/null; then
+                break
+            fi
+            i=$((i + 1)); sleep 1
+        done
         start_daemon
         wait_daemon_responsive "$port" || log "el daemon no respondio tras el reinicio (sigue el supervisor)"
     fi

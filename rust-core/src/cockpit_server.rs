@@ -419,6 +419,14 @@ fn with_query(path: &str, query: &str) -> String {
 
 /// Puertos realmente enlazados (los alias son best-effort).
 static OPEN_PORTS: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
+/// Puertos alias recuperados DESPUÉS del arranque (ver `spawn_alias_recovery`).
+///
+/// BUG MEDIDO (2026-11-23, movil): tras un reinicio del daemon, el proceso
+/// anterior todavía tenía los puertos alias abiertos => el `bind` fallaba
+/// ("Address already in use") => los alias NUNCA se reintentaban y la Web UI
+/// quedaba muerta hasta el siguiente reinicio.  Con este registro, los alias
+/// recuperados se publican en /health y se sirven.
+static RECOVERED_PORTS: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
 /// Puerto principal del cockpit.
 static PRIMARY_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 /// Instante en el que el listener nació.
@@ -464,7 +472,15 @@ pub fn web_diagnostics() -> Value {
         .unwrap_or(EMBEDDED_TEMPLATE.len() as u64);
     let token_path = format!("{}/cockpit_token", state_dir());
     let token_materialized = Path::new(&token_path).exists();
-    let ports_open = OPEN_PORTS.get().cloned().unwrap_or_default();
+    let mut ports_open = OPEN_PORTS.get().cloned().unwrap_or_default();
+    if let Ok(rec) = RECOVERED_PORTS.lock() {
+        for p in rec.iter() {
+            if !ports_open.contains(p) {
+                ports_open.push(*p);
+            }
+        }
+    }
+    ports_open.sort_unstable();
     let primary = PRIMARY_PORT.get().copied().unwrap_or(3000);
     let ips = local_ips();
 
@@ -1022,7 +1038,7 @@ fn handle_client(mut stream: TcpStream) {
         || path == "/channel.json";
     let is_public_probe = matches!(
         path,
-        "/health" | "/api/health" | "/metrics" | "/api/metrics" | "/api/ping"
+        "/health" | "/api/health" | "/metrics" | "/api/metrics" | "/api/ping" | "/api/live"
     );
     // v14: el navegador local del dispositivo se exime de la API key
     // (decisión por Host + veto de cabeceras de proxy; ver el comentario de
@@ -1610,6 +1626,25 @@ fn handle_client(mut stream: TcpStream) {
                     "system_power_save": st.system_power_save,
                     "governor": st.governor,
                     "usb_plugged": st.usb_plugged
+                }));
+            }
+            // Sonda de VIVENCIA minima y SIN autenticacion.
+            //
+            // BUG MEDIDO (2026-11-23, movil): el watchdog sondeaba
+            // /api/power SIN credencial; con la API key obligatoria ese
+            // endpoint responde 401 => el watchdog contaba "el daemon no
+            // responde" => reiniciaba el daemon en bucle (1644 reinicios
+            // en el log del movil).  /api/live es publico, minimo (no
+            // filtra nada) y TOQUA el estado compartido de energia: asi
+            // sigue detectando un mutex envenenado sin necesitar la key.
+            "/api/live" => {
+                let (st, _pol) = power_policy::current_policy();
+                send_json(&mut stream, &json!({
+                    "ok": true,
+                    "build": crate::self_update::build_info()["short"].as_str().unwrap_or("?").to_string(),
+                    "uptime_sec": uptime_secs(),
+                    "charging": st.charging,
+                    "battery_pct": st.capacity_pct
                 }));
             }
             "/api/uploads" => send_json(&mut stream, &list_uploaded_files()),
@@ -2974,7 +3009,57 @@ pub fn run_server(port: u16) -> Result<(), String> {
     println!("==================================================================");
 
     for (_, listener) in listeners {
-        std::thread::spawn(move || {
+        spawn_listener_thread(listener);
+    }
+    // RECUPERACION DE PUERTOS ALIAS (2026-11-23).
+    //
+    // BUG MEDIDO (movil): tras un reinicio, el proceso anterior aun tenia
+    // abiertos los puertos alias => `bind` fallaba con "Address already in
+    // use" => los alias NUNCA se reintentaban y la Web UI (3000/3030/8090)
+    // quedaba MUERTA hasta el siguiente reinicio, que podia fallar igual.
+    // Aqui un hilo reintenta cada 10 s enlazar los alias que falten y, en
+    // cuanto salen, los sirve: el movil se autorepara sin reinicios.
+    {
+        let esperados: Vec<u16> = ports.clone();
+        let ya: Vec<u16> = listeners.iter().map(|(p, _)| *p).collect();
+        let faltan: Vec<u16> = esperados.into_iter().filter(|p| !ya.contains(p)).collect();
+        if !faltan.is_empty() {
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(Duration::from_secs(10));
+                    for p in &faltan {
+                        let addr = format!("0.0.0.0:{}", p);
+                        if let Ok(l) = TcpListener::bind(&addr) {
+                            println!("cockpit: puerto alias {} recuperado", p);
+                            let _ = RECOVERED_PORTS.lock().map(|mut v| {
+                                if !v.contains(p) {
+                                    v.push(*p);
+                                }
+                            });
+                            spawn_listener_thread(l);
+                            let v6 = format!("[::1]:{}", p);
+                            if let Ok(l6) = TcpListener::bind(&v6) {
+                                spawn_listener_thread(l6);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+    // El hilo principal se queda vivo (los workers atienden).
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(3600));
+    }
+}
+
+/// Atiende las conexiones de un listener (un hilo por listener).
+///
+/// MEDIDO (2026-11-23): el bucle de aceptacion estaba en linea dentro de
+/// `serve`; se extrae a una funcion para poder reutilizarla cuando un
+/// puerto alias se recupera despues del arranque.
+fn spawn_listener_thread(listener: TcpListener) {
+    std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
                 // Techo de clientes concurrentes: el móvil va JUSTO de RAM
                 // (10,2/10,5 GB) y un hilo por conexión puede multiplicarse
@@ -3015,12 +3100,7 @@ pub fn run_server(port: u16) -> Result<(), String> {
                     ACTIVE_CLIENTS.fetch_sub(1, Ordering::Relaxed);
                 });
             }
-        });
-    }
-    // El hilo principal se queda vivo (los workers atienden).
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(3600));
-    }
+    });
 }
 
 /// Puertos alias del cockpit.
