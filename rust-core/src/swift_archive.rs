@@ -44,14 +44,17 @@ pub fn kdf_argon2id(
     parallelism: u32,
     out_len: usize,
 ) -> Result<Vec<u8>, String> {
-    crate::argon2::derive_key(
-        passphrase,
-        salt,
-        iterations,
-        memory_kib,
-        parallelism,
-        out_len,
-    )
+    // La implementacion local `crate::argon2` se perdio en un merge; se usa
+    // el crate `argon2` (mismo Argon2id, RFC 9106, `default-features = false`
+    // + `alloc`, que es lo que ya usa `crate::backup_crypto`).
+    use argon2::{Algorithm, Argon2, Params, Version};
+    let params = Params::new(memory_kib, iterations, parallelism, Some(out_len))
+        .map_err(|e| e.to_string())?;
+    let a = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let mut out = vec![0u8; out_len];
+    a.hash_password_into(passphrase.as_bytes(), salt, &mut out)
+        .map_err(|e| e.to_string())?;
+    Ok(out)
 }
 
 /// Parámetros del KDF, tal y como se leen de la cabecera.
