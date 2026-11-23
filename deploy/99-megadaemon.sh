@@ -350,7 +350,15 @@ MCP_TUNNEL_LOG=$PREFIX/mcp_tunnel.log
 MCP_TUNNEL_URL_FILE=$PREFIX/mcp_tunnel.url
 
 tunnel_url_from_log() {
-    grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' "$1" 2>/dev/null | tail -1
+    # MEDIDO (2026-11-23, movil): el grep cogia "https://api.trycloudflare.com"
+    # (la URL de la API que el propio cloudflared escribe en su log) => el
+    # fichero tunnel.url guardaba una URL que NO es el tunel => el movil se
+    # quedaba "sin URL publica" y la Web UI era inalcanzable desde fuera.
+    # Ahora: solo se aceptan hosts de TUNEL RAPIDO y se excluye la API.
+    grep -ao 'https://[a-z0-9-]*\.trycloudflare\.com' "$1" 2>/dev/null \
+        | grep -v '^https://api\.' \
+        | grep -v '^https://developers\.' \
+        | tail -1
 }
 
 # URL del log principal y, si no aparece, del log de respaldo (el túnel
@@ -439,8 +447,21 @@ ensure_tunnel() {
         t_wait=$((t_wait + 1))
     done
     if [ -n "$t_new" ] && [ "$t_new" != "$t_url" ]; then
-        printf '%s\n' "$t_new" > "$t_urlfile" 2>/dev/null
-        log "tunel $t_tag URL VIGENTE: $t_new  (guardada en $t_urlfile)"
+        # MEDIDO (2026-11-23): se publicaba la URL sin comprobar que el
+        # tunel responde => un host equivocado (o un tunel recien salido)
+        # se guardaba como "URL vigente" y la flota se quedaba fuera.
+        # Ahora se sondea: si responde (200/401/403 = el origen esta vivo),
+        # se publica; si no, se conserva la anterior y se dice en el log.
+        _tc=$(tunnel_status "$t_new")
+        case "$_tc" in
+            200|401|403)
+                printf '%s\n' "$t_new" > "$t_urlfile" 2>/dev/null
+                log "tunel $t_tag URL VIGENTE: $t_new  (guardada en $t_urlfile, sondeada: HTTP $_tc)"
+                ;;
+            *)
+                log "tunel $t_tag: la URL nueva ($t_new) NO responde (HTTP $_tc): se conserva la anterior"
+                ;;
+        esac
     fi
     t_url=$(cat "$t_urlfile" 2>/dev/null)
 
