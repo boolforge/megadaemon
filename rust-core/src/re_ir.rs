@@ -60,9 +60,12 @@ impl Ins {
 
     /// Segundo operando (sin espacios).
     pub fn op1(&self) -> &str {
-        let mut it = self.ops.splitn(2, ',');
-        it.next();
-        it.next().unwrap_or("").trim()
+        self.ops.split(',').nth(1).unwrap_or("").trim()
+    }
+
+    /// Tercer operando (sin espacios) — para las formas de tres operandos.
+    pub fn op2(&self) -> &str {
+        self.ops.split(',').nth(2).unwrap_or("").trim()
     }
 
     /// Valor inmediato del operando, si lo es (admite `0x`, decimal y `-`).
@@ -256,6 +259,23 @@ impl Cfg {
         Cfg { blocks }
     }
 
+    /// Construye el CFG a partir de un desensamblado (`(dirección, texto)`).
+    ///
+    /// El texto es el que devuelve Capstone/iced: `"mov w0, #0x1234"`.
+    pub fn desde_disasm(instrs: &[(u64, String)]) -> Cfg {
+        let ins: Vec<Ins> = instrs
+            .iter()
+            .map(|(addr, texto)| {
+                let t = texto.trim();
+                match t.find(' ') {
+                    Some(i) => Ins::new(*addr, &t[..i], &t[i + 1..]),
+                    None => Ins::new(*addr, t, ""),
+                }
+            })
+            .collect();
+        Cfg::from_ins(&ins)
+    }
+
     /// Índice del bloque que empieza en `addr`.
     pub fn index_of(&self, addr: u64) -> Option<usize> {
         self.blocks.iter().position(|b| b.addr == addr)
@@ -353,6 +373,91 @@ impl Cfg {
         }
         seen
     }
+}
+
+/// Dispatcher detectado en un CFG real (a partir del desensamblado).
+#[derive(Clone, Debug)]
+pub struct DispatcherCfg {
+    /// Dirección del bloque dispatcher.
+    pub addr: u64,
+    /// Texto del salto indirecto (`rax`, `[rip+0x1234]`…).
+    pub destino_indirecto: String,
+    /// Grado de entrada: cuántos bloques saltan al dispatcher.
+    pub grado_entrada: usize,
+    /// Variable de estado (registro) que se asigna antes de saltar.
+    pub variable_estado: String,
+    /// Casos: (valor del estado -> bloque destino).
+    pub casos: Vec<(i64, u64)>,
+}
+
+/// Detecta el dispatcher de un CFG **real** (desensamblado).
+///
+/// Heurística: el dispatcher es el bloque con mayor grado de entrada; los
+/// "setters" son los bloques que le asignan un estado (un `mov reg, inm`
+/// justo antes del salto) y los casos se emparejan estado -> bloque.
+pub fn detectar_dispatcher_cfg(cfg: &Cfg) -> Option<DispatcherCfg> {
+    let in_deg = cfg.in_degree();
+    let mut mejor: Option<(u64, usize)> = None;
+    for b in &cfg.blocks {
+        let g = *in_deg.get(&b.addr).unwrap_or(&0);
+        if g < 3 {
+            continue;
+        }
+        match mejor {
+            Some((_, pg)) if pg >= g => {}
+            _ => mejor = Some((b.addr, g)),
+        }
+    }
+    let (addr, grado) = mejor?;
+    // Variable de estado: el registro asignado en los bloques que van al
+    // dispatcher (deben coincidir).
+    let mut variable = String::new();
+    let mut casos: Vec<(i64, u64)> = Vec::new();
+    for b in &cfg.blocks {
+        if b.addr == addr {
+            continue;
+        }
+        if !cfg.succs(b).contains(&addr) {
+            continue;
+        }
+        if let Some((reg, valor)) = estado_antes_del_salto(b) {
+            if variable.is_empty() {
+                variable = reg.clone();
+            }
+            if variable == reg {
+                casos.push((valor, b.addr));
+            }
+        }
+    }
+    casos.sort_by_key(|(k, _)| *k);
+    let destino_indirecto = cfg
+        .block_at(addr)
+        .and_then(|b| b.last().map(|i| i.ops.clone()))
+        .unwrap_or_default();
+    Some(DispatcherCfg {
+        addr,
+        destino_indirecto,
+        grado_entrada: grado,
+        variable_estado: variable,
+        casos,
+    })
+}
+
+/// Estado (`mov reg, inm`) asignado justo antes del salto final del bloque.
+pub fn estado_antes_del_salto(b: &Block) -> Option<(String, i64)> {
+    let n = b.ins.len();
+    if n < 2 {
+        return None;
+    }
+    for i in (0..n.saturating_sub(1)).rev().take(3) {
+        let ins = &b.ins[i];
+        if matches!(ins.mnem.as_str(), "mov" | "movabs" | "movz") {
+            if let Some(v) = crate::re_ir::parse_int(ins.op1()) {
+                return Some((ins.op0().to_string(), v));
+            }
+        }
+    }
+    None
 }
 
 /// Calcula el terminador de una instrucción.
