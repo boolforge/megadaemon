@@ -1460,23 +1460,19 @@ impl KeyMaterial {
     }
 
     /// Escribe el fichero de claves con permisos `0600`.
+    ///
+    /// MEDIDO (2026-11-23, auditoría de calidad): antes usaba
+    /// `fs::write` + `set_permissions(0o600)` ⇒ el fichero (que contiene la
+    /// clave MAESTRA y la SENSIBLE en hexadecimal) se creaba con el modo del
+    /// umask (0644) y sólo después seaba restrictivo: hay una ventana en la
+    /// que la credencial está legible por cualquiera.  `util_fs::write_atomic`
+    /// crea el temporal **con** el modo 0600 en el momento de crearlo y lo
+    /// renombra encima del destino.
     pub fn write_secure(&self, path: &Path) -> Result<(), String> {
-        use std::os::unix::fs::PermissionsExt;
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("no se puede serializar el material de claves: {e}"))?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("no se puede crear {}: {e}", parent.display()))?;
-        }
-        std::fs::write(path, json.as_bytes())
-            .map_err(|e| format!("no se puede escribir {}: {e}", path.display()))?;
-        let mut perms = std::fs::metadata(path)
-            .map_err(|e| format!("no se puede ver {}: {e}", path.display()))?
-            .permissions();
-        perms.set_mode(0o600);
-        std::fs::set_permissions(path, perms)
-            .map_err(|e| format!("no se puede poner 0600 a {}: {e}", path.display()))?;
-        Ok(())
+        crate::util_fs::write_atomic(path, json.as_bytes(), 0o600)
+            .map_err(|e| format!("no se puede escribir {}: {e}", path.display()))
     }
 
     /// Lee el fichero de claves (y comprueba los permisos).
