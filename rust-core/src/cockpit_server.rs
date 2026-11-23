@@ -1403,7 +1403,7 @@ fn handle_client(mut stream: TcpStream) {
                     "detail" => crate::antigravity_sessions::detalle_sesion(&conv_id, tail),
                     "log" => crate::antigravity_sessions::daemon_log(tail).map(|lines| json!({ "lines": lines })),
                     "tasks" => crate::antigravity_sessions::tareas_daemon(),
-                    "tokens" => crate::antigravity_sessions::tokens_y_modelo(&conv_id),
+                    "tokens" => Ok(crate::antigravity_sessions::tokens_y_modelo(&conv_id)),
                     "correlacion" => crate::antigravity_sessions::correlacion_shim(tail),
                     _ => crate::antigravity_sessions::estado()
                         .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),

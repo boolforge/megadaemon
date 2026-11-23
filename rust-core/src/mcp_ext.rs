@@ -1400,7 +1400,7 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 "tasks" => crate::antigravity_sessions::tareas_daemon_en(dir),
                 // v16 (2026-11-23): tokens, modelo en uso y correlacion con
                 // el NDJSON del shim.
-                "tokens" => crate::antigravity_sessions::tokens_y_modelo_en(dir, conv_id),
+                "tokens" => Ok(crate::antigravity_sessions::tokens_y_modelo_en(dir, conv_id)),
                 "correlacion" => crate::antigravity_sessions::correlacion_shim_en(dir, tail),
                 _ => crate::antigravity_sessions::estado_en(dir)
                     .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
@@ -2013,17 +2013,22 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     if destino.is_empty() {
                         Err("falta 'to' (la carpeta destino)".to_string())
                     } else {
-                        let (file_id, from_id) = if vpath.starts_with("drive:") {
-                            let e = crate::drive_vfs::stat_path(&vpath, Some(&st))?;
-                            let p = crate::drive_vfs::parent_de(&e.id, Some(&st))?;
-                            (e.id, p)
-                        } else {
-                            let p = crate::drive_vfs::parent_de(&vpath, Some(&st))?;
-                            (vpath.clone(), p)
-                        };
-                        let dest_id = crate::drive_vfs::stat_path(&destino, Some(&st))?.id;
-                        crate::drive_vfs::move_item(&file_id, &from_id, &dest_id, Some(&st))?;
-                        json!({"ok": true, "file_id": file_id, "de": from_id, "a": dest_id})
+                        // MEDIDO (2026-11-23): `?` sobre un Result NO vale
+                        // aqui (el dispatch devuelve Option) => E0277.  Se
+                        // encapsula en una closure que SI devuelve Result.
+                        (|| -> Result<Value, String> {
+                            let (file_id, from_id) = if vpath.starts_with("drive:") {
+                                let e = crate::drive_vfs::stat_path(&vpath, Some(&st))?;
+                                let p = crate::drive_vfs::parent_de(&e.id, Some(&st))?;
+                                (e.id, p)
+                            } else {
+                                let p = crate::drive_vfs::parent_de(&vpath, Some(&st))?;
+                                (vpath.clone(), p)
+                            };
+                            let dest_id = crate::drive_vfs::stat_path(&destino, Some(&st))?.id;
+                            crate::drive_vfs::move_item(&file_id, &from_id, &dest_id, Some(&st))?;
+                            Ok(json!({"ok": true, "file_id": file_id, "de": from_id, "a": dest_id}))
+                        })()
                     }
                 }
                 other => Err(format!("unknown drive_vfs action '{}'", other)),

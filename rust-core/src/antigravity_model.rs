@@ -346,7 +346,13 @@ pub fn integracion_estado() -> Value {
         "modelo_registrado": registrado,
         "bridge_error": error_bridge,
         "resumen": {
-            "gate_parcheado": gate.get("de").is_string()
+            // MEDIDO (2026-11-23): `gate.get(..)` devuelve Option<Option<&Value>>
+            // en este modulo => E0599 con `.is_string()`.  Se comprueba el
+            // valor a traves de `as_str()`.
+            "gate_parcheado": gate
+                .get("de")
+                .and_then(|v| v.as_str())
+                .is_some()
                 && gate
                     .get("de")
                     .and_then(|v| v.as_str())
