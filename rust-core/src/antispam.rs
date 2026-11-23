@@ -347,14 +347,20 @@ impl SpamLists {
     }
 
     /// Guarda las listas en el `state_dir` con permisos **0600**.
+    ///
+    /// MEDIDO (2026-11-23, auditoría de calidad): antes usaba
+    /// `fs::write` + `set_mode_600` (que además ignoraba el error del
+    /// chmod) ⇒ el fichero se creaba con el modo del umask (0644) y sólo
+    /// después se restrictivo: hay una ventana en la que las listas (números
+    /// bloqueados, reglas del filtro) están legibles por cualquiera.  Ahora
+    /// el temporal se crea CON el modo 0600 y se renombra.
     pub fn save(&self, state_dir: &str) -> Result<(), String> {
         fs::create_dir_all(state_dir).map_err(|e| format!("mkdir {state_dir}: {e}"))?;
         let path = SpamLists::path(state_dir);
         let txt = serde_json::to_string_pretty(self)
             .map_err(|e| format!("serializando las listas: {e}"))?;
-        fs::write(&path, txt).map_err(|e| format!("escribiendo {path}: {e}"))?;
-        set_mode_600(&path);
-        Ok(())
+        crate::util_fs::write_atomic(std::path::Path::new(&path), txt.as_bytes(), 0o600)
+            .map_err(|e| format!("escribiendo {path}: {e}"))
     }
 
     /// Añade un número a la lista negra (sólo en memoria).
@@ -466,22 +472,9 @@ impl SpamLists {
     }
 }
 
-/// Pone un fichero en modo 0600 (Unix).
-fn set_mode_600(path: &str) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = fs::metadata(path) {
-            let mut perm = meta.permissions();
-            perm.set_mode(0o600);
-            let _ = fs::set_permissions(path, perm);
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-    }
-}
+/// Nota: el guardado usa `util_fs::write_atomic` (tmp + 0600 + rename), así
+/// que ya no hace falta un `set_mode_600` aparte: el fichero nace con el
+/// modo correcto y no hay ventana en la que el contenido esté legible.
 
 /// Ahora mismo, en ms epoch.
 fn now_ms() -> i64 {
