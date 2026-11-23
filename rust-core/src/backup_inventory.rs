@@ -1832,10 +1832,16 @@ pub fn export(
     let manifest_path = opts
         .out_dir
         .join(format!("{}.manifest.json", opts.level.profile()));
-    std::fs::write(
+    // Escritura ATÓMICA (MEDIDO 2026-11-23, auditoría de calidad): con
+    // `fs::write` el manifiesto se TRUNCABA antes de escribir ⇒ un corte a
+    // mitad dejaba un JSON corrupto, y el manifiesto es la REFERENCIA que
+    // usa `verify` y el restore ("el manifiesto manda"): un manifiesto a
+    // medias hace que todo el backup parezca corrupto.
+    crate::util_fs::write_atomic(
         &manifest_path,
-        serde_json::to_vec_pretty(&manifest)
+        &serde_json::to_vec_pretty(&manifest)
             .map_err(|e| format!("no se puede serializar el manifiesto: {e}"))?,
+        0o600,
     )
     .map_err(|e| format!("no se puede escribir {}: {e}", manifest_path.display()))?;
 
@@ -2378,7 +2384,13 @@ pub fn restore(
                     continue;
                 }
             }
-            std::fs::write(&target, &buf)
+            // Escritura ATÓMICA (MEDIDO 2026-11-23, auditoría de calidad):
+            // `fs::write` TRUNCA el destino antes de escribir ⇒ con
+            // `--overwrite`, un fallo a mitad dejaba un fichero PARCIAL y
+            // el bueno ya estaba destruido.  Con tmp + rename, el destino
+            // queda completo o no se toca.  El fichero nace con 0600: es
+            // dato privado de la app (bases de datos, tokens).
+            crate::util_fs::write_atomic(&target, &buf, 0o600)
                 .map_err(|e| format!("no se puede escribir {}: {e}", target.display()))?;
             bytes += buf.len() as u64;
             written.push(rel.to_string_lossy().to_string());
