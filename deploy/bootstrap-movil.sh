@@ -91,6 +91,22 @@ for f in 99-megadaemon.sh 97-megadaemon-keeper.sh; do
     fi
 done
 
+# --- 5b) la API KEY (sin ella el daemon arranca pero TODO queda en 403) ---
+# MEDIDO (2026-11-23): al mover el estado a la ruta persistente, la key se
+# quedo en la carpeta vieja => el daemon arranco "sano" pero sin key
+# ("el daemon no tiene ninguna key configurada") => /mcp y las tools
+# inaccesibles.  Si no existe, se genera una (32 bytes, 0600) y se ANUNCIAS
+# (es la credencial de la flota).
+KEYF="$PREFIX/state/megadaemon_api.key"
+if [ ! -s "$KEYF" ]; then
+    mkdir -p "$PREFIX/state"
+    ( head -c 32 /dev/urandom 2>/dev/null || head -c 32 /dev/random ) \
+        | base64 | tr -d '=+/\\n' | cut -c1-40 > "$KEYF" 2>/dev/null
+    chmod 600 "$KEYF" 2>/dev/null
+    log "API key generada en $KEYF"
+fi
+KEY=$(cat "$KEYF" 2>/dev/null)
+
 # --- 6) entorno (secretos aparte; el auto-update cada 30 min) -----------
 ENVF="$PREFIX/megadaemon.env"
 touch "$ENVF"; chmod 600 "$ENVF"
@@ -122,6 +138,7 @@ echo "keeper   : $(ls -l "$SD/97-megadaemon-keeper.sh" 2>/dev/null | tr -s ' ')"
 URL=$(grep -ao 'https://[a-z0-9-]*\.trycloudflare\.com' "$PREFIX/tunnel.log" 2>/dev/null | grep -v '^https://api\.' | tail -1)
 [ -z "$URL" ] && URL=$(cat "$PREFIX/tunnel.url" 2>/dev/null)
 echo "TUNEL PUBLICO: ${URL:-<aun no hay: mira $PREFIX/tunnel.log>}"
+echo "API KEY (la credencial de la flota): ${KEY:-<no se pudo leer>}"
 echo "================================================================="
 echo "copia esta linea para que la flota se conecte:"
 echo "${URL:-PENDIENTE}"
