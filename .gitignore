@@ -50,3 +50,8 @@ tools/re_fusion-harness/target/
 
 # Target-dir local de las pruebas en el sandbox (no se sube).
 rust-core/target-test/
+
+# Payload de hooks (frida-gum): crate AISLADO, se compila aparte y su
+# target/dist nunca se suben.
+crates/hooks-payload/target/
+crates/hooks-payload/dist/

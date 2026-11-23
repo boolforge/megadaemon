@@ -110,6 +110,13 @@ pub fn candidatas_ndjson(gum: &Gum) -> Vec<String> {
     if !tmp.is_empty() {
         v.push(format!("{tmp}/megadaemon-hooks-{uid}.ndjson"));
     }
+    // Último recurso: el TMPDIR del entorno (en el host y en CI).
+    if let Ok(t) = std::env::var("TMPDIR") {
+        let t = t.trim().trim_end_matches('/');
+        if !t.is_empty() {
+            v.push(format!("{t}/megadaemon-hooks-{uid}.ndjson"));
+        }
+    }
     v
 }
 
@@ -194,6 +201,7 @@ pub extern "C" fn megadaemon_hooks_version() -> u32 {
 ///
 /// Se puede desactivar con `MEGADAEMON_HOOKS_AUTOSTART=0` (útil para
 /// cargar la librería y activarla después a mano).
+#[cfg(not(test))]
 #[ctor]
 fn autostart() {
     if std::env::var("MEGADAEMON_HOOKS_AUTOSTART")

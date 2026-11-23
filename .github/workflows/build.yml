@@ -272,10 +272,111 @@ jobs:
           path: rust-core/dist/
           retention-days: 30
 
+  # ---------------------------------------------------------------------------
+  # PAYLOAD DE HOOKS (frida-gum) — ARM64 Android
+  # ---------------------------------------------------------------------------
+  # El payload es un crate AISLADO (crates/hooks-payload) que usa los
+  # bindings OFICIALES de Frida en Rust (frida-gum).  Vive FUERA del crate
+  # del daemon a propósito: el binario principal no puede depender de gum,
+  # de bindgen (libclang) ni del devkit de Frida => el build por defecto
+  # (CI, móvil) no se entera.
+  #
+  # Requisitos de build (medidos el 2026-11-23, ver docs/INYECCION-HOOKS.md):
+  #   * `libclang-dev` + `clang`: frida-gum-sys usa BINDGEN 0.72.1 para
+  #     generar los bindings a gum.h.
+  #   * el clang del NDK (CC_aarch64_linux_android): frida-gum-sys compila
+  #     con `cc` los shims en C (invocation_listener.c, probe_listener.c).
+  #   * RED: con la feature `auto-download`, frida-build descarga el devkit
+  #     PRECOMPILADO `frida-gum-devkit-17.9.5-android-arm64.tar.xz` (9,5 MB)
+  #     del release de Frida 17.9.5 (el que fija frida-gum-sys/FRIDA_VERSION)
+  #     => NO hacen falta meson ni ninja (gum no se compila: se enlaza el
+  #     `libfrida-gum.a` del devkit).
+  #   * el linker del NDK: aarch64-linux-android26-clang.
+  build-hooks-payload:
+    name: build payload de hooks (frida-gum / ARM64 Android)
+    runs-on: ubuntu-latest
+    # NO depende de `quality`: el payload es accesorio; el binario del daemon
+    # no puede depender de él (si el payload no compila, el móvil sigue
+    # teniendo daemon).
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+      - name: "Dependencias de gum (bindgen necesita libclang; los shims en C, el clang del NDK)"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev clang
+          clang --version | head -1
+      - name: Cache de cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-hooks-payload-${{ hashFiles('crates/hooks-payload/Cargo.lock') }}
+      - name: Compilar el payload (gum)
+        working-directory: crates/hooks-payload
+        env:
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          RANLIB_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
+        run: |
+          cargo build --release --target aarch64-linux-android
+          mkdir -p dist
+          cp target/aarch64-linux-android/release/libhooks_payload.so dist/hooks-payload-arm64
+          sha256sum dist/hooks-payload-arm64 > dist/hooks-payload-arm64.sha256
+          # La .so tiene que ser una shared object ARM64 (si no, el móvil la
+          # rechaza al dlopen).
+          file dist/hooks-payload-arm64 | tee /tmp/fichero-payload.txt
+          grep -q "ELF 64-bit LSB shared object" /tmp/fichero-payload.txt || {
+            echo "::error::el payload no es una shared object ELF 64-bit"; exit 1; }
+          grep -q "ARM aarch64" /tmp/fichero-payload.txt || {
+            echo "::error::el payload no es ARM aarch64"; exit 1; }
+          ls -l dist/
+      - name: Subir artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: megadaemon-hooks-payload-arm64
+          path: crates/hooks-payload/dist/
+          retention-days: 30
+
+  # Tests del payload en el HOST (x86_64): validan la redacción de
+  # credenciales y el escritor NDJSON SIN tocar el móvil.  Es un job aparte
+  # (no bloquea la release) porque el payload es accesorio.
+  hooks-payload-test:
+    name: tests del payload (host)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: "Dependencias de gum (bindgen necesita libclang)"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev clang
+      - name: Tests
+        working-directory: crates/hooks-payload
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+        run: cargo test --release
+
   release:
     name: release (auto-actualización de las instancias)
     runs-on: ubuntu-latest
-    needs: [build-android, build-linux]
+    # `build-hooks-payload` entra en `needs` para que la release ESPERE a él
+    # (si no, el asset del payload a veces no llega a tiempo al release), pero
+    # el `if: always()` de abajo hace que su fallo NO tumbe la release: el
+    # móvil no puede quedarse sin daemon porque el payload no compile.
+    needs: [build-android, build-linux, build-hooks-payload]
     # Publica en CUALQUIER rama (main y v14-coordination): el tag es v<sha>, así
     # que no chocan entre ramas y el binario ARM64 sale siempre con nombre
     # versionado.
@@ -324,10 +425,33 @@ jobs:
           sha256sum -c dist/megadaemon-core-android-arm64.sha256 || exit 1
           sha256sum -c "dist/megadaemon-core-android-arm64-${GITHUB_SHA::7}.sha256" || exit 1
           echo "assets ARM64 verificados ✓"
+          # El PAYLOAD DE HOOKS es opcional: si su job falló, la release sale
+          # igual (el móvil no se queda sin daemon por culpa del payload) pero
+          # sin el asset del payload.  Si está, se verifica su sha256.
+          if [ -f dist/hooks-payload-arm64 ]; then
+            if [ ! -f dist/hooks-payload-arm64.sha256 ]; then
+              echo "::error::falta dist/hooks-payload-arm64.sha256"; exit 1
+            fi
+            sha256sum -c dist/hooks-payload-arm64.sha256 || exit 1
+            echo "payload de hooks verificado ✓"
+          else
+            echo "::notice::el payload de hooks NO se publica en este run (job 'build-hooks-payload' falló o no se ejecutó)"
+          fi
       - name: Publicar el estado del release (manifiesto con SÓLO los assets que existen)
         # El manifiesto se genera DINÁMICO: si una pata de Linux falló, su
         # asset NO aparece en `latest.json` (antes siempre aparecía => la
         # instancia pedía un fichero inexistente).
+        #
+        # POR QUÉ EL PAYLOAD DE HOOKS NO ENTRA EN `latest.json`:
+        # `latest.json` es el manifiesto del BINARIO del daemon.  El móvil se
+        # autoactualiza comparando `version` y bajando el asset que corresponde
+        # a SU plataforma (`assets`/`assets_versioned`).  El payload es otro
+        # artefacto, con su propio ciclo: la tool `hooks_payload` lo baja del
+        # último release (`hooks-payload-arm64`), verifica su sha256 y lo
+        # reinstala cuando hace falta.  Meterlo aquí daría la falsa impresión
+        # de que "el daemon se ha actualizado" cuando lo único que cambió fue
+        # el payload, y haría que el daemon se autoactualizara sin motivo
+        # (gaste de datos y reinicio del servicio en el móvil).
         run: |
           mkdir -p dist/state
           python3 - <<'PY'
