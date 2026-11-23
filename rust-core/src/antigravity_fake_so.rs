@@ -194,7 +194,13 @@ pub fn activar(puerto: u16, confirmar: bool) -> Result<Value, String> {
 
     // 3) Instalación EN EL SITIO (mismo inode: se conservan etiqueta
     //    SELinux, dueño y permisos; borrar+recrear los perdería).
+    //
+    // MEDIDO (2026-11-23): `std::fs::write` conserva el dueño ✔, pero el
+    // RESPALDO (si no existía) lo crea root ⇒ dentro del runtime de la app
+    // la app no lo puede borrar al desempaquetar y NO ARRANCA.  Se devuelve
+    // al dueño de la app.
     std::fs::write(&ruta, &falso).map_err(|e| format!("instalar {}: {e}", ruta.display()))?;
+    crate::antigravity_clone::devolver_al_dueno_de_la_app(&ruta);
 
     // 4) El manifiesto del runtime lleva el sha256 del fichero.
     let manifiesto = crate::antigravity_endpoint::actualizar_manifesto_publico(&sha_falsa);

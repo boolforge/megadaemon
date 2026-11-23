@@ -350,6 +350,10 @@ pub fn sincronizar_puente_mcp() -> Result<Value, String> {
         let txt = serde_json::to_string_pretty(&v).unwrap_or_default();
         crate::util_fs::write_atomic(Path::new(ruta), txt.as_bytes(), 0o644)
             .map_err(|e| format!("escribir {ruta}: {e}"))?;
+        // MEDIDO (2026-11-23): el daemon escribe como root ⇒ el fichero
+        // queda root-owned ⇒ la app no lo puede reescribir.  Se devuelve al
+        // dueño de la app (y a su contexto SELinux).
+        crate::antigravity_clone::devolver_al_dueno_de_la_app(Path::new(ruta));
     }
     Ok(json!({
         "ok": true,

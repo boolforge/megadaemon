@@ -488,6 +488,10 @@ pub fn aplicar_endpoint(puerto: u16, confirmar: bool) -> Result<Value, String> {
 
     if !respaldo.exists() {
         std::fs::copy(&ruta, &respaldo).map_err(|e| format!("respaldo: {e}"))?;
+        // MEDIDO (2026-11-23): la copia la crea ROOT ⇒ si queda dentro del
+        // runtime de la app, la app no lo puede borrar al desempaquetar y
+        // NO ARRANCA.  Se devuelve al dueño de la app.
+        crate::antigravity_clone::devolver_al_dueno_de_la_app(&respaldo);
     }
     std::fs::write(&ruta, &datos).map_err(|e| format!("escritura: {e}"))?;
 
@@ -620,6 +624,7 @@ pub fn aplicar_gate(confirmar: bool) -> Result<Value, String> {
     let nuevo = texto.replace(GATE_CONDICION, "!0");
     if !respaldo.exists() {
         std::fs::copy(&ruta, &respaldo).map_err(|e| format!("respaldo: {e}"))?;
+        crate::antigravity_clone::devolver_al_dueno_de_la_app(&respaldo);
     }
     std::fs::write(&ruta, nuevo).map_err(|e| format!("escritura: {e}"))?;
     Ok(json!({

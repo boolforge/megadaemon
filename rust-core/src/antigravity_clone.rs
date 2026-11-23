@@ -44,7 +44,25 @@ use std::path::{Path, PathBuf};
 /// Clon del repo que mantiene Antigravity.
 pub const CLON: &str = "/data/user/0/com.agy/files/megadaemon";
 /// Runtime (binarios) de Antigravity.
+///
+/// ⚠️ **NUNCA escribir aquí**: es el directorio que la app DESEMPAQUETA en
+/// cada arranque (assets/runtime → files/runtime).  Si el daemon deja un
+/// fichero ROOT dentro (o un directorio root-owned), la app no puede
+/// borrarlo al desempaquetar y **no arranca**:
+///
+///   "cannot unpack assets/runtime into /data/user/0/com.agy/files/runtime:
+///    cannot delete .../runtime/etc/antigravity/admin_settings.json"
+///
+/// MEDIDO (2026-11-23): el daemon se copiaba a sí mismo aquí (root) en
+/// cada arranque (`unificar_runtime`) ⇒ la app se rompía en el siguiente
+/// arranque, y el daemon volvía a meterlo en el siguiente reinicio.
 pub const RUNTIME: &str = "/data/user/0/com.agy/files/runtime/bin";
+
+/// Directorio del CLON del daemon dentro de la app (NO se desempaqueta).
+///
+/// `files/megadaemon/` es del daemon: la app no lo toca ⇒ aquí sí se puede
+/// dejar una copia del binario sin romper el desempaquetado.
+pub const BIN_CLON: &str = "/data/user/0/com.agy/files/megadaemon/bin/megadaemon-core";
 /// Binario canónico del daemon (root).
 ///
 /// MEDIDO (2026-11-23): estaba en `/data/local/tmp/megadaemon/...`, que es
@@ -65,6 +83,35 @@ pub fn bin_canonico() -> String {
 pub const REPO: &str = "boolforge/megadaemon";
 /// UID de la app Antigravity (`u0_a1573` ⇒ 100000 + 1573).
 pub const UID_ANTIGRAVITY: u32 = 101_573;
+
+/// Devuelve un fichero al **dueño de la app** (y a su contexto SELinux).
+///
+/// MEDIDO (2026-11-23): el daemon escribe como ROOT dentro del directorio
+/// privado de la app ⇒ el fichero queda root-owned ⇒ la app no lo puede
+/// reescribir ni borrar.  En el caso grave (el runtime, que la app
+/// desempaqueta en cada arranque) eso IMPIDE QUE LA APP ARRANQUE.
+///
+/// Con esta función, todo lo que el daemon escribe dentro de la app queda
+/// como si lo hubiera escrito la propia app.
+pub fn devolver_al_dueno_de_la_app(ruta: &Path) -> bool {
+    let Some(dir) = ruta.parent() else {
+        return false;
+    };
+    // El uid se toma del directorio que lo contiene (el de la app).
+    let uid = uid_de(dir).unwrap_or(UID_ANTIGRAVITY);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::chown;
+        let _ = chown(ruta, Some(uid), None);
+    }
+    // Contexto SELinux: `restorecon` (el daemon corre como root).
+    let _ = std::process::Command::new("restorecon")
+        .arg(ruta)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    uid_de(ruta) == Some(uid)
+}
 
 // ---------------------------------------------------------------------------
 // Estado
@@ -198,7 +245,9 @@ pub fn estado_clon() -> EstadoClon {
 
 /// Estado del runtime de binarios.
 pub fn estado_runtime() -> EstadoRuntime {
-    let bin = Path::new(RUNTIME).join("megadaemon-core");
+    // El binario del daemon ya NO vive en el runtime de la app (rompia el
+    // desempaquetado); vive en el clon del daemon.
+    let bin = PathBuf::from(BIN_CLON);
     let mut e = EstadoRuntime {
         ruta: bin.to_string_lossy().to_string(),
         ..Default::default()
@@ -213,6 +262,9 @@ pub fn estado_runtime() -> EstadoRuntime {
         }
     }
     e.uid_directorio = uid_de(Path::new(RUNTIME));
+    // ¿Queda algún intruso nuestro en el runtime de la app?
+    let intruso = Path::new(RUNTIME).join("megadaemon-core");
+    e.tiene_megadaemon = intruso.exists();
     e
 }
 
@@ -244,9 +296,31 @@ pub fn unificar_runtime() -> Result<ReporteUnificar, String> {
     if !canonico.exists() {
         return Err(format!("no existe el binario canónico {}", bin_canonico()));
     }
-    let dir = Path::new(RUNTIME);
-    std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {RUNTIME}: {e}"))?;
-    let dest = dir.join("megadaemon-core");
+    // MEDIDO (2026-11-23): el destino ya NO es el runtime de la app (ahí la
+    // app desempaqueta sus assets y un fichero root lo rompe todo), sino el
+    // directorio del clon del daemon, que la app no toca.
+    let dest = PathBuf::from(BIN_CLON);
+    let dir = dest
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(BIN_CLON));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+
+    // Limpieza del INTRUSO: si una versión anterior dejó el binario (o su
+    // .prev) dentro del runtime de la app, se borra AHORA (con el dueño y
+    // el contexto SELinux correctos: root puede borrarlo, la app no).
+    let intrusos = [
+        PathBuf::from(RUNTIME).join("megadaemon-core"),
+        PathBuf::from(RUNTIME).join("megadaemon-core.prev"),
+    ];
+    let mut limpiados = vec![];
+    for i in intrusos {
+        if i.exists() {
+            if std::fs::remove_file(&i).is_ok() {
+                limpiados.push(i.to_string_lossy().to_string());
+            }
+        }
+    }
 
     let mut rep = ReporteUnificar {
         destino: dest.to_string_lossy().to_string(),
@@ -282,10 +356,19 @@ pub fn unificar_runtime() -> Result<ReporteUnificar, String> {
     rep.sha256 = sha.clone();
     rep.igual_que_canonico = Some(sha == sha256_de(&canonico));
     rep.aplicado = true;
-    rep.detalle = format!(
-        "binario canónico copiado al runtime de Antigravity (sha256 {})",
-        sha.clone().unwrap_or_else(|| "?".into())
-    );
+    rep.detalle = if limpiados.is_empty() {
+        format!(
+            "binario canónico copiado al clon del daemon (sha256 {})",
+            sha.clone().unwrap_or_else(|| "?".into())
+        )
+    } else {
+        format!(
+            "binario canónico copiado al clon del daemon (sha256 {}) y              {} intruso(s) borrado(s) del runtime de la app: {}",
+            sha.clone().unwrap_or_else(|| "?".into()),
+            limpiados.len(),
+            limpiados.join(", ")
+        )
+    };
     Ok(rep)
 }
 
