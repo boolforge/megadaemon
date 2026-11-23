@@ -1,0 +1,58 @@
+[package]
+name = "hooks-payload"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Payload de instrumentacion en Rust con frida-gum (bindings oficiales de Frida)"
+
+# CRATE AISLADO (regla dura del proyecto): este paquete NO pertenece al
+# workspace del daemon.  `rust-core` sigue compilando sin gum, sin bindgen y
+# sin el devkit de Frida; el payload se compila aparte, para
+# `aarch64-linux-android`, en el job de CI `build-hooks-payload`.
+#
+# El `[workspace]` vacío hace que cargo trate este paquete como la raíz de su
+# propio workspace (si no, intentaría heredarlo del repo).
+[workspace]
+
+[lib]
+name = "hooks_payload"
+path = "src/lib.rs"
+# `cdylib` ⇒ el artefacto es un .so que se puede `dlopen` en el proceso
+# objetivo (Zygisk, frida-server, o cualquier cargador).
+crate-type = ["cdylib"]
+
+[dependencies]
+# BINDINGS OFICIALES de Frida en Rust (NO un inyector artesanal).
+#
+# * `invocation-listener` → habilita `Interceptor::attach` con
+#   `InvocationListener` (el shim en C que gum necesita).
+# * `auto-download`        → `frida-gum-sys` descarga el devkit PRECOMPILADO
+#   de gum (headers + `libfrida-gum.a`) del release de Frida que fija
+#   `frida-gum-sys/FRIDA_VERSION` (17.9.5 para 0.17.2) ⇒ NO hace falta
+#   meson/ninja para compilar gum: hace falta red + libclang (bindgen) + un
+#   compilador C del NDK (los shims en C).
+# * `std`                 → gum con `std` (por defecto `frida-gum` es no_std).
+#
+# Versión EXACTA a propósito: la API de gum cambió en `main` de frida-rust
+# (`Module::obtain`, `find_export_by_name(None, ..)`) y ese cambio NO está
+# publicado; con `=0.17.2` el código compila contra la API real de crates.io.
+frida-gum = { version = "=0.17.2", features = [
+    "std",
+    "invocation-listener",
+    "auto-download",
+] }
+# `libc` para el NDJSON (open/write/mkdir): en un interceptor NUNCA se usa
+# `std::fs` (puede bloquear y paniquear).
+libc = "0.2"
+# Constructores de ELF: el payload se auto-instala al ser cargado (dlopen).
+ctor = "1"
+
+[profile.release]
+# El payload es I/O puro: gum viene precompilado, así que el perfil sólo
+# afecta a nuestro código.
+opt-level = 1
+lto = false
+codegen-units = 16
+strip = true
+# SIN `panic = "abort"`: el payload envuelve cada hook en `catch_unwind`
+# (un panic dentro de un interceptor atravesaría frames de C).
