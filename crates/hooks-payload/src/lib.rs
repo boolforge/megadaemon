@@ -37,8 +37,7 @@ mod redact;
 mod sink;
 mod sys;
 
-use std::sync::atomic::{AtomicPtr, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use frida_gum::interceptor::Interceptor;
 use frida_gum::Gum;
@@ -56,7 +55,17 @@ static GUM: OnceLock<Gum> = OnceLock::new();
 
 /// El `Interceptor` (nunca se suelta: gum desengancha los hooks cuando se
 /// libera el interceptor).
-static INTERCEPTOR: AtomicPtr<Interceptor> = AtomicPtr::new(std::ptr::null_mut());
+///
+/// Va detrás de un `Mutex` y NO se expone como `&'static mut`: dos `&mut`
+/// al mismo objeto serían UB (aliasing).  El mutex da acceso exclusivo.
+struct InterceptorBloqueado(Interceptor);
+
+// SAFETY: el `Interceptor` de gum contiene un puntero crudo y NO es `Send`.
+// Aquí sólo se usa bajo el mutex de abajo (`instalar` es la única vía) y
+// gum no exige que el hilo que adjunta y el que llama sean el mismo.
+unsafe impl Send for InterceptorBloqueado {}
+
+static INTERCEPTOR: OnceLock<Mutex<InterceptorBloqueado>> = OnceLock::new();
 
 /// Informe de la instalación (para que la llamada sea idempotente).
 static INFORME: OnceLock<hooks::Informe> = OnceLock::new();
@@ -69,18 +78,18 @@ pub fn gum() -> &'static Gum {
     GUM.get_or_init(Gum::obtain)
 }
 
-/// El interceptor (fugado a propósito: vive lo que el proceso).
-fn interceptor() -> &'static mut Interceptor {
-    let p = INTERCEPTOR.load(Ordering::SeqCst);
-    if !p.is_null() {
-        // SAFETY: el puntero se publica una sola vez (bajo `CERROJO`) y no
-        // se libera nunca.
-        return unsafe { &mut *p };
+/// El interceptor global (vive lo que el proceso).
+fn interceptor() -> &'static Mutex<InterceptorBloqueado> {
+    INTERCEPTOR.get_or_init(|| Mutex::new(InterceptorBloqueado(Interceptor::obtain(gum()))))
+}
+
+/// Acceso exclusivo al interceptor (sin envenenarse: un panic en un hook no
+/// puede dejar el mutex envenenado para los demás hilos).
+fn interceptor_bloqueado() -> MutexGuard<'static, InterceptorBloqueado> {
+    match interceptor().lock() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
     }
-    let raw = Box::into_raw(Box::new(Interceptor::obtain(gum())));
-    INTERCEPTOR.store(raw, Ordering::SeqCst);
-    // SAFETY: ver arriba.
-    unsafe { &mut *raw }
 }
 
 /// Rutas candidatas del NDJSON, **en orden de preferencia**.
@@ -138,8 +147,8 @@ pub fn instalar() -> Result<hooks::Informe, String> {
     let candidatas = candidatas_ndjson(g);
     let ruta = sink::Sink::global().abrir(&candidatas)?;
     // 2) Los hooks.
-    let inter = interceptor();
-    let mut informe = hooks::instalar(inter, g);
+    let mut inter = interceptor_bloqueado();
+    let mut informe = hooks::instalar(&mut inter.0, g);
     informe.ndjson = ruta.clone();
     // 3) El evento de arranque (con el informe completo).
     //    OJO: el escritor ya pone `ts`, `pid` y `tid` ⇒ aquí no se repiten.
@@ -162,7 +171,10 @@ pub fn instalar() -> Result<hooks::Informe, String> {
         })
         .collect();
     campos.push(format!("\"ganchos\":[{}]", ganchos.join(",")));
-    sink::Sink::global().evento(0, &json::une(&campos));
+    // El evento de arranque NO se puede perder (dice qué ruta de NDJSON se
+    // está usando y qué hooks quedaron instalados) ⇒ se escribe esperando
+    // el mutex, no descartándolo.
+    sink::Sink::global().evento_bloqueante(0, &json::une(&campos));
     let _ = INFORME.set(informe.clone());
     Ok(informe)
 }
@@ -204,8 +216,18 @@ pub extern "C" fn megadaemon_hooks_version() -> u32 {
 ///
 /// Se puede desactivar con `MEGADAEMON_HOOKS_AUTOSTART=0` (útil para
 /// cargar la librería y activarla después a mano).
+///
+/// MEDIDO (2026-11-23, crate `ctor` 1.0.14 leído del `.crate`): el
+/// atributo **exige** `unsafe`:
+/// `src/parse.rs` tiene un `compile_error!("Missing unsafe keyword in
+/// #[ctor] annotation. Use #[ctor(unsafe)]")` que salta cuando la función
+/// NO es `unsafe fn` y el atributo no lleva `unsafe`.  Con `#[ctor]` a secas
+/// el crate NO COMPILABA (y el CI `build-hooks-payload` se caía).
+/// El `unsafe` de `#[ctor(unsafe)]` significa "puede correr antes de que el
+/// runtime de Rust esté listo": aquí es seguro porque el payload se carga con
+/// `dlopen` dentro de un proceso que ya tiene el runtime.
 #[cfg(not(test))]
-#[ctor]
+#[ctor(unsafe)]
 fn autostart() {
     if std::env::var("MEGADAEMON_HOOKS_AUTOSTART")
         .map(|v| v == "0")
