@@ -754,13 +754,34 @@ fn registrar_uso_y_fleet_cost_se_registran_en_cada_respuesta() {
         "p-usage-test",
     );
     let d = deps(&v, &t);
+    // MEDIDO 2026-11-23: los contadores del presupuesto diario son de
+    // PROCESO (globales) y `cargo test` corre los tests de este binario en
+    // PARALELO: cualquier otro test que hace una llamada con exito tambien
+    // los incrementa => los valores ABSOLUTOS ("1 llamada", "2000 tokens")
+    // dependian del orden de ejecucion (rojo intermitente en el CI).  Se
+    // comprueba el DELTA de esta llamada.
+    let antes = megadaemon_core::providers::daily_budget_snapshot();
     let res = execute_chat_with("hola", Some("p-usage-test"), None, None, 128, &d);
     assert_eq!(res.model_id, "p-usage-test");
     assert_eq!(res.tokens_used, 2000);
 
     let snap = megadaemon_core::providers::daily_budget_snapshot();
-    assert_eq!(snap["calls_total"].as_u64(), Some(1));
-    assert_eq!(snap["tokens_total"].as_u64(), Some(2000));
+    let llamadas = snap["calls_total"].as_u64().unwrap_or(0)
+        .saturating_sub(antes["calls_total"].as_u64().unwrap_or(0));
+    let tokens = snap["tokens_total"].as_u64().unwrap_or(0)
+        .saturating_sub(antes["tokens_total"].as_u64().unwrap_or(0));
+    assert!(
+        llamadas >= 1,
+        "la llamada debe registrarse en el presupuesto diario: {}",
+        snap
+    );
+    assert!(
+        tokens >= 2000,
+        "la llamada debe registrar sus 2000 tokens: {}",
+        snap
+    );
+    // El GASTO si es exacto: solo lo mueven los proveedores con precio
+    // (este test y el del tope, y ambos tienen el cerrojo puesto).
     let spend = snap["spend_usd"].as_f64().unwrap();
     assert!(
         (spend - 0.00075).abs() < 1e-9,
