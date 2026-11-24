@@ -828,6 +828,35 @@ mod tests {
         }
     }
 
+    /// MEDIDO 2026-11-24 (movil): el language server pide las rutas Gemini
+    /// **con barra** (`/v1internal/generateContent`) y el catalogo como
+    /// `/v1internal/listModels`.  El shim solo reconocia la forma con dos
+    /// puntos => devolvia 404 {"error":"el shim no sirve la ruta
+    /// /v1internal/"} => el LS se rendia => el core salia con **exit 135**.
+    ///
+    /// Este test es la puerta de esa regresion: el shim NO puede volver a
+    /// devolver 404 en las rutas que el LS pide de verdad.
+    #[test]
+    fn el_shim_no_puede_devolver_404_en_la_ruta_del_language_server() {
+        for ruta in [
+            "/v1internal/generateContent",
+            "/v1internal/streamGenerateContent",
+            "/v1internal:generateContent",
+            "/v1internal:streamGenerateContent",
+            "/v1internal/listModels",
+            "/v1internal:listModels",
+        ] {
+            assert!(es_ruta_proxy(ruta), "el shim no proxyfaria {ruta}");
+            assert!(dialecto_de(ruta).is_some(), "el shim no sabria el dialecto de {ruta}");
+            let (st, cuerpo) = procesar("POST", ruta, r#"{"model":"models/gemini-2.5-pro"}"#);
+            assert_ne!(st, 404, "404 en {ruta} => el LS se rinde y el core sale con 135");
+            assert!(
+                !cuerpo.contains("el shim no sirve la ruta"),
+                "el shim seatio de {ruta} con su propio 404"
+            );
+        }
+    }
+
     #[test]
     fn el_modelo_se_extrae_del_cuerpo() {
         assert_eq!(
