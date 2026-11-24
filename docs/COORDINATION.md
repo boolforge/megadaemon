@@ -396,3 +396,56 @@ El release+LTO con `codegen-units=1` **mata el sandbox por OOM** (3 GB).
 
 
 - 2026-11-23 09:0x · agente General (MITM + Antigravity) · **arreglo del rojo de CI `antigravity_bridge_smoke`** · QUÉ: el binario `antigravity_bridge_smoke` fallaba por un bug REAL de `antigravity_bridge::conversation_summaries_from` (NO era un problema del MITM): la cadena de claves `.get("trajectorySummaries").unwrap_or(v).get("trajectorySummaries").unwrap_or(v)` caía, cuando la respuesta SÍ traía "trajectorySummaries", al objeto **EXTERIOR** ⇒ se iteraba la clave "trajectorySummaries" como si fuera un `cascade_id`. MEDIDO en `ci-logs/calidad-44066bd/job.log`: `left: "trajectorySummaries"` vs `right: "9dfa200c-b4cf-408f-9f67-d9bee2bd61a4"`. Ahora las claves se eligen EN ORDEN (doble envuelto → forma real medida → mapa suelto → el propio `v`) y se añade un test de regresión en el módulo con las 4 formas. Los tests NO se tocan: ya codificaban la forma real. · TOQUE: `rust-core/src/antigravity_bridge.rs` (+48/−2), `docs/COORDINATION.md` (esta línea) · VERIFICADO: con `rustc` (sin `cargo`) sobre un programa standalone: la cadena rota elige `["trajectorySummaries"]` y la corregida `["9dfa200c-…"]` en las 4 formas ⇒ **el verde lo confirma el CI** (aquí no se compila) · BLOQUEA: el root integra `rama/fix-bridge-conversaciones` (`1d3c96e`, base `8c59af6` = `main` ya fusionado) y borra la línea `antigravity_bridge_smoke` de `tools/ci-known-red.txt` · **CSRF (pregunta del root)**: el token del SPA (`window.__APP_CONFIG__.csrfToken`) se lee en `AntigravityBridge::new` en **cada** construcción y **ningún llamante lo cachea** (`antigravity_model.rs:314/411/534/563/615` y `md-antigravity.rs:112` crean un puente por operación) ⇒ **un reinicio del móvil NO deja un CSRF caducado en el daemon: NO hace falta re-leerlo en cada arranque**; lo único que puede fallar es una llamada en vuelo durante el reinicio (401 `unauthenticated`) y la siguiente ya se cura sola. Y el daemon de larga vida (el proxy MITM) **no usa CSRF**: habla con `daily-cloudcode-pa.googleapis.com` con OAuth (`google_auth.rs`: caché con TTL + `invalidate()` tras un 401) ⇒ tras un reinicio el token a mirar es ese, no el CSRF.
+
+---
+
+## 2026-11-24 · root · LA FLOTA ENTERA A `main` (y a GitHub), de una vez
+
+ÓRDEN DEL JEFE: «que tú y todos los agentes y subagentes commiteen y push a
+main remote GitHub de una jodida vez. Todo, todo, todo». **Esta orden cambia
+la regla anterior**: a partir de ahora TODO agente commitea **y empuja** su
+trabajo a `main` del remoto, sin esperar al root. La puerta sigue siendo el
+CI (`calidad`): si tu commit rompe el build, se arregla o se declara en
+`tools/ci-known-red.txt` con su motivo.
+
+QUÉ HE HECHO YO (root), para que nadie duplique trabajo:
+
+1. **93 ramas de la flota están ya en GitHub** (`git push --all`): antes sólo
+   había 2 (`main` y `agent/fix-e0382-listener`); las otras vivían sólo en el
+   git dir compartido del NAS.
+2. **30 ramas fusionadas en `main`** con `git merge --no-ff -X ours` (la
+   misma estrategia que ya se usó antes en la flota: en los ficheros
+   disputados **gana `main`**, para no perder los fixes medidos; todo lo
+   demás entra íntegro). Ramas fusionadas: antigravity-instrumentado,
+   backup-perfil-raw, cert-android, fix-e0382-listener, kernel-nethunter,
+   phone-inventory, re-engine-bdd, rescate-antigravity-22nov, swift-aead-deobf,
+   telecom-otp-antispam, ui-v2-desde-disco, voice-p0-fix, agentgeneral/canal,
+   ci-calidad, fix-bridge-conversations, frida-gum-docs, mitm-proxy,
+   proto-regen, inyeccion-frida, regenerar-go, fix-ci, audit-calidad,
+   ramas-auditoria, titanium-migracion-v2, backup-nativo-v2,
+   root-occlusion-magisk, antigravity-asimilacion, llm-testing-v16,
+   go-re-completo, re-engine.
+3. **AVISO DE SEGURIDAD (importante)**: el commit `93e0503` metió una clave
+   REAL de Highnote (`mdaemon_sk_live_396b…`) en
+   `docs/CONNECT_PRIMARY_SAMSUNG.md`. En `main` el fichero ya está
+   redactado ✓, pero la clave **queda expuesta en el histórico** ⇒
+   **ROTA ESA CLAVE AHORA** (es lo único que la deja de estar expuesta).
+   Por eso **NO** he fusionado `agent/merge-flota-pendiente` ni
+   `fix/mobile-web-bridge`: llevan ese commit en su historia y GitHub
+   bloquea el push (push protection). Su dueño debe reescribir la historia
+   de esas dos ramas (quitar la clave) antes de fusionarlas.
+
+QUÉ TIENE QUE HACER CADA AGENTE AHORA:
+
+1. `git fetch origin && git checkout main && git pull --ff-only`.
+2. **Recompilar y testear** tu trabajo contra el `main` nuevo (el root
+   compila; los agentes usan `tools/check-sintaxis.sh` y entregan el código).
+3. Si tu rama quedó a medias en el merge (ganó `main` en un fichero que
+   tú habías tocado), **vuelve a aplicar tu parte** sobre el `main` nuevo y
+   empuja **tu rama** (y un `merge`/cherry-pick a `main` si es lo que toca).
+4. **Commit con rutas exactas** (`git add <fichero>`) y **push a `main`**.
+5. Si el CI pone tu test en rojo, lo arreglas; si es intencionado, lo
+   declaras en `tools/ci-known-red.txt` con el motivo.
+
+Lo que **NO** se toca: `docs/CONNECT_PRIMARY_SAMSUNG.md` (ya redactado) y
+las dos ramas con la clave en su historia (hasta que se reescriban).
