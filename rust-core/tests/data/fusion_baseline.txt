@@ -57,3 +57,15 @@ rust-core/src/drive_native.rs:deleting
 rust-core/src/backup_apps.rs:decoupled
 docs/GO_REVERSE_ENGINEERING.md:debugger
 docs/RECONSTRUCCION_MULTI_METODO.md:desincroniza
+
+# --- MEDIDO 2026-11-24 (los 2 hallazgos nuevos que trajeron las 30 ramas) ---
+# - "ofrec"   = "o" + "frec": NO es una fusión.  La palabra española es
+#   "ofrecía" y el troceador del lint parte en ASCII, así que la "í" se come
+#   el final y queda el token suelto "ofrec" (una sola vez en todo el corpus
+#   ⇒ pasa el filtro de hapax).  Fichero: el comentario que explica que la
+#   GUI no ofrecía el modelo `megadaemon`.
+# - "nocache" = "no" + "cache": NO es una fusión.  Es el DIRECTORIO REAL de
+#   Android (`/nocache/`, junto a `/cache/` y `/code_cache/`), citado en la
+#   lista de exclusiones del plan de backup.
+rust-core/src/antigravity_model.rs:ofrec
+docs/BACKUP_PERFIL_Y_RAW.md:nocache
