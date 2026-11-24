@@ -30,6 +30,8 @@
 | `openai/codex` → `codex-rs/README.md` | lectura | el README es un enlace a la documentación; la arquitectura está en el árbol de crates |
 | `openai/plugins` → `README.md` | lectura | manifiesto `.codex-plugin/plugin.json` + superficies `skills/`, `.app.json`, `.mcp.json`, `agents/`, `commands/`, `hooks.json`, `assets/`; *marketplace* en `.agents/plugins/marketplace.json` |
 | `openai/skills` → `README.md` | lectura | **el repo está DEPRECADO** (remite a `openai/plugins`); las skills son carpetas de instrucciones + scripts + recursos, con niveles `.system`, `.curated`, `.experimental` y un estándar abierto (`agentskills.io`) |
+| `@anthropic-ai/claude-code` en npm | descarga del paquete `2.1.331` (el más nuevo publicado) y del `2.1.88` | **el paquete más nuevo ya NO trae código fuente**: son 32 KB con un `cli-wrapper.cjs` que **descarga un binario nativo** por plataforma (linux/darwin/`.exe`) ⇒ **0 mapas de fuentes**. Por tanto **2.1.88 es el techo de lo recuperable**: es la última versión cuyo paquete traía el `cli.js.map` |
+| `mohsinmomin440/claude-code-source-code`, `DZCD/claude-code-source-code`, `Icarus603/claude-code` | lectura de README | `mohsinmomin440` recupera la **misma 2.1.88**; `DZCD` e `Icarus603` son **reimplementaciones/forks**, no recuperaciones ⇒ no se les atribuye nada de Anthropic |
 
 Lo que **no** se ha medido: el contenido de cada crate (132 lecturas no caben
 en la cuota). Las afirmaciones sobre *qué hace* cada crate salen de su nombre
@@ -262,6 +264,23 @@ sesiones (P2) → instrumentación (P3). Y las novedades que sólo aporta
 Claude Code (H7 plan mode, H9 búsqueda de herramientas, H10 preguntar a la
 persona) encajan justo en el sitio donde el agente de MegaDaemon más falta:
 trabaja sobre un móvil compartido, con root, sin la persona al lado.
+
+### ¿Cuál es la fuente recuperada MÁS NUEVA?
+
+Medido el 2026-11-24: la versión más nueva publicada de
+`@anthropic-ai/claude-code` es la **2.1.331**, pero su paquete en npm son
+**32 KB** y sólo contiene `cli-wrapper.cjs`, un lanzador que **descarga un
+binario nativo** para la plataforma (linux, darwin, `.exe`). **No hay ningún
+`.map` en el paquete.** El código JavaScript con mapa de fuentes dejó de
+publicarse; la comunidad recuperó hasta la **2.1.88** (la última con
+`cli.js.map` dentro del paquete), y no hay recuperación más nueva publicada
+(`mohsinmomin440/claude-code-source-code` recupera la misma 2.1.88).
+
+⇒ **2.1.88 es el techo del código legible de Claude Code.** A partir de ahí
+la vía es ingeniería inversa del binario nativo (posible, pero mucho más
+cara: no hay `src/` con nombres de fichero ni de función). Para estudiar la
+arquitectura, 2.1.88 es suficiente: en ella ya están los 44 módulos de
+herramientas, `skills/`, `plugins/`, `permissions.ts` y el plan mode.
 
 ### Prioridad revisada
 
