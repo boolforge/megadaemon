@@ -519,6 +519,22 @@ pub fn bucle_automatico(puerto: u16) {
         60,
     )
     .clamp(15, 3600);
+    // MEDIDO (2026-11-24): el plan de hooks sólo se escribía cuando
+    // `aplicar()` encontraba algo que hacer ⇒ si todo estaba en su sitio, el
+    // payload se quedaba SIN plan.  Se escribe al arrancar (una vez): el
+    // plan depende del `.so` (el pclntab), no del estado del resto.
+    if on("plan_hooks", true) {
+        match crate::antigravity_intercept::escribir_plan_para_el_payload(bias_del_ls()) {
+            Ok(v) => {
+                eprintln!(
+                    "instrumentación AGY: plan de hooks listo ({} hooks → {})",
+                    v.get("hooks").and_then(|x| x.as_u64()).unwrap_or(0),
+                    v.get("ruta_payload").and_then(|x| x.as_str()).unwrap_or("?")
+                );
+            }
+            Err(e) => eprintln!("instrumentación AGY: no se pudo escribir el plan de hooks: {e}"),
+        }
+    }
     loop {
         std::thread::sleep(std::time::Duration::from_secs(intervalo));
         if !on("automatica", true) {

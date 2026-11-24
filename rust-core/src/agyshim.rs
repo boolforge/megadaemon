@@ -586,7 +586,6 @@ pub struct Peticion {
     /// MEDIDO (2026-11-24): sin esto el passthrough perdía los parámetros
     /// (`?alt=json&…`) y Google respondía 404 ⇒ el LS no conseguía ni el
     /// estado de sesión ni el catálogo.
-    #[serde(default)]
     pub query: String,
 }
 
