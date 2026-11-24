@@ -555,7 +555,14 @@ pub enum Dialecto {
 /// ¿Qué dialecto habla esta ruta?  `None` = el shim no la sirve.
 pub fn dialecto_de(ruta: &str) -> Option<Dialecto> {
     let r = normalizar_ruta_proxy(ruta);
-    if r.ends_with(":fetchAvailableModels") || r.ends_with("/models") || r == "/models" {
+    // MEDIDO 2026-11-24 (movil): el LS pide el catalogo como
+    // `/v1internal/listModels` (con barra) y antes nos devolvia 404.
+    if r.ends_with(":fetchAvailableModels")
+        || r.ends_with("/models")
+        || r == "/models"
+        || r.ends_with("/listModels")
+        || r.ends_with(":listModels")
+    {
         return Some(Dialecto::Catalogo);
     }
     if r.contains("/chat/completions") {
