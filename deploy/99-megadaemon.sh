@@ -1257,7 +1257,6 @@ while true; do
         # vivo).  Dos fallos seguidos de /health => se reinicia.
         probe_iface_init
         check_daemon_responsive "$PORT" || true
-        ensure_shell_service
         apply_energy_policy
         ensure_web_bridge
         sync_antigravity_bridge
