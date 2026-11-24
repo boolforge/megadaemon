@@ -135,13 +135,25 @@ pub fn relanzar_ls_para_el_binario_nuevo() -> Option<Value> {
     }))
 }
 
+/// **Bias de carga** del `.so` en el proceso vivo del LS.
+///
+/// El módulo carga con `p_vaddr 0` ⇒ la dirección en runtime = bias + VA del
+/// ELF (el bias sale de `/proc/<pid>/maps`).
+pub fn bias_del_ls() -> u64 {
+    let Some(pid) = pid_del_language_server() else {
+        return 0;
+    };
+    let ruta = crate::antigravity_endpoint::ruta_ls().to_string_lossy().to_string();
+    crate::antigravity_intercept::bias_del_proceso(pid as i32, &ruta).unwrap_or(0)
+}
+
 /// PID del proceso del language server (el que tiene el `.so` en memoria).
 ///
 /// MEDIDO (2026-11-24): la cmdline es
 /// `runtime/bin/libloader.so --library-path runtime/lib --preload
 ///  runtime/lib/liblse_compat.so runtime/bin/liblanguage_server.so
 ///  --standalone --override_ide_name antigravity --subclient_type hub -`
-fn pid_del_language_server() -> Option<u32> {
+pub fn pid_del_language_server() -> Option<u32> {
     let dir = std::fs::read_dir("/proc").ok()?;
     for e in dir.flatten() {
         let nombre = e.file_name().to_string_lossy().to_string();
@@ -717,6 +729,17 @@ pub fn aplicar(puerto: u16, confirmar: bool) -> Value {
                 "detalle": format!("{n} grants de permisos saneados (unsandboxed( -> n()"),
             })),
             Err(e) => piezas.push(json!({ "pieza": "grants", "estado": "fallo", "detalle": e })),
+        }
+    }
+
+    // --- 6) El plan de hooks (lo que lee el payload de frida-gum) ------
+    // El `.so` acaba de cambiar ⇒ sus direcciones pueden haber cambiado:
+    // el plan se re-resuelve con el pclntab y se reescribe (el payload lo
+    // lee de `/data/local/tmp/megadaemon/hooks-plan.txt`).
+    if on("plan_hooks", true) {
+        match crate::antigravity_intercept::escribir_plan_para_el_payload(bias_del_ls()) {
+            Ok(v) => piezas.push(json!({ "pieza": "plan_hooks", "estado": "aplicado", "detalle": v })),
+            Err(e) => piezas.push(json!({ "pieza": "plan_hooks", "estado": "fallo", "detalle": e })),
         }
     }
 

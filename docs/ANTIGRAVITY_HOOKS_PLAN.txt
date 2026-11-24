@@ -1,0 +1,28 @@
+# PLAN DE HOOKS del language server de Antigravity (liblanguage_server.so)
+#
+# Formato (UNA LINEA POR HOOK, separados por TABULADORES):
+#   RUTA_O_NOMBRE_DEL_MODULO <TAB> VA_ELF_HEX <TAB> ID <TAB> TAREA
+#
+# VA_ELF_HEX = direccion de la funcion EN EL ELF (sin el bias de carga).
+# El payload (frida-gum) busca el modulo en el proceso vivo, le suma el base
+# y engancha con Interceptor::attach.  El .so NO se modifica.
+#
+# Las direcciones son las del PCLNTAB (la verdad): el indice de Ghidra de
+# nuestro corpus esta +0x1000000 (1 MiB) por encima (medido, 93% de las
+# funciones) => con Ghidra el hook caeria 1 MiB equivocado.
+#
+# TAREA: observar = se loguea la llamada (args + retorno) y el .so real sigue
+#        ejecutandose igual; sustituir_url = el retorno (la URL) se cambia.
+#
+# MEDIDO el 2026-11-24 (go-retool sobre liblanguage_server.so, 161.682
+# funciones): estas seis direcciones coinciden byte a byte con el TSV del
+# regenerador.
+#
+liblanguage_server.so	0x66a2728	getAICodeURL	sustituir_url
+liblanguage_server.so	0x66a27f8	StreamGenerateContentFromAICode	observar
+liblanguage_server.so	0x66a2f78	GenerateContentFromAICode	observar
+liblanguage_server.so	0x66d8168	StreamGenerateContentFromAICode.func2	observar
+liblanguage_server.so	0x66d8258	StreamGenerateContentFromAICode.func1	observar
+liblanguage_server.so	0x6d92c28	ParseEnvOverrides	observar
+liblanguage_server.so	0x6d938e8	LoadEffectiveSettings	observar
+liblanguage_server.so	0x6d94448	getLastDiscoveredCatalog	observar

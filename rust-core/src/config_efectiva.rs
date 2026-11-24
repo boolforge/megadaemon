@@ -86,6 +86,9 @@ pub fn por_defecto() -> Value {
             // acepta `command(...)` y `n(...)`; si no, la app pinta el
             // error en la UI (medido 2026-11-24).
             "sanear_grants": true,
+            // El plan de hooks (direcciones del pclntab) que lee el payload
+            // de frida-gum: se reescribe cada vez que cambia el `.so`.
+            "plan_hooks": true,
             "ocultar": [],
             "reescribir": {}
         },
