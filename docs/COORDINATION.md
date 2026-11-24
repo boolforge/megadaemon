@@ -449,3 +449,28 @@ QUÉ TIENE QUE HACER CADA AGENTE AHORA:
 
 Lo que **NO** se toca: `docs/CONNECT_PRIMARY_SAMSUNG.md` (ya redactado) y
 las dos ramas con la clave en su historia (hasta que se reescriban).
+
+---
+
+## 2026-11-24 · root · el paquete con el secreto, para Drive
+
+Las dos ramas que GitHub NO puede recibir (`agent/merge-flota-pendiente` y
+`fix/mobile-web-bridge`, con la clave real de Highnote en su historia) están
+**empaquetadas** para subirlas al Drive del usuario:
+
+* `state/drive-payload/ramas-bloqueadas-secreto.bundle` — `git bundle` de las
+  dos ramas (5,2 MB). Es **lo único** de ese trabajo que no puede ir a GitHub.
+* Comando (en el nodo con credenciales de Drive, el móvil o el que tenga
+  `gdrive_credentials.json`):
+
+      megadaemon-core drive-sync <dir> <carpeta> --parent 15FRlRwDQdAicoZcfKFOTzeWqJQMjXIC0
+
+  (`15FRl…` = la carpeta `megadaemon-backup` de `state/backup_target.json` ✓;
+  el daemon busca el token en `gdrive_credentials.json` y, si no, en
+  `rclone.conf` ✓).
+
+* MEDIDO: **el sandbox NO tiene credenciales de Drive** (`gdrive_credentials.json`
+  no existe aquí y `rclone.conf` sólo está en el móvil) ⇒ la subida la tiene
+  que hacer quien tenga el token. Y recuerda: **la clave hay que rotarla**,
+  el bundle la conserva tal cual para que no se pierda el trabajo, pero eso no
+  la deja de estar expuesta.
