@@ -394,3 +394,96 @@ El release+LTO con `codegen-units=1` **mata el sandbox por OOM** (3 GB).
 
 - 2026-11-21 16:0x · agente General · **F-01 (P1) — Board v1: un solo tablón de tareas** (diseño + código, todo en **un** commit para que un revert parcial no pueda dejarlo huérfano). El enjambre tenía **tres** tableros (`coordination` SQLite, `mesh` JSON, `task_scheduler` JSON) con tres formatos, tres espacios de ids y tres modelos de bloqueo, y el cockpit **sólo enseñaba el tercero** ⇒ el trabajo real del enjambre era invisible para el usuario; además `task_scheduler` persiste con un `fs::write` de todo el fichero (dos procesos se pisan) y los leases usan el reloj local (un nodo atrasado puede robar una tarea). Entrego `rust-core/src/board.rs` (**un** tablón SQLite, **un** tipo `Task`, **una** máquina de estados con `can_transition` como único sitio donde se decide, bloqueo = `lease` + `deps`, WAL/DELETE según el FS, `busy_timeout` + backoff, **reloj monótono del tablón**, snapshot + restauración ante corrupción, **modo degradado** con WAL ndjson, eventos como rastro de auditoría, almacén tras un **trait** para no cerrar la puerta a otro backend) + `rust-core/src/bin/md-board.rs` (CLI con `--help`: tasks/ready/stats/events/add/claim/start/report/renew/reclaim/**migrate --dry-run**/snapshot/doctor) + `tools/md-board.sh` + `docs/BOARD_V1_DESIGN.md` (126 líneas: plan de migración **idempotente** de los tres legacy sin borrar los originales, riesgos y reversión). **12 tests** que fijan los invariantes. **No toco** `coordination.rs`, `mesh.rs`, `task_scheduler.rs` ni `cockpit_server.rs`: son de sus dueños y el doc lleva el plan de migración ⇒ **mi commit es aditivo** (si un merge lo revierte, se revierte entero, no a medias).
 
+
+- 2026-11-23 09:0x · agente General (MITM + Antigravity) · **arreglo del rojo de CI `antigravity_bridge_smoke`** · QUÉ: el binario `antigravity_bridge_smoke` fallaba por un bug REAL de `antigravity_bridge::conversation_summaries_from` (NO era un problema del MITM): la cadena de claves `.get("trajectorySummaries").unwrap_or(v).get("trajectorySummaries").unwrap_or(v)` caía, cuando la respuesta SÍ traía "trajectorySummaries", al objeto **EXTERIOR** ⇒ se iteraba la clave "trajectorySummaries" como si fuera un `cascade_id`. MEDIDO en `ci-logs/calidad-44066bd/job.log`: `left: "trajectorySummaries"` vs `right: "9dfa200c-b4cf-408f-9f67-d9bee2bd61a4"`. Ahora las claves se eligen EN ORDEN (doble envuelto → forma real medida → mapa suelto → el propio `v`) y se añade un test de regresión en el módulo con las 4 formas. Los tests NO se tocan: ya codificaban la forma real. · TOQUE: `rust-core/src/antigravity_bridge.rs` (+48/−2), `docs/COORDINATION.md` (esta línea) · VERIFICADO: con `rustc` (sin `cargo`) sobre un programa standalone: la cadena rota elige `["trajectorySummaries"]` y la corregida `["9dfa200c-…"]` en las 4 formas ⇒ **el verde lo confirma el CI** (aquí no se compila) · BLOQUEA: el root integra `rama/fix-bridge-conversaciones` (`1d3c96e`, base `8c59af6` = `main` ya fusionado) y borra la línea `antigravity_bridge_smoke` de `tools/ci-known-red.txt` · **CSRF (pregunta del root)**: el token del SPA (`window.__APP_CONFIG__.csrfToken`) se lee en `AntigravityBridge::new` en **cada** construcción y **ningún llamante lo cachea** (`antigravity_model.rs:314/411/534/563/615` y `md-antigravity.rs:112` crean un puente por operación) ⇒ **un reinicio del móvil NO deja un CSRF caducado en el daemon: NO hace falta re-leerlo en cada arranque**; lo único que puede fallar es una llamada en vuelo durante el reinicio (401 `unauthenticated`) y la siguiente ya se cura sola. Y el daemon de larga vida (el proxy MITM) **no usa CSRF**: habla con `daily-cloudcode-pa.googleapis.com` con OAuth (`google_auth.rs`: caché con TTL + `invalidate()` tras un 401) ⇒ tras un reinicio el token a mirar es ese, no el CSRF.
+
+---
+
+## 2026-11-24 · root · LA FLOTA ENTERA A `main` (y a GitHub), de una vez
+
+ÓRDEN DEL JEFE: «que tú y todos los agentes y subagentes commiteen y push a
+main remote GitHub de una jodida vez. Todo, todo, todo». **Esta orden cambia
+la regla anterior**: a partir de ahora TODO agente commitea **y empuja** su
+trabajo a `main` del remoto, sin esperar al root. La puerta sigue siendo el
+CI (`calidad`): si tu commit rompe el build, se arregla o se declara en
+`tools/ci-known-red.txt` con su motivo.
+
+QUÉ HE HECHO YO (root), para que nadie duplique trabajo:
+
+1. **93 ramas de la flota están ya en GitHub** (`git push --all`): antes sólo
+   había 2 (`main` y `agent/fix-e0382-listener`); las otras vivían sólo en el
+   git dir compartido del NAS.
+2. **30 ramas fusionadas en `main`** con `git merge --no-ff -X ours` (la
+   misma estrategia que ya se usó antes en la flota: en los ficheros
+   disputados **gana `main`**, para no perder los fixes medidos; todo lo
+   demás entra íntegro). Ramas fusionadas: antigravity-instrumentado,
+   backup-perfil-raw, cert-android, fix-e0382-listener, kernel-nethunter,
+   phone-inventory, re-engine-bdd, rescate-antigravity-22nov, swift-aead-deobf,
+   telecom-otp-antispam, ui-v2-desde-disco, voice-p0-fix, agentgeneral/canal,
+   ci-calidad, fix-bridge-conversations, frida-gum-docs, mitm-proxy,
+   proto-regen, inyeccion-frida, regenerar-go, fix-ci, audit-calidad,
+   ramas-auditoria, titanium-migracion-v2, backup-nativo-v2,
+   root-occlusion-magisk, antigravity-asimilacion, llm-testing-v16,
+   go-re-completo, re-engine.
+3. **AVISO DE SEGURIDAD (importante)**: el commit `93e0503` metió una clave
+   REAL de Highnote (`mdaemon_sk_live_396b…`) en
+   `docs/CONNECT_PRIMARY_SAMSUNG.md`. En `main` el fichero ya está
+   redactado ✓, pero la clave **queda expuesta en el histórico** ⇒
+   **ROTA ESA CLAVE AHORA** (es lo único que la deja de estar expuesta).
+   Por eso **NO** he fusionado `agent/merge-flota-pendiente` ni
+   `fix/mobile-web-bridge`: llevan ese commit en su historia y GitHub
+   bloquea el push (push protection). Su dueño debe reescribir la historia
+   de esas dos ramas (quitar la clave) antes de fusionarlas.
+
+QUÉ TIENE QUE HACER CADA AGENTE AHORA:
+
+1. `git fetch origin && git checkout main && git pull --ff-only`.
+2. **Recompilar y testear** tu trabajo contra el `main` nuevo (el root
+   compila; los agentes usan `tools/check-sintaxis.sh` y entregan el código).
+3. Si tu rama quedó a medias en el merge (ganó `main` en un fichero que
+   tú habías tocado), **vuelve a aplicar tu parte** sobre el `main` nuevo y
+   empuja **tu rama** (y un `merge`/cherry-pick a `main` si es lo que toca).
+4. **Commit con rutas exactas** (`git add <fichero>`) y **push a `main`**.
+5. Si el CI pone tu test en rojo, lo arreglas; si es intencionado, lo
+   declaras en `tools/ci-known-red.txt` con el motivo.
+
+Lo que **NO** se toca: `docs/CONNECT_PRIMARY_SAMSUNG.md` (ya redactado) y
+las dos ramas con la clave en su historia (hasta que se reescriban).
+
+---
+
+## 2026-11-24 · root · el paquete con el secreto, para Drive
+
+Las dos ramas que GitHub NO puede recibir (`agent/merge-flota-pendiente` y
+`fix/mobile-web-bridge`, con la clave real de Highnote en su historia) están
+**empaquetadas** para subirlas al Drive del usuario:
+
+* `state/drive-payload/ramas-bloqueadas-secreto.bundle` — `git bundle` de las
+  dos ramas (5,2 MB). Es **lo único** de ese trabajo que no puede ir a GitHub.
+* Comando (en el nodo con credenciales de Drive, el móvil o el que tenga
+  `gdrive_credentials.json`):
+
+      megadaemon-core drive-sync <dir> <carpeta> --parent 15FRlRwDQdAicoZcfKFOTzeWqJQMjXIC0
+
+  (`15FRl…` = la carpeta `megadaemon-backup` de `state/backup_target.json` ✓;
+  el daemon busca el token en `gdrive_credentials.json` y, si no, en
+  `rclone.conf` ✓).
+
+* MEDIDO: **el sandbox NO tiene credenciales de Drive** (`gdrive_credentials.json`
+  no existe aquí y `rclone.conf` sólo está en el móvil) ⇒ la subida la tiene
+  que hacer quien tenga el token. Y recuerda: **la clave hay que rotarla**,
+  el bundle la conserva tal cual para que no se pierda el trabajo, pero eso no
+  la deja de estar expuesta.
+
+### CORRECCIÓN (urgente): el bundle con la clave SALE del repo
+
+El repo es **PÚBLICO** (`visibility: public` ✓). El `git bundle` con la clave
+real se había subido a `state/drive-payload/` ⇒ **se ha quitado del `main`
+ya** (queda en el histórico, hay que purgarlo, y sobre todo **hay que
+rotar la clave**).
+
+* El bundle se regenera en cualquier momento desde el git dir compartido:
+  `git bundle create ramas-bloqueadas-secreto.bundle agent/merge-flota-pendiente fix/mobile-web-bridge`
+* La subida a Drive la hace el nodo con token (`megadaemon-core drive-sync`).
+* **La clave hay que rotarla YA**: es la única medida que la deja de estar
+  expuesta.

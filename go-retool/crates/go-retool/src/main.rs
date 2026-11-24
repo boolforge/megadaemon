@@ -39,10 +39,10 @@ fn run()->Result<(),String>{
  // contenedor (ver container::text_base_hint).  Es una estimacion: el
  // valor definitivo sale de moduledata.text, que este crate no localiza.
  let (text_base,text_base_source)=match text_base{
-  Some(v)=>(Some(v),Some("explicitly-supplied")),
+  Some(v)=>(Some(v),Some("explicitly-supplied".to_string())),
   None=>{let rep=scan_container(&bytes).map_err(|e|e.to_string())?;
         let h=rep.text_base_hint.and_then(|h|h.strip_prefix("0x").and_then(|x|u64::from_str_radix(x,16).ok()));
-        (h,h.map(|_|"estimated-from-container-sections (runtime.text NOT verified)"))}
+        (h,rep.text_base_source)}
  };
  let opt=ParseOptions{module_index,file_offset:offset.ok_or("--offset is required")?,text_base,text_base_source,..Default::default()};
  let result=parse_go118_plus(&bytes,opt).map_err(|e|e.to_string())?;output(&result,out)
@@ -83,13 +83,30 @@ fn run_export(a:&[String])->Result<(),String>{
  }i+=1;}
  let bytes=fs::read(&path).map_err(|e|format!("read {path}: {e}"))?;
  let (text_base,text_base_source)=match text_base{
-  Some(v)=>(Some(v),Some("explicitly-supplied")),
+  Some(v)=>(Some(v),Some("explicitly-supplied".to_string())),
   None=>{let rep=scan_container(&bytes).map_err(|e|e.to_string())?;
         let h=rep.text_base_hint.and_then(|h|h.strip_prefix("0x").and_then(|x|u64::from_str_radix(x,16).ok()));
-        (h,h.map(|_|"estimated-from-container-sections (runtime.text NOT verified)"))}
+        (h,rep.text_base_source)}
  };
  let opt=ParseOptions{module_index:0,file_offset:offset.ok_or("--offset is required")?,text_base,text_base_source,..Default::default()};
  let analysis=parse_go118_plus(&bytes,opt).map_err(|e|e.to_string())?;
+ // COMPROBACION CRUZADA: la base de texto tiene que encajar con el
+ // `moduledata` del binario (minpc = base+entryoff[0], maxpc = base+fin de
+ // la ultima).  MEDIDO 2026-11-23: con la estimacion por secciones estas dos
+ // comprobaciones FALLAN (desplazamiento de 0x83F8 bytes) => sin esta
+ // comprobacion, el export sale con direcciones equivocadas y nadie se
+ // entera hasta que el pseudocodigo no cuadra con el nombre.
+ if let Some(base)=text_base{
+  if let Some(md)=go_retool::moduledata::read_moduledata(&bytes){
+   let funcs=&analysis.modules[0].functions;
+   let first=funcs.first().map(|f|f.entryoff).unwrap_or(0);
+   let last_end=funcs.last().and_then(|f|f.end_va.as_ref()).and_then(|v|v.strip_prefix("0x")).and_then(|v|u64::from_str_radix(v,16).ok()).map(|v|v.wrapping_sub(base)).unwrap_or(0);
+   if let Err(e)=go_retool::moduledata::verify_text_base(&md,base,first as u64,last_end){
+    eprintln!("AVISO: la base de texto 0x{base:x} NO encaja con el moduledata del binario: {e}");
+    eprintln!("       las direcciones del export serian incorrectas; usa --text-base 0x{:x}",md.text);
+   }
+  }
+ }
  let mut export=build_export(&analysis,&path);
  // Anclajes: se leen del TSV, se cruzan con los simbolos (paquete, fichero,
  // linea y tamano) y se incrustan en el documento JSON.

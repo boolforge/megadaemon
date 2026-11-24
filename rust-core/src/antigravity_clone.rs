@@ -213,6 +213,9 @@ pub struct EstadoClon {
 /// Estado del runtime de binarios de Antigravity.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EstadoRuntime {
+    /// ¿Sigue algún intruso nuestro en `runtime/bin/`? (rompe el arranque
+    /// de la app: medido 2026-11-23).
+    pub intruso_en_runtime: bool,
     pub ruta: String,
     /// ¿Existe `runtime/bin/megadaemon-core`?
     pub tiene_megadaemon: bool,
@@ -319,6 +322,10 @@ pub fn estado_clon() -> EstadoClon {
 }
 
 /// Estado del runtime de binarios.
+///
+/// MEDIDO (2026-11-23): el binario unificado **no** va en `runtime/bin/`
+/// (rompe el arranque de la app, ver [`BIN_UNIFICADO`]); aquí se mide la
+/// ruta buena y se avisa si el intruso sigue en el runtime.
 pub fn estado_runtime() -> EstadoRuntime {
     // El binario del daemon ya NO vive en el runtime de la app (rompia el
     // desempaquetado); vive en el clon del daemon.
@@ -343,6 +350,90 @@ pub fn estado_runtime() -> EstadoRuntime {
     e
 }
 
+/// ¿Sigue alguno de nuestros ficheros en `runtime/bin/`?
+///
+/// Si sí, el **core de Antigravity no arranca** (medido 2026-11-23): el
+/// desempaquetador no puede borrarlos.
+pub fn intrusos_presentes() -> bool {
+    let dir = Path::new(RUNTIME);
+    INTRUSOS_RUNTIME
+        .iter()
+        .any(|n| dir.join(n).exists() || dir.join(n).is_symlink())
+}
+
+/// Arregla la config MCP de Antigravity para que el servidor
+/// `megadaemon-minimax` apunte al binario **unificado**.
+///
+/// MEDIDO (2026-11-22/23): la config del móvil declara
+/// `"command": "/data/user/0/com.agy/files/megadaemon/rust-core/target/release/megadaemon-core"`,
+/// ruta que **no existe** en el dispositivo (el clon no tiene build) ⇒ el
+/// servidor MCP no arranca aunque sus *schemas* de tools estén cacheados
+/// (por eso "parece" funcionar).
+///
+/// Es **idempotente**: sólo reescribe los `command` que apuntan a un
+/// `megadaemon-core` inexistente.  Devuelve `true` si cambió algo.
+pub fn arreglar_mcp_config() -> Result<bool, String> {
+    let raw = std::fs::read_to_string(MCP_CONFIG)
+        .map_err(|e| format!("leer {MCP_CONFIG}: {e}"))?;
+    let mut v: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("parsear {MCP_CONFIG}: {e}"))?;
+    let servers = match v.get_mut("mcpServers").and_then(|m| m.as_object_mut()) {
+        Some(m) => m,
+        None => return Ok(false),
+    };
+    let mut cambiado = false;
+    for (_nombre, srv) in servers.iter_mut() {
+        let cmd = match srv.get("command").and_then(|c| c.as_str()) {
+            Some(c) => c.to_string(),
+            None => continue,
+        };
+        if !cmd.contains("megadaemon-core") {
+            continue;
+        }
+        if Path::new(&cmd).exists() {
+            continue; // ya apunta a algo real: no se toca
+        }
+        if let Some(o) = srv.as_object_mut() {
+            o.insert(
+                "command".to_string(),
+                serde_json::Value::String(BIN_UNIFICADO.to_string()),
+            );
+            cambiado = true;
+        }
+    }
+    if !cambiado {
+        return Ok(false);
+    }
+    let salida = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
+    std::fs::write(MCP_CONFIG, salida).map_err(|e| format!("escribir {MCP_CONFIG}: {e}"))?;
+    Ok(true)
+}
+
+/// Borra de `runtime/bin/` lo que **nosotros** metimos allí.
+///
+/// Es la reparación del fallo medido el 2026-11-23 (`cannot unpack
+/// assets/runtime … cannot delete …/runtime/bin/megadaemon-core`): con esto
+/// fuera, la app puede desempaquetar su runtime y su core vuelve a arrancar.
+///
+/// Devuelve las rutas que ha quitado (vacío = no había nada).
+pub fn limpiar_runtime() -> Vec<String> {
+    let dir = Path::new(RUNTIME);
+    let mut quitados = Vec::new();
+    for n in INTRUSOS_RUNTIME {
+        let p = dir.join(n);
+        if p.exists() || p.is_symlink() {
+            match std::fs::remove_file(&p) {
+                Ok(()) => quitados.push(p.to_string_lossy().to_string()),
+                Err(e) => {
+                    // Con root se puede; sin root, el mensaje dice qué hacer.
+                    eprintln!("antigravity: no se pudo borrar {p:?}: {e}");
+                }
+            }
+        }
+    }
+    quitados
+}
+
 // ---------------------------------------------------------------------------
 // Unificación del runtime
 // ---------------------------------------------------------------------------
@@ -359,6 +450,10 @@ pub struct ReporteUnificar {
     pub detalle: String,
     /// Copia del binario anterior (para deshacer).
     pub copia_anterior: Option<String>,
+    /// Ficheros intrusos que se han quitado de `runtime/bin/`.
+    pub intrusos_eliminados: Vec<String>,
+    /// Qué pasó con la config MCP de Antigravity.
+    pub detalle_mcp: Option<String>,
 }
 
 /// Copia el binario canónico al runtime de Antigravity.
@@ -424,6 +519,18 @@ pub fn unificar_runtime() -> Result<ReporteUnificar, String> {
         let uid = uid_de(&dir).unwrap_or(UID_ANTIGRAVITY);
         let _ = std::os::unix::fs::chown(&dest, Some(uid), None);
         rep.uid = uid_de(&dest);
+    }
+
+    // Lo que dejamos antes en `runtime/bin/` fuera: es lo que rompía el
+    // arranque de la app (medido 2026-11-23).
+    rep.intrusos_eliminados = limpiar_runtime();
+
+    // Y el MCP de Antigravity apunta al binario unificado (si no, su
+    // servidor MCP no arranca: el `command` apunta a un build inexistente).
+    match arreglar_mcp_config() {
+        Ok(true) => rep.detalle_mcp = Some("config MCP apuntada al binario unificado".into()),
+        Ok(false) => rep.detalle_mcp = Some("config MCP ya correcta o sin servidores".into()),
+        Err(e) => rep.detalle_mcp = Some(format!("config MCP no arreglada: {e}")),
     }
 
     let sha = sha256_de(&dest);
@@ -551,6 +658,112 @@ fn instalador_canonico() -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Config MCP de Antigravity
+// ---------------------------------------------------------------------------
+
+/// `mcp_config.json` de Antigravity: donde se declara el servidor MCP
+/// `megadaemon-minimax` que hace que Antigravity use a MegaDaemon.
+pub const AGY_MCP_CONFIG: &str = "/data/user/0/com.agy/files/.gemini/config/mcp_config.json";
+/// Nombre del servidor MCP que declara MegaDaemon en Antigravity.
+pub const SERVIDOR_MCP: &str = "megadaemon-minimax";
+/// Puerto del daemon en el móvil (alias multi-puerto).
+pub const PUERTO_DAEMON: u16 = 9090;
+
+/// Qué cambió al sincronizar el `mcp_config.json`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReporteMcpConfig {
+    pub aplicado: bool,
+    pub ruta: String,
+    pub campos_actualizados: Vec<String>,
+    pub detalle: String,
+}
+
+/// Mantiene el `mcp_config.json` de Antigravity apuntando al daemon local
+/// con las credenciales **vigentes**.
+///
+/// MEDIDO (2026-11-22): el fichero traía el `X-Seere-Auth-Token` y el
+/// `X-API-Key` **escritos a mano**.  Si se rota cualquiera de los dos (la
+/// rotación de la API key es una operación normal), el plugin de Antigravity
+/// se queda roto y sus 52 tools dejan de responder, sin que nadie se entere.
+///
+/// Aqui se re-sincroniza solo al arrancar el daemon:
+///
+/// * `url` => `http://127.0.0.1:9090/mcp` (el daemon local, no el tunel:
+///   asi funciona aunque no haya red);
+/// * `X-API-Key` => la API key de la instancia;
+/// * `X-Seere-Auth-Token` => el token de sesion vigente.
+///
+/// **El resto del JSON se conserva** (por ejemplo el bloque `providers` con
+/// las claves de los modelos externos): esto NO toca ni rota credenciales
+/// ajenas.
+pub fn sincronizar_mcp_config() -> Result<ReporteMcpConfig, String> {
+    let ruta = std::path::Path::new(AGY_MCP_CONFIG);
+    if !ruta.exists() {
+        return Err(format!("no existe {AGY_MCP_CONFIG}"));
+    }
+    let texto = std::fs::read_to_string(ruta).map_err(|e| format!("leer mcp_config: {e}"))?;
+    let mut v: serde_json::Value =
+        serde_json::from_str(&texto).map_err(|e| format!("mcp_config no es JSON: {e}"))?;
+
+    let sd = crate::cockpit_server::state_dir();
+    let cfg = crate::api_key::load(&sd);
+    let api_key = cfg.key.clone();
+    let token = crate::cockpit_server::auth_token().to_string();
+
+    let mut cambios: Vec<String> = Vec::new();
+    {
+        let servidores = v
+            .get_mut("mcpServers")
+            .and_then(|m| m.as_object_mut())
+            .ok_or("mcp_config.json no tiene 'mcpServers'")?;
+        let entrada = servidores
+            .get_mut(SERVIDOR_MCP)
+            .and_then(|s| s.as_object_mut())
+            .ok_or("mcp_config.json no declara 'megadaemon-minimax'")?;
+
+        let url = format!("http://127.0.0.1:{PUERTO_DAEMON}/mcp");
+        if entrada.get("url").and_then(|u| u.as_str()) != Some(url.as_str()) {
+            entrada.insert("url".into(), serde_json::Value::String(url));
+            cambios.push("url".into());
+        }
+        let cabeceras = entrada
+            .entry("headers".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        let cabeceras = cabeceras
+            .as_object_mut()
+            .ok_or("'headers' de megadaemon-minimax no es un objeto")?;
+        for (k, valor) in [("X-API-Key", &api_key), ("X-Seere-Auth-Token", &token)] {
+            if cabeceras.get(k).and_then(|x| x.as_str()) != Some(valor.as_str()) {
+                cabeceras.insert(k.to_string(), serde_json::Value::String(valor.clone()));
+                cambios.push(k.to_string());
+            }
+        }
+    }
+
+    if cambios.is_empty() {
+        return Ok(ReporteMcpConfig {
+            aplicado: false,
+            ruta: AGY_MCP_CONFIG.to_string(),
+            campos_actualizados: cambios,
+            detalle: "ya estaba sincronizado".into(),
+        });
+    }
+
+    // Se escribe EN EL SITIO (truncar) y no con rename: asi se conservan el
+    // propietario (u0_a1573) y los permisos del fichero de la app.
+    let mut salida = serde_json::to_string_pretty(&v).map_err(|e| format!("serializar: {e}"))?;
+    salida.push('\n');
+    std::fs::write(ruta, salida.as_bytes()).map_err(|e| format!("escribir mcp_config: {e}"))?;
+
+    Ok(ReporteMcpConfig {
+        aplicado: true,
+        ruta: AGY_MCP_CONFIG.to_string(),
+        campos_actualizados: cambios,
+        detalle: format!("sincronizado con el daemon local ({PUERTO_DAEMON})"),
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Utilidades
 // ---------------------------------------------------------------------------
 
@@ -641,6 +854,15 @@ mod tests {
             let e = unificar_runtime().unwrap_err();
             assert!(e.contains("canónico"), "mensaje: {e}");
         }
+    }
+
+    #[test]
+    fn el_binario_unificado_no_vive_en_el_runtime_de_la_app() {
+        // MEDIDO (2026-11-23): si el binario está en `runtime/bin/`, el
+        // desempaquetador de Antigravity no puede borrarlo y el core de la
+        // app NO arranca (`cannot unpack assets/runtime ... cannot delete`).
+        assert!(!BIN_UNIFICADO.starts_with(RUNTIME), "ruta: {BIN_UNIFICADO}");
+        assert!(BIN_UNIFICADO.contains("/megadaemon/bin/"), "ruta: {BIN_UNIFICADO}");
     }
 
     #[test]

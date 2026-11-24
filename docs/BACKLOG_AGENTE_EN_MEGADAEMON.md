@@ -144,3 +144,74 @@ proveedor de pago, cuota, retired) en vez de fallar en silencio.
 | el cliente Antigravity es Python | `core/*.py` (16 ficheros) |
 | el móvil no tiene python3/node/sqlite3/jq/curl/wget | `docs/SOFTWARE_INSTALLED.md` (medido por root, 2026-11-23) |
 | la auditoría que es la tarea principal de esta sesión | `docs/AUDIT_LLM_V16.md` |
+
+---
+
+## 6. Lo que aporta el agente `general` (2026-11-23) — auditoría de ramas + credenciales
+
+> Esta sección la añade el agente cuya **tarea principal** de esta sesión fue la
+> **auditoría de ramas** y la **rotación de credenciales** (`docs/AUDITORIA-RAMAS-2026-11-23.md`
+> y `docs/ROTACION-CREDENCIALES.md`). No sustituye a §3: lo de aquí es lo que ya
+> está **medido y entregado**.
+
+### 6.1 H2/H3 — la interfaz existe ya (Jetski × API v2)
+
+`web/cockpit_antigravity.html` — una sola página, sin dependencias externas (el móvil
+no tiene `node`), con:
+
+| pieza | de dónde sale | qué hace |
+|---|---|---|
+| marco visual *Jetski Web* | `/workspace/agy-intel/assets_web_index.html` (el shell de la IDE de Antigravity, copy local) | tema claro/oscuro, `backdrop-filter`, `--accent-glow` |
+| cliente de la **API v2** | `docs/API_V2.md` §3 (2 capas de auth) | `POST /api/session/exchange` (la API key **en el cuerpo**) → `X-Seere-Auth-Token`; el token **no se cachea** (rota en cada reinicio del daemon) |
+| Panel / Agentes / Tareas | `/api/v2/dashboard`, `/api/v2/nodes`, `/api/v2/tasks` | una vista = una llamada agregada |
+| **Chat con el agente** | `POST /api/chat` (`rust-core/src/cockpit_server.rs:2383`) | cierra **P0-1** (página de chat con el agente) |
+| Asignar / enviar | `POST /api/v2/nodes/assign`, `POST /api/v2/nodes/message` | **P2-1**: una tarea publicada desde la UI llega al bus |
+| Reclamar / reportar | `POST /api/v2/tasks/claim\|release\|report` | el agente trabaja por el tablero, no por scripts sueltos |
+| Pestaña *Antigravity* | `assets_web_index.html` | iframe de la IDE de Antigravity en la misma página ⇒ **la fusión** |
+
+**Puerta de aceptación de H2/H3:** desde un navegador real contra el nodo, la pestaña
+*Chat* devuelve una respuesta de un proveedor real del vault y **el cuerpo de la
+petición sale por `POST /api/chat`** (se comprueba en el log del daemon, no en el
+navegador). *NO verificado en el móvil: el túnel daba 502 durante esta sesión
+(`curl` → `http=502` contra `MEGADAEMON_URL` ⇒ no es la credencial, es el móvil).*
+
+### 6.2 H4/P2-1 — el agente es un nodo del sistema
+
+`tools/registrar-agente-general.py` — **idempotente** y **dry-run por defecto**
+(el mismo patrón que `tools/md-repair-entorno.sh`: *un diagnóstico que escribe estado
+puede romper el sistema que está diagnosticando*).
+
+```bash
+tools/registrar-agente-general.py                # dry-run: imprime lo que haría
+tools/registrar-agente-general.py --apply        # escribe (instances + tasks + registro)
+```
+
+Da de alta `agent-general@cloud-compute-new-hjn5f` en `state/board.sqlite`
+(tabla `instances`, **mismo INSERT** que `coordination.rs::register_instance`) y deja
+sus 5 tareas en el tablón. El registro por fichero es `state/agents/agent-general.json`
+(mismo esquema que `state/agents/inventory-agent.json`).
+
+### 6.3 Lo que la auditoría añadió al backlog (P0, sin cerrar)
+
+- **P0 · `main` está roto y es PÚBLICO**: marcadores de conflicto sin resolver en
+  `state/mesh_board.json:3-7` ⇒ **el bus no parsea como JSON**. Culpables medidos:
+  `d148c95` (`merge(flota)`) y `d902a7e` (`docs=theirs, codigo=ours`).
+  Detalle: `docs/AUDITORIA-RAMAS-2026-11-23.md` §0.
+- **P0 · credenciales expuestas**: 4 API keys de Google (`AIzaSy…`) escritas a pelo
+  en `tools/drive_ls.py:23-26` de un repo **público** (`boolforge/megadaemon`,
+  `private=false`). Detalle y procedimiento: `docs/ROTACION-CREDENCIALES.md`.
+- **Lo que NO hay que rehacer**: la API key viva (`mdaemon_sk_live_…`) **no está en el
+  repo** — 0 coincidencias comparando el valor completo (sha256) contra las 81 puntas
+  de rama. Esa rotación ya está hecha.
+
+### 6.4 Nota de trazabilidad
+
+| afirmación | de dónde sale |
+|---|---|
+| `web/cockpit_antigravity.html` (la fusión) | este repo, rama `rama/ramas-auditoria-2026-11-23` |
+| copy del GUI de Antigravity | `/workspace/agy-intel/assets_web_index.html` |
+| `POST /api/chat` (body: `message`, `model`, `system`, `max_tokens`) | `rust-core/src/cockpit_server.rs:2383-2388` |
+| `/api/v2/nodes/assign` · `/api/v2/nodes/message` | `rust-core/src/webui.rs:74-75` y `:4103-4108` |
+| `/api/v2/tasks/claim\|release\|report` | `rust-core/src/webui.rs:4120-4123` |
+| `instances` / `tasks` / `events` del tablón | `state/board.sqlite` (esquema en `rust-core/src/coordination.rs:322`) |
+| repo público | `curl -s https://api.github.com/repos/boolforge/megadaemon` → `"private":false` |

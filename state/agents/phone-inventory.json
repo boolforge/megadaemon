@@ -1,0 +1,50 @@
+{
+  "id": "phone-inventory",
+  "name": "inventory-general (inventario y plan de respaldo del S21 Ultra)",
+  "role": "worker",
+  "device": "primary-samsung",
+  "repo": "https://github.com/boolforge/megadaemon",
+  "branch": "agent/phone-inventory",
+  "commit": "f561784",
+  "last_seen": "2026-11-22T01:30:00Z",
+  "capabilities": [
+    "device-inventory",
+    "backup-plan",
+    "rclone-drive",
+    "superloop-measurement"
+  ],
+  "focus": [
+    "inventario-S21-Ultra",
+    "plan-respaldo-por-fases"
+  ],
+  "artifacts": [
+    {
+      "name": "PHONE_INVENTORY.md",
+      "where": [
+        "repo:docs/PHONE_INVENTORY.md"
+      ],
+      "tipo": "inventario medido (1.719 paquetes, /data/user/0, /data/app, /data/media/0, superloop)"
+    },
+    {
+      "name": "PHONE_BACKUP_PLAN.md",
+      "where": [
+        "repo:docs/PHONE_BACKUP_PLAN.md"
+      ],
+      "tipo": "plan de respaldo en 6 fases (196,08 GiB, ~191,9 h a la tasa de subida medida)"
+    }
+  ],
+  "medidas_clave": {
+    "paquetes": 1719,
+    "paquetes_sistema": 457,
+    "paquetes_usuario": 1262,
+    "data_user_0_KB": 50978411,
+    "data_app_KB": 88149106,
+    "data_media_0_KB": 75185640,
+    "basura_regenerable_KB": 11873621,
+    "libres_movil_KB": 10732152,
+    "subida_mediida_Bps": 304742,
+    "bajada_mediida_Bps": 5668249,
+    "drive_libre": "3,751 TiB"
+  },
+  "notas": "Sin credenciales, sin tokens, sin claves. Solo medidas publicas del filesystem del movil. Cero escrituras y cero borrados en el movil."
+}

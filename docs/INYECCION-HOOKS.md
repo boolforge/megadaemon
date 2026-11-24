@@ -121,8 +121,11 @@ Además el payload **no** hookea `SSL_write`/`SSL_read` (a diferencia de los
 scripts JS de `frida_hooks.rs`): así **no hay cuerpos HTTP** que puedan
 filtrar un token.  De la red sólo se registra `host:puerto`.
 
-Implementación: `crates/hooks-payload/src/redact.rs` (con tests que
-reproducen el test del shim: `redacta_credenciales`).
+Implementación: **`crates/redact/`** (crate `megadaemon-redact`), la
+**fuente única** de la política: la usan el shim del daemon y el payload (el
+root unificó la copia que tenía el payload, que tenía un bug: en texto plano
+`password=` no se redactaba).  Con tests que reproducen el test del shim
+(`redacta_credenciales`).
 
 ### 3.2 Concurrencia y robustez
 
@@ -329,7 +332,8 @@ Si el NDJSON no está en la ruta canónica, el evento `payload/iniciado` dice
 | `crates/hooks-payload/src/lib.rs` | punto de entrada: gum, instalador, `megadaemon_hooks_start()` |
 | `crates/hooks-payload/src/hooks.rs` | los hooks (listeners de gum) y la búsqueda de símbolos |
 | `crates/hooks-payload/src/sink.rs` | escritor NDJSON (`libc::open`/`write`, `O_APPEND`, guardián de re-entrada) |
-| `crates/hooks-payload/src/redact.rs` | redacción de credenciales (criterio de `agyshim::redactar`) |
+| `crates/redact/` (`megadaemon-redact`) | redacción de credenciales: **fuente única** para el shim del daemon y el payload (criterio de `agyshim::redactar`) |
+| ~~`crates/hooks-payload/src/redact.rs`~~ | movido a `crates/redact/` (fuente única; la copia del payload tenía un bug con `password=` en texto plano) |
 | `crates/hooks-payload/src/sys.rs` | lecturas seguras (cadenas C, `sockaddr`, uid, paquete) |
 | `crates/hooks-payload/src/json.rs` | escapado JSON mínimo (sin `serde`) |
 | `rust-core/src/hooks_payload.rs` | lado daemon: `estado`/`instalar`/`activar`/`leer` (SIN gum) |
