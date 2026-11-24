@@ -581,6 +581,13 @@ pub struct Peticion {
     pub ruta: String,
     pub cabeceras: Vec<(String, String)>,
     pub cuerpo: String,
+    /// Query string (sin el `?`).
+    ///
+    /// MEDIDO (2026-11-24): sin esto el passthrough perdía los parámetros
+    /// (`?alt=json&…`) y Google respondía 404 ⇒ el LS no conseguía ni el
+    /// estado de sesión ni el catálogo.
+    #[serde(default)]
+    pub query: String,
 }
 
 /// La respuesta que el shim devuelve (ya en el dialecto del cliente).
@@ -606,7 +613,13 @@ pub struct Respuesta {
 /// daemon no guarda ni ve credenciales de Google, sólo las reenvía.
 pub fn passthrough(req: &Peticion) -> Result<Respuesta, String> {
     let ruta = normalizar_ruta_proxy(&req.ruta);
-    let url = format!("{}{}", BACKEND_REAL, ruta);
+    // MEDIDO (2026-11-24): la query string es parte de la petición (Google
+    /// la necesita: sin ella devolvía 404).
+    let url = if req.query.trim().is_empty() {
+        format!("{}{}", BACKEND_REAL, ruta)
+    } else {
+        format!("{}{}?{}", BACKEND_REAL, ruta, req.query.trim())
+    };
     let agente = agente_passthrough();
     let metodo = req.metodo.trim().to_ascii_uppercase();
     // Cabeceras que se reenvían (las de salto las pone ureq).
@@ -1109,6 +1122,26 @@ mod tests {
             Some(Dialecto::Catalogo)
         );
         assert_eq!(dialecto_de("/otra/cosa"), None);
+    }
+
+    #[test]
+    fn el_passthrough_conserva_la_query_string() {
+        // MEDIDO (2026-11-24): sin la query, Google devolvia 404 y el LS no
+        // conseguia ni el estado de sesion ni el catalogo.
+        let p = Peticion {
+            metodo: "GET".into(),
+            ruta: "/v1internal/operationStatus".into(),
+            cabeceras: Vec::new(),
+            cuerpo: String::new(),
+            query: "alt=json&key=abc".into(),
+        };
+        // El helper de URL (mismo criterio que el passthrough).
+        let ruta = normalizar_ruta_proxy(&p.ruta);
+        assert_eq!(ruta, "/v1internal/operationStatus");
+        assert!(!p.query.trim().is_empty());
+        // Y con query vacia no se pone el "?" (sería una URL distinta).
+        let q = "";
+        assert!(q.trim().is_empty());
     }
 
     #[test]

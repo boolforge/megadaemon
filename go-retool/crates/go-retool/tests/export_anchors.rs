@@ -56,7 +56,7 @@ fn exportar_binario_real() -> Option<SymbolExport> {
         module_index: 0,
         file_offset: PCLNTAB_OFFSET,
         text_base: Some(TEXT_BASE),
-        text_base_source: Some("explicitly-supplied".to_string()),
+        text_base_source: Some("explicitly-supplied"),
         ..Default::default()
     };
     let analysis = parse_go118_plus(&bytes, opt).expect("parsear la pclntab");

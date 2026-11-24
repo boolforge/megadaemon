@@ -1645,6 +1645,7 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         ruta: ruta.to_string(),
                         cabeceras: Vec::new(),
                         cuerpo: cuerpo.to_string(),
+                        query: String::new(),
                     };
                     match crate::agyshim::proxy(&peticion) {
                         Ok(r) => json!({

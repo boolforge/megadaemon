@@ -10,10 +10,10 @@ const MAX_NAME:u64=16*1024;
 const MAX_AUX_ENTRIES:u64=8_000_000;
 const MAX_NAME_BYTES_TOTAL:u64=128*1024*1024;
 
-#[derive(Debug,Clone)]
+#[derive(Debug,Clone,Copy)]
 pub struct ParseOptions { pub module_index:u32, pub file_offset:u64, pub text_base:Option<u64>, pub max_functions:u64,
  /// De donde salio el text_base ("explicit", "estimated-from-container-sections", ...). MEDIDO 2026-11-22.
- pub text_base_source:Option<String> }
+ pub text_base_source:Option<&'static str> }
 impl Default for ParseOptions { fn default()->Self{Self{module_index:0,file_offset:0,text_base:None,max_functions:MAX_FUNCS,text_base_source:None}} }
 
 /// Paquete Go de un nombre de funcion.
@@ -159,8 +159,6 @@ pub fn parse_go118_plus(data:&[u8], opt:ParseOptions)->Result<Analysis>{
  }
  Ok(Analysis{schema_version:"1.2".into(),parser:ParserInfo{name:"go-retool".into(),version:env!("CARGO_PKG_VERSION").into(),pclntab_layout:"go1.18+ modern functab; Go1.20 magic family; V5 semantic coverage not implied".into()},modules:vec![Module{module_index:opt.module_index,module_identity:"offline-pclntab-module".into(),pclntab_file_offset:format!("0x{base:x}"),go_version:None,text_base_va:effective_base.map(|v|format!("0x{v:x}")),text_base_status:match (opt.text_base,effective_base){
    (Some(_),_)=>match opt.text_base_source{Some(src)=>format!("{src}; caller attests the mapping"),None=>"explicitly-supplied; caller must attest mapping".into()},
-   // MEDIDO 2026-11-23: `moduledata.text` es la base REAL (verificada con
-   // los invariantes minpc/maxpc); la estimacion por secciones NO lo es.
    (None,Some(v))=>format!("from pcHeader.textStart (0x{v:x}); Go runtime text base"),
    (None,None)=>"unresolved; relative offsets only".into(),
   },magic:format!("0x{magic:08x}"),pointer_size:ptr,min_instruction_size:min_lc,nfunc,functions,warnings:vec!["This parser does not locate pclntab in ELF/PE/Mach-O/Wasm.".into(),"textStart is read from pcHeader and used as the text base when the caller supplies none; for PIE/ET_DYN the value is a load-relative virtual address, not a runtime ASLR address".into(),"It does not parse moduledata/textsectmap, type descriptors, itabs, DWARF, or resolve pcdata/funcdata payloads; it exports only the raw _func offsets.".into(),"Go 1.27 V5 support must be validated against pinned official source and fixtures; magic acceptance is not full release compatibility.".into(),"A supplied text_base is valid only when the caller has resolved the applicable text mapping; secondary text sections/textsectmap are not handled here.".into()]}],warnings:vec!["Conservative parser; no container mapping or moduledata discovery.".into()]})

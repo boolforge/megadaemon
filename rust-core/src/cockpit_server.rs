@@ -1310,6 +1310,7 @@ fn handle_client(mut stream: TcpStream) {
                     metodo: method.to_string(),
                     ruta: p.to_string(),
                     cabeceras: cabeceras_peticion.clone(),
+                    query: query.to_string(),
                     cuerpo: String::from_utf8_lossy(body_slice).into_owned(),
                 };
                 match crate::agyshim::proxy(&peticion) {
@@ -1618,6 +1619,7 @@ fn handle_client(mut stream: TcpStream) {
                     metodo: method.to_string(),
                     ruta: p.to_string(),
                     cabeceras: cabeceras_peticion.clone(),
+                    query: query.to_string(),
                     cuerpo: String::from_utf8_lossy(body_slice).to_string(),
                 };
                 match crate::agyshim::proxy(&peticion) {

@@ -215,6 +215,46 @@ pub fn plan_txt(objetivos: &[Objetivo], modulo: &str) -> String {
     out
 }
 
+/// El plan en el formato del payload **con la 5ª columna**: el valor a
+/// devolver (en HEX) cuando la tarea sustituye el retorno.
+///
+/// MEDIDO (2026-11-24, el payload lo soporta desde `f0c4fb9`):
+/// `RUTA_O_NOMBRE TAB VA_ELF_HEX TAB ID TAB TAREA [TAB VALOR_HEX]`
+///
+/// Para `sustituir_url` el valor es la URL parcheada **en hexadecimal**
+/// (así el secreto local no sale en claro por el plan ni por el bus).
+pub fn plan_txt_con_valores(
+    objetivos: &[Objetivo],
+    modulo: &str,
+    valores: &[(String, String)],
+) -> String {
+    let mut out = String::new();
+    for o in objetivos {
+        let v = valores
+            .iter()
+            .find(|(id, _)| id == o.id())
+            .map(|(_, v)| v.clone());
+        match v {
+            Some(hex) => out.push_str(&format!(
+                "{}\t0x{:x}\t{}\t{}\t{}\n",
+                modulo,
+                o.va_elf,
+                o.id(),
+                o.tarea,
+                hex
+            )),
+            None => out.push_str(&format!(
+                "{}\t0x{:x}\t{}\t{}\n",
+                modulo,
+                o.va_elf,
+                o.id(),
+                o.tarea
+            )),
+        }
+    }
+    out
+}
+
 /// Ruta donde el **payload de frida-gum** lee el plan.
 ///
 /// MEDIDO (2026-11-23) en `crates/hooks-payload/src/plan.rs`:
@@ -236,7 +276,23 @@ pub fn escribir_plan_para_el_payload(base: u64) -> Result<Value, String> {
     let datos =
         std::fs::read(&ruta_ls).map_err(|e| format!("{}: {e}", ruta_ls.display()))?;
     let objetivos = resolver(&datos, base)?;
-    let txt = plan_txt(&objetivos, "liblanguage_server.so");
+
+    // 5ª columna: para `sustituir_url`, la URL parcheada EN HEX (el secreto
+    // local no sale en claro por el plan, ni por el bus, ni por la UI).
+    let url = crate::antigravity_endpoint::url_destino(
+        crate::antigravity_endpoint::PUERTO_GATEWAY,
+    );
+    let hex_url: String = url
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    let valores: Vec<(String, String)> = objetivos
+        .iter()
+        .filter(|o| o.tarea == SUSTITUIR_URL)
+        .map(|o| (o.id().to_string(), hex_url.clone()))
+        .collect();
+    let txt = plan_txt_con_valores(&objetivos, "liblanguage_server.so", &valores);
 
     // 1) El que lee el payload.
     let ruta_txt = PathBuf::from(RUTA_PLAN_PAYLOAD);
@@ -347,6 +403,44 @@ mod tests {
             Some(0x7f00_2000)
         );
         assert_eq!(hooks[0].get("id").and_then(|i| i.as_str()), Some("Foo"));
+    }
+
+    #[test]
+    fn el_plan_txt_con_valores_añade_la_quinta_columna() {
+        // MEDIDO (2026-11-24): el payload lee la 5ª columna como el valor
+        // a devolver, en HEX.
+        let objs = vec![
+            Objetivo {
+                simbolo: "pkg.getURL".into(),
+                tarea: SUSTITUIR_URL,
+                va_elf: 0x66a2728,
+                bytes: 32,
+                direccion: 0x1000,
+            },
+            Objetivo {
+                simbolo: "pkg.observa".into(),
+                tarea: OBSERVAR,
+                va_elf: 0x66a2f78,
+                bytes: 32,
+                direccion: 0x2000,
+            },
+        ];
+        let t = plan_txt_con_valores(
+            &objs,
+            "liblanguage_server.so",
+            &[("getURL".to_string(), "68747470".to_string())],
+        );
+        let lineas: Vec<&str> = t.lines().collect();
+        assert_eq!(lineas.len(), 2);
+        assert_eq!(
+            lineas[0],
+            "liblanguage_server.so\t0x66a2728\tgetURL\tsustituir_url\t68747470"
+        );
+        // El que NO sustituye no lleva la quinta columna.
+        assert_eq!(
+            lineas[1],
+            "liblanguage_server.so\t0x66a2f78\tobserva\tobservar"
+        );
     }
 
     #[test]
