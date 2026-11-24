@@ -70,7 +70,11 @@ pub struct Request {
     #[serde(default = "jsonrpc_version")]
     pub jsonrpc: String,
     /// Identificador de la petición; `null` = notificación (sin respuesta).
-    #[serde(default)]
+    ///
+    /// OJO: si se serializa como `null` el cliente lo lee como "hay id".
+    /// En las notificaciones el campo se OMITE (`skip_serializing_if`), que
+    /// es lo que distingue una notificación de una petición.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Value>,
     /// Nombre del método.
     pub method: String,
@@ -115,7 +119,7 @@ impl Request {
 pub struct Response {
     #[serde(default = "jsonrpc_version")]
     pub jsonrpc: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
