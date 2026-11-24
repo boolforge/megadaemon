@@ -10,6 +10,7 @@ pub mod embed;
 pub mod error;
 pub mod filetab;
 pub mod model;
+pub mod moduledata;
 pub mod module_chain;
 pub mod pctab;
 pub mod pclntab;

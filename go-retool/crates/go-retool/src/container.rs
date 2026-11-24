@@ -21,34 +21,38 @@ pub struct PclnCandidate{
 pub struct ContainerReport{
  pub format:String,pub architecture:String,pub endianness:String,
  pub is_64:bool,pub sections:Vec<SectionInfo>,pub pclntab_candidates:Vec<PclnCandidate>,
- /// Base de texto estimada del modulo Go (VERIFICAR antes de fiarse).
+ /// Base de texto del modulo Go.
  ///
- /// MEDIDO 2026-11-22 (liblanguage_server.so de Antigravity, Go 1.28 RC02,
+ /// MEDIDO 2026-11-23 (liblanguage_server.so de Antigravity, Go 1.28 RC02,
  /// layout 1.20, minLC=4): el `pcHeader.textStart` de una BIBLIOTECA
- /// compartida vale 0 (el linker no puede conocer la VA final), y la
- /// seccion `.text` NO empieza en el texto de Go: hay secciones
- /// auxiliares antes (`.text.hot` con TAMANO 0 justo en el arranque del
- /// texto).  El valor real de `runtime.text` resulto ser 0x4d06cb8, que
- /// es la direccion de `.text.hot` (tamano 0) y NO la de `.text`.
+ /// compartida vale 0 (el linker no puede conocer la VA final), asi que la
+ /// base hay que sacarla de `moduledata.text`, que el propio binario lleva
+ /// en la seccion `.go.module` (ver `crate::moduledata`).
  ///
- /// Regla usada: minima direccion entre las secciones cuyo nombre empieza
- /// por ".text" (incluidas las de tamano 0).  Es una ESTIMACION: el valor
- /// definitivo sale de `moduledata.text`, que este crate no localiza aun.
+ /// El valor real es **0x4d0f0b0**.  La estimacion por secciones (la menor
+ /// direccion ".text*") daba 0x4d06cb8 = `.text.hot`, una seccion de TAMANO
+ /// 0 => **error de 0x83F8 bytes en todas las direcciones**.
+ ///
+ /// `text_base_source` dice de donde sale el valor; si dice "estimated" no
+ /// esta verificado y no se debe confiar en el.
  pub text_base_hint:Option<String>,
+ /// De donde sale `text_base_hint` (ver `crate::moduledata`).
+ pub text_base_source:Option<String>,
  pub warnings:Vec<String>,
 }
 
-/// Estima la base de texto de un modulo Go a partir de las secciones.
+/// ESTIMA la base de texto de un modulo Go a partir de las secciones.
 ///
-/// MEDIDO 2026-11-22 en el binario real de Antigravity (Go 1.28 RC02):
-/// la base correcta es 0x4d06cb8 (= `.text.hot`, seccion de TAMANO 0),
-/// mientras que `.text` empieza en 0x4d0f000.  Usar `.text` deja las
-/// VAs desplazadas ~0x8330 bytes y los nombres NO cuadran con las
-/// direcciones (comprobado contra `unstrip` y contra la tabla de
-/// funciones del agente de RE: 161.682/161.682 direcciones coinciden).
+/// MEDIDO 2026-11-23 en el binario real de Antigravity: esta estimacion es
+/// **INCORRECTA** (da 0x4d06cb8 en vez de 0x4d0f0b0) porque `.text.hot` es
+/// una seccion de TAMANO 0 que va antes que `.text`.  Se conserva SOLO como
+/// respaldo cuando el binario no tiene `.go.module`; el valor bueno sale de
+/// `crate::moduledata::read_moduledata`.
 ///
-/// Por eso la regla mira TODAS las secciones ".text*" y se queda con la
-/// MENOR direccion, aunque su tamano sea 0.
+/// AVISO: dos implementaciones que compartan esta heuristica CONCuerdan
+/// entre si aunque ambas esten equivocadas: comparar "go-retool" con
+/// "unstrip" asi NO valida nada.  La validacion real es
+/// `base+entryoff[0]==moduledata.minpc` y `base+sentinel==moduledata.maxpc`.
 pub fn text_base_hint(sections:&[SectionInfo])->Option<u64>{
  let mut best:Option<u64>=None;
  for s in sections{
@@ -89,8 +93,17 @@ pub fn scan_container(data:&[u8])->Result<ContainerReport>{
   let section_address=mapping.and_then(|m|m.address.checked_add(off as u64-m.start)).map(|v|format!("0x{v:x}"));
   candidates.push(PclnCandidate{file_offset:format!("0x{off:x}"),magic:format!("0x{magic:08x}"),pointer_size:module.pointer_size,min_lc:module.min_instruction_size,nfunc:module.nfunc,names_resolved:names,section,section_address,address_domain:address_domain.clone(),address_status:"container section address only; Go text base unresolved".into()});
  }
- let tbh=text_base_hint(&sections);
- Ok(ContainerReport{format:format_name,text_base_hint:tbh.map(|v|format!("0x{v:x}")),architecture:format!("{:?}",file.architecture()),endianness:if file.is_little_endian(){"little"}else{"big"}.into(),is_64:file.is_64(),sections,pclntab_candidates:candidates,warnings:vec!["Only little-endian Go 1.18/1.20 magic-family pclntab candidates are parsed by this MVP.".into(),"Section address is the address of the pclntab bytes in the container section (format-specific, e.g. PE RVA), not moduledata.text; no function VA is derived from it.".into(),"Container section mappings do not resolve relocations, ASLR, secondary text sections, or runtime-loaded plugins.".into()]})
+ // Base de texto: PRIMERO el `moduledata` del propio binario (medido y
+ // verificado con los invariantes minpc/maxpc); si no esta, la estimacion
+ // por secciones, que NO esta verificada (medido: falla en 0x83F8 bytes).
+ let md=crate::moduledata::read_moduledata(data);
+ let (tbh,tbs)=match md.as_ref(){
+  Some(m)=>(Some(m.text),Some(m.source.clone())),
+  None=>(text_base_hint(&sections),Some("estimated-from-container-sections (moduledata.text NOT found; NOT verified)".to_string())),
+ };
+ let mut warnings=vec!["Only little-endian Go 1.18/1.20 magic-family pclntab candidates are parsed by this MVP.".into(),"Section address is the address of the pclntab bytes in the container section (format-specific, e.g. PE RVA), not moduledata.text; no function VA is derived from it.".into(),"Container section mappings do not resolve relocations, ASLR, secondary text sections, or runtime-loaded plugins.".into()];
+ if md.is_none(){warnings.push("moduledata.text NOT found: the text base is an ESTIMATION from section addresses and is NOT verified; the function VAs it produces can be wrong (measured: 0x83F8 bytes off on the Antigravity binary)".into());}
+ Ok(ContainerReport{format:format_name,text_base_hint:tbh.map(|v|format!("0x{v:x}")),text_base_source:tbs,architecture:format!("{:?}",file.architecture()),endianness:if file.is_little_endian(){"little"}else{"big"}.into(),is_64:file.is_64(),sections,pclntab_candidates:candidates,warnings})
 }
 
 #[cfg(test)]mod tests{
