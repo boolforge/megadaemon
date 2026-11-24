@@ -658,6 +658,112 @@ fn instalador_canonico() -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Config MCP de Antigravity
+// ---------------------------------------------------------------------------
+
+/// `mcp_config.json` de Antigravity: donde se declara el servidor MCP
+/// `megadaemon-minimax` que hace que Antigravity use a MegaDaemon.
+pub const AGY_MCP_CONFIG: &str = "/data/user/0/com.agy/files/.gemini/config/mcp_config.json";
+/// Nombre del servidor MCP que declara MegaDaemon en Antigravity.
+pub const SERVIDOR_MCP: &str = "megadaemon-minimax";
+/// Puerto del daemon en el móvil (alias multi-puerto).
+pub const PUERTO_DAEMON: u16 = 9090;
+
+/// Qué cambió al sincronizar el `mcp_config.json`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReporteMcpConfig {
+    pub aplicado: bool,
+    pub ruta: String,
+    pub campos_actualizados: Vec<String>,
+    pub detalle: String,
+}
+
+/// Mantiene el `mcp_config.json` de Antigravity apuntando al daemon local
+/// con las credenciales **vigentes**.
+///
+/// MEDIDO (2026-11-22): el fichero traía el `X-Seere-Auth-Token` y el
+/// `X-API-Key` **escritos a mano**.  Si se rota cualquiera de los dos (la
+/// rotación de la API key es una operación normal), el plugin de Antigravity
+/// se queda roto y sus 52 tools dejan de responder, sin que nadie se entere.
+///
+/// Aqui se re-sincroniza solo al arrancar el daemon:
+///
+/// * `url` => `http://127.0.0.1:9090/mcp` (el daemon local, no el tunel:
+///   asi funciona aunque no haya red);
+/// * `X-API-Key` => la API key de la instancia;
+/// * `X-Seere-Auth-Token` => el token de sesion vigente.
+///
+/// **El resto del JSON se conserva** (por ejemplo el bloque `providers` con
+/// las claves de los modelos externos): esto NO toca ni rota credenciales
+/// ajenas.
+pub fn sincronizar_mcp_config() -> Result<ReporteMcpConfig, String> {
+    let ruta = std::path::Path::new(AGY_MCP_CONFIG);
+    if !ruta.exists() {
+        return Err(format!("no existe {AGY_MCP_CONFIG}"));
+    }
+    let texto = std::fs::read_to_string(ruta).map_err(|e| format!("leer mcp_config: {e}"))?;
+    let mut v: serde_json::Value =
+        serde_json::from_str(&texto).map_err(|e| format!("mcp_config no es JSON: {e}"))?;
+
+    let sd = crate::cockpit_server::state_dir();
+    let cfg = crate::api_key::load(&sd);
+    let api_key = cfg.key.clone();
+    let token = crate::cockpit_server::auth_token().to_string();
+
+    let mut cambios: Vec<String> = Vec::new();
+    {
+        let servidores = v
+            .get_mut("mcpServers")
+            .and_then(|m| m.as_object_mut())
+            .ok_or("mcp_config.json no tiene 'mcpServers'")?;
+        let entrada = servidores
+            .get_mut(SERVIDOR_MCP)
+            .and_then(|s| s.as_object_mut())
+            .ok_or("mcp_config.json no declara 'megadaemon-minimax'")?;
+
+        let url = format!("http://127.0.0.1:{PUERTO_DAEMON}/mcp");
+        if entrada.get("url").and_then(|u| u.as_str()) != Some(url.as_str()) {
+            entrada.insert("url".into(), serde_json::Value::String(url));
+            cambios.push("url".into());
+        }
+        let cabeceras = entrada
+            .entry("headers".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        let cabeceras = cabeceras
+            .as_object_mut()
+            .ok_or("'headers' de megadaemon-minimax no es un objeto")?;
+        for (k, valor) in [("X-API-Key", &api_key), ("X-Seere-Auth-Token", &token)] {
+            if cabeceras.get(k).and_then(|x| x.as_str()) != Some(valor.as_str()) {
+                cabeceras.insert(k.to_string(), serde_json::Value::String(valor.clone()));
+                cambios.push(k.to_string());
+            }
+        }
+    }
+
+    if cambios.is_empty() {
+        return Ok(ReporteMcpConfig {
+            aplicado: false,
+            ruta: AGY_MCP_CONFIG.to_string(),
+            campos_actualizados: cambios,
+            detalle: "ya estaba sincronizado".into(),
+        });
+    }
+
+    // Se escribe EN EL SITIO (truncar) y no con rename: asi se conservan el
+    // propietario (u0_a1573) y los permisos del fichero de la app.
+    let mut salida = serde_json::to_string_pretty(&v).map_err(|e| format!("serializar: {e}"))?;
+    salida.push('\n');
+    std::fs::write(ruta, salida.as_bytes()).map_err(|e| format!("escribir mcp_config: {e}"))?;
+
+    Ok(ReporteMcpConfig {
+        aplicado: true,
+        ruta: AGY_MCP_CONFIG.to_string(),
+        campos_actualizados: cambios,
+        detalle: format!("sincronizado con el daemon local ({PUERTO_DAEMON})"),
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Utilidades
 // ---------------------------------------------------------------------------
 
