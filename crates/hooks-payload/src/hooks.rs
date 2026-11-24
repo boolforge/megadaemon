@@ -552,6 +552,8 @@ pub struct PlanListener {
     pub id: String,
     /// Qué se hace con la llamada (`observar`, `sustituir_url`).
     pub tarea: String,
+    /// Valor a devolver (hex) si la tarea sustituye.
+    pub valor: Option<Vec<u8>>,
 }
 
 impl InvocationListener for PlanListener {
@@ -580,14 +582,63 @@ impl InvocationListener for PlanListener {
         let tid = ctx.thread_id();
         let id = self.id.clone();
         let tarea = self.tarea.clone();
+        let valor = self.valor.clone();
         protegido(|| {
-            let extra = vec![
+            let mut extra = vec![
                 json::campo("id", &id),
                 json::campo("tarea", &tarea),
                 json::campo("ret", &format!("0x{:x}", ctx.return_value())),
             ];
+            if let Some(v) = valor {
+                // El retorno de una `string` de Go son DOS registros:
+                // el puntero (x0) y la longitud (x1).  Escribimos los bytes
+                // nuevos en memoria del proceso y cambiamos los dos.
+                let largo_viejo = ctx.arg(1);
+                match escribir_en_el_proceso(&v) {
+                    Some(p) => {
+                        ctx.set_return_value(p);
+                        // El segundo registro (longitud) sólo existe en el
+                        // ABI de Go (AArch64).  En x86_64 el C ABI no lo usa.
+                        #[cfg(target_arch = "aarch64")]
+                        ctx.set_arg(1, v.len());
+                        extra.push(json::campo("sustituto", &format!("0x{:x}", p)));
+                        extra.push(json::campo("len_viejo", &format!("{largo_viejo}")));
+                        extra.push(json::campo("len_nuevo", &format!("{}", v.len())));
+                    }
+                    None => {
+                        extra.push(json::campo("sustitucion", "no se pudo escribir en memoria"));
+                    }
+                }
+            }
             evento(tid, "plan", &id, &extra);
         });
+    }
+}
+
+/// Escribe bytes en memoria del proceso y devuelve la direccion.
+///
+/// `mmap` del propio proceso: la memoria es real para el binario objetivo
+/// (el Go runtime la lee como un `string` normal), y no la recicla el GC
+/// porque no es memoria gestionada por Go.
+fn escribir_en_el_proceso(bytes: &[u8]) -> Option<usize> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let largo = bytes.len().max(16);
+    unsafe {
+        let p = libc::mmap(
+            std::ptr::null_mut(),
+            largo,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        );
+        if p == libc::MAP_FAILED || p.is_null() {
+            return None;
+        }
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), p as *mut u8, bytes.len());
+        Some(p as usize)
     }
 }
 
@@ -630,6 +681,7 @@ pub fn instala_plan(
         let mut boxed: Box<PlanListener> = Box::new(PlanListener {
             id: o.id.clone(),
             tarea: o.tarea.clone(),
+            valor: o.valor.clone(),
         });
         match interceptor.attach(addr, &mut *boxed) {
             Ok(handle) => {

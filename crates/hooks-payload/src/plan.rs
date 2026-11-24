@@ -41,6 +41,13 @@ pub struct Objetivo {
     pub id: String,
     /// Qué se hace con la llamada (`observar`, `sustituir_url`, ...).
     pub tarea: String,
+    /// Valor a DEVOLVER (en hexadecimal) cuando la tarea sustituye: es el
+    /// contenido con el que se reemplaza el retorno de la función.
+    ///
+    /// Para una `string` de Go el retorno son **dos** registros (puntero +
+    /// longitud): el payload escribe los bytes en memoria del proceso y
+    /// cambia x0 y x1 (AArch64) / rax y rdx (x86_64).
+    pub valor: Option<Vec<u8>>,
 }
 
 /// Dónde se busca el plan por defecto (en el móvil).
@@ -74,11 +81,25 @@ pub fn lee(ruta: &str) -> Vec<Objetivo> {
         if va == 0 {
             continue;
         }
+        // Quinta columna opcional: el valor de substitution, en HEX.
+        let valor = p.get(4).map(|v| v.trim()).filter(|v| !v.is_empty()).map(|v| {
+            let limpio: String = v.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+            let bytes = limpio.as_bytes().to_vec();
+            let mut out = Vec::with_capacity(bytes.len() / 2);
+            let mut i = 0;
+            while i + 1 < bytes.len() {
+                let h = std::str::from_utf8(&bytes[i..i + 2]).unwrap_or("00");
+                out.push(u8::from_str_radix(h, 16).unwrap_or(0));
+                i += 2;
+            }
+            out
+        });
         out.push(Objetivo {
             modulo: p[0].trim().to_string(),
             va_elf: va,
             id: p[2].trim().to_string(),
             tarea: p[3].trim().to_string(),
+            valor,
         });
     }
     out
