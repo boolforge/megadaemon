@@ -26,3 +26,16 @@ liblanguage_server.so	0x66d8258	StreamGenerateContentFromAICode.func1	observar
 liblanguage_server.so	0x6d92c28	ParseEnvOverrides	observar
 liblanguage_server.so	0x6d938e8	LoadEffectiveSettings	observar
 liblanguage_server.so	0x6d94448	getLastDiscoveredCatalog	observar
+#
+# QUINTA COLUMNA (opcional): el valor de sustitucion, en HEX.
+#   RUTA_O_NOMBRE_DEL_MODULO <TAB> VA_ELF_HEX <TAB> ID <TAB> TAREA <TAB> VALOR_HEX
+#
+# Si la TAREA es "sustituir_url", el payload devuelve VALOR_HEX en vez del
+# retorno original.  MEDIDO (2026-11-24, local): el payload escribe los bytes
+# en memoria del proceso y cambia el puntero de retorno; en AArch64 cambia
+# tambien el segundo registro (longitud), que es como se representa una
+# "string" de Go (puntero + longitud).
+#
+# Ejemplo (el valor seria la URL parcheada con el secreto local; el secreto
+# lo genera el daemon, no lo pongas aqui):
+# liblanguage_server.so<TAB>0x66a2728<TAB>getAICodeURL<TAB>sustituir_url<TAB>687474703a2f2f3132372e302e302e313a393039302f6d64612f...
