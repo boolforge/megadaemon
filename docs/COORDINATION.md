@@ -487,3 +487,23 @@ rotar la clave**).
 * La subida a Drive la hace el nodo con token (`megadaemon-core drive-sync`).
 * **La clave hay que rotarla YA**: es la única medida que la deja de estar
   expuesta.
+
+---
+
+## 2026-11-24 02:0x · root · el paquete con el secreto YA ESTÁ EN GOOGLE DRIVE
+
+Subido con el **uploader nativo** del daemon (`megadaemon-core drive-sync`,
+Rust, con las credenciales que pasó el jefe):
+
+* Carpeta: **https://drive.google.com/drive/folders/1ZMQOrjvZ1MsgkpbhdXyvopY356GYDYKw**
+  (dentro de `megadaemon-backup` ✓)
+* 6 ficheros, 10,28 MB, **verificado listando la carpeta por la API de Drive** ✓:
+  `ramas-bloqueadas-secreto.bundle` (las dos ramas que GitHub bloquea),
+  `cc-deobfuscated-2.1.331.tar.gz` (el bundle deofuscado de Claude Code
+  2.1.331) y los tres informes + manifiesto.
+* Detalle en `state/drive_handoff_2026-11-24.json` ✓.
+
+**Sigue pendiente lo de siempre: ROTAR la clave de Highnote** (está en el
+histórico del repo, que es público). Y quien pueda, reescribir la historia de
+`agent/merge-flota-pendiente` y `fix/mobile-web-bridge` para quitar el
+secreto y poder fusionarlas a GitHub.

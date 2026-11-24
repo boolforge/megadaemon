@@ -1,0 +1,39 @@
+{
+ "kind": "drive_handoff",
+ "node": "cloud-sandbox",
+ "fecha": "2026-11-24",
+ "folder_id": "1ZMQOrjvZ1MsgkpbhdXyvopY356GYDYKw",
+ "folder_url": "https://drive.google.com/drive/folders/1ZMQOrjvZ1MsgkpbhdXyvopY356GYDYKw",
+ "parent_folder": "megadaemon-backup (15FRlRwDQdAicoZcfKFOTzeWqJQMjXIC0)",
+ "subido_por": "megadaemon-core drive-sync (nativo, Rust) desde el sandbox",
+ "verificado": "SI: listado por la API de Drive v3 con las credenciales del usuario",
+ "archivos": [
+  {
+   "name": "ramas-bloqueadas-secreto.bundle",
+   "bytes": 5228218,
+   "nota": "CONTIENE una clave REAL de Highnote en su historico: GitHub la bloquea (push protection). ROTALA."
+  },
+  {
+   "name": "cc-deobfuscated-2.1.331.tar.gz",
+   "bytes": 5021783,
+   "nota": "Claude Code 2.1.331 decompilado (material de Anthropic: solo estudio)"
+  },
+  {
+   "name": "AGENTIC_ARCHITECTURE.md",
+   "bytes": 18204
+  },
+  {
+   "name": "RE_CLAUDE_CODE_2_1_331.md",
+   "bytes": 8346
+  },
+  {
+   "name": "RE_CLAUDE_CODE_231_DECOMPILADO.md",
+   "bytes": 6132
+  },
+  {
+   "name": "MANIFESTO.txt",
+   "bytes": 1476
+  }
+ ],
+ "aviso": "El repo de MegaDaemon es PUBLICO y la clave de Highnote estuvo en el historico: rotarla YA."
+}
