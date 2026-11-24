@@ -11,6 +11,7 @@ state/cache.json*
 uploads/
 media/clip_*
 rust-core/target/
+go-retool/target/
 scummvm.ini
 state/providers.json
 state/api_keys.json
