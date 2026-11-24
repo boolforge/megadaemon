@@ -19,7 +19,16 @@ mod cert_vault;
 #[path = "../src/cert_android.rs"]
 #[allow(dead_code, unused_imports, unused_mut)]
 mod cert_android;
+// MEDIDO 2026-11-24: `backup_vault.rs` y `cert_vault.rs` llaman a
+// `crate::util_fs::write_atomic`.  Este arnés mete esos MÓDULOS dentro de su
+// propia raíz de crate (con `#[path]`), así que `crate::` aquí es ESTE crate
+// y `util_fs` tiene que existir también en él ⇒ E0432/E0433 al compilar el
+// test.  `util_fs.rs` sólo usa `std`, así que se puede incluir tal cual.
+#[path = "../src/util_fs.rs"]
+#[allow(dead_code, unused_imports, unused_mut)]
+mod util_fs;
 
+use base64ct::Encoding;
 use cert_android::*;
 use cert_vault::*;
 use std::fs;
