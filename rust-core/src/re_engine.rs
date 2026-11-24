@@ -748,9 +748,25 @@ mod tests {
 
     #[test]
     fn detecta_elf_y_go() {
-        let p = Path::new("/workspace/agy-re/liblanguage_server.so");
+        // MEDIDO 2026-11-23 (job `calidad`): la ruta estaba FIJA a la máquina
+        // que tiene el binario real (`/workspace/agy-re/...`), así que en el
+        // runner el test se saltaba SIN DECIR NADA (un verde que no comprueba
+        // nada).  Ahora:
+        //   * la ruta sale de `MD_LANGUAGE_SERVER_SO` (con ese valor por
+        //     defecto, para que en local siga funcionando sin configurar
+        //     nada), y
+        //   * si no hay artefacto, se DICE en voz alta que el test no ha
+        //     podido comprobar nada (con `--nocapture` se ve en el log).
+        let ruta = std::env::var("MD_LANGUAGE_SERVER_SO")
+            .unwrap_or_else(|_| "/workspace/agy-re/liblanguage_server.so".to_string());
+        let p = Path::new(&ruta);
         if !p.exists() {
-            // Sin el artefacto real, el test no puede afirmar nada.
+            eprintln!(
+                "SKIP (explícito): `detecta_elf_y_go` NO ha comprobado nada: \
+                 no existe el binario `{}`.  Pon MD_LANGUAGE_SERVER_SO=<ruta> \
+                 para ejecutarlo de verdad.",
+                p.display()
+            );
             return;
         }
         let id = identificar(p).expect("identificar");
