@@ -22,6 +22,11 @@ inventado: lo que no se ha medido, está marcado como **NO MEDIDO**.
 
 ---
 
+> **Arquitectura objetivo e investigación (Codex + Claude Code, medidos el
+> 2026-11-24): `docs/AGENTIC_ARCHITECTURE.md`** — los seis huecos reales del
+> daemon, la hoja de ruta P0..P4 con su puerta de aceptación y el primer
+> corte ya implementado (`rust-core/src/protocol.rs`).
+
 ## 1. Lo que YA existe (medido) — la API del daemon
 
 | Qué | Dónde | Estado |
