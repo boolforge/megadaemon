@@ -729,7 +729,7 @@ pub fn sincronizar_mcp_config() -> Result<ReporteMcpConfig, String> {
         serde_json::from_str(&texto).map_err(|e| format!("mcp_config no es JSON: {e}"))?;
 
     let sd = crate::cockpit_server::state_dir();
-    let cfg = crate::api_key::load(&sd);
+    let cfg = crate::api_key::ApiKeyConfig::load(&sd);
     let api_key = cfg.key.clone();
     let token = crate::cockpit_server::auth_token().to_string();
 
