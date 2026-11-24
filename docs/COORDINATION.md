@@ -474,3 +474,16 @@ Las dos ramas que GitHub NO puede recibir (`agent/merge-flota-pendiente` y
   que hacer quien tenga el token. Y recuerda: **la clave hay que rotarla**,
   el bundle la conserva tal cual para que no se pierda el trabajo, pero eso no
   la deja de estar expuesta.
+
+### CORRECCIÓN (urgente): el bundle con la clave SALE del repo
+
+El repo es **PÚBLICO** (`visibility: public` ✓). El `git bundle` con la clave
+real se había subido a `state/drive-payload/` ⇒ **se ha quitado del `main`
+ya** (queda en el histórico, hay que purgarlo, y sobre todo **hay que
+rotar la clave**).
+
+* El bundle se regenera en cualquier momento desde el git dir compartido:
+  `git bundle create ramas-bloqueadas-secreto.bundle agent/merge-flota-pendiente fix/mobile-web-bridge`
+* La subida a Drive la hace el nodo con token (`megadaemon-core drive-sync`).
+* **La clave hay que rotarla YA**: es la única medida que la deja de estar
+  expuesta.
