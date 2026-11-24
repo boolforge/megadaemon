@@ -344,8 +344,39 @@ pub struct GeminiRoute {
 /// * `/v1internal:streamGenerateContent`
 /// * `/v1beta/models/{model}:generateContent`
 /// * `/v1beta/models/{model}:streamGenerateContent`
+/// Normaliza una ruta Gemini a la forma canónica (con dos puntos).
+///
+/// MEDIDO (2026-11-24, S21 Ultra): el language server de Antigravity pide
+/// las rutas Gemini **con barra** (`/v1internal/generateContent`) y nuestro
+/// shim sólo reconocía la forma con dos puntos ⇒ devolvía
+/// `404 {"error":"el shim no sirve la ruta /v1internal/"}` ⇒ el LS se
+/// rendía y el core salía con **exit 135**.
+///
+/// Normaliza:
+/// * `/v1internal/generateContent`        ⇒ `/v1internal:generateContent`
+/// * `/v1internal/streamGenerateContent`  ⇒ `/v1internal:streamGenerateContent`
+/// * `/v1beta/models/<m>/generateContent` ⇒ `/v1beta/models/<m>:generateContent`
+pub fn normalizar_ruta_gemini(p: &str) -> String {
+    let mut s = p.to_string();
+    if let Some(rest) = s.strip_prefix("/v1internal/") {
+        if !rest.is_empty() && !rest.contains(':') && !rest.contains('/') {
+            s = format!("/v1internal:{rest}");
+        }
+    }
+    if let Some(cuerpo) = s.strip_prefix("/v1beta/models/") {
+        if let Some(i) = cuerpo.rfind('/') {
+            let (cabeza, cola) = cuerpo.split_at(i);
+            let cola = &cola[1..];
+            if !cola.is_empty() && !cola.contains(':') && !cola.contains('/') {
+                s = format!("/v1beta/models/{cabeza}:{cola}");
+            }
+        }
+    }
+    s
+}
+
 pub fn gemini_route(path: &str) -> Option<GeminiRoute> {
-    let p = path.trim();
+    let p = normalizar_ruta_gemini(path.trim());
     let (rest, stream) = if let Some(r) = p.strip_suffix(":streamGenerateContent") {
         (r, true)
     } else if let Some(r) = p.strip_suffix(":generateContent") {
@@ -680,6 +711,23 @@ mod tests {
 
         assert!(gemini_route("/v1/chat/completions").is_none());
         assert!(gemini_route("/v1internal:otraCosa").is_none());
+        // MEDIDO 2026-11-24 (movil): el LS pide la forma CON BARRA.
+        let barra = gemini_route("/v1internal/generateContent").expect("forma con barra");
+        assert_eq!(barra.model, "");
+        assert!(!barra.stream);
+        let barra_stream = gemini_route("/v1internal/streamGenerateContent").expect("stream con barra");
+        assert!(barra_stream.stream);
+        let v1beta = gemini_route("/v1beta/models/megadaemon/generateContent").expect("v1beta con barra");
+        assert_eq!(v1beta.model, "megadaemon");
+        assert_eq!(
+            normalizar_ruta_gemini("/v1internal/listModels"),
+            "/v1internal:listModels"
+        );
+        // El catalogo lo sirve el shim en las dos formas.
+        assert!(crate::agyshim::dialecto_de("/v1internal/listModels").is_some());
+        assert!(crate::agyshim::dialecto_de("/v1internal:listModels").is_some());
+        assert!(crate::agyshim::dialecto_de("/v1internal/generateContent").is_some());
+        assert!(crate::agyshim::dialecto_de("/v1internal:generateContent").is_some());
     }
 
     #[test]
