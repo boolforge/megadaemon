@@ -862,6 +862,7 @@ pub fn verify_key_check(
         kdf: ultimo_kdf,
         payload_hmac_key: None,
         payload_hmac_verified: None,
+        descifrado: None,
         notes,
     }
 }
