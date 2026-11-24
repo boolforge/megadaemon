@@ -53,6 +53,7 @@ pub mod cron;
 pub mod energy_automation;
 pub mod llm_gateway;
 pub mod protocol;
+pub mod skills;
 pub mod state_dir;
 pub mod backup_engine;
 pub mod backup_formats;
