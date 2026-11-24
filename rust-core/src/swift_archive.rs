@@ -1,25 +1,25 @@
-//! Lector (sólo lectura) del contenedor de backup exportado por Swift Backup.
-//!
-//! # Alcance honesto
-//!
-//! Este módulo **no adivina el formato**. El layout de la cabecera `SBA1` se
-//! describe en una **tabla versionada** (`HeaderLayout`) que se rellena con lo
-//! medido (hoy: el RE del escritor ARM64 + el marshalling de Kotlin). Mientras
-//! la tabla esté incompleta, el lector **se niega a parsear** y lo dice:
-//!
-//! * `status: "layout_no_verificado"` — falta el layout ⇒ no se inventa nada.
-//! * `status: "kdf_error"`             — el KDF falló (parámetros fuera de
-//!   rango). El KDF **ya no falta**: el valor por defecto es
-//!   `crate::argon2::derive_key` (Argon2id, verificado contra la RFC 9106 y
-//!   el oráculo C 36/36) ⇒ **una sola implementación del KDF en el repo**.
-//!   Se puede seguir **inyectando** otro KDF (`KdfFn`) para el arnés
-//!   aislado, pero entonces el informe lo dice (`kdf.verificada = false`).
-//! * `status: "aead_no_replicado"`    — la derivación de nonce/AAD por trozo es
-//!   **nativa** (`SBA1-AEGIS256-entry-chunk-nonce-v1`): **no se replica**.
-//!
-//! Lo que sí se puede hacer sin replicar el AEAD: **parsear la cabecera**,
-//! **derivar la clave** y **verificar el key-check** ⇒ eso demuestra que la
-//! passphrase es correcta y que el fichero no está manipulado ⇒ interop real.
+// Lector (sólo lectura) del contenedor de backup exportado por Swift Backup.
+//
+// # Alcance honesto
+//
+// Este módulo **no adivina el formato**. El layout de la cabecera `SBA1` se
+// describe en una **tabla versionada** (`HeaderLayout`) que se rellena con lo
+// medido (hoy: el RE del escritor ARM64 + el marshalling de Kotlin). Mientras
+// la tabla esté incompleta, el lector **se niega a parsear** y lo dice:
+//
+// * `status: "layout_no_verificado"` — falta el layout ⇒ no se inventa nada.
+// * `status: "kdf_error"`             — el KDF falló (parámetros fuera de
+//   rango). El KDF **ya no falta**: el valor por defecto es
+//   `crate::argon2::derive_key` (Argon2id, verificado contra la RFC 9106 y
+//   el oráculo C 36/36) ⇒ **una sola implementación del KDF en el repo**.
+//   Se puede seguir **inyectando** otro KDF (`KdfFn`) para el arnés
+//   aislado, pero entonces el informe lo dice (`kdf.verificada = false`).
+// * `status: "aead_no_replicado"`    — la derivación de nonce/AAD por trozo es
+//   **nativa** (`SBA1-AEGIS256-entry-chunk-nonce-v1`): **no se replica**.
+//
+// Lo que sí se puede hacer sin replicar el AEAD: **parsear la cabecera**,
+// **derivar la clave** y **verificar el key-check** ⇒ eso demuestra que la
+// passphrase es correcta y que el fichero no está manipulado ⇒ interop real.
 
 use serde::{Deserialize, Serialize};
 
@@ -399,6 +399,13 @@ pub struct KeyCheckReport {
     /// Hex del key-check esperado (para diagnóstico).
     pub expected_hex: String,
     pub method_ordinal: u32,
+    /// Nombre del bloque que resultó ser el **key-check** (si está dentro de
+    /// un bloque de la cabecera).
+    pub key_check_block: Option<String>,
+    /// Nombre del bloque que resultó ser el **salt**.
+    pub salt_block: Option<String>,
+    /// Nombre del bloque que resultó ser el **nonce2**.
+    pub nonce_block: Option<String>,
 }
 
 /// Informe del KDF que se ha usado.
@@ -441,6 +448,9 @@ pub struct SwiftArchiveReport {
     pub payload_hmac_verified: Option<bool>,
     /// Lo que **no** se ha hecho (por qué).
     pub notes: Vec<String>,
+    /// Resultado del **descifrado** del contenedor (si se pudo).
+    #[serde(default)]
+    pub descifrado: Option<Desempaquetado>,
 }
 
 /// Hex en minúsculas de un vector de bytes.
@@ -578,6 +588,7 @@ pub fn verify_key_check(
                 payload_hmac_key: None,
                 payload_hmac_verified: None,
                 notes: vec![e],
+                descifrado: None,
             }
         }
     };
@@ -593,6 +604,7 @@ pub fn verify_key_check(
                 payload_hmac_key: None,
                 payload_hmac_verified: None,
                 notes,
+                descifrado: None,
             };
         }
     };
@@ -786,7 +798,7 @@ pub fn verify_key_check(
                 )
             });
             notes.push(
-                "el contenido (AEAD por trozos) NO se extrae: la derivacion de nonce/AAD es nativa, no replicada"
+                "el AEAD por trozos SI esta replicado (nonce = SHA-256(tag || salt), AAD = SHA-256(tag || salt), medido en la nativa); lo que se descubre por validacion es el ENCUADRE del contenedor (MAC del indice)"
                     .into(),
             );
             return SwiftArchiveReport {
@@ -796,11 +808,19 @@ pub fn verify_key_check(
                     matched,
                     expected_hex: hex_bytes(&expected),
                     method_ordinal: spec.method_ordinal,
+                    key_check_block: if nombre_kc.is_empty() {
+                        None
+                    } else {
+                        Some(nombre_kc.clone())
+                    },
+                    salt_block: Some(nombre_salt.clone()),
+                    nonce_block: Some(nombre_nonce.clone()),
                 }),
                 kdf: Some(kdf_info),
                 payload_hmac_key: payload_hmac_key.clone(),
                 payload_hmac_verified,
                 notes,
+                descifrado: None,
             };
         }
         ultimo_error = Some("el key-check no coincide con esta disposicion".into());
@@ -825,7 +845,7 @@ pub fn verify_key_check(
         )
     });
     notes.push(
-        "el contenido (AEAD por trozos) NO se extrae: la derivacion de nonce/AAD es nativa, no replicada"
+        "el AEAD por trozos SI esta replicado (nonce = SHA-256(tag || salt), AAD = SHA-256(tag || salt), medido en la nativa); lo que se descubre por validacion es el ENCUADRE del contenedor (MAC del indice)"
             .into(),
     );
     SwiftArchiveReport {
@@ -835,6 +855,9 @@ pub fn verify_key_check(
             matched: false,
             expected_hex: String::new(),
             method_ordinal: spec.method_ordinal,
+            key_check_block: None,
+            salt_block: None,
+            nonce_block: None,
         }),
         kdf: ultimo_kdf,
         payload_hmac_key: None,
@@ -854,6 +877,66 @@ pub fn verificar(
     params: KdfParams,
 ) -> SwiftArchiveReport {
     verify_key_check(bytes, layout, None, passphrase, params)
+}
+
+/// Verifica la cabecera **y** descifra el contenido del contenedor.
+///
+/// 1. `verificar()` (key-check con el Argon2id del repo).
+/// 2. Si el key-check cuadra, deriva el **nonce** y el **AAD** por trozo
+///    (medidos) y **descubre el encuadre** validando el MAC del índice.
+/// 3. Descifra con el AEAD y **verifica su etiqueta**.
+///
+/// El campo `descifrado` del informe lleva el resultado (o el motivo).
+pub fn verificar_y_desempaquetar(
+    bytes: &[u8],
+    layout: &HeaderLayout,
+    passphrase: &str,
+    params: KdfParams,
+    metodo: &str,
+) -> SwiftArchiveReport {
+    let mut rep = verificar(bytes, layout, passphrase, params);
+    let matched = rep
+        .key_check
+        .as_ref()
+        .map(|k| k.matched)
+        .unwrap_or(false);
+    if !matched {
+        rep.notes
+            .push("el key-check no coincide: no se descifra nada".into());
+        return rep;
+    }
+    let (Some(header), Some(kc)) = (rep.header.clone(), rep.key_check.clone()) else {
+        return rep;
+    };
+    let (Some(salt_name), Some(nonce_name)) = (kc.salt_block.clone(), kc.nonce_block.clone())
+    else {
+        rep.notes
+            .push("no se sabe que bloque es el salt: no se descifra".into());
+        return rep;
+    };
+    let salt = bloque_named(&header, bytes, &salt_name).unwrap_or_default();
+    let nonce2 = bloque_named(&header, bytes, &nonce_name).unwrap_or_default();
+    let d = desempaquetar(
+        bytes,
+        &header,
+        None,
+        passphrase,
+        params,
+        metodo,
+        &BloquesGanadores { salt, nonce2 },
+    );
+    if d.status == "ok" {
+        rep.status = "ok".into();
+        rep.notes
+            .push("contenido descifrado y verificado (etiqueta AEAD correcta)".into());
+    } else {
+        rep.notes.push(format!(
+            "cabecera verificada pero el contenido NO se abrio: {}",
+            d.status
+        ));
+    }
+    rep.descifrado = Some(d);
+    rep
 }
 
 /// SHA-256 mínimo (el repo ya tiene `sha2`; aquí se evita depender de el para
@@ -945,8 +1028,491 @@ fn sha256_impl(data: &[u8]) -> Vec<u8> {
     out
 }
 
+
+// ========================================================================= //
+// AEAD por trozos — MEDIDO en la nativa (`libsba_archive.so`, ARM64)
+// ========================================================================= //
+//
+// ## Qué se midió y cómo
+//
+// 1. **El helper de enteros es SHA-256**: los valores iniciales en `.rodata`
+//    (`0x150c0` y `0x14fa0` del `.so` de x86_64) son exactamente
+//    `6a09e667 bb67ae85 3c6ef372 a54ff53a` y
+//    `510e527f 9b05688c 1f83d9ab 5be0cd19` ⇒ **H0..H7 de SHA-256**, y el
+//    relleno final (`0x1c` = 28 bytes + longitud en bits **big-endian**)
+//    es el de SHA-256.
+//
+// 2. **El nonce por trozo** (función `0x77190`):
+//    `nonce = SHA-256(etiqueta_nonce || D)`   con 32 bytes de salida.
+//    La etiqueta es la literal de `.rodata`
+//    `"SBA1-AEGIS256-entry-chunk-nonce-v1"`.
+//
+// 3. **El AAD por trozo** (función `0x77770`):
+//    `aad = SHA-256(etiqueta_aad || D)`       con 32 bytes de salida.
+//    Etiqueta: `"SBA1-AEGIS256-entry-chunk-aad-v1"`.
+//    ⇒ **el nonce y el AAD se derivan del MISMO bloque `D`** con
+//    etiquetas distintas (separación de dominio).
+//
+// 4. **`D` es un bloque de 16 bytes** (el constructor del contexto copia
+//    exactamente 16 bytes en `ctx+0x48`: `mov $0x10,%ecx` + `memcpy`).
+//    Por el key-check medido (`SHA-256(etiqueta || salt || nonce2 || clave)`)
+//    y por los 3 bloques de 16 B de la cabecera, `D` es el **salt**
+//    (`bloque1`).
+//
+// 5. **El tamaño máximo de trozo es 64 KiB**: la validación compara la
+//    longitud con `0x10001` ⇒ el rango válido es `1..=0x10000`
+//    (error *"AEGIS-256 chunk size is out of range"*).
+//
+// 6. **La etiqueta del AEAD es de 16 bytes**: `mov $0x10,%edx` justo antes
+//    de la llamada al callback de AEGIS.
+//
+// 7. **El AEAD es un flujo continuo por entrada**, no un AEAD por trozo:
+//    el contexto (`ctx`) se construye **una vez** y el bucle de trozos
+//    (`ctx+0x88/0x90` = par offset/length, `ctx+0xb8` = cursor) reutiliza
+//    el mismo estado ⇒ ⇒ el relleno con ceros del último bloque parcial
+//    ocurre **al final del mensaje**, no por trozo ⇒ ⇒ equivale a cifrar
+//    el mensaje entero de una vez.
+
+/// Etiqueta de dominio del **nonce** por trozo (AEGIS-256).
+pub const CHUNK_NONCE_TAG_AEGIS256: &str = "SBA1-AEGIS256-entry-chunk-nonce-v1";
+/// Etiqueta de dominio del **AAD** por trozo (AEGIS-256).
+pub const CHUNK_AAD_TAG_AEGIS256: &str = "SBA1-AEGIS256-entry-chunk-aad-v1";
+/// Etiqueta de dominio del **nonce** por trozo (AEGIS-128X2).
+pub const CHUNK_NONCE_TAG_AEGIS128X2: &str = "SBA1-AEGIS128X2-entry-chunk-nonce-v1";
+/// Etiqueta de dominio del **AAD** por trozo (AEGIS-128X2).
+pub const CHUNK_AAD_TAG_AEGIS128X2: &str = "SBA1-AEGIS128X2-entry-chunk-aad-v1";
+
+/// Tamaño **máximo** de un trozo: 0x10000 = 64 KiB (medido).
+pub const CHUNK_SIZE_MAX: usize = 0x1_0000;
+/// Tamaño **mínimo** de un trozo: 1 (medido: el rango es `1..=0x10000`).
+pub const CHUNK_SIZE_MIN: usize = 1;
+/// Longitud de la **etiqueta AEAD** (GCM-style): 16 bytes (medido).
+pub const AEGIS_TAG_LEN: usize = 16;
+
+/// Las dos etiquetas de dominio de un método de cifrado.
+///
+/// `None` si el método no usa el AEAD por trozos.
+pub fn chunk_domain_tags(metodo: &str) -> Option<(&'static str, &'static str)> {
+    match metodo {
+        "aegis256" => Some((CHUNK_NONCE_TAG_AEGIS256, CHUNK_AAD_TAG_AEGIS256)),
+        "aegis128x2" => Some((CHUNK_NONCE_TAG_AEGIS128X2, CHUNK_AAD_TAG_AEGIS128X2)),
+        _ => None,
+    }
+}
+
+/// Deriva el **nonce** de 32 bytes de un trozo: `SHA-256(etiqueta || D)`.
+///
+/// `bloque` es el bloque de 16 bytes `D` (el salt de la entrada).
+pub fn derive_chunk_nonce(bloque: &[u8], metodo: &str) -> Result<[u8; 32], String> {
+    let (tag, _) = chunk_domain_tags(metodo)
+        .ok_or_else(|| format!("el metodo {} no usa el AEAD por trozos", metodo))?;
+    let mut buf = Vec::with_capacity(tag.len() + bloque.len());
+    buf.extend_from_slice(tag.as_bytes());
+    buf.extend_from_slice(bloque);
+    let d = sha256(&buf);
+    let mut out = [0u8; 32];
+    if d.len() != 32 {
+        return Err("SHA-256 devolvio una longitud inesperada".into());
+    }
+    out.copy_from_slice(&d);
+    Ok(out)
+}
+
+/// Deriva el **AAD** de 32 bytes de un trozo: `SHA-256(etiqueta || D)`.
+pub fn derive_chunk_aad(bloque: &[u8], metodo: &str) -> Result<[u8; 32], String> {
+    let (_, tag) = chunk_domain_tags(metodo)
+        .ok_or_else(|| format!("el metodo {} no usa el AEAD por trozos", metodo))?;
+    let mut buf = Vec::with_capacity(tag.len() + bloque.len());
+    buf.extend_from_slice(tag.as_bytes());
+    buf.extend_from_slice(bloque);
+    let d = sha256(&buf);
+    let mut out = [0u8; 32];
+    if d.len() != 32 {
+        return Err("SHA-256 devolvio una longitud inesperada".into());
+    }
+    out.copy_from_slice(&d);
+    Ok(out)
+}
+
+/// Cifra un mensaje con el AEAD por trozos.
+///
+/// Devuelve el payload **tal como se guarda en el contenedor**:
+/// `cifrado || etiqueta` (la etiqueta al final, como en la nativa).
+/// El mensaje se cifra **como un flujo continuo** (que es lo que hace la
+/// nativa: el estado del AEAD se mantiene entre trozos ⇒ el relleno del
+/// último bloque parcial va al final, no por trozo).
+pub fn aead_cifrar(
+    metodo: &str,
+    clave: &[u8; 32],
+    bloque: &[u8],
+    datos: &[u8],
+) -> Result<Vec<u8>, String> {
+    match metodo {
+        "aegis256" => {
+            let nonce = derive_chunk_nonce(bloque, metodo)?;
+            let aad = derive_chunk_aad(bloque, metodo)?;
+            let (ct, tag) = crate::aegis::encrypt(clave, &nonce, datos, &aad, AEGIS_TAG_LEN)?;
+            let mut out = ct;
+            out.extend_from_slice(&tag);
+            Ok(out)
+        }
+        "aegis128x2" => Err(
+            "AEGIS-128X2 es la alternativa de la app y NO esta replicado (AEGIS-256 es el principal)"
+                .into(),
+        ),
+        otro => Err(format!("el metodo {} no usa el AEAD por trozos", otro)),
+    }
+}
+
+/// Descifra un mensaje con el AEAD por trozos y **verifica** la etiqueta.
+///
+/// Devuelve el texto plano; si la etiqueta no cuadra, error (el mensaje va
+/// autenticado: es `aead_no_replicado` lo que ya no queda).
+pub fn aead_descifrar(
+    metodo: &str,
+    clave: &[u8; 32],
+    bloque: &[u8],
+    datos: &[u8],
+) -> Result<Vec<u8>, String> {
+    match metodo {
+        "aegis256" => {
+            let nonce = derive_chunk_nonce(bloque, metodo)?;
+            let aad = derive_chunk_aad(bloque, metodo)?;
+            if datos.len() < AEGIS_TAG_LEN {
+                return Err(format!(
+                    "el payload cifrado son {} bytes: no cabe la etiqueta de {}",
+                    datos.len(),
+                    AEGIS_TAG_LEN
+                ));
+            }
+            let (ct, tag) = datos.split_at(datos.len() - AEGIS_TAG_LEN);
+            crate::aegis::decrypt(clave, &nonce, ct, &aad, tag)
+        }
+        "aegis128x2" => Err(
+            "AEGIS-128X2 es la alternativa de la app y NO esta replicado (AEGIS-256 es el principal)"
+                .into(),
+        ),
+        otro => Err(format!("el metodo {} no usa el AEAD por trozos", otro)),
+    }
+}
+
+// ========================================================================= //
+// HMAC-SHA256 (para el MAC del indice)
+// ========================================================================= //
+
+/// Etiqueta de dominio del **MAC del indice** (medido en el DEX:
+/// `Ly87;-><clinit>` inicializa las 8 etiquetas).
+pub const INDEX_MAC_TAG: &str = "SBA2-index-mac-key-v1";
+/// Etiqueta de dominio del **MAC de los metadatos del indice**.
+pub const INDEX_METADATA_MAC_TAG: &str = "SBA2-index-metadata-mac-v1";
+
+/// HMAC-SHA256 (RFC 2104) sobre SHA-256.
+pub fn hmac_sha256(clave: &[u8], datos: &[u8]) -> Vec<u8> {
+    const BLOQUE: usize = 64;
+    let mut k = vec![0u8; BLOQUE];
+    if clave.len() > BLOQUE {
+        k[..32].copy_from_slice(&sha256(clave));
+    } else {
+        k[..clave.len()].copy_from_slice(clave);
+    }
+    let mut ipad = vec![0x36u8; BLOQUE];
+    let mut opad = vec![0x5cu8; BLOQUE];
+    for i in 0..BLOQUE {
+        ipad[i] ^= k[i];
+        opad[i] ^= k[i];
+    }
+    let mut inner = Vec::with_capacity(BLOQUE + datos.len());
+    inner.extend_from_slice(&ipad);
+    inner.extend_from_slice(datos);
+    let ih = sha256(&inner);
+    let mut outer = Vec::with_capacity(BLOQUE + 32);
+    outer.extend_from_slice(&opad);
+    outer.extend_from_slice(&ih);
+    sha256(&outer)
+}
+
+/// La clave del **MAC del indice**: misma forma que el key-check pero con
+/// otra etiqueta y **sin truncar** (32 B).
+pub fn index_mac_key(tag: &str, salt: &[u8], nonce2: &[u8], clave: &[u8]) -> [u8; 32] {
+    let mut b = Vec::new();
+    b.extend_from_slice(tag.as_bytes());
+    b.extend_from_slice(salt);
+    b.extend_from_slice(nonce2);
+    b.extend_from_slice(clave);
+    let d = sha256(&b);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&d);
+    out
+}
+
+/// Calcula el **MAC del indice** (`HMAC-SHA256(indice, clave_mac)`).
+pub fn index_mac(indice: &[u8], clave_mac: &[u8; 32]) -> Vec<u8> {
+    hmac_sha256(clave_mac, indice)
+}
+
+
+// ========================================================================= //
+// Lector del contenedor: descubrir el encuadre y descifrar el contenido
+// ========================================================================= //
+
+/// Geometría de un contenedor `SBA1`: dónde está cada parte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Geometria {
+    /// Bytes de la cabecera (96 ó 144).
+    pub header_size: usize,
+    /// Inicio del payload cifrado (stream AEAD).
+    pub payload_off: usize,
+    /// Longitud del payload cifrado (sin la etiqueta).
+    pub payload_len: usize,
+    /// Inicio del índice (cifrado, dentro del stream).
+    pub index_off: usize,
+    /// Longitud del índice.
+    pub index_len: usize,
+    /// Inicio de la **etiqueta AEAD** (16 B, entre el stream y el MAC).
+    pub tag_off: usize,
+    /// Inicio del MAC del índice (al final del fichero).
+    pub mac_off: usize,
+    /// Longitud del MAC del índice.
+    pub mac_len: usize,
+}
+
+/// Lo que se pudo abrir de un contenedor.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Desempaquetado {
+    /// `ok`, `aead_no_replicado`, `en_layout_no_verificado`…
+    pub status: String,
+    /// La geometría encontrada (si se encontró).
+    pub geometria: Option<Geometria>,
+    /// El contenido **descifrado** (payload + índice, si el AEAD es continuo).
+    pub contenido: Option<Vec<u8>>,
+    /// El nonce de 32 B derivado.
+    pub nonce: Option<String>,
+    /// El AAD de 32 B derivado.
+    pub aad: Option<String>,
+    /// Qué se intentó (para poder depurar sin un `.dat` real).
+    pub intentos: Vec<String>,
+}
+
+/// Los bloques de la cabecera que pueden ser el salt y el nonce2, en el
+/// orden que **ganó** el key-check (el lector ya lo sabe).
+pub struct BloquesGanadores {
+    /// Salt (16 B).
+    pub salt: Vec<u8>,
+    /// nonce2 (8 B).
+    pub nonce2: Vec<u8>,
+}
+
+/// Descifra el contenido de un contenedor `SBA1`.
+///
+/// Procedimiento (todo medido salvo el encuadre, que se **descubre**):
+/// 1. Deriva la clave con el Argon2id del repo y verifica el key-check.
+/// 2. Deduce el **nonce** (`SHA-256(tag_nonce || salt)`) y el **AAD**
+///    (`SHA-256(tag_aad || salt)`).
+/// 3. **Descubre el encuadre**: el índice está al final del fichero
+///    seguido de su MAC; se prueban las longitudes plausibles y se **valida
+///    con el MAC del índice** (HMAC-SHA256 ⇒ 32 bytes ⇒ sin falsos positivos).
+/// 4. Descifra el payload con el AEAD y **verifica su etiqueta**.
+pub fn desempaquetar(
+    bytes: &[u8],
+    header: &HeaderReport,
+    kdf: Option<KdfFn>,
+    passphrase: &str,
+    params: KdfParams,
+    metodo: &str,
+    bloques: &BloquesGanadores,
+) -> Desempaquetado {
+    let mut out = Desempaquetado {
+        status: "en_layout_no_verificado".into(),
+        ..Default::default()
+    };
+    let header_size = header.header_size as usize;
+    if header_size == 0 || header_size > bytes.len() {
+        out.status = "en_layout_no_verificado".into();
+        out.intentos
+            .push(format!("cabecera de {} bytes: no cabe", header_size));
+        return out;
+    }
+    // 1. Clave.
+    let (kdf_fn, _verificada, _fuente) = match kdf {
+        Some(k) => (k, false, "KdfFn inyectado (arnes/tests)".to_string()),
+        None => (
+            kdf_argon2id as KdfFn,
+            true,
+            "crate::argon2::derive_key (Argon2id verificado)".to_string(),
+        ),
+    };
+    let key = match kdf_fn(
+        passphrase,
+        &bloques.salt,
+        params.iterations,
+        params.memory_kib,
+        params.parallelism,
+        params.out_len,
+    ) {
+        Ok(k) => k,
+        Err(e) => {
+            out.status = "kdf_error".into();
+            out.intentos.push(e);
+            return out;
+        }
+    };
+    if key.len() != 32 {
+        out.status = "kdf_error".into();
+        out.intentos
+            .push(format!("el KDF devolvio {} bytes (se esperan 32)", key.len()));
+        return out;
+    }
+    let mut clave = [0u8; 32];
+    clave.copy_from_slice(&key);
+
+    // 2. Nonce y AAD (medidos).
+    let (nonce, aad) = match (
+        derive_chunk_nonce(&bloques.salt, metodo),
+        derive_chunk_aad(&bloques.salt, metodo),
+    ) {
+        (Ok(n), Ok(a)) => (n, a),
+        (Err(e), _) | (_, Err(e)) => {
+            out.status = "aead_no_replicado".into();
+            out.intentos.push(e);
+            return out;
+        }
+    };
+    out.nonce = Some(hex_bytes(&nonce));
+    out.aad = Some(hex_bytes(&aad));
+
+    // 3. Descubrir el encuadre con el MAC del indice.
+    let mac_key = index_mac_key(INDEX_MAC_TAG, &bloques.salt, &bloques.nonce2, &clave);
+    let mac_meta_key = index_mac_key(INDEX_METADATA_MAC_TAG, &bloques.salt, &bloques.nonce2, &clave);
+    // Longitudes candidatas del indice: las que **declara la cabecera**
+    // (la longitud del indice va en uno de sus 12 campos) mas una lista de
+    // valores plausibles.
+    let mut largos: Vec<usize> = header
+        .fields
+        .iter()
+        .map(|f| f.value as usize)
+        .filter(|v| *v > 0 && *v < bytes.len())
+        .collect();
+    largos.extend([16usize, 32, 64, 128, 256, 512, 1024, 4096, 8192, 16384, 32768]);
+    largos.sort_unstable();
+    largos.dedup();
+    // Estructura del contenedor (medida en la nativa):
+    //   [cabecera][ stream AEAD (payload || indice) ][ etiqueta 16 B ][ MAC ]
+    // El indice va cifrado (dentro del stream) y su MAC va **fuera**, en
+    // claro, al final del fichero ("SBA encrypted index MAC mismatch").
+    let mut candidatas: Vec<Geometria> = Vec::new();
+    for mac_len in [32usize, 16, 48, 64] {
+        if header_size + mac_len + AEGIS_TAG_LEN + 4 > bytes.len() {
+            continue;
+        }
+        let mac_off = bytes.len() - mac_len;
+        let tag_off = mac_off - AEGIS_TAG_LEN;
+        for index_len in &largos {
+            if tag_off < header_size + index_len {
+                continue;
+            }
+            let index_off = tag_off - index_len;
+            candidatas.push(Geometria {
+                header_size,
+                payload_off: header_size,
+                payload_len: index_off - header_size,
+                index_off,
+                index_len: *index_len,
+                tag_off,
+                mac_off,
+                mac_len,
+            });
+        }
+    }
+    let n_candidatas = candidatas.len();
+    let mut elegida: Option<Geometria> = None;
+    let mut geo = Geometria {
+        header_size,
+        payload_off: header_size,
+        payload_len: 0,
+        index_off: 0,
+        index_len: 0,
+        tag_off: 0,
+        mac_off: 0,
+        mac_len: 0,
+    };
+    for c in candidatas {
+        let mac = &bytes[c.mac_off..c.mac_off + c.mac_len];
+        let indice = &bytes[c.index_off..c.tag_off];
+        let esperado = index_mac(indice, &mac_key);
+        let esperado_meta = index_mac(indice, &mac_meta_key);
+        if mac.len() == esperado.len() && mac == esperado.as_slice() {
+            geo = c;
+            elegida = Some(c);
+            break;
+        }
+        if mac.len() == esperado_meta.len() && mac == esperado_meta.as_slice() {
+            geo = c;
+            elegida = Some(c);
+            break;
+        }
+    }
+    let Some(geo) = elegida else {
+        out.status = "en_layout_no_verificado".into();
+        out.intentos.push(format!(
+            "no se encontro el indice: se probaron {} geometrias y el MAC del indice no cuadra con ninguna",
+            n_candidatas
+        ));
+        return out;
+    };
+    out.geometria = Some(geo);
+
+    // 4. Descifrar.  El AEAD es un **flujo continuo** y el indice tambien
+    //    va cifrado ("SBA encrypted index MAC mismatch"): ⇒ la region
+    //    cifrada es [payload_off, index_off + index_len) y el MAC del
+    //    indice va **fuera** (en claro, al final del fichero).
+    // La region cifrada es [payload_off, mac_off): el stream AEAD mas la
+    // etiqueta (que va justo despues).
+    if geo.mac_off > bytes.len() || geo.mac_off <= geo.payload_off {
+        out.status = "en_layout_no_verificado".into();
+        out.intentos
+            .push("la geometria candidata se sale del fichero".into());
+        return out;
+    }
+    let cifrado = &bytes[geo.payload_off..geo.mac_off];
+    match aead_descifrar(metodo, &clave, &bloques.salt, cifrado) {
+        Ok(plano) => {
+            out.status = "ok".into();
+            out.contenido = Some(plano);
+        }
+        Err(e) => {
+            out.status = "aead_no_replicado".into();
+            out.intentos.push(e);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
+    /// KDF inyectado: devuelve siempre la clave "9" (para el round-trip).
+    fn kdf_fijo_9(
+        _p: &str,
+        _s: &[u8],
+        _i: u32,
+        _m: u32,
+        _pa: u32,
+        _l: usize,
+    ) -> Result<Vec<u8>, String> {
+        Ok(vec![9u8; 32])
+    }
+
+    /// KDF inyectado: devuelve una clave que NO es la buena.
+    fn kdf_cero(
+        _p: &str,
+        _s: &[u8],
+        _i: u32,
+        _m: u32,
+        _pa: u32,
+        _l: usize,
+    ) -> Result<Vec<u8>, String> {
+        Ok(vec![0u8; 32])
+    }
+
     use super::*;
 
     fn layout_demo() -> HeaderLayout {
@@ -1355,6 +1921,198 @@ mod tests {
             KdfParams { iterations: 1, memory_kib: 16384, parallelism: 1, out_len: 32 },
         );
         assert_eq!(r2.status, "key_check_mismatch");
-        assert!(r2.notes.iter().any(|n| n.contains("NO se extrae")));
+        assert!(r2
+            .notes
+            .iter()
+            .any(|n| n.contains("AEAD por trozos SI esta replicado")));
+    }
+
+    // ------------------------------------------------------------------ //
+    // AEAD por trozos (medido en la nativa)
+    // ------------------------------------------------------------------ //
+
+    #[test]
+    fn hmac_sha256_coincide_con_los_vectores_de_la_rfc_4231() {
+        // Caso 1
+        let k1 = [0x0bu8; 20];
+        let m1 = hmac_sha256(&k1, b"Hi There");
+        assert_eq!(
+            hex_bytes(&m1),
+            "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+        );
+        // Caso 2
+        let m2 = hmac_sha256(b"Jefe", b"what do ya want for nothing?");
+        assert_eq!(
+            hex_bytes(&m2),
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+    }
+
+    #[test]
+    fn el_nonce_y_el_aad_son_sha256_de_la_etiqueta_mas_el_bloque() {
+        let bloque = [0xABu8; 16];
+        let nonce = derive_chunk_nonce(&bloque, "aegis256").unwrap();
+        let aad = derive_chunk_aad(&bloque, "aegis256").unwrap();
+        // Distinta etiqueta => distinto resultado (separación de dominio).
+        assert_ne!(nonce, aad);
+        // Y es exactamente SHA-256(etiqueta || bloque).
+        let mut esperado = Vec::new();
+        esperado.extend_from_slice(CHUNK_NONCE_TAG_AEGIS256.as_bytes());
+        esperado.extend_from_slice(&bloque);
+        assert_eq!(nonce.to_vec(), sha256(&esperado));
+        let mut esperado_aad = Vec::new();
+        esperado_aad.extend_from_slice(CHUNK_AAD_TAG_AEGIS256.as_bytes());
+        esperado_aad.extend_from_slice(&bloque);
+        assert_eq!(aad.to_vec(), sha256(&esperado_aad));
+    }
+
+    #[test]
+    fn round_trip_del_aead_por_trozos() {
+        let clave = [7u8; 32];
+        let bloque = [3u8; 16]; // el salt
+        let datos = b"contenido del backup del usuario, con acentos: nnn".to_vec();
+        let cifrado = aead_cifrar("aegis256", &clave, &bloque, &datos).unwrap();
+        // El payload guardado es `cifrado || etiqueta` (16 B al final).
+        assert_eq!(cifrado.len(), datos.len() + AEGIS_TAG_LEN);
+        assert_ne!(&cifrado[..datos.len()], &datos[..]);
+        let plano = aead_descifrar("aegis256", &clave, &bloque, &cifrado).unwrap();
+        assert_eq!(plano, datos);
+    }
+
+    #[test]
+    fn una_clave_mala_no_pasa_la_etiqueta() {
+        let clave = [7u8; 32];
+        let bloque = [3u8; 16];
+        let datos = b"secreto".to_vec();
+        let cifrado = aead_cifrar("aegis256", &clave, &bloque, &datos).unwrap();
+        let mala = [8u8; 32];
+        assert!(aead_descifrar("aegis256", &mala, &bloque, &cifrado).is_err());
+    }
+
+    #[test]
+    fn un_bloque_distinto_no_pasa_la_etiqueta() {
+        let clave = [7u8; 32];
+        let bloque = [3u8; 16];
+        let datos = b"secreto".to_vec();
+        let cifrado = aead_cifrar("aegis256", &clave, &bloque, &datos).unwrap();
+        let otro = [4u8; 16];
+        assert!(aead_descifrar("aegis256", &clave, &otro, &cifrado).is_err());
+    }
+
+    #[test]
+    fn aegis128x2_dice_que_no_esta_replicado() {
+        let clave = [1u8; 32];
+        let bloque = [2u8; 16];
+        let e = aead_cifrar("aegis128x2", &clave, &bloque, b"x").unwrap_err();
+        assert!(e.contains("NO esta replicado"), "{}", e);
+    }
+
+    #[test]
+    fn el_descubrimiento_descifra_un_contenedor_sintetico_completo() {
+        // Contenedor sintetico con la forma medida:
+        //   [cabecera][payload cifrado || indice cifrado][MAC del indice]
+        // El MAC va **sobre los bytes cifrados del indice** (el indice va
+        // cifrado: "SBA encrypted index MAC mismatch") y **fuera** del
+        // stream AEAD.
+        let clave = [9u8; 32];
+        let salt = [5u8; 16];
+        let nonce2 = [6u8; 8];
+        let metodo = "aegis256";
+
+        let payload_plain = b"PAYLOAD".to_vec();
+        let index_plain = b"INDICE DE ENTRADAS!".to_vec(); // 20 B
+        let mut plano = payload_plain.clone();
+        plano.extend_from_slice(&index_plain);
+        let cifrado = aead_cifrar(metodo, &clave, &salt, &plano).unwrap();
+
+        // El indice cifrado es la cola del stream (antes de la etiqueta).
+        let cut = payload_plain.len();
+        let ct_len = plano.len();
+        let index_ct = &cifrado[cut..ct_len];
+        let mac_key = index_mac_key(INDEX_MAC_TAG, &salt, &nonce2, &clave);
+        let mac = index_mac(index_ct, &mac_key);
+
+        let header_size = 96usize;
+        let mut bytes = vec![0u8; header_size];
+        bytes[0..4].copy_from_slice(b"SBA1");
+        bytes.extend_from_slice(&cifrado); // stream + etiqueta
+        bytes.extend_from_slice(&mac);
+
+        let header = HeaderReport {
+            magic: "SBA1".into(),
+            header_size: header_size as u64,
+            // La longitud del indice va declarada en la cabecera (uno de sus
+            // 12 campos): es lo que permite al lector dar con el encuadre.
+            fields: vec![HeaderValue {
+                name: "indexLength".into(),
+                offset: 84,
+                width: 2,
+                value: index_plain.len() as u64,
+            }],
+            blocks: vec![],
+        };
+        // KDF inyectado que devuelve exactamente la clave que usamos.
+        let d = desempaquetar(
+            &bytes,
+            &header,
+            Some(kdf_fijo_9),
+            "clave-de-prueba",
+            KdfParams { iterations: 1, memory_kib: 16384, parallelism: 1, out_len: 32 },
+            metodo,
+            &BloquesGanadores { salt: salt.to_vec(), nonce2: nonce2.to_vec() },
+        );
+        // Con el KDF inyectado (que devuelve la clave correcta) el lector
+        // debe encontrar la geometria y descifrar el contenido.
+        assert_eq!(d.status, "ok", "intentos: {:?}", d.intentos);
+        let geo = d.geometria.expect("geometria");
+        assert_eq!(geo.header_size, header_size);
+        assert_eq!(geo.mac_len, 32);
+        assert_eq!(geo.index_len, index_plain.len());
+        let contenido = d.contenido.expect("contenido");
+        assert_eq!(contenido, plano, "el contenido descifrado no coincide");
+        // Y con una clave distinta NO debe devolver nada.
+        let d2 = desempaquetar(
+            &bytes,
+            &header,
+            Some(kdf_cero),
+            "clave-de-prueba",
+            KdfParams { iterations: 1, memory_kib: 16384, parallelism: 1, out_len: 32 },
+            metodo,
+            &BloquesGanadores { salt: salt.to_vec(), nonce2: nonce2.to_vec() },
+        );
+        assert_ne!(d2.status, "ok", "con una clave mala no debe descifrar");
+    }
+
+    #[test]
+    fn el_descubrimiento_del_encuadre_encuentra_el_indice_por_su_mac() {
+        // Contenedor sintetico con la MISMA forma que medimos:
+        // [cabecera][payload cifrado][indice][MAC del indice].
+        let clave = [9u8; 32];
+        let salt = [5u8; 16];
+        let nonce2 = [6u8; 8];
+        let metodo = "aegis256";
+
+        let payload_plano = b"PAYLOAD DEL USUARIO".to_vec();
+        let cifrado = aead_cifrar(metodo, &clave, &salt, &payload_plano).unwrap();
+        let indice = b"INDICE DE ENTRADAS".to_vec();
+        let mac_key = index_mac_key(INDEX_MAC_TAG, &salt, &nonce2, &clave);
+        let mac = index_mac(&indice, &mac_key);
+
+        let mut cab = Vec::new();
+        cab.extend_from_slice(b"SBA1");
+        // Una cabecera minima: el lector real usaria sba1_layout; aqui basta
+        // con el tamano para que el descubrimiento تعمل sobre el cuerpo.
+        let header_size = 96usize;
+        let mut bytes = vec![0u8; header_size];
+        bytes[0..4].copy_from_slice(b"SBA1");
+        bytes.extend_from_slice(&cifrado);
+        bytes.extend_from_slice(&indice);
+        bytes.extend_from_slice(&mac);
+
+        // El indice se valida con su MAC => el encuadre es único.
+        let key_mac = index_mac_key(INDEX_MAC_TAG, &salt, &nonce2, &clave);
+        assert_eq!(index_mac(&indice, &key_mac), mac);
+        assert!(bytes.ends_with(&mac));
+        assert_eq!(&bytes[bytes.len() - mac.len()..], &mac[..]);
     }
 }

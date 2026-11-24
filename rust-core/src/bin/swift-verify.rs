@@ -35,7 +35,7 @@
 //! verifica la cabecera, no descifra el payload.
 
 use megadaemon_core::swift_archive::{
-    key_check_tag, sba1_detectar, verificar, KdfParams,
+    key_check_tag, sba1_detectar, verificar_y_desempaquetar, KdfParams,
 };
 use serde_json::json;
 use std::fs;
@@ -67,6 +67,10 @@ fn usage() -> ! {
     eprintln!(
         "\n--method: sevenzip_aes | aes256_gcm | aes256_gcm_siv | aegis256 | aegis128x2\n\
          (el default es aegis256; la etiqueta de dominio del key-check depende de el)"
+    );
+    eprintln!(
+        "\n--dump <ruta>: vuelca a disco el CONTENIDO DESCIFRADO (si el AEAD por\n\
+         trozos se pudo replicar y el encuadre se pudo validar con el MAC del indice)"
     );
     std::process::exit(2);
 }
@@ -110,7 +114,47 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let report = verificar(&bytes, &layout, &passphrase, params);
+    let report = verificar_y_desempaquetar(&bytes, &layout, &passphrase, params, &metodo);
+
+    // Volcar el contenido descifrado, si se pudo.
+    let mut volcado: Option<String> = None;
+    if let Some(destino) = arg("--dump") {
+        match report
+            .descifrado
+            .as_ref()
+            .and_then(|d| d.contenido.as_ref())
+        {
+            Some(contenido) => match fs::write(&destino, contenido) {
+                Ok(()) => volcado = Some(format!(
+                    "{} bytes descifrados -> {}",
+                    contenido.len(),
+                    destino
+                )),
+                Err(e) => volcado = Some(format!("no se pudo escribir {}: {}", destino, e)),
+            },
+            None => volcado = Some(
+                "no se pudo descifrar el contenido (mira \"notas\" y \"descifrado\")".into(),
+            ),
+        }
+    }
+    let descifrado = report.descifrado.as_ref().map(|d| {
+        json!({
+            "status": d.status,
+            "geometria": d.geometria.map(|g| json!({
+                "header_size": g.header_size,
+                "payload_off": g.payload_off,
+                "payload_len": g.payload_len,
+                "index_off": g.index_off,
+                "index_len": g.index_len,
+                "mac_off": g.mac_off,
+                "mac_len": g.mac_len,
+            })),
+            "nonce": d.nonce,
+            "aad": d.aad,
+            "bytes_descifrados": d.contenido.as_ref().map(|c| c.len()),
+            "intentos": d.intentos,
+        })
+    });
     let out = json!({
         "fichero": path,
         "metodo_cifrado": metodo,
@@ -118,6 +162,8 @@ fn main() {
         "kdf": report.kdf,
         "key_check": report.key_check,
         "payload_hmac_key": report.payload_hmac_key,
+        "descifrado": descifrado,
+        "volcado": volcado,
         "notas": report.notes,
     });
     let txt = if pretty {
