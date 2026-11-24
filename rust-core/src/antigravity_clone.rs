@@ -72,6 +72,29 @@ pub const BIN_CLON: &str = "/data/user/0/com.agy/files/megadaemon/bin/megadaemon
 /// (`/data/adb/megadaemon`), que sobrevive a los reinicios.
 pub const BIN_CANONICO: &str = "/data/adb/megadaemon/megadaemon-core";
 
+/// Binario **unificado**: el único que usan TODOS (la IDE, el servidor MCP
+/// de Antigravity y el clon).
+///
+/// MEDIDO (2026-11-23, móvil, diagnóstico de la app):
+/// ```text
+/// core start failed: cannot unpack assets/runtime into
+/// /data/user/0/com.agy/files/runtime: cannot delete
+/// /data/user/0/com.agy/files/runtime/bin/megadaemon-core
+/// ```
+///
+/// ⇒ **`runtime/` es de la app: no se escribe nada ahí**.  El binario
+/// unificado vive en el clon (que ya existe y mantiene la propia IDE), en
+/// `megadaemon/bin/`, y el intruso que nosotros metimos en `runtime/bin/`
+/// se borra (ver [`limpiar_runtime`]).
+pub const BIN_UNIFICADO: &str = "/data/user/0/com.agy/files/megadaemon/bin/megadaemon-core";
+
+/// Config MCP de Antigravity (la que declara el servidor `megadaemon-minimax`).
+pub const MCP_CONFIG: &str = "/data/user/0/com.agy/files/.gemini/config/mcp_config.json";
+
+/// Ficheros que **nosotros** metimos en `runtime/bin/` y que el
+/// desempaquetador de la app no puede borrar (rompen su arranque).
+pub const INTRUSOS_RUNTIME: &[&str] = &["megadaemon-core", "megadaemon-core.prev"];
+
 /// Configuración de permisos del agente de Antigravity (`.gemini/config`).
 ///
 /// MEDIDO (2026-11-24, móvil): aquí viven los *grants* de permisos que el
