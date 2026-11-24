@@ -2857,7 +2857,21 @@ function paintInstrumentacion(inst) {
   const cfg = inst.config || {};
   html += '<dl class="kv mt-3">' +
     "<dt>Modo del .so</dt><dd>" + esc(inst.modo_so || "—") + "</dd>" +
-    "<dt>URL del endpoint</dt><dd class='mono small'>" + esc((inst.endpoint_local && inst.endpoint_local.url) || "—") + "</dd>" +
+    // MEDIDO (2026-11-24): la API expone la URL en
+    // `endpoint_local.estado.endpoint.url_destino`; `endpoint_local.url`
+    // llega `null` ⇒ la UI pintaba «—» con el endpoint parcheado de verdad.
+    "<dt>URL del endpoint</dt><dd class='mono small'>" + esc(
+      (inst.endpoint_local && inst.endpoint_local.estado &&
+       inst.endpoint_local.estado.endpoint && inst.endpoint_local.estado.endpoint.url_destino) ||
+      (inst.endpoint_local && inst.endpoint_local.url) || "—") + "</dd>" +
+    "<dt>Parcheado</dt><dd>" + esc(
+      String((inst.endpoint_local && inst.endpoint_local.estado &&
+              inst.endpoint_local.estado.endpoint &&
+              inst.endpoint_local.estado.endpoint.parcheado) ? "sí" : "no")) + "</dd>" +
+    "<dt>Gate de la GUI</dt><dd>" + esc(
+      String((inst.endpoint_local && inst.endpoint_local.estado &&
+              inst.endpoint_local.estado.gate &&
+              inst.endpoint_local.estado.gate.parcheado) ? "parcheado" : "regenerado por la app")) + "</dd>" +
     "<dt>Config</dt><dd class='mono small'>" + esc(JSON.stringify(cfg)) + "</dd></dl>";
   el.innerHTML = html;
 }
