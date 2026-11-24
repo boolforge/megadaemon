@@ -394,3 +394,20 @@ El release+LTO con `codegen-units=1` **mata el sandbox por OOM** (3 GB).
 
 - 2026-11-21 16:0x · agente General · **F-01 (P1) — Board v1: un solo tablón de tareas** (diseño + código, todo en **un** commit para que un revert parcial no pueda dejarlo huérfano). El enjambre tenía **tres** tableros (`coordination` SQLite, `mesh` JSON, `task_scheduler` JSON) con tres formatos, tres espacios de ids y tres modelos de bloqueo, y el cockpit **sólo enseñaba el tercero** ⇒ el trabajo real del enjambre era invisible para el usuario; además `task_scheduler` persiste con un `fs::write` de todo el fichero (dos procesos se pisan) y los leases usan el reloj local (un nodo atrasado puede robar una tarea). Entrego `rust-core/src/board.rs` (**un** tablón SQLite, **un** tipo `Task`, **una** máquina de estados con `can_transition` como único sitio donde se decide, bloqueo = `lease` + `deps`, WAL/DELETE según el FS, `busy_timeout` + backoff, **reloj monótono del tablón**, snapshot + restauración ante corrupción, **modo degradado** con WAL ndjson, eventos como rastro de auditoría, almacén tras un **trait** para no cerrar la puerta a otro backend) + `rust-core/src/bin/md-board.rs` (CLI con `--help`: tasks/ready/stats/events/add/claim/start/report/renew/reclaim/**migrate --dry-run**/snapshot/doctor) + `tools/md-board.sh` + `docs/BOARD_V1_DESIGN.md` (126 líneas: plan de migración **idempotente** de los tres legacy sin borrar los originales, riesgos y reversión). **12 tests** que fijan los invariantes. **No toco** `coordination.rs`, `mesh.rs`, `task_scheduler.rs` ni `cockpit_server.rs`: son de sus dueños y el doc lleva el plan de migración ⇒ **mi commit es aditivo** (si un merge lo revierte, se revierte entero, no a medias).
 
+
+### Entrega de `rama/ramas-auditoria-2026-11-23` — 2026-11-24T01:30:51Z
+AUDITORIA DE RAMAS + ROTACION DE CREDENCIALES (tarea principal) + integracion del agente en el bus/GUI.
+
+1) AUDITORIA DE RAMAS (81 ramas, main 89a2237): docs/AUDITORIA-RAMAS-2026-11-23.md con la tabla priorizada. 7 mergeables sin conflicto, 19 con conflicto, 6 riesgosas, 49 obsoletas. P0: main PUBLICO tiene marcadores de conflicto sin resolver y state/mesh_board.json NO PARSEA como JSON (tambien en origin/main publicado) => el bus no arranca. Culpables: d148c95 (merge(flota)) y d902a7e (docs=theirs).
+
+2) GH013 - LAS 2 RAMAS BLOQUEADAS: la clave completa (80 chars) solo estaba en el commit 93e0503; en main salia ELIPSIZADA. Ambas ramas estan VACIAS (0 lineas que main no tenga). YA DEJO EL HISTORIAL LIMPIO Y VERIFICADO:
+   - fix/mobile-web-bridge-limpia @ 5c3648e (93e0503 redactado; 0 ocurrencias del valor; rev-list origin/main..rama = 1 => empujable sin GH013)
+   - agent/merge-flota-pendiente-limpia @ origin/main (su contenido ya esta integrado)
+   El root tiene que: (a) comprobar/rotar la key en el movil (su -mm -c 'cat /data/user/0/com.agy/files/megadaemon/state/megadaemon_api.key'), (b) sustituir las ramas por las limpias y empujar --force-with-lease. Procedimiento exacto en docs/ROTACION-CREDENCIALES.md seccion 1.0.
+
+3) CREDENCIALES: 4 API keys de Google (AIzaSy..., tools/drive_ls.py:23-26) en un repo PUBLICO, introducidas por 235c399 => rotar + purgar historial. La API key VIVA no esta en el repo (0 coincidencias por sha256 del valor completo sobre 81 puntas) => esa rotacion ya esta hecha.
+
+4) INTEGRACION CON EL SISTEMA: web/cockpit_antigravity.html (shell Jetski de Antigravity + API v2 + chat por POST /api/chat) y tools/registrar-agente-general.py (alta del agente general como nodo del bus, idempotente, dry-run por defecto) + state/agents/agent-general.json. NO COMPILADO aqui (cargo bloqueado); el JS pasa node --check.
+- ficheros: docs/AUDITORIA-RAMAS-2026-11-23.md docs/ROTACION-CREDENCIALES.md web/cockpit_antigravity.html tools/registrar-agente-general.py state/agents/agent-general.json
+- rama: `rama/ramas-auditoria-2026-11-23` · SHA: `8ca79f2`
+- **NO compilado aqui**: lo compila y testea el root (sandbox de 3 GB).
