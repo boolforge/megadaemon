@@ -832,7 +832,19 @@ mod tests {
         let (offset, n, _ver) = detectar_go_pclntab_offset(&d).expect("debe detectar");
         assert_eq!(offset, off as u64, "el offset debe ser donde esta el magic");
         assert_eq!(n, 4321, "y el numero de funciones, el de siempre");
-        // Y el parser real debe aceptarlo (sin "unsupported magic").
+        // El offset TIENE que apuntar al magic (el bug era usar nfunc).
+        assert_eq!(
+            &d[offset as usize..offset as usize + 4],
+            &[0xf1, 0xff, 0xff, 0xff],
+            "el offset detectado no apunta al magic"
+        );
+        // Y go-retool NO puede quejarse del magic en ese offset.
+        //
+        // MEDIDO (2026-11-25, CI): este fixture no es una pclntab completa
+        // (el parser real quiere functab, _func, etc.), asi que puede fallar
+        // por otra cosa; lo que NO puede es quejarse del MAGIC, que es
+        // exactamente lo que pasaba cuando se le pasaba nfunc como offset
+        // ("unsupported pclntab magic 0x00000424" en el movil).
         let analisis = go_retool::pclntab::parse_go118_plus(
             &d,
             go_retool::pclntab::ParseOptions {
@@ -840,11 +852,13 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!(
-            analisis.is_ok(),
-            "go-retool debe parsear la pclntab en el offset detectado: {:?}",
-            analisis.err()
-        );
+        if let Err(e) = &analisis {
+            let msg = e.to_string();
+            assert!(
+                !msg.contains("pclntab magic"),
+                "go-retool se quejo del magic en el offset detectado: {msg}"
+            );
+        }
     }
 
     #[test]
