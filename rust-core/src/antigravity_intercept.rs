@@ -128,7 +128,11 @@ pub fn va_de_hex(s: &str) -> Option<u64> {
 /// `base` es el **bias de carga** del módulo en el proceso vivo (0 si
 /// todavía no se ha calculado: las direcciones salen en VA del ELF).
 pub fn resolver(datos: &[u8], base: u64) -> Result<Vec<Objetivo>, String> {
-    let (offset, _ver) = crate::re_engine::detectar_go_pclntab(datos)
+    // MEDIDO (2026-11-25, movil): aqui se usaba el NUMERO de funciones como
+    // offset (la funcion devolvia nfunc) => go-retool leia bytes arbitrarios
+    // y fallaba con "unsupported pclntab magic 0x00000424" => el plan de
+    // hooks nunca se escribia => el LS no se redirigia al gateway.
+    let (offset, _nfunc, _ver) = crate::re_engine::detectar_go_pclntab_offset(datos)
         .ok_or_else(|| "el binario no tiene pclntab de Go (go1.18+)".to_string())?;
     let opt = go_retool::ParseOptions {
         file_offset: offset,
@@ -273,15 +277,12 @@ pub const RUTA_PLAN_PAYLOAD: &str = "/data/local/tmp/megadaemon/hooks-plan.txt";
 /// medido: el payload puede calcularlo con los maps).
 pub fn escribir_plan_para_el_payload(base: u64) -> Result<Value, String> {
     let ruta_ls = crate::antigravity_endpoint::ruta_ls();
-    let datos =
-        std::fs::read(&ruta_ls).map_err(|e| format!("{}: {e}", ruta_ls.display()))?;
+    let datos = std::fs::read(&ruta_ls).map_err(|e| format!("{}: {e}", ruta_ls.display()))?;
     let objetivos = resolver(&datos, base)?;
 
     // 5ª columna: para `sustituir_url`, la URL parcheada EN HEX (el secreto
     // local no sale en claro por el plan, ni por el bus, ni por la UI).
-    let url = crate::antigravity_endpoint::url_destino(
-        crate::antigravity_endpoint::PUERTO_GATEWAY,
-    );
+    let url = crate::antigravity_endpoint::url_destino(crate::antigravity_endpoint::PUERTO_GATEWAY);
     let hex_url: String = url
         .as_bytes()
         .iter()
@@ -308,15 +309,17 @@ pub fn escribir_plan_para_el_payload(base: u64) -> Result<Value, String> {
     }
 
     // 2) El JSON en el state dir (persistente y legible).
-    let ruta_json = std::path::PathBuf::from(crate::cockpit_server::state_dir())
-        .join("agy/hooks-plan.json");
+    let ruta_json =
+        std::path::PathBuf::from(crate::cockpit_server::state_dir()).join("agy/hooks-plan.json");
     let plan_json = plan(&objetivos, base);
     if let Some(dir) = ruta_json.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     let _ = std::fs::write(
         &ruta_json,
-        serde_json::to_string_pretty(&plan_json).unwrap_or_default().as_bytes(),
+        serde_json::to_string_pretty(&plan_json)
+            .unwrap_or_default()
+            .as_bytes(),
     );
 
     Ok(json!({
@@ -396,8 +399,14 @@ mod tests {
         let p = plan(&objs, 0x7f00_0000);
         let hooks = p.get("hooks").and_then(|h| h.as_array()).expect("hooks");
         assert_eq!(hooks.len(), 2);
-        assert_eq!(hooks[0].get("tarea").and_then(|t| t.as_str()), Some("observar"));
-        assert_eq!(hooks[1].get("tarea").and_then(|t| t.as_str()), Some("sustituir_url"));
+        assert_eq!(
+            hooks[0].get("tarea").and_then(|t| t.as_str()),
+            Some("observar")
+        );
+        assert_eq!(
+            hooks[1].get("tarea").and_then(|t| t.as_str()),
+            Some("sustituir_url")
+        );
         assert_eq!(
             hooks[1].get("direccion").and_then(|d| d.as_u64()),
             Some(0x7f00_2000)

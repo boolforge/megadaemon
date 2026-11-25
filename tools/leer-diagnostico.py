@@ -147,6 +147,7 @@ def main() -> int:
     print(f"== diagnostico de {nodo} (fichero {fichero['name']}, {fichero.get('size','?')} B)")
     print(f"   build: {v.get('build', {}).get('short', '?')}")
     print(f"   ts:    {v.get('ts')}")
+    print(f"-- supervisores vivos: {v.get('supervisores')} (1 es lo correcto)")
     print("-- procesos:")
     for p in v.get("procesos", []):
         print(f"   {p.get('pid')} rss={p.get('rss_kb')}kB  {p.get('cmd')}")

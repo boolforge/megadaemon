@@ -351,26 +351,69 @@ pub fn estado_json(cfg: &Config) -> Value {
     })
 }
 
-/// **Reinicia el supervisor** si su fichero en disco cambió.
+/// Ruta canónica del supervisor (la de Magisk `service.d`).
+pub const RUTA_SUPERVISOR_CANONICO: &str = "/data/adb/service.d/99-megadaemon.sh";
+
+/// **Reinicia el supervisor** si su fichero en disco cambió, y se
+/// **queda con UN SOLO supervisor**.
 ///
-/// MEDIDO (2026-11-25): el supervisor en ejecución es el que relanza el
-/// daemon, el túnel y la energía.  Si se reescribe su fichero pero el
-/// proceso sigue siendo el viejo, el cambio no surte efecto hasta el
-/// próximo reinicio del móvil ⇒ hay que matarlo.  Lo revive el *keeper*
-/// (`97-megadaemon-keeper.sh`), que comprueba cada 60 s.
+/// MEDIDO (2026-11-25, movil): el diagnóstico automático encontró DOS
+/// supervisores vivos:
 ///
-/// Devuelve `true` si se pidió el reinicio.
+/// ```text
+/// 4808 sh /data/adb/service.d/99-megadaemon.sh
+/// 4823 sh /data/adb/service.d/99-megadaemon.sh.bak-50k
+/// ```
+///
+/// El segundo es una COPIA del supervisor (el `.bak` que se hace al
+/// instalar).  Con dos supervisores, uno reinicia el daemon mientras el
+/// otro lo mata ⇒ bucle de reinicios (medido: "el daemon no responde
+/// /health ni /api/power (fallo 3/3)" una y otra vez).
+///
+/// El patrón de `pkill -f` es una SUBSTRING, así que también se lleva el
+/// `.bak-50k` (que contiene la ruta canónica) ⇒ aquí se matan TODOS y se
+/// relanza el canónico, para no depender del keeper (que tarda hasta 60 s).
+///
+/// Patrón con corchetes: el propio comando no se mata a sí mismo.
 pub fn reiniciar_supervisor() -> bool {
     // Patrón con corchetes: el propio comando no se mata a sí mismo.
     // MEDIDO: `pkill -f` con un patrón que aparece en la propia línea de
     // comandos se suicida ⇒ por eso se usa el truco de los corchetes.
-    let salida = std::process::Command::new("pkill")
+    let _ = std::process::Command::new("pkill")
         .args(["-9", "-f", "service.d/99-megadaemo[n].sh"])
         .output();
-    match salida {
-        Ok(o) => o.status.success(),
-        Err(_) => false,
+    // Que sólo quede el canónico.
+    let _ = std::process::Command::new("pkill")
+        .args(["-9", "-f", "service.d/99-megadaemo[n].sh.bak"])
+        .output();
+    // Relanzar el canónico si no quedó ninguno vivo (no depender del keeper).
+    if !supervisor_vivo() {
+        let _ = std::process::Command::new("setsid")
+            .args(["nohup", "sh", RUTA_SUPERVISOR_CANONICO])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
     }
+    true
+}
+
+/// ¿Cuántos supervisores hay vivos?  (medido: 2 = hay uno de más)
+pub fn numero_supervisores() -> usize {
+    let mut n = 0;
+    if let Ok(entradas) = std::fs::read_dir("/proc") {
+        for e in entradas.flatten() {
+            let nombre = e.file_name().to_string_lossy().to_string();
+            if !nombre.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            let cmdline = std::fs::read(e.path().join("cmdline")).unwrap_or_default();
+            let cmd = String::from_utf8_lossy(&cmdline);
+            if cmd.contains("99-megadaemon.sh") {
+                n += 1;
+            }
+        }
+    }
+    n
 }
 
 /// ¿Existe el proceso del supervisor?

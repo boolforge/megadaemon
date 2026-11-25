@@ -243,6 +243,10 @@ pub fn recoger() -> Value {
         "nodo": nodo(),
         "build": crate::self_update::build_info(),
         "procesos": procesos(),
+        // MEDIDO (2026-11-25): con DOS supervisores vivos (el canónico y
+        // su copia .bak) el móvil entraba en bucle de reinicios.  El
+        // diagnóstico lo dice explícitamente.
+        "supervisores": crate::stack::numero_supervisores(),
         "puertos": puertos(),
         "health": health(puerto),
         "stack": stack(),
@@ -267,6 +271,10 @@ pub fn a_markdown(v: &Value) -> String {
         v["build"]["short"].as_str().unwrap_or("?")
     ));
     s.push_str(&format!("- ts: `{}`\n\n", v["ts"].as_u64().unwrap_or(0)));
+    s.push_str(&format!(
+        "## Supervisores: {}\n\n",
+        v["supervisores"].as_u64().unwrap_or(0)
+    ));
     s.push_str("## Procesos\n\n```\n");
     for p in v["procesos"].as_array().cloned().unwrap_or_default() {
         s.push_str(&format!(
