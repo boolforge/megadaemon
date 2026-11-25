@@ -576,11 +576,29 @@ pub fn normalizar_ruta_proxy(path: &str) -> String {
 /// mismo formato que el catalogo de `/v1internal/listModels`.
 pub fn es_ruta_resoluble_local(ruta: &str) -> bool {
     let r = normalizar_ruta_proxy(ruta);
-    // `/v1internal/` y `/v1internal` peladas: no existen en Google.
+    // MEDIDO (2026-11-25, movil): `/v1internal/` y `/v1internal` PELADAS
+    // NO existen en Google (404 medido contra el backend real).  Resolverlas
+    // EN LOCAL con el catalogo de MegaDaemon rompia el arranque del
+    // language server:
+    //
+    //   - con el shim: el LS pedia `/v1internal/` 32 veces seguidas y NUNCA
+    //     llegaba a "core ready" (log: "core did not become ready within
+    //     60000ms") => la app de Antigravity se quedaba sin core y el
+    //     login ("Continue with Google") no avanzaba;
+    //   - con el `.so` ORIGINAL (sin shim): el LS anuncia "core ready on
+    //     127.0.0.1:45157" y acepta conexiones (medido: el propio LS
+    //     registra "http: TLS handshake error from 127.0.0.1:42274: EOF").
+    //
+    // TRANSPARENCIA: el shim debe devolver EXACTAMENTE lo que devolveria
+    // Google.  La unica excepcion son las rutas de MODELO
+    // (`:fetchAvailableModels` y las de generacion), que si deben devolver
+    // el catalogo de MegaDaemon (el modelo real detras de megadaemon);
+    // esas se resuelven por `dialecto_de`, no por aqui.
+    //
+    // Por tanto: la pelada se deja al PASSTHROUGH (que la devuelve a Google
+    // tal cual, 404 incluido) => el LS se comporta igual que sin shim.
     let pelada = r.trim_end_matches('/');
-    if pelada == "/v1internal" || pelada.is_empty() {
-        return true;
-    }
+    let _ = pelada;
     false
 }
 
@@ -1352,6 +1370,21 @@ mod tests {
         assert!(!es_ruta_proxy("/health"));
         assert!(!es_ruta_proxy("/api/antigravity/sessions"));
         assert!(!es_ruta_proxy("/proxyxyz"));
+    }
+
+    #[test]
+    fn la_ruta_pelada_no_se_resuelve_en_local() {
+        // MEDIDO (2026-11-25, movil): resolver `/v1internal/` en local
+        // impedia que el language server llegara a "core ready" (el LS
+        // pedia 32 veces y la app se quedaba sin core => el login no
+        // avanzaba).  La pelada tiene que ir al PASSTHROUGH para que el
+        // shim sea transparente.
+        assert!(!es_ruta_resoluble_local("/v1internal/"));
+        assert!(!es_ruta_resoluble_local("/v1internal"));
+        assert!(!es_ruta_resoluble_local("/proxy/v1internal/"));
+        // Y la pelada SI es passthrough (la devuelve a Google tal cual).
+        assert!(es_ruta_passthrough("/v1internal/"));
+        assert!(es_ruta_passthrough("/v1internal"));
     }
 
     #[test]
