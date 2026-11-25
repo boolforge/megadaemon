@@ -615,10 +615,12 @@ pub struct Respuesta {
     /// La regla que se aplicó (si alguna).
     pub regla: Option<String>,
     /// La ruta REAL que se pidió al backend (tras probar las variantes).
-    #[serde(default)]
+    ///
+    /// MEDIDO (2026-11-25, CI): `Respuesta` NO deriva serde, así que aquí no
+    /// puede haber `#[serde(default)]` (error: "cannot find attribute
+    /// `serde` in this scope").
     pub ruta_real: String,
     /// Cuántas variantes se probaron.
-    #[serde(default)]
     pub variantes: u32,
 }
 
@@ -775,18 +777,6 @@ pub fn passthrough(req: &Peticion) -> Result<Respuesta, String> {
         .get(probadas as usize - 1)
         .cloned()
         .unwrap_or_else(|| ruta.clone());
-    // MEDIDO (2026-11-24, error E0599): en ureq 3 no hay `resp.content_type()`;
-    // la cabecera se lee de `headers()`.
-    let content_type = resp
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("application/json")
-        .to_string();
-    let cuerpo = resp
-        .into_body()
-        .read_to_string()
-        .map_err(|e| format!("passthrough: lectura del cuerpo: {e}"))?;
     Ok(Respuesta {
         status,
         content_type,
@@ -1004,6 +994,10 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
         real_model: real,
         substituted: sustituido,
         regla,
+        // Las rutas de MODELO las sirve el gateway, no el backend de Google:
+        // no hay passthrough y por tanto no hay variantes que probar.
+        ruta_real: ruta.clone(),
+        variantes: 1,
     })
 }
 
