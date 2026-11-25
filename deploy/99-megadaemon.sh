@@ -953,6 +953,17 @@ start_daemon() {
         if [ "$fast_fails" -ge "$MAX_FAST_FAILS" ] && [ -f "$PREV_BIN" ]; then
             log "AUTO-ROLLBACK: restaurando el binario anterior ($PREV_BIN)"
             cp -a "$BIN" "$BIN.bad-$(date +%s)" 2>/dev/null || true
+            # MEDIDO 2026-11-25 (auto-actualizacion SIN bucles): al restaurar
+            # el binario anterior, el auto-actualizador volveria a instalar el
+            # MISMO asset (que es el que acaba de morir al arrancar) => bucle
+            # infinito de installs y reinicios.  Se apunta el SHA-256 del
+            # binario que ha fallado y el auto-actualizador lo salta.
+            _malo=$(sha256sum "$BIN" 2>/dev/null | cut -d' ' -f1)
+            if [ -n "$_malo" ]; then
+                mkdir -p "$MEGADAEMON_STATE_DIR" 2>/dev/null
+                echo "$_malo" > "$MEGADAEMON_STATE_DIR/binario_malo.sha256" 2>/dev/null && \
+                    log "binario marcado como malo (sha16 ${_malo:0:16}): el auto-actualizador lo saltara"
+            fi
             # MEDIDO el 2026-11-21: estos `.bad-*` se acumulaban SIN
             # limite (12 ficheros, 104 MB en el movil).  El rollback solo
             # necesita el ULTIMO: se podan todos menos el mas reciente.

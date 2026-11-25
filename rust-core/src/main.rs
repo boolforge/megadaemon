@@ -272,6 +272,32 @@ fn main() {
         //
         // Codigo de salida 10 = "se instalo una version nueva" => el
         // supervisor reinicia el daemon con el binario nuevo.
+        // `megadaemon-core self-test` — AUTOCOMPROBACIÓN de arranque.
+        //
+        // MEDIDO 2026-11-25 (el usuario: "que no se rompa en cada
+        // auto-update"): el auto-actualizador verificaba el SHA-256 del
+        // binario descargado, pero NO que el binario ARRANQUE.  Un asset
+        // corrupto en larelease (o un binario que no arranca en ese móvil)
+        // se instalaba y el móvil se quedaba sin daemon: la copia al
+        // `.prev` existía, pero nadie la restauraba.
+        //
+        // Este comando hace un arranque mínimo (state dir, escritura,
+        // configuracion, SHA-256) SIN red y SIN abrir el cockpit, e imprime
+        // una marca.  El auto-actualizador lo ejecuta sobre el `.new` ANTES
+        // de instalarlo: si no arranca, no se instala nada.
+        "self-test" => {
+            match megadaemon_core::self_update::autocomprobacion() {
+                Ok(marca) => {
+                    println!("{marca}");
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("SELFTEST-FALLO: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+
         "update" => {
             let solo_comprobar = args.iter().any(|a| a == "--check");
             let ruta = std::env::var("MEGADAEMON_BIN")

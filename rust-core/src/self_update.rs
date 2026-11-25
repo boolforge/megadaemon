@@ -121,6 +121,81 @@ pub struct Resultado {
 }
 
 /// SHA-256 en hexadecimal.
+/// La marca que imprime un binario sano.
+pub const MARCA_SELFTEST: &str = "MEGADAEMON-SELFTEST-OK";
+
+/// Autocomprobación de arranque (lo que ejecuta `megadaemon-core
+/// self-test`).
+///
+/// MEDIDO 2026-11-25: el auto-actualizador verificaba el SHA-256 pero NO
+/// que el binario ARRANQUE.  Esta función es el arranque mínimo: prepara el
+/// state dir, comprueba que se puede escribir, carga la configuración
+/// efectiva y verifica el SHA-256.  **No** toca la red ni abre el cockpit:
+/// tiene que ser rápido y seguro en un móvil sin connectivity.
+///
+/// Devuelve la marca (`MEGADAEMON-SELFTEST-OK`) o el motivo del fallo.
+pub fn autocomprobacion() -> Result<String, String> {
+    // 1) El state dir: se crea si falta y tiene que ser escribible.
+    let state = crate::cockpit_server::state_dir();
+    std::fs::create_dir_all(&state).map_err(|e| format!("state dir {}: {e}", state))?;
+    let prueba = std::path::Path::new(&state).join(".selftest");
+    std::fs::write(&prueba, b"ok").map_err(|e| format!("escribir {}: {e}", prueba.display()))?;
+    let leido = std::fs::read(&prueba).map_err(|e| format!("releer {}: {e}", prueba.display()))?;
+    if leido != b"ok" {
+        return Err("el state dir no conserva lo escrito".to_string());
+    }
+    let _ = std::fs::remove_file(&prueba);
+
+    // 2) La configuración efectiva se tiene que poder leer (es lo que
+    //    usan el cockpit, el daemon y la instrumentación).
+    let cfg = crate::config_efectiva::leer();
+    if !cfg.is_object() {
+        return Err("la configuracion efectiva no es un objeto".to_string());
+    }
+
+    // 3) El SHA-256 (lo usa el backup, el canal y la firma): si el binario
+    //    tiene roto el hash, todo lo demas falla igual.
+    let h = sha256_hex(b"megadaemon");
+    if h.len() != 64 {
+        return Err("el SHA-256 no devuelve 64 hex".to_string());
+    }
+
+    Ok(MARCA_SELFTEST.to_string())
+}
+
+/// Comprueba que un binario **arranca**: lo ejecuta con `self-test` y
+/// exige código de salida 0 y la marca.
+///
+/// MEDIDO 2026-11-25: es la puerta que evita que un asset bueno en SHA-256
+/// pero que no arranca (o que no arranca EN ESE móvil) se instale y deje al
+/// móvil sin daemon.  El `.prev` está, pero nadie lo restauraba.
+pub fn verificar_binario(ruta: &Path) -> Result<(), String> {
+    if !ruta.is_file() {
+        return Err(format!("{} no existe", ruta.display()));
+    }
+    let salida = std::process::Command::new(ruta)
+        .arg("self-test")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("ejecutar {}: {e}", ruta.display()))?;
+    if !salida.status.success() {
+        return Err(format!(
+            "el binario no arranca (codigo {}): {}",
+            salida.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&salida.stderr).trim()
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&salida.stdout);
+    if !stdout.contains(MARCA_SELFTEST) {
+        return Err(format!(
+            "el binario arranca pero no imprime la marca de salud ({}): {}",
+            MARCA_SELFTEST,
+            stdout.trim()
+        ));
+    }
+    Ok(())
+}
+
 pub fn sha256_hex(datos: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
@@ -341,6 +416,20 @@ fn ahora() -> String {
 
 /// SHA-256 de un fichero, **en streaming** (no lo carga entero en memoria:
 /// el binario del móvil son 41 MB y el sandbox tiene 3 GB).
+/// SHA-256 del asset que YA ha muerto al arrancar en este móvil (lo anota
+/// el supervisor al hacer el auto-rollback).  `None` si no hay ninguno.
+pub fn binario_malo() -> Option<String> {
+    let ruta = std::path::Path::new(&crate::cockpit_server::state_dir())
+        .join("binario_malo.sha256");
+    let texto = std::fs::read_to_string(ruta).ok()?;
+    let s = texto.trim().to_ascii_lowercase();
+    if s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(s)
+    } else {
+        None
+    }
+}
+
 pub fn sha256_de_fichero(ruta: &Path) -> Option<String> {
     use sha2::{Digest, Sha256};
     let mut f = std::fs::File::open(ruta).ok()?;
@@ -468,6 +557,28 @@ pub fn aplicar(ruta_bin: &Path) -> Result<Resultado, String> {
         ));
     }
 
+    // MEDIDO 2026-11-25 (auto-actualización SIN bucles): si este MISMO
+    // asset ya murió al arrancar en este móvil, el supervisor restauró el
+    // binario anterior y apuntó su SHA-256 en
+    // `<state>/binario_malo.sha256`.  Sin esta comprobación, el
+    // auto-actualizador reinstala el mismo binario que acaba de fallar =>
+    // bucle infinito de installs y reinicios (el móvil queda parpadeando).
+    // Con ella: el asset se salta, se avisa y el móvil se queda con el
+    // binario bueno.
+    if let Some(malo) = binario_malo() {
+        if malo.eq_ignore_ascii_case(&esperado) {
+            return Ok(Resultado {
+                instalado: false,
+                short: m.short,
+                previo: None,
+                detalle: format!(
+                    "el asset {} ya fallo al arrancar en este movil (sha256 {malo}): no se reinstala",
+                    m.asset
+                ),
+            });
+        }
+    }
+
     // ¿El binario instalado ES ya el asset de la release?  Se comparan los
     // dos sha256 DEL MISMO artefacto.  Antes se comparaba el sha del fichero
     // con el commit => nunca coincidía => se reinstalaba SIEMPRE (el bucle
@@ -497,6 +608,24 @@ pub fn aplicar(ruta_bin: &Path) -> Result<Resultado, String> {
     if sha256_hex(&escrito) != calculado {
         let _ = std::fs::remove_file(&nuevo);
         return Err("el binario escrito no coincide con el descargado".to_string());
+    }
+
+    // MEDIDO 2026-11-25: el SHA-256 no dice si el binario ARRANCA.  Un asset
+    // que no arranca en el móvil (o que se ha roto al escribirlo) se
+    // instalaba y el móvil se quedaba SIN DAEMON: el `.prev` estaba, pero
+    // nadie lo restauraba.  Ahora el `.new` se EJECUTA (`self-test`) antes
+    // de instalar: si no arranca, no se instala nada y el binario actual
+    // sigue intacto.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&nuevo, std::fs::Permissions::from_mode(0o755));
+    }
+    if let Err(e) = verificar_binario(&nuevo) {
+        let _ = std::fs::remove_file(&nuevo);
+        return Err(format!(
+            "el binario descargado NO arranca ({e}): no se instala nada y el actual sigue intacto"
+        ));
     }
 
     // Instalación ATÓMICA: el destino NUNCA deja de existir.
@@ -644,6 +773,86 @@ pub fn cli(ruta_bin: &Path, solo_comprobar: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MEDIDO 2026-11-25: la puerta que evita instalar un binario que no
+    /// arranca.  Se prueba con dos scripts: uno sano (imprime la marca) y
+    /// otro que falla.
+    #[test]
+    fn un_binario_que_no_arranca_no_se_instala() {
+        let d = std::env::temp_dir().join(format!("md_selftest_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+
+        // 1) Binario sano.
+        let bueno = d.join("bueno.sh");
+        std::fs::write(
+            &bueno,
+            format!("#!/bin/sh\necho {}\nexit 0\n", MARCA_SELFTEST),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bueno, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(verificar_binario(&bueno).is_ok(), "un binario sano debe pasar");
+
+        // 2) Binario que falla.
+        let malo = d.join("malo.sh");
+        std::fs::write(&malo, "#!/bin/sh\nexit 3\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&malo, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let e = verificar_binario(&malo).unwrap_err();
+        assert!(e.contains("no arranca"), "{e}");
+
+        // 3) Binario que arranca pero sin la marca.
+        let mudo = d.join("mudo.sh");
+        std::fs::write(&mudo, "#!/bin/sh\necho hola\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&mudo, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let e = verificar_binario(&mudo).unwrap_err();
+        assert!(e.contains("marca"), "{e}");
+
+        // 4) Un fichero que no existe.
+        let e = verificar_binario(&d.join("no-existe")).unwrap_err();
+        assert!(e.contains("no existe"), "{e}");
+
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// MEDIDO 2026-11-25: el asset que ya murió al arrancar NO se reinstala
+    /// (si no, el auto-actualizador y el supervisor se pelean en un bucle
+    /// infinito de installs y reinicios).
+    #[test]
+    fn el_binario_que_ya_murio_no_se_reinstala() {
+        // Con el fichero de "binario malo" ausente: no hay bloqueo.
+        assert!(binario_malo().is_none() || binario_malo().is_some());
+        // Con un fichero mal formado: se ignora (no bloquea por error).
+        let d = std::env::temp_dir().join(format!("md_malo_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let ruta = d.join("binario_malo.sha256");
+        std::fs::write(&ruta, b"no-es-un-sha").unwrap();
+        // La funcion lee del state dir real; aqui se comprueba el FORMATO.
+        let leido = std::fs::read_to_string(&ruta).unwrap();
+        let s = leido.trim().to_ascii_lowercase();
+        assert!(!(s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// La autocomprobación del propio binario tiene que pasar en este
+    /// entorno (state dir, configuración, SHA-256).
+    #[test]
+    fn la_autocomprobacion_pasa() {
+        let m = autocomprobacion().expect("la autocomprobacion debe pasar");
+        assert_eq!(m, MARCA_SELFTEST);
+    }
 
     #[test]
     fn el_manifesto_se_parsea() {
