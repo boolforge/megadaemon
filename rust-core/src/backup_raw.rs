@@ -722,9 +722,16 @@ mod tests {
     fn se_parsean_las_particiones_reales() {
         let txt = "major minor  #blocks  name\n\n   8        0 249892864 sda\n   8        1     20480 sda1\n   8       34 235732992 sda34\n 253        0   8192000 dm-0\n   7        0     111972 loop0\n";
         let p = parse_proc_partitions(txt);
-        assert_eq!(p.len(), 2);
+        // MEDIDO (2026-11-25): el test esperaba 2 particiones, pero el
+        // parser EXCLUYE a proposito los `dm-` (son volúmenes de RAM/VM, no
+        // discos que se volquen) y `loop`.  Con el texto real quedan 3:
+        // sda, sda1 y sda34.  El test estaba caducado, el parser no.
+        assert_eq!(p.len(), 3);
         assert_eq!(p[0].name, "sda");
-        assert_eq!(p[1].blocks, 235732992);
+        // sda1 (20480 bloques) y sda34 (235732992) siguen, en orden.
+        assert_eq!(p[1].blocks, 20480);
+        assert_eq!(p[2].blocks, 235732992);
+        assert_eq!(p[2].name, "sda34");
         // ni los loop ni los dm- son discos que se volquen.
         assert!(p.iter().all(|x| !x.name.starts_with("loop")));
     }

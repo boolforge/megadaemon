@@ -21,11 +21,13 @@ fn tmp(tag: &str) -> PathBuf {
 /// Fichero que imita a una partición: superbloque f2fs + bloques de datos.
 fn fake_partition(path: &Path, size: usize) {
     let mut data = vec![0u8; size];
-    data[1024..1028].copy_from_slice(&[0xF2, 0xF5, 0x20, 0x10]);
     for i in 0..size {
         // Relleno determinista (depende del offset ⇒ los bloques se notan).
         data[i] = ((i / 4096) % 251) as u8;
     }
+    // MEDIDO (2026-11-25): el magic se escribía ANTES del relleno, que
+    // lo pisaba ⇒ `probe_fs` devolvía `Unknown` en vez de `F2fs`.
+    data[1024..1028].copy_from_slice(&[0xF2, 0xF5, 0x20, 0x10]);
     std::fs::write(path, data).unwrap();
 }
 
