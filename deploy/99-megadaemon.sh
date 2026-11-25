@@ -416,9 +416,19 @@ tunnel_status() {
 # tunel esta bien pero el ORIGEN (el daemon) no responde -> no hay que
 # tocar el tunel (el supervisor ya relanza el daemon).  Reiniciar el tunel
 # por eso cambia la URL publica y deja a toda la flota con un 530.
+#
+# MEDIDO (2026-11-25, movil): el tunel estaba MUERTO y nadie lo relanzaba.
+# El proceso de cloudflared seguia vivo (pid 28610) pero su host ya no
+# resolvia (NXDOMAIN) => `curl` devolvia 000 => la funcion decia "esta
+# vivo" => el tunel NUNCA se reiniciaba => el movil era inalcanzable desde
+# fuera hasta que alguien lo relanzase a mano.
+#
+# 000 = no hay ni edge ni origen (DNS/TCP caidos) => el tunel esta MUERTO.
+# El reinicio sigue exigiendo DOS comprobaciones seguidas (tunnel_strikes),
+# asi que un fallo puntual de red no cambia la URL publica.
 tunnel_is_dead() {
     case "$1" in
-        530|521|522) return 0 ;;
+        000|530|521|522) return 0 ;;
         *) return 1 ;;
     esac
 }
