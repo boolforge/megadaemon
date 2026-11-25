@@ -958,6 +958,42 @@ fn main() {
             );
         }
 
+        //   megadaemon-core agy-logs [--json] [--n 200]
+        //
+        //   Los logs de la PROPIA app de Antigravity (donde esta el error
+        //   real del login) y el estado de la cuenta.  Se pueden volcar a
+        //   stdout o subir a Drive con `--publicar` (util desde el movil,
+        //   sin ADB ni que el root tenga que pegar texto).
+        "agy-logs" => {
+            let json = args[2..].iter().any(|a| a == "--json");
+            let publicar = args[2..].iter().any(|a| a == "--publicar");
+            let n: usize = args[2..]
+                .iter()
+                .position(|a| a == "--n")
+                .and_then(|i| args[2 + i + 1].parse().ok())
+                .unwrap_or(200);
+            let v = megadaemon_core::diagnostico::logs_de_la_app_publicos(n);
+            if publicar {
+                match megadaemon_core::diagnostico::publicar_logs_agy(&v) {
+                    Ok(r) => println!("{}", r),
+                    Err(e) => {
+                        eprintln!("agy-logs: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            } else if json {
+                println!("{}", v);
+            } else {
+                for f in v["ficheros"].as_array().cloned().unwrap_or_default() {
+                    println!("== {}", f["fichero"].as_str().unwrap_or("?"));
+                    for l in f["lineas"].as_array().cloned().unwrap_or_default() {
+                        println!("{}", l.as_str().unwrap_or(""));
+                    }
+                }
+            }
+            std::process::exit(0);
+        }
+
         "drive-vfs" => {
             let sub = args.get(2).map(|s| s.as_str()).unwrap_or("ls");
             let vpath = args.get(3).map(|s| s.as_str()).unwrap_or("drive:/");

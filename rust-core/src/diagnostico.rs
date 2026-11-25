@@ -227,7 +227,7 @@ fn cuenta_agy() -> Value {
 /// MEDIDO (2026-11-25): el daemon solo tenia el log del supervisor; el
 /// error real ("falla el login") estaba en el log de la app, que solo se
 /// puede leer desde el movil (el daemon corre ahi con root).
-fn logs_de_la_app() -> Vec<Value> {
+pub fn logs_de_la_app() -> Vec<Value> {
     let base = Path::new(crate::antigravity_endpoint::RAIZ_APP);
     let mut out = Vec::new();
     // Los logs de la app estan en varios sitios segun la version; se
@@ -271,6 +271,52 @@ fn logs_de_la_app() -> Vec<Value> {
         }
     }
     out
+}
+
+/// Los logs de la app en formato JSON (para el CLI y el endpoint).
+pub fn logs_de_la_app_publicos(n: usize) -> Value {
+    let logs = logs_de_la_app();
+    let ficheros: Vec<Value> = logs
+        .into_iter()
+        .map(|f| {
+            let todos: Vec<Value> = f["lineas"].as_array().cloned().unwrap_or_default();
+            let lineas: Vec<Value> = todos
+                .into_iter()
+                .rev()
+                .take(n)
+                .collect::<Vec<Value>>()
+                .into_iter()
+                .rev()
+                .collect();
+            json!({"fichero": f["fichero"], "lineas": lineas})
+        })
+        .collect();
+    json!({
+        "ok": true,
+        "ts": ahora(),
+        "nodo": nodo(),
+        "cuenta": cuenta_agy(),
+        "ficheros": ficheros,
+    })
+}
+
+/// Sube los logs de la app a Drive (`MegaDaemon/diagnostico/<nodo>/`).
+///
+/// Es la via para que el root vea el error del login SIN que el usuario
+/// tenga que pegar texto y sin ADB.
+pub fn publicar_logs_agy(v: &Value) -> Result<Value, String> {
+    let state = crate::cockpit_server::state_dir();
+    let dir = Path::new(&state).join("diagnostico");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("no se pudo crear el dir local: {e}"))?;
+    let base = format!("agy-logs-{}-{}", nodo(), v["ts"].as_u64().unwrap_or(0));
+    let ruta = dir.join(format!("{base}.json"));
+    std::fs::write(&ruta, serde_json::to_vec_pretty(v).unwrap_or_default())
+        .map_err(|e| format!("no se pudo escribir {}: {e}", ruta.display()))?;
+    let vfs = format!("{CARPETA_VFS}/{}", nodo());
+    let sd = Some(state.as_str());
+    let j = crate::drive_vfs::write_local_file(&ruta, &vfs, &format!("{base}.json"), sd)
+        .map_err(|e| format!("no se pudo subir a Drive: {e}"))?;
+    Ok(json!({"ok": true, "vfs": vfs, "archivo": j}))
 }
 
 /// Estado del stack autocontenido.

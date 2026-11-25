@@ -552,6 +552,38 @@ pub fn normalizar_ruta_proxy(path: &str) -> String {
     p.to_string()
 }
 
+/// Rutas de la API interna que **NO existen en Google** y que el shim tiene
+/// que resolver él mismo.
+///
+/// MEDIDO (2026-11-25, contra el backend real de Google, sin credenciales):
+/// ```text
+/// GET  /v1internal/                     -> 404 (HTML de Google)
+/// GET  /v1internal                      -> 404
+/// GET  /v1internal/buildWithGooglePlugins -> 401 (¡EXISTE! con BARRA)
+/// GET  /v1internal:buildWithGooglePlugins -> 404 (no existe con dos puntos)
+/// POST /v1internal:loadCodeAssist      -> 401 (existe con dos puntos)
+/// POST /v1internal/loadCodeAssist      -> 404 (no existe con barra)
+/// ```
+///
+/// ⇒ **El dialecto MIXTO depende del metodo**: `loadCodeAssist`,
+/// `fetchAvailableModels` y `onboardUser` existen con DOS PUNTOS;
+/// `buildWithGooglePlugins` existe con BARRA.  Por eso el shim prueba las
+/// variantes (ver [`variantes_de_ruta`]).
+///
+/// Y `/v1internal/` pelada NO existe en ninguna forma ⇒ passthrough al
+/// backend SIEMPRE da 404.  Aqui se responde con el **catalogo** de
+/// MegaDaemon (que es lo que el LS quiere saber: que modelos hay), con el
+/// mismo formato que el catalogo de `/v1internal/listModels`.
+pub fn es_ruta_resoluble_local(ruta: &str) -> bool {
+    let r = normalizar_ruta_proxy(ruta);
+    // `/v1internal/` y `/v1internal` peladas: no existen en Google.
+    let pelada = r.trim_end_matches('/');
+    if pelada == "/v1internal" || pelada.is_empty() {
+        return true;
+    }
+    false
+}
+
 /// El dialecto que habla una ruta.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dialecto {
@@ -719,6 +751,7 @@ pub fn passthrough(req: &Peticion) -> Result<Respuesta, String> {
     // Pide cada variante hasta que una NO devuelva 404.
     let mut probadas: u32 = 0;
     let mut ultima: Option<(u16, String, String, Vec<(String, String)>)> = None;
+    let mut primera: Option<(u16, String, String, Vec<(String, String)>)> = None;
     let mut ganador: Option<(u16, String, String, Vec<(String, String)>)> = None;
     for variante in &variantes {
         probadas += 1;
@@ -762,13 +795,20 @@ pub fn passthrough(req: &Peticion) -> Result<Respuesta, String> {
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect();
         let info = (status, content_type, cuerpo, cabs);
+        if primera.is_none() {
+            primera = Some(info.clone());
+        }
         if status != 404 {
             ganador = Some(info);
             break;
         }
         ultima = Some(info);
     }
-    let (status, content_type, cuerpo, _cabs) = match ganador.or(ultima) {
+    // MEDIDO (2026-11-25): si NINGUNA variante existe en Google, se
+    // devuelve la respuesta de la PRIMERA (la que se pidió tal cual): es lo
+    // que vería la app si hablara con Google directamente, que es el
+    // comportamiento de referencia.
+    let (status, content_type, cuerpo, _cabs) = match ganador.or(primera).or(ultima) {
         Some(v) => v,
         // No se pudo probar ninguna variante (no deberia pasar).
         None => return Err(format!("passthrough a {}: sin variantes", BACKEND_REAL)),
@@ -816,6 +856,42 @@ fn agente_passthrough() -> ureq::Agent {
 /// `megadaemon` (`requested_model`, `real_model`, `substituted`).
 pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
     let ruta = normalizar_ruta_proxy(&req.ruta);
+    // MEDIDO (2026-11-25): `/v1internal/` pelada NO existe en el backend de
+    // Google (404 con cualquier forma) ⇒ el passthrough era un 404
+    // garantizado.  Se resuelve AQUI con el catalogo de MegaDaemon.
+    if es_ruta_resoluble_local(&ruta) {
+        let v = crate::antigravity_endpoint::catalogo_gemini();
+        let cuerpo = v.to_string();
+        registrar(&Entrada {
+            ts: ahora(),
+            metodo: req.metodo.clone(),
+            ruta: req.ruta.clone(),
+            modelo: Some(MODELO_CANONICO.to_string()),
+            bytes_cuerpo: req.cuerpo.len(),
+            status: 200,
+            regla: None,
+            cuerpo: Some(req.cuerpo.chars().take(400).collect()),
+            respuesta: Some(cuerpo.chars().take(400).collect()),
+            ms: 0,
+            requested_model: Some(MODELO_CANONICO.to_string()),
+            real_model: None,
+            substituted: false,
+            proxy: true,
+            ruta_real: Some(ruta.clone()),
+            variantes: 1,
+        });
+        return Ok(Respuesta {
+            status: 200,
+            content_type: "application/json".to_string(),
+            cuerpo,
+            requested_model: MODELO_CANONICO.to_string(),
+            real_model: String::new(),
+            substituted: false,
+            regla: Some("catalogo-local".to_string()),
+            ruta_real: ruta,
+            variantes: 1,
+        });
+    }
     let dialecto = match dialecto_de(&req.ruta) {
         Some(d) => d,
         None => {
@@ -1338,33 +1414,37 @@ mod tests {
         // rutas de CUENTA, no de modelo ⇒ pasan tal cual a Google.
         assert!(dialecto_de("/v1internal/buildWithGooglePlugins").is_none());
         assert!(es_ruta_passthrough("/v1internal/buildWithGooglePlugins"));
-        /// MEDIDO (2026-11-25, movil): el LS pide `/v1internal/` (barra, sin
-        /// metodo) y `/v1internal/buildWithGooglePlugins`, y Google usa el
-        /// dialecto de DOS PUNTOS.  Con una sola forma, el 404 era inevitable.
-        #[test]
-        fn las_variantes_cubren_barra_dos_puntos_y_la_ruta_pelada() {
-            let v = variantes_de_ruta("/v1internal/loadCodeAssist");
-            assert!(
-                v.contains(&"/v1internal:loadCodeAssist".to_string()),
-                "{v:?}"
-            );
-            assert!(
-                v.contains(&"/v1internal/loadCodeAssist".to_string()),
-                "{v:?}"
-            );
-            // La primera es la canonica (dos puntos).
-            assert_eq!(v[0], "/v1internal:loadCodeAssist");
+    }
 
-            // La ruta pelada: el LS la pide tal cual y Google no la tiene.
-            let v2 = variantes_de_ruta("/v1internal/");
-            assert!(v2.contains(&"/v1internal".to_string()), "{v2:?}");
-            assert!(v2.contains(&"/v1internal/".to_string()), "{v2:?}");
-            assert!(v2.len() >= 2, "{v2:?}");
+    /// MEDIDO (2026-11-25, movil): el LS pide `/v1internal/` (barra, sin
+    /// metodo) y `/v1internal/buildWithGooglePlugins`, y Google usa el
+    /// dialecto de DOS PUNTOS.  Con una sola forma, el 404 era inevitable.
+    #[test]
+    fn las_variantes_cubren_barra_dos_puntos_y_la_ruta_pelada() {
+        let v = variantes_de_ruta("/v1internal/loadCodeAssist");
+        assert!(
+            v.contains(&"/v1internal:loadCodeAssist".to_string()),
+            "{v:?}"
+        );
+        assert!(
+            v.contains(&"/v1internal/loadCodeAssist".to_string()),
+            "{v:?}"
+        );
+        // La primera es la canonica (dos puntos).
+        assert_eq!(v[0], "/v1internal:loadCodeAssist");
 
-            // Un 404 real (ruta que no existe) se queda con UNA variante.
-            assert_eq!(variantes_de_ruta("/otra/ruta").len(), 1);
-        }
+        // La ruta pelada: el LS la pide tal cual y Google no la tiene.
+        let v2 = variantes_de_ruta("/v1internal/");
+        assert!(v2.contains(&"/v1internal".to_string()), "{v2:?}");
+        assert!(v2.contains(&"/v1internal/".to_string()), "{v2:?}");
+        assert!(v2.len() >= 2, "{v2:?}");
 
+        // Un 404 real (ruta que no existe) se queda con UNA variante.
+        assert_eq!(variantes_de_ruta("/otra/ruta").len(), 1);
+    }
+
+    #[test]
+    fn las_rutas_de_cuenta_pasan_al_backend() {
         assert!(es_ruta_passthrough("/v1internal/loadCodeAssist"));
         // Las de MODELO las intercepta el gateway (nunca pasan a Google).
         assert!(dialecto_de("/v1internal:generateContent").is_some());

@@ -487,4 +487,14 @@ if [ -x "$BIN" ]; then
     else
         log "AVISO: no se pudo publicar el diagnostico en Drive"
     fi
+    # 4.b) Los logs de la PROPIA app de Antigravity: es donde esta el error
+    #      del login ("Continue with Google"), que no sale ni del log del
+    #      supervisor ni del NDJSON del shim.
+    echo "== publicando los logs de la app de Antigravity"
+    if "$BIN" agy-logs --publicar >/dev/null 2>&1; then
+        log "logs de la app publicados en Drive"
+        echo "  OK: el root los lee con tools/leer-diagnostico.py"
+    else
+        log "AVISO: no se pudieron publicar los logs de la app"
+    fi
 fi
