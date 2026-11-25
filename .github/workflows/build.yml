@@ -236,7 +236,9 @@ jobs:
           # crate principal baja a 4 por el override de `package` en
           # Cargo.toml (1 lo mata, 16 infla el binario).
           CARGO_PROFILE_RELEASE_LTO: "thin"
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          # MEDIDO 2026-11-25: CU=16 para las DEPENDENCIAS infla el binario
+          # (con CU=4 el enlazador elimina el codigo muerto de verdad).
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "4"
           CARGO_PROFILE_RELEASE_DEBUG: "0"
         run: |
           cargo build --release --target aarch64-linux-android
@@ -332,7 +334,9 @@ jobs:
           # de Android, y "thin" da casi todo el ahorro del "fat" sin
           # matar al rustc por OOM.
           CARGO_PROFILE_RELEASE_LTO: "thin"
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          # MEDIDO 2026-11-25: CU=16 para las DEPENDENCIAS infla el binario
+          # (con CU=4 el enlazador elimina el codigo muerto de verdad).
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "4"
           CARGO_PROFILE_RELEASE_DEBUG: "0"
         run: |
           cargo build --release --target ${{ matrix.target }}
