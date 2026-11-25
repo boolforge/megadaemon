@@ -286,7 +286,8 @@ mod tests {
         cab2.set_size(m.len() as u64);
         cab2.set_mode(0o644);
         cab2.set_cksum();
-        ar.append_data(&mut cab2, "manifest.json", &m).unwrap();
+        ar.append_data(&mut cab2, "manifest.json", m.as_slice())
+            .unwrap();
         let tar = ar.into_inner().unwrap();
         let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         enc.write_all(&tar).unwrap();

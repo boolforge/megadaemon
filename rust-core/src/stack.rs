@@ -239,6 +239,23 @@ impl Informe {
     }
 }
 
+/// Escribe bytes de forma ATÓMICA (`.tmp` + `rename`) y con permisos.
+///
+/// Es la versión binaria de [`escribir_atomico`] (la del bundle meta).
+pub fn escribir_atomico_bytes(destino: &Path, datos: &[u8], modo: u32) -> Result<(), String> {
+    if let Some(p) = destino.parent() {
+        std::fs::create_dir_all(p).map_err(|e| format!("no se pudo crear {}: {e}", p.display()))?;
+    }
+    let tmp = destino.with_extension("tmp-bundle");
+    std::fs::write(&tmp, datos)
+        .map_err(|e| format!("no se pudo escribir {}: {e}", tmp.display()))?;
+    chmod(&tmp, modo)?;
+    std::fs::rename(&tmp, destino)
+        .map_err(|e| format!("no se pudo renombrar a {}: {e}", destino.display()))?;
+    chmod(destino, modo)?;
+    Ok(())
+}
+
 /// Escribe un fichero de forma ATÓMICA (`.tmp` + `rename`) y con permisos.
 ///
 /// MEDIDO: un `cp` directo deja el fichero a medias si el sistema se queda
