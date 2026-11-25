@@ -108,6 +108,17 @@ pub struct Entrada {
     /// ¿La sirvió el shim como proxy real (no sólo interceptada)?
     #[serde(default)]
     pub proxy: bool,
+    /// La ruta **REAL** que se pidió al backend (tras normalizar).
+    ///
+    /// MEDIDO (2026-11-25, movil): el NDJSON guardaba la ruta TAL COMO la
+    /// pidió el cliente y no la que acabó en Google => con un 404 no se
+    /// podía saber qué se pidió de verdad.  Con este campo se ve la ruta
+    /// que funcionó (o las que se probaron).
+    #[serde(default)]
+    pub ruta_real: Option<String>,
+    /// Cuántas variantes de ruta se probaron (1 = a la primera).
+    #[serde(default)]
+    pub variantes: u32,
 }
 
 /// Estadísticas en memoria.
@@ -603,6 +614,51 @@ pub struct Respuesta {
     pub substituted: bool,
     /// La regla que se aplicó (si alguna).
     pub regla: Option<String>,
+    /// La ruta REAL que se pidió al backend (tras probar las variantes).
+    #[serde(default)]
+    pub ruta_real: String,
+    /// Cuántas variantes se probaron.
+    #[serde(default)]
+    pub variantes: u32,
+}
+
+/// Las formas en que se puede pedir una ruta de la API interna de Google.
+///
+/// MEDIDO (2026-11-25, movil): el LS pide `/v1internal/` (barra, sin
+/// metodo) y `/v1internal/buildWithGooglePlugins` (barra), y el backend de
+/// Google (`daily-cloudcode-pa`) usa el dialecto de DOS PUNTOS
+/// (`/v1internal:metodo`).  Con la conversion a dos puntos, `/v1internal/`
+/// se queda como esta (no hay metodo que traducir) y Google responde 404.
+///
+/// En vez de adivinar, el shim PRUEBA las variantes en orden y se queda con
+/// la primera que no devuelva 404.  Asi da igual que el LS use barra,
+/// dos puntos o la ruta pelada: siempre hay una que funciona.
+pub fn variantes_de_ruta(ruta: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut anadir = |s: String| {
+        if !s.is_empty() && !out.contains(&s) {
+            out.push(s);
+        }
+    };
+    let ruta = normalizar_ruta_proxy(ruta);
+    // 1) La forma canonica del gateway (dos puntos), si se puede.
+    let dos_puntos = crate::llm_gateway::normalizar_ruta_gemini(&ruta);
+    anadir(dos_puntos.clone());
+    // 2) La forma tal cual la pidio el cliente.
+    anadir(ruta.clone());
+    // 3) Sin barra final (el LS a veces pide `/v1internal/`).
+    if let Some(sin) = ruta.strip_suffix('/') {
+        if !sin.is_empty() {
+            anadir(sin.to_string());
+        }
+    }
+    // 4) Con dos puntos y sin barra final.
+    if let Some(sin) = dos_puntos.strip_suffix('/') {
+        if !sin.is_empty() {
+            anadir(sin.to_string());
+        }
+    }
+    out
 }
 
 /// Reenvía la petición al backend real de Antigravity y devuelve la
@@ -621,14 +677,16 @@ pub fn passthrough(req: &Peticion) -> Result<Respuesta, String> {
     // `normalizar_ruta_gemini` ya sabe traducir barra -> dos puntos (y lo
     // hace de forma conservadora: sólo si el resto no lleva ya ':' ni '/').
     // Aquí se aplica al PASSTHROUGH, que es donde la ruta se usa tal cual.
-    let ruta = crate::llm_gateway::normalizar_ruta_gemini(&ruta);
-    // MEDIDO (2026-11-24): la query string es parte de la petición (Google
-    /// la necesita: sin ella devolvía 404).
-    let url = if req.query.trim().is_empty() {
-        format!("{}{}", BACKEND_REAL, ruta)
-    } else {
-        format!("{}{}?{}", BACKEND_REAL, ruta, req.query.trim())
-    };
+    // MEDIDO (2026-11-25, movil): el LS pide `/v1internal/` (barra) y
+    // `/v1internal/buildWithGooglePlugins`, y el backend usa dos puntos
+    // (`/v1internal:metodo`).  Antes se traducía a dos puntos y a
+    // `/v1internal/` se quedaba igual (no hay metodo que traducir) =>
+    // Google respondia 404 y Antigravity no arrancaba.
+    //
+    // Ahora se PRUEBAN las variantes en orden y se gana la primera que no
+    // devuelva 404.  Con una ruta de metodo las dos formas se prueban; con
+    // `/v1internal/` se prueban las cuatro.
+    let variantes = variantes_de_ruta(&ruta);
     let agente = agente_passthrough();
     let metodo = req.metodo.trim().to_ascii_uppercase();
     // Cabeceras que se reenvían (las de salto las pone ureq).
@@ -656,18 +714,67 @@ pub fn passthrough(req: &Peticion) -> Result<Respuesta, String> {
             p
         }};
     }
-    let resp = match metodo.as_str() {
-        "GET" => con_cabeceras!(agente.get(&url)).call(),
-        "DELETE" => con_cabeceras!(agente.delete(&url)).call(),
-        "PUT" => con_cabeceras!(agente.put(&url)).send(req.cuerpo.as_bytes()),
-        "PATCH" => con_cabeceras!(agente.patch(&url)).send(req.cuerpo.as_bytes()),
-        // MEDIDO (2026-11-24, error E0599): en ureq 3 el builder de POST es
-        // `WithBody` y NO tiene `.call()`: siempre se envía (el cuerpo vacío
-        // es un POST sin cuerpo ✔).
-        _ => con_cabeceras!(agente.post(&url)).send(req.cuerpo.as_bytes()),
+    // Pide cada variante hasta que una NO devuelva 404.
+    let mut probadas: u32 = 0;
+    let mut ultima: Option<(u16, String, String, Vec<(String, String)>)> = None;
+    let mut ganador: Option<(u16, String, String, Vec<(String, String)>)> = None;
+    for variante in &variantes {
+        probadas += 1;
+        // MEDIDO (2026-11-24): la query string es parte de la petición
+        // (Google la necesita: sin ella devolvía 404).
+        let url = if req.query.trim().is_empty() {
+            format!("{}{}", BACKEND_REAL, variante)
+        } else {
+            format!("{}{}?{}", BACKEND_REAL, variante, req.query.trim())
+        };
+        let resp = match metodo.as_str() {
+            "GET" => con_cabeceras!(agente.get(&url)).call(),
+            "DELETE" => con_cabeceras!(agente.delete(&url)).call(),
+            "PUT" => con_cabeceras!(agente.put(&url)).send(req.cuerpo.as_bytes()),
+            "PATCH" => con_cabeceras!(agente.patch(&url)).send(req.cuerpo.as_bytes()),
+            // MEDIDO (2026-11-24, error E0599): en ureq 3 el builder de POST
+            // es `WithBody` y NO tiene `.call()`: siempre se envía (el cuerpo
+            // vacío es un POST sin cuerpo ✔).
+            _ => con_cabeceras!(agente.post(&url)).send(req.cuerpo.as_bytes()),
+        };
+        let resp = match resp {
+            Ok(r) => r,
+            Err(e) => {
+                // Si no hay red, no hay variantes que probar.
+                return Err(format!("passthrough a {}: {}", BACKEND_REAL, e));
+            }
+        };
+        let status = resp.status().as_u16();
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/json")
+            .to_string();
+        let cuerpo = resp
+            .into_body()
+            .read_to_string()
+            .map_err(|e| format!("passthrough: lectura del cuerpo: {e}"))?;
+        let cabs: Vec<(String, String)> = cabeceras
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        let info = (status, content_type, cuerpo, cabs);
+        if status != 404 {
+            ganador = Some(info);
+            break;
+        }
+        ultima = Some(info);
     }
-    .map_err(|e| format!("passthrough a {}: {}", BACKEND_REAL, e))?;
-    let status = resp.status().as_u16();
+    let (status, content_type, cuerpo, _cabs) = match ganador.or(ultima) {
+        Some(v) => v,
+        // No se pudo probar ninguna variante (no deberia pasar).
+        None => return Err(format!("passthrough a {}: sin variantes", BACKEND_REAL)),
+    };
+    let ruta_real = variantes
+        .get(probadas as usize - 1)
+        .cloned()
+        .unwrap_or_else(|| ruta.clone());
     // MEDIDO (2026-11-24, error E0599): en ureq 3 no hay `resp.content_type()`;
     // la cabecera se lee de `headers()`.
     let content_type = resp
@@ -688,6 +795,8 @@ pub fn passthrough(req: &Peticion) -> Result<Respuesta, String> {
         real_model: String::new(),
         substituted: false,
         regla: Some("passthrough".to_string()),
+        ruta_real,
+        variantes: probadas,
     })
 }
 
@@ -730,9 +839,14 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
                 // TAL CUAL la pedia el cliente y con la ruta ya
                 // NORMALIZADA (la que se envie a Google).
                 let r = passthrough(req);
-                let (status, cuerpo) = match &r {
-                    Ok(resp) => (resp.status, resp.cuerpo.clone()),
-                    Err(e) => (0u16, format!("{{\"error\":\"{e}\"}}")),
+                let (status, cuerpo, ruta_real, variantes) = match &r {
+                    Ok(resp) => (
+                        resp.status,
+                        resp.cuerpo.clone(),
+                        Some(resp.ruta_real.clone()),
+                        resp.variantes,
+                    ),
+                    Err(e) => (0u16, format!("{{\"error\":\"{e}\"}}"), None, 0),
                 };
                 registrar(&Entrada {
                     ts: ahora(),
@@ -749,6 +863,8 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
                     real_model: None,
                     substituted: false,
                     proxy: true,
+                    ruta_real,
+                    variantes,
                 });
                 return r;
             }
@@ -869,9 +985,15 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
         },
         ms: t0.elapsed().as_millis() as u64,
         requested_model: Some(requested.clone()),
-        real_model: if real.is_empty() { None } else { Some(real.clone()) },
+        real_model: if real.is_empty() {
+            None
+        } else {
+            Some(real.clone())
+        },
         substituted: sustituido,
         proxy: true,
+        ruta_real: Some(ruta.clone()),
+        variantes: 1,
     });
 
     Ok(Respuesta {
@@ -943,6 +1065,8 @@ pub fn procesar(metodo: &str, ruta: &str, cuerpo: &str) -> (u16, String) {
         real_model: None,
         substituted: false,
         proxy: false,
+        ruta_real: None,
+        variantes: 0,
         // MEDIDO (2026-11-23, auditoría de calidad): la RUTA se guardaba en
         // claro mientras que el cuerpo y la respuesta pasaban por el
         // redactor.  La ruta de una llamada a la API puede llevar la
@@ -980,36 +1104,36 @@ pub fn procesar(metodo: &str, ruta: &str, cuerpo: &str) -> (u16, String) {
 
 #[cfg(test)]
 
-    /// MEDIDO 2026-11-25 (movil): el backend de Google usa el dialecto de
-    /// DOS PUNTOS (`/v1internal:loadCodeAssist`).  Si el passthrough
-    /// reenvia la ruta con BARRA, Google responde 404 y Antigravity muere
-    /// con "unexpected issue setting up your account".
-    #[test]
-    fn el_passthrough_traduce_la_ruta_al_dialecto_de_google() {
-        // La forma que llega al backend (lo que se ve en la URL real).
-        assert_eq!(
-            crate::llm_gateway::normalizar_ruta_gemini("/v1internal/loadCodeAssist"),
-            "/v1internal:loadCodeAssist"
-        );
-        assert_eq!(
-            crate::llm_gateway::normalizar_ruta_gemini("/v1internal/userInfo"),
-            "/v1internal:userInfo"
-        );
-        assert_eq!(
-            crate::llm_gateway::normalizar_ruta_gemini("/v1internal/buildWithGooglePlugins"),
-            "/v1internal:buildWithGooglePlugins"
-        );
-        // La forma con dos puntos NO se toca (ya es la buena).
-        assert_eq!(
-            crate::llm_gateway::normalizar_ruta_gemini("/v1internal:loadCodeAssist"),
-            "/v1internal:loadCodeAssist"
-        );
-        // Y una ruta de modelo tampoco se rompe.
-        assert_eq!(
-            crate::llm_gateway::normalizar_ruta_gemini("/v1internal/generateContent"),
-            "/v1internal:generateContent"
-        );
-    }
+/// MEDIDO 2026-11-25 (movil): el backend de Google usa el dialecto de
+/// DOS PUNTOS (`/v1internal:loadCodeAssist`).  Si el passthrough
+/// reenvia la ruta con BARRA, Google responde 404 y Antigravity muere
+/// con "unexpected issue setting up your account".
+#[test]
+fn el_passthrough_traduce_la_ruta_al_dialecto_de_google() {
+    // La forma que llega al backend (lo que se ve en la URL real).
+    assert_eq!(
+        crate::llm_gateway::normalizar_ruta_gemini("/v1internal/loadCodeAssist"),
+        "/v1internal:loadCodeAssist"
+    );
+    assert_eq!(
+        crate::llm_gateway::normalizar_ruta_gemini("/v1internal/userInfo"),
+        "/v1internal:userInfo"
+    );
+    assert_eq!(
+        crate::llm_gateway::normalizar_ruta_gemini("/v1internal/buildWithGooglePlugins"),
+        "/v1internal:buildWithGooglePlugins"
+    );
+    // La forma con dos puntos NO se toca (ya es la buena).
+    assert_eq!(
+        crate::llm_gateway::normalizar_ruta_gemini("/v1internal:loadCodeAssist"),
+        "/v1internal:loadCodeAssist"
+    );
+    // Y una ruta de modelo tampoco se rompe.
+    assert_eq!(
+        crate::llm_gateway::normalizar_ruta_gemini("/v1internal/generateContent"),
+        "/v1internal:generateContent"
+    );
+}
 mod tests {
     use super::*;
 
@@ -1150,7 +1274,9 @@ mod tests {
         assert!(es_ruta_proxy("/v1internal:streamGenerateContent"));
         assert!(es_ruta_proxy("/v1internal/fetchAvailableModels"));
         assert!(es_ruta_proxy("/proxy/v1/chat/completions"));
-        assert!(es_ruta_proxy("/v1beta/models/gemini-2.5-pro:generateContent"));
+        assert!(es_ruta_proxy(
+            "/v1beta/models/gemini-2.5-pro:generateContent"
+        ));
         // Y NO las que no son suyas.
         assert!(!es_ruta_proxy("/v1/chat/completions"));
         assert!(!es_ruta_proxy("/health"));
@@ -1218,6 +1344,33 @@ mod tests {
         // rutas de CUENTA, no de modelo ⇒ pasan tal cual a Google.
         assert!(dialecto_de("/v1internal/buildWithGooglePlugins").is_none());
         assert!(es_ruta_passthrough("/v1internal/buildWithGooglePlugins"));
+        /// MEDIDO (2026-11-25, movil): el LS pide `/v1internal/` (barra, sin
+        /// metodo) y `/v1internal/buildWithGooglePlugins`, y Google usa el
+        /// dialecto de DOS PUNTOS.  Con una sola forma, el 404 era inevitable.
+        #[test]
+        fn las_variantes_cubren_barra_dos_puntos_y_la_ruta_pelada() {
+            let v = variantes_de_ruta("/v1internal/loadCodeAssist");
+            assert!(
+                v.contains(&"/v1internal:loadCodeAssist".to_string()),
+                "{v:?}"
+            );
+            assert!(
+                v.contains(&"/v1internal/loadCodeAssist".to_string()),
+                "{v:?}"
+            );
+            // La primera es la canonica (dos puntos).
+            assert_eq!(v[0], "/v1internal:loadCodeAssist");
+
+            // La ruta pelada: el LS la pide tal cual y Google no la tiene.
+            let v2 = variantes_de_ruta("/v1internal/");
+            assert!(v2.contains(&"/v1internal".to_string()), "{v2:?}");
+            assert!(v2.contains(&"/v1internal/".to_string()), "{v2:?}");
+            assert!(v2.len() >= 2, "{v2:?}");
+
+            // Un 404 real (ruta que no existe) se queda con UNA variante.
+            assert_eq!(variantes_de_ruta("/otra/ruta").len(), 1);
+        }
+
         assert!(es_ruta_passthrough("/v1internal/loadCodeAssist"));
         // Las de MODELO las intercepta el gateway (nunca pasan a Google).
         assert!(dialecto_de("/v1internal:generateContent").is_some());
@@ -1234,7 +1387,10 @@ mod tests {
         assert!(t.contains("REDACTADO"));
         // Y no toca el texto normal.
         let t2 = redactar("esto es sk-3 corto y AIza algo");
-        assert!(t2.contains("sk-3"), "no debe redaccionar texto normal: {t2}");
+        assert!(
+            t2.contains("sk-3"),
+            "no debe redaccionar texto normal: {t2}"
+        );
     }
 
     #[test]
@@ -1272,7 +1428,9 @@ mod tests {
         assert!(crate::llm_gateway::es_alias_megadaemon("megadaemon"));
         assert!(crate::llm_gateway::es_alias_megadaemon("MEGADAEMON"));
         assert!(crate::llm_gateway::es_alias_megadaemon("auto"));
-        assert!(!crate::llm_gateway::es_alias_megadaemon("minimax-m3.1-flash"));
+        assert!(!crate::llm_gateway::es_alias_megadaemon(
+            "minimax-m3.1-flash"
+        ));
         assert!(!crate::llm_gateway::es_alias_megadaemon(""));
     }
 

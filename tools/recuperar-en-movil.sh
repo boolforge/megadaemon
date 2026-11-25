@@ -255,9 +255,34 @@ log "supervisores tras la limpieza: $(supervisores_vivos) (0 = el keeper lo rela
 #    "perdido cosas".  El supervisor ya lo hacia bien (SIGKILL + esperar a
 #    que /proc/net/tcp deje de mostrar el puerto en LISTEN); aqui se copia
 #    esa tecnica.
+# MEDIDO (2026-11-25, movil): el script MATABA el daemon sano y luego
+# arrancaba otro a mano => el nuevo fallaba con "Failed to bind Rust
+# Cockpit on 0.0.0.0:9090: Address already in use" (el supervisor habia
+# relanzado el suyo) y el movil se quedaba sin daemon en el 9090.
+#
+# Ahora: si el daemon que corre YA USA el binario nuevo, no se toca.  Se
+# comprueba con /proc/<pid>/exe (si el fichero se sustituyo, el symlink
+# queda como "(deleted)" => ese proceso corre el binario VIEJO => hay que
+# reiniciarlo).
+daemon_usa_binario_nuevo() {
+    d=$1
+    exe=$(readlink "/proc/$(basename "$d")/exe" 2>/dev/null)
+    case "$exe" in
+        *"(deleted)") return 1;;   # corre el binario viejo
+        "$BIN") return 0;;          # corre el binario de disco (el nuevo)
+        "") return 0;;              # no se puede saber: no se toca
+        *) return 0;;
+    esac
+}
+REINICIAR_DAEMON=1
 if d=$(daemon_vivo); then
-    log "el daemon ya corria ($d): lo mato para cargar el binario actual"
-    kill -9 $(echo "$d" | tr '\n' ' ') 2>/dev/null
+    if daemon_usa_binario_nuevo "$d"; then
+        REINICIAR_DAEMON=0
+        log "el daemon ($d) ya usa el binario actual: NO lo toco"
+    else
+        log "el daemon ($d) corre el binario VIEJO: lo reinicio"
+        kill -9 $(echo "$d" | tr '\n' ' ') 2>/dev/null
+    fi
 fi
 puerto_libre() {
     hp=$(printf '%04X' "$PORT")
@@ -293,13 +318,35 @@ arrancar_daemon_a_mano() {
     log "daemon arrancado a mano (pid $!)"
 }
 i=0
-while [ $i -lt 30 ]; do
+while [ $i -lt 45 ]; do
     if health; then log "el supervisor levanto el daemon (cockpit responde)"; break; fi
     i=$((i + 1)); sleep 2
 done
-if [ $i -ge 30 ]; then
-    log "el supervisor no levanto el daemon en 60 s: lo arranco yo"
-    arrancar_daemon_a_mano
+if [ $i -ge 45 ]; then
+    if [ "$REINICIAR_DAEMON" = "1" ]; then
+        # Solo si de verdad no hay nadie escuchando: si el puerto esta
+        # ocupado, hay un daemon vivo y arrancar otro es un error.
+        if ! puerto_libre; then
+            log "el puerto $PORT esta ocupado pero el cockpit no responde: hay un daemon atascado"
+            log "lo mato por nombre y espero a que suelte el puerto"
+            pkill -9 -x megadaemon-core 2>/dev/null
+            i=0
+            while [ $i -lt 30 ]; do
+                puerto_libre && break
+                i=$((i + 1)); sleep 1
+            done
+        fi
+        log "el supervisor no levanto el daemon en 90 s: lo arranco yo"
+        arrancar_daemon_a_mano
+        i=0
+        while [ $i -lt 25 ]; do
+            if health; then break; fi
+            i=$((i + 1)); sleep 2
+        done
+        health || log "AVISO: el cockpit sigue sin responder"
+    else
+        log "el daemon vivo no responde: el supervisor lo reiniciara"
+    fi
 fi
 
 # 2) Espera a que responda y COMPRUEBA que es el daemon NUEVO.
@@ -398,14 +445,33 @@ if ! tunel_responde; then
     log "el tunel NO responde: relanzo cloudflared"
     pkill -f 'cloudflared tunnel .*9090' 2>/dev/null
     sleep 2
-    if [ -x "$PREFIX/cloudflared" ]; then
-        setsid nohup "$PREFIX/cloudflared" tunnel --no-autoupdate \
+    # MEDIDO (2026-11-25, movil): el cloudflared NO esta en el prefijo
+    # persistente sino en la ruta legacy (/data/local/tmp/megadaemon) y el
+    # script solo miraba en el prefijo => "no hay cloudflared" y el movil
+    # se quedaba sin tunel.  Se buscan en las dos rutas y se copia al
+    # prefijo (que es donde el supervisor lo deja).
+    CF=""
+    for c in "$PREFIX/cloudflared" /data/local/tmp/megadaemon/cloudflared \
+             /data/data/com.termux/files/usr/bin/cloudflared \
+             /data/data/com.agy/files/usr/bin/cloudflared; do
+        if [ -x "$c" ]; then CF="$c"; break; fi
+    done
+    if [ -n "$CF" ]; then
+        if [ "$CF" != "$PREFIX/cloudflared" ]; then
+            mkdir -p "$PREFIX" 2>/dev/null
+            cp -f "$CF" "$PREFIX/cloudflared.new" 2>/dev/null && \
+                chmod 755 "$PREFIX/cloudflared.new" 2>/dev/null && \
+                mv -f "$PREFIX/cloudflared.new" "$PREFIX/cloudflared" 2>/dev/null
+            log "cloudflared migrado al prefijo persistente (estaba en $CF)"
+            CF="$PREFIX/cloudflared"
+        fi
+        setsid nohup "$CF" tunnel --no-autoupdate \
             --url "http://127.0.0.1:$PORT" >> "$PREFIX/tunnel.log" 2>&1 < /dev/null &
-        sleep 12
+        sleep 14
         u=$(cat "$PREFIX/tunnel.url" 2>/dev/null)
         log "tunel relanzado: ${u:-sin-url}"
     else
-        log "AVISO: no hay cloudflared en $PREFIX"
+        log "AVISO: no hay cloudflared en ninguna ruta"
     fi
 fi
 
