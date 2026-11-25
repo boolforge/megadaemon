@@ -186,14 +186,20 @@ jobs:
           CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
           RANLIB_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
+          # El payload es un cdylib PEQUEÑO que va embebido en el daemon:
+          # se deja con LTO desactivado (es el camino ya verificado) porque
+          # su tamaño es irrelevante frente al binario principal.
+          #
+          # MEDIDO 2026-11-25: el comentario va ANTES del bloque plegado
+          # (`>-`) a propósito: tras un bloque literal tiene que venir una
+          # CLAVE, y `tools/yaml_lint.py` (el gate del CI) rechaza un
+          # comentario ahí ("línea fuera del bloque literal con sangría
+          # incorrecta") ⇒ el workflow entero se rechazaba.
           BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android: >-
             --sysroot=${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot
             -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
             -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/aarch64-linux-android
             -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/aarch64-linux-android/api-level-26
-          # El payload es un cdylib PEQUEÑO que va embebido en el daemon:
-          # se deja con LTO desactivado (es el camino ya verificado) porque
-          # su tamaño es irrelevante frente al binario principal.
           CARGO_PROFILE_RELEASE_LTO: "false"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
           CARGO_PROFILE_RELEASE_DEBUG: "0"
