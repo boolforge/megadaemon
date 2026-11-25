@@ -27,9 +27,23 @@
 PREFIX=/data/adb/megadaemon
 STATE="$PREFIX/state"
 BIN="$PREFIX/megadaemon-core"
-PORT=3000
-GW=9090
+ENV_FILE="$PREFIX/megadaemon.env"
 LOG=/sdcard/megadaemon.log
+
+# MEDIDO (2026-11-25, movil): el daemon NO sirve en el 3000.  El supervisor
+# (deploy/99-megadaemon.sh) lo arranca con "cockpit $PORT", y su PORT por
+# defecto es **9090** (configurable con MEGADAEMON_COCKPIT_PORT en
+# megadaemon.env).  Con 3000 el script arrancaba un daemon que nadie
+# escuchaba y daba por muerto un cockpit que estaba vivo => falso negativo.
+PORT=9090
+if [ -f "$ENV_FILE" ]; then
+    p=$(sed -n 's/^MEGADAEMON_COCKPIT_PORT=//p' "$ENV_FILE" 2>/dev/null | head -1 | tr -d '\r"')
+    case "$p" in
+        ''|*[!0-9]*) ;;
+        *) PORT="$p";;
+    esac
+fi
+GW="$PORT"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] recuperar: $*" >> "$LOG" 2>/dev/null; echo "$*"; }
 
@@ -145,6 +159,79 @@ instalar_nuevo() {
 
 instalar_nuevo
 
+# 0) SUPERVISOR: actualizarlo es parte de la recuperacion.
+#
+#    MEDIDO (2026-11-25, movil, log del supervisor):
+#      "ERROR: no existe /data/local/tmp/megadaemon/megadaemon-core (y no hay
+#       despliegue en curso)"
+#    El supervisor INSTALADO en el movil es una version ANTIGUA cuyo PREFIX
+#    era la ruta VOLATIL (/data/local/tmp/megadaemon); el binario canonico
+#    vive en /data/adb/megadaemon => el supervisor no lo encontraba y NO
+#    PODIA relanzar el daemon => el movil se quedaba sin daemon (UI y
+#    gateway caidos) y en bucle de reinicios.
+#    Ademas el supervisor arrancaba el daemon en el 9090 mientras este
+#    script lo arrancaba en el 3000 => dos daemons compitiendo por puertos
+#    distintos y el supervisor matando al que estaba en el 3000 por "no
+#    responder /health".
+#
+#    Solucion: este script instala el supervisor ACTUAL (y el keeper) desde
+#    el repo, reinicia el stack y deja que el supervisor sea el UNICO que
+#    levanta el daemon, en el puerto real.
+SERVICED=/data/adb/service.d
+SUPERVISOR_NUEVO="$STATE/99-megadaemon.sh"
+KEEPER_NUEVO="$STATE/97-megadaemon-keeper.sh"
+REPO_RAW=https://raw.githubusercontent.com/boolforge/megadaemon
+REF="${MEGADAEMON_REF:-main}"
+
+actualizar_supervisor() {
+    echo "== supervisor: comprobando version"
+    mkdir -p "$STATE" 2>/dev/null
+    if ! descargar "$REPO_RAW/$REF/deploy/99-megadaemon.sh" "$SUPERVISOR_NUEVO"; then
+        log "AVISO: no se pudo descargar el supervisor (sin red?): se deja el que hay"
+        return 1
+    fi
+    # El supervisor nuevo DEBE apuntar al prefijo persistente.
+    if ! grep -q '^PREFIX=/data/adb/megadaemon' "$SUPERVISOR_NUEVO"; then
+        log "AVISO: el supervisor descargado no usa el prefijo persistente: no se instala"
+        return 1
+    fi
+    if [ -f "$SERVICED/99-megadaemon.sh" ] && cmp -s "$SUPERVISOR_NUEVO" "$SERVICED/99-megadaemon.sh"; then
+        echo "  el supervisor ya es el actual"
+    else
+        mkdir -p "$SERVICED" 2>/dev/null
+        [ -f "$SERVICED/99-megadaemon.sh" ] && cp -f "$SERVICED/99-megadaemon.sh" "$SERVICED/99-megadaemon.sh.bak"
+        cp -f "$SUPERVISOR_NUEVO" "$SERVICED/99-megadaemon.sh" && chmod 755 "$SERVICED/99-megadaemon.sh"
+        log "supervisor actualizado en $SERVICED/99-megadaemon.sh (copia .bak)"
+        echo "  supervisor actualizado"
+    fi
+    # El keeper tambien (vigila al supervisor: sin el, el movil se queda sin
+    # supervisor tras un reinicio).
+    if descargar "$REPO_RAW/$REF/deploy/97-megadaemon-keeper.sh" "$KEEPER_NUEVO"; then
+        mkdir -p "$SERVICED" 2>/dev/null
+        cp -f "$KEEPER_NUEVO" "$SERVICED/97-megadaemon-keeper.sh" 2>/dev/null && \
+            chmod 755 "$SERVICED/97-megadaemon-keeper.sh" 2>/dev/null
+        echo "  keeper actualizado"
+    fi
+    return 0
+}
+actualizar_supervisor
+
+# 0.b) Reiniciar el stack: al supervisor viejo hay que matarlo para que
+#     cargue el nuevo (Magisk solo los lanza al arrancar el movil).
+supervisor_vivo() {
+    for p in /proc/[0-9]*; do
+        [ -r "$p/cmdline" ] || continue
+        c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+        case "$c" in *99-megadaemon.sh*) echo "$p"; return 0;; esac
+    done
+    return 1
+}
+if s=$(supervisor_vivo); then
+    log "reiniciando el supervisor (pid $s) para que cargue la version nueva"
+    kill -9 $(echo "$s" | tr '\n' ' ') 2>/dev/null
+    sleep 2
+fi
+
 # 1) Daemon: hay que matarlo DE VERD y esperar a que quede libre el puerto.
 #
 #    MEDIDO (2026-11-25, movil): con un simple "kill + 2 s" el daemon NUEVO
@@ -172,19 +259,34 @@ if ! puerto_libre; then
     pkill -9 -x megadaemon-core 2>/dev/null
     sleep 3
 fi
-log "puerto $PORT libre: arranco el daemon nuevo"
+log "puerto $PORT libre"
 if [ ! -x "$BIN" ]; then
     log "ERROR: no hay binario en $BIN"
     exit 1
 fi
-export MEGADAEMON_BIN="$BIN"
-export MEGADAEMON_STATE_DIR="$STATE"
-export MEGADAEMON_INSTANCE_NAME=samsung
-export MEGADAEMON_INSTANCE_ROLE=primary
-export MEGADAEMON_COCKPIT_PORT="$PORT"
-cd "$PREFIX" || exit 1
-setsid nohup "$BIN" cockpit "$PORT" >> "$LOG" 2>&1 < /dev/null &
-log "daemon arrancado (pid $!)"
+
+# MEDIDO (2026-11-25): el daemon lo debe levantar EL SUPERVISOR (es el que
+# gestiona energia, tunel, auto-update y watchdog).  Este script solo lo
+# levanta si el supervisor no lo hace.
+arrancar_daemon_a_mano() {
+    export MEGADAEMON_BIN="$BIN"
+    export MEGADAEMON_STATE_DIR="$STATE"
+    export MEGADAEMON_INSTANCE_NAME=samsung
+    export MEGADAEMON_INSTANCE_ROLE=primary
+    export MEGADAEMON_COCKPIT_PORT="$PORT"
+    cd "$PREFIX" || return 1
+    setsid nohup "$BIN" cockpit "$PORT" >> "$LOG" 2>&1 < /dev/null &
+    log "daemon arrancado a mano (pid $!)"
+}
+i=0
+while [ $i -lt 30 ]; do
+    if health; then log "el supervisor levanto el daemon (cockpit responde)"; break; fi
+    i=$((i + 1)); sleep 2
+done
+if [ $i -ge 30 ]; then
+    log "el supervisor no levanto el daemon en 60 s: lo arranco yo"
+    arrancar_daemon_a_mano
+fi
 
 # 2) Espera a que responda y COMPRUEBA que es el daemon NUEVO.
 i=0
