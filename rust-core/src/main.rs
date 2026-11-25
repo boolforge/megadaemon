@@ -17,13 +17,17 @@ fn print_usage() {
     eprintln!("  cirx-ssa [mas]                              LTO-Decomp v3.4 CIRX Micro-RTL SSA, Risk Score S/R & SMT-LIB2 Export");
     eprintln!("  mba <expr>                                  D810/Goomba Mixed Boolean-Arithmetic (MBA) Algebraic Simplifier");
     eprintln!("  kaitai <file> [template] [offset]           ImHex/Kaitai Struct Declarative Binary Parser");
-    eprintln!("  rizin <file> [mode] [arch]                  Native ARM64 Rizin 0.9.1 Multi-OS Inspector");
+    eprintln!(
+        "  rizin <file> [mode] [arch]                  Native ARM64 Rizin 0.9.1 Multi-OS Inspector"
+    );
     eprintln!("  frida <mode> <module> <sym_or_off> [proc]   Frida DBI Script Generator (attach|stalker|native_call|android_jni|tenet_mem)");
     eprintln!("  npu-cv                                      Exynos 2100 NPU + Mali-G78 + VLA Computer Vision ROI Telemetry");
     eprintln!("  unifier                                     Scan & Unify All 9 Projects Across the Device Ecosystem");
     eprintln!("  rea <plat> [query] [max]                    REA Ghidra 2.7MB C Corpus Indexer & ScummVM C++ Transpiler");
     eprintln!("  cfg <plat> [offset] [count]                 Native Control Flow Graph (CFG) Lifter & Mermaid Generator");
-    eprintln!("  bindiff <plat>                              Multi-ISA Cross-Platform Function Matcher");
+    eprintln!(
+        "  bindiff <plat>                              Multi-ISA Cross-Platform Function Matcher"
+    );
     eprintln!("  hw-mmio <plat>                              Hardware MMIO Register Annotator & Auto-Struct Reconstructor");
     eprintln!("  crypto-scan <plat>                          Shift-JIS String Decoder & Konami LZSS/RLE Scanner");
     eprintln!("  seere <query> [--max-turns N] [--env-in-prompt]   Execute SEERE v13.1 GBNF Local Harness (0 tokens if possible)");
@@ -36,20 +40,26 @@ fn print_usage() {
     eprintln!("  csc-verify                                Verifica en el movil si la feature de grabacion nativa (CSC) esta activa");
     eprintln!("  rootcheck <paquete>[,...]                 Banco de pruebas de ocultacion de root: veredicto + evidencia");
     eprintln!("  rootcheck --state                        Que senales de root quedan a la vista ahora mismo");
-    eprintln!("  rootcheck --exec <paquete>               Arranca la app y captura su logcat filtrado");
+    eprintln!(
+        "  rootcheck --exec <paquete>               Arranca la app y captura su logcat filtrado"
+    );
     eprintln!("  magisk list|enable|disable|install       Gestion real de modulos Magisk (install valida el ZIP)");
     eprintln!("  magisk shamiko [<zip>]                   Ficha de la release oficial + estado real en el movil");
     eprintln!("  locate-roms [refresh]                       Native Multi-Platform ROM & Binary Auto-Discovery");
     eprintln!("  disasm <plat> <file> [offset] [count]       Native Multi-Arch Disassembler");
     eprintln!("  hex <file> [offset] [length]                Native Hex & ASCII Inspector");
-    eprintln!("  deobfuscate <plat> <file>                   Native Konami XOR Script Deobfuscator");
+    eprintln!(
+        "  deobfuscate <plat> <file>                   Native Konami XOR Script Deobfuscator"
+    );
     eprintln!("  dumper <plat> <file>                        Native Asset Signature Extractor");
     eprintln!("  entropy <file> [block_size]                 Shannon Entropy Block Classifier");
     eprintln!("  pattern <file> <pattern_str> [max_matches]  Wildcard AOB Pattern Scanner");
     eprintln!("  pointers <file> <base_hex> [is_be] [max]    32-bit Pointer Table Miner");
     eprintln!("  diff <file_a> <file_b> [base_hex] [max]     Memory Snapshot Differential Engine");
     eprintln!("  shm-status                                  Zero-Copy VLA SHM Bus Header Status");
-    eprintln!("  shm-frame-bmp                               Render Live 24-bit BMP Frame from SHM");
+    eprintln!(
+        "  shm-frame-bmp                               Render Live 24-bit BMP Frame from SHM"
+    );
 }
 
 /// D-10 (P0): hook de panic con backtrace.
@@ -86,7 +96,10 @@ fn main() {
 
     match args[1].as_str() {
         "cockpit" => {
-            let port = args.get(2).and_then(|s| s.parse::<u16>().ok()).unwrap_or(3000);
+            let port = args
+                .get(2)
+                .and_then(|s| s.parse::<u16>().ok())
+                .unwrap_or(3000);
             // v15 (W0): bucle autónomo de la voz.  Opt-in explícito
             // (MEGADAEMON_VOICE=1): 1 acción por tick, cooldown, presupuesto
             // por hora y NUNCA reinicios ni procesos nuevos.
@@ -187,9 +200,7 @@ fn main() {
                                 "url": url,
                                 "puerto": 9090,
                             });
-                            if let Ok(mut t) =
-                                megadaemon_core::resonance::Tablon::abrir(&dir)
-                            {
+                            if let Ok(mut t) = megadaemon_core::resonance::Tablon::abrir(&dir) {
                                 t.publicar("latido", cuerpo);
                             }
                             break;
@@ -234,26 +245,73 @@ fn main() {
                 // si la app restaura su `.so`, se repone sin que nadie toque
                 // nada.  Es lo que faltaba para que "arrancar Antigravity"
                 // se notase (queja del usuario, 2026-11-23).
-                if megadaemon_core::config_efectiva::bool_de(
-                    "instrumentacion_agy.automatica",
-                    true,
-                ) {
-                    let puerto = megadaemon_core::config_efectiva::u64_de(
-                        "general.puerto_gateway",
-                        9090,
-                    ) as u16;
+                if megadaemon_core::config_efectiva::bool_de("instrumentacion_agy.automatica", true)
+                {
+                    let puerto =
+                        megadaemon_core::config_efectiva::u64_de("general.puerto_gateway", 9090)
+                            as u16;
                     std::thread::Builder::new()
                         .name("instrumentacion-agy".to_string())
                         .spawn(move || {
                             megadaemon_core::instrumentacion_agy::bucle_automatico(puerto)
                         })
                         .map(|_| {
-                            eprintln!("instrumentación AGY: ciclo automático cada 60 s (configurable)");
+                            eprintln!(
+                                "instrumentación AGY: ciclo automático cada 60 s (configurable)"
+                            );
                         })
                         .map_err(|e| {
                             eprintln!("instrumentación AGY: no se pudo arrancar el ciclo: {e}");
                         });
                 }
+            }
+            // v21: el daemon RECONCILIA SU PROPIO STACK al arrancar y cada
+            // 10 min.
+            //
+            // MEDIDO (2026-11-25, movil): el binario se actualizaba pero el
+            // supervisor se quedaba viejo (con el prefijo VOLATIL) => no
+            // encontraba el binario => no podia relanzar el daemon => movil
+            // sin daemon y en bucle de reinicios.  Ademas la Web UI servida
+            // era la V1 (7 vistas, sin Antigravity) porque el HTML en disco
+            // era viejo.
+            //
+            // Aqui el daemon lleva DENTRO el supervisor, el keeper, los
+            // scripts de Antigravity y la Web UI (ver `stack`), y reescribe
+            // lo que difiera.  Es idempotente y no hace nada si todo esta
+            // en su sitio.  Si el supervisor cambio, se le mata para que
+            // cargue la version nueva (lo revive el keeper).
+            {
+                std::thread::Builder::new()
+                    .name("stack-reconciliacion".to_string())
+                    .spawn(|| {
+                        let cfg = megadaemon_core::stack::Config::del_entorno();
+                        // En un PC (no Android) no se toca /data/adb.
+                        let puede = cfg.android
+                            || std::fs::create_dir_all(&cfg.prefijo).is_ok();
+                        if !puede {
+                            return;
+                        }
+                        loop {
+                            let inf = megadaemon_core::stack::reconciliar(&cfg);
+                            if inf.cambio() {
+                                eprintln!("stack: {}", inf.linea());
+                                for e in &inf.escritos {
+                                    eprintln!("stack: escrito {e}");
+                                }
+                                for (r, m) in &inf.fallidos {
+                                    eprintln!("stack: FALLO {r}: {m}");
+                                }
+                                if inf.supervisor_cambiado {
+                                    let ok = megadaemon_core::stack::reiniciar_supervisor();
+                                    eprintln!(
+                                        "stack: el supervisor cambio y se reinicio={ok} (lo revive el keeper)"
+                                    );
+                                }
+                            }
+                            std::thread::sleep(std::time::Duration::from_secs(600));
+                        }
+                    })
+                    .map_err(|e| eprintln!("stack: no se pudo arrancar la reconciliacion: {e}"));
             }
             if let Err(e) = cockpit_server::run_server(port) {
                 eprintln!("Cockpit server error: {}", e);
@@ -285,18 +343,16 @@ fn main() {
         // configuracion, SHA-256) SIN red y SIN abrir el cockpit, e imprime
         // una marca.  El auto-actualizador lo ejecuta sobre el `.new` ANTES
         // de instalarlo: si no arranca, no se instala nada.
-        "self-test" => {
-            match megadaemon_core::self_update::autocomprobacion() {
-                Ok(marca) => {
-                    println!("{marca}");
-                    std::process::exit(0);
-                }
-                Err(e) => {
-                    eprintln!("SELFTEST-FALLO: {e}");
-                    std::process::exit(1);
-                }
+        "self-test" => match megadaemon_core::self_update::autocomprobacion() {
+            Ok(marca) => {
+                println!("{marca}");
+                std::process::exit(0);
             }
-        }
+            Err(e) => {
+                eprintln!("SELFTEST-FALLO: {e}");
+                std::process::exit(1);
+            }
+        },
 
         "update" => {
             let solo_comprobar = args.iter().any(|a| a == "--check");
@@ -346,7 +402,8 @@ fn main() {
                 }
                 "publish" => {
                     let sd = std::env::var("MEGADAEMON_STATE_DIR").ok();
-                    let out = megadaemon_core::channel::publish(sd.as_deref(), None, None, None, None);
+                    let out =
+                        megadaemon_core::channel::publish(sd.as_deref(), None, None, None, None);
                     println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
                 }
                 _ => {
@@ -371,22 +428,31 @@ fn main() {
                     "add" => {
                         // La regla llega como JSON en el último argumento.
                         let raw = rest.join(" ");
-                        let rule: serde_json::Value = serde_json::from_str(&raw)
-                            .unwrap_or_else(|e| serde_json::json!({"ok": false, "error": e.to_string()}));
+                        let rule: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(
+                            |e| serde_json::json!({"ok": false, "error": e.to_string()}),
+                        );
                         match megadaemon_core::automation_runtime::automation_add(&rule) {
                             Ok(v) => v,
                             Err(e) => serde_json::json!({"ok": false, "error": e}),
                         }
                     }
-                    "remove" => match megadaemon_core::automation_runtime::automation_remove(rest.first().map(|s| s.as_str()).unwrap_or("")) {
+                    "remove" => match megadaemon_core::automation_runtime::automation_remove(
+                        rest.first().map(|s| s.as_str()).unwrap_or(""),
+                    ) {
                         Ok(v) => v,
                         Err(e) => serde_json::json!({"ok": false, "error": e}),
                     },
-                    "enable" => match megadaemon_core::automation_runtime::automation_toggle(rest.first().map(|s| s.as_str()).unwrap_or(""), true) {
+                    "enable" => match megadaemon_core::automation_runtime::automation_toggle(
+                        rest.first().map(|s| s.as_str()).unwrap_or(""),
+                        true,
+                    ) {
                         Ok(v) => v,
                         Err(e) => serde_json::json!({"ok": false, "error": e}),
                     },
-                    "disable" => match megadaemon_core::automation_runtime::automation_toggle(rest.first().map(|s| s.as_str()).unwrap_or(""), false) {
+                    "disable" => match megadaemon_core::automation_runtime::automation_toggle(
+                        rest.first().map(|s| s.as_str()).unwrap_or(""),
+                        false,
+                    ) {
                         Ok(v) => v,
                         Err(e) => serde_json::json!({"ok": false, "error": e}),
                     },
@@ -401,7 +467,9 @@ fn main() {
                         let kind = rest.first().cloned().unwrap_or_default();
                         let key = rest.get(1).cloned().unwrap_or_default();
                         let text = rest.get(2).cloned().unwrap_or_default();
-                        match megadaemon_core::automation_runtime::automation_fire(&kind, &key, None, &text, false) {
+                        match megadaemon_core::automation_runtime::automation_fire(
+                            &kind, &key, None, &text, false,
+                        ) {
                             Ok(v) => v,
                             Err(e) => serde_json::json!({"ok": false, "error": e}),
                         }
@@ -412,14 +480,17 @@ fn main() {
                 "cron" => match action.as_str() {
                     "add" => {
                         let raw = rest.join(" ");
-                        let job: serde_json::Value = serde_json::from_str(&raw)
-                            .unwrap_or_else(|e| serde_json::json!({"ok": false, "error": e.to_string()}));
+                        let job: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(
+                            |e| serde_json::json!({"ok": false, "error": e.to_string()}),
+                        );
                         match megadaemon_core::automation_runtime::cron_add(&job) {
                             Ok(v) => v,
                             Err(e) => serde_json::json!({"ok": false, "error": e}),
                         }
                     }
-                    "remove" => match megadaemon_core::automation_runtime::cron_remove(rest.first().map(|s| s.as_str()).unwrap_or("")) {
+                    "remove" => match megadaemon_core::automation_runtime::cron_remove(
+                        rest.first().map(|s| s.as_str()).unwrap_or(""),
+                    ) {
                         Ok(v) => v,
                         Err(e) => serde_json::json!({"ok": false, "error": e}),
                     },
@@ -437,8 +508,12 @@ fn main() {
                         ),
                     }),
                     "profiles" => megadaemon_core::automation_runtime::energy_profiles(),
-                    "apply" => megadaemon_core::automation_runtime::energy_apply(rest.first().map(|s| s.as_str()).unwrap_or("")),
-                    "set_profile" => match megadaemon_core::automation_runtime::energy_set_profile(rest.first().map(|s| s.as_str()).unwrap_or("")) {
+                    "apply" => megadaemon_core::automation_runtime::energy_apply(
+                        rest.first().map(|s| s.as_str()).unwrap_or(""),
+                    ),
+                    "set_profile" => match megadaemon_core::automation_runtime::energy_set_profile(
+                        rest.first().map(|s| s.as_str()).unwrap_or(""),
+                    ) {
                         Ok(v) => v,
                         Err(e) => serde_json::json!({"ok": false, "error": e}),
                     },
@@ -508,14 +583,20 @@ fn main() {
                     }
                 }
             }
-            let r = megadaemon_core::voice_runtime::handle(&action, &serde_json::Value::Object(payload));
+            let r = megadaemon_core::voice_runtime::handle(
+                &action,
+                &serde_json::Value::Object(payload),
+            );
             println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
         }
 
         // v13.3 — Motor de sincronización de conversaciones (CLI).
         "sync" => {
             let services: Option<Vec<String>> = args.get(2).map(|s| {
-                s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()
+                s.split(',')
+                    .map(|x| x.trim().to_string())
+                    .filter(|x| !x.is_empty())
+                    .collect()
             });
             let cookies = args.iter().any(|a| a == "--cookies");
             let r = megadaemon_core::sync::run_sync(services, cookies);
@@ -571,24 +652,47 @@ fn main() {
                 };
                 match sub {
                     "scan" => {
-                        let analysis = megadaemon_core::daad::DAADBytecodeParser::parse_ddb(&data, &target_path);
-                        println!("{}", serde_json::to_string_pretty(&analysis).unwrap_or_default());
+                        let analysis = megadaemon_core::daad::DAADBytecodeParser::parse_ddb(
+                            &data,
+                            &target_path,
+                        );
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&analysis).unwrap_or_default()
+                        );
                     }
                     "embedded" => {
-                        if let Some((offset, size, analysis)) = megadaemon_core::daad::DAADBytecodeParser::find_embedded_ddb(&data) {
-                            println!("Encontrado DDB embebido en offset 0x{:08X} ({} bytes):", offset, size);
-                            println!("{}", serde_json::to_string_pretty(&analysis).unwrap_or_default());
+                        if let Some((offset, size, analysis)) =
+                            megadaemon_core::daad::DAADBytecodeParser::find_embedded_ddb(&data)
+                        {
+                            println!(
+                                "Encontrado DDB embebido en offset 0x{:08X} ({} bytes):",
+                                offset, size
+                            );
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&analysis).unwrap_or_default()
+                            );
                         } else {
                             println!("No se encontró DDB embebido.");
                         }
                     }
                     "media" => {
-                        let media = megadaemon_core::daad::MediaInspector::inspect_media(&data, &target_path);
-                        println!("{}", serde_json::to_string_pretty(&media).unwrap_or_default());
+                        let media = megadaemon_core::daad::MediaInspector::inspect_media(
+                            &data,
+                            &target_path,
+                        );
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&media).unwrap_or_default()
+                        );
                     }
                     "disasm" => {
                         let dialect = args.get(4).map(|s| s.as_str()).unwrap_or("v2");
-                        let (condacts, next_offset) = megadaemon_core::daad::CondActDisassembler::disassemble_stream(&data, 0, dialect);
+                        let (condacts, next_offset) =
+                            megadaemon_core::daad::CondActDisassembler::disassemble_stream(
+                                &data, 0, dialect,
+                            );
                         let out = serde_json::json!({
                             "dialect": dialect,
                             "count": condacts.len(),
@@ -624,7 +728,11 @@ fn main() {
                 model = Some(rest[0]);
                 rest.remove(0);
             }
-            let prompt = if rest.is_empty() { "Hello".to_string() } else { rest.join(" ") };
+            let prompt = if rest.is_empty() {
+                "Hello".to_string()
+            } else {
+                rest.join(" ")
+            };
             let mut res = providers::execute_chat(&prompt, model, None, None, 1024);
             if !want_reasoning {
                 res.reasoning = String::new();
@@ -633,7 +741,8 @@ fn main() {
         }
 
         "code" => {
-            let mut workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let mut workspace =
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let mut model: Option<String> = None;
             let mut session_id: Option<String> = None;
             let mut max_turns: usize = 20;
@@ -695,7 +804,10 @@ fn main() {
                 allow_outside_workspace: allow_outside,
             };
             let report = megadaemon_core::agent_coding::run_coding_session_live(&goal, &cfg);
-            println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).unwrap_or_default()
+            );
         }
 
         "go-retool" => {
@@ -740,7 +852,11 @@ fn main() {
                     let hex_str = args.get(3).map(|s| s.as_str()).unwrap_or("");
                     let bytes: Vec<u8> = (0..hex_str.len())
                         .step_by(2)
-                        .filter_map(|i| hex_str.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
+                        .filter_map(|i| {
+                            hex_str
+                                .get(i..i + 2)
+                                .and_then(|h| u8::from_str_radix(h, 16).ok())
+                        })
                         .collect();
                     let res = megadaemon_core::es_eid::inspect_dnie_atr(&bytes);
                     println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
@@ -775,11 +891,17 @@ fn main() {
             }
             let bytes: Vec<u8> = (0..hex_str.len())
                 .step_by(2)
-                .filter_map(|i| hex_str.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
+                .filter_map(|i| {
+                    hex_str
+                        .get(i..i + 2)
+                        .and_then(|h| u8::from_str_radix(h, 16).ok())
+                })
                 .collect();
             let res = if arch == "x86_32" || arch == "x86_64" {
                 let bits = if arch == "x86_32" { 32 } else { 64 };
-                Ok(megadaemon_core::re_disasm::disasm_x86_iced(&bytes, bits, 0x400000, 128))
+                Ok(megadaemon_core::re_disasm::disasm_x86_iced(
+                    &bytes, bits, 0x400000, 128,
+                ))
             } else {
                 megadaemon_core::re_disasm::disasm_capstone(&bytes, arch, 0x400000, 128)
             };
@@ -799,18 +921,26 @@ fn main() {
         }
 
         "jobs" => {
-            let db = std::path::Path::new(&megadaemon_core::cockpit_server::state_dir()).join("megadaemon_jobs.db");
+            let db = std::path::Path::new(&megadaemon_core::cockpit_server::state_dir())
+                .join("megadaemon_jobs.db");
             let q = megadaemon_core::job_queue::JobQueue::open(&db).expect("open job queue");
             let list = q.list(50).unwrap_or_default();
-            println!("{}", serde_json::to_string_pretty(&list).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&list).unwrap_or_default()
+            );
         }
 
         "audit" => {
-            let db = std::path::Path::new(&megadaemon_core::cockpit_server::state_dir()).join("megadaemon_audit.db");
+            let db = std::path::Path::new(&megadaemon_core::cockpit_server::state_dir())
+                .join("megadaemon_audit.db");
             let rows = megadaemon_core::tool_policy::AuditJournal::open(&db)
                 .and_then(|j| j.recent(50))
                 .unwrap_or_default();
-            println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&rows).unwrap_or_default()
+            );
         }
 
         "drive-vfs" => {
@@ -846,6 +976,82 @@ fn main() {
         "reparar" | "repair" => {
             let rc = megadaemon_core::reparar_entorno::run_cli(&args[2..]);
             std::process::exit(rc);
+        }
+
+        //   megadaemon-core stack [--reconciliar] [--json]
+        //
+        //   El daemon lleva DENTRO el supervisor, el keeper, cloudflared,
+        //   los scripts de Antigravity y la Web UI.  "stack" dice si lo que
+        //   hay en disco es exactamente lo que lleva el binario;
+        //   "--reconciliar" reescribe lo que difiere (idempotente) y
+        //   reinicia el supervisor si este cambio.
+        //
+        //   MEDIDO (2026-11-25, movil): el supervisor instalado era una
+        //   version vieja con el prefijo VOLATIL => no encontraba el
+        //   binario => no podia relanzar el daemon => movil sin daemon.
+        "stack" => {
+            let cfg = megadaemon_core::stack::Config::del_entorno();
+            let json = args[2..].iter().any(|a| a == "--json");
+            let reconciliar = args[2..]
+                .iter()
+                .any(|a| a == "--reconciliar" || a == "reconciliar" || a == "reparar");
+            if !reconciliar {
+                let v = megadaemon_core::stack::estado_json(&cfg);
+                if json {
+                    println!("{}", v);
+                } else {
+                    println!("stack (prefijo {}):", cfg.prefijo);
+                    for f in v["ficheros"].as_array().cloned().unwrap_or_default() {
+                        println!(
+                            "  [{}] {}  (origen {})",
+                            if f["ok"].as_bool().unwrap_or(false) {
+                                "ok"
+                            } else {
+                                "DESFASADO"
+                            },
+                            f["ruta"].as_str().unwrap_or("?"),
+                            f["origen"].as_str().unwrap_or("?")
+                        );
+                    }
+                    println!(
+                        "  {} de {} correctos",
+                        v["correctos"].as_u64().unwrap_or(0),
+                        v["total"].as_u64().unwrap_or(0)
+                    );
+                }
+                std::process::exit(0);
+            }
+            let inf = megadaemon_core::stack::reconciliar(&cfg);
+            let reiniciado = if inf.supervisor_cambiado {
+                megadaemon_core::stack::reiniciar_supervisor()
+            } else {
+                false
+            };
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "ok": inf.ok(),
+                        "informe": inf.a_json(),
+                        "supervisor_reiniciado": reiniciado,
+                        "estado": megadaemon_core::stack::estado_json(&cfg),
+                    })
+                );
+            } else {
+                println!("{}", inf.linea());
+                for e in &inf.escritos {
+                    println!("  escrito: {e}");
+                }
+                for (r, m) in &inf.fallidos {
+                    eprintln!("  FALLO {r}: {m}");
+                }
+                if inf.supervisor_cambiado {
+                    println!(
+                        "  el supervisor cambio: reiniciado={reiniciado} (lo revive el keeper)"
+                    );
+                }
+            }
+            std::process::exit(if inf.ok() { 0 } else { 1 });
         }
 
         "retro-tools" => {
@@ -921,24 +1127,37 @@ fn main() {
         }
 
         "cirx-ssa" => {
-            let mas = args.get(2).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.75);
+            let mas = args
+                .get(2)
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.75);
             let rep = cirx_rtl::run_reference_pipeline(mas, 10, 0.05, 3, 1, 0);
             println!("{}", serde_json::to_string_pretty(&rep).unwrap());
         }
 
         "mba" => {
-            let expr = if args.len() > 2 { args[2..].join(" ") } else { "(x ^ y) + 2*(x & y)".into() };
+            let expr = if args.len() > 2 {
+                args[2..].join(" ")
+            } else {
+                "(x ^ y) + 2*(x & y)".into()
+            };
             let rep = kaitai_imhex::simplify_mba_expression(&expr);
             println!("{}", serde_json::to_string_pretty(&rep).unwrap());
         }
 
         "kaitai" => {
             let fp = args.get(2).map(|s| s.as_str()).unwrap_or("");
-            let tmpl = args.get(3).map(|s| s.as_str()).unwrap_or("sega_m68k_vectors");
+            let tmpl = args
+                .get(3)
+                .map(|s| s.as_str())
+                .unwrap_or("sega_m68k_vectors");
             let off = args.get(4).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
             match kaitai_imhex::parse_struct_at_offset(fp, tmpl, off, None) {
                 Ok(rep) => println!("{}", serde_json::to_string_pretty(&rep).unwrap()),
-                Err(e) => { eprintln!("{}", e); std::process::exit(1); }
+                Err(e) => {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
             }
         }
 
@@ -954,7 +1173,10 @@ fn main() {
             let mode = args.get(2).map(|s| s.as_str()).unwrap_or("attach");
             let module = args.get(3).map(|s| s.as_str()).unwrap_or("libtarget.so");
             let sym = args.get(4).map(|s| s.as_str()).unwrap_or("0x1000");
-            let proc_n = args.get(5).map(|s| s.as_str()).unwrap_or("com.example.target");
+            let proc_n = args
+                .get(5)
+                .map(|s| s.as_str())
+                .unwrap_or("com.example.target");
             let rep = frida_dbi::generate_frida_script(mode, module, sym, proc_n);
             println!("{}", serde_json::to_string_pretty(&rep).unwrap());
         }
@@ -972,7 +1194,10 @@ fn main() {
         "rea" => {
             let plat = args.get(2).map(|s| s.as_str()).unwrap_or("segacd");
             let query = args.get(3).map(|s| s.as_str()).unwrap_or("");
-            let max_r = args.get(4).and_then(|s| s.parse::<usize>().ok()).unwrap_or(5);
+            let max_r = args
+                .get(4)
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(5);
             let rep = rea_assistant::analyze_ghidra_corpus(plat, query, max_r);
             println!("{}", serde_json::to_string_pretty(&rep).unwrap());
         }
@@ -980,9 +1205,19 @@ fn main() {
         "cfg" => {
             let plat = args.get(2).map(|s| s.as_str()).unwrap_or("segacd");
             let offset = args.get(3).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-            let count = args.get(4).and_then(|s| s.parse::<usize>().ok()).unwrap_or(28);
+            let count = args
+                .get(4)
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(28);
             if let Some(rom) = rom_locator::resolve_binary(plat) {
-                match cfg_lifter::lift_cfg(plat, &rom.platform_name, &rom.arch, &rom.path, offset, count) {
+                match cfg_lifter::lift_cfg(
+                    plat,
+                    &rom.platform_name,
+                    &rom.arch,
+                    &rom.path,
+                    offset,
+                    count,
+                ) {
                     Ok(rep) => println!("{}", serde_json::to_string_pretty(&rep).unwrap()),
                     Err(e) => {
                         eprintln!("CFG error: {}", e);
@@ -1075,18 +1310,26 @@ fn main() {
 
         "power" => {
             let (st, pol) = power_policy::current_policy();
-            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                "policy": pol.name, "max_turns": pol.max_turns,
-                "prefer_local": pol.prefer_local, "allow_heavy": pol.allow_heavy,
-                "max_tokens": pol.max_tokens, "reason": pol.reason,
-                "charging": st.charging, "battery_pct": st.capacity_pct,
-                "battery_temp_c": st.battery_temp_c, "cpu_temp_c": st.cpu_temp_c,
-                "thermal_hot": st.thermal_hot, "system_power_save": st.system_power_save,
-                "governor": st.governor
-            })).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "policy": pol.name, "max_turns": pol.max_turns,
+                    "prefer_local": pol.prefer_local, "allow_heavy": pol.allow_heavy,
+                    "max_tokens": pol.max_tokens, "reason": pol.reason,
+                    "charging": st.charging, "battery_pct": st.capacity_pct,
+                    "battery_temp_c": st.battery_temp_c, "cpu_temp_c": st.cpu_temp_c,
+                    "thermal_hot": st.thermal_hot, "system_power_save": st.system_power_save,
+                    "governor": st.governor
+                }))
+                .unwrap()
+            );
         }
         "seere-prompt" => {
-            let lang = if args.len() > 2 { args[2].clone() } else { "es".to_string() };
+            let lang = if args.len() > 2 {
+                args[2].clone()
+            } else {
+                "es".to_string()
+            };
             println!("{}", seere_v11::sys_prompt("REACT", &lang));
         }
         "seere-grammar" => {
@@ -1146,7 +1389,9 @@ fn main() {
                 .unwrap_or_else(|| "CscFeature_VoiceCall_ConfigRecording".to_string());
             let apply = args.iter().any(|a| a == "--apply");
             let Some(valor) = value else {
-                eprintln!("Uso: megadaemon-core csc-patch --value <valor> [--feature <nombre>] [--apply]");
+                eprintln!(
+                    "Uso: megadaemon-core csc-patch --value <valor> [--feature <nombre>] [--apply]"
+                );
                 std::process::exit(2);
             };
             let csc = csc_patch::active_csc().unwrap_or_else(|| "AMO".to_string());
@@ -1178,11 +1423,10 @@ fn main() {
             // sha256, se descodifica (OMC) y se comprueba el valor.
             let bytes = std::fs::read(&rep.modulo).unwrap_or_default();
             let despues = root_occlusion::sha256_hex(&bytes);
-            let leido = root_occlusion::read_device_file(&rep.modulo, 1 << 20)
-                .and_then(|b| {
-                    let (xml, _enc, _err) = csc_verify::decode_csc_file(&b);
-                    xml.and_then(|x| rom_migration::csc_feature_get(&x, &feature))
-                });
+            let leido = root_occlusion::read_device_file(&rep.modulo, 1 << 20).and_then(|b| {
+                let (xml, _enc, _err) = csc_verify::decode_csc_file(&b);
+                xml.and_then(|x| rom_migration::csc_feature_get(&x, &feature))
+            });
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
@@ -1286,7 +1530,10 @@ fn main() {
         }
 
         "locate-roms" => {
-            let refresh = args.get(2).map(|s| s == "1" || s == "true").unwrap_or(false);
+            let refresh = args
+                .get(2)
+                .map(|s| s == "1" || s == "true")
+                .unwrap_or(false);
             let roms = rom_locator::locate_all(refresh);
             println!("{}", serde_json::to_string(&roms).unwrap());
         }
@@ -1299,7 +1546,10 @@ fn main() {
             let plat = &args[2];
             let file_path = &args[3];
             let offset = args.get(4).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-            let count = args.get(5).and_then(|s| s.parse::<usize>().ok()).unwrap_or(16);
+            let count = args
+                .get(5)
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(16);
             let (plat_name, arch, _, _, _) = rom_locator::platform_metadata(plat);
             match disasm::disassemble_file(plat, plat_name, arch, file_path, offset, count) {
                 Ok(rep) => println!("{}", serde_json::to_string(&rep).unwrap()),
@@ -1317,7 +1567,10 @@ fn main() {
             }
             let file_path = &args[2];
             let offset = args.get(3).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-            let length = args.get(4).and_then(|s| s.parse::<usize>().ok()).unwrap_or(256);
+            let length = args
+                .get(4)
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(256);
             match disasm::inspect_hex(file_path, "ARM64/Retro", offset, length) {
                 Ok(rep) => println!("{}", serde_json::to_string(&rep).unwrap()),
                 Err(e) => {
@@ -1409,7 +1662,10 @@ fn main() {
             let file_path = &args[2];
             let base_hex = args[3].trim_start_matches("0x");
             let base_vaddr = u32::from_str_radix(base_hex, 16).unwrap_or(0);
-            let is_be = args.get(4).map(|s| s == "1" || s == "true").unwrap_or(false);
+            let is_be = args
+                .get(4)
+                .map(|s| s == "1" || s == "true")
+                .unwrap_or(false);
             let max_res = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(128);
 
             let mut f = match File::open(file_path) {
@@ -1436,7 +1692,10 @@ fn main() {
             }
             let file_a_path = &args[2];
             let file_b_path = &args[3];
-            let base_hex = args.get(4).map(|s| s.trim_start_matches("0x")).unwrap_or("0");
+            let base_hex = args
+                .get(4)
+                .map(|s| s.trim_start_matches("0x"))
+                .unwrap_or("0");
             let base_vaddr = u32::from_str_radix(base_hex, 16).unwrap_or(0);
             let max_res = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(256);
 

@@ -191,6 +191,7 @@ pub mod shm;
 pub mod signing;
 pub mod signing_vault;
 pub mod snapshot;
+pub mod stack;
 pub mod sqlite_probe;
 pub mod sshd;
 pub mod store_manager;

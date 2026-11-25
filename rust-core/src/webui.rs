@@ -121,6 +121,8 @@ pub fn api_v2_routes() -> Vec<(&'static str, &'static str)> {
         ("GET", "/api/v2/quota"),
         ("GET", "/api/v2/instrumentacion"),
         ("POST", "/api/v2/instrumentacion"),
+        ("GET", "/api/v2/stack"),
+        ("POST", "/api/v2/stack"),
         ("GET", "/api/v2/backups"),
         // MEDIDO (2026-11-23): estas dos se añadieron al dispatcher y a la
         // tabla de descripciones, pero NO a la tabla autoritativa
@@ -191,6 +193,8 @@ fn route_descriptions() -> Vec<(&'static str, &'static str, &'static str)> {
         ("GET", "/api/v2/quota", "Cuota de cada modelo/proveedor, aviso al agente, presupuesto diario en USD y la configuracion de cuotas."),
         ("GET", "/api/v2/instrumentacion", "Estado vivo de la instrumentacion de Antigravity: .so (falso o in situ), modelo tras MegaDaemon, puente MCP y MITM de la DB."),
         ("POST", "/api/v2/instrumentacion", "Aplica, planifica o restaura la instrumentacion de Antigravity (accion=aplicar|plan|restore, confirmar=bool)."),
+        ("GET", "/api/v2/stack", "Estado del stack autocontenido: supervisor, keeper, cloudflared, scripts de Antigravity y Web UI (SHA-256 embebido vs el de disco)."),
+        ("POST", "/api/v2/stack", "Reconcilia el stack (accion=reconciliar, confirmar=bool): reescribe lo que difiere y reinicia el supervisor si cambio."),
         ("GET", "/api/v2/backups", "Estado de Drive y de los respaldos: si hay credenciales, inventario real en disco y ultimos jobs de la cola durable."),
         ("GET", "/api/v2/inventario", "Inventario VIVO de la API: que rutas existen (v1 y v2) y cuales las consume la UI, medido contra el HTML que el daemon esta sirviendo."),
         ("GET", "/api/v2/devlog", "Bitacora de desarrollo del daemon (eventos, no telemetria): lo que ha escrito el propio daemon en devlog.json."),
@@ -355,7 +359,10 @@ pub fn inventario_api() -> Value {
             "usada_por_ui": usada,
         }));
     }
-    let huerfanas: Vec<&Value> = v1.iter().filter(|r| r["usada_por_ui"] == json!(false)).collect();
+    let huerfanas: Vec<&Value> = v1
+        .iter()
+        .filter(|r| r["usada_por_ui"] == json!(false))
+        .collect();
 
     json!({
         "ok": true,
@@ -1158,8 +1165,13 @@ pub fn node_message(node_id: &str, message: &str, data_b64: &str) -> Value {
         return json!({ "ok": false, "error": "inbox_write_failed", "detail": e });
     }
 
-    let task_id = format!("msg-{}-{}", now_epoch(), crate::backup_vault::sha256_hex(line.as_bytes())[..8].to_string());
-    let mut task = crate::mesh::MeshTask::new(&task_id, &format!("mensaje para {}", node_id), "message");
+    let task_id = format!(
+        "msg-{}-{}",
+        now_epoch(),
+        crate::backup_vault::sha256_hex(line.as_bytes())[..8].to_string()
+    );
+    let mut task =
+        crate::mesh::MeshTask::new(&task_id, &format!("mensaje para {}", node_id), "message");
     task.payload = record.clone();
     if let Err(e) = mesh.publish(&task) {
         return json!({ "ok": false, "error": "publish_failed", "detail": e });
@@ -1204,14 +1216,16 @@ pub fn node_migrate(target_version: &str) -> Value {
     }
     if board.exists() {
         if let Ok(mut mesh) = crate::mesh::Mesh::open(&dir) {
-            if let Ok(plan) = crate::mesh::check_migration(&mut mesh, &crate::mesh::release_info()) {
+            if let Ok(plan) = crate::mesh::check_migration(&mut mesh, &crate::mesh::release_info())
+            {
                 out["mesh_plan"] = serde_json::to_value(plan).unwrap_or(Value::Null);
             }
         }
     }
     if out["sqlite_plan"] == Value::Null && out["mesh_plan"] == Value::Null {
         out["reason"] = bus_status()["reason"].clone();
-        out["note"] = json!("no hay instancias registradas: despliega el bus para calcular el plan");
+        out["note"] =
+            json!("no hay instancias registradas: despliega el bus para calcular el plan");
     }
     out
 }
@@ -1394,7 +1408,9 @@ fn build_delegate_engine(state: &Value) -> crate::delegate::DelegateEngine {
         .and_then(|v| v.as_array())
         .map(|a| {
             a.iter()
-                .filter_map(|x| serde_json::from_value::<crate::delegate::ProviderAccount>(x.clone()).ok())
+                .filter_map(|x| {
+                    serde_json::from_value::<crate::delegate::ProviderAccount>(x.clone()).ok()
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -1422,7 +1438,8 @@ fn build_delegate_engine(state: &Value) -> crate::delegate::DelegateEngine {
     let mut engine = crate::delegate::DelegateEngine::new(accounts);
     if let Some(tasks) = state.get("tasks").and_then(|v| v.as_array()) {
         for t in tasks {
-            let Ok(mut task) = serde_json::from_value::<crate::delegate::DelegationTask>(t.clone()) else {
+            let Ok(mut task) = serde_json::from_value::<crate::delegate::DelegationTask>(t.clone())
+            else {
                 continue;
             };
             let attempts = std::mem::take(&mut task.attempts);
@@ -1477,7 +1494,11 @@ pub fn delegation() -> Value {
         .map(|a| {
             a.iter()
                 .map(|p| {
-                    let id = p.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let id = p
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     let g = gasto_por_id.get(&id);
                     json!({
                         "id": id,
@@ -1673,12 +1694,18 @@ pub fn alerts_view() -> Value {
 /// fingida.
 pub fn re_apps() -> Value {
     let inventory = crate::apk_inventory::inventory(60);
-    let pkgs = inventory["packages"].as_array().cloned().unwrap_or_default();
+    let pkgs = inventory["packages"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     let apps_available = inventory["ok"] == json!(true) && !pkgs.is_empty();
 
     // Material de firma presente en la instancia (lo que hay de verdad).
     let mut signature_files: Vec<Value> = vec![];
-    for dir in [Path::new(&cockpit_state_dir()).join("keys"), Path::new(&bus_state_dir()).join("keys")] {
+    for dir in [
+        Path::new(&cockpit_state_dir()).join("keys"),
+        Path::new(&bus_state_dir()).join("keys"),
+    ] {
         if let Ok(entries) = fs::read_dir(&dir) {
             for e in entries.flatten() {
                 let p = e.path();
@@ -1767,7 +1794,11 @@ pub fn agentic_loop_status() -> Value {
         .cloned()
         .unwrap_or(json!([]));
 
-    let entries = journal.get("entries").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let entries = journal
+        .get("entries")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     let mut done = 0usize;
     let mut failed = 0usize;
     for e in &entries {
@@ -1883,8 +1914,16 @@ fn shared_files_in(root: &Path) -> Value {
     let mut missing = 0usize;
 
     for e in &entries {
-        let path = e.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let declared = e.get("sha256").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let path = e
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let declared = e
+            .get("sha256")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let size = e.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
         total_bytes += size;
         let blob = blob_path(root, &declared);
@@ -2011,7 +2050,12 @@ fn share_put_in(root: &Path, rel_path: &str, data_b64: &str, expected_sha256: &s
 ///
 /// El hash verificado es el del **trozo**; el hash del fichero completo se
 /// comprueba en `share_commit`.
-pub fn share_put_chunk(rel_path: &str, index: usize, data_b64: &str, expected_sha256: &str) -> Value {
+pub fn share_put_chunk(
+    rel_path: &str,
+    index: usize,
+    data_b64: &str,
+    expected_sha256: &str,
+) -> Value {
     share_put_chunk_in(&share_root(), rel_path, index, data_b64, expected_sha256)
 }
 
@@ -2380,10 +2424,16 @@ fn load_rules_file() -> Value {
 pub fn rules_for(node: &str) -> ShareRules {
     let file = load_rules_file();
     let nodes = file.get("nodes").cloned().unwrap_or(json!({}));
-    if let Some(r) = nodes.get(node).and_then(|v| serde_json::from_value::<ShareRules>(v.clone()).ok()) {
+    if let Some(r) = nodes
+        .get(node)
+        .and_then(|v| serde_json::from_value::<ShareRules>(v.clone()).ok())
+    {
         return r;
     }
-    if let Some(r) = nodes.get("*").and_then(|v| serde_json::from_value::<ShareRules>(v.clone()).ok()) {
+    if let Some(r) = nodes
+        .get("*")
+        .and_then(|v| serde_json::from_value::<ShareRules>(v.clone()).ok())
+    {
         let mut r = r;
         r.node = node.to_string();
         return r;
@@ -2431,13 +2481,11 @@ pub fn work_rules_set(node: &str, payload: &Value) -> Value {
     let mut rules = rules_for(node);
     rules.node = node.to_string();
 
-    let set_bool = |rules: &mut ShareRules, key: &str, v: bool| {
-        match key {
-            "dedicated" => rules.dedicated = v,
-            "only_when_charging" => rules.only_when_charging = v,
-            "share_inference" => rules.share_inference = v,
-            _ => {}
-        }
+    let set_bool = |rules: &mut ShareRules, key: &str, v: bool| match key {
+        "dedicated" => rules.dedicated = v,
+        "only_when_charging" => rules.only_when_charging = v,
+        "share_inference" => rules.share_inference = v,
+        _ => {}
     };
     let p = payload.get("rules").unwrap_or(payload);
     if let Some(obj) = p.as_object() {
@@ -2527,12 +2575,20 @@ pub fn work_rules_set(node: &str, payload: &Value) -> Value {
         nodes = json!({});
     }
     if let Some(obj) = nodes.as_object_mut() {
-        obj.insert(node.to_string(), serde_json::to_value(&rules).unwrap_or(json!({})));
+        obj.insert(
+            node.to_string(),
+            serde_json::to_value(&rules).unwrap_or(json!({})),
+        );
     }
     file["version"] = json!(1);
     file["nodes"] = nodes;
     file["updated_at"] = json!(now_iso());
-    if let Err(e) = write_atomic(&rules_path(), serde_json::to_string_pretty(&file).unwrap_or_default().as_bytes()) {
+    if let Err(e) = write_atomic(
+        &rules_path(),
+        serde_json::to_string_pretty(&file)
+            .unwrap_or_default()
+            .as_bytes(),
+    ) {
         return json!({ "ok": false, "error": "persist_failed", "detail": e });
     }
     json!({
@@ -2612,11 +2668,20 @@ fn kinds_from_capabilities(caps: &[String]) -> Vec<String> {
     };
     for c in caps {
         let l = c.to_ascii_lowercase();
-        if l.contains("llm") || l.contains("seere") || l.contains("inference") || l.contains("model") {
+        if l.contains("llm")
+            || l.contains("seere")
+            || l.contains("inference")
+            || l.contains("model")
+        {
             push("inference", &mut out);
         }
-        if l.contains("reverse") || l.contains("dex") || l.contains("sign") || l.contains("firma")
-            || l.contains("build") || l.contains("apk") || l.contains("re")
+        if l.contains("reverse")
+            || l.contains("dex")
+            || l.contains("sign")
+            || l.contains("firma")
+            || l.contains("build")
+            || l.contains("apk")
+            || l.contains("re")
         {
             push("build", &mut out);
         }
@@ -2626,7 +2691,11 @@ fn kinds_from_capabilities(caps: &[String]) -> Vec<String> {
         if l.contains("net") || l.contains("web") || l.contains("proxy") || l.contains("sync") {
             push("network", &mut out);
         }
-        if l.contains("storage") || l.contains("vault") || l.contains("backup") || l.contains("disk") {
+        if l.contains("storage")
+            || l.contains("vault")
+            || l.contains("backup")
+            || l.contains("disk")
+        {
             push("storage", &mut out);
         }
     }
@@ -2638,9 +2707,15 @@ fn effective_offer(rules: &ShareRules, node: &Value, device: &Value) -> Value {
     let mut blocked: Vec<String> = vec![];
     let load = node.get("load").and_then(|v| v.as_f64()).unwrap_or(0.0);
     let battery = device.get("capacity_pct").and_then(|v| v.as_u64());
-    let charging = device.get("charging").and_then(|v| v.as_bool()).unwrap_or(false);
+    let charging = device
+        .get("charging")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let cpu_temp = device.get("cpu_temp_c").and_then(|v| v.as_f64());
-    let thermal = device.get("thermal_hot").and_then(|v| v.as_bool()).unwrap_or(false);
+    let thermal = device
+        .get("thermal_hot")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     if rules.dedicated {
         blocked.push("instancia dedicada: no comparte nada".to_string());
@@ -2671,7 +2746,8 @@ fn effective_offer(rules: &ShareRules, node: &Value, device: &Value) -> Value {
     // Capacidad libre = lo que no se reserva para uso local, menos la carga.
     // `rules.reserved_ratio` es f32 y `load` es f64: se Homogeneiza a f64
     // (E0277/E0308 rompia el build entero del crate).
-    let mut capacity = (1.0f64 - rules.reserved_ratio as f64).max(0.0) * (1.0 - load.clamp(0.0, 1.0));
+    let mut capacity =
+        (1.0f64 - rules.reserved_ratio as f64).max(0.0) * (1.0 - load.clamp(0.0, 1.0));
     if let Some(b) = battery {
         if b < 40 {
             capacity *= 0.5; // por debajo del 40 % se ofrece la mitad
@@ -2748,7 +2824,11 @@ fn market_nodes() -> Vec<Value> {
         if let Some(instances) = coord.get("instances").and_then(|v| v.as_array()) {
             for i in instances {
                 let id = i.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                if id.is_empty() || out.iter().any(|n| n.get("id").and_then(|v| v.as_str()) == Some(id)) {
+                if id.is_empty()
+                    || out
+                        .iter()
+                        .any(|n| n.get("id").and_then(|v| v.as_str()) == Some(id))
+                {
                     continue;
                 }
                 let caps: Vec<String> = i
@@ -2782,13 +2862,18 @@ fn market_nodes() -> Vec<Value> {
 /// "Todos los nodos deben contribuir": un nodo vivo con capacidad libre y
 /// cero contribución aparece marcado como `debe_contribuir`.
 fn contribution_ledger(nodes: &[Value]) -> Vec<Value> {
-    let mut ledger: std::collections::BTreeMap<String, (u64, u64, u64)> = std::collections::BTreeMap::new();
+    let mut ledger: std::collections::BTreeMap<String, (u64, u64, u64)> =
+        std::collections::BTreeMap::new();
 
     // Agentes registrados en el bus.
     if let Some(board) = mesh_snapshot() {
         if let Some(agents) = board.get("agents").and_then(|v| v.as_array()) {
             for a in agents {
-                let who = a.get("agent").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let who = a
+                    .get("agent")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 if who.is_empty() {
                     continue;
                 }
@@ -2842,7 +2927,11 @@ fn contribution_ledger(nodes: &[Value]) -> Vec<Value> {
     let total: u64 = ledger.values().map(|v| v.0).sum();
     let mut out: Vec<Value> = vec![];
     for n in nodes {
-        let id = n.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let id = n
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         if id.is_empty() {
             continue;
         }
@@ -2926,7 +3015,10 @@ fn score_node(
     if !offers.iter().any(|k| k == work_kind) {
         return None;
     }
-    let capacity = offer.get("capacity").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let capacity = offer
+        .get("capacity")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
     let bias = 1.0 + (rules.priority_bias as f64 / 100.0);
     // Equidad: quien menos ha contributed recibe un empujón (todos deben
     // aportar).  El nodo con 0 % recibe ×1.5, el que ya hizo el 100 % ×1.0.
@@ -2959,7 +3051,9 @@ pub fn work_market() -> Value {
             .iter()
             .find(|c| c.get("node").and_then(|v| v.as_str()) == Some(id))
             .cloned()
-            .unwrap_or(json!({ "node": id, "tasks": 0, "share_pct": 0.0, "verdict": "sin_trabajo" }))
+            .unwrap_or(
+                json!({ "node": id, "tasks": 0, "share_pct": 0.0, "verdict": "sin_trabajo" }),
+            )
     };
 
     // Oferta por nodo (con sus reglas locales).
@@ -2973,7 +3067,10 @@ pub fn work_market() -> Value {
         let offer = effective_offer(&rules, n, &device);
         let mut entry = n.clone();
         if let Some(o) = entry.as_object_mut() {
-            o.insert("rules".to_string(), serde_json::to_value(&rules).unwrap_or(json!({})));
+            o.insert(
+                "rules".to_string(),
+                serde_json::to_value(&rules).unwrap_or(json!({})),
+            );
             o.insert("offer".to_string(), offer.clone());
             o.insert("contribution".to_string(), contribution_of(id));
         }
@@ -2984,7 +3081,10 @@ pub fn work_market() -> Value {
     let demand = market_demands();
     let mut plan: Vec<Value> = vec![];
     for d in &demand {
-        let work_kind = d.get("work_kind").and_then(|v| v.as_str()).unwrap_or("compute");
+        let work_kind = d
+            .get("work_kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("compute");
         let mut best: Option<(f64, String, Value)> = None;
         let mut considered: Vec<Value> = vec![];
         for n in &supply {
@@ -3130,9 +3230,16 @@ pub fn work_route(demand: &Value) -> Value {
         });
     };
 
-    let node = assignment.get("node").and_then(|v| v.as_str()).unwrap_or("");
+    let node = assignment
+        .get("node")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let mut published = Value::Null;
-    if demand.get("publish").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if demand
+        .get("publish")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         if node.is_empty() {
             return json!({
                 "ok": false,
@@ -3292,7 +3399,15 @@ fn ts_key(v: &Value) -> i64 {
 
 /// Campos que se conservan de cada hallazgo (el resto se descarta).
 const FINDING_FIELDS: &[&str] = &[
-    "agent", "kind", "title", "finding", "target", "sha256", "size", "confidence", "ts",
+    "agent",
+    "kind",
+    "title",
+    "finding",
+    "target",
+    "sha256",
+    "size",
+    "confidence",
+    "ts",
 ];
 
 /// Normaliza una línea de hallazgo al contrato de la API.
@@ -3478,11 +3593,19 @@ fn mesh_findings_in(roots: &[PathBuf], limit: usize, offset: usize) -> Value {
     let mut kinds: Vec<String> = vec![];
     let mut agent_names: Vec<String> = vec![];
     for f in &findings {
-        let k = f.get("kind").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let k = f
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         if !k.is_empty() && !kinds.contains(&k) {
             kinds.push(k);
         }
-        let a = f.get("agent").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let a = f
+            .get("agent")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         if !a.is_empty() && !agent_names.contains(&a) {
             agent_names.push(a);
         }
@@ -3492,12 +3615,7 @@ fn mesh_findings_in(roots: &[PathBuf], limit: usize, offset: usize) -> Value {
 
     let limit = limit.clamp(1, 200);
     let offset = offset.min(total.saturating_sub(1).max(0));
-    let page: Vec<Value> = findings
-        .iter()
-        .skip(offset)
-        .take(limit)
-        .cloned()
-        .collect();
+    let page: Vec<Value> = findings.iter().skip(offset).take(limit).cloned().collect();
 
     json!({
         "ok": true,
@@ -3565,7 +3683,11 @@ fn tunnel_url(kind: &str) -> String {
         }
     }
     // Último recurso: el log del túnel.
-    let log = dir.join(if kind == "mcp" { "mcp_tunnel.log" } else { "tunnel.log" });
+    let log = dir.join(if kind == "mcp" {
+        "mcp_tunnel.log"
+    } else {
+        "tunnel.log"
+    });
     if let Ok(raw) = fs::read_to_string(&log) {
         let mut found = String::new();
         for line in raw.lines() {
@@ -3636,7 +3758,10 @@ pub fn prompt_external(include_secrets: bool, api_key: &str) -> Value {
             mcp_url.clone()
         }
     ));
-    md.push_str(&format!("- Health (público, sin credenciales): {}/health\n", local_web));
+    md.push_str(&format!(
+        "- Health (público, sin credenciales): {}/health\n",
+        local_web
+    ));
     md.push_str("- Cabeceras:\n");
     if include_secrets {
         let key = if api_key.trim().is_empty() {
@@ -3655,7 +3780,10 @@ pub fn prompt_external(include_secrets: bool, api_key: &str) -> Value {
     }
     md.push_str("- El canje de la API key por token de sesión: `POST /api/session/exchange` con `{\"api_key\":\"…\"}` → `{\"ok\":true,\"token\":\"…\"}`.\n\n");
 
-    md.push_str(&format!("## Herramientas MCP ({} disponibles)\n\n", tool_list.len()));
+    md.push_str(&format!(
+        "## Herramientas MCP ({} disponibles)\n\n",
+        tool_list.len()
+    ));
     for t in &tool_list {
         let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("");
         let desc = t.get("description").and_then(|v| v.as_str()).unwrap_or("");
@@ -3685,13 +3813,21 @@ pub fn prompt_external(include_secrets: bool, api_key: &str) -> Value {
         let caps: Vec<String> = n
             .get("capabilities")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default();
         md.push_str(&format!(
             "- `{}` ({}) — capacidades: {}\n",
             id,
             role,
-            if caps.is_empty() { "—".to_string() } else { caps.join(", ") }
+            if caps.is_empty() {
+                "—".to_string()
+            } else {
+                caps.join(", ")
+            }
         ));
     }
 
@@ -3719,7 +3855,11 @@ pub fn prompt_external(include_secrets: bool, api_key: &str) -> Value {
             "### [{}] {} — {}\n",
             kind,
             title,
-            if conf.is_empty() { String::new() } else { format!("confianza {}", conf) }
+            if conf.is_empty() {
+                String::new()
+            } else {
+                format!("confianza {}", conf)
+            }
         ));
         md.push_str(&format!(
             "- agente: {} · target: {} · sha256: {} · {} B\n- {}\n\n",
@@ -3806,7 +3946,11 @@ fn local_instance() -> Option<Value> {
 /// Rol de la instancia local ("primary" | "worker" | "observer" | "unknown").
 fn local_role() -> String {
     local_instance()
-        .and_then(|i| i.get("role").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .and_then(|i| {
+            i.get("role")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
         .unwrap_or_else(|| "unknown".to_string())
 }
 
@@ -3905,7 +4049,9 @@ fn board_claim_at(path: &str, body: &Value) -> Value {
     }
     let conn = match rusqlite::Connection::open(path) {
         Ok(c) => c,
-        Err(e) => return json!({ "ok": false, "error": "board_open_failed", "reason": e.to_string() }),
+        Err(e) => {
+            return json!({ "ok": false, "error": "board_open_failed", "reason": e.to_string() })
+        }
     };
     let now = now_epoch();
     let mut won = false;
@@ -3936,7 +4082,11 @@ fn board_claim_at(path: &str, body: &Value) -> Value {
             won = n == 1;
             coord_log_event(
                 &conn,
-                if won { "task_claimed" } else { "task_claim_lost" },
+                if won {
+                    "task_claimed"
+                } else {
+                    "task_claim_lost"
+                },
                 &owner,
                 &json!({ "id": task_id, "role": role, "lease_secs": lease }),
             );
@@ -3951,7 +4101,13 @@ fn board_claim_at(path: &str, body: &Value) -> Value {
         .query_row(
             "SELECT status, owner, lease_expires_at FROM tasks WHERE id=?1",
             rusqlite::params![task_id],
-            |r| Ok((r.get::<_, String>(0).unwrap_or_default(), r.get::<_, String>(1).unwrap_or_default(), r.get::<_, i64>(2).unwrap_or(0))),
+            |r| {
+                Ok((
+                    r.get::<_, String>(0).unwrap_or_default(),
+                    r.get::<_, String>(1).unwrap_or_default(),
+                    r.get::<_, i64>(2).unwrap_or(0),
+                ))
+            },
         )
         .ok();
     json!({
@@ -3997,7 +4153,9 @@ fn board_release_at(path: &str, body: &Value) -> Value {
     }
     let conn = match rusqlite::Connection::open(path) {
         Ok(c) => c,
-        Err(e) => return json!({ "ok": false, "error": "board_open_failed", "reason": e.to_string() }),
+        Err(e) => {
+            return json!({ "ok": false, "error": "board_open_failed", "reason": e.to_string() })
+        }
     };
     let now = now_epoch();
     if let Err(e) = conn.execute_batch("BEGIN IMMEDIATE") {
@@ -4061,7 +4219,9 @@ fn board_report_at(path: &str, body: &Value) -> Value {
     }
     let conn = match rusqlite::Connection::open(path) {
         Ok(c) => c,
-        Err(e) => return json!({ "ok": false, "error": "board_open_failed", "reason": e.to_string() }),
+        Err(e) => {
+            return json!({ "ok": false, "error": "board_open_failed", "reason": e.to_string() })
+        }
     };
     let now = now_epoch();
     if let Err(e) = conn.execute_batch("BEGIN IMMEDIATE") {
@@ -4081,7 +4241,12 @@ fn board_report_at(path: &str, body: &Value) -> Value {
         }
     };
     if n == 1 {
-        coord_log_event(&conn, "task_reported", &owner, &json!({ "id": task_id, "ok": ok }));
+        coord_log_event(
+            &conn,
+            "task_reported",
+            &owner,
+            &json!({ "id": task_id, "ok": ok }),
+        );
     }
     let _ = conn.execute_batch("COMMIT");
     json!({
@@ -4103,7 +4268,11 @@ fn board_report_at(path: &str, body: &Value) -> Value {
 /// (sin comillas ni metacarácteres de shell) y el resultado que se devuelve es
 /// el de `pm` de verdad, no un "hecho" inventado.
 pub fn admin_install_apk(body: &Value) -> Value {
-    if !body.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if !body
+        .get("confirm")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         return json!({
             "ok": false,
             "error": "confirmation_required",
@@ -4161,7 +4330,11 @@ pub fn admin_install_apk(body: &Value) -> Value {
 /// Esto es exactamente lo que pidió el usuario ("abrir una shell y hacer
 /// root"), pero con una doble barrera: API key + token de sesión + confirm.
 pub fn admin_shell(body: &Value) -> Value {
-    if !body.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if !body
+        .get("confirm")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         return json!({
             "ok": false,
             "error": "confirmation_required",
@@ -4249,7 +4422,11 @@ pub fn voice_action(action: &str, body: &Value) -> Value {
 /// Exige `confirm: true` y tiene un enfriamiento de 30 s (evita bucles de
 /// reinicio si alguien pulsa el botón en racha).
 pub fn admin_restart(body: &Value) -> Value {
-    if !body.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if !body
+        .get("confirm")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         return json!({
             "ok": false,
             "error": "confirmation_required",
@@ -4585,26 +4762,54 @@ pub fn tools_catalogo() -> Value {
         let n = t.get("name").and_then(|v| v.as_str()).unwrap_or("?");
         let grupo = if n.starts_with("antigravity") || n.contains("agy") || n.contains("mitm") {
             "antigravity"
-        } else if n.starts_with("re_") || n.contains("ghidra") || n.contains("go_retool") || n.contains("daad") {
+        } else if n.starts_with("re_")
+            || n.contains("ghidra")
+            || n.contains("go_retool")
+            || n.contains("daad")
+        {
             "reverse"
-        } else if n.starts_with("backup") || n.contains("drive") || n.contains("swift") || n.contains("titanium") {
+        } else if n.starts_with("backup")
+            || n.contains("drive")
+            || n.contains("swift")
+            || n.contains("titanium")
+        {
             "backup"
         } else if n.starts_with("root_") {
             "root"
-        } else if n.contains("task") || n.contains("job") || n.contains("queue") || n.contains("cron") {
+        } else if n.contains("task")
+            || n.contains("job")
+            || n.contains("queue")
+            || n.contains("cron")
+        {
             "cola"
-        } else if n.contains("quota") || n.contains("provider") || n.contains("llm") || n.contains("bus") {
+        } else if n.contains("quota")
+            || n.contains("provider")
+            || n.contains("llm")
+            || n.contains("bus")
+        {
             "modelos"
         } else if n.contains("energy") || n.contains("battery") || n.contains("power") {
             "energia"
-        } else if n.contains("sync") || n.contains("conversation") || n.contains("chat") || n.contains("message") {
+        } else if n.contains("sync")
+            || n.contains("conversation")
+            || n.contains("chat")
+            || n.contains("message")
+        {
             "sync"
-        } else if n.contains("mesh") || n.contains("resonance") || n.contains("node") || n.contains("peer") || n.contains("delegate") {
+        } else if n.contains("mesh")
+            || n.contains("resonance")
+            || n.contains("node")
+            || n.contains("peer")
+            || n.contains("delegate")
+        {
             "enjambre"
         } else {
             "core"
         };
-        grupos.entry(grupo.to_string()).or_default().push(n.to_string());
+        grupos
+            .entry(grupo.to_string())
+            .or_default()
+            .push(n.to_string());
     }
     json!({
         "ok": true,
@@ -4733,8 +4938,16 @@ pub fn nodes_detalle() -> Value {
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(90);
     for n in lista.iter_mut() {
-        let id = n.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let last_seen = n.get("last_seen").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let id = n
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let last_seen = n
+            .get("last_seen")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let vivo = if n.get("es_yo").and_then(|v| v.as_bool()).unwrap_or(false) {
             true
         } else {
@@ -4749,9 +4962,12 @@ pub fn nodes_detalle() -> Value {
                 "url".to_string(),
                 json!(urls.get(&id).cloned().unwrap_or_default()),
             );
-            o.insert("edad_s".to_string(), json!(crate::mesh::iso_to_epoch(&last_seen)
-                .map(|t| ahora - t)
-                .unwrap_or(-1)));
+            o.insert(
+                "edad_s".to_string(),
+                json!(crate::mesh::iso_to_epoch(&last_seen)
+                    .map(|t| ahora - t)
+                    .unwrap_or(-1)),
+            );
         }
     }
 
@@ -4768,7 +4984,11 @@ pub fn nodes_detalle() -> Value {
         if sondeados >= max_sondeos {
             break;
         }
-        let url = n.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let url = n
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         if url.is_empty() || !url.starts_with("http") {
             continue;
         }
@@ -4784,14 +5004,17 @@ pub fn nodes_detalle() -> Value {
         .find(|n| n.get("es_yo").and_then(|v| v.as_bool()).unwrap_or(false))
         .and_then(|n| n.as_object_mut())
     {
-        o.insert("vivo_local".to_string(), json!({
-            "uptime_sec": process_uptime_secs(),
-            "uptime_human": human_duration(process_uptime_secs()),
-            "cpu_pct": cpu_usage_pct(),
-            "mem": mem_info(),
-            "build": crate::self_update::build_info(),
-            "cola": crate::task_scheduler::stats(),
-        }));
+        o.insert(
+            "vivo_local".to_string(),
+            json!({
+                "uptime_sec": process_uptime_secs(),
+                "uptime_human": human_duration(process_uptime_secs()),
+                "cpu_pct": cpu_usage_pct(),
+                "mem": mem_info(),
+                "build": crate::self_update::build_info(),
+                "cola": crate::task_scheduler::stats(),
+            }),
+        );
     }
 
     json!({
@@ -4904,9 +5127,62 @@ pub fn instrumentacion_apply(body: &Value) -> Value {
     match accion.as_str() {
         "aplicar" => crate::instrumentacion_agy::aplicar(puerto, confirmar),
         "plan" => crate::instrumentacion_agy::plan(),
-        "restore" => crate::instrumentacion_agy::dispatch(&json!({"accion": "restore", "confirmar": confirmar})),
+        "restore" => crate::instrumentacion_agy::dispatch(
+            &json!({"accion": "restore", "confirmar": confirmar}),
+        ),
         other => json!({"ok": false, "error": format!("accion desconocida: {other}")}),
     }
+}
+
+/// **Stack autocontenido**: estado de cada fichero (embebido vs disco).
+///
+/// MEDIDO (2026-11-25): el móvil se rompía porque el binario se actualizaba
+/// pero el supervisor se quedaba viejo ⇒ no encontraba el binario ⇒ no
+/// podía relanzar el daemon.  Este endpoint dice, fichero a fichero, si lo
+/// que hay en disco es EXACTAMENTE lo que lleva el binario.
+pub fn stack_view() -> Value {
+    crate::stack::estado_json(&crate::stack::Config::del_entorno())
+}
+
+/// **Reconcilia el stack**: reescribe lo que difiere del embebido.
+///
+/// Es idempotente.  `confirmar=true` es obligatorio para escribir (igual
+/// que en el resto de endpoints que tocan el sistema).
+pub fn stack_apply(body: &Value) -> Value {
+    let confirmar = body
+        .get("confirmar")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let accion = body
+        .get("accion")
+        .and_then(|v| v.as_str())
+        .unwrap_or("reconciliar")
+        .to_string();
+    if accion != "reconciliar" && accion != "repair" {
+        return json!({"ok": false, "error": format!("accion desconocida: {accion}")});
+    }
+    if !confirmar {
+        return json!({
+            "ok": false,
+            "error": "hace falta confirmar=true para reconciliar el stack",
+            "estado": stack_view(),
+        });
+    }
+    let cfg = crate::stack::Config::del_entorno();
+    let informe = crate::stack::reconciliar(&cfg);
+    // Si el supervisor cambio, hay que reiniciarlo: el proceso en
+    // ejecucion sigue siendo el viejo.  Lo revive el keeper.
+    let reiniciado = if informe.supervisor_cambiado {
+        crate::stack::reiniciar_supervisor()
+    } else {
+        false
+    };
+    json!({
+        "ok": informe.ok(),
+        "informe": informe.a_json(),
+        "supervisor_reiniciado": reiniciado,
+        "estado": crate::stack::estado_json(&cfg),
+    })
 }
 
 /// Perfiles de energía: los de fábrica + los guardados por el usuario.
@@ -4978,7 +5254,11 @@ pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
     if !route.starts_with(API_V2_PREFIX) {
         return None;
     }
-    let b = if body.is_object() { body.clone() } else { json!({}) };
+    let b = if body.is_object() {
+        body.clone()
+    } else {
+        json!({})
+    };
     let s = |k: &str| b.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
     let n = |k: &str| b.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
 
@@ -4987,131 +5267,140 @@ pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
     // NO usa `panic="abort"`), así que el catch es efectivo; además las rutas
     // de la v2 no usan `expect()`/`unwrap()` sobre datos que vienen del
     // exterior, para que el caso normal no llegue ni a panic.
-    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-    match (m.as_str(), route) {
-        ("GET", "/api/v2/dashboard") => dashboard(),
-        ("GET", "/api/v2/nodes") => nodes(),
-        ("GET", "/api/v2/tasks") => task_board(),
-        ("GET", "/api/v2/llm") => llm_catalog(),
-        ("GET", "/api/v2/delegation") => delegation(),
-        ("GET", "/api/v2/alerts") => alerts_view(),
-        ("GET", "/api/v2/re") => re_apps(),
-        ("GET", "/api/v2/agentic") => agentic_loop_status(),
-        ("GET", "/api/v2/share") => shared_files(),
-        ("GET", "/api/v2/routes") => routes_doc(),
-        ("GET", "/api/v2/antigravity") => antigravity_overview(),
-        ("GET", "/api/v2/antigravity/models") => antigravity_models(),
-        ("GET", "/api/v2/antigravity/conversations") => antigravity_conversations(),
-        ("GET", "/api/v2/antigravity/search") => {
-            let q = query_get(query, "q").unwrap_or_default();
-            let limit = query_get(query, "limit")
-                .and_then(|v| v.parse::<u32>().ok())
-                .unwrap_or(20);
-            antigravity_search(&q, limit)
-        }
-        ("GET", "/api/v2/antigravity/conversation") => {
-            let id = query_get(query, "id").unwrap_or_default();
-            antigravity_conversation(&id)
-        }
-        ("GET", "/api/v2/logs") => logs_view(query),
-        ("GET", "/api/v2/config") => config_view(),
-        ("POST", "/api/v2/config") => config_apply(&b),
-        ("GET", "/api/v2/tools") => tools_catalogo(),
-        ("GET", "/api/v2/nodes/detalle") => nodes_detalle(),
-        ("GET", "/api/v2/system") => sistema_view(),
-        ("GET", "/api/v2/quota") => quota_view(),
-        ("GET", "/api/v2/instrumentacion") => instrumentacion_view(),
-        ("POST", "/api/v2/instrumentacion") => instrumentacion_apply(&b),
-        ("GET", "/api/v2/backups") => backups_view(),
-        ("GET", "/api/v2/inventario") => inventario_api(),
-        ("GET", "/api/v2/devlog") => crate::devlog::leer(),
-        ("GET", "/api/v2/antigravity/tasks") => antigravity_tasks(),
-        ("GET", "/api/v2/market") => work_market(),
-        ("GET", "/api/v2/mesh_findings") => mesh_findings(query),
-        ("GET", "/api/v2/prompt_external") => prompt_external(false, ""),
-        ("POST", "/api/v2/prompt_external") => {
-            let inc = b.get("include_secrets").and_then(|v| v.as_bool()).unwrap_or(false);
-            prompt_external(inc, &s("api_key"))
-        }
-        ("GET", "/api/v2/market/rules") => {
-            let node = query_get(query, "node").unwrap_or_default();
-            work_rules(&node)
-        }
-        ("GET", "/api/v2/share/get") => {
-            let path_q = query_get(query, "path").unwrap_or_default();
-            let offset = query_get(query, "offset")
-                .and_then(|v| v.parse::<usize>().ok())
-                .unwrap_or(0);
-            let len = query_get(query, "len")
-                .and_then(|v| v.parse::<usize>().ok())
-                .unwrap_or(0);
-            share_get_range(&path_q, offset, len)
-        }
-        ("POST", "/api/v2/nodes/assign") => {
-            let payload = b.get("payload").cloned().unwrap_or(json!({}));
-            node_assign(&s("node"), &s("kind"), &payload, &s("capability"))
-        }
-        ("POST", "/api/v2/nodes/message") => {
-            node_message(&s("node"), &s("message"), &s("data_b64"))
-        }
-        ("POST", "/api/v2/nodes/migrate") => node_migrate(&s("target_version")),
-        ("POST", "/api/v2/tasks/export") => task_export(&s("node")),
-        ("POST", "/api/v2/tasks/import") => task_import(&b),
-        ("POST", "/api/v2/tasks/claim") => board_claim(&b),
-        ("POST", "/api/v2/tasks/release") => board_release(&b),
-        ("POST", "/api/v2/tasks/report") => board_report(&b),
-        ("GET", "/api/v2/voice") => voice_status(),
-        ("POST", "/api/v2/voice") => {
-            let action = s("action");
-            voice_action(&action, &b)
-        }
-        ("POST", "/api/v2/admin/restart") => admin_restart(&b),
-        ("POST", "/api/v2/admin/install_apk") => admin_install_apk(&b),
-        ("POST", "/api/v2/admin/shell") => admin_shell(&b),
-        ("POST", "/api/v2/antigravity/enqueue") => {
-            let prompt = s("prompt");
-            let confirm = b.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false);
-            let ws: Vec<String> = b
-                .get("workspaces")
-                .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
-                .unwrap_or_default();
-            antigravity_enqueue(&prompt, &ws, confirm)
-        }
-        ("POST", "/api/v2/delegation/apply") => {
-            let adj = b.get("adjustments").cloned().unwrap_or(json!([]));
-            delegation_apply(&adj)
-        }
-        ("POST", "/api/v2/share/put") => {
-            share_put(&s("path"), &s("data_b64"), &s("sha256"))
-        }
-        ("POST", "/api/v2/share/chunk") => {
-            share_put_chunk(&s("path"), n("index") as usize, &s("data_b64"), &s("sha256"))
-        }
-        ("POST", "/api/v2/share/commit") => share_commit(&s("path"), &s("sha256")),
-        ("POST", "/api/v2/market/rules") => {
-            let node = s("node");
-            work_rules_set(&node, &b)
-        }
-        ("POST", "/api/v2/market/route") => work_route(&b),
-        _ => json!({
-            "ok": false,
-            "error": "unknown_route",
-            "method": m,
-            "path": route,
-            "hint": "consulta GET /api/v2/routes para la tabla completa",
-        }),
-    }
-    }))
-    .unwrap_or_else(|_| {
-        json!({
-            "ok": false,
-            "error": "internal_error",
-            "reason": "la ruta ha entrado en pánico; el daemon sigue en pie",
-            "method": m,
-            "path": route,
-        })
-    });
+    let out =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match (m.as_str(), route) {
+            ("GET", "/api/v2/dashboard") => dashboard(),
+            ("GET", "/api/v2/nodes") => nodes(),
+            ("GET", "/api/v2/tasks") => task_board(),
+            ("GET", "/api/v2/llm") => llm_catalog(),
+            ("GET", "/api/v2/delegation") => delegation(),
+            ("GET", "/api/v2/alerts") => alerts_view(),
+            ("GET", "/api/v2/re") => re_apps(),
+            ("GET", "/api/v2/agentic") => agentic_loop_status(),
+            ("GET", "/api/v2/share") => shared_files(),
+            ("GET", "/api/v2/routes") => routes_doc(),
+            ("GET", "/api/v2/antigravity") => antigravity_overview(),
+            ("GET", "/api/v2/antigravity/models") => antigravity_models(),
+            ("GET", "/api/v2/antigravity/conversations") => antigravity_conversations(),
+            ("GET", "/api/v2/antigravity/search") => {
+                let q = query_get(query, "q").unwrap_or_default();
+                let limit = query_get(query, "limit")
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .unwrap_or(20);
+                antigravity_search(&q, limit)
+            }
+            ("GET", "/api/v2/antigravity/conversation") => {
+                let id = query_get(query, "id").unwrap_or_default();
+                antigravity_conversation(&id)
+            }
+            ("GET", "/api/v2/logs") => logs_view(query),
+            ("GET", "/api/v2/config") => config_view(),
+            ("POST", "/api/v2/config") => config_apply(&b),
+            ("GET", "/api/v2/tools") => tools_catalogo(),
+            ("GET", "/api/v2/nodes/detalle") => nodes_detalle(),
+            ("GET", "/api/v2/system") => sistema_view(),
+            ("GET", "/api/v2/quota") => quota_view(),
+            ("GET", "/api/v2/instrumentacion") => instrumentacion_view(),
+            ("POST", "/api/v2/instrumentacion") => instrumentacion_apply(&b),
+            ("GET", "/api/v2/stack") => stack_view(),
+            ("POST", "/api/v2/stack") => stack_apply(&b),
+            ("GET", "/api/v2/backups") => backups_view(),
+            ("GET", "/api/v2/inventario") => inventario_api(),
+            ("GET", "/api/v2/devlog") => crate::devlog::leer(),
+            ("GET", "/api/v2/antigravity/tasks") => antigravity_tasks(),
+            ("GET", "/api/v2/market") => work_market(),
+            ("GET", "/api/v2/mesh_findings") => mesh_findings(query),
+            ("GET", "/api/v2/prompt_external") => prompt_external(false, ""),
+            ("POST", "/api/v2/prompt_external") => {
+                let inc = b
+                    .get("include_secrets")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                prompt_external(inc, &s("api_key"))
+            }
+            ("GET", "/api/v2/market/rules") => {
+                let node = query_get(query, "node").unwrap_or_default();
+                work_rules(&node)
+            }
+            ("GET", "/api/v2/share/get") => {
+                let path_q = query_get(query, "path").unwrap_or_default();
+                let offset = query_get(query, "offset")
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(0);
+                let len = query_get(query, "len")
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(0);
+                share_get_range(&path_q, offset, len)
+            }
+            ("POST", "/api/v2/nodes/assign") => {
+                let payload = b.get("payload").cloned().unwrap_or(json!({}));
+                node_assign(&s("node"), &s("kind"), &payload, &s("capability"))
+            }
+            ("POST", "/api/v2/nodes/message") => {
+                node_message(&s("node"), &s("message"), &s("data_b64"))
+            }
+            ("POST", "/api/v2/nodes/migrate") => node_migrate(&s("target_version")),
+            ("POST", "/api/v2/tasks/export") => task_export(&s("node")),
+            ("POST", "/api/v2/tasks/import") => task_import(&b),
+            ("POST", "/api/v2/tasks/claim") => board_claim(&b),
+            ("POST", "/api/v2/tasks/release") => board_release(&b),
+            ("POST", "/api/v2/tasks/report") => board_report(&b),
+            ("GET", "/api/v2/voice") => voice_status(),
+            ("POST", "/api/v2/voice") => {
+                let action = s("action");
+                voice_action(&action, &b)
+            }
+            ("POST", "/api/v2/admin/restart") => admin_restart(&b),
+            ("POST", "/api/v2/admin/install_apk") => admin_install_apk(&b),
+            ("POST", "/api/v2/admin/shell") => admin_shell(&b),
+            ("POST", "/api/v2/antigravity/enqueue") => {
+                let prompt = s("prompt");
+                let confirm = b.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false);
+                let ws: Vec<String> = b
+                    .get("workspaces")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                antigravity_enqueue(&prompt, &ws, confirm)
+            }
+            ("POST", "/api/v2/delegation/apply") => {
+                let adj = b.get("adjustments").cloned().unwrap_or(json!([]));
+                delegation_apply(&adj)
+            }
+            ("POST", "/api/v2/share/put") => share_put(&s("path"), &s("data_b64"), &s("sha256")),
+            ("POST", "/api/v2/share/chunk") => share_put_chunk(
+                &s("path"),
+                n("index") as usize,
+                &s("data_b64"),
+                &s("sha256"),
+            ),
+            ("POST", "/api/v2/share/commit") => share_commit(&s("path"), &s("sha256")),
+            ("POST", "/api/v2/market/rules") => {
+                let node = s("node");
+                work_rules_set(&node, &b)
+            }
+            ("POST", "/api/v2/market/route") => work_route(&b),
+            _ => json!({
+                "ok": false,
+                "error": "unknown_route",
+                "method": m,
+                "path": route,
+                "hint": "consulta GET /api/v2/routes para la tabla completa",
+            }),
+        }))
+        .unwrap_or_else(|_| {
+            json!({
+                "ok": false,
+                "error": "internal_error",
+                "reason": "la ruta ha entrado en pánico; el daemon sigue en pie",
+                "method": m,
+                "path": route,
+            })
+        });
     Some(out)
 }
 
@@ -5238,7 +5527,9 @@ mod tests {
 
     /// Paths literales que el servidor v1 expone (se leen de su fuente).
     fn v1_server_paths() -> Vec<String> {
-        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("cockpit_server.rs");
+        let src = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("cockpit_server.rs");
         let Ok(text) = fs::read_to_string(&src) else {
             return vec![];
         };
@@ -5264,7 +5555,11 @@ mod tests {
         assert!(routes.len() >= 15, "la API v2 debe tener al menos 15 rutas");
         let mut seen: Vec<String> = vec![];
         for (m, p) in &routes {
-            assert!(p.starts_with(API_V2_PREFIX), "ruta fuera del prefijo v2: {}", p);
+            assert!(
+                p.starts_with(API_V2_PREFIX),
+                "ruta fuera del prefijo v2: {}",
+                p
+            );
             assert!(*m == "GET" || *m == "POST", "método no soportado: {}", m);
             let key = format!("{} {}", m, p);
             assert!(!seen.contains(&key), "ruta duplicada: {}", key);
@@ -5311,19 +5606,30 @@ mod tests {
             "deben detectarse rutas v1 en el fuente del servidor"
         );
         let origen = inv["ui"]["origen"].as_str().unwrap_or("");
-        assert!(origen == "disk" || origen == "embedded", "origen raro: {}", origen);
+        assert!(
+            origen == "disk" || origen == "embedded",
+            "origen raro: {}",
+            origen
+        );
     }
 
     #[test]
     fn la_ui_no_llama_a_rutas_inexistentes() {
         let html = ui_source();
-        let v2: Vec<String> = api_v2_routes().into_iter().map(|(_, p)| p.to_string()).collect();
+        let v2: Vec<String> = api_v2_routes()
+            .into_iter()
+            .map(|(_, p)| p.to_string())
+            .collect();
         let v1 = v1_server_paths();
         let tools: Vec<String> = crate::mcp_ext::tool_definitions()
             .as_array()
             .map(|a| {
                 a.iter()
-                    .filter_map(|t| t.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                    .filter_map(|t| {
+                        t.get("name")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -5363,7 +5669,11 @@ mod tests {
             .as_array()
             .map(|a| {
                 a.iter()
-                    .filter_map(|t| t.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                    .filter_map(|t| {
+                        t.get("name")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -5396,7 +5706,11 @@ mod tests {
             "llm",
             "share",
         ] {
-            assert!(d.get(key).is_some(), "el dashboard no tiene la clave {}", key);
+            assert!(
+                d.get(key).is_some(),
+                "el dashboard no tiene la clave {}",
+                key
+            );
         }
         assert!(d["daemon"]["version"].as_str().is_some());
         assert!(d["generated_at"].as_str().unwrap_or("").ends_with('Z'));
@@ -5411,7 +5725,8 @@ mod tests {
         let deployed = d["bus"]["deployed"].as_bool().unwrap_or(false);
         if !deployed {
             assert_eq!(
-                d["bus"]["nodes"], json!(0),
+                d["bus"]["nodes"],
+                json!(0),
                 "sin bus desplegado no puede haber nodos contados"
             );
             let reason = d["bus"]["reason"].as_str().unwrap_or("");
@@ -5430,7 +5745,10 @@ mod tests {
         let deployed = n["bus"]["deployed"].as_bool().unwrap_or(false);
         let count = n["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
         if !deployed {
-            assert_eq!(count, 0, "sin bus desplegado la lista de nodos debe ir vacía");
+            assert_eq!(
+                count, 0,
+                "sin bus desplegado la lista de nodos debe ir vacía"
+            );
         }
         assert!(n["bus"].get("reason").is_some());
     }
@@ -5528,8 +5846,14 @@ mod tests {
         assert_eq!(node_message("", "hola", "")["ok"], json!(false));
 
         // Compartición con rutas malas.
-        assert_eq!(share_put_in(&std::env::temp_dir(), "../x", "", "")["ok"], json!(false));
-        assert_eq!(share_put_chunk_in(&std::env::temp_dir(), "/x", 0, "", "")["ok"], json!(false));
+        assert_eq!(
+            share_put_in(&std::env::temp_dir(), "../x", "", "")["ok"],
+            json!(false)
+        );
+        assert_eq!(
+            share_put_chunk_in(&std::env::temp_dir(), "/x", 0, "", "")["ok"],
+            json!(false)
+        );
 
         // Base64 inválido.
         assert!(base64_decode("###").is_err());
@@ -5561,7 +5885,10 @@ mod tests {
         let t = task_board();
         assert_eq!(t["ok"], json!(true));
         let kinds = t["known_kinds"].as_array().cloned().unwrap_or_default();
-        assert!(!kinds.is_empty(), "la lista de tipos de tarea no puede ir vacía");
+        assert!(
+            !kinds.is_empty(),
+            "la lista de tipos de tarea no puede ir vacía"
+        );
         assert!(kinds.iter().any(|k| k == "sync.local"));
         assert!(t["board"].get("deployed").is_some());
     }
@@ -5589,7 +5916,10 @@ mod tests {
             assert_eq!(listed[i]["method"], json!(m));
             assert_eq!(listed[i]["path"], json!(p));
         }
-        assert!(doc["auth"]["api_key_header"].as_str().unwrap_or("").contains("API-Key"));
+        assert!(doc["auth"]["api_key_header"]
+            .as_str()
+            .unwrap_or("")
+            .contains("API-Key"));
     }
 
     #[test]
@@ -5645,7 +5975,12 @@ mod tests {
         rules.reserved_ratio = 0.5;
 
         let offer = effective_offer(&rules, &node, &device);
-        assert_eq!(offer["available"], json!(true), "con batería y frío debe compartir: {}", offer);
+        assert_eq!(
+            offer["available"],
+            json!(true),
+            "con batería y frío debe compartir: {}",
+            offer
+        );
 
         // Batería baja: deja de compartir y lo explica.
         let low = json!({
@@ -5654,7 +5989,11 @@ mod tests {
         let offer = effective_offer(&rules, &node, &low);
         assert_eq!(offer["available"], json!(false));
         let reason = offer["reason"].as_str().unwrap_or("");
-        assert!(reason.contains("batería"), "debe explicar el bloqueo: {}", reason);
+        assert!(
+            reason.contains("batería"),
+            "debe explicar el bloqueo: {}",
+            reason
+        );
 
         // Modo dedicado: no comparte nada, aunque la batería sea perfecta.
         let mut dedicated = rules.clone();
@@ -5718,7 +6057,8 @@ mod tests {
 
     /// Prepara un directorio de estado del enjambre de mentira.
     fn fake_swarm_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("md-webui-swarm-{}-{}", tag, std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("md-webui-swarm-{}-{}", tag, std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("sync")).unwrap();
         fs::create_dir_all(dir.join("agents")).unwrap();
@@ -5758,7 +6098,8 @@ mod tests {
         .unwrap();
         fs::write(
             dir.join("agents").join("cloud-sandbox.json"),
-            json!({ "id": "cloud-sandbox", "role": "worker", "platform": "linux-x86_64" }).to_string(),
+            json!({ "id": "cloud-sandbox", "role": "worker", "platform": "linux-x86_64" })
+                .to_string(),
         )
         .unwrap();
 
@@ -5799,7 +6140,9 @@ mod tests {
         let dir = fake_swarm_dir("roto");
         let mut body = String::new();
         body.push_str("esto no es json\n");
-        body.push_str(&json!({ "agent": "n1", "kind": "reverse", "finding": "ok", "ts": 5 }).to_string());
+        body.push_str(
+            &json!({ "agent": "n1", "kind": "reverse", "finding": "ok", "ts": 5 }).to_string(),
+        );
         body.push('\n');
         body.push_str("{\"agent\":\"n2\",\"kind\":\"npu\"}\n"); // sin ts: se acepta
         body.push_str("\n"); // línea vacía: se salta
@@ -5823,8 +6166,16 @@ mod tests {
         fs::write(dir.join("sync").join("re_s.ndjson"), body).unwrap();
         let r = mesh_findings_in(&vec![dir.clone()], 50, 0);
         let text = r.to_string();
-        assert!(!text.contains("mdaemon_sk_live_ABCDEF0123456789"), "la key se filtró: {}", text);
-        assert!(!text.contains("sk-zzzzzzzzzzzz"), "el token se filtró: {}", text);
+        assert!(
+            !text.contains("mdaemon_sk_live_ABCDEF0123456789"),
+            "la key se filtró: {}",
+            text
+        );
+        assert!(
+            !text.contains("sk-zzzzzzzzzzzz"),
+            "el token se filtró: {}",
+            text
+        );
         assert!(text.contains("[REDACTED]"));
         assert!(r["redactions"].as_u64().unwrap_or(0) >= 1);
         let _ = fs::remove_dir_all(&dir);
@@ -5848,11 +6199,8 @@ mod tests {
 
     /// Crea un tablero SQLite de prueba con una tarea en `queued`.
     fn tablero_de_prueba(tag: &str) -> (std::path::PathBuf, String, String) {
-        let dir = std::env::temp_dir().join(format!(
-            "md-webui-board-{}-{}",
-            tag,
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("md-webui-board-{}-{}", tag, std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("dir de prueba");
         let path = dir.join("board.sqlite").to_string_lossy().to_string();
@@ -5868,13 +6216,19 @@ mod tests {
     #[test]
     fn el_claim_gana_el_lock_y_el_lease_impide_el_doble_claim() {
         let (_dir, path, id) = tablero_de_prueba("claim");
-        let a = board_claim_at(&path, &json!({ "task_id": id, "owner": "agente-a", "role": "worker", "lease_secs": 300 }));
+        let a = board_claim_at(
+            &path,
+            &json!({ "task_id": id, "owner": "agente-a", "role": "worker", "lease_secs": 300 }),
+        );
         assert_eq!(a["ok"], json!(true));
         assert_eq!(a["won"], json!(true), "el primer claim debe ganar");
         assert_eq!(a["role"], json!("worker"));
 
         // Otro agente con el lease vivo NO puede reclamarla.
-        let b = board_claim_at(&path, &json!({ "task_id": id, "owner": "agente-b", "role": "worker" }));
+        let b = board_claim_at(
+            &path,
+            &json!({ "task_id": id, "owner": "agente-b", "role": "worker" }),
+        );
         assert_eq!(b["ok"], json!(true));
         assert_eq!(b["won"], json!(false), "el segundo claim debe perder");
         assert_eq!(b["current_owner"], json!("agente-a"));
@@ -5883,7 +6237,10 @@ mod tests {
     #[test]
     fn el_release_solo_lo_puede_hacer_el_dueno_y_el_report_marca_el_resultado() {
         let (_dir, path, id) = tablero_de_prueba("release");
-        board_claim_at(&path, &json!({ "task_id": id, "owner": "agente-a", "role": "worker" }));
+        board_claim_at(
+            &path,
+            &json!({ "task_id": id, "owner": "agente-a", "role": "worker" }),
+        );
 
         // Un tercero no puede soltar la tarea de otro.
         let r = board_release_at(&path, &json!({ "task_id": id, "owner": "agente-b" }));
@@ -5896,9 +6253,15 @@ mod tests {
         assert_eq!(r2["released"], json!(true));
 
         // Y ahora se puede volver a reclamar.
-        let c = board_claim_at(&path, &json!({ "task_id": id, "owner": "agente-b", "role": "primary" }));
+        let c = board_claim_at(
+            &path,
+            &json!({ "task_id": id, "owner": "agente-b", "role": "primary" }),
+        );
         assert_eq!(c["won"], json!(true));
-        let rep = board_report_at(&path, &json!({ "task_id": id, "owner": "agente-b", "ok": true, "report": "hecho" }));
+        let rep = board_report_at(
+            &path,
+            &json!({ "task_id": id, "owner": "agente-b", "ok": true, "report": "hecho" }),
+        );
         assert_eq!(rep["ok"], json!(true));
         assert_eq!(rep["status"], json!("done"));
     }
@@ -5906,7 +6269,10 @@ mod tests {
     #[test]
     fn un_rol_invalido_no_se_inventa() {
         let (_dir, path, id) = tablero_de_prueba("rol");
-        let r = board_claim_at(&path, &json!({ "task_id": id, "owner": "x", "role": "rey" }));
+        let r = board_claim_at(
+            &path,
+            &json!({ "task_id": id, "owner": "x", "role": "rey" }),
+        );
         assert_eq!(r["ok"], json!(false));
         assert_eq!(r["error"], json!("invalid_role"));
         let sin_tarea = board_claim_at(&path, &json!({ "owner": "x" }));
@@ -5946,12 +6312,18 @@ mod tests {
         assert_eq!(p["ok"], json!(true));
         assert_eq!(p["contains_secrets"], json!(false));
         let md = p["markdown"].as_str().unwrap_or("");
-        assert!(md.contains("Cómo hablar con el daemon"), "falta la sección de acceso");
+        assert!(
+            md.contains("Cómo hablar con el daemon"),
+            "falta la sección de acceso"
+        );
         assert!(md.contains("Herramientas MCP"));
         assert!(md.contains("Estado del dispositivo"));
         assert!(md.contains("Hallazgos del enjambre"));
         // El catálogo de tools es real, no un texto de relleno.
-        assert!(p["tools"].as_u64().unwrap_or(0) > 10, "el catálogo de tools debe ser real");
+        assert!(
+            p["tools"].as_u64().unwrap_or(0) > 10,
+            "el catálogo de tools debe ser real"
+        );
         // SIN credenciales: el token de sesión no puede aparecer.
         assert!(
             !md.contains(crate::cockpit_server::auth_token()),
@@ -5964,7 +6336,10 @@ mod tests {
         let p = prompt_external(true, "mdaemon_sk_test_1234567890");
         assert_eq!(p["contains_secrets"], json!(true));
         let md = p["markdown"].as_str().unwrap_or("");
-        assert!(md.contains("contiene credenciales"), "debe avisar en la primera línea");
+        assert!(
+            md.contains("contiene credenciales"),
+            "debe avisar en la primera línea"
+        );
         assert!(md.contains("mdaemon_sk_test_1234567890"));
         assert!(md.contains(crate::cockpit_server::auth_token()));
         let w = p["warnings"].as_array().cloned().unwrap_or_default();
@@ -5989,7 +6364,8 @@ mod tests {
         // No ofrece inference: descartado.
         assert!(score_node(&node, &offer, &rules, "inference", &contrib).is_none());
         // Nodo bloqueado: descartado aunque encaje el tipo.
-        let blocked = json!({ "available": false, "capacity": 0.0, "offers": ["compute"], "reason": "x" });
+        let blocked =
+            json!({ "available": false, "capacity": 0.0, "offers": ["compute"], "reason": "x" });
         assert!(score_node(&node, &blocked, &rules, "compute", &contrib).is_none());
     }
 }
