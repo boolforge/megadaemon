@@ -119,22 +119,19 @@ mod tests {
     /// PARALELO, se pisaban: uno leía la entrada que había escrito el
     /// otro (`left: String("masa")`, `right: "prueba"`).  Ahora cada
     /// llamada tiene su propio directorio (contador atómico).
+    ///
+    /// MEDIDO 2026-11-25 (CI rojo, 2ª vez): este helper FIJABA
+    /// `MEGADAEMON_STATE_DIR`, que es una variable de ENTORNO GLOBAL del
+    /// proceso ⇒ en paralelo, otro test leía (o borraba) el directorio de
+    /// este.  Ya no se toca ninguna variable de entorno: el estado de cada
+    /// test es su temporal por hilo (`state_dir::state_dir_de_test()`), y
+    /// aquí sólo se limpia al terminar.
     fn con_state_dir_tmp<T>(f: impl FnOnce() -> T) -> T {
-        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let previo = std::env::var("MEGADAEMON_STATE_DIR").ok();
-        let tmp = std::env::temp_dir().join(format!(
-            "md-devlog-test-{}-{n}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&tmp).expect("dir de test");
-        std::env::set_var("MEGADAEMON_STATE_DIR", &tmp);
+        let dir = crate::cockpit_server::state_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir de test");
         let r = f();
-        match previo {
-            Some(v) => std::env::set_var("MEGADAEMON_STATE_DIR", v),
-            None => std::env::remove_var("MEGADAEMON_STATE_DIR"),
-        }
-        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&dir);
         r
     }
 
