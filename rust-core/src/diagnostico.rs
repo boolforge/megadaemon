@@ -168,6 +168,111 @@ fn health(puerto: u16) -> Value {
     })
 }
 
+/// El estado de la CUENTA de Antigravity (el login).
+///
+/// MEDIDO (2026-11-25): la pantalla "Continue with Google" significa que la
+/// cuenta no esta cargada.  Aqui se ve si el `antigravity_state.pbtxt`
+/// existe, que modelo pide y si hay algun marcador de error.
+///
+/// NO se imprime el fichero entero: puede llevar identificadores.  Se sacan
+/// solo los camposinteresting y se redacta lo que huela a credencial.
+fn cuenta_agy() -> Value {
+    let ruta = crate::antigravity_bridge::AGY_STATE;
+    let Ok(txt) = std::fs::read_to_string(&ruta) else {
+        return json!({"existe": false, "ruta": ruta});
+    };
+    let mut out = serde_json::Map::new();
+    out.insert("existe".to_string(), json!(true));
+    out.insert("ruta".to_string(), json!(ruta));
+    out.insert("bytes".to_string(), json!(txt.len()));
+    // Los campos clave del pbtxt (nombre: valor), redactando lo sensible.
+    let mut claves: Vec<String> = Vec::new();
+    for linea in txt.lines() {
+        let t = linea.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        let Some((k, v)) = t.split_once(':') else {
+            continue;
+        };
+        let k = k.trim();
+        if k.is_empty() {
+            continue;
+        }
+        let v = v.trim();
+        // No se copian tokens ni claves.
+        let sensible = k.to_ascii_lowercase().contains("token")
+            || k.to_ascii_lowercase().contains("key")
+            || k.to_ascii_lowercase().contains("secret")
+            || k.to_ascii_lowercase().contains("credential")
+            || k.to_ascii_lowercase().contains("auth");
+        let valor = if sensible {
+            json!("<redactado>")
+        } else if v.len() > 200 {
+            json!(format!("{}…", &v[..200]))
+        } else {
+            json!(v)
+        };
+        claves.push(format!("{k} = {valor}"));
+        if claves.len() >= 40 {
+            break;
+        }
+    }
+    out.insert("campos".to_string(), json!(claves));
+    json!(Value::Object(out))
+}
+
+/// Logs de la PROPIA app de Antigravity (donde esta el error del login).
+///
+/// MEDIDO (2026-11-25): el daemon solo tenia el log del supervisor; el
+/// error real ("falla el login") estaba en el log de la app, que solo se
+/// puede leer desde el movil (el daemon corre ahi con root).
+fn logs_de_la_app() -> Vec<Value> {
+    let base = Path::new(crate::antigravity_endpoint::RAIZ_APP);
+    let mut out = Vec::new();
+    // Los logs de la app estan en varios sitios segun la version; se
+    // recorren los mas probables y se cogen las ultimas lineas.
+    let candidatos = [
+        "logs",
+        "logs/window1",
+        "logs/exthost",
+        "antigravity-app/logs",
+        ".gemini/logs",
+        "brain/root-1/.system_generated/logs",
+    ];
+    for rel in candidatos {
+        let dir = base.join(rel);
+        let Ok(entradas) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut ficheros: Vec<_> = entradas.flatten().collect();
+        // Los mas recientes primero.
+        ficheros.sort_by_key(|e| {
+            e.metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::UNIX_EPOCH)
+        });
+        for e in ficheros.into_iter().rev().take(4) {
+            let ruta = e.path();
+            if !ruta.is_file() {
+                continue;
+            }
+            let lineas = ultimas_lineas(&ruta.to_string_lossy(), 3000);
+            if lineas.is_empty() {
+                continue;
+            }
+            out.push(json!({
+                "fichero": ruta.display().to_string(),
+                "lineas": lineas,
+            }));
+            if out.len() >= 6 {
+                return out;
+            }
+        }
+    }
+    out
+}
+
 /// Estado del stack autocontenido.
 fn stack() -> Value {
     crate::stack::estado_json(&crate::stack::Config::del_entorno())
@@ -254,6 +359,15 @@ pub fn recoger() -> Value {
         "energia": energia(),
         "red": red(),
         "log": ultimas_lineas("/sdcard/megadaemon.log", 6000),
+        // MEDIDO (2026-11-25): el login de Antigravity fallaba y NO se
+        // podia saber por que sin el estado de la instrumentacion (si el
+        // .so parcheado esta puesto, si el modelo esta registrado) ni los
+        // logs de la propia app (donde esta el error de verdad).
+        "instrumentacion": crate::instrumentacion_agy::estado(),
+        // MEDIDO (2026-11-25): el login fallaba y esto dice si la cuenta
+        // esta registrada y con que modelo (el `antigravity_state.pbtxt`).
+        "cuenta": cuenta_agy(),
+        "ags_logs": logs_de_la_app(),
         "shim": ultimas_lineas("/data/adb/megadaemon/state/agyshim.ndjson", 4000),
         "state_dir": state,
     })

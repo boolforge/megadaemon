@@ -161,6 +161,29 @@ def main() -> int:
     print(f"-- binario: {b.get('bytes')} B sha={str(b.get('sha256'))[:16]}")
     print("-- energia:", json.dumps(v.get("energia", {})))
     print("-- red:", json.dumps(v.get("red", {}))[:300])
+    inst = v.get("instrumentacion") or {}
+    if inst:
+        print("-- instrumentacion AGY:")
+        print("   so_falso:", json.dumps(inst.get("so_falso", {}).get("activo")),
+              "| endpoint aplicado:", json.dumps(inst.get("endpoint", {}).get("aplicado")))
+        print("   modelo registrado:", json.dumps(inst.get("modelo", {}).get("registrado")),
+              "| puente MCP:", json.dumps(inst.get("puente_mcp", {}).get("token_al_dia")))
+        print("   MITM db montado:", json.dumps(inst.get("mitm_db", {}).get("montado")))
+        st = inst.get("so_falso", {}).get("estado") or {}
+        if st:
+            print("   detalle .so:", json.dumps(st)[:400])
+        ep = inst.get("endpoint", {}).get("estado") or {}
+        if ep:
+            print("   detalle endpoint:", json.dumps(ep)[:500])
+    print("-- cuenta AGY:")
+    c = v.get("cuenta") or {}
+    print("   existe:", c.get("existe"), "| bytes:", c.get("bytes"))
+    for k in (c.get("campos") or [])[:40]:
+        print("   " + str(k))
+    for lg in v.get("ags_logs") or []:
+        print("-- log de la app:", lg.get("fichero"))
+        for l in lg.get("lineas", [])[-40:]:
+            print("   " + l[:300])
     print("-- ultimas lineas del log:")
     for l in v.get("log", [])[-25:]:
         print("   " + l)

@@ -131,6 +131,21 @@ pub fn fuentes() -> Vec<Fuente> {
             tipo: "texto",
             ruta: crate::instrumentacion_agy::ruta_estado(),
         },
+        // MEDIDO (2026-11-25): el login de Antigravity fallaba y el error
+        // de verdad NO esta en el log del supervisor ni en el NDJSON del
+        // shim: esta en el log de la PROPIA app.  Se anaden sus fuentes.
+        Fuente {
+            id: "agy_app",
+            nombre: "Antigravity (log de la app)",
+            tipo: "texto",
+            ruta: PathBuf::from("/data/user/0/com.agy/files/logs/main.log"),
+        },
+        Fuente {
+            id: "agy_app_window",
+            nombre: "Antigravity (log de la ventana)",
+            tipo: "texto",
+            ruta: PathBuf::from("/data/user/0/com.agy/files/logs/window1/main.log"),
+        },
     ]
 }
 
@@ -200,7 +215,9 @@ fn leer_final(ruta: &PathBuf, lineas: usize) -> Result<Vec<String>, String> {
 /// Niveles reconocidos en las líneas de log.
 fn nivel(linea: &str) -> Option<&'static str> {
     let l = linea.to_ascii_uppercase();
-    for n in ["ERROR", "FATAL", "PANIC", "WARN", "WARNING", "INFO", "DEBUG", "TRACE"] {
+    for n in [
+        "ERROR", "FATAL", "PANIC", "WARN", "WARNING", "INFO", "DEBUG", "TRACE",
+    ] {
         if l.contains(n) {
             return Some(match n {
                 "ERROR" | "FATAL" | "PANIC" => "error",
@@ -238,7 +255,11 @@ pub fn tail(id: &str, lineas: usize, filtro: &str, nivel_f: &str, desde: usize) 
         }
     };
     let filtro_l = filtro.to_lowercase();
-    let nivel_deseado = if nivel_f.is_empty() { None } else { Some(nivel_f) };
+    let nivel_deseado = if nivel_f.is_empty() {
+        None
+    } else {
+        Some(nivel_f)
+    };
     let mut out = Vec::new();
     let mut total = 0usize;
     for (i, l) in todas.iter().enumerate() {
