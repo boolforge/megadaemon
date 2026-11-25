@@ -145,12 +145,34 @@ instalar_nuevo() {
 
 instalar_nuevo
 
-# 1) Daemon.
+# 1) Daemon: hay que matarlo DE VERD y esperar a que quede libre el puerto.
+#
+#    MEDIDO (2026-11-25, movil): con un simple "kill + 2 s" el daemon NUEVO
+#    arranco y fallo con "Failed to bind Rust Cockpit on 0.0.0.0:3000:
+#    Address already in use" => el daemon VIEJO seguia sirviendo la UI (la
+#    V1, sin la vista Antigravity) y el usuario creia que la UI habia
+#    "perdido cosas".  El supervisor ya lo hacia bien (SIGKILL + esperar a
+#    que /proc/net/tcp deje de mostrar el puerto en LISTEN); aqui se copia
+#    esa tecnica.
 if d=$(daemon_vivo); then
-    log "el daemon ya corria ($d): lo reinicio para cargar el binario actual"
+    log "el daemon ya corria ($d): lo mato para cargar el binario actual"
     kill -9 $(echo "$d" | tr '\n' ' ') 2>/dev/null
-    sleep 2
 fi
+puerto_libre() {
+    hp=$(printf '%04X' "$PORT")
+    ! grep -qiE ":$hp [0-9a-f]{8}:[0-9a-f]{4} 0A" /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
+i=0
+while [ $i -lt 30 ]; do
+    puerto_libre && break
+    i=$((i + 1)); sleep 1
+done
+if ! puerto_libre; then
+    log "el puerto $PORT sigue ocupado: mato por nombre"
+    pkill -9 -x megadaemon-core 2>/dev/null
+    sleep 3
+fi
+log "puerto $PORT libre: arranco el daemon nuevo"
 if [ ! -x "$BIN" ]; then
     log "ERROR: no hay binario en $BIN"
     exit 1
@@ -164,18 +186,37 @@ cd "$PREFIX" || exit 1
 setsid nohup "$BIN" cockpit "$PORT" >> "$LOG" 2>&1 < /dev/null &
 log "daemon arrancado (pid $!)"
 
-# 2) Espera a que responda.
+# 2) Espera a que responda y COMPRUEBA que es el daemon NUEVO.
 i=0
-while [ $i -lt 20 ]; do
+while [ $i -lt 25 ]; do
     if health; then log "cockpit responde en $PORT"; break; fi
     i=$((i+1)); sleep 2
 done
-[ $i -ge 20 ] && log "AVISO: el cockpit no respondio tras 40 s"
+if [ $i -ge 25 ]; then
+    log "AVISO: el cockpit no respondio tras 50 s"
+else
+    # MEDIDO (2026-11-25): hay que comprobar que el que responde es el NUEVO:
+    # si el viejo sobrevive, la UI que se ve es la VIEJA (y parece que "la UI
+    # ha perdido la vista Antigravity").
+    d2=$(daemon_vivo)
+    log "daemon en marcha: ${d2:-desconocido}"
+    h=$(toybox wget -q -O - "http://127.0.0.1:$PORT/health" 2>/dev/null | head -c 500)
+    log "health: $h"
+fi
 
-# 2.b) El LS instrumentado: la app RE-EXTRAE files/runtime/ en CADA arranque
-#      => el .so parcheado se pierde.  MEDIDO 2026-11-25: lo que funciona es
-#      MATAR el LS (libloader.so): la app lo relanza en ~1 s y el LS nuevo
-#      carga el .so ya parcheado => el fix del passthrough llega al LS.
+# 2.b) El LS instrumentado, DESPUES del parche.
+#
+#      MEDIDO (2026-11-25, movil): la app RE-EXTRAE files/runtime/ en CADA
+#      arranque => el .so parcheado se pierde.  Lo que funciona es MATAR el
+#      LS (libloader.so) DESPUES de que el daemon haya re-aplicado el
+#      parche: la app lo relanza en ~1 s y el LS nuevo carga el .so ya
+#      parcheado => el fix del passthrough (la ruta con dos puntos) llega al
+#      LS.  Si se mata ANTES, el LS se relanza con el .so sin parchear y el
+#      parche posterior no surte efecto.
+#
+#      El daemon aplica la instrumentacion en su ciclo automatico (60 s por
+#      defecto), asi que aqui se espera a que pase.
+ESPERA_INSTRUMENTACION="${ESPERA_INSTRUMENTACION:-75}"
 ls_vivo() {
     for p in /proc/[0-9]*; do
         [ -r "$p/cmdline" ] || continue
@@ -184,11 +225,20 @@ ls_vivo() {
     done
     return 1
 }
+log "esperando $ESPERA_INSTRUMENTACION s a que el daemon re-aplique el parche del .so"
+sleep "$ESPERA_INSTRUMENTACION"
 if l=$(ls_vivo); then
     log "el LS instrumentado esta vivo ($l): lo mato para que recargue el .so parcheado"
     kill -9 $(echo "$l" | tr '\n' ' ') 2>/dev/null
-    sleep 3
-    ls_vivo && log "AVISO: el LS sigue vivo"
+    i=0
+    while [ $i -lt 10 ]; do
+        if ls_vivo >/dev/null 2>&1; then i=$((i + 1)); sleep 1; else break; fi
+    done
+    if ls_vivo >/dev/null 2>&1; then
+        log "el LS se ha relanzado (eso es lo normal: la app lo vuelve a levantar)"
+    else
+        log "el LS esta muerto: la app lo relanzara con el .so parcheado"
+    fi
 else
     log "no hay ningun LS vivo (la app lo relanzara al abrirla)"
 fi
