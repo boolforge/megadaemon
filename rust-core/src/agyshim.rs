@@ -612,6 +612,16 @@ pub struct Respuesta {
 /// daemon no guarda ni ve credenciales de Google, sólo las reenvía.
 pub fn passthrough(req: &Peticion) -> Result<Respuesta, String> {
     let ruta = normalizar_ruta_proxy(&req.ruta);
+    // MEDIDO (2026-11-25, movil): el backend real de Google (cloudcode-pa)
+    // NO entiende la forma con BARRA (`/v1internal/loadCodeAssist`): su
+    // dialecto interno usa DOS PUNTOS (`/v1internal:loadCodeAssist`).  Al
+    // reenviar la ruta tal cual, Google respondia 404 y Antigravity moria
+    // con "There was an unexpected issue setting up your account".
+    //
+    // `normalizar_ruta_gemini` ya sabe traducir barra -> dos puntos (y lo
+    // hace de forma conservadora: sólo si el resto no lleva ya ':' ni '/').
+    // Aquí se aplica al PASSTHROUGH, que es donde la ruta se usa tal cual.
+    let ruta = crate::llm_gateway::normalizar_ruta_gemini(&ruta);
     // MEDIDO (2026-11-24): la query string es parte de la petición (Google
     /// la necesita: sin ella devolvía 404).
     let url = if req.query.trim().is_empty() {
@@ -713,7 +723,34 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
             // Ruta de cuenta/sesión (no de modelo): passthrough al backend
             // real con las credenciales que ya envía la app.
             if es_ruta_passthrough(&req.ruta) {
-                return passthrough(req);
+                // MEDIDO (2026-11-25): las rutas de PASSTHROUGH no se
+                // registraban en el NDJSON => cuando Google devolvia un 404
+                // (o lo que fuera) no habia ni una linea que dijera QUE
+                // ruta se habia pedido.  Ahora se registra con la ruta
+                // TAL CUAL la pedia el cliente y con la ruta ya
+                // NORMALIZADA (la que se envie a Google).
+                let r = passthrough(req);
+                let (status, cuerpo) = match &r {
+                    Ok(resp) => (resp.status, resp.cuerpo.clone()),
+                    Err(e) => (0u16, format!("{{\"error\":\"{e}\"}}")),
+                };
+                registrar(&Entrada {
+                    ts: ahora(),
+                    metodo: req.metodo.clone(),
+                    ruta: req.ruta.clone(),
+                    modelo: None,
+                    bytes_cuerpo: req.cuerpo.len(),
+                    status,
+                    regla: None,
+                    cuerpo: Some(req.cuerpo.chars().take(400).collect()),
+                    respuesta: Some(cuerpo.chars().take(400).collect()),
+                    ms: 0,
+                    requested_model: None,
+                    real_model: None,
+                    substituted: false,
+                    proxy: true,
+                });
+                return r;
             }
             return Err(format!("el shim no sirve la ruta {}", req.ruta));
         }
@@ -942,6 +979,37 @@ pub fn procesar(metodo: &str, ruta: &str, cuerpo: &str) -> (u16, String) {
 }
 
 #[cfg(test)]
+
+    /// MEDIDO 2026-11-25 (movil): el backend de Google usa el dialecto de
+    /// DOS PUNTOS (`/v1internal:loadCodeAssist`).  Si el passthrough
+    /// reenvia la ruta con BARRA, Google responde 404 y Antigravity muere
+    /// con "unexpected issue setting up your account".
+    #[test]
+    fn el_passthrough_traduce_la_ruta_al_dialecto_de_google() {
+        // La forma que llega al backend (lo que se ve en la URL real).
+        assert_eq!(
+            crate::llm_gateway::normalizar_ruta_gemini("/v1internal/loadCodeAssist"),
+            "/v1internal:loadCodeAssist"
+        );
+        assert_eq!(
+            crate::llm_gateway::normalizar_ruta_gemini("/v1internal/userInfo"),
+            "/v1internal:userInfo"
+        );
+        assert_eq!(
+            crate::llm_gateway::normalizar_ruta_gemini("/v1internal/buildWithGooglePlugins"),
+            "/v1internal:buildWithGooglePlugins"
+        );
+        // La forma con dos puntos NO se toca (ya es la buena).
+        assert_eq!(
+            crate::llm_gateway::normalizar_ruta_gemini("/v1internal:loadCodeAssist"),
+            "/v1internal:loadCodeAssist"
+        );
+        // Y una ruta de modelo tampoco se rompe.
+        assert_eq!(
+            crate::llm_gateway::normalizar_ruta_gemini("/v1internal/generateContent"),
+            "/v1internal:generateContent"
+        );
+    }
 mod tests {
     use super::*;
 

@@ -53,7 +53,11 @@ pub fn state_dir_de_test() -> String {
             return d.to_string();
         }
     }
-    let base = state_dir();
+    // MEDIDO 2026-11-25 (CI rojo): el state dir por DEFECTO es la ruta del
+    // móvil (`/data/user/0/com.agy/files/megadaemon/state`), que en el CI no
+    // es escribible => "Permission denied (os error 13)".  Los tests viven
+    // en un temporal, por hilo.
+    let base = std::env::temp_dir().join(format!("megadaemon-test-{}", std::process::id()));
     let nombre = std::thread::current().name().unwrap_or("main").to_string();
     let limpio: String = nombre
         .chars()
@@ -65,7 +69,7 @@ pub fn state_dir_de_test() -> String {
             }
         })
         .collect();
-    format!("{base}/test-{limpio}")
+    base.join(format!("test-{limpio}")).to_string_lossy().to_string()
 }
 
 #[cfg(test)]
