@@ -1424,6 +1424,54 @@ fn main() {
             println!("{}", serde_json::to_string_pretty(&rep).unwrap());
         }
 
+        // v21: `megadaemon-core config-set <ruta.punteada> <json>`
+        //
+        // MEDIDO (2026-11-25, movil): la instrumentacion de Antigravity
+        // hubo que DESACTIVAR a mano (por HTTP) para que el language server
+        // arrancara, y reactivarla exigia el token de sesion.  Con este
+        // CLI el script de recuperacion la reactiva sin HTTP ni token.
+        //
+        //   megadaemon-core config-set instrumentacion_agy.activa true
+        //   megadaemon-core config-set instrumentacion_agy.modo_so '"falso"'
+        //   megadaemon-core config-get instrumentacion_agy.activa
+        "config-set" | "config-get" => {
+            let ruta = args.get(2).cloned().unwrap_or_default();
+            if ruta.is_empty() {
+                eprintln!(
+                    "uso: megadaemon-core <config-set|config-get> <ruta.punteada> [valor-json]"
+                );
+                std::process::exit(2);
+            }
+            if args[1] == "config-get" {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &megadaemon_core::config_efectiva::valor(&ruta)
+                            .unwrap_or(serde_json::Value::Null)
+                    )
+                    .unwrap_or_default()
+                );
+                return;
+            }
+            let valor_txt = args.get(3).cloned().unwrap_or_default();
+            let valor: serde_json::Value = serde_json::from_str(&valor_txt)
+                .unwrap_or_else(|_| serde_json::Value::String(valor_txt.clone()));
+            // De "a.b.c" a {"a":{"b":{"c":valor}}}.
+            let mut anidado = valor.clone();
+            let mut partes: Vec<&str> = ruta.split('.').rev().collect();
+            let primera = partes.remove(0);
+            for p in partes.into_iter().rev() {
+                anidado = serde_json::json!({ p: anidado });
+            }
+            let cambios = serde_json::json!({ primera: anidado });
+            match megadaemon_core::config_efectiva::escribir(&cambios) {
+                Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default()),
+                Err(e) => {
+                    eprintln!("config-set error: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
         "cfg" => {
             let plat = args.get(2).map(|s| s.as_str()).unwrap_or("segacd");
             let offset = args.get(3).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);

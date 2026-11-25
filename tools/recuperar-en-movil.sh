@@ -497,4 +497,22 @@ if [ -x "$BIN" ]; then
     else
         log "AVISO: no se pudieron publicar los logs de la app"
     fi
+
+    # 4.c) REACTIVAR la instrumentacion de Antigravity.
+    #
+    # MEDIDO (2026-11-25, movil): hubo que DESACTIVARLA a mano (por HTTP)
+    # para que el language server llegara a "core ready": con el shim, el
+    # LS pedia `/v1internal/` 32 veces y la app se quedaba sin core
+    # ("core did not become ready within 60000ms").  La causa era que el
+    # shim resolvia en local una ruta que NO existe en Google; ya está
+    # corregido (el shim es transparente).  Aqui se reactiva sola, para
+    # que el usuario no tenga que tocar nada.
+    if "$BIN" config-set instrumentacion_agy.activa true >/dev/null 2>&1; then
+        log "instrumentacion de Antigravity reactivada"
+    else
+        log "AVISO: no se pudo reactivar la instrumentacion (config-set)"
+    fi
+    "$BIN" config-set instrumentacion_agy.modo_so '"falso"' >/dev/null 2>&1
+    "$BIN" config-set instrumentacion_agy.relanzar_ls true >/dev/null 2>&1
+    "$BIN" config-set instrumentacion_agy.payload_frida true >/dev/null 2>&1
 fi
