@@ -194,10 +194,9 @@ fn la_voz_respeta_el_cooldown_y_el_tope_por_tick() {
     assert!(out.broadcast.is_empty(), "un idle no se difunde");
 }
 
-// Modulo auxiliar del que depende el modulo incluido por `#[path]` (MEDIDO el
-// 2026-11-21: al fusionar `fix/robustness-20261120` varios modulos pasaron a
-// usar los helpers canonicos `util_text`/`util_fs` y los arneses
-// autocontenidos dejaron de compilar: E0432).
-#[path = "../src/util_text.rs"]
-#[allow(dead_code, unused_imports, unused_mut)]
-mod util_text;
+// MEDIDO (2026-11-25): este arnés ya usa `megadaemon_core::` para el
+// módulo bajo prueba, así que el `#[path = "../src/util_text.rs"]` era un
+// residuo (y `tests/declared_modules.rs` prohíbe copiar módulos de la
+// librería).  `util_text` es `pub mod` de la librería: se usa desde allí.
+#[allow(unused_imports)]
+use megadaemon_core::util_text;

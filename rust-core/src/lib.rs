@@ -71,6 +71,7 @@ pub mod call_recorder;
 pub mod board;
 pub mod capability;
 pub mod cert_vault;
+pub mod cert_android;
 pub mod cfg_lifter;
 pub mod channel;
 pub mod cirx_rtl;

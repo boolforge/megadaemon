@@ -163,6 +163,10 @@ fn los_arnes_usan_la_libreria_y_no_copian_modulos() {
                     if let Some(fin) = resto.find('"') {
                         let rel = &resto[..fin];
                         incluidos += 1;
+                        // MEDIDO (2026-11-25): el path ya trae la
+                        // extension (".rs"), y aqui se volvia a anadir
+                        // => "src/x.rs.rs" => "NO EXISTE" para todos.
+                        let rel = rel.strip_suffix(".rs").unwrap_or(rel);
                         let f = raiz().join("src").join(format!("{rel}.rs"));
                         if !f.is_file() {
                             copias.push(format!("{} -> src/{rel}.rs (NO EXISTE)", p.display()));

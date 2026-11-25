@@ -27,3 +27,28 @@ antigravity_bridge_smoke
 # una pasada de limpieza sobre esos comentarios.  El lint EJECUTABLE
 # (`tools/word-fusion-lint`) pasa en verde sobre el repo.
 word_fusion_lint
+# MEDIDO 2026-11-25 (tras el merge de las 7 ramas): rojos REALES que no son
+# del merge pero bloquean el gate.  Son de codigo de otros agentes (backups y
+# certificados), NO de la instrumentacion ni del merge.
+# MEDIDO 2026-11-25: los tres rojos de backups se han ARREGLADO EN EL
+# CODIGO (no se tapan):
+#   * `backup_profile`: el `TarPusher` empujaba piezas variables mientras
+#     la tuberia repartia por trozos de 256 KiB => "trozo 1 fuera del
+#     reparto"; ademas `reassemble`/`verify_stream` leian `part{NN}` y los
+#     sinks escriben `{prefijo}.part{NN}`; la cache no aparecia en el plan;
+#     y los specs del navegador llevaran barra final => doble barra en la
+#     ruta del manifiesto.
+#   * `backup_raw`: el fixture escribia el magic de F2fs ANTES del relleno,
+#     que lo pisaba.
+#   * `backup_stream`: el test usaba trozos de 4 B (Drive exige 256 KiB) y
+#     un total que no cuadraba con el reparto; ademas `FileSink::finish()`
+#     devolvia SIEMPRE `bytes: 0` y `chunks: 0` (bug real de produccion).
+# MEDIDO 2026-11-25: los dos rojos restantes se han ARREGLADO EN EL CODIGO:
+#   * `cert_android_smoke`: el dedup de certificados era por `id` (que lleva
+#     la etiqueta de la fuente) => el MISMO cert en tres fuentes contaba como
+#     tres; ahora se deduplica por el SHA-256 del DER.  Ademas el fixture
+#     traia un typo ("MD Tess Persona Fisica" en el issuer) que hacia que el
+#     cert de prueba NO fuese autofirmado.
+#   * `declared_modules`: los arneses copiaban 6 modulos de la libreria con
+#     `#[path]` (prohibido por ese mismo test) y el test duplicaba la
+#     extension ("x.rs.rs").  Ahora los arneses usan `megadaemon_core::`.
