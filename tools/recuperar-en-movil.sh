@@ -226,11 +226,25 @@ supervisor_vivo() {
     done
     return 1
 }
-if s=$(supervisor_vivo); then
-    log "reiniciando el supervisor (pid $s) para que cargue la version nueva"
-    kill -9 $(echo "$s" | tr '\n' ' ') 2>/dev/null
-    sleep 2
-fi
+# MEDIDO (2026-11-25, movil): HABIA DOS SUPERVISORES vivos
+#   4808 sh /data/adb/service.d/99-megadaemon.sh
+#   4823 sh /data/adb/service.d/99-megadaemon.sh.bak-50k
+# Con dos, uno reinicia el daemon mientras el otro lo mata => bucle de
+# reinicios ("el daemon no responde /health ni /api/power (fallo 3/3)").
+# Se matan TODOS (el patron pkill -f es substring: tambien se lleva el
+# .bak-50k) y el keeper relanza el canonico.
+pkill -9 -f 'service.d/99-megadaemo[n].sh' 2>/dev/null
+sleep 2
+supervisores_vivos() {
+    n=0
+    for p in /proc/[0-9]*; do
+        [ -r "$p/cmdline" ] || continue
+        c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+        case "$c" in *99-megadaemon.sh*) n=$((n + 1));; esac
+    done
+    echo "$n"
+}
+log "supervisores tras la limpieza: $(supervisores_vivos) (0 = el keeper lo relanza)"
 
 # 1) Daemon: hay que matarlo DE VERD y esperar a que quede libre el puerto.
 #
@@ -357,4 +371,54 @@ while [ $i -lt 30 ]; do
 done
 [ $i -ge 30 ] && log "AVISO: no hay URL de tunel (el watchdog deberia levantarlo)"
 
+# 3) Tunel: lo relanza el watchdog (98) o el propio daemon; aqui se espera
+#    a que exista una URL valida Y a que responda de verdad.
+#
+#    MEDIDO (2026-11-25): el tunel estaba MUERTO (DNS caido => 000) y el
+#    supervisor NO lo relanzaba (solo contaba 530/521/522).  El supervisor
+#    nuevo ya trata 000 como muerto; aqui, para no depender de el, se
+#    relanza el cloudflared si la URL guardada no responde.
+tunel_responde() {
+    u=$(cat "$PREFIX/tunnel.url" 2>/dev/null)
+    case "$u" in https://*) ;; *) return 1;; esac
+    code=$(toybox wget -q -S -O /dev/null "$u/health" 2>&1 | grep -m1 -o 'HTTP/[0-9.]* [0-9]*' | awk '{print $2}')
+    case "$code" in 200|401|403|502|503) return 0;; esac
+    return 1
+}
+i=0
+while [ $i -lt 30 ]; do
+    if [ -s "$PREFIX/tunnel.url" ]; then
+        u=$(cat "$PREFIX/tunnel.url" 2>/dev/null)
+        case "$u" in https://*) log "tunel: $u"; break;; esac
+    fi
+    i=$((i+1)); sleep 2
+done
+[ $i -ge 30 ] && log "AVISO: no hay URL de tunel (el watchdog deberio levantarlo)"
+if ! tunel_responde; then
+    log "el tunel NO responde: relanzo cloudflared"
+    pkill -f 'cloudflared tunnel .*9090' 2>/dev/null
+    sleep 2
+    if [ -x "$PREFIX/cloudflared" ]; then
+        setsid nohup "$PREFIX/cloudflared" tunnel --no-autoupdate \
+            --url "http://127.0.0.1:$PORT" >> "$PREFIX/tunnel.log" 2>&1 < /dev/null &
+        sleep 12
+        u=$(cat "$PREFIX/tunnel.url" 2>/dev/null)
+        log "tunel relanzado: ${u:-sin-url}"
+    else
+        log "AVISO: no hay cloudflared en $PREFIX"
+    fi
+fi
+
 diagnostico
+
+# 4) Publicar el DIAGNOSTICO en Drive: el root lo lee desde el sandbox con
+#    tools/leer-diagnostico.py (sin ADB y sin pegar texto en el chat).
+if [ -x "$BIN" ]; then
+    echo "== publicando el diagnostico en Drive"
+    if "$BIN" diagnostico --publicar >/dev/null 2>&1; then
+        log "diagnostico publicado en Drive (MegaDaemon/diagnostico/<nodo>/)"
+        echo "  OK: el root lo lee con tools/leer-diagnostico.py"
+    else
+        log "AVISO: no se pudo publicar el diagnostico en Drive"
+    fi
+fi
