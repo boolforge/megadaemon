@@ -174,6 +174,98 @@ pub fn pid_del_language_server() -> Option<u32> {
     None
 }
 
+/// Epoch (segundos) en que arrancó el proceso `pid`.
+///
+/// Se lee `starttime` de `/proc/<pid>/stat` (campo 22) y se convierte a
+/// epoch con `btime` de `/proc/stat` y la frecuencia de reloj (100 Hz en
+/// Android).  Sirve para saber si un proceso es más ANTIGUO que un
+/// fichero: si el binario del LS se parcheó después de que el LS
+/// arrancara, el LS tiene la versión VIEJA en memoria.
+///
+/// MEDIDO (2026-11-25, móvil): esto era el bug que bloqueaba el login de
+/// Antigravity.  El `.so` estaba parcheado en disco, pero el LS llevaba
+/// horas en marcha con el binario viejo ⇒ sus peticiones NO pasaban por el
+/// shim ⇒ el NDJSON no tenía ni una línea desde las 12:53 y el login no
+/// avanzaba.  Tras `kill -9` del LS, el shim empezó a registrar
+/// `GET /v1internal/` → 200 (medido).
+pub fn arranque_de_proceso(pid: &str) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // El nombre del proceso va entre paréntesis y puede contener espacios
+    // y paréntesis: se parte por el ÚLTIMO ") ".
+    let resto = stat.rsplit_once(") ")?.1;
+    let campos: Vec<&str> = resto.split_whitespace().collect();
+    // campos[0] es `state` (campo 3 del stat) ⇒ starttime (campo 22) es el
+    // índice 22 - 3 = 19.
+    let starttime: u64 = campos.get(19)?.parse().ok()?;
+    const HZ: u64 = 100; // SC_CLK_TCK en Android
+    let btime = std::fs::read_to_string("/proc/stat")
+        .ok()?
+        .lines()
+        .find(|l| l.starts_with("btime "))?
+        .split_whitespace()
+        .nth(1)?
+        .parse::<u64>()
+        .ok()?;
+    Some(btime + starttime / HZ)
+}
+
+/// Relanza el language server si tiene el binario VIEJO en memoria.
+///
+/// MEDIDO (2026-11-25, móvil): el daemon sólo relanzaba el LS cuando el
+/// `.so` se parcheaba EN ESE MOMENTO.  Como el parche ya estaba aplicado
+/// (y la app re-extrae su runtime en cada arranque), el LS se quedaba con
+/// la URL vieja en memoria para siempre ⇒ el shim no veía ni una petición
+/// ⇒ **el login de Antigravity nunca avanzaba**.
+///
+/// Aquí el criterio es determinista y no depende de "acabar de parchar":
+/// si el proceso del LS arrancó ANTES que el mtime del `.so` parcheado,
+/// el LS tiene el binario viejo ⇒ se relanza (la app lo vuelve a
+/// levantar).
+pub fn relanzar_ls_si_tiene_el_binario_viejo() -> Option<Value> {
+    if !on("relanzar_ls", true) {
+        return None;
+    }
+    if !proceso_vivo("com.agy") {
+        return None;
+    }
+    let pid = pid_del_language_server()?;
+    let so = crate::antigravity_endpoint::ruta_ls();
+    let mtime = std::fs::metadata(&so)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let arranque = arranque_de_proceso(&pid.to_string())?;
+    // El LS ya tiene el binario actual: no se toca nada.
+    if mtime <= arranque {
+        return None;
+    }
+    // Anti-bucle: como mucho una vez cada 2 minutos.
+    let marca =
+        std::path::PathBuf::from(crate::cockpit_server::state_dir()).join("agy/relanzar_ls.ts");
+    let ahora = crate::webui::now_epoch();
+    if let Ok(txt) = std::fs::read_to_string(&marca) {
+        if let Ok(prev) = txt.trim().parse::<i64>() {
+            if ahora - prev < 120 {
+                return None;
+            }
+        }
+    }
+    let _ = std::fs::create_dir_all(marca.parent().unwrap());
+    let _ = std::fs::write(&marca, format!("{ahora}\n"));
+    let r = crate::android::root_exec(&format!("kill -9 {pid}"), 5_000, 1_024);
+    Some(json!({
+        "pid": pid,
+        "mtime_so": mtime,
+        "arranque_ls": arranque,
+        "ok": !r.combined().to_lowercase().contains("no such process"),
+        "detalle": r.combined().trim().chars().take(160).collect::<String>(),
+        "ts": ahora,
+    }))
+}
+
 /// Ruta del fichero de estado de la instrumentación.
 pub fn ruta_estado() -> PathBuf {
     PathBuf::from(format!(
@@ -557,6 +649,17 @@ pub fn bucle_automatico(puerto: u16) {
         if !on("automatica", true) {
             continue;
         }
+        // MEDIDO (2026-11-25): el LS puede llevar horas en marcha con el
+        // binario VIEJO en memoria (el `.so` parcheado en disco, pero el
+        // proceso arrancó antes del parche).  Entonces sus peticiones NO
+        // pasan por el shim y el login de Antigravity no avanza.  Se
+        // comprueba en cada ciclo, con el criterio determinista del mtime.
+        if let Some(r) = relanzar_ls_si_tiene_el_binario_viejo() {
+            eprintln!(
+                "instrumentación AGY: el LS tenía el binario viejo; relanzado (pid {})",
+                r.get("pid").and_then(|v| v.as_u64()).unwrap_or(0)
+            );
+        }
         let faltan = revision_cheap();
         if faltan.is_empty() {
             continue;
@@ -904,6 +1007,24 @@ pub fn dispatch(args: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn el_arranque_de_un_proceso_se_calcula_en_epoch() {
+        // El proceso actual existe en Linux: su arranque debe ser un epoch
+        // plausible (mismo orden de magnitud que ahora).
+        let pid = std::process::id().to_string();
+        let a = arranque_de_proceso(&pid).expect("arranque del proceso actual");
+        let ahora = crate::webui::now_epoch() as u64;
+        assert!(
+            a <= ahora && ahora - a < 86_400,
+            "arranque {a} fuera de rango (ahora {ahora})"
+        );
+    }
+
+    #[test]
+    fn el_arranque_de_un_pid_inexistente_es_none() {
+        assert!(arranque_de_proceso("999999999").is_none());
+    }
 
     #[test]
     fn el_estado_no_rompe_sin_antigravity() {
