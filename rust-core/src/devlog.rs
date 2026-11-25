@@ -112,9 +112,21 @@ mod tests {
     use super::*;
 
     /// El test usa un state dir propio para no tocar el del daemon.
+    ///
+    /// MEDIDO 2026-11-25 (CI rojo): el directorio era
+    /// `md-devlog-test-{pid}` ⇒ **todos los tests de este binario lo
+    /// comparten** (el PID es el del proceso) y, como los tests corren en
+    /// PARALELO, se pisaban: uno leía la entrada que había escrito el
+    /// otro (`left: String("masa")`, `right: "prueba"`).  Ahora cada
+    /// llamada tiene su propio directorio (contador atómico).
     fn con_state_dir_tmp<T>(f: impl FnOnce() -> T) -> T {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let previo = std::env::var("MEGADAEMON_STATE_DIR").ok();
-        let tmp = std::env::temp_dir().join(format!("md-devlog-test-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "md-devlog-test-{}-{n}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&tmp).expect("dir de test");
         std::env::set_var("MEGADAEMON_STATE_DIR", &tmp);
         let r = f();

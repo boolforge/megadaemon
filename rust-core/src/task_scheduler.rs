@@ -102,14 +102,39 @@ fn now() -> u64 {
         .unwrap_or(0)
 }
 
+/// La cola GLOBAL, aislada por `state_dir`.
+///
+/// MEDIDO 2026-11-25 (CI rojo, run 0d74b89): la cola era un `static` único
+/// del proceso ⇒ TODOS los tests la compartían y, como corren en PARALELO,
+/// se pisaban: `un_lease_caducado_devuelve_la_tarea_a_la_cola` fallaba con
+/// "assertion failed: t.node.is_empty()" (otro test le había reclamado la
+/// tarea) y `migrar_tareas_mueve_el_trabajo_a_otro_nodo` con `n == 1`.
+///
+/// Ahora hay una cola por `state_dir` (en producción hay UNO solo ⇒ el
+/// comportamiento es el de antes) y, como el `state_dir` de los tests
+/// deriva del hilo (`state_dir::state_dir_de_test()`), cada test tiene su
+/// cola.  `Box::leak` da la referencia `'static` que pide la firma.
 fn queue() -> &'static Mutex<Vec<Task>> {
-    static Q: OnceLock<Mutex<Vec<Task>>> = OnceLock::new();
-    Q.get_or_init(|| Mutex::new(Vec::new()))
+    /// Mapa `state_dir` -> cola (alias para que el parser no confunda los
+    /// `>>>` anidados).
+    type Mapa = std::collections::HashMap<String, &'static Mutex<Vec<Task>>>;
+    static MAP: OnceLock<Mutex<Mapa>> = OnceLock::new();
+    let clave = crate::cockpit_server::state_dir();
+    let mapa = MAP.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let mut g = mapa.lock().unwrap_or_else(|p| p.into_inner());
+    g.entry(clave)
+        .or_insert_with(|| Box::leak(Box::new(Mutex::new(Vec::new()))))
 }
 
+/// La bitácora, aislada por `state_dir` (mismo motivo que [`queue`]).
 fn journal() -> &'static Mutex<Vec<Value>> {
-    static J: OnceLock<Mutex<Vec<Value>>> = OnceLock::new();
-    J.get_or_init(|| Mutex::new(Vec::new()))
+    type Mapa = std::collections::HashMap<String, &'static Mutex<Vec<Value>>>;
+    static MAP: OnceLock<Mutex<Mapa>> = OnceLock::new();
+    let clave = crate::cockpit_server::state_dir();
+    let mapa = MAP.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let mut g = mapa.lock().unwrap_or_else(|p| p.into_inner());
+    g.entry(clave)
+        .or_insert_with(|| Box::leak(Box::new(Mutex::new(Vec::new()))))
 }
 
 fn queue_path() -> String {

@@ -30,6 +30,44 @@ pub fn state_dir() -> String {
     STATE_DIR.to_string()
 }
 
+/// Estado de los TESTS: un directorio **por hilo de test**.
+///
+/// MEDIDO 2026-11-25 (CI rojo, run 0d74b89): los tests de Rust corren en
+/// paralelo dentro del mismo proceso y TODOS comparten el mismo
+/// `state_dir` ⇒ se pisan.  Rojo medido: `devlog` leía la entrada que
+/// había escrito otro test (`left: String("masa")`, `right: "prueba"`) y
+/// `task_scheduler` veía la tarea reclamada por otro test.
+///
+/// Aquí el directorio se deriva del **nombre del hilo**, que en Rust es el
+/// nombre del test ⇒ cada test tiene su propio estado (ficheros, cola,
+/// bitácora) y los tests que fijan `MEGADAEMON_STATE_DIR` siguen mandando
+/// (esa variable tiene prioridad).
+#[cfg(test)]
+pub fn state_dir_de_test() -> String {
+    // Si el estado está FIJADO por entorno, ese es el estado y no se toca:
+    // los tests que lo fijan ya eligen un directorio propio (y sus rutas
+    // esperadas dependen de él).
+    if let Ok(d) = std::env::var("MEGADAEMON_STATE_DIR") {
+        let d = d.trim();
+        if !d.is_empty() {
+            return d.to_string();
+        }
+    }
+    let base = state_dir();
+    let nombre = std::thread::current().name().unwrap_or("main").to_string();
+    let limpio: String = nombre
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("{base}/test-{limpio}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

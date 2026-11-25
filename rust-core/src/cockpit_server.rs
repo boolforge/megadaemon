@@ -38,7 +38,18 @@ const SCUMMVM_TOOLS_DIR: &str = "/data/user/0/com.agy/files/scummvm/tools/re_pip
 /// ~2,2 GB al rustc y el OOM killer lo mataba en un contenedor de 3 GB).
 /// Aquí **delega**: una sola fuente de verdad.
 pub fn state_dir() -> String {
-    crate::state_dir::state_dir()
+    // MEDIDO 2026-11-25 (CI rojo): en los TESTS el estado se aísla por
+    // hilo (el nombre del hilo es el del test) porque los tests corren en
+    // paralelo y comparten el mismo directorio => se pisan (medido en
+    // `devlog` y en `task_scheduler`).  En producción no cambia nada.
+    #[cfg(test)]
+    {
+        crate::state_dir::state_dir_de_test()
+    }
+    #[cfg(not(test))]
+    {
+        crate::state_dir::state_dir()
+    }
 }
 /// Directorio BASE de la instancia: el **padre** de `state_dir()`.
 ///
