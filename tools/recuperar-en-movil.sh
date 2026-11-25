@@ -172,6 +172,27 @@ while [ $i -lt 20 ]; do
 done
 [ $i -ge 20 ] && log "AVISO: el cockpit no respondio tras 40 s"
 
+# 2.b) El LS instrumentado: la app RE-EXTRAE files/runtime/ en CADA arranque
+#      => el .so parcheado se pierde.  MEDIDO 2026-11-25: lo que funciona es
+#      MATAR el LS (libloader.so): la app lo relanza en ~1 s y el LS nuevo
+#      carga el .so ya parcheado => el fix del passthrough llega al LS.
+ls_vivo() {
+    for p in /proc/[0-9]*; do
+        [ -r "$p/cmdline" ] || continue
+        c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+        case "$c" in *libloader.so*) echo "$p"; return 0;; esac
+    done
+    return 1
+}
+if l=$(ls_vivo); then
+    log "el LS instrumentado esta vivo ($l): lo mato para que recargue el .so parcheado"
+    kill -9 $(echo "$l" | tr '\n' ' ') 2>/dev/null
+    sleep 3
+    ls_vivo && log "AVISO: el LS sigue vivo"
+else
+    log "no hay ningun LS vivo (la app lo relanzara al abrirla)"
+fi
+
 # 3) Tunel: lo relanza el watchdog (98) o el propio daemon; aqui se espera
 #    a que exista una URL valida.
 i=0
