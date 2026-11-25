@@ -135,6 +135,14 @@ strip = true
 # y red (no CPU) ⇒ se pierde un % imperceptible y el build entra en un
 # contenedor de 3 GB. Los overrides de `package` **no** tocan el perfil de las
 # dependencias (siguen compilándose con el perfil base ⇒ no se recalcula nada).
+#
+# MEDIDO 2026-11-25 (tamaño del binario): `opt-level = 1` era la mayor parte
+# del problema.  El asset ARM64 medido pesaba 47.191.040 B (45,0 MB) porque
+# el job de Android además DESACTIVABA el LTO (`LTO=false`, CU=16) "por
+# OOM".  Con `opt-level = 3` el código se optimiza de verdad y el binario
+# baja; `codegen-units = 4` se mantiene (1 lo que mata al rustc, 16 infla el
+# binario).  El LTO pasa a "thin" en el workflow: da casi todo el ahorro del
+# LTO "fat" con una fracción de la RAM.
 [profile.release.package.megadaemon-core]
-opt-level = 1
+opt-level = 3
 codegen-units = 4

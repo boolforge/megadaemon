@@ -191,6 +191,9 @@ jobs:
             -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
             -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/aarch64-linux-android
             -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/aarch64-linux-android/api-level-26
+          # El payload es un cdylib PEQUEÑO que va embebido en el daemon:
+          # se deja con LTO desactivado (es el camino ya verificado) porque
+          # su tamaño es irrelevante frente al binario principal.
           CARGO_PROFILE_RELEASE_LTO: "false"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
           CARGO_PROFILE_RELEASE_DEBUG: "0"
@@ -218,10 +221,15 @@ jobs:
           # El NDK r26c NO trae 'aarch64-linux-android-ar' ni su ranlib =>
           # cc-rs aborta si no se le pasan llvm-ar/llvm-ranlib.
           RANLIB_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
-          # El perfil release por defecto (lto=true, codegen-units=1) MATA al
-          # rustc por OOM (SIGKILL) en el runner: el crate es grande.  Con
-          # estos overrides entra (mismo perfil que usan los agentes en local).
-          CARGO_PROFILE_RELEASE_LTO: "false"
+          # El perfil release por defecto (lto=true "fat", codegen-units=1)
+          # MATA al rustc por OOM (SIGKILL) en el runner: el crate es grande.
+          # MEDIDO 2026-11-25 (tamaño): con `LTO=false` el asset ARM64 pesaba
+          # 47.191.040 B (45,0 MB).  LTO "thin" da casi todo el ahorro del
+          # "fat" con una fracción de la RAM ⇒ el binario baja de tamaño sin
+          # volver a morir.  `codegen-units=16` es para las DEPENDENCIAS; el
+          # crate principal baja a 4 por el override de `package` en
+          # Cargo.toml (1 lo mata, 16 infla el binario).
+          CARGO_PROFILE_RELEASE_LTO: "thin"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
           CARGO_PROFILE_RELEASE_DEBUG: "0"
         run: |
@@ -248,6 +256,23 @@ jobs:
               sha256sum "dist/$aux-arm64" > "dist/$aux-arm64.sha256"
               echo "  dist/$aux-arm64"
             fi
+          done
+      - name: "Tamano del binario (medido, para comparar builds)"
+        # MEDIDO 2026-11-25: el usuario pidio Explicitamente "optimizar mucho
+        # el tamano final del binario sin perder capacidades".  Sin medicion
+        # no hay forma de saber si un cambio ayuda.  Se publica el tamano de
+        # CADA asset en el resumen del job (legible sin permisos de admin) y
+        # como aviso en el log.
+        run: |
+          set -u
+          { echo ""; echo "| asset | bytes | MiB |"; echo "|---|---|---|"; } >> "${GITHUB_STEP_SUMMARY:-/dev/null}" 2>/dev/null || true
+          for f in dist/*; do
+            [ -f "$f" ] || continue
+            case "$f" in *.sha256|*.json) continue;; esac
+            b=$(stat -c %s "$f")
+            m=$(awk -v b="$b" 'BEGIN{printf "%.2f", b/1048576}')
+            echo "::notice::$(basename "$f") = $b bytes ($m MiB)"
+            { echo "| $(basename "$f") | $b | $m |"; } >> "${GITHUB_STEP_SUMMARY:-/dev/null}" 2>/dev/null || true
           done
       - name: Subir artefacto
         uses: actions/upload-artifact@v4
@@ -296,7 +321,11 @@ jobs:
           RANLIB_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ranlib
           # Perfil release sin LTO: con lto=true, codegen-units=1 el rustc
           # muere por OOM en el runner (SIGKILL) y el build aarch64 cae.
-          CARGO_PROFILE_RELEASE_LTO: "false"
+          # MEDIDO 2026-11-25: LTO "thin" (mismo criterio que el ARM64):
+          # el asset publicado tiene que llevar la misma politica que el
+          # de Android, y "thin" da casi todo el ahorro del "fat" sin
+          # matar al rustc por OOM.
+          CARGO_PROFILE_RELEASE_LTO: "thin"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
           CARGO_PROFILE_RELEASE_DEBUG: "0"
         run: |
@@ -310,6 +339,23 @@ jobs:
           # build está en el dispositivo.
           cp dist/${{ matrix.asset }} dist/${{ matrix.asset }}-${GITHUB_SHA::7}
           sha256sum dist/${{ matrix.asset }}-${GITHUB_SHA::7} > dist/${{ matrix.asset }}-${GITHUB_SHA::7}.sha256
+      - name: "Tamano del binario (medido, para comparar builds)"
+        # MEDIDO 2026-11-25: el usuario pidio Explicitamente "optimizar mucho
+        # el tamano final del binario sin perder capacidades".  Sin medicion
+        # no hay forma de saber si un cambio ayuda.  Se publica el tamano de
+        # CADA asset en el resumen del job (legible sin permisos de admin) y
+        # como aviso en el log.
+        run: |
+          set -u
+          { echo ""; echo "| asset | bytes | MiB |"; echo "|---|---|---|"; } >> "${GITHUB_STEP_SUMMARY:-/dev/null}" 2>/dev/null || true
+          for f in dist/*; do
+            [ -f "$f" ] || continue
+            case "$f" in *.sha256|*.json) continue;; esac
+            b=$(stat -c %s "$f")
+            m=$(awk -v b="$b" 'BEGIN{printf "%.2f", b/1048576}')
+            echo "::notice::$(basename "$f") = $b bytes ($m MiB)"
+            { echo "| $(basename "$f") | $b | $m |"; } >> "${GITHUB_STEP_SUMMARY:-/dev/null}" 2>/dev/null || true
+          done
       - name: Subir artefacto
         uses: actions/upload-artifact@v4
         with:
