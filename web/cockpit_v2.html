@@ -877,6 +877,18 @@
       </div>
 
       <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">Stack autocontenido y diagnóstico</h2>
+          <div class="row">
+            <button class="btn btn--sm" id="stack-reconciliar">Reconciliar stack</button>
+            <button class="btn btn--sm" id="stack-publicar">Publicar diagnóstico</button>
+          </div>
+        </div>
+        <p class="muted small">El daemon lleva dentro el supervisor, el keeper, cloudflared, los scripts de Antigravity y esta Web UI, y los reconcilia solo: el móvil se repara entero, no sólo el binario.</p>
+        <div id="stack-panel" class="mt-3"></div>
+      </div>
+
+      <div class="card">
         <div class="card__head"><h2 class="card__title">Valor actual</h2></div>
         <div id="config-form"></div>
       </div>
@@ -1247,6 +1259,7 @@ const VIEW_LOADERS = {
   sistema: loadSistema,
   logs: loadLogs,
   config: loadConfig,
+
   tools: loadTools,
   chat: loadChat,
   inspect: loadInspect,
@@ -1325,7 +1338,67 @@ function cfgRender(v, prefijo, editados, out) {
   );
 }
 
+async function loadStack() {
+  const r = await Promise.all([
+    apiCall("/api/v2/stack", () => fetch("/api/v2/stack", { cache: "no-store", headers: authHeaders() })),
+    apiCall("/api/v2/diagnostico", () => fetch("/api/v2/diagnostico", { cache: "no-store", headers: authHeaders() }))
+  ]);
+  const stack = r[0] || {}, diag = r[1] || {};
+  const ficheros = stack.ficheros || [];
+  const fuera = (stack.desfasados || 0);
+  const chips = [
+    ["ficheros", (stack.correctos || 0) + "/" + (stack.total || 0)],
+    ["desfasados", String(fuera)],
+    ["build", (diag.build && diag.build.short) || "?"],
+    ["procesos", String((diag.procesos || []).length)],
+    ["health", diag.health && diag.health.ok === false ? "no responde" : "ok"]
+  ];
+  const el = $("#stack-panel");
+  if (!el) return;
+  let html = '<div class="row">' + chips.map(function (c) {
+    return '<span class="chip">' + esc(c[0]) + ": " + esc(c[1]) + "</span>";
+  }).join("") + "</div>";
+  if (ficheros.length) {
+    html += '<div class="table-wrap mt-3"><table class="table"><thead><tr><th>Fichero</th><th>Origen</th><th>Estado</th></tr></thead><tbody>' +
+      ficheros.map(function (f) {
+        return "<tr><td class='small mono'>" + esc(f.ruta) + "</td>" +
+          "<td class='small muted'>" + esc(f.origen) + "</td>" +
+          "<td class='small'>" + (f.ok ? "ok" : "<b>desfasado</b>") + "</td></tr>";
+      }).join("") + "</tbody></table></div>";
+  }
+  el.innerHTML = html;
+}
+
+async function stackReconciliar() {
+  const res = await apiCall("/api/v2/stack", () => fetch("/api/v2/stack", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ accion: "reconciliar", confirmar: true })
+  }));
+  if (res && res.ok !== false) {
+    toast("ok", "Stack reconciliado", (res.informe && res.informe.escritos || []).length + " fichero(s) reescritos");
+    await loadStack();
+  } else {
+    toast("error", "No se pudo reconciliar", (res && res.error) || "error desconocido");
+  }
+}
+
+async function diagnosticoPublicar() {
+  const res = await apiCall("/api/v2/diagnostico", () => fetch("/api/v2/diagnostico", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ accion: "publicar", confirmar: true })
+  }));
+  if (res && res.ok !== false) {
+    toast("ok", "Diagnóstico publicado", "en Drive: " + (res.vfs || ""));
+  } else {
+    toast("error", "No se pudo publicar", (res && res.error) || "error desconocido");
+  }
+}
+
 async function loadConfig() {
+  // El stack y el diagnostico van en paralelo: no bloquean la vista.
+  loadStack();
   const data = await apiCall("/api/v2/config", () => fetch("/api/v2/config", { cache: "no-store", headers: authHeaders() }));
   const out = [];
   (data.secciones || []).forEach(function (sec) {
@@ -4393,6 +4466,10 @@ function bindEvents() {
   // ── Configuración ───────────────────────────────────────────────────────
   $("#config-reload").addEventListener("click", loadConfig);
   $("#config-save").addEventListener("click", configGuardar);
+  // Stack autocontenido + diagnóstico (MEDIDO 2026-11-25: sin esto el
+  // móvil se rompía al actualizar y no había forma de verlo).
+  $("#stack-reconciliar").addEventListener("click", stackReconciliar);
+  $("#stack-publicar").addEventListener("click", diagnosticoPublicar);
 
   // ── Tools ───────────────────────────────────────────────────────────────
   $("#tools-run").addEventListener("click", toolsEjecutar);

@@ -398,14 +398,23 @@ pub fn supervisor_vivo() -> bool {
 mod tests {
     use super::*;
 
+    /// Prefijo temporal **unico por hilo**, con su propio padre.
+    ///
+    /// MEDIDO (2026-11-25, CI): los destinos `servicio/` caen en
+    /// `<padre del prefijo>/service.d/`.  Con el prefijo directamente en
+    /// /tmp, TODOS los hilos compartian `/tmp/service.d` => los tests se
+    /// pisaban (uno escribia, otro veia el hash ya correcto y contaba 5 de
+    /// 9) y uno BORRABA el directorio del otro.  Ahora cada hilo tiene su
+    /// propio arbol.
     fn prefijo_temporal() -> String {
-        let base = std::env::temp_dir().join(format!(
+        let raiz = std::env::temp_dir().join(format!(
             "megadaemon-stack-test-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
-        std::fs::create_dir_all(&base).expect("temp");
-        base.to_string_lossy().to_string()
+        let prefijo = raiz.join("prefijo");
+        std::fs::create_dir_all(&prefijo).expect("temp");
+        prefijo.to_string_lossy().to_string()
     }
 
     #[test]
@@ -436,13 +445,19 @@ mod tests {
             .iter()
             .find(|e| e.origen == "deploy/99-megadaemon.sh")
             .expect("el supervisor esta en el stack");
+        // MEDIDO (2026-11-25, CI): el assert buscar la subcadena
+        // "PREFIX=/data/local/tmp/megadaemon" saltaba porque el supervisor
+        // tiene `LEGACY_PREFIX=/data/local/tmp/megadaemon` (que es
+        // CORRECTO: es la ruta que se migra).  Se comprueba la linea
+        // completa, al principio de linea.
         assert!(
-            sup.contenido.contains("PREFIX=/data/adb/megadaemon"),
+            sup.contenido.contains("\nPREFIX=/data/adb/megadaemon"),
             "el supervisor embebido NO usa el prefijo persistente"
         );
         assert!(
-            !sup.contenido.contains("PREFIX=/data/local/tmp/megadaemon"),
-            "el supervisor embebido usa la ruta volatil"
+            !sup.contenido
+                .contains("\nPREFIX=/data/local/tmp/megadaemon"),
+            "el supervisor embebido usa la ruta volatil como PREFIX"
         );
     }
 
@@ -472,7 +487,7 @@ mod tests {
                 }
             }
         }
-        let _ = std::fs::remove_dir_all(&p);
+        let _ = std::fs::remove_dir_all(Path::new(&p).parent().unwrap());
     }
 
     #[test]
@@ -497,7 +512,7 @@ mod tests {
         for e in estado(&cfg) {
             assert!(e.ok, "{} no coincide", e.ruta);
         }
-        let _ = std::fs::remove_dir_all(&p);
+        let _ = std::fs::remove_dir_all(Path::new(&p).parent().unwrap());
     }
 
     #[test]
@@ -545,6 +560,6 @@ mod tests {
         let v2 = estado_json(&cfg);
         assert_eq!(v2["desfasados"].as_u64().unwrap(), 0);
         assert_eq!(v2["correctos"].as_u64().unwrap(), STACK.len() as u64);
-        let _ = std::fs::remove_dir_all(&p);
+        let _ = std::fs::remove_dir_all(Path::new(&p).parent().unwrap());
     }
 }
