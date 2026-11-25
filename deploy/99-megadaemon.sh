@@ -465,7 +465,21 @@ tunnel_strikes=0
 # apuntando a 8765).
 # ─────────────────────────────────────────────────────────────────────────────
 mcp_legacy_enabled() {
-    [ "${MD_MCP_LEGACY_TUNNEL:-0}" = "1" ]
+    [ "${MD_MCP_LEGACY_TUNNEL:-0}" = "1" ] || return 1
+    # MEDIDO (2026-11-25, movil): aunque MD_MCP_LEGACY_TUNNEL estuviera a 1,
+    # el tunel para el 8765 NO puede funcionar (el daemon sirve el MCP en el
+    # MISMO puerto que el cockpit, $PORT) y el supervisor lo relanzaba cada
+    # ~30 s: cloudflared escribiendo logs, quic, temperatura y bateria.
+    # El movil estaba al 30 % de bateria descargando por esto.
+    #
+    # Aqui se COMPRUEBA que el 8765 lo sirva de verdad alguien (esta en
+    # LISTEN).  Si no hay nadie escuchando, el tunel se apaga solo, aunque la
+    # variable diga 1.
+    hp=$(printf '%04X' 8765)
+    if grep -qiE ":$hp [0-9a-f]{8}:[0-9a-f]{4} 0A" /proc/net/tcp /proc/net/tcp6 2>/dev/null; then
+        return 0
+    fi
+    return 1
 }
 
 mcp_legacy_stop() {
