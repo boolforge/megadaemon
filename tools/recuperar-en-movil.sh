@@ -55,7 +55,11 @@ diagnostico() {
     echo "== binario"
     if [ -x "$BIN" ]; then echo "  $BIN ($(stat -c %s "$BIN") B, sha16 $(sha256sum "$BIN" 2>/dev/null | cut -c1-16))"; else echo "  FALTA $BIN"; fi
     echo "== previous"
-    [ -f "$BIN.prev" ] && echo "  hay .prev (sha16 $(sha256sum "$BIN.prev" 2>/dev/null | cut -c1-16))" || echo "  no hay .prev"
+    if [ -f "$BIN.prev" ]; then
+        echo "  hay .prev (sha16 $(sha256sum "$BIN.prev" 2>/dev/null | cut -c1-16))"
+    else
+        echo "  no hay .prev"
+    fi
     echo "== tunel"
     [ -f "$PREFIX/tunnel.url" ] && echo "  url: $(cat "$PREFIX/tunnel.url")" || echo "  sin tunnel.url"
     echo "== estado"
@@ -77,6 +81,69 @@ fi
 
 mkdir -p "$STATE" 2>/dev/null
 log "=== recuperacion manual"
+
+# 0) BINARIO: si falta, o si su SHA-256 no es el de la release, se
+#    descarga, se VERIFICA y se instala (con copia del anterior a .prev).
+#
+#    MEDIDO 2026-11-25: el binario del movil era del 2026-11-23 (d7d72f1)
+#    y su `update`_buscaba el binario en la ruta VOLATIL antigua => no se
+#    actualizaba nunca.  Por eso aqui se hace a mano, con verificacion.
+#
+#    Descarga con las herramientas que haya: `curl` (Termux) o `wget`
+#    (toybox).  Con `toybox wget` el codigo de salida es 0.
+REPO_RELEASE=https://github.com/boolforge/megadaemon/releases/latest/download
+ASSET=megadaemon-core-android-arm64
+
+descargar() {
+    # $1 = url, $2 = destino
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --max-time 600 -o "$2" "$1" && return 0
+    fi
+    if command -v wget >/dev/null 2>&1; then
+        wget -q -O "$2" "$1" && return 0
+    fi
+    toybox wget -q -O "$2" "$1" 2>/dev/null && return 0
+    return 1
+}
+
+sha256_de() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
+
+instalar_nuevo() {
+    echo "== binario: comprobando release"
+    if ! descargar "$REPO_RELEASE/$ASSET.sha256" "$STATE/asset.sha256"; then
+        log "AVISO: no se pudo descargar el .sha256 (sin red?): se usa el binario actual"
+        return 1
+    fi
+    esperado=$(cut -d' ' -f1 < "$STATE/asset.sha256" 2>/dev/null | tr -d '\r\n')
+    case "$esperado" in
+        [0-9a-f][0-9a-f]*) ;;
+        *) log "AVISO: el .sha256 no es valido ('$esperado'): no se toca el binario"; return 1;;
+    esac
+    actual=""
+    [ -f "$BIN" ] && actual=$(sha256_de "$BIN")
+    if [ "$actual" = "$esperado" ]; then
+        echo "  el binario ya es el de la release ($esperado)"
+        return 0
+    fi
+    echo "  descargando el binario de la release (sha256 $esperado)..."
+    if ! descargar "$REPO_RELEASE/$ASSET" "$STATE/megadaemon-core.new"; then
+        log "ERROR: no se pudo descargar el binario: no se toca el actual"
+        return 1
+    fi
+    got=$(sha256_de "$STATE/megadaemon-core.new")
+    if [ "$got" != "$esperado" ]; then
+        log "ERROR: SHA-256 no coincide (esperado $esperado, obtenido $got): no se instala"
+        rm -f "$STATE/megadaemon-core.new"
+        return 1
+    fi
+    [ -f "$BIN" ] && cp -f "$BIN" "$BIN.prev"
+    chmod 755 "$STATE/megadaemon-core.new"
+    mv -f "$STATE/megadaemon-core.new" "$BIN"
+    echo "  instalado (sha256 verificado)"
+    return 0
+}
+
+instalar_nuevo
 
 # 1) Daemon.
 if d=$(daemon_vivo); then
