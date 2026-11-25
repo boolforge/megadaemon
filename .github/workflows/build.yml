@@ -165,13 +165,53 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            rust-core/target
+            crates/hooks-payload/target
           key: cargo-android-${{ hashFiles('rust-core/Cargo.lock') }}
+      # MEDIDO (2026-11-24): el payload de frida-gum se compila AQUI, con el
+      # MISMO NDK y el MISMO target que el daemon, y se EMBARDA en el binario
+      # (una sola build, un solo artefacto: el movil no tiene que bajarlo de
+      # un Release aparte).  Sigue siendo un `cdylib` (tiene que ser un .so
+      # aparte para dlopen en otro proceso), pero el ARTEFACTO que baja el
+      # movil es UNO.
+      - name: "Dependencias de gum (bindgen necesita libclang; los shims en C, el clang del NDK)"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev clang
+          clang --version | head -1
+      - name: "Compilar el payload (gum) para incrustarlo"
+        working-directory: crates/hooks-payload
+        env:
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          RANLIB_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
+          BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android: >-
+            --sysroot=${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot
+            -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
+            -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/aarch64-linux-android
+            -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/aarch64-linux-android/api-level-26
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
+        run: |
+          cargo build --release --target aarch64-linux-android
+          mkdir -p ../rust-core/dist
+          cp target/aarch64-linux-android/release/libhooks_payload.so ../rust-core/dist/hooks-payload-arm64
+          sha256sum ../rust-core/dist/hooks-payload-arm64 > ../rust-core/dist/hooks-payload-arm64.sha256
+          file ../rust-core/dist/hooks-payload-arm64 | tee /tmp/fichero-payload.txt
+          grep -q "ELF 64-bit LSB shared object" /tmp/fichero-payload.txt || {
+            echo "::error::el payload no es una shared object ELF 64-bit"; exit 1; }
+          grep -q "ARM aarch64" /tmp/fichero-payload.txt || {
+            echo "::error::el payload no es ARM aarch64"; exit 1; }
       - name: Compilar
         working-directory: rust-core
         env:
           # El commit se EMBEBE en el binario: /health publica build.short y
           # asi se puede comprobar desde fuera qué build sirve el movil.
           MEGADAEMON_BUILD_SHA: ${{ github.sha }}
+          # El payload de frida-gum EMBEBIDO (una sola build).
+          MEGADAEMON_PAYLOAD_PATH: ${{ github.workspace }}/crates/hooks-payload/target/aarch64-linux-android/release/libhooks_payload.so
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
           CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
@@ -280,7 +320,9 @@ jobs:
   # ---------------------------------------------------------------------------
   # PAYLOAD DE HOOKS (frida-gum) — ARM64 Android
   # ---------------------------------------------------------------------------
-  # El payload es un crate AISLADO (crates/hooks-payload) que usa los
+  # (El payload de frida-gum ya NO tiene build propio: se compila en el job
+  # de Android y va EMBEBIDO en el daemon.  Ver "build-android".)
+  #
   # bindings OFICIALES de Frida en Rust (frida-gum).  Vive FUERA del crate
   # del daemon a propósito: el binario principal no puede depender de gum,
   # de bindgen (libclang) ni del devkit de Frida => el build por defecto
@@ -297,72 +339,6 @@ jobs:
   #     => NO hacen falta meson ni ninja (gum no se compila: se enlaza el
   #     `libfrida-gum.a` del devkit).
   #   * el linker del NDK: aarch64-linux-android26-clang.
-  build-hooks-payload:
-    name: build payload de hooks (frida-gum / ARM64 Android)
-    runs-on: ubuntu-latest
-    # NO depende de `quality`: el payload es accesorio; el binario del daemon
-    # no puede depender de él (si el payload no compila, el móvil sigue
-    # teniendo daemon).
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-      - uses: nttld/setup-ndk@v1
-        id: ndk
-        with:
-          ndk-version: r26c
-      - name: "Dependencias de gum (bindgen necesita libclang; los shims en C, el clang del NDK)"
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libclang-dev clang
-          clang --version | head -1
-      - name: Cache de cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-hooks-payload-${{ hashFiles('crates/hooks-payload/Cargo.lock') }}
-      - name: Compilar el payload (gum)
-        working-directory: crates/hooks-payload
-        env:
-          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
-          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
-          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
-          RANLIB_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
-          # MEDIDO (2026-11-23): bindgen (frida-gum-sys) usaba el include del
-          # HOST (/usr/include/limits.h) y reventaba con
-          # "bits/libc-header-start.h file not found": el sysroot del NDK y
-          # los includes del TARGET tienen que estar en la ruta de clang.
-          BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android: >-
-            --sysroot=${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot
-            -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
-            -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/aarch64-linux-android
-            -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/aarch64-linux-android/api-level-26
-          CARGO_PROFILE_RELEASE_LTO: "false"
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
-          CARGO_PROFILE_RELEASE_DEBUG: "0"
-        run: |
-          cargo build --release --target aarch64-linux-android
-          mkdir -p dist
-          cp target/aarch64-linux-android/release/libhooks_payload.so dist/hooks-payload-arm64
-          sha256sum dist/hooks-payload-arm64 > dist/hooks-payload-arm64.sha256
-          # La .so tiene que ser una shared object ARM64 (si no, el móvil la
-          # rechaza al dlopen).
-          file dist/hooks-payload-arm64 | tee /tmp/fichero-payload.txt
-          grep -q "ELF 64-bit LSB shared object" /tmp/fichero-payload.txt || {
-            echo "::error::el payload no es una shared object ELF 64-bit"; exit 1; }
-          grep -q "ARM aarch64" /tmp/fichero-payload.txt || {
-            echo "::error::el payload no es ARM aarch64"; exit 1; }
-          ls -l dist/
-      - name: Subir artefacto
-        uses: actions/upload-artifact@v4
-        with:
-          name: megadaemon-hooks-payload-arm64
-          path: crates/hooks-payload/dist/
-          retention-days: 30
-
   # Tests del payload en el HOST (x86_64): validan la redacción de
   # credenciales y el escritor NDJSON SIN tocar el móvil.  Es un job aparte
   # (no bloquea la release) porque el payload es accesorio.
@@ -386,11 +362,10 @@ jobs:
   release:
     name: release (auto-actualización de las instancias)
     runs-on: ubuntu-latest
-    # `build-hooks-payload` entra en `needs` para que la release ESPERE a él
     # (si no, el asset del payload a veces no llega a tiempo al release), pero
     # el `if: always()` de abajo hace que su fallo NO tumbe la release: el
     # móvil no puede quedarse sin daemon porque el payload no compile.
-    needs: [build-android, build-linux, build-hooks-payload]
+    needs: [build-android, build-linux]
     # Publica en CUALQUIER rama (main y v14-coordination): el tag es v<sha>, así
     # que no chocan entre ramas y el binario ARM64 sale siempre con nombre
     # versionado.

@@ -734,6 +734,20 @@ pub fn aplicar(puerto: u16, confirmar: bool) -> Value {
         }));
     }
 
+    // --- 4b) El payload de frida-gum va EMBEBIDO en el daemon: se instala
+    // solo (sin red, sin Release).  MEDIDO (2026-11-24): antes era un
+    // crate aislado con su propio build y el movil lo bajaba de un Release
+    // aparte ⇒ si ese job fallaba, el movil se quedaba sin instrumentación.
+    if on("payload_frida", true) {
+        match crate::hooks_payload::instalar_embebido() {
+            None => {}
+            Some(v) if v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false) => {
+                piezas.push(json!({ "pieza": "payload_frida", "estado": "aplicado", "detalle": v }));
+            }
+            Some(v) => piezas.push(json!({ "pieza": "payload_frida", "estado": "fallo", "detalle": v })),
+        }
+    }
+
     // --- 5) Los grants de permisos: el LS sólo acepta `command(...)` y
     // `n(...)`.  Cualquier otra forma la rechaza y **la app la pinta en la
     // UI** (el "muro de texto").  Se sanean en cuanto aparecen.

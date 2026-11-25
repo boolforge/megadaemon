@@ -215,6 +215,25 @@ pub fn detectar_cargadores() -> Cargadores {
 
 /// Estado del payload, del proceso objetivo y del NDJSON.
 pub fn estado(args: &Value) -> Value {
+    let mut v = estado_real(args);
+    if let Some(o) = v.as_object_mut() {
+        o.insert(
+            "embebido".to_string(),
+            json!({
+                "disponible": payload_embebido(),
+                "bytes": PAYLOAD_EMBEBIDO.len(),
+                "sha256": if payload_embebido() {
+                    crate::self_update::sha256_hex(PAYLOAD_EMBEBIDO)
+                } else {
+                    String::new()
+                },
+            }),
+        );
+    }
+    v
+}
+
+fn estado_real(args: &Value) -> Value {
     let paquete = paquete_de(args);
     let payload = Path::new(RUTA_PAYLOAD);
     let meta = std::fs::metadata(payload).ok();
@@ -254,8 +273,82 @@ pub fn estado(args: &Value) -> Value {
 }
 
 /// Descarga e instala el payload (verifica el SHA-256 antes de tocar nada).
+/// **PAYLOAD EMBEBIDO**: el `.so` de frida-gum compilado EN LA MISMA BUILD
+/// que este binario, incrustado con `include_bytes!`.
+///
+/// MEDIDO (2026-11-24): el payload era un crate AISLADO (`crates/hooks-payload`)
+/// ⇒ dos builds, dos jobs de CI, dos artefactos y el móvil tenía que
+/// BAJARLO de un release aparte (y si ese job fallaba, el móvil se quedaba
+/// sin instrumentación).
+///
+/// Ahora: una sola build.  El job de Android compila el payload y el daemon
+/// (mismo NDK, mismo target, mismo `dist/`), y el daemon lo lleva EMBEBIDO:
+/// el móvil lo escribe al disco al arrancar, sin red y sin Release.
+///
+/// El `.so` embebido se compila aparte (es un `cdylib`: no se puede linkear
+/// dentro de un binario), pero el ARTEFACTO que descarga el móvil es UNO.
+pub const PAYLOAD_EMBEBIDO: &[u8] = include_bytes!(env!("MEGADAEMON_PAYLOAD_BIN"));
+
+/// ¿Trae el daemon el payload embebido?
+pub fn payload_embebido() -> bool {
+    !PAYLOAD_EMBEBIDO.is_empty()
+}
+
+/// Instala el payload **embebido** (sin red).
+///
+/// Devuelve `None` si este build no lo trae embebido (build de desarrollo).
+pub fn instalar_embebido() -> Option<Value> {
+    if PAYLOAD_EMBEBIDO.is_empty() {
+        return None;
+    }
+    let destino = PathBuf::from(RUTA_PAYLOAD);
+    let calculado = crate::self_update::sha256_hex(PAYLOAD_EMBEBIDO);
+    // ¿ya está y es el mismo?
+    if let Some(sha_local) = sha_de_fichero(&destino) {
+        if sha_local == calculado {
+            return Some(json!({
+                "ok": true,
+                "ya_instalado": true,
+                "ruta": RUTA_PAYLOAD,
+                "sha256": sha_local,
+                "bytes": PAYLOAD_EMBEBIDO.len(),
+                "origen": "embebido",
+            }));
+        }
+    }
+    if let Some(dir) = destino.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let tmp = destino.with_extension("so.new");
+    if let Err(e) = escribir_en(&tmp, PAYLOAD_EMBEBIDO, 0o700) {
+        let _ = std::fs::remove_file(&tmp);
+        return Some(json!({
+            "ok": false,
+            "error": format!("escribir {}: {e}", tmp.display()),
+        }));
+    }
+    if let Err(e) = std::fs::rename(&tmp, &destino) {
+        let _ = std::fs::remove_file(&tmp);
+        return Some(json!({ "ok": false, "error": format!("renombrar: {e}") }));
+    }
+    Some(json!({
+        "ok": true,
+        "ruta": RUTA_PAYLOAD,
+        "bytes": PAYLOAD_EMBEBIDO.len(),
+        "sha256": calculado,
+        "modo": "0700",
+        "origen": "embebido",
+        "nota": "instalado desde el propio binario: sin red, sin Release",
+    }))
+}
+
 pub fn instalar(args: &Value) -> Value {
     let _ = args;
+    // MEDIDO (2026-11-24): si el build trae el payload embebido, se usa
+    // ESO (sin red).  La descarga del Release queda como respaldo.
+    if let Some(v) = instalar_embebido() {
+        return v;
+    }
     let release = crate::self_update::url_release();
     let url = format!("{release}/{ASSET_PAYLOAD}");
     let url_sha = format!("{url}.sha256");
@@ -553,6 +646,10 @@ pub fn dispatch(accion: &str, args: &Value) -> Value {
     match accion {
         "estado" => estado(args),
         "instalar" => instalar(args),
+        "instalar_embebido" => instalar_embebido().unwrap_or_else(|| json!({
+            "ok": false,
+            "error": "este build no trae el payload embebido",
+        })),
         "activar" => activar(args),
         "leer" => leer(args),
         otro => json!({
