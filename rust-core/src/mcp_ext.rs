@@ -709,6 +709,20 @@ pub fn tool_definitions() -> Value {
                 }
             },
             {
+                "name": "diagnostico",
+                "description": "DIAGNOSTICO AUTOMATICO: el nodo recoge su estado completo (procesos, puertos, /health, stack autocontenido, binario y su SHA-256, energia, red, log del supervisor y NDJSON del shim) y lo publica en Drive (MegaDaemon/diagnostico/<nodo>/). El root lo lee desde el sandbox, sin ADB y sin que nadie tenga que pegar texto. Acciones: recoger (solo lee) | publicar (sube el informe a Drive).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": {
+                            "type": "string",
+                            "description": "recoger | publicar",
+                            "default": "recoger"
+                        }
+                    }
+                }
+            },
+            {
                 "name": "stack",
                 "description": "STACK AUTOCONTENIDO: el daemon lleva DENTRO el supervisor, el keeper, cloudflared, los scripts de Antigravity y la Web UI, y los reconcilia solo (SHA-256 embebido vs el de disco). Es lo que evita que el movil se rompa al actualizar (medido el 2026-11-25: el supervisor viejo no encontraba el binario nuevo y no podia relanzar el daemon). Acciones: estado (solo mira) | reconciliar (reescribe lo que difiere y reinicia el supervisor si cambio; es idempotente).",
                 "inputSchema": {
@@ -1412,6 +1426,19 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         // keeper, los scripts de Antigravity y la Web UI, y los reconcilia.
         // MEDIDO (2026-11-25): sin esto, el movil se rompia al actualizar
         // (el supervisor viejo no encontraba el binario nuevo).
+        // Diagnostico automatico: el nodo publica su estado en Drive y el
+        // root lo lee desde el sandbox (sin ADB, sin pegar texto).
+        "diagnostico" => {
+            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("recoger");
+            let v = match accion {
+                "publicar" | "publish" => match crate::diagnostico::publicar() {
+                    Ok(v) => v,
+                    Err(e) => json!({"ok": false, "error": e}),
+                },
+                _ => crate::diagnostico::recoger(),
+            };
+            json!({ "content": [{ "type": "text", "text": v.to_string() }] })
+        }
         "stack" => {
             let accion = args
                 .get("accion")

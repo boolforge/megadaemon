@@ -123,6 +123,8 @@ pub fn api_v2_routes() -> Vec<(&'static str, &'static str)> {
         ("POST", "/api/v2/instrumentacion"),
         ("GET", "/api/v2/stack"),
         ("POST", "/api/v2/stack"),
+        ("GET", "/api/v2/diagnostico"),
+        ("POST", "/api/v2/diagnostico"),
         ("GET", "/api/v2/backups"),
         // MEDIDO (2026-11-23): estas dos se añadieron al dispatcher y a la
         // tabla de descripciones, pero NO a la tabla autoritativa
@@ -195,6 +197,8 @@ fn route_descriptions() -> Vec<(&'static str, &'static str, &'static str)> {
         ("POST", "/api/v2/instrumentacion", "Aplica, planifica o restaura la instrumentacion de Antigravity (accion=aplicar|plan|restore, confirmar=bool)."),
         ("GET", "/api/v2/stack", "Estado del stack autocontenido: supervisor, keeper, cloudflared, scripts de Antigravity y Web UI (SHA-256 embebido vs el de disco)."),
         ("POST", "/api/v2/stack", "Reconcilia el stack (accion=reconciliar, confirmar=bool): reescribe lo que difiere y reinicia el supervisor si cambio."),
+        ("GET", "/api/v2/diagnostico", "Estado completo del nodo: procesos, puertos, /health, stack, binario, energia, red, log y NDJSON del shim."),
+        ("POST", "/api/v2/diagnostico", "Publica el diagnostico del nodo en Drive (accion=publicar, confirmar=bool): el root lo lee desde el sandbox sin ADB."),
         ("GET", "/api/v2/backups", "Estado de Drive y de los respaldos: si hay credenciales, inventario real en disco y ultimos jobs de la cola durable."),
         ("GET", "/api/v2/inventario", "Inventario VIVO de la API: que rutas existen (v1 y v2) y cuales las consume la UI, medido contra el HTML que el daemon esta sirviendo."),
         ("GET", "/api/v2/devlog", "Bitacora de desarrollo del daemon (eventos, no telemetria): lo que ha escrito el propio daemon en devlog.json."),
@@ -5185,6 +5189,38 @@ pub fn stack_apply(body: &Value) -> Value {
     })
 }
 
+/// **Diagnóstico del nodo**: lo recoge y lo publica en Drive.
+///
+/// MEDIDO (2026-11-25): pedirle al usuario que pegase la salida del
+/// terminal en el chat era lento y se perdía.  Con esto el nodo publica su
+/// estado en Drive y el root lo lee solo.
+pub fn diagnostico_apply(body: &Value) -> Value {
+    let confirmar = body
+        .get("confirmar")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let accion = body
+        .get("accion")
+        .and_then(|v| v.as_str())
+        .unwrap_or("recoger")
+        .to_string();
+    match accion.as_str() {
+        "publicar" | "publish" => {
+            if !confirmar {
+                return json!({
+                    "ok": false,
+                    "error": "hace falta confirmar=true para publicar en Drive",
+                });
+            }
+            match crate::diagnostico::publicar() {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            }
+        }
+        _ => crate::diagnostico::recoger(),
+    }
+}
+
 /// Perfiles de energía: los de fábrica + los guardados por el usuario.
 fn perfiles_energia() -> Value {
     let mut p = crate::energy_automation::builtin_profiles();
@@ -5304,6 +5340,8 @@ pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
             ("POST", "/api/v2/instrumentacion") => instrumentacion_apply(&b),
             ("GET", "/api/v2/stack") => stack_view(),
             ("POST", "/api/v2/stack") => stack_apply(&b),
+            ("GET", "/api/v2/diagnostico") => crate::diagnostico::recoger(),
+            ("POST", "/api/v2/diagnostico") => diagnostico_apply(&b),
             ("GET", "/api/v2/backups") => backups_view(),
             ("GET", "/api/v2/inventario") => inventario_api(),
             ("GET", "/api/v2/devlog") => crate::devlog::leer(),
