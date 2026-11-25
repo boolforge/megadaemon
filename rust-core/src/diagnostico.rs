@@ -52,6 +52,38 @@ fn ahora() -> u64 {
 }
 
 /// Texto de un fichero, recortado a `max` bytes (cola).
+/// Resumen compacto del NDJSON del shim.
+///
+/// Se queda con lo que hay que VERIFICAR (que ruta se pidio, que ruta real
+/// funciono, cuantas variantes se probaron, que status devolvio) y quita
+/// los cuerpos, que son enormes y no aportan para el diagnostico.
+fn resumen_shim(ruta: &str, max: usize) -> Vec<Value> {
+    let Ok(datos) = std::fs::read(ruta) else {
+        return Vec::new();
+    };
+    let texto = String::from_utf8_lossy(&datos);
+    let lineas: Vec<&str> = texto.lines().collect();
+    let inicio = lineas.len().saturating_sub(max);
+    let mut out = Vec::new();
+    for l in &lineas[inicio..] {
+        let Ok(v) = serde_json::from_str::<Value>(l) else {
+            continue;
+        };
+        out.push(json!({
+            "ts": v.get("ts").cloned().unwrap_or(Value::Null),
+            "m": v.get("metodo").cloned().unwrap_or(Value::Null),
+            "ruta": v.get("ruta").cloned().unwrap_or(Value::Null),
+            "ruta_real": v.get("ruta_real").cloned().unwrap_or(Value::Null),
+            "variantes": v.get("variantes").cloned().unwrap_or(Value::Null),
+            "status": v.get("status").cloned().unwrap_or(Value::Null),
+            "regla": v.get("regla").cloned().unwrap_or(Value::Null),
+            "ms": v.get("ms").cloned().unwrap_or(Value::Null),
+            "modelo": v.get("modelo").cloned().unwrap_or(Value::Null),
+        }));
+    }
+    out
+}
+
 fn ultimas_lineas(ruta: &str, max: usize) -> Vec<String> {
     let Ok(datos) = std::fs::read(ruta) else {
         return Vec::new();
@@ -92,7 +124,21 @@ fn procesos() -> Value {
                 .replace('\0', " ")
                 .trim()
                 .to_string();
-            if !cmd.contains("megadaemon") && !cmd.contains("99-megadaemon") {
+            // MEDIDO (2026-11-25): el filtro solo dejaba pasar lo de
+            // MegaDaemon, asi que el diagnostico NO decia si el language
+            // server de Antigravity estaba vivo, con que .so habia
+            // cargado ni que pidio.  Eso es justo lo necesario para el
+            // login.  Ahora se incluyen los procesos de Antigravity y el
+            // language server.
+            let es_agy = cmd.contains("com.agy")
+                || cmd.contains("language_server")
+                || cmd.contains("libloader")
+                || cmd.contains("ags");
+            if !cmd.contains("megadaemon")
+                && !cmd.contains("99-megadaemon")
+                && !es_agy
+                && !cmd.contains("cloudflared")
+            {
                 continue;
             }
             let rss = std::fs::read_to_string(e.path().join("status"))
@@ -432,7 +478,17 @@ pub fn recoger() -> Value {
         // esta registrada y con que modelo (el `antigravity_state.pbtxt`).
         "cuenta": cuenta_agy(),
         "ags_logs": logs_de_la_app(),
-        "shim": ultimas_lineas("/data/adb/megadaemon/state/agyshim.ndjson", 4000),
+        // MEDIDO (2026-11-25): con 4.000 B solo cabian 6 entradas del NDJSON
+        // del shim => no se veía ni una sola vez que ruta real se uso ni
+        // cuantas variantes se probaron (que es justo lo que hay que
+        // verificar del fix del dialecto MIXTO).  Ampliado a 120.000 B
+        // (~150 entradas).
+        "shim": ultimas_lineas("/data/adb/megadaemon/state/agyshim.ndjson", 120_000),
+        // Y un RESUMEN compacto: las ultimas 300 entradas sin los cuerpos
+        // (que son enormes) pero con lo que importa para verificar:
+        // ruta pedida, ruta REAL usada, cuantas variantes se probaron, el
+        // status y la regla aplicada.
+        "shim_resumen": resumen_shim("/data/adb/megadaemon/state/agyshim.ndjson", 300),
         "state_dir": state,
     })
 }
