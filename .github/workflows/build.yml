@@ -482,6 +482,37 @@ jobs:
           else
             echo "::notice::el payload de hooks NO se publica en este run (job 'build-hooks-payload' falló o no se ejecutó)"
           fi
+      - name: "Build META: bundle con TODO dentro (binario + stack + manifiesto)"
+        # El bundle meta es la via de instalacion/actualizacion COMPLETA: un
+        # unico .tar.gz con el binario, el supervisor, el keeper, los scripts
+        # de Antigravity y la Web UI, y un manifest.json con el SHA-256 de
+        # CADA fichero.  El daemon lo descarga, lo verifica fichero a
+        # fichero y lo instala (`megadaemon-core bundle --instalar`).
+        # La autorreparacion offline la hace el modulo `stack` (el binario
+        # lleva el stack dentro).
+        run: |
+          set -u
+          chmod +x tools/construir-bundle.sh
+          tools/construir-bundle.sh dist/megadaemon-core-android-arm64 dist/megadaemon-movil.tar.gz
+          echo "--- contenido del bundle:"
+          tar -tzf dist/megadaemon-movil.tar.gz | sort
+          # El manifiesto debe estar dentro y listar los 10 ficheros.
+          python3 - <<'PY2'
+          import json, tarfile, sys
+          with tarfile.open("dist/megadaemon-movil.tar.gz", "r:gz") as t:
+              man = json.load(t.extractfile("manifest.json"))
+          n = len(man["ficheros"])
+          print(f"   manifiesto: {n} ficheros, build {man['build']}")
+          if n < 10:
+              print("::error::el bundle no trae todos los ficheros del stack")
+              sys.exit(1)
+          for f in man["ficheros"]:
+              if len(f["sha256"]) != 64:
+                  print(f"::error::sha invalido para {f['origen']}")
+                  sys.exit(1)
+          PY2
+          sha256sum dist/megadaemon-movil.tar.gz > dist/megadaemon-movil.tar.gz.sha256
+          echo "bundle verificado ✓"
       - name: Publicar el estado del release (manifiesto con SÓLO los assets que existen)
         # El manifiesto se genera DINÁMICO: si una pata de Linux falló, su
         # asset NO aparece en `latest.json` (antes siempre aparecía => la

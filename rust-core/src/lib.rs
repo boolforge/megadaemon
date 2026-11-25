@@ -11,6 +11,7 @@
 #![recursion_limit = "4096"]
 
 pub mod accelerator_policy;
+pub mod bundle;
 pub mod adb_client;
 pub mod adb_tool;
 pub mod aegis;
@@ -93,6 +94,7 @@ pub mod daad_unpack;
 pub mod delegate;
 pub mod deobfuscate;
 pub mod device_inventory;
+pub mod diagnostico;
 pub mod dex_decompile;
 pub mod dict_sync;
 pub mod disasm;

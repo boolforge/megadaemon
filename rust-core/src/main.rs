@@ -265,6 +265,21 @@ fn main() {
                         });
                 }
             }
+            // v21: el daemon PUBLICA SU DIAGNOSTICO en Drive cada N min.
+            //
+            // MEDIDO (2026-11-25): el diagnóstico dependía de que el
+            // usuario pegase texto en el chat.  Con esto el móvil publica
+            // su estado (procesos, puertos, /health, stack, binario, log y
+            // NDJSON del shim) en `MegaDaemon/diagnostico/<nodo>/` y el
+            // root lo lee desde el sandbox con tools/leer-diagnostico.py:
+            // sin ADB, sin túnel y sin pegar nada.
+            {
+                let min = megadaemon_core::config_efectiva::u64_de("diagnostico.publicar_min", 30);
+                if min > 0 {
+                    megadaemon_core::diagnostico::publicar_periodico(min);
+                    eprintln!("diagnostico: publicación en Drive cada {min} min");
+                }
+            }
             // v21: el daemon RECONCILIA SU PROPIO STACK al arrancar y cada
             // 10 min.
             //
@@ -1052,6 +1067,100 @@ fn main() {
                 }
             }
             std::process::exit(if inf.ok() { 0 } else { 1 });
+        }
+
+        //   megadaemon-core bundle [--instalar] [--json]
+        //
+        //   Descarga el ARTEFACTO META (un unico .tar.gz con el binario, el
+        //   supervisor, el keeper, los scripts de Antigravity y la Web UI),
+        //   verifica el SHA-256 de CADA fichero contra su manifest.json y lo
+        //   instala todo.  Si un solo hash no coincide, no instala nada.
+        //
+        //   Es la via de instalacion/actualizacion COMPLETA; el stack
+        //   autocontenido (comando `stack`) es la via de autorreparacion
+        //   offline.
+        "bundle" => {
+            let json = args[2..].iter().any(|a| a == "--json");
+            let instalar = args[2..]
+                .iter()
+                .any(|a| a == "--instalar" || a == "instalar" || a == "install");
+            if !instalar {
+                let url = megadaemon_core::bundle::url_bundle();
+                match megadaemon_core::bundle::sha256_bundle() {
+                    Ok(sha) => {
+                        if json {
+                            println!("{}", serde_json::json!({"url": url, "sha256": sha}));
+                        } else {
+                            println!("bundle: {url}");
+                            println!("  sha256: {sha}");
+                            println!("  usa: megadaemon-core bundle --instalar");
+                        }
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        eprintln!("bundle: no se pudo consultar: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            match megadaemon_core::bundle::instalar() {
+                Ok(inf) => {
+                    if json {
+                        println!("{}", inf.a_json());
+                    } else {
+                        println!("bundle instalado (build {})", inf.build);
+                        for i in &inf.instalados {
+                            println!("  instalado: {i}");
+                        }
+                        for (r, m) in &inf.fallidos {
+                            eprintln!("  FALLO {r}: {m}");
+                        }
+                    }
+                    std::process::exit(if inf.ok() { 0 } else { 1 });
+                }
+                Err(e) => {
+                    eprintln!("bundle: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        //   megadaemon-core diagnostico [--publicar] [--json]
+        //
+        //   Recoge el estado completo del nodo y, con --publicar, lo sube a
+        //   Drive (MegaDaemon/diagnostico/<nodo>/).  Asi el root ve el
+        //   estado del movil sin ADB y sin pegar texto en el chat.
+        "diagnostico" | "diagnostics" => {
+            let json = args[2..].iter().any(|a| a == "--json");
+            let publicar = args[2..]
+                .iter()
+                .any(|a| a == "--publicar" || a == "publicar" || a == "publish");
+            if publicar {
+                match megadaemon_core::diagnostico::publicar() {
+                    Ok(v) => {
+                        if json {
+                            println!("{}", v);
+                        } else {
+                            println!(
+                                "diagnostico publicado en Drive: {}",
+                                v["vfs"].as_str().unwrap_or("?")
+                            );
+                        }
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        eprintln!("diagnostico: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            let v = megadaemon_core::diagnostico::recoger();
+            if json {
+                println!("{}", v);
+            } else {
+                println!("{}", megadaemon_core::diagnostico::a_markdown(&v));
+            }
+            std::process::exit(0);
         }
 
         "retro-tools" => {
