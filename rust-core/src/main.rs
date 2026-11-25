@@ -207,6 +207,74 @@ fn main() {
                         }
                     }
                 }
+                // v21: ANUNCIO CONTINUO DEL TÚNEL.
+                //
+                // MEDIDO (2026-11-25): el quick tunnel de Cloudflare genera
+                // una URL ALEATORIA nueva cada vez que se reconecta (y se
+                // reconecta al cambiar de WiFi a datos, al perder cobertura
+                // o al morir cloudflared).  Antes la URL solo se publicaba
+                // al ARRANCAR el daemon => el root se quedaba horas con una
+                // URL muerta sin saber que habia otra viva.
+                //
+                // Aqui se vigila `tunnel.url` y se publica en el tablón de
+                // Drive en cuanto cambia (y cada 5 min para que el "latido"
+                // siga fresco).  El root lo lee con tools/ver-tunel.py y se
+                // conecta solo: esto es el equivalente a "mosh" aqui, donde
+                // lo que migra es la URL, no la IP.
+                {
+                    let dir = std::env::var("MEGADAEMON_STATE_DIR")
+                        .unwrap_or_else(|_| megadaemon_core::cockpit_server::state_dir());
+                    let dir2 = dir.clone();
+                    std::thread::Builder::new()
+                        .name("anuncio-tunel".to_string())
+                        .spawn(move || {
+                            let mut ultima: String = String::new();
+                            loop {
+                                // La URL vigente: la del daemon, o la del
+                                // watchdog si el daemon no la ha escrito.
+                                let mut url = String::new();
+                                for cand in [
+                                    format!("{dir2}/tunnel.url"),
+                                    format!("{dir2}/../tunnel.url"),
+                                    "/data/adb/megadaemon/tunnel.url".to_string(),
+                                ] {
+                                    if let Ok(t) = std::fs::read_to_string(&cand) {
+                                        let t = t.trim().to_string();
+                                        if t.starts_with("https://") {
+                                            url = t;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if !url.is_empty() && url != ultima {
+                                    ultima = url.clone();
+                                    let cuerpo = serde_json::json!({
+                                        "url": url,
+                                        "puerto": 9090,
+                                        "build": megadaemon_core::self_update::build_commit(),
+                                    });
+                                    if let Ok(mut t) =
+                                        megadaemon_core::resonance::Tablon::abrir(&dir2)
+                                    {
+                                        t.publicar("latido", cuerpo);
+                                        eprintln!("tunel anunciado: {url}");
+                                    }
+                                    // Y el MARCADOR DE PRESENCIA en Drive: es
+                                    // lo que sigue el root (tools/ver-tunel.py)
+                                    // para migrar solo cuando la URL cambia.
+                                    match megadaemon_core::diagnostico::publicar_presencia(&url) {
+                                        Ok(_) => eprintln!("presencia publicada: {url}"),
+                                        Err(e) => eprintln!("presencia: no se pudo publicar: {e}"),
+                                    }
+                                }
+                                // Cada 60 s: el hilo comprueba la URL y, si
+                                // ha cambiado, la republica (por si el
+                                // primer intento fallo sin red).
+                                std::thread::sleep(std::time::Duration::from_secs(60));
+                            }
+                        })
+                        .map_err(|e| eprintln!("anuncio de tunel: no se pudo arrancar: {e}"));
+                }
                 // v18: sincroniza el runtime unificado de Antigravity al arrancar.
                 if let Err(e) = megadaemon_core::antigravity_clone::unificar_runtime() {
                     eprintln!("antigravity: runtime no unificado: {e}");

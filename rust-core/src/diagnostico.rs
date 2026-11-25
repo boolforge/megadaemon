@@ -378,11 +378,23 @@ fn red() -> Value {
             }
         }
     }
-    let tunel = std::fs::read_to_string("/data/local/tmp/megadaemon/mcp_tunnel.url")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    json!({"interfaces": ip, "tunel_mcp": tunel})
+    // MEDIDO (2026-11-25): el túnel del COCKPIT es el que importa (es el
+    // que sirve la Web UI) y vive en el prefijo persistente.  El del
+    // mcp-legacy esta en la ruta legacy (y ahora apagado por defecto).
+    let leer = |p: &str| -> Option<String> {
+        std::fs::read_to_string(p)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let tunel_cockpit = leer("/data/adb/megadaemon/tunnel.url")
+        .or_else(|| leer("/data/local/tmp/megadaemon/tunnel.url"));
+    let tunel_mcp = leer("/data/local/tmp/megadaemon/mcp_tunnel.url");
+    json!({
+        "interfaces": ip,
+        "tunel_cockpit": tunel_cockpit,
+        "tunel_mcp": tunel_mcp,
+    })
 }
 
 /// **Recoge el estado completo del nodo.**
@@ -540,6 +552,47 @@ pub fn publicar() -> Result<Value, String> {
         "json": j,
         "md": m,
         "local": ruta_json.display().to_string(),
+    }))
+}
+
+/// **Publica el marcador de PRESENCIA**: un fichero diminuto en Drive con
+/// la URL viva del túnel, reescrito en cuanto cambia.
+///
+/// MEDIDO (2026-11-25): el túnel del cockpit es un *quick tunnel* de
+/// Cloudflare ⇒ URL ALEATORIA nueva en cada reconexión (y se reconecta al
+/// cambiar de WiFi a datos, al perder cobertura o al morir cloudflared).
+/// El diagnóstico completo se publica cada 30 min ⇒ la URL podia estar
+/// caduca 30 minutos.  Con este marcador, el root lo ve al instante.
+///
+/// El fichero se llama SIEMPRE igual (`presencia-<nodo>.json`): se BORRA y
+/// se vuelve a subir (el PATCH de Drive no funciona con `parents`).
+pub fn publicar_presencia(url: &str) -> Result<Value, String> {
+    let state = crate::cockpit_server::state_dir();
+    let ts = ahora();
+    let v = json!({
+        "nodo": nodo(),
+        "url": url,
+        "puerto": 9090,
+        "ts": ts,
+        "build": crate::self_update::build_commit(),
+    });
+    let local = Path::new(&state).join("presencia.json");
+    std::fs::write(&local, serde_json::to_vec_pretty(&v).unwrap_or_default())
+        .map_err(|e| format!("no se pudo escribir {}: {e}", local.display()))?;
+    // MEDIDO (2026-11-25): subir un fichero con un nombre que YA existe en
+    // Drive da conflicto, y el PATCH con `parents` devuelve 403.  La via que
+    // funciona es un nombre NUEVO por publicacion: el visor se queda con el
+    // mas reciente (los viejos se limpian a mano, son unos bytes).
+    let vfs = format!("{CARPETA_VFS}/{}", nodo());
+    let nombre = format!("presencia-{}-{ts}.json", nodo());
+    let j = crate::drive_vfs::write_local_file(&local, &vfs, &nombre, Some(&state))
+        .map_err(|e| format!("no se pudo subir la presencia: {e}"))?;
+    Ok(json!({
+        "ok": true,
+        "url": url,
+        "vfs": vfs,
+        "file_id": j.get("file_id").cloned().unwrap_or(Value::Null),
+        "bytes": j.get("bytes").cloned().unwrap_or(Value::Null),
     }))
 }
 
