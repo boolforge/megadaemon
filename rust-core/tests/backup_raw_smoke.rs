@@ -63,7 +63,10 @@ fn el_volcado_por_bloques_sale_exacto_y_se_verifica() {
     let out = d.join("out");
 
     let sink = Arc::new(bs::FileSink::new(&out, "raw").unwrap());
-    let chunk = 64 * 1024u64;
+    // MEDIDO (2026-11-25): 64 KiB NO es múltiplo de 256 KiB, que es lo que
+    // exige Drive => la tubería lo rechaza.  El volcado usa trozos
+    // válidos: 300 KiB son 2 trozos (256 KiB + 44 KiB).
+    let chunk = 256 * 1024u64;
     let mut pipeline =
         bs::Pipeline::new(sink, "raw", size as u64, chunk, 2, BTreeMap::new()).unwrap();
     let opts = br::RawOptions {
@@ -78,7 +81,7 @@ fn el_volcado_por_bloques_sale_exacto_y_se_verifica() {
     // Todo el contenido ha salido, bloque a bloque.
     assert_eq!(report.bytes, size as u64);
     assert_eq!(summary.bytes, size as u64);
-    assert_eq!(report.chunks.len(), 5); // 300 KiB en trozos de 64 KiB
+    assert_eq!(report.chunks.len(), 2); // 300 KiB en trozos de 256 KiB
     assert_eq!(report.fs.as_deref(), Some("f2fs"));
 
     // El hash global es el del fichero original.
@@ -91,7 +94,7 @@ fn el_volcado_por_bloques_sale_exacto_y_se_verifica() {
     // La verificación relee el origen y cuadra.
     let v = br::verify_raw(&img, &report).unwrap();
     assert!(v.ok, "{:?}", v.blocks_bad);
-    assert_eq!(v.blocks_checked, 5);
+    assert_eq!(v.blocks_checked, 2);
 
     // Si el origen cambia, la verificación lo detecta (bloque exacto).
     let mut changed = original.clone();
@@ -125,10 +128,10 @@ fn el_volcado_nunca_escribe_en_el_origen() {
     let out = d.join("out");
     let sink = Arc::new(bs::FileSink::new(&out, "raw").unwrap());
     let mut pipeline =
-        bs::Pipeline::new(sink, "raw", before.len(), 64 * 1024, 1, BTreeMap::new()).unwrap();
+        bs::Pipeline::new(sink, "raw", before.len(), 256 * 1024, 1, BTreeMap::new()).unwrap();
     let opts = br::RawOptions {
         device: img.to_string_lossy().to_string(),
-        chunk_bytes: 64 * 1024,
+        chunk_bytes: 256 * 1024,
         max_bytes: 0,
         label: "raw".into(),
     };
