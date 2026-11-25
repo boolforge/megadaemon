@@ -20,8 +20,19 @@ fn main() {
     let fuente = std::env::var("MEGADAEMON_PAYLOAD_PATH").ok().map(PathBuf::from);
     match fuente {
         Some(p) if p.is_file() => {
-            std::fs::copy(&p, &destino).expect("copiar el payload embebido");
-            println!("cargo:warning=payload de frida-gum embebido ({} bytes)", std::fs::metadata(&destino).map(|m| m.len()).unwrap_or(0));
+            // MEDIDO (2026-11-25): el payload crudo son 3,12 MiB (7,6 % del
+            // binario del daemon).  Se COMPRIME antes de incrustarlo: el
+            // daemon lo descomprime al instalar (el .so que acaba en el
+            // movil es EXACTAMENTE el mismo, byte a byte).
+            let crudo = std::fs::read(&p).expect("leer el payload");
+            let comprimido = zstd::bulk::compress(&crudo, 19).expect("comprimir el payload");
+            std::fs::write(&destino, &comprimido).expect("escribir el payload comprimido");
+            println!(
+                "cargo:warning=payload de frida-gum embebido ({} B crudo -> {} B comprimido, -{}%)",
+                crudo.len(),
+                comprimido.len(),
+                100 - (comprimido.len() * 100 / crudo.len().max(1))
+            );
         }
         _ => {
             // Build de desarrollo: payload vacio (el daemon lo bajara del
@@ -30,5 +41,7 @@ fn main() {
             println!("cargo:warning=sin payload de frida-gum embebido (build de desarrollo)");
         }
     }
+    // El nombre lo dice: lo que se incrusta esta COMPRIMIDO (el daemon lo
+    // descomprime al instalar).
     println!("cargo:rustc-env=MEGADAEMON_PAYLOAD_BIN={}", destino.display());
 }

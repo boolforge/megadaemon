@@ -221,12 +221,15 @@ pub fn estado(args: &Value) -> Value {
             "embebido".to_string(),
             json!({
                 "disponible": payload_embebido(),
-                "bytes": PAYLOAD_EMBEBIDO.len(),
-                "sha256": if payload_embebido() {
-                    crate::self_update::sha256_hex(PAYLOAD_EMBEBIDO)
-                } else {
-                    String::new()
-                },
+                // Lo que ocupa en el BINARIO (comprimido) y lo que es el
+                // payload real (descomprimido): son dos números distintos y
+                // confundirlos haría creer que el binario crece.
+                "bytes_comprimidos": PAYLOAD_EMBEBIDO.len(),
+                "bytes": payload_descomprimido().map(|v| v.len()).unwrap_or(0),
+                "sha256": payload_descomprimido()
+                    .map(|v| crate::self_update::sha256_hex(&v))
+                    .unwrap_or_default(),
+                "nota": "el payload va incrustado COMPRIMIDO (zstd); se descomprime al instalar",
             }),
         );
     }
@@ -287,7 +290,32 @@ fn estado_real(args: &Value) -> Value {
 ///
 /// El `.so` embebido se compila aparte (es un `cdylib`: no se puede linkear
 /// dentro de un binario), pero el ARTEFACTO que descarga el móvil es UNO.
+///
+/// MEDIDO (2026-11-25): lo que va incrustado va **COMPRIMIDO** (zstd) para
+/// no gastar 3,12 MiB del binario del movil (7,6 %).  El `.so` que se
+/// instala es EXACTAMENTE el mismo: se descomprime y se verifica con su
+/// SHA-256 antes de escribirlo.
 pub const PAYLOAD_EMBEBIDO: &[u8] = include_bytes!(env!("MEGADAEMON_PAYLOAD_BIN"));
+
+/// Descomprime el payload incrustado (vacío si no hay).
+///
+/// MEDIDO: 3.269.720 B -> 1.054.700 B (zstd -19) y la descompresion en el
+/// movil es de microsegundos.
+pub fn payload_descomprimido() -> Option<Vec<u8>> {
+    if PAYLOAD_EMBEBIDO.is_empty() {
+        return None;
+    }
+    match zstd::bulk::decompress(PAYLOAD_EMBEBIDO, 64 * 1024 * 1024) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            crate::devlog::append(
+                "payload_frida",
+                serde_json::json!({ "error": format!("descomprimir el payload embebido: {e}") }),
+            );
+            None
+        }
+    }
+}
 
 /// ¿Trae el daemon el payload embebido?
 pub fn payload_embebido() -> bool {
@@ -301,8 +329,12 @@ pub fn instalar_embebido() -> Option<Value> {
     if PAYLOAD_EMBEBIDO.is_empty() {
         return None;
     }
+    // MEDIDO (2026-11-25): lo incrustado va COMPRIMIDO; el payload real (el
+    // .so que se instala) es el descomprimido, y su SHA-256 es el que se
+    // verifica y se publica.
+    let real = payload_descomprimido()?;
     let destino = PathBuf::from(RUTA_PAYLOAD);
-    let calculado = crate::self_update::sha256_hex(PAYLOAD_EMBEBIDO);
+    let calculado = crate::self_update::sha256_hex(&real);
     // ¿ya está y es el mismo?
     if let Some(sha_local) = sha_de_fichero(&destino) {
         if sha_local == calculado {
@@ -311,7 +343,7 @@ pub fn instalar_embebido() -> Option<Value> {
                 "ya_instalado": true,
                 "ruta": RUTA_PAYLOAD,
                 "sha256": sha_local,
-                "bytes": PAYLOAD_EMBEBIDO.len(),
+                "bytes": real.len(),
                 "origen": "embebido",
             }));
         }
@@ -320,7 +352,7 @@ pub fn instalar_embebido() -> Option<Value> {
         let _ = std::fs::create_dir_all(dir);
     }
     let tmp = destino.with_extension("so.new");
-    if let Err(e) = escribir_en(&tmp, PAYLOAD_EMBEBIDO, 0o700) {
+    if let Err(e) = escribir_en(&tmp, &real, 0o700) {
         let _ = std::fs::remove_file(&tmp);
         return Some(json!({
             "ok": false,
@@ -334,7 +366,8 @@ pub fn instalar_embebido() -> Option<Value> {
     Some(json!({
         "ok": true,
         "ruta": RUTA_PAYLOAD,
-        "bytes": PAYLOAD_EMBEBIDO.len(),
+        "bytes": real.len(),
+        "bytes_comprimidos": PAYLOAD_EMBEBIDO.len(),
         "sha256": calculado,
         "modo": "0700",
         "origen": "embebido",
@@ -660,6 +693,29 @@ pub fn dispatch(accion: &str, args: &Value) -> Value {
 }
 
 #[cfg(test)]
+
+    /// MEDIDO (2026-11-25): el payload incrustado va COMPRIMIDO; el `.so` que
+    /// se instala tiene que ser EXACTAMENTE el original (byte a byte).
+    #[test]
+    fn el_payload_comprimido_descomprime_al_original() {
+        let crudo = payload_descomprimido();
+        // Sin payload (build de desarrollo) no hay nada que comprobar.
+        let Some(crudo) = crudo else {
+            assert!(PAYLOAD_EMBEBIDO.is_empty());
+            return;
+        };
+        assert!(!crudo.is_empty());
+        // Es un ELF de 64 bits (el payload de frida-gum).
+        assert_eq!(&crudo[0..4], b"\x7fELF");
+        // Y lo incrustado es mas pequeño que el original (si no, comprimirlo
+        // no sirve de nada).
+        assert!(
+            PAYLOAD_EMBEBIDO.len() < crudo.len(),
+            "comprimir no ha ahorrado nada: {} vs {}",
+            PAYLOAD_EMBEBIDO.len(),
+            crudo.len()
+        );
+    }
 mod tests {
     use super::*;
 

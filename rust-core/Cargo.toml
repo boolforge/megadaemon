@@ -5,6 +5,15 @@ edition = "2021"
 authors = ["MegaDaemon Engineering Team <megadaemon@agy.internal>"]
 description = "MegaDaemon v13.0 Zenith — Pure Rust Multi-OS RE Workbench (DiE, Binwalk, Tile Molester, ImHex/Kaitai, CIRX v3.4 SSA, MBA, Rizin/Frida, Exynos NPU/CV, Parasitic LLM Swarm & Antigravity MCP Server)"
 
+# El build script COMPRIME el payload de frida-gum antes de incrustarlo.
+# MEDIDO (2026-11-25): el payload son 3.269.720 B (3,12 MiB = 7,6 % del
+# binario del daemon) y comprime a 1.054.700 B con xz -9 (zstd -19 da algo
+# mas, ~1,2 MiB, y descomprime en microsegundos).  Al incrustar el
+# COMPRIMIDO y descomprimir al instalar, el binario del movil pierde ~2 MiB
+# sin perder ninguna capacidad.
+[build-dependencies]
+zstd = { version = "0.13", default-features = false, features = ["arrays"] }
+
 [dependencies]
 # Política de redacción de credenciales: **fuente única** compartida con el
 # payload de hooks que se inyecta en el móvil (`crates/injector-payload`).
@@ -146,3 +155,11 @@ strip = true
 [profile.release.package.megadaemon-core]
 opt-level = 3
 codegen-units = 4
+# MEDIDO (2026-11-25, binario publicado): el override de PAQUETE **anula**
+# el `strip = true` del perfil base (Cargo no lo hereda aqui).  Sin esta
+# linea el binarioPublished llevaba `.symtab` (2.661.408 B) + `.strtab`
+# (4.166.193 B) = 6.827.601 B = 6,52 MiB (15,9 % del binario) de tabla de
+# simbolos en el movil, que no sirve para nada.
+# REPRODUCIDO con un paquete minimo: con el override el binario conserva
+# .symtab/.strtab; sin el override desaparecen (362.808 -> 290.944 B).
+strip = true
