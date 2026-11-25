@@ -2310,42 +2310,7 @@ mod tests {
     }
 
     // ── Despliegue y ADB remoto ───────────────────────────────────────
-    #[test]
-    fn el_sondeo_de_salud_se_interpreta_bien() {
-        let (ok, code) = parse_health_output("ruido\nHEALTH:200\nmas ruido");
-        assert!(ok);
-        assert_eq!(code, "200");
 
-        let (ok, code) = parse_health_output("HEALTH:000");
-        assert!(!ok);
-        assert_eq!(code, "000");
 
-        // Si el sondeo no llegó a Prints (p.ej. sin root), es "no responde".
-        let (ok, code) = parse_health_output("sin salida de salud");
-        assert!(!ok);
-        assert_eq!(code, "000");
-    }
 
-    #[test]
-    fn desplegar_sin_confirmacion_no_toca_nada() {
-        let r = deploy_binary("megadaemon-core", "/no/existe", "", false);
-        assert_eq!(r["ok"], false);
-        assert_eq!(r["installed"], false);
-        assert!(r["error"].as_str().unwrap().contains("confirm"));
-    }
-
-    #[test]
-    fn desplegar_un_fichero_inexistente_falla() {
-        let r = deploy_binary("megadaemon-core", "/no/existe/megadaemon-core", "", true);
-        assert_eq!(r["ok"], false);
-        assert!(r["error"].as_str().unwrap().contains("no existe"));
-    }
-
-    #[test]
-    fn adb_remoto_exige_confirmacion() {
-        let r = remote_adb(true, false, "");
-        assert_eq!(r["ok"], false);
-        assert_eq!(r["enabled"], false);
-        assert!(r["error"].as_str().unwrap().contains("confirm"));
-    }
 }

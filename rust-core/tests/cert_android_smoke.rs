@@ -4,6 +4,10 @@
 //! `cert_vault_smoke.rs`) y el "dispositivo" es un árbol de ficheros sintético
 //! que se crea en un directorio temporal.
 
+use base64ct::Encoding;
+
+#[path = "../src/util_fs.rs"]
+mod util_fs;
 #[path = "../src/aegis.rs"]
 #[allow(dead_code, unused_imports, unused_mut)]
 mod aegis;

@@ -162,6 +162,7 @@ pub mod re_disasm;
 pub mod re_bdd;
 pub mod re_mba;
 pub mod re_strings;
+pub mod re_strenc;
 pub mod re_ir;
 pub mod re_cff;
 pub mod re_crypto;
