@@ -72,8 +72,8 @@ pub fn reiniciar_app_para_el_binario_nuevo() -> Option<Value> {
     if !proceso_vivo("com.agy") {
         return None;
     }
-    let marca = std::path::PathBuf::from(crate::cockpit_server::state_dir())
-        .join("agy/restart_app.ts");
+    let marca =
+        std::path::PathBuf::from(crate::cockpit_server::state_dir()).join("agy/restart_app.ts");
     let ahora = crate::webui::now_epoch();
     if let Ok(txt) = std::fs::read_to_string(&marca) {
         if let Ok(prev) = txt.trim().parse::<i64>() {
@@ -82,7 +82,8 @@ pub fn reiniciar_app_para_el_binario_nuevo() -> Option<Value> {
             }
         }
     }
-    let cmd = "am force-stop com.agy; sleep 2; am start -n com.agy/.ui.launcher.LauncherDarkActivity";
+    let cmd =
+        "am force-stop com.agy; sleep 2; am start -n com.agy/.ui.launcher.LauncherDarkActivity";
     let r = crate::android::root_exec(cmd, 20_000, 2048);
     let _ = std::fs::create_dir_all(marca.parent().unwrap());
     let _ = std::fs::write(&marca, format!("{ahora}\n"));
@@ -114,8 +115,8 @@ pub fn relanzar_ls_para_el_binario_nuevo() -> Option<Value> {
         return None;
     }
     let pid = pid_del_language_server()?;
-    let marca = std::path::PathBuf::from(crate::cockpit_server::state_dir())
-        .join("agy/relanzar_ls.ts");
+    let marca =
+        std::path::PathBuf::from(crate::cockpit_server::state_dir()).join("agy/relanzar_ls.ts");
     let ahora = crate::webui::now_epoch();
     if let Ok(txt) = std::fs::read_to_string(&marca) {
         if let Ok(prev) = txt.trim().parse::<i64>() {
@@ -143,7 +144,9 @@ pub fn bias_del_ls() -> u64 {
     let Some(pid) = pid_del_language_server() else {
         return 0;
     };
-    let ruta = crate::antigravity_endpoint::ruta_ls().to_string_lossy().to_string();
+    let ruta = crate::antigravity_endpoint::ruta_ls()
+        .to_string_lossy()
+        .to_string();
     crate::antigravity_intercept::bias_del_proceso(pid as i32, &ruta).unwrap_or(0)
 }
 
@@ -202,7 +205,8 @@ pub fn estado() -> Value {
     let endpoint = crate::antigravity_endpoint::estado();
     let falso = crate::antigravity_fake_so::estado();
     let modelo = crate::antigravity_model::integracion_estado();
-    let mitm = crate::sqlite_mitm::estado_mitm().unwrap_or_else(|e| json!({"ok": false, "error": e}));
+    let mitm =
+        crate::sqlite_mitm::estado_mitm().unwrap_or_else(|e| json!({"ok": false, "error": e}));
 
     // ¿Está la app de Antigravity corriendo?  (si no, no tiene sentido
     // instrumentarla todavía, pero tampoco es un error).
@@ -297,7 +301,9 @@ fn puente_mcp_estado() -> Value {
                         servidores = map.len();
                         for (_, spec) in map {
                             let url = spec.get("url").and_then(|u| u.as_str()).unwrap_or("");
-                            if url.contains("127.0.0.1:9090/mcp") || url.contains("localhost:9090/mcp") {
+                            if url.contains("127.0.0.1:9090/mcp")
+                                || url.contains("localhost:9090/mcp")
+                            {
                                 let h = spec
                                     .get("headers")
                                     .and_then(|h| h.get("X-Seere-Auth-Token"))
@@ -391,7 +397,9 @@ pub fn sincronizar_puente_mcp() -> Result<Value, String> {
         .ok_or("mcpServers no es un objeto")?;
     let mut cambios = 0usize;
     for (_, spec) in servers.iter_mut() {
-        let Some(obj) = spec.as_object_mut() else { continue };
+        let Some(obj) = spec.as_object_mut() else {
+            continue;
+        };
         let url = obj.get("url").and_then(|u| u.as_str()).unwrap_or("");
         if !url.contains("127.0.0.1:9090/mcp") && !url.contains("localhost:9090/mcp") {
             continue;
@@ -479,18 +487,17 @@ pub fn revision_cheap() -> Vec<String> {
         }
     } else if modo == "in situ" {
         let e = crate::antigravity_endpoint::estado();
-        if !e
-            .get("aplicado")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-        {
+        if !e.get("aplicado").and_then(|v| v.as_bool()).unwrap_or(false) {
             faltan.push("so".to_string());
         }
     }
     if on("puente_mcp", true) {
         let p = puente_mcp_estado();
         let existe = p.get("existe").and_then(|v| v.as_bool()).unwrap_or(false);
-        let al_dia = p.get("token_al_dia").and_then(|v| v.as_bool()).unwrap_or(false);
+        let al_dia = p
+            .get("token_al_dia")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         if existe && !al_dia {
             faltan.push("puente_mcp".to_string());
         }
@@ -514,11 +521,8 @@ pub fn revision_cheap() -> Vec<String> {
 /// detectar la manipulación), el daemon vuelve a poner el suyo sin que nadie
 /// toque nada.  Es idempotente y barato: en el caso normal no hace nada.
 pub fn bucle_automatico(puerto: u16) {
-    let intervalo = crate::config_efectiva::u64_de(
-        "instrumentacion_agy.intervalo_s",
-        60,
-    )
-    .clamp(15, 3600);
+    let intervalo =
+        crate::config_efectiva::u64_de("instrumentacion_agy.intervalo_s", 60).clamp(15, 3600);
     // MEDIDO (2026-11-24): el plan de hooks sólo se escribía cuando
     // `aplicar()` encontraba algo que hacer ⇒ si todo estaba en su sitio, el
     // payload se quedaba SIN plan.  Se escribe al arrancar (una vez): el
@@ -529,14 +533,27 @@ pub fn bucle_automatico(puerto: u16) {
                 eprintln!(
                     "instrumentación AGY: plan de hooks listo ({} hooks → {})",
                     v.get("hooks").and_then(|x| x.as_u64()).unwrap_or(0),
-                    v.get("ruta_payload").and_then(|x| x.as_str()).unwrap_or("?")
+                    v.get("ruta_payload")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("?")
                 );
             }
             Err(e) => eprintln!("instrumentación AGY: no se pudo escribir el plan de hooks: {e}"),
         }
     }
     loop {
-        std::thread::sleep(std::time::Duration::from_secs(intervalo));
+        // MEDIDO (2026-11-25, movil): la bateria bajo al 14 % con el movil
+        // descargando y el ciclo de instrumentacion cada 60 s.  Ese ciclo
+        // comprueba metadatos y reaplica hooks: con la bateria en "seal" hay
+        // que ALARGARLO, porque el trabajo discrecional es lo primero que
+        // debe caer (la politica de energia ya define "seal" por debajo del
+        // 20 %).
+        let espera = if crate::battery_advanced::modo_ahorro_activo() {
+            (intervalo * 5).clamp(60, 3600)
+        } else {
+            intervalo
+        };
+        std::thread::sleep(std::time::Duration::from_secs(espera));
         if !on("automatica", true) {
             continue;
         }
@@ -606,7 +623,10 @@ pub fn aplicar(puerto: u16, confirmar: bool) -> Value {
     } else if modo == "falso" {
         match crate::antigravity_fake_so::activar(puerto, confirmar) {
             Ok(v) => {
-                let ya = v.get("ya_activo").and_then(|x| x.as_bool()).unwrap_or(false);
+                let ya = v
+                    .get("ya_activo")
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false);
                 piezas.push(json!({
                     "pieza": "so", "modo": modo,
                     "estado": if ya { "aplicado" } else { "aplicado_ahora" },
@@ -620,7 +640,10 @@ pub fn aplicar(puerto: u16, confirmar: bool) -> Value {
     } else {
         match crate::antigravity_endpoint::aplicar_endpoint(puerto, confirmar) {
             Ok(v) => {
-                let ya = v.get("ya_aplicado").and_then(|x| x.as_bool()).unwrap_or(false);
+                let ya = v
+                    .get("ya_aplicado")
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false);
                 piezas.push(json!({
                     "pieza": "so", "modo": modo,
                     "estado": if ya { "aplicado" } else { "aplicado_ahora" },
@@ -702,14 +725,13 @@ pub fn aplicar(puerto: u16, confirmar: bool) -> Value {
 
     // --- 4) MITM de la DB de conversaciones ---------------------------
     if on("mitm_db", false) {
-        let ocultar: Vec<String> = crate::config_efectiva::vector_de("instrumentacion_agy.ocultar")
-            .unwrap_or_default();
-        let reescribir: Vec<(String, String)> = crate::config_efectiva::pares_de(
-            "instrumentacion_agy.reescribir",
-        )
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
+        let ocultar: Vec<String> =
+            crate::config_efectiva::vector_de("instrumentacion_agy.ocultar").unwrap_or_default();
+        let reescribir: Vec<(String, String)> =
+            crate::config_efectiva::pares_de("instrumentacion_agy.reescribir")
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
         match crate::sqlite_mitm::activar(&ocultar, &reescribir) {
             Ok(v) => {
                 let ya = v
@@ -742,9 +764,12 @@ pub fn aplicar(puerto: u16, confirmar: bool) -> Value {
         match crate::hooks_payload::instalar_embebido() {
             None => {}
             Some(v) if v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false) => {
-                piezas.push(json!({ "pieza": "payload_frida", "estado": "aplicado", "detalle": v }));
+                piezas
+                    .push(json!({ "pieza": "payload_frida", "estado": "aplicado", "detalle": v }));
             }
-            Some(v) => piezas.push(json!({ "pieza": "payload_frida", "estado": "fallo", "detalle": v })),
+            Some(v) => {
+                piezas.push(json!({ "pieza": "payload_frida", "estado": "fallo", "detalle": v }))
+            }
         }
     }
 
@@ -768,8 +793,12 @@ pub fn aplicar(puerto: u16, confirmar: bool) -> Value {
     // lee de `/data/local/tmp/megadaemon/hooks-plan.txt`).
     if on("plan_hooks", true) {
         match crate::antigravity_intercept::escribir_plan_para_el_payload(bias_del_ls()) {
-            Ok(v) => piezas.push(json!({ "pieza": "plan_hooks", "estado": "aplicado", "detalle": v })),
-            Err(e) => piezas.push(json!({ "pieza": "plan_hooks", "estado": "fallo", "detalle": e })),
+            Ok(v) => {
+                piezas.push(json!({ "pieza": "plan_hooks", "estado": "aplicado", "detalle": v }))
+            }
+            Err(e) => {
+                piezas.push(json!({ "pieza": "plan_hooks", "estado": "fallo", "detalle": e }))
+            }
         }
     }
 
@@ -866,7 +895,9 @@ pub fn dispatch(args: &Value) -> Value {
                 "estado": estado(),
             })
         }
-        other => json!({"ok": false, "error": format!("accion desconocida: {other} (estado|plan|aplicar|restore)")}),
+        other => {
+            json!({"ok": false, "error": format!("accion desconocida: {other} (estado|plan|aplicar|restore)")})
+        }
     }
 }
 

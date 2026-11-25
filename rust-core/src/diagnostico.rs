@@ -416,7 +416,13 @@ pub fn recoger() -> Value {
         "binario": binario(),
         "energia": energia(),
         "red": red(),
-        "log": ultimas_lineas("/sdcard/megadaemon.log", 6000),
+        // MEDIDO (2026-11-25): con 6.000 B solo cupian 46 lineas y no se
+        // veia el patron de reinicios.  Ampliado a 60.000 B (~600 lineas).
+        "log": ultimas_lineas("/sdcard/megadaemon.log", 60_000),
+        // Historial explicito de reinicios del daemon (lo escribe el
+        // supervisor).  Es lo que permite ver si el bucle de reinicios
+        // sigue vivo sin depender del log de texto.
+        "reinicios": ultimas_lineas("/data/adb/megadaemon/reinicios.log", 20_000),
         // MEDIDO (2026-11-25): el login de Antigravity fallaba y NO se
         // podia saber por que sin el estado de la instrumentacion (si el
         // .so parcheado esta puesto, si el modelo esta registrado) ni los
@@ -605,6 +611,12 @@ pub fn publicar_periodico(minutos: u64) -> std::thread::JoinHandle<()> {
         .spawn(move || {
             let periodo = std::time::Duration::from_secs(minutos.max(1) * 60);
             loop {
+                // MEDIDO (2026-11-25, movil): bateria al 14 % descargando.
+                // La publicacion del diagnostico usa red (Drive) => con la
+                // bateria en "seal" se multiplica el periodo x3.
+                if crate::battery_advanced::modo_ahorro_activo() {
+                    std::thread::sleep(periodo * 2);
+                }
                 match publicar() {
                     Ok(v) => {
                         eprintln!(

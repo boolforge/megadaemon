@@ -391,7 +391,16 @@ fn main() {
                                     );
                                 }
                             }
-                            std::thread::sleep(std::time::Duration::from_secs(600));
+                            // MEDIDO (2026-11-25, movil): con la bateria en
+                            // "seal" (<20 % sin cargador) la reconciliacion
+                            // se espacia: es trabajo discrecional y solo
+                            // importa que el stack este en su sitio.
+                            let espera = if megadaemon_core::battery_advanced::modo_ahorro_activo() {
+                                1800
+                            } else {
+                                600
+                            };
+                            std::thread::sleep(std::time::Duration::from_secs(espera));
                         }
                     })
                     .map_err(|e| eprintln!("stack: no se pudo arrancar la reconciliacion: {e}"));

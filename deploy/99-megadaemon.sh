@@ -348,6 +348,23 @@ for cand in "$PREFIX/cloudflared" \
             /data/local/tmp/megadaemon/cloudflared; do
     [ -x "$cand" ] && { CLOUDFLARED="$cand"; break; }
 done
+# MEDIDO (2026-11-25, movil): si el cloudflared estaba en la ruta LEGACY
+# (/data/local/tmp/megadaemon, VOLATIL) se usaba desde ahi y NO se migraba
+# => al reiniciar el movil, /data/local/tmp se limpiava y el movil se
+# quedaba SIN TUNEL (medido: el proceso corria desde
+# /data/local/tmp/megadaemon/cloudflared).  Ahora se MIGRABA al prefijo
+# persistente nada mas encontrarlo.
+if [ -n "$CLOUDFLARED" ] && [ "$CLOUDFLARED" != "$PREFIX/cloudflared" ]; then
+    if cp -f "$CLOUDFLARED" "$PREFIX/cloudflared.new" 2>/dev/null; then
+        chmod 755 "$PREFIX/cloudflared.new" 2>/dev/null
+        if mv -f "$PREFIX/cloudflared.new" "$PREFIX/cloudflared" 2>/dev/null; then
+            log "cloudflared MIGRADO al prefijo persistente (estaba en $CLOUDFLARED)"
+            CLOUDFLARED="$PREFIX/cloudflared"
+        else
+            rm -f "$PREFIX/cloudflared.new" 2>/dev/null
+        fi
+    fi
+fi
 if [ -z "$CLOUDFLARED" ]; then
     for cand in /data/data/com.termux/files/usr/bin/cloudflared \
                 /data/data/com.agy/files/usr/bin/cloudflared; do
@@ -942,6 +959,11 @@ start_daemon() {
     setsid nohup "$BIN" cockpit "$PORT" >> "$LOG" 2>&1 < /dev/null &
     pid=$!
     log "megadaemon-core arrancado PID $pid (cockpit en 127.0.0.1:$PORT, instancia=$MEGADAEMON_INSTANCE_NAME/$MEGADAEMON_INSTANCE_ROLE)"
+    # MEDIDO (2026-11-25): el log de texto se trunca a 46 lineas en el
+    # diagnostico y no se veía si el daemon se reiniciaba en bucle.  Este
+    # registro es dedicado y lo lee el diagnostico.
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] arrancado PID $pid puerto=$PORT" \
+        >> "$PREFIX/reinicios.log" 2>/dev/null
 
     # --- lmkd / OOM killer: el daemon NO debe ser la primera victima -----
     # MEDIDO (2026-11-23): el movil se caia de forma DETERMINISTA porque
@@ -1316,19 +1338,45 @@ while true; do
         # colgado seguia dando 502 desde el tunel mientras el watchdog, que
         # solo miraba pgrep, lo daba por bueno. Ahora se le pregunta de
         # verdad: si /health no responde, se reinicia.
-        py2="$PY_BIN"
-        if [ -z "$py2" ]; then
-            for cand in /data/data/com.termux/files/usr/bin/python3 \
-                        /data/data/com.agy/files/usr/bin/python3 \
-                        /system/bin/python3; do
-                [ -x "$cand" ] && { py2="$cand"; break; }
+        # MEDIDO (2026-11-25, movil): el probe usaba PY_BIN (el python3 de
+        # TERMUX).  Si Termux esta frio, apagado o su python3 falla, el probe
+        # daba "sin responder" y el supervisor MATABA un daemon SANO
+        # (medido: "daemon VIVO pero NO RESPONDE: se reinicia" y el daemon
+        # se relanzaba, pero /health respondia bien).  Ademas, si Termux no
+        # esta instalado, el probe NUNCA podia pasar y el supervisor
+        # reiniciaba el daemon sin parar.
+        #
+        # Ahora el probe usa HERRAMIENTAS NATIVAS del sistema (toybox wget /
+        # busybox wget / curl), sin depender de ninguna app.  Si no hay
+        # ninguna, se usa el /proc/net/tcp (el daemon escucha aunque /health
+        # tarde): es unindicador de "hay alguien escuchando en el puerto".
+        probe_health() {
+            local u="http://127.0.0.1:$PORT/health"
+            for cand in /system/bin/toybox /data/adb/megadaemon/busybox \
+                        /data/adb/magisk/busybox /data/local/tmp/megadaemon/busybox \
+                        /data/data/com.termux/files/usr/bin/curl \
+                        /data/data/com.termux/files/usr/bin/wget; do
+                [ -x "$cand" ] || continue
+                case "$cand" in
+                    */toybox) "$cand" wget -O /dev/null -T 4 "$u" >/dev/null 2>&1 && return 0 ;;
+                    */busybox) "$cand" wget -q -O /dev/null -T 4 "$u" >/dev/null 2>&1 && return 0 ;;
+                    */curl)   "$cand" -fsS -m 4 -o /dev/null "$u" >/dev/null 2>&1 && return 0 ;;
+                    */wget)   "$cand" -q -T 4 -O /dev/null "$u" >/dev/null 2>&1 && return 0 ;;
+                esac
             done
-        fi
+            # Sin herramientas: se mira /proc/net/tcp (puerto en LISTEN = 0A).
+            local hexport
+            hexport=$(printf '%04X' "$PORT")
+            if [ -r /proc/net/tcp ] && grep -qi ":$hexport .*0A" /proc/net/tcp 2>/dev/null; then
+                return 0
+            fi
+            return 1
+        }
         miss=0
         i=0
         while [ $i -lt 3 ]; do
             i=$((i + 1))
-            if [ -n "$py2" ] && "$py2" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:$PORT/health',timeout=4)" >/dev/null 2>&1; then
+            if probe_health; then
                 miss=0
                 break
             fi
@@ -1336,7 +1384,7 @@ while true; do
             log "daemon sin responder en /health (intento $miss/3)"
             sleep 2
         done
-        if [ "$miss" -ge 3 ] && [ -n "$py2" ]; then
+        if [ "$miss" -ge 3 ]; then
             log "daemon VIVO pero NO RESPONDE: se reinicia (antes se quedaba en 502 para siempre)"
             for p in $(pgrep -f "megadaemon-core cockpit" 2>/dev/null); do
                 kill "$p" 2>/dev/null

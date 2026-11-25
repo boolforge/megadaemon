@@ -120,7 +120,6 @@ pub fn state_dir() -> String {
     crate::state_dir::state_dir()
 }
 
-
 /// Temperatura de batería (°C) a partir de la cual la política se endurece.
 pub const THERMAL_WARN_C: f32 = 42.0;
 
@@ -254,8 +253,12 @@ pub fn read_battery(root: &str) -> Result<BatterySnapshot, String> {
     let status = read_attr(&dir, "status").unwrap_or_else(|| "Unknown".to_string());
     let health = read_attr(&dir, "health").unwrap_or_else(|| "Unknown".to_string());
     let temp_c = read_i64(&dir, "temp").map(normalize_temp).unwrap_or(0.0);
-    let voltage_mv = read_i64(&dir, "voltage_now").map(normalize_voltage_mv).unwrap_or(0);
-    let current_ma = read_i64(&dir, "current_now").map(normalize_current_ma).unwrap_or(0);
+    let voltage_mv = read_i64(&dir, "voltage_now")
+        .map(normalize_voltage_mv)
+        .unwrap_or(0);
+    let current_ma = read_i64(&dir, "current_now")
+        .map(normalize_current_ma)
+        .unwrap_or(0);
     let charge_full = read_i64(&dir, "charge_full").unwrap_or(0);
     let charge_full_design = read_i64(&dir, "charge_full_design").unwrap_or(0);
     let cycle_count = read_i64(&dir, "cycle_count").map(|v| v as i32);
@@ -421,8 +424,7 @@ pub fn profiles() -> Vec<PowerProfile> {
             wakelock_timeout_s: 60,
             charge_limit_pct: Some(80),
             enforce_on_thermal: true,
-            notes: "Máxima autonomía: el más restrictivo de todos los perfiles."
-                .to_string(),
+            notes: "Máxima autonomía: el más restrictivo de todos los perfiles.".to_string(),
         },
         PowerProfile {
             name: "performance".to_string(),
@@ -533,7 +535,15 @@ impl Action {
         match self {
             Action::SetProp { key, value } => format!("setprop {}={}", key, value),
             Action::Shell { cmd, reversible } => {
-                format!("shell {}{}", cmd, if *reversible { " [rev]" } else { " [DESTRUCTIVA]" })
+                format!(
+                    "shell {}{}",
+                    cmd,
+                    if *reversible {
+                        " [rev]"
+                    } else {
+                        " [DESTRUCTIVA]"
+                    }
+                )
             }
             Action::File { path, .. } => format!("file {}", path),
             Action::Notice { text } => format!("notice: {}", text),
@@ -744,7 +754,12 @@ fn charge_limit_cmd(limit: u8) -> String {
 }
 
 /// Devuelve el JSON de la política efectiva (sin marca de tiempo: `plan` es puro).
-fn policy_json(r: &Resolved, profile: &PowerProfile, snap: &BatterySnapshot, charging: bool) -> String {
+fn policy_json(
+    r: &Resolved,
+    profile: &PowerProfile,
+    snap: &BatterySnapshot,
+    charging: bool,
+) -> String {
     let v = json!({
         "profile": profile.name,
         "resolved": {
@@ -819,7 +834,8 @@ pub fn plan(profile: &PowerProfile, snap: &BatterySnapshot, charging: bool) -> V
             cmd: format!(
                 "for p in $(cat {}/standby_targets.txt 2>/dev/null); do \
                  am set-standby-bucket \"$p\" {} 2>/dev/null; done",
-                state_dir(), r.bucket
+                state_dir(),
+                r.bucket
             ),
             reversible: true,
         });
@@ -939,7 +955,10 @@ pub fn apply_with(actions: &[Action], ex: &mut dyn Executor, confirm: bool) -> V
             },
             Action::Shell { cmd, reversible } => {
                 if !*reversible && !confirm {
-                    (false, "omitida: acción destructiva, exige confirm=true".to_string())
+                    (
+                        false,
+                        "omitida: acción destructiva, exige confirm=true".to_string(),
+                    )
                 } else {
                     match ex.run(cmd) {
                         Ok(o) => (true, o),
@@ -1143,8 +1162,7 @@ fn parse_alarms(text: &str) -> Vec<String> {
             let tok = tok.trim_end_matches(',');
             let tok = match tok.split_once(':') {
                 Some((head, rest))
-                    if !head.is_empty()
-                        && head.chars().all(|c| c.is_ascii_alphanumeric()) =>
+                    if !head.is_empty() && head.chars().all(|c| c.is_ascii_alphanumeric()) =>
                 {
                     rest
                 }
@@ -1243,7 +1261,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let p = std::env::temp_dir().join(format!("md-batt-{}-{}-{}", tag, std::process::id(), nanos));
+        let p =
+            std::env::temp_dir().join(format!("md-batt-{}-{}-{}", tag, std::process::id(), nanos));
         fs::create_dir_all(&p).unwrap();
         p
     }
@@ -1357,7 +1376,11 @@ mod tests {
     #[test]
     fn la_salud_de_la_celda_es_el_ratio_real() {
         let s = snapshot("Charging", "450000", "31.5");
-        assert!((health_pct(&s) - 88.0).abs() < 0.01, "salud = {}", health_pct(&s));
+        assert!(
+            (health_pct(&s) - 88.0).abs() < 0.01,
+            "salud = {}",
+            health_pct(&s)
+        );
         // Sin charge_full_design no se puede afirmar nada.
         let mut roto = s.clone();
         roto.charge_full_design = 0;
@@ -1466,8 +1489,14 @@ mod tests {
         let p = profile("gms_doze").unwrap();
         let s = snapshot("Discharging", "-450000", "31.5");
         let acts = plan(&p, &s, false);
-        assert!(has_shell(&acts, "dumpsys deviceidle whitelist -com.google.android.gms"));
-        assert!(has_shell(&acts, "am set-standby-bucket com.google.android.gms rare"));
+        assert!(has_shell(
+            &acts,
+            "dumpsys deviceidle whitelist -com.google.android.gms"
+        ));
+        assert!(has_shell(
+            &acts,
+            "am set-standby-bucket com.google.android.gms rare"
+        ));
     }
 
     #[test]
@@ -1836,9 +1865,39 @@ impl PolicyClass {
 /// 3. `Conserve` si la batería baja del 35 % sin cargador, o si la RAM
 ///    disponible cae por debajo del suelo.
 /// 4. `Normal` en caso contrario.
+/// ¿Está el móvil en modo de AHORRO (batería baja o temperatura alta)?
+///
+/// MEDIDO (2026-11-25, móvil): la batería bajó al 14 % con el móvil
+/// descargando mientras el daemon hacía un ciclo de instrumentación cada
+/// 60 s.  El trabajo discrecional es lo primero que debe caer, así que el
+/// daemon consulta esto para alargar sus ciclos.
+///
+/// Lectura mínima: sysfs (2 ficheros) — sin `dumpsys`, sin root.
+pub fn modo_ahorro_activo() -> bool {
+    let pct = std::fs::read_to_string("/sys/class/power_supply/battery/capacity")
+        .ok()
+        .and_then(|s| s.trim().parse::<u8>().ok());
+    let Some(pct) = pct else {
+        return false;
+    };
+    let cargando = std::fs::read_to_string("/sys/class/power_supply/battery/status")
+        .ok()
+        .map(|s| {
+            let s = s.trim().to_ascii_lowercase();
+            s.contains("charging") || s.contains("full")
+        })
+        .unwrap_or(false);
+    // Baja y sin cargador => ahorro.  Con cargador no se recorta: el
+    // trabajo discrecional se paga con la carga.
+    pct < 20 && !cargando
+}
+
 pub fn classify(st: &DeviceState, th: &Thresholds) -> PolicyClass {
     let pct = st.battery_pct.unwrap_or(100);
-    let temp = st.max_temp_c.unwrap_or(0.0).max(st.battery_temp_c.unwrap_or(0.0));
+    let temp = st
+        .max_temp_c
+        .unwrap_or(0.0)
+        .max(st.battery_temp_c.unwrap_or(0.0));
 
     if pct < th.seal_below_pct {
         return PolicyClass::Seal;
@@ -1923,7 +1982,10 @@ pub fn device_plan(st: &DeviceState, th: &Thresholds) -> Vec<DeviceAction> {
             out.push(DeviceAction::new(
                 "appops_bg",
                 &format!("cmd appops set {} RUN_ANY_IN_BACKGROUND ignore", pkg),
-                &format!("cmd appops get {} RUN_ANY_IN_BACKGROUND 2>/dev/null | tail -1", pkg),
+                &format!(
+                    "cmd appops get {} RUN_ANY_IN_BACKGROUND 2>/dev/null | tail -1",
+                    pkg
+                ),
                 true,
             ));
         }
@@ -1993,8 +2055,7 @@ pub fn read_device_state(root: &str) -> DeviceState {
     let mut st = DeviceState::default();
     let bat = format!("{}/sys/class/power_supply/battery", root);
 
-    if let Some(v) =
-        read_trim_file(&format!("{}/capacity", bat)).and_then(|s| s.parse::<u8>().ok())
+    if let Some(v) = read_trim_file(&format!("{}/capacity", bat)).and_then(|s| s.parse::<u8>().ok())
     {
         st.battery_pct = Some(v);
     }
@@ -2075,7 +2136,12 @@ pub fn parse_curl_probe(out: &str) -> Option<(u16, u64)> {
 }
 
 /// Evalúa una sonda: sólo es sana si contesta 200 Y rápido Y con cuerpo.
-pub fn evaluate_probe(code: u16, elapsed_ms: u64, timeout_ms: u64, body_len: usize) -> ProbeOutcome {
+pub fn evaluate_probe(
+    code: u16,
+    elapsed_ms: u64,
+    timeout_ms: u64,
+    body_len: usize,
+) -> ProbeOutcome {
     if code == 0 {
         return ProbeOutcome {
             code,
@@ -2190,7 +2256,11 @@ pub fn prune_candidates(names: &[String], keep: usize) -> Vec<String> {
         .collect();
     stamped.sort_by(|a, b| a.1.cmp(&b.1));
     let excess = stamped.len().saturating_sub(keep);
-    stamped.into_iter().take(excess).map(|(n, _)| n.clone()).collect()
+    stamped
+        .into_iter()
+        .take(excess)
+        .map(|(n, _)| n.clone())
+        .collect()
 }
 
 /// Suma los tamaños (kB) de las entradas que se van a borrar: el número que
@@ -2232,8 +2302,14 @@ mod device_tests {
     #[test]
     fn bateria_baja_sella_el_dispositivo() {
         let t = Thresholds::default();
-        assert_eq!(classify(&st(19, false, 30.0, 3_000_000), &t), PolicyClass::Seal);
-        assert_eq!(classify(&st(19, true, 30.0, 3_000_000), &t), PolicyClass::Seal);
+        assert_eq!(
+            classify(&st(19, false, 30.0, 3_000_000), &t),
+            PolicyClass::Seal
+        );
+        assert_eq!(
+            classify(&st(19, true, 30.0, 3_000_000), &t),
+            PolicyClass::Seal
+        );
         // al 20 % exacto ya NO se sella; sin cargador es "conserve"
         assert_eq!(
             classify(&st(20, false, 30.0, 3_000_000), &t),
@@ -2281,7 +2357,9 @@ mod device_tests {
         let t = Thresholds::default();
         let plan = device_plan(&st(30, false, 25.0, 3_000_000), &t);
         let cmds: Vec<&str> = plan.iter().map(|a| a.cmd.as_str()).collect();
-        assert!(cmds.iter().any(|c| c.contains("RUN_ANY_IN_BACKGROUND ignore")));
+        assert!(cmds
+            .iter()
+            .any(|c| c.contains("RUN_ANY_IN_BACKGROUND ignore")));
         assert!(cmds.iter().any(|c| c.contains("screen_brightness")));
         assert!(!cmds.iter().any(|c| c.contains("com.termux")));
         assert!(!cmds.iter().any(|c| c.contains("com.agy")));
