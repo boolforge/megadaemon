@@ -97,6 +97,17 @@ fn modo_de(ruta: &Path) -> Option<u32> {
 /// La primera es la canónica; las demás son las alternativas que el payload
 /// usa cuando el proceso de la app no puede escribir en `/data/local/tmp`.
 pub fn candidatas_ndjson() -> Vec<String> {
+    candidatas_ndjson_para("com.agy", "")
+}
+
+/// Como [`candidatas_ndjson`], pero para un paquete y un UID concretos.
+///
+/// MEDIDO (2026-11-26, móvil, inyección REAL en el LS de Antigravity): el
+/// payload escribe en `{cache de la app}/megadaemon-hooks-{uid}.ndjson` — el
+/// `tmp_dir` que ve frida-gum **dentro** del proceso, con el UID en el
+/// nombre.  Sin esa variante en la lista, el informe de `estado` decía
+/// "no existe" con el fichero delante.
+pub fn candidatas_ndjson_para(paquete: &str, uid: &str) -> Vec<String> {
     let mut v: Vec<String> = vec![RUTA_NDJSON.to_string()];
     let dir = Path::new("/data/local/tmp/megadaemon/state");
     if let Ok(entradas) = std::fs::read_dir(dir) {
@@ -109,15 +120,21 @@ pub fn candidatas_ndjson() -> Vec<String> {
         extras.sort();
         v.extend(extras);
     }
-    for base in ["/data/user/0/com.agy/cache", "/data/data/com.agy/cache"] {
+    for base in [
+        format!("/data/user/0/{paquete}/cache"),
+        format!("/data/data/{paquete}/cache"),
+    ] {
         v.push(format!("{base}/megadaemon-hooks.ndjson"));
+        if !uid.is_empty() {
+            v.push(format!("{base}/megadaemon-hooks-{uid}.ndjson"));
+        }
     }
     v
 }
 
 /// El NDJSON que existe ahora mismo (si hay alguno).
-fn ndjson_existente() -> Option<(String, std::fs::Metadata)> {
-    for r in candidatas_ndjson() {
+fn ndjson_existente(paquete: &str, uid: &str) -> Option<(String, std::fs::Metadata)> {
+    for r in candidatas_ndjson_para(paquete, uid) {
         if let Ok(m) = std::fs::metadata(&r) {
             return Some((r, m));
         }
@@ -250,7 +267,8 @@ fn estado_real(args: &Value) -> Value {
     let meta = std::fs::metadata(payload).ok();
     let existe = meta.is_some();
     let pids = pids_objetivo(&paquete);
-    let ndjson = ndjson_existente();
+    let uid = crate::hooks_bridge::uid_de(&paquete);
+    let ndjson = ndjson_existente(&paquete, &uid);
     let cargadores = detectar_cargadores();
     json!({
         "ok": true,
@@ -273,7 +291,7 @@ fn estado_real(args: &Value) -> Value {
             "existe": ndjson.is_some(),
             "ruta": ndjson.as_ref().map(|(r, _)| r.clone()),
             "bytes": ndjson.as_ref().map(|(_, m)| m.len()).unwrap_or(0),
-            "rutas_candidatas": candidatas_ndjson(),
+            "rutas_candidatas": candidatas_ndjson_para(&paquete, &uid),
         },
         "cargadores": {
             "frida_server": cargadores.frida_server,
@@ -657,7 +675,14 @@ pub fn leer(args: &Value) -> Value {
 
     let candidatas = match &ruta {
         Some(r) => vec![r.clone()],
-        None => candidatas_ndjson(),
+        // MEDIDO (2026-11-26): el payload escribe en
+        // `{cache de la app}/megadaemon-hooks-{uid}.ndjson` ⇒ sin el UID la
+        // lista no lo cubre y el lector decía "no hay NDJSON".
+        None => {
+            let paquete = paquete_de(args);
+            let uid = crate::hooks_bridge::uid_de(&paquete);
+            candidatas_ndjson_para(&paquete, &uid)
+        }
     };
     for c in &candidatas {
         let p = Path::new(c);
@@ -771,5 +796,15 @@ mod tests {
     fn las_candidatas_del_ndjson_empezan_por_la_canonica() {
         let c = candidatas_ndjson();
         assert_eq!(c[0], RUTA_NDJSON);
+    }
+
+    #[test]
+    fn las_candidatas_con_uid_cubren_el_fichero_real() {
+        // MEDIDO (2026-11-26, móvil): `/data/user/0/com.agy/cache/megadaemon-hooks-11573.ndjson`.
+        let c = candidatas_ndjson_para("com.agy", "11573");
+        assert!(c.iter().any(|x| x
+            == "/data/user/0/com.agy/cache/megadaemon-hooks-11573.ndjson"));
+        assert!(c.iter().any(|x| x
+            == "/data/data/com.agy/cache/megadaemon-hooks-11573.ndjson"));
     }
 }

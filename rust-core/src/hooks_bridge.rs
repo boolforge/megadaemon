@@ -547,18 +547,20 @@ fn payload_para_inyectar(pkg: &str, variante: VariantePayload) -> Result<String,
     Ok(privado)
 }
 
-/// `leer`: las últimas líneas del NDJSON de hooks.
-fn leer(paquete: &str, lineas: usize) -> Value {
-    let pkg = descubrir_paquete(paquete);
-    // MEDIDO (2026-11-26, móvil): el PAYLOAD escribe el NDJSON en una de sus
-    // candidatas (`/data/local/tmp/megadaemon/state/hooks.ndjson`,
-    // `…/hooks-{uid}.ndjson`, `/data/user/0/<pkg>/cache/megadaemon-hooks.ndjson`…)
-    // y el LECTOR miraba otras tres ⇒ no se solapaban NINGUNA ⇒ aunque la
-    // inyección funcionase, `leer` decía "sin_ndjson".  Ahora se buscan las
-    // MISMAS candidatas que usa el payload (`hooks_payload::candidatas_ndjson`
-    // es la lista de referencia).
-    let uid = uid_de(&pkg);
-    let candidatos = vec![
+/// Candidatas del NDJSON de hooks: las del payload + las medidas en vivo.
+///
+/// MEDIDO (2026-11-26, móvil, inyección REAL en el LS de Antigravity): el
+/// payload acabó escribiendo en
+/// `/data/user/0/com.agy/cache/megadaemon-hooks-11573.ndjson` — el `tmp_dir`
+/// que ve frida-gum **dentro** del proceso de la app, con el UID en el
+/// nombre.  Las candidatas del LECTOR no incluían ese nombre ⇒, con el
+/// payload volcando datos en vivo, `leer` respondía "sin_ndjson".
+///
+/// La lista replica `hooks_payload::candidatas_ndjson` (la del payload) más
+/// las variantes con UID que el payload usa cuando el proceso corre como la
+/// app.
+pub fn candidatas_hooks(pkg: &str, uid: &str) -> Vec<String> {
+    vec![
         ndjson_remoto(),
         "/data/local/tmp/megadaemon/state/hooks.ndjson".to_string(),
         format!("/data/local/tmp/megadaemon/state/hooks-{uid}.ndjson"),
@@ -567,7 +569,19 @@ fn leer(paquete: &str, lineas: usize) -> Value {
         format!("/data/data/{pkg}/cache/megadaemon-hooks.ndjson"),
         format!("/data/data/{pkg}/files/megadaemon/hooks.ndjson"),
         format!("/data/user/0/{pkg}/files/megadaemon/hooks.ndjson"),
-    ];
+        // MEDIDO (2026-11-26): el `tmp_dir` del proceso instrumentado, con UID.
+        format!("/data/user/0/{pkg}/cache/megadaemon-hooks-{uid}.ndjson"),
+        format!("/data/data/{pkg}/cache/megadaemon-hooks-{uid}.ndjson"),
+        format!("/data/local/tmp/megadaemon/megadaemon-hooks-{uid}.ndjson"),
+        format!("/data/local/tmp/megadaemon-hooks-{uid}.ndjson"),
+    ]
+}
+
+/// `leer`: las últimas líneas del NDJSON de hooks.
+fn leer(paquete: &str, lineas: usize) -> Value {
+    let pkg = descubrir_paquete(paquete);
+    let uid = uid_de(&pkg);
+    let candidatos = candidatas_hooks(&pkg, &uid);
     let mut lista = String::new();
     let mut encontrado: Option<String> = None;
     for c in &candidatos {
@@ -584,6 +598,43 @@ fn leer(paquete: &str, lineas: usize) -> Value {
             encontrado = Some(c.clone());
             lista.push_str(&r.stdout);
             break;
+        }
+    }
+    // Red de seguridad: si ninguna candidata exacta existe, se BARREN los
+    // directorios plausibles buscando cualquier `*hooks*.ndjson`.  MEDIDO
+    // (2026-11-26): el nombre que elige el payload depende del `tmp_dir` que
+    // ve frida-gum dentro del proceso ⇒ no se puede adivinar a priori.
+    if encontrado.is_none() {
+        let barrido = format!(
+            "for d in {dirs}; do ls -1 \"$d\" 2>/dev/null | grep -i 'hooks.*\\.ndjson' | while read -r n; do echo \"$d/$n\"; done; done",
+            dirs = [
+                format!("/data/user/0/{}/cache", pkg),
+                format!("/data/data/{}/cache", pkg),
+                format!("/data/user/0/{}/files/megadaemon", pkg),
+                "/data/local/tmp/megadaemon/state".to_string(),
+                "/data/local/tmp".to_string(),
+                crate::state_dir::state_dir(),
+            ]
+            .iter()
+            .map(|d| sh_quote(d))
+            .collect::<Vec<_>>()
+            .join(" ")
+        );
+        let r = root_exec(&barrido, 30_000, 64 * 1024);
+        for ruta in r.stdout.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
+            if candidatos.iter().any(|c| c == ruta) {
+                continue;
+            }
+            let t = root_exec(
+                &format!("if [ -f {f} ]; then tail -n {n} {f}; fi", f = sh_quote(ruta), n = lineas),
+                30_000,
+                512 * 1024,
+            );
+            if !t.stdout.trim().is_empty() {
+                encontrado = Some(ruta.to_string());
+                lista.push_str(&t.stdout);
+                break;
+            }
         }
     }
     match encontrado {
@@ -830,7 +881,7 @@ fn set_modo(ruta: &std::path::Path, modo: u32) {
 }
 
 /// UID del paquete (para que el fichero quede legible por la app).
-fn uid_de(paquete: &str) -> String {
+pub(crate) fn uid_de(paquete: &str) -> String {
     let r = root_exec(
         &format!("stat -c %u {p} 2>/dev/null", p = sh_quote(&format!("/data/data/{}", paquete))),
         20_000,
@@ -890,5 +941,31 @@ mod pruebas {
         let r = dispatch(&json!({}));
         assert_eq!(r["ok"], json!(false));
         assert_eq!(r["error"], "falta_action");
+    }
+
+    #[test]
+    fn las_candidatas_incluyen_el_nombre_real_del_payload() {
+        // MEDIDO (2026-11-26, móvil, inyección REAL): el payload escribió en
+        // `/data/user/0/com.agy/cache/megadaemon-hooks-11573.ndjson`.
+        let c = candidatas_hooks("com.agy", "11573");
+        let real = "/data/user/0/com.agy/cache/megadaemon-hooks-11573.ndjson";
+        assert!(
+            c.iter().any(|x| x == real),
+            "las candidatas no cubren {}: {:?}",
+            real,
+            c
+        );
+    }
+
+    #[test]
+    fn las_candidatas_cubren_el_doble_de_cache_con_y_sin_uid() {
+        let c = candidatas_hooks("com.agy", "11573");
+        for base in ["/data/user/0/com.agy/cache", "/data/data/com.agy/cache"] {
+            assert!(c.iter().any(|x| x == &format!("{base}/megadaemon-hooks.ndjson")));
+            assert!(
+                c.iter()
+                    .any(|x| x == &format!("{base}/megadaemon-hooks-11573.ndjson"))
+            );
+        }
     }
 }
