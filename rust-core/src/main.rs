@@ -648,6 +648,33 @@ fn main() {
             println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
         }
 
+        // v17 — RE profunda de APK (xrefs, rutas REST, pins y descifradores).
+        //   megadaemon-core redeep <apk> [analizar|rutas|pins|descifradores|xrefs] [buscar]
+        "redeep" => {
+            let sub = args.get(2).cloned().unwrap_or_else(|| "analizar".to_string());
+            let apk = args.get(3).cloned().unwrap_or_default();
+            let buscar = args.get(4).cloned().unwrap_or_default();
+            if apk.is_empty() {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": false,
+                        "error": "falta la ruta del APK (megadaemon-core redeep <apk> [accion])"
+                    }))
+                    .unwrap_or_default()
+                );
+                std::process::exit(2);
+            }
+            let out = megadaemon_core::re_deep::dispatch(&serde_json::json!({
+                "accion": sub,
+                "ruta": apk,
+                "buscar": buscar,
+            }));
+            println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+            let ok = out["ok"].as_bool().unwrap_or(false);
+            std::process::exit(if ok { 0 } else { 1 });
+        }
+
         // v16 — Capa de automatización (CLI de los 5 módulos nuevos).
         //   megadaemon-core automation <list|add|remove|enable|disable|poll|events|fire|journal>
         //   megadaemon-core cron       <list|add|remove|tick|plan|resume>

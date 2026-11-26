@@ -59,6 +59,7 @@ pub mod state_dir;
 pub mod telemetria;
 pub mod bus_ejecutor;
 pub mod gasto_datos;
+pub mod re_deep;
 pub mod backup_engine;
 pub mod backup_formats;
 pub mod backup_full;

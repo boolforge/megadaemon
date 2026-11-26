@@ -557,3 +557,33 @@ secreto y poder fusionarlas a GitHub.
   (`audit_scout_ui`, `audit_scout_voice`, `audit_adversarial_v15`) son **preexistentes y
   ajenos** a estos cambios.
   Commits: `54841fb`, `97e3156`, `1ce4477`, `7595a18`, `23d73d4`.
+
+- 2026-11-26 · agente principal · **módulo `re_deep` (RE profunda de APK) integrado y
+  cableado**: `rust-core/src/re_deep.rs` (nuevo, ~1.900 líneas) da lo que
+  `dex_decompile`/`apk_inventory` **no** cubren: xrefs (string → clase + método),
+  rutas REST **relativas** con su familia de API, entropía de los assets (payload
+  cifrado), pin de certificado frente a los certificados de firma (⇒ si el pin no es de
+  firma, es **del servidor**), descifradores de strings **discriminados** (un candidato con
+  `javax/crypto/*` es un SDK de pago 3DS2, no un ofuscador) y ejecución simbólica acotada.
+  Cableado: `pub mod re_deep;` en `lib.rs`, subcomando `megadaemon-core redeep <apk>
+  [analizar|rutas|pins|descifradores|xrefs]` y tool MCP `re_profunda`.
+  **Tres bugs reales** los encontró la integración, no el autor: (1) `substring` no
+  compilaba (`s.get(rango)` devuelve `Option<&[char]>`); (2) los **payloads de Dalvik
+  nunca se saltaban** en tres barreadores (el ident se leía `unidad >> 8` ⇒ 0x01/0x02/0x03,
+  nunca 0x0100/0x0200/0x0300) ⇒ el barrido continuaba **dentro de los datos** e inventaba
+  xrefs y llamadas fantasma; ahora usa `unidad & 0xff00`, igual que el parser canónico
+  `dex_decompile::disassemble_code`; (3) **el inventario de rutas salía VACÍO en la app
+  real**: `classify_rest_path` rechazaba las mayúsculas en cualquier segmento, y todas
+  las rutas medidas de esta app llevan parámetros camelCase (`{subscriptionId}`,
+  `{accountId}`, `{productId}`) ⇒ no encontraba ninguna ruta y **no daba error**.
+  **MEDIDO sobre el APK real** (pool de strings de los 5 DEX, 169.488 strings únicos):
+  el clasificador viejo encuentra **16** rutas y el nuevo **133** (superconjunto estricto:
+  0 perdidas, 117 ganadas), y las ganadas son justo las del control de gasto
+  (`user-tariffs`, `recharges`, `recurring`, `balances`, `events`, `penalties`).
+  **24 tests puros** (sin APK, sin red, sin móvil), incluidos los vectores SHA-256 de
+  NIST, la regresión de los payloads y las 8 rutas reales medidas de la app.
+  Además, **fix de la tool MCP `telemetria`**: su esquema declara la clave `accion` pero
+  el dispatch leía `action` ⇒ `accion="publicar"` devolvía el estado **sin publicar
+  nada**; ahora se aceptan las dos claves (con `accion` mandando).
+  Los APK y sus volcados **no** van al repo (es público): siguen fuera, en
+  `/workspace/apk_work/jazztel/`.

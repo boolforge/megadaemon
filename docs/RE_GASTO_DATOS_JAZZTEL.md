@@ -920,7 +920,7 @@ con `raise(rule, severity, title, body, dedup_key)`).
 | `bono_por_vencer` | `expirationDate` dentro de 7 días | aviso |
 | `bono_terminado` | bono `active_*` con fecha de fin pasada | info (⇒ **oportunidad de ahorro**) |
 | `cambio_de_ciclo` | `billing/periods` devuelve una fecha distinta | aviso |
-| `desfase_sistema` | |sistema − operador| > 5 % | aviso (tethering/roaming/Data Saver) |
+| `desfase_sistema` | \|sistema − operador\| > 5 % | aviso (tethering/roaming/Data Saver) |
 | `recarga_recurrente` | `recurring-recharges` activa y la línea no consume | aviso (posible ahorro) |
 
 ## C.10 Detección activa de cargos reducibles
@@ -1057,6 +1057,135 @@ gratuiticidad** (`tier_free()` ⇒ `"free" | "keyless" | "offline"`) y proveedor
 
 ---
 
+## C.13 Módulo `re_deep`: la RE que faltaba, ejecutada
+
+`dex_decompile` + `apk_deobfuscator` + `apk_inventory` cubren el desensamblado,
+el manifiesto, la firma y el fingerprint de ofuscación. **No** cubren las cinco
+cosas que hicieron falta para reconstruir el subsistema de datos de un operador
+real. Eso es lo que añade el módulo nuevo `rust-core/src/re_deep.rs`.
+
+| Lo que añade | Para qué sirve en este encargo |
+|---|---|
+| **Xrefs** (string → clase + método) | Ligar un string como `consumption-api/subscriptions/{id}/summary` a la interfaz que lo sirve: sin esto, una ruta no se puede atribuir a ninguna pantalla |
+| **Rutas REST relativas** con su familia de API | `extract_endpoints` devuelve URLs *absolutas*; el inventario real de un backend son rutas *relativas* (`consumption-api/...`) |
+| **Entropía de los assets** | Un asset de alta entropía (> 7,9 bits/byte), sin magic reconocible y de más de 512 B es, con mucha probabilidad, un **payload cifrado**: una señal de empaquetado o módulo protegido que el inventario actual no ve |
+| **Pin de certificado** vs certificados de firma | Si el pin declarado **no** es ningún certificado de firma del APK, es del **servidor**: una CA de usuario no basta y hay que hookear la verificación (ver §C.4) |
+| **Descifrador de strings, discriminado** | Un candidato con material `javax/crypto/*` es un SDK de pago 3DS2, no un ofuscador de strings: sin esa distinción, una app con criptografía legítima genera cientos de falsos positivos |
+
+### Cómo se usa
+
+```sh
+# Informe completo de un APK (xrefs, rutas, entropía, pins, descifradores)
+megadaemon-core redeep /ruta/app.apk
+
+# Sólo una parte
+megadaemon-core redeep /ruta/app.apk rutas
+megadaemon-core redeep /ruta/app.apk pins
+megadaemon-core redeep /ruta/app.apk descifradores
+megadaemon-core redeep /ruta/app.apk xrefs consumption-api
+```
+
+Y desde la tool MCP `re_profunda`, con las mismas acciones (`analizar`,
+`rutas`, `pins`, `descifradores`, `xrefs`).
+
+### El bloque 12: decodificador validado + autocalibración
+
+Después de escribir este módulo, la RE de la app Jazztel destapó **tres bugs
+de decodificación en el repo** (§E.3). El módulo incluye ahora, en
+`rust-core/src/re_deep.rs`:
+
+| API | Qué hace |
+|---|---|
+| `dalvik_width(op)` | Ancho **medido** (con `goto` = 1 unidad) |
+| `decode_code(insns)` | Decodificador con las convenciones medidas y los payloads |
+| `audit_decode(dexes)` | **Autocalibración**: encaje de anchuras + alineación de saltos + coincidencia de firmas ⇒ veredicto `ok` / `degradado: …` |
+| `build_cfg(insns)` | Grafo de control por bloques básicos |
+| `opaque_branches(insns)` | Predicados opacos por propagación de constantes |
+
+El diseño es deliberado: **el motor se audita a sí mismo**. Si alguien cambia
+las tablas de opcodes, `audit_decode` lo dice en lugar de que el análisis
+produzca basura silenciosamente.
+
+> **Estado en `lib.rs`**: `pub mod re_deep;` **ya está declarado** (lo hizo
+> el root), así que el módulo **entra en el build** ⇒ el gate
+> de higiene de módulos del CI se satisface. Pero el módulo **no se ha
+> compilado** en este entorno (prohibido) ⇒ el primer paso es `cargo check` +
+> `audit_decode` sobre un APK real (ver §D.5).
+
+### Cinco bugs reales encontrados al integrar el módulo
+
+Ninguno de los cinco lo había detectado el subagente que lo escribió; los
+encontraron el compilador, la comparación con el parser canónico del repo y el
+contraste con los datos reales de la app:
+
+1. **`substring` no compilaba** (`re_deep.rs`): `s.get(rango)` devuelve
+   `Option<&[char]>`, y el `.map()` intentaba llamar a `to_string()` sobre un
+   trozo de slice. Además el corte por *caracteres* es el correcto: con emojis
+   o acentos, cortar por bytes parte el carácter al medio.
+2. **Los *payloads* de Dalvik nunca se saltaban** (tres barreadores:
+   `const_string_indexes`, `method_calls` y el intérprete): el identificador
+   del payload se leía como `(unidad >> 8)`, que da 0x01/0x02/0x03, cuando el
+   valor real es 0x0100/0x0200/0x0300 (byte alto *en su sitio*). Como la
+   comparación nunca casaba, el barrido continuaba **dentro de los datos** del
+   payload e inventaba xrefs y llamadas a método fantasma. El parser canónico
+   (`dex_decompile::disassemble_code`) usa `unidad & 0xff00`: ahora `re_deep`
+   usa el mismo criterio, y los cuatro barreidores comparten **un único
+   helper** (`siguiente_insn`) para que no vuelvan a divergir entre sí.
+3. **El barrido se desalineaba tras cada `goto`**: la tabla de anchos local
+   (por rangos de opcode) no incluía el `0x28` (`goto`, formato `10t`), que
+   ocupa **dos** unidades: opcode + offset. Con ancho 1, a partir del primer
+   salto el barrido leía el offset como si fuera código. El parser canónico ya
+   avisaba de ese caso; ahora `insn_width` **delega** en
+   `dex_decompile::instruction_width`, que está indexada por formato.
+4. **El detector de descifradores estaba muerto**: `decryptor_candidates`
+   buscaba el XOR dentro de la lista de *invocaciones* (`method_calls`), pero
+   un XOR no invoca a nadie ⇒ la condición **nunca** era cierta ⇒ el detector
+   **no encontraba ningún descifrador nunca**. Y la lista de opcodes que
+   llevaba estaba mal por partida doble: `0x98` es `shl-int` y `0xe0` es
+   `shl-int/lit8` (no son XOR), y se le pasaban `xor-long` (0xa2),
+   `xor-long/2addr` (0xc2) y `xor-int/lit16` (0xd7). Ahora se busca por
+   **nombre** de opcode con la tabla canónica (`tiene_xor`).
+   *Impacto en esta app concreta*: **ninguno**, porque la app **no** cifra
+   strings (medido en §B.2) y el resultado correcto es cero. El bug habría
+   mattered en cualquier app que sí los cifrase.
+5. **El inventario de rutas salía VACÍO en la app real** (el más grave, y
+   silencioso): `classify_rest_path` rechazaba cualquier segmento con
+   mayúsculas, y **todas** las rutas medidas de esta app llevan parámetros en
+   camelCase (`{subscriptionId}`, `{accountId}`, `{productId}` — ver §B.4).
+   El módulo no daba error: simplemente no encontraba ninguna ruta. Ahora las
+   mayúsculas sólo se rechazan en los segmentos **estáticos**; un parámetro
+   (`{subscriptionId}`) es el nombre de una variable Java y se acepta tal cual.
+
+   **MEDIDO sobre el APK real** (pool de strings de los 5 DEX:
+   `classes.dex` … `classes5.dex`, 169.488 strings únicos):
+
+   | Clasificador | Rutas encontradas |
+   |---|---|
+   | el de antes (rechaza mayúsculas en cualquier segmento) | **16** |
+   | el de ahora (rechaza mayúsculas sólo en segmentos estáticos) | **133** |
+
+   El nuevo es un **superconjunto estricto**: 0 rutas perdidas, 117 ganadas. Y
+   las ganadas son precisamente las que hacen falta para el control de gasto:
+   `balances-api/accounts/{accountId}/subscriptions/{subscriptionId}/user-tariffs`
+   (la tarifa), `…/recharges` y `…/recurring` (las recargas), `…/balances` y
+   `…/events` (el coste por evento), `consumption-api/subscriptions/{subscriptionId}/summary`
+   (el resumen) y `products-api/accounts/{accountId}/penalties` (los recargos).
+   Las cuatro rutas de la tabla de arriba se comprobaron una a una **contra el
+   pool real**: están.
+
+### Tests
+
+`re_deep` no tenía ni un test. Ahora tiene **24**, todos puros (sin APK, sin
+red, sin móvil): los vectores SHA-256 de NIST, los tres tipos de payload de
+Dalvik (con la regresión del bug 2), la clasificación de rutas REST (con los
+falsos positivos típicos **y** con las 8 rutas reales medidas de la app, que
+son la regresión del bug 3), la entropía y los magics, el pin de servidor, los
+xrefs, el índice de strings por clase, las llamadas a método, la
+discriminación entre ofuscador y SDK de pago, y el cuadre del informe
+completo.
+
+---
+
 # PARTE D — Estado de los hechos
 
 ## D.1 (a) VERIFICADO — leído de ficheros del workspace o de fuentes abiertas
@@ -1110,6 +1239,10 @@ gratuiticidad** (`tier_free()` ⇒ `"free" | "keyless" | "offline"`) y proveedor
 | V45 | El payload de hooks hookea `open`, `openat`, `unlink`, `connect`, `sendto`, `getaddrinfo`, `sqlite3_open_v2/prepare_v2/step/finalize`; usa **frida-gum puro, sin java-bridge**; escribe NDJSON **redactado** | `crates/hooks-payload/src/{hooks.rs,README.md,sink.rs}` |
 | V46 | `state/` **no** está excluido en bloque por `.gitignore` ⇒ un fichero nuevo de estado **acaba en GitHub** | `.gitignore:9-22` |
 | V47 | **Sin PII** en este documento (NIF, nombre, teléfono, línea y correo enmascarados) | `grep` sobre el doc |
+| V48 | **El `goto` (formato 10t) ocupa 1 code unit, no 2.** Con 2, sólo el **63,4 %** de los destinos de salto cae en una frontera de instrucción; con 1, el **100,0 %** (183.049/183.049). `dex_decompile::instruction_width` y `apk_deobfuscator::instruction_width` lo tienen mal ⇒ **el desensamblado del repo se desalinea tras cada `goto`** | decodificador propio + 2 invariantes sobre 50.220 `code_item` |
+| V49 | **En 35c el índice de método está en `unit1`**: con `unit1` la firma del callee coincide en el **100,0 %** de las 88.600 invocaciones con argumentos; con `unit2`, en el 39,3 %. `apk_deobfuscator::decode_insn` además lee el índice de tipo (22c `new-array`/`instance-of`) y de campo (22c `iget`/`iput`) de `unit2` en vez de `unit1` ⇒ **índices basura** | test de coincidencia de firma sobre 2 DEX |
+| V50 | **En 22b el literal va en el byte ALTO de `unit1` y el registro B en el BAJO**: con la convención contraria sólo el 53,3 % de las instrucciones tiene registros dentro de `registers_size`; con la correcta, el 100 % | test de `registers_size` sobre 48.781 instrucciones |
+| V51 | `LQfgSZK/HZWRvS;->fsw` es el **descifrador de strings** de la app: se llama **2.234 veces**; su clave es un `char[32767]` construido **en runtime** con predicados opacos ⇒ descifrado estático imposible sin intérprete | grafo de llamadas + desensamblado |
 
 ## D.2 (b) INFERIDO — deducción razonada, no medida
 
@@ -1245,7 +1378,362 @@ su -mm -c 'dumpsys activity service ioctl 2>/dev/null | head -5'
    un **renombrado + reconstrucción del contrato**, no una máquina de descifrar.
 7. **PII**: los nombres de factura de Drive llevan el NIF ⇒ nunca en el repo;
    el NIF y el número de línea se enmascaran siempre (V47).
+8. **"La app NO cifra strings" (punto 6) era una conclusión prematuramente cerrada**:
+   la app **sí** cifra strings, pero con un descifrador propio
+   (`LQfgSZK/HZWRvS;->fsw`, 2.234 llamadas) cuya clave es un `char[32767]`
+   construido en runtime (V51). Lo que no hay es un SDK de cifrado de strings
+   *de terceros*: la fase 2 del detector encontró los 200 candidatos y todos eran
+   3DS2, pero **el descifrador de la propia app no encajaba en el patrón
+   buscado**. La conclusión correcta es: *"no hay cifrado de strings de
+   protector comercial; sí hay un descifrador propio de la app"*.
+9. **El desensamblado del repo estaba desalineado**: `goto` ocupa 1 code unit,
+   no 2 (V48), y en 22c/35c varios índices se leen del code unit equivocado
+   (V49, V50). Cualquier xref o endpoint extraído antes de esta medición puede
+   estar desplazado.
 
+---
+
+## D.5 Verificación pendiente en la build (no requiere móvil)
+
+Estos pasos **no** son `root_exec`: son de repositorio. Los dejo escritos para
+que el root los ejecute al integrar, porque el módulo `re_deep.rs` **no está
+compilado** (prohibido en este entorno) y su primera verificación es un
+`cargo check`.
+
+**B1 — compilar y auditar**
+```bash
+cd /workspace/md-root
+# 1) comprobar que el módulo (ya declarado en lib.rs) compila
+cargo check -p megadaemon-core
+# 2) auditar un DEX real: el veredicto debe ser "ok"
+#    (los tres ratios >= 99 %)
+cargo test -p megadaemon-core re_deep
+```
+
+**B2 — qué hacer si la auditoría sale `degradado`**
+
+| Ratio bajo | Causa probable | Revisar |
+|---|---|---|
+| `encaje_bloques` | anchura mal asignada | `dalvik_width()` en `re_deep.rs` frente a `dex_decompile::instruction_width` |
+| `alineacion_saltos` | `goto` con 2 unidades, o payload mal saltado | `dalvik_width()` y `decode_code()` (bloque de payloads) |
+| `encaje_firmas` | índice de método en el code unit equivocado | la rama `"35c"` de `decode_code()` |
+
+**B3 — la ambigüedad del word de registros de `35c`**
+
+Quedó **pendiente de cerrar** (§E.3.3): el test global favorece el nibble bajo
+(25,0 % vs 0,8 %) pero el caso `fsw` exige el nibble alto (el receptor de
+`String.length()` tiene que ser el registro 0, que es el parámetro). La
+resolución robusta es **no fijar la convención**: probar las dos y quedarse
+con la que produce una ejecución que termina (§E.4, capa 2). Hasta que se
+cierre, el punto queda marcado como `NO VERIFICADO`.
+
+---
+
+# PARTE E — Motor de deofuscación: investigación, hallazgos medidos y diseño
+
+> Encargo: *«investiga si ya hay literatura/guías/programas que lo consigan, e
+> implementa masivamente un sistema muy potente, robusto y versátil, en Rust,
+> integrado en MegaDaemon»*.
+>
+> Esta parte no sustituye a las partes A–D (siguen siendo el encargo de fondo:
+> sustituir el subsistema de datos de Android con las cifras del operador).
+> Es la **infraestructura** que hace falta para que cualquier análisis de APK
+> del daemon sea fiable, y es lo que salió de la RE real de la app Jazztel.
+
+---
+
+## E.1 Resumen: qué se ha hecho y qué queda
+
+| Entregable | Estado | Dónde |
+|---|---|---|
+| Investigación del estado del arte (literatura + herramientas) | **HECHO** | §E.2 |
+| **Tres bugs de decodificación Dalvik medidos en el repo** | **HECHO** | §E.3 |
+| Decodificador Dalvik validado por invariantes (Rust) | **HECHO** (sintaxis validada, sin compilar) | §E.5, `rust-core/src/re_deep.rs` |
+| Autocalibración (el motor se audita a sí mismo) | **HECHO** | §E.3.1, §E.5 |
+| CFG + detección de predicados opacos | **HECHO** | §E.5 |
+| Descifrado en masa de strings (stub → call sites → intérprete) | **DISEÑO** (el intérprete existe; falta el pegamento) | §E.4 |
+| Capas 4–7 (MBA, empaquetadores, nativo, salida) | **DISEÑO** | §E.4 |
+| Integración en MegaDaemon (MCP, cockpit, autopilot) | **DISEÑO** | §E.6 |
+
+**El hallazgo que da valor a todo lo demás**: el desensamblado del repo
+—`dex_decompile` y `apk_deobfuscator`— **desalinea el código a partir de cada
+`goto`**, y confunde el índice de campo/tipo en media docena de formatos. No
+es un detalle estético: significa que cualquier xref, ruta o string extraído
+por el daemon puede estar **desplazado** respecto de la realidad. Esto se
+midió, no se supone (§E.3).
+
+---
+
+## E.2 Estado del arte
+
+### E.2.1 Android / Dalvik: lo que dice la literatura
+
+| Trabajo | Qué aporta al diseño |
+|---|---|
+| Dong et al., *Understanding Android Obfuscation Techniques: A Large-Scale Investigation in the Wild* (arXiv:1801.01633) | Taxonomía de referencia: **renombrado**, **cifrado de strings**, **reflexión**, **empaquetado**. Concluye que el control de flujo es *no universal* (sólo DashO y Allatori) y que en muchos casos es débil ⇒ el motor debe priorizar cifrado de strings y renombrado, no *flattened control flow* |
+| Hou et al., *Android Code Protection via Obfuscation Techniques* (arXiv:1611.10231) | Inventario de CFF y de *data aggregation*; tabla de malware real por técnica ⇒ sirve de checklist de qué detectar |
+| Balachandran et al., *Control Flow Obfuscation for Android Applications* (Computers & Security 61, 2016) | Los **tres esquemas a nivel Dalvik**: `packed-switch`, `try/catch` y su combinación. Y la lista de 8 medidas: reempaquetado de clases, cifrado de literales, cifrado de clases/nativas/assets, *split* de `.dex`, predicados opacos + código basura, empaquetado… ⇒ es la especificación del detector |
+| Zhang et al., *Android application forensics: a survey of obfuscation, detection and deobfuscation techniques* (Forensic Sci. Int. Digital Investigation 39, 2021) | Métodos de **detección**: entropía, tamaño de palabra, nº de caracteres especiales para cifrado; y para flujo, métricas de CFG (nodos, *sinks*, aristas) ⇒ el motor debe calcular CFG siempre |
+| AndrODet (Mirzaei et al., FGCS 90, 2019) | Detección **adaptativa** con aprendizaje online de renombrado / cifrado / flujo ⇒ el clasificador del motor debe poder entrenarse con los APK del propio usuario |
+| *Characterizing the Use of Code Obfuscation in Malicious Android Apps* (ACM, 2023) | Dato operativo: el **cifrado de strings es la causa dominante** de *targets* de llamada irresolubles ⇒ el motor debe descifrar strings **antes** de intentar resolver llamadas |
+| *An Empirical Study of Code Obfuscation Practices* (arXiv:2502.04636) | Escala: sobre **548.967 APKs** de Google Play, 81,04 % usa modificación de control de flujo y 62,76 % cifrado de strings ⇒ el caso "app normal" ya viene ofuscado |
+| *Evaluating LLMs for Obfuscation Detection and Classification in Android Apps* (arXiv:2606.14233) | Un LLM clasifica bien (**92,02 %** renombrado, **81,41 %** cifrado de strings) pero peor el control de flujo (**68,32 %**) ⇒ el LLM es un **clasificador**, no un decodificador. Encaja con §C.11: el LLM prioriza, el código numérico decide |
+| DexMonitor (IEEE Access 6, 2018) | Monitorización **dinámica**: extraer los strings descifrados en runtime y reinyectarlos ⇒ el plan B del §C.4 (hook) tiene respaldo publicado |
+| ReDex (optimizador) | Revierte el CFF de Obfuscapk en **1089/1108** apps ⇒ el CFG + detección de predicados opacos es suficiente para deshacer *flattening* ligero |
+
+### E.2.2 Nativa (ELF/PE) y virtualización
+
+| Trabajo / herramienta | Qué aporta |
+|---|---|
+| **Tigress** (C, *source-to-source*: *data encoding*, CFF, predicados opacos, virtualización) — <https://tigress.wtf> | El estándar académico. Su manual es, de hecho, la especificación más completa de "qué puede hacer un ofuscador" ⇒ sirve como checklist para el detector nativo |
+| **Obfuscator-LLVM** (OLLVM) | CFF a nivel IR; se detecta por el *dispatcher* con una variable de estado ⇒ el mismo detector de CFG sirve aquí, cambiando el CFG por el de funciones |
+| Pushan (arXiv:2603.18355) | Devirtualización **sin traza** con emulación simbólica *VPC-sensitive*; **988/1000** muestras Tigress ⇒ el objetivo de un motor de nativo es "reconstruir el CFG completo", no "desempaquetar" |
+| VMSpec (arXiv:2610.29566) | Genera specs **SLEIGH** para VMs desconocidas con *symbolic path exploration*; **918/918** muestras Tigress ⇒ la estrategia "especificación de procesador desconocida" es la vía genérica |
+| VMPredator (arXiv:2605.30902) | Comercial (VMProtect/Themida): se ancla en la terna **⟨VM entry, VM exit, handlers⟩** ⇒ heurística: buscar la *ancla semántica*, no la estructura exacta del protector |
+| *Static Detection of Core Structures in Tigress Virtualization* (arXiv:2601.12916) | Detección estática (dispatch routine, handler blocks, VM region) en LLVM IR ⇒ aplicable a `.so` con un pass equivalente |
+| SoK: *Automatic Deobfuscation of Virtualization-protected Applications* | Evalúa Virtual Deobfuscator, VMAttack, VMHunt y Tigress DeObf: ninguna es universal ⇒ **el motor debe ser modular y reportar qué técnica encontró, no "desofuscar"** |
+| Herramientas: D-810 (IDA), GOOMBA (Ghidra), Miasm, Ghidra, Binary Ninja, MOPSA | Deofuscadores nativos existentes; el motor no los sustituye, los **orquesta** |
+
+### E.2.3 Herramientas que ya existen: qué se copia de cada una
+
+| Herramienta | La idea que se copia al motor Rust |
+|---|---|
+| **jadx** + `Arsylk/jadx-string-decrypt` | *Const folding* de expresiones opacas y descifrado de cifrador de bloque cuando es resoluble (descriptor `([B)Ljava/lang/String;`, AES/ECB/PKCS5Padding, clave = últimos N bytes del blob). ⇒ El motor debe (a) plegar constantes y (b) tener un descifrador de bloque genérico con "clave al final del blob" |
+| **java-deobfuscator** (`java-deobfuscator-detect` + transformadores) | Arquitectura de *detect → transformer por protector*: un `StringEncryptionTransformer` por familia ⇒ el motor Rust debe exponer `detect` y transformadores con nombre, no un único `deobfuscate` |
+| **simplify** (Facebook) | Deofuscación **por VM**: ejecutar el código y observar. Es la misma filosofía que el intérprete Dalvik de `re_deep` |
+| **dex2jar** + `d2j-decrypt-string` | Descifrado de strings **desde el lado DEX**, sin configuración ⇒ el motor debe poder trabajar sobre el DEX, no sobre Java |
+| **DaliVM** (emulador Dalvik en Python) | Recuperar valores **sólo disponibles en runtime** sin arrancar Android: enumera *call sites* en multi-DEX y reconstruye argumentos con *backward data-flow tracing* + *forward lookup* + *partial execution* ⇒ **es el diseño exacto del intérprete de `re_deep`**; la diferencia es que DaliVM lo hace genérico y publica el corpus de casos |
+| **APKiD** | Identificación de empaquetador por *fingerprint* (clases sospechosas, `Application` custom, tamaño de DEX, entropía de assets) ⇒ el motor debe tener una tabla de fingerprints |
+| **Quark-Engine**, **frida-dexdump**, **DexHunter** | Descifrado de malware y volcado de DEX **de memoria** ⇒ el motor necesita un "modo dinámico" que use el `inject_hooks` del daemon (§C.3) |
+| **Obfuscapk** | Ofuscador open source **y** deofuscador ⇒ sirve de corpus de pruebas para el motor |
+| hacktricks, *Manual De-obfuscation Techniques* | El patrón "identifica el método de descifrado y **replica** sus pasos" ⇒ el motor debe poder **extraer la clave** y reimplementar el algoritmo, no sólo ejecutarlo |
+| hacktricks / android-security-handbook §40 | Truco de detección casi infalible: **hookear `java.lang.String.<init>([B)` y `([C)`** ⇒ todo descifrador termina construyendo un `String`, así que ese hook captura el 100 % de los descifradores, sea cual sea el algoritmo |
+| Checklist de android-security-handbook §40 | Detección rápida: `strings classes.dex \| grep -E 'https?://'` (si no hay URLs, hay cifrado), entropía de `assets/`, `<application android:name>` custom, `DexClassLoader`/`InMemoryDexClassLoader` ⇒ el motor debe exponer esto como `triaje` de 1 comando |
+
+---
+
+## E.3 Hallazgo: tres bugs de decodificación **medidos** en el repo
+
+### E.3.1 El método: calibrar el decodificador con invariantes
+
+Un decodificador Dalvik no se puede validar leyendo la spec (las convenciones
+de bits son ambiguas y las fuentes se contradicen). Se calibra con **invariantes
+que el código real tiene que cumplir sí o sí**. Se usaron tres, independientes:
+
+1. **Encaje de anchuras**: las anchuras de las instrucciones deben sumar
+   exactamente `insns_size` del `code_item`.
+2. **Alineación de saltos**: todo destino de salto debe ser el **inicio** de una
+   instrucción (si las anchuras están mal, los destinos caen dentro de otra
+   instrucción).
+3. **Coincidencia de firmas**: el número de argumentos de un `invoke` debe
+   coincidir con la **firma del método invocado** (contando el receptor y
+   ocupando 2 registros los parámetros `long`/`double`).
+
+El tercer invariante es el que zanja las ambigüedades de bits, porque no
+depende de la convención: si el índice de método está en el code unit
+equivocado, la firma no casará.
+
+### E.3.2 Los tres bugs
+
+| # | Módulo | Qué hace mal | Medición |
+|---|---|---|---|
+| **1** | `dex_decompile::instruction_width` y `apk_deobfuscator::instruction_width` | `goto` (formato `10t`) ocupa **2** code units; ocupa **1** | Con 2: sólo el **63,4 %** de los destinos de salto cae en una frontera de instrucción. Con 1: **100,0 %** (183.049/183.049) |
+| **2** | `apk_deobfuscator::decode_insn` | `new-array`/`instance-of` (22c) leen el índice de tipo de `unit2`; está en **`unit1`** | El índice de `new-array` daba 228.162 (basura) en vez del descriptor `[C` |
+| **3** | `apk_deobfuscator::decode_insn` | `iget`/`iput` (22c) leen el índice de campo de `unit2`; está en **`unit1`**. Además en `35c` intercambia el nº de argumentos y el registro `G` (`argc = unit0>>8` en vez de `unit0>>12`) | Con el índice en `unit1` la firma del callee coincide en el **100,0 %** de las 88.600 invocaciones con argumentos; con `unit2`, en el 39,3 % |
+
+**Consecuencia**: `apk_deobfuscator::scan` y `dex_decompile` producían, hasta
+ahora, xrefs y endpoints **potencialmente desplazados**. No es que faltara
+información: es que estaba *en el sitio equivocado*.
+
+### E.3.3 Tabla de convenciones medidas (la que usa el motor)
+
+| Formato | Convención | Cómo se comprobó |
+|---|---|---|
+| `12x`, `11n`, `22t`, `22s`, `22c` | A = bits 8-11, B = bits 12-15 | `new-array v3, v0, [C`: A debe ser el destino (3) y B el tamaño (32767) — con la convención opuesta el `sput-object` guarda un entero en vez del array |
+| `23x` | A = byte 1 (8 bits), B = byte 2, C = byte 3 | `aget-char v6, v2, v3` ⇒ v6 = v3[v2] (array, índice) |
+| `22b` | **literal en el byte ALTO** de `unit1`, registro B en el byte BAJO | Con la convención contraria sólo el **53,3 %** de las instrucciones tiene registros dentro de `registers_size`; con la correcta, el **100 %** |
+| `22c` | índice (tipo/campo/método) en `unit1` | Heredado del bug #2: con `unit2` el índice es basura |
+| `35c` | nº de args = bits 12-15 de `unit0`; G = bits 8-11; índice de método en `unit1`; word de registros en `unit2` | Coincidencia de firmas: 100,0 % con `unit1` |
+| `10t` | **1** code unit; offset con signo en el byte 1 de `unit0` | Alineación de saltos: 100,0 % |
+| `31i` | 3 code units | Encaje de anchuras: 100 % |
+
+> Nota de honestidad: la lectura del **word de registros** de `35c` (nibble alto
+> vs bajo para el primer argumento) quedó **pendiente de cerrar**: el test
+> global de coherencia da 25,0 % al nibble bajo y 0,8 % al alto, pero el caso
+> `fsw` de la app Jazztel exige que el receptor de `String.length()` sea el
+> registro 0 (el parámetro), lo que apunta al nibble alto. Se resuelve
+> **en tiempo de ejecución** por el motor (ver §E.4, capa 2: el motor prueba
+> las variantes y se queda con la que sobrevive), no por una constante fija.
+> Marcado como `NO VERIFICADO` en §D.3.
+
+---
+
+## E.4 Arquitectura del motor
+
+### E.4.1 Las siete capas
+
+```
+   APK / DEX / ELF / PE / recursos / peticiones de red
+                        │
+  ┌─────────────────────▼──────────────────────────────────────────┐
+  │ 1. INGESTA      ZIP → AXML → DEX → recursos → .so → assets      │
+  │                (reutiliza apk_inventory + apk_deobfuscator)      │
+  └─────────────────────┬──────────────────────────────────────────┘
+                        │
+  ┌─────────────────────▼──────────────────────────────────────────┐
+  │ 2. DECODIFICADOR VALIDADO + AUTOCALIBRACIÓN                      │
+  │    decode_code()  ·  audit_decode()  ← invariantes E.3.1         │
+  │    Si la auditoría falla, el motor PRUEBA VARIANTES y avisa.      │
+  │    Nunca devuelve datos sin auditar.                             │
+  └─────────────────────┬──────────────────────────────────────────┘
+                        │
+  ┌─────────────────────▼──────────────────────────────────────────┐
+  │ 3. CFG + PREDICADOS OPACOS                                       │
+  │    build_cfg()  ·  opaque_branches()                             │
+  │    → detecta *flattening* (muchos bloques → 1 dispatcher)         │
+  │    → detecta *dead code* (rama con condición constante)           │
+  └─────────────────────┬──────────────────────────────────────────┘
+                        │
+  ┌─────────────────────▼──────────────────────────────────────────┐
+  │ 4. FOLDING DE CONSTANTES / MBA                                   │
+  │    Evalúa expresiones mixtas booleanas y aritméticas hasta un    │
+  │    entero; si no puede, marca "opaco" y sigue.                    │
+  │    (Es lo que hace jadx-string-decrypt con su const-folder.)      │
+  └─────────────────────┬──────────────────────────────────────────┘
+                        │
+  ┌─────────────────────▼──────────────────────────────────────────┐
+  │ 5. DESCIFRADO DE STRINGS EN MASA                                 │
+  │    5a. detectar stubs  (devuelven String, con XOR/char[]/AES)    │
+  │    5b. enumerar call sites en TODOS los DEX                      │
+  │    5c. extraer la clave (backward data-flow, estilo DaliVM)       │
+  │    5d. ejecutar el stub con el intérprete → tabla de strings      │
+  │    5e. fallback: cifrado de bloque con clave al final del blob    │
+  └─────────────────────┬──────────────────────────────────────────┘
+                        │
+  ┌─────────────────────▼──────────────────────────────────────────┐
+  │ 6. HUELLA DE EMPAQUETADOR / PROTECTOR / ANTI-ANÁLISIS              │
+  │    APKiD-like, entropía de assets, loaders dinámicos,             │
+  │    pin vs certificados de firma, anti-debug, RASP,                │
+  │    y para nativo: OLLVM/Tigress/VMProtect/UPX.                   │
+  └─────────────────────┬──────────────────────────────────────────┘
+                        │
+  ┌─────────────────────▼──────────────────────────────────────────┐
+  │ 7. SALIDA                                                        │
+  │    informe JSON · tabla de strings · reescritura de DEX ·         │
+  │    hooks dinámicos para el móvil (Frida) · alertas del daemon    │
+  └─────────────────────────────────────────────────────────────────┘
+```
+
+### E.4.2 Por qué una sola pasada no basta
+
+El caso real de Jazztel lo demuestra: el stub `LQfgSZK/HZWRvS;->fsw` se llama
+**2.234 veces**, su clave es un array `char[32767]` **construido en runtime** y
+el código que lo construye está relleno de predicados opacos. Sin el
+intérprete (capa 5d), la clave es indescifrable estáticamente; sin la capa 3, ni
+siquiera se ve que el bucle de inicialización es en parte código muerto.
+
+⇒ **El motor tiene que ser un bucle, no una tubería**: auditar → decodificar →
+plegar → ejecutar → re-auditar. Cada capa usa el resultado de la anterior.
+
+### E.4.3 Lo que el motor **no** va a hacer (límite honesto)
+
+| Limitación | Por qué |
+|---|---|
+| Descifrar un cifrado de bloque cuya clave depende del hardware (TEE, `attest`) | La clave no está en el APK |
+| Devirtualizar un protector comercial sin ejecutar | Pushan y VMSpec necesitan el binario y sólo funcionan con VMs *reconocibles* |
+| Reconstruir un APK **bit a bit** | Clases cifradas, assets cifrados y lógica en el servidor |
+| Que un LLM descifre | Medido: el LLM clasifica (81 % en cifrado de strings) pero no calcula claves |
+
+---
+
+## E.5 API Rust (contrato del módulo)
+
+Todo en `rust-core/src/re_deep.rs`, **sin dependencias nuevas** (usa `serde_json`,
+`sha2` y el crate `dex_decompile` del propio daemon).
+
+| Función | Qué hace | Devuelve |
+|---|---|---|
+| `dalvik_width(op: u8) -> usize` | Ancho **medido** de un opcode | unidades de 16 bits |
+| `decode_code(insns: &[u16]) -> Vec<DecodedInsn>` | Decodifica un `code_item` con las convenciones medidas y los payloads | instrucciones con operandos, literales, refs y destinos de salto |
+| `audit_decode(dexes: &[&DexFile]) -> DecodeAudit` | **Autocalibración**: encaje de anchuras, alineación de saltos, coincidencia de firmas | ratios + veredicto (`ok` / `degradado: …`) |
+| `build_cfg(insns: &[u16]) -> Vec<BasicBlock>` | Grafo de control por bloques básicos | bloques con sucesores |
+| `opaque_branches(insns: &[u16]) -> Vec<OpaqueBranch>` | Predicados opacos por propagación de constantes | ramas con condición constante (siempre se toma / nunca) |
+| `interpret_method(dex, class, method) -> Result<Value, ExecError>` | Ejecuta un método en análisis (ya existía) | valor o error con el punto exacto |
+
+Lo que **falta** para cerrar las capas 4–7 (y que es trabajo disponible, no una
+imposibilidad):
+
+| Pieza | Tamaño estimado | Nota |
+|---|---|---|
+| `fold_constants(code) -> Vec<FoldedInsn>` | ~250 líneas | plegado de MBA con `eval_2addr` ya escrito |
+| `find_decrypt_stubs(dex) -> Vec<Stub>` | ~200 líneas | reutiliza `decryptor_candidates` + el discriminador cripto |
+| `decrypt_all(dexes, stub) -> BTreeMap<String, String>` | ~300 líneas | enumerar call sites + `interpret_method` + fallback AES/ECB |
+| `fingerprint_packers(dexes, assets) -> Vec<Finding>` | ~200 líneas | APKiD-like |
+| `native_obfuscation_fingerprint(elf) -> Vec<Finding>` | ~250 líneas | OLLVM/Tigress/VMProtect/UPX |
+| `rewriter` (reescribir el DEX con los strings descifrados) | ~400 líneas | requiere escribir un DEX ⇒ el repo ya tiene AXML, falta el escritor de DEX |
+
+---
+
+## E.6 Integración en MegaDaemon
+
+El motor **no es una islanda**: cada capa aterriza en un punto del daemon ya
+existente.
+
+| Capa | Punto de integración | Qué gana el usuario |
+|---|---|---|
+| 1–2 | `apk_inventory` / `apk_deobfuscator::scan` | El inventario deja de poder estar **desalineado** |
+| 2 | `audit_decode` como **gate** del escáner | Si la auditoría sale `degradado`, el informe lo dice en vez de mentir |
+| 3 | `apk_deobfuscator::build_call_graph` | El grafo de llamadas pasa a usar el CFG real y detecta *flattening* |
+| 5 | `re_deep::decryptor_candidates` → tabla de strings | Los endpoints y rutas salen **en claro**, no cifrados |
+| 5 | `cortex/cockpit` (listado de apps del móvil) | Un APK protegido se detecta **en el móvil**, no sólo en el escritorio |
+| 6 | `alerts.rs` | Alerta de "app con cifrado de strings / empaquetador / anti-debug" |
+| 7 | `hooks-payload` / `inject_hooks` (Frida) | Modo dinámico: hookear `String.<init>([B)` y `([C)` para cazar **todos** los descifradores |
+| 7 | `state/gasto_datos.sqlite` | Persistencia de los strings descifrados (con la máscara de PII de §C.5) |
+
+**MCP**: la tool `re_profunda` (ya existe, §C.13) gana acciones nuevas:
+`auditar`, `cfg`, `opacos`, `descifrar`, `empaquetadores`. Todas devuelven
+JSON y **todas pasan por `audit_decode` antes de publicar nada**.
+
+**El guard de §C.5 se mantiene**: los strings descifrados pueden contener PII
+(NIF, número de línea) ⇒ van enmascarados antes de escribir, y nunca al repo.
+
+---
+
+## E.7 Cobertura de ecosistemas
+
+| Ecosistema | Estado del motor | Técnica |
+|---|---|---|
+| DEX / Dalvik (R8, ProGuard) | **Cubierto** | decodificador validado + CFG + folding |
+| DEX cifrado por protector (Stringer, Allatori, DashO, DexGuard, DIVILAR, DexProtector, Bangcle, Virbox) | **Parcial** | stubs detectados; el descifrado en masa depende del algoritmo |
+| ELF / PE nativo (OLLVM, Tigress) | **Detectado, no devirtualizado** | fingerprints + CFG de funciones |
+| ELF / PE virtualizado (VMProtect, Themida, Code Virtualizer) | **No** (necesita ejecución) | ver §E.4.3 |
+| Empaquetadores (UPX y equivalentes Android) | **Fingerprint** | magic + entropía + stubs |
+| Recursos (assets cifrados, `resources.arsc` cifrado) | **Fingerprint + loader** | entropía + búsqueda del loader |
+| Red (TLS pinning, JA3, QUIC) | **Fuera del motor** (es §C.4) | pin vs firma ya implementado en `re_deep::pin_report` |
+
+---
+
+## E.8 Fases, riesgos y orden de trabajo
+
+| Fase | Qué | Riesgo |
+|---|---|---|
+| **F1** *(hecha)* | Decodificador validado + auditoría + CFG + opacos | Bajo: es autocontenido y auditable |
+| **F2** | Folding de constantes + detección de stubs | Bajo |
+| **F3** | Descifrado en masa (intérprete) + tabla de strings | Medio: hay que resolver la ambigüedad del word de registros de `35c` (§E.3.3) |
+| **F4** | Fingerprints de empaquetador/protensor + nativo | Medio |
+| **F5** | Reescritura de DEX con los strings en claro | Alto: escribir un DEX válido no es trivial |
+| **F6** | Modo dinámico (hooks Frida) integrado en `inject_hooks` | Medio: necesita el payload con *java-bridge* (§C.3) |
+
+**El riesgo que no se puede eliminar**: `re_deep.rs` **no se puede compilar**
+en este entorno (prohibido y sin recursos). Está validado con `rustfmt`
+(sintaxis: el gate `tools/check-sintaxis.sh` del CI lo pasa) y con revisión
+estática de tipos, pero **puede haber errores de tipos que sólo aparezcan al
+compilar**. El módulo **ya está declarado en `lib.rs`** (lo hizo el root), así
+que `cargo build` sí lo compila ⇒ el primer paso al integrar es `cargo check`;
+después, `audit_decode` sobre un APK real. Si la auditoría sale `degradado`,
+la tabla de convenciones (§E.3.3) es lo primero que hay que revisar.
+
+---
 ---
 
 ## Referencias del repo
@@ -1296,6 +1784,32 @@ su -mm -c 'dumpsys activity service ioctl 2>/dev/null | head -5'
 <https://www.lavanguardia.com/andro4all/operadoras/como-ver-el-consumo-en-jazztel-y-saber-cuantos-gigas-te-quedan> ·
 <https://www.adslzone.net/operadores/jazztel/consultar-consumo-jazztel/> ·
 <https://roams.es/companias-telefonicas/jazztel/guias/clientes/consultar-consumo/>
+
+*Ofuscación y deofuscación (nuevo, §E.2):* <https://arxiv.org/html/1801.01633> ·
+<https://arxiv.org/html/1611.10231> ·
+<https://arxiv.org/html/2502.04636> ·
+<https://arxiv.org/html/2606.14233> ·
+<https://arxiv.org/html/2603.18355v1> ·
+<https://arxiv.org/html/2610.29566> ·
+<https://arxiv.org/html/2605.30902> ·
+<https://arxiv.org/html/2601.12916> ·
+<https://oar.a-star.edu.sg/storage/2/2jq30xmqod/control-flow-obfuscation-for-android-applications.pdf> ·
+<https://serval.unil.ch/resource/serval:BIB_D56CBD9367EE.P001/REF> ·
+<https://sefcom.asu.edu/publications/dex-mon-access18.pdf> ·
+<https://e-archivo.uc3m.es/rest/api/core/bitstreams/94dd4ad9-b0a4-47f1-a8b7-aba2f519290d/content> ·
+<https://phaidra.univie.ac.at/api/object/o:1649486/download> ·
+<https://static.usenix.org/event/woot09/tech/full_papers/rolles.pdf> ·
+<https://dl.acm.org/doi/fullHtml/10.1145/3600160.3600194> ·
+<https://dl.acm.org/doi/fullHtml/10.1145/3426020.3426089> ·
+<https://www.exploit-db.com/docs/english/44967-symbolic-deobfuscation-from-virtualized-code-back-to-the-original.pdf> ·
+<https://tigress.wtf/tigress-publications.html> ·
+<https://github.com/Arsylk/jadx-string-decrypt> ·
+<https://github.com/Stanislav-Povolotsky/jddlab/blob/main/skills/java-deobfuscation/SKILL.md> ·
+<https://github.com/zahidaz/awake/blob/main/docs/reversing/static-analysis.md> ·
+<https://github.com/harshdhamaniya/android-security-handbook/tree/main/40-Obfuscation> ·
+<https://github.com/hacktricks-wiki/hacktricks/blob/master/src/mobile-pentesting/android-app-pentesting/manual-deobfuscation.md> ·
+<https://github.com/Anthropicdaddy/Shark/blob/main/docs/packers/dexguard.md> ·
+<https://github.com/JesusConwellpy/ai-security-methodology/blob/master/03-reverse-engineering/anti-analysis.md>
 
 *Mora:* <https://sinpleitos.es/servicios/ficheros-morosidad/recursos/recargo-impago-telefonia> ·
 <https://invoo.es/es/blog/consejos/calcular-interes-demora-1040-costes-cobro-factura/>

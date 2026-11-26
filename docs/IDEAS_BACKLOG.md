@@ -197,3 +197,37 @@
 | L8 | El `hash` nativo del daemon (el móvil NO tiene `sha256sum`) | ✅ | `megadaemon-core hash <fichero>` |
 | L9 | Prueba real contra el release publicado | ✅ | descarga del bundle real (12.881.744 B) + **sha256 verificado por valor** (el `.sha256` del CI lleva la ruta `dist/…` ⇒ la comparación por valor es obligatoria) |
 | L10 | Prueba real en el móvil | ⛔ | `NO VERIFICADO`: el móvil está inalcanzable. Comandos exactos en `docs/TELEMETRIA_DRIVE.md` y en el propio script (`--diagnostico`) |
+
+## N. Hallazgos medidos en los decodificadores DEX del repo (2026-11-26) — para el dueño de cada módulo
+
+> Salieron al integrar `re_deep`: la tabla de anchos y el reparto de operandos
+> de los decodificadores **del repo** no coinciden con lo que se mide en un APK
+> real. No se tocan aquí (un agente = un módulo): quedan documentados y
+> medidos para que los dueños los arreglen con sus propios tests.
+
+| # | módulo | hallazgo | evidencia | estado |
+|---|---|---|---|---|
+| N1 | `dex_decompile::instruction_width` | el `goto` (0x28, `10t`) figura con **2** code units; el medido es **1** (offset con signo en el byte 1 de `unit0`) | APK real (5 DEX, 36.248 clases): con 2 aparecen **5.549 opcodes reservados** (que ningún compilador emite) y sólo el 93,60 % de los métodos termina en `return`/`throw`; con 1: **0 reservados** y **96,35 %**. `re_deep` usa su propia tabla medida (`dalvik_width`) | ⛔ pendiente del dueño de `dex_decompile` |
+| N2 | `dex_decompile::render_operands` (formato `10t`) | lee el delta del `goto` en `unit1`; con el ancho medido (1 unidad) el delta está en el byte 1 de `unit0` | ver N1 | ⛔ pendiente |
+| N3 | `apk_deobfuscator::decode_insn` (formato `22c`) | `new-array`/`instance-of` leen el índice de **tipo** de `unit2`; el índice está en **`unit1`** | medido por el subagente de RE | ⛔ pendiente |
+| N4 | `apk_deobfuscator::decode_insn` (formato `22c`) | `iget`/`iput` leen el índice de **campo** de `unit2`; está en **`unit1`** | medido por el subagente de RE | ⛔ pendiente |
+| N5 | `apk_deobfuscator::decode_insn` (formato `35c`) | intercambia el nº de argumentos y el registro `G`: lo correcto es `argc = unit0>>12` y `G = unit0>>8` | con el índice de método en `unit1` la firma del callee coincide en el **100 %** de las 88.600 invocaciones con argumentos; con `unit2`, en el 39,3 % | ⛔ pendiente |
+
+## M. RE profunda de APK (2026-11-26) — la parte que faltaba de la RE de Jazztel
+
+> `dex_decompile` + `apk_deobfuscator` + `apk_inventory` cubren el
+> desensamblado, el manifiesto, la firma y el fingerprint de ofuscación. Faltaban
+> las cinco cosas que hacen falta para reconstruir el subsistema de datos de un
+> operador real. Eso es el módulo `re_deep`.
+
+| # | idea | estado | detalle |
+|---|---|---|---|
+| M1 | **Xrefs**: qué clase y qué método usan cada string (para ligar una ruta a la interfaz que la sirve) | ✅ | `re_deep::string_xrefs()` + `string_index()` |
+| M2 | **Rutas REST relativas** con su familia de API (`consumption-api/…`), no URLs absolutas | ✅ | `re_deep::rest_paths()`, `classify_rest_path()` |
+| M3 | **Entropía de los assets**: un payload cifrado en `assets/` es una señal de empaquetado que el inventario no ve | ✅ | `re_deep::entropy()`, `detect_magic()`, `asset_reports()` |
+| M4 | **Pin de certificado** vs certificados de firma: si el pin no es de firma, es **del servidor** (una CA de usuario no valdría) | ✅ | `re_deep::pin_report()`, `signing_certs()` |
+| M5 | **Descifrador de strings discriminado**: un candidato con `javax/crypto/*` es un SDK de pago 3DS2, no un ofuscador | ✅ | `re_deep::decryptor_candidates()` (200 falsos positivos evitados) |
+| M6 | **Ejecución simbólica** acotada de un método del DEX para recuperar en claro lo que la app descifra en runtime | ✅ | `re_deep::interpret_method()` (nunca inventa: si toca una API que no se sabe emular, se detiene y lo dice) |
+| M7 | **Cableado**: registro en `lib.rs`, subcomando de CLI y tool MCP | ✅ | `megadaemon-core redeep <apk> [analizar\|rutas\|pins\|descifradores\|xrefs]` y tool `re_profunda` |
+| M8 | **Tests** | ✅ | **24 tests puros** (sin APK, sin red, sin móvil), incluidos los vectores SHA-256 de NIST y la regresión de los payloads de Dalvik |
+| M9 | **Cinco bugs reales** encontrados al integrar el módulo (no los había detectado quien lo escribió) | ✅ | (1) `substring` no compilaba: `s.get(rango)` devuelve `Option<&[char]>`; (2) los **payloads de Dalvik nunca se saltaban** en tres barreadores: el ident se leía como `unidad >> 8` (0x01/0x02/0x03) en vez de `unidad & 0xff00` (0x0100/0x0200/0x0300) ⇒ el barrido continuaba dentro de los datos e inventaba xrefs fantasma; ahora los cuatro barreadores comparten un único helper (`siguiente_insn`); (3) **el barrido se desalineaba tras cada `goto`**: la tabla local de anchos (por rangos) no tenía el `0x28` (`goto`, `10t`, **dos** unidades) ⇒ el offset del salto se leía como código; ahora `insn_width` delega en la tabla canónica por formato; (4) **el detector de descifradores estaba muerto**: buscaba el XOR dentro de la lista de *invocaciones* (un XOR no invoca a nadie ⇒ la condición nunca era cierta ⇒ **no encontraba ningún descifrador nunca**) y con una lista de opcodes equivocada (`0x98` = `shl-int`, `0xe0` = `shl-int/lit8`; faltaban `xor-long`, `xor-long/2addr`, `xor-int/lit16`); ahora se busca por **nombre** de opcode. Impacto en esta app: **ninguno** (esta app no cifra strings: el resultado correcto es cero); (5) **el inventario de rutas salía VACÍO en la app real**: `classify_rest_path` rechazaba las mayúsculas en cualquier segmento, y todas las rutas medidas de esta app llevan parámetros camelCase (`{subscriptionId}`, `{accountId}`, `{productId}`) ⇒ no encontraba ninguna ruta y no daba error. **MEDIDO sobre el APK real** (pool de strings de los 5 DEX, 169.488 strings únicos): el clasificador viejo encuentra **16** rutas y el nuevo **133** (superconjunto estricto: 0 perdidas, 117 ganadas), y las ganadas son las del control de gasto (`user-tariffs`, `recharges`, `recurring`, `balances`, `events`, `penalties`) |

@@ -778,6 +778,23 @@ pub fn tool_definitions() -> Value {
                 }
             },
             {
+                "name": "re_profunda",
+                "description": "RE PROFUNDA DE APK: lo que 'dex_decompile' y 'apk_inventory' NO cubren. (1) XREFS: que clase y que metodo usan cada string. (2) RUTAS REST relativas con su familia de API (consumption-api, balances-api...). (3) ENTROPIA de los assets: un payload de alta entropia sin magic es un modulo protegido. (4) PINS de certificado: si el pin declarado NO es un certificado de firma, es del SERVIDOR (una CA de usuario no valeria). (5) DESCIFRADORES de strings, con la distincion entre un ofuscador y un SDK de pago 3DS2. Acciones: analizar (informe completo) | rutas | pins | descifradores | xrefs (filtro con buscar).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": {
+                            "type": "string",
+                            "enum": ["analizar", "rutas", "pins", "descifradores", "xrefs"],
+                            "default": "analizar"
+                        },
+                        "ruta": { "type": "string", "description": "Ruta local del APK a analizar." },
+                        "buscar": { "type": "string", "description": "Texto a filtrar (accion xrefs; vacio = todos)." }
+                    },
+                    "required": ["ruta"]
+                }
+            },
+            {
                 "name": "stack",
                 "description": "STACK AUTOCONTENIDO: el daemon lleva DENTRO el supervisor, el keeper, cloudflared, los scripts de Antigravity y la Web UI, y los reconcilia solo (SHA-256 embebido vs el de disco). Es lo que evita que el movil se rompa al actualizar (medido el 2026-11-25: el supervisor viejo no encontraba el binario nuevo y no podia relanzar el daemon). Acciones: estado (solo mira) | reconciliar (reescribe lo que difiere y reinicia el supervisor si cambio; es idempotente).",
                 "inputSchema": {
@@ -1492,6 +1509,13 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 },
                 _ => crate::diagnostico::recoger(),
             };
+            json!({ "content": [{ "type": "text", "text": v.to_string() }] })
+        }
+        // v17 — RE profunda de APK: xrefs, rutas REST, pins de certificado y
+        // descifradores de strings.  Es el módulo que sostiene la lectura del
+        // subsistema de datos de la app del operador.
+        "re_profunda" => {
+            let v = crate::re_deep::dispatch(args);
             json!({ "content": [{ "type": "text", "text": v.to_string() }] })
         }
         // v17 — Telemetría a Drive: el móvil **empuja** su estado (red
