@@ -326,9 +326,79 @@ const DT_HASH: i64 = 4;
 const DT_STRTAB: i64 = 5;
 const DT_SYMTAB: i64 = 6;
 const DT_SYMENT: i64 = 11;
+/// `DT_GNU_HASH`: la tabla de hash estilo GNU.  **Medido (2026-11-26, móvil)**
+/// las librerías del runtime de Antigravity (`libc.so.6` de glibc) **sólo**
+/// declaran `DT_GNU_HASH` y **no** `DT_HASH`: un parser que exija `DT_HASH`
+/// no ve ningún símbolo y falla siempre.
+const DT_GNU_HASH: i64 = 0x6ffffef5;
 
 /// Tope de seguridad: no se leen librerías de más de 64 MB.
 const MAX_ELF: usize = 64 * 1024 * 1024;
+
+/// Índices de los símbolos **hasheados** de una tabla `DT_GNU_HASH`.
+///
+/// Estructura de la tabla (ELF gABI, GNU extension):
+///
+/// ```text
+///   nbuckets   (u32)
+///   symoffset  (u32)   <- primer símbolo con hash
+///   bloom_size (u32)   <- palabras del filtro de Bloom
+///   bloom_shift(u32)
+///   bloom[bloom_size]
+///   buckets[nbuckets]  <- índice del primer símbolo de cada hash
+///   chain[]            <- eslabones; el bit 0 marca el último
+/// ```
+///
+/// El símbolo `symoffset + k` está en `chain[k]`: si el bit 0 de la palabra es
+/// 1, ése es el último de la cadena.  El bucket 0 se reserva ("vacío"), por
+/// eso `symoffset` es siempre ≥ 1.
+///
+/// Devuelve los índices **en la tabla de símbolos** (relativos a `symtab`).
+pub fn indices_gnu_hash(datos: &[u8], gnu_off: usize) -> Vec<usize> {
+    let rd_u32 = |off: usize| -> u64 {
+        if off + 4 > datos.len() {
+            return 0;
+        }
+        u32::from_le_bytes([datos[off], datos[off + 1], datos[off + 2], datos[off + 3]]) as u64
+    };
+    if gnu_off + 16 > datos.len() {
+        return Vec::new();
+    }
+    let nbuckets = rd_u32(gnu_off) as usize;
+    let symoffset = rd_u32(gnu_off + 4) as usize;
+    let bloom_size = rd_u32(gnu_off + 8) as usize;
+    // Se salta el filtro de Bloom: `bloom_size` palabras de 8 bytes.
+    let buckets_off = gnu_off + 16 + bloom_size * 8;
+    let chain_off = buckets_off + nbuckets * 4;
+    if buckets_off + nbuckets * 4 > datos.len() {
+        return Vec::new();
+    }
+    let mut vistos: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    for b in 0..nbuckets {
+        let bucket = rd_u32(buckets_off + b * 4) as usize;
+        // El bucket 0 significa "cadena vacía"; los índices válidos son
+        // ≥ symoffset.
+        if bucket == 0 || bucket < symoffset {
+            continue;
+        }
+        let mut idx = bucket;
+        let mut k = bucket - symoffset;
+        loop {
+            let coff = chain_off + k * 4;
+            if coff + 4 > datos.len() || idx > 10_000_000 {
+                break;
+            }
+            let c = rd_u32(coff) as u32;
+            vistos.insert(idx);
+            if c & 1 != 0 {
+                break; // último eslabón de la cadena
+            }
+            idx += 1;
+            k += 1;
+        }
+    }
+    vistos.into_iter().collect()
+}
 
 /// Devuelve la dirección **en el espacio del proceso cargado** del símbolo
 /// `nombre` exportado por la librería `ruta` (bias de carga `bias`).
@@ -449,8 +519,9 @@ pub fn buscar_simbolo_elf(ruta: &str, mapas: &[Mapa], nombre: &str) -> Result<u6
         None
     };
 
-    // Tabla dinámica: se buscan DT_HASH / DT_SYMTAB / DT_STRTAB.
+    // Tabla dinámica: se buscan DT_HASH / DT_GNU_HASH / DT_SYMTAB / DT_STRTAB.
     let mut dt_hash: Option<u64> = None;
+    let mut dt_gnu_hash: Option<u64> = None;
     let mut dt_symtab: Option<u64> = None;
     let mut dt_strtab: Option<u64> = None;
     let mut dt_syment: u64 = 24;
@@ -464,6 +535,7 @@ pub fn buscar_simbolo_elf(ruta: &str, mapas: &[Mapa], nombre: &str) -> Result<u6
         }
         match tag {
             DT_HASH => dt_hash = Some(val),
+            DT_GNU_HASH => dt_gnu_hash = Some(val),
             DT_SYMTAB => dt_symtab = Some(val),
             DT_STRTAB => dt_strtab = Some(val),
             DT_SYMENT => dt_syment = val,
@@ -479,39 +551,45 @@ pub fn buscar_simbolo_elf(ruta: &str, mapas: &[Mapa], nombre: &str) -> Result<u6
     let strtab_off = vaddr_a_offset(strtab_v)
         .ok_or_else(|| format!("{}: DT_STRTAB fuera de los segmentos PT_LOAD", ruta))?;
 
-    // Número de símbolos: DT_HASH.nchain es el número exacto.
-    let n_simbolos: usize = match dt_hash {
-        Some(h) => {
-            let ho = vaddr_a_offset(h).unwrap_or(0);
-            if ho + 8 <= datos.len() {
-                (rd_u32(ho + 4)) as usize
-            } else {
-                0
-            }
+    // Índices de los símbolos a revisar:
+    //  * con `DT_HASH` → `nchain` es el número exacto (todos los símbolos);
+    //  * sin `DT_HASH` pero con `DT_GNU_HASH` → los símbolos hasheados se
+    //    recorren por buckets+chains.  **Es el caso de las librerías del
+    //    runtime de Antigravity** (glibc con `--hash-style=gnu`).
+    let indices: Vec<usize> = if let Some(h) = dt_hash {
+        let ho = vaddr_a_offset(h).unwrap_or(0);
+        if ho + 8 <= datos.len() {
+            (0..(rd_u32(ho + 4) as usize)).collect()
+        } else {
+            Vec::new()
         }
-        None => {
-            // Sin DT_HASH no se sabe cuántos símbolos hay: no se inventa.
-            0
+    } else if let Some(g) = dt_gnu_hash {
+        match vaddr_a_offset(g) {
+            Some(go) => indices_gnu_hash(&datos, go),
+            None => Vec::new(),
         }
+    } else {
+        Vec::new()
     };
 
-    if n_simbolos == 0 {
+    if indices.is_empty() {
         return Err(format!(
-            "{} no declara DT_HASH: no se puede saber cuántos símbolos hay",
+            "{} no declara DT_HASH ni DT_GNU_HASH: no se puede saber qué símbolos exporta",
             ruta
         ));
     }
 
     let syment = if dt_syment == 0 { 24 } else { dt_syment as usize };
-    for i in 0..n_simbolos {
+    for i in indices {
         let s = symtab_off + i * syment;
         if s + 24 > datos.len() {
             break;
         }
         let st_name = rd_u32(s) as usize;
         let st_value = rd_u64(s + 8);
-        if st_name == 0 || st_value == 0 {
-            continue; // símbolo sin nombre o indefinido
+        let st_shndx = rd_u16(s + 6);
+        if st_name == 0 || st_value == 0 || st_shndx == 0 {
+            continue; // símbolo sin nombre, sin dirección o indefinido (UND)
         }
         let n = strtab_off + st_name;
         if n >= datos.len() {
@@ -535,6 +613,10 @@ pub fn buscar_simbolo_elf(ruta: &str, mapas: &[Mapa], nombre: &str) -> Result<u6
 /// Se recorren las librerías mapeadas por el objetivo buscando una que
 /// exporte `dlopen` (en Android suele ser `libdl.so` o `libc.so`; en
 /// glibc, `libc.so.6`).
+/// Nombres que se prueban para la carga dinámica.  Todos tienen la **misma
+/// firma** `void *f(const char *, int)`, que es la que usa la llamada remota.
+pub const NOMBRES_CARGA: [&str; 3] = ["dlopen", "__libc_dlopen", "__libc_dlopen_mode"];
+
 pub fn resolver_dlopen(pid: i32) -> Result<u64, String> {
     resolver_dlopen_en(Path::new("/proc"), pid)
 }
@@ -549,6 +631,7 @@ pub fn resolver_dlopen_en(raiz: &Path, pid: i32) -> Result<u64, String> {
         ));
     }
     let mut probadas: Vec<String> = Vec::new();
+    let mut motivos: Vec<String> = Vec::new();
     // Candidatas: las librerías del sistema (dlopen vive en libdl/libc).
     // Se recorren rutas **únicas**: la misma libc sale mapeada en 4 trozos.
     let mut vistas: Vec<String> = Vec::new();
@@ -566,17 +649,30 @@ pub fn resolver_dlopen_en(raiz: &Path, pid: i32) -> Result<u64, String> {
         }
         vistas.push(m.ruta.clone());
         probadas.push(m.ruta.clone());
-        match buscar_simbolo_elf(&m.ruta, &mapas, "dlopen") {
-            Ok(direccion) => return Ok(direccion),
-            Err(_) => continue,
+        for nombre in NOMBRES_CARGA {
+            match buscar_simbolo_elf(&m.ruta, &mapas, nombre) {
+                Ok(direccion) => return Ok(direccion),
+                Err(e) => {
+                    if nombre == NOMBRES_CARGA[0] {
+                        // Sólo se guarda el motivo del nombre principal: los
+                        // demás son alias y el mensaje se llenaría de ruido.
+                        motivos.push(format!("{}: {}", m.ruta, e));
+                    }
+                }
+            }
         }
     }
     Err(format!(
-        "no se ha encontrado 'dlopen' en ninguna librería del objetivo (probadas: {})",
+        "no se ha encontrado 'dlopen' en ninguna librería del objetivo (probadas: {}; {})",
         if probadas.is_empty() {
             "ninguna".to_string()
         } else {
             probadas.join(", ")
+        },
+        if motivos.is_empty() {
+            "sin detalles".to_string()
+        } else {
+            motivos.join(" | ")
         }
     ))
 }
@@ -684,6 +780,167 @@ mod tests {
         assert_eq!(mapas[0].inicio, 0x70ccc00000);
         assert!(mapas[1].ruta.contains("libc.so"));
         let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    /// Construye un ELF64 mínimo con tabla de símbolos y una tabla de hash,
+    /// para probar el parser sin depender del sistema.
+    ///
+    /// `con_gnu_hash`/`con_hash` eligen qué tabla declara la sección
+    /// dinámica: `true/false` → sólo `DT_GNU_HASH`; `false/true` → sólo
+    /// `DT_HASH`; `false/false` → ninguna (el parser debe avisar).
+    ///
+    /// Exporta `dlopen` en 0x1234 y `dlsym` en 0x5678.
+    fn elf_de_prueba(con_gnu_hash: bool, con_hash: bool) -> Vec<u8> {
+        let off_datos = 0x200usize;
+        let strtab: &[u8] = b"\0dlopen\0dlsym\0";
+        let off_str = off_datos;
+        let off_sym = off_str + strtab.len();
+        let off_gnu = off_sym + 3 * 24; // 3 símbolos: el nulo + los dos reales
+        let off_hash = off_gnu + 40;
+        let off_dyn = off_hash + 8;
+        let total = off_dyn + 5 * 16;
+
+        let mut d = vec![0u8; total];
+        let put16 = |d: &mut Vec<u8>, at: usize, v: u16| {
+            d[at..at + 2].copy_from_slice(&v.to_le_bytes());
+        };
+        let put32 = |d: &mut Vec<u8>, at: usize, v: u32| {
+            d[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        };
+        let put64 = |d: &mut Vec<u8>, at: usize, v: u64| {
+            d[at..at + 8].copy_from_slice(&v.to_le_bytes());
+        };
+
+        // --- Cabecera ELF64 ---
+        d[0..4].copy_from_slice(b"\x7fELF");
+        d[4] = 2; // ELFCLASS64
+        d[5] = 1; // ELFDATA2LSB
+        d[6] = 1; // EV_CURRENT
+        put16(&mut d, 16, 3); // ET_DYN
+        put16(&mut d, 18, 0xb7); // EM_AARCH64
+        put32(&mut d, 20, 1); // e_version
+        put64(&mut d, 0x20, 0x40); // e_phoff
+        put16(&mut d, 0x34, 64); // e_ehsize
+        put16(&mut d, 0x36, 56); // e_phentsize
+        put16(&mut d, 0x38, 3); // e_phnum
+
+        // --- Tres program headers ---
+        let ph = |i: usize| 0x40 + i * 56;
+        // PT_LOAD: cubre todo el fichero (vaddr == offset).
+        let p = ph(0);
+        put32(&mut d, p, 1);
+        put32(&mut d, p + 4, 5);
+        put64(&mut d, p + 8, 0);
+        put64(&mut d, p + 16, 0);
+        put64(&mut d, p + 24, 0);
+        put64(&mut d, p + 32, total as u64);
+        put64(&mut d, p + 40, total as u64);
+        put64(&mut d, p + 48, 0x1000);
+        // PT_DYNAMIC
+        let p = ph(1);
+        put32(&mut d, p, 2);
+        put32(&mut d, p + 4, 6);
+        put64(&mut d, p + 8, off_dyn as u64);
+        put64(&mut d, p + 16, off_dyn as u64);
+        put64(&mut d, p + 32, (5 * 16) as u64);
+        put64(&mut d, p + 40, (5 * 16) as u64);
+        put64(&mut d, p + 48, 8);
+        // PT_GNU_STACK (ignorado por el parser, pero completa e_phnum)
+        let p = ph(2);
+        put32(&mut d, p, 0x6474e551);
+        put32(&mut d, p + 4, 7);
+        put64(&mut d, p + 16, 0);
+        put64(&mut d, p + 32, total as u64);
+        put64(&mut d, p + 40, total as u64);
+
+        // --- Tabla de nombres ---
+        d[off_str..off_str + strtab.len()].copy_from_slice(strtab);
+        // --- Tabla de símbolos (2 entradas de 24 bytes) ---
+        let entrada = |d: &mut Vec<u8>, at: usize, nombre: u32, valor: u64| {
+            put32(d, at, nombre);
+            d[at + 4] = 0x12; // GLOBAL | FUNC
+            d[at + 5] = 0;
+            put16(d, at + 6, 1); // st_shndx = 1 (definido)
+            put64(d, at + 8, valor);
+            put64(d, at + 16, 0x20);
+        };
+        entrada(&mut d, off_sym, 0, 0); // entrada nula
+        entrada(&mut d, off_sym + 24, 1, 0x1234); // "dlopen"
+        entrada(&mut d, off_sym + 48, 8, 0x5678); // "dlsym"
+        // --- GNU_HASH: 1 bucket, symoffset=1, cadena de 2 ---
+        put32(&mut d, off_gnu, 1); // nbuckets
+        put32(&mut d, off_gnu + 4, 1); // symoffset
+        put32(&mut d, off_gnu + 8, 1); // bloom_size
+        put32(&mut d, off_gnu + 12, 0); // bloom_shift
+        put64(&mut d, off_gnu + 16, 0); // bloom[0]
+        put32(&mut d, off_gnu + 24, 1); // buckets[0] -> símbolo 1
+        put32(&mut d, off_gnu + 28, 0); // chain[0]: sigue
+        put32(&mut d, off_gnu + 32, 1); // chain[1]: fin (bit 0)
+        // --- DT_HASH clásico ---
+        put32(&mut d, off_hash, 1); // nbucket
+        put32(&mut d, off_hash + 4, 3); // nchain (nº de símbolos)
+
+        // --- Tabla dinámica ---
+        let mut e = 0usize;
+        let tag = |d: &mut Vec<u8>, at: usize, t: u64, v: u64| {
+            put64(d, at, t);
+            put64(d, at + 8, v);
+        };
+        tag(&mut d, off_dyn + e * 16, 6, off_sym as u64); // DT_SYMTAB
+        e += 1;
+        tag(&mut d, off_dyn + e * 16, 5, off_str as u64); // DT_STRTAB
+        e += 1;
+        tag(&mut d, off_dyn + e * 16, 11, 24); // DT_SYMENT
+        e += 1;
+        if con_gnu_hash {
+            tag(&mut d, off_dyn + e * 16, DT_GNU_HASH as u64, off_gnu as u64);
+            e += 1;
+        }
+        if con_hash {
+            tag(&mut d, off_dyn + e * 16, DT_HASH as u64, off_hash as u64);
+            e += 1;
+        }
+        tag(&mut d, off_dyn + e * 16, 0, 0); // DT_NULL
+        d
+    }
+
+    /// MEDIDO (2026-11-26, móvil): la libc del runtime de Antigravity
+    /// (`/data/user/0/com.agy/files/runtime/lib/libc.so.6`) declara **sólo**
+    /// `DT_GNU_HASH` (no `DT_HASH`) y exporta `dlopen` en 0x871e0.  El
+    /// parser exigía `DT_HASH`, así que no veía **ningún** símbolo y la
+    /// inyección moría con "no se ha encontrado 'dlopen' en ninguna librería
+    /// del objetivo".  Este test fija esa regresión.
+    #[test]
+    fn encuentra_simbolos_en_elf_con_solo_gnu_hash() {
+        let dir = std::env::temp_dir().join(format!("md_elf_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let mapas: Vec<Mapa> = Vec::new();
+
+        let ruta = dir.join("libgnu.so");
+        std::fs::write(&ruta, elf_de_prueba(true, false)).unwrap();
+        let r = ruta.to_str().unwrap();
+        assert_eq!(
+            buscar_simbolo_elf(r, &mapas, "dlopen").unwrap(),
+            0x1234,
+            "con sólo DT_GNU_HASH hay que encontrar dlopen"
+        );
+        assert_eq!(buscar_simbolo_elf(r, &mapas, "dlsym").unwrap(), 0x5678);
+
+        // El camino clásico (DT_HASH) sigue funcionando.
+        let ruta2 = dir.join("libhash.so");
+        std::fs::write(&ruta2, elf_de_prueba(false, true)).unwrap();
+        assert_eq!(
+            buscar_simbolo_elf(ruta2.to_str().unwrap(), &mapas, "dlopen").unwrap(),
+            0x1234
+        );
+
+        // Sin ninguna tabla de hash el error tiene que decirlo claro.
+        let ruta3 = dir.join("libnada.so");
+        std::fs::write(&ruta3, elf_de_prueba(false, false)).unwrap();
+        let e = buscar_simbolo_elf(ruta3.to_str().unwrap(), &mapas, "dlopen").unwrap_err();
+        assert!(e.contains("DT_GNU_HASH"), "el error debe nombrar la tabla: {}", e);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Comprueba el parser de ELF **contra el propio proceso**: la dirección
