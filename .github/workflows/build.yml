@@ -212,7 +212,12 @@ jobs:
           cargo build --release --target aarch64-linux-android
           mkdir -p "$DIST"
           cp target/aarch64-linux-android/release/libhooks_payload.so "$DIST/hooks-payload-arm64"
-          sha256sum "$DIST/hooks-payload-arm64" > "$DIST/hooks-payload-arm64.sha256"
+          # MEDIDO (2026-11-26, CI): el `.sha256` se generaba con la ruta
+          # ABSOLUTA (`/home/runner/work/.../rust-core/dist/hooks-payload-arm64`)
+          # ⇒ en el job `release` `sha256sum -c` buscaba ESA ruta (que allí no
+          # existe) y fallaba => NO se publicaba ninguna release.  Se genera
+          # con el NOMBRE (no con la ruta absoluta) ⇒ portable entre jobs.
+          ( cd "$DIST" && sha256sum hooks-payload-arm64 > hooks-payload-arm64.sha256 )
           file "$DIST/hooks-payload-arm64" | tee /tmp/fichero-payload.txt
           grep -q "ELF 64-bit LSB shared object" /tmp/fichero-payload.txt || {
             echo "::error::el payload no es una shared object ELF 64-bit"; exit 1; }
@@ -492,7 +497,10 @@ jobs:
           cargo build --release --target aarch64-unknown-linux-gnu
           mkdir -p "$DIST"
           cp target/aarch64-unknown-linux-gnu/release/libhooks_payload.so "$DIST/hooks-payload-linux-arm64"
-          sha256sum "$DIST/hooks-payload-linux-arm64" > "$DIST/hooks-payload-linux-arm64.sha256"
+          # MEDIDO (2026-11-26, CI): `.sha256` con el NOMBRE (no con la ruta
+          # absoluta) ⇒ portable entre jobs.  Ver el mismo comentario en el
+          # job de Android.
+          ( cd "$DIST" && sha256sum hooks-payload-linux-arm64 > hooks-payload-linux-arm64.sha256 )
           file "$DIST/hooks-payload-linux-arm64" | tee /tmp/fichero-payload-glibc.txt
           grep -q "ELF 64-bit LSB shared object" /tmp/fichero-payload-glibc.txt || {
             echo "::error::el payload glibc no es una shared object ELF 64-bit"; exit 1; }
@@ -575,6 +583,23 @@ jobs:
           sha256sum -c dist/megadaemon-core-android-arm64.sha256 || exit 1
           sha256sum -c "dist/megadaemon-core-android-arm64-${GITHUB_SHA::7}.sha256" || exit 1
           echo "assets ARM64 verificados ✓"
+          # Verificar el VALOR del sha256, NO la ruta.
+          #
+          # MEDIDO (2026-11-26, CI): el `.sha256` del payload lo genera el job
+          # que lo compila, en SU directorio ⇒ la ruta que contiene no existe
+          # en este job (`/home/runner/work/.../rust-core/dist/…`) y
+          # `sha256sum -c` fallaba con "No such file or directory" => el job
+          # `release` caía => NO se publicaba NINGUNA release (el móvil se
+          # quedaba sin binario).  Aquí se compara el VALOR del hash.
+          verificar_sha() {
+            local f="$1" esperado real
+            esperado=$(cut -d' ' -f1 < "$f.sha256")
+            real=$(sha256sum "$f" | cut -d' ' -f1)
+            if [ "$esperado" != "$real" ]; then
+              echo "::error::sha256 incorrecto en $f (esperado $esperado, real $real)"
+              exit 1
+            fi
+          }
           # El PAYLOAD DE HOOKS es opcional: si su job falló, la release sale
           # igual (el móvil no se queda sin daemon por culpa del payload) pero
           # sin el asset del payload.  Si está, se verifica su sha256.
@@ -582,7 +607,7 @@ jobs:
             if [ ! -f dist/hooks-payload-arm64.sha256 ]; then
               echo "::error::falta dist/hooks-payload-arm64.sha256"; exit 1
             fi
-            sha256sum -c dist/hooks-payload-arm64.sha256 || exit 1
+            verificar_sha dist/hooks-payload-arm64
             echo "payload de hooks verificado ✓"
           else
             echo "::notice::el payload de hooks NO se publica en este run (job 'build-hooks-payload' falló o no se ejecutó)"
@@ -593,7 +618,7 @@ jobs:
             if [ ! -f dist/hooks-payload-linux-arm64.sha256 ]; then
               echo "::error::falta dist/hooks-payload-linux-arm64.sha256"; exit 1
             fi
-            sha256sum -c dist/hooks-payload-linux-arm64.sha256 || exit 1
+            verificar_sha dist/hooks-payload-linux-arm64
             echo "payload de hooks (glibc) verificado ✓"
           else
             echo "::notice::el payload de hooks para glibc NO se publica en este run"
