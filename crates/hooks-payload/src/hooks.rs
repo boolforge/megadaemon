@@ -554,8 +554,13 @@ mod tests {
     use std::ffi::c_void;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    static ENTER: AtomicU64 = AtomicU64::new(0);
-    static LEAVE: AtomicU64 = AtomicU64::new(0);
+    // MEDIDO (2026-11-26, CI): con contadores GLOBALES los tests se
+    // contaminaban (uno reseteaba el contador mientras otro lo leía) ⇒
+    // fallo en el CI y no en local.  Cada test tiene los suyos.
+    static ENTER_A: AtomicU64 = AtomicU64::new(0);
+    static LEAVE_A: AtomicU64 = AtomicU64::new(0);
+    static ENTER_B: AtomicU64 = AtomicU64::new(0);
+    static LEAVE_B: AtomicU64 = AtomicU64::new(0);
 
     /// Función a hookear: `#[inline(never)]` para que gum la pueda enganchar.
     ///
@@ -606,40 +611,55 @@ mod tests {
         }
     }
 
-    struct Contador;
+    /// Contador de entradas/salidas, con sus PROPIOS contadores.
+    struct Contador {
+        enter: &'static AtomicU64,
+        leave: &'static AtomicU64,
+    }
 
-    impl InvocationListener for Contador {
-        fn on_enter(&mut self, _ctx: InvocationContext) {
-            ENTER.fetch_add(1, Ordering::SeqCst);
-        }
-        fn on_leave(&mut self, _ctx: InvocationContext) {
-            LEAVE.fetch_add(1, Ordering::SeqCst);
+    impl Contador {
+        fn nuevo(enter: &'static AtomicU64, leave: &'static AtomicU64) -> Self {
+            Self { enter, leave }
         }
     }
 
-    /// Los contadores son globales: cada test los pone a cero (los tests se
-    /// ejecutan en paralelo y se contaminarían).
-    fn reinicia_contadores() {
-        ENTER.store(0, Ordering::SeqCst);
-        LEAVE.store(0, Ordering::SeqCst);
+    impl InvocationListener for Contador {
+        fn on_enter(&mut self, _ctx: InvocationContext) {
+            self.enter.fetch_add(1, Ordering::SeqCst);
+        }
+        fn on_leave(&mut self, _ctx: InvocationContext) {
+            self.leave.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// El escritor NDJSON es un SINGLTON global ⇒ dos tests que lo abran
+    /// con rutas distintas se pisan (el último `abrir` cambia el `fd`).
+    /// MEDIDO (2026-11-26, CI): por eso los tests que lo usan se serializan
+    /// con este cerrojo.
+    static CERROJO_SINK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn cerrojo_sink() -> std::sync::MutexGuard<'static, ()> {
+        match CERROJO_SINK.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        }
     }
 
     #[test]
     fn gum_llama_a_on_leave_al_salir_de_la_funcion() {
-        reinicia_contadores();
         let mut inter = crate::interceptor_bloqueado();
         let addr = objetivo as extern "C" fn(u64) -> u64;
         let ptr = frida_gum::NativePointer(addr as *mut c_void);
-        let mut l = Contador;
+        let mut l = Contador::nuevo(&ENTER_A, &LEAVE_A);
         let handle = inter
             .0
             .attach(ptr, &mut l)
             .expect("gum no pudo enganchar la función de prueba");
         let r = objetivo(35);
         assert_eq!(r, 42, "la función hookeada no se puede llamar");
-        assert_eq!(ENTER.load(Ordering::SeqCst), 1, "on_enter no se disparó");
+        assert_eq!(ENTER_A.load(Ordering::SeqCst), 1, "on_enter no se disparó");
         assert_eq!(
-            LEAVE.load(Ordering::SeqCst),
+            LEAVE_A.load(Ordering::SeqCst),
             1,
             "on_leave NO se disparó (gum no llama al callback de salida)"
         );
@@ -654,6 +674,8 @@ mod tests {
     /// endpoint) nunca se veía.
     #[test]
     fn el_plan_listener_escribe_el_retorno_de_la_llamada() {
+        let _cerrojo = cerrojo_sink();
+        let mut inter = crate::interceptor_bloqueado();
         let dir = std::env::temp_dir().join(format!("md_plan_listener_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let ruta = dir.join("eventos.ndjson");
@@ -662,7 +684,6 @@ mod tests {
         let abierta = sink::Sink::global().abrir(&cand).expect("no se pudo abrir el NDJSON");
         assert_eq!(abierta, cand[0]);
 
-        let mut inter = crate::interceptor_bloqueado();
         let addr = objetivo2 as extern "C" fn(u64) -> u64;
         let ptr = frida_gum::NativePointer(addr as *mut c_void);
         let mut l = PlanListener {
@@ -695,16 +716,15 @@ mod tests {
     /// `on_leave` (medido: el `ret` depende de él).
     #[test]
     fn una_funcion_que_devuelve_una_string_tambien_dispara_on_leave() {
-        reinicia_contadores();
         let mut inter = crate::interceptor_bloqueado();
         let addr = objetivo3 as extern "C" fn(u64) -> &'static str;
         let ptr = frida_gum::NativePointer(addr as *mut c_void);
-        let mut l = Contador;
+        let mut l = Contador::nuevo(&ENTER_B, &LEAVE_B);
         let h = inter.0.attach(ptr, &mut l).expect("attach");
         let r = objetivo3(7);
         assert_eq!(r, "https://endpoint.de.prueba/v1/x");
-        assert_eq!(ENTER.load(Ordering::SeqCst), 1, "on_enter no se disparó");
-        assert_eq!(LEAVE.load(Ordering::SeqCst), 1, "on_leave no se disparó");
+        assert_eq!(ENTER_B.load(Ordering::SeqCst), 1, "on_enter no se disparó");
+        assert_eq!(LEAVE_B.load(Ordering::SeqCst), 1, "on_leave no se dispara");
         drop(h);
     }
 
@@ -715,15 +735,22 @@ mod tests {
     /// endpoint; sin esto no se ve QUÉ URL usa el LS.
     #[test]
     fn el_plan_listener_lee_la_string_que_devuelve_la_funcion() {
-        reinicia_contadores();
+        // El escritor NDJSON es global: este cerrojo serializa los tests que
+        // lo usan (MEDIDO 2026-11-26 en CI: sin él, los dos tests se pisan
+        // el `fd` y el que pierde falla).
+        let _cerrojo = cerrojo_sink();
+        // El interceptor también es global: se toma ANTES de abrir el NDJSON
+        // para que el `fd` no lo cambie otro test mientras éste corre.
+        let mut inter = crate::interceptor_bloqueado();
         let dir = std::env::temp_dir().join(format!("md_plan_str_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let ruta = dir.join("eventos.ndjson");
         let _ = std::fs::remove_file(&ruta);
         let cand = vec![ruta.to_string_lossy().to_string()];
-        sink::Sink::global().abrir(&cand).expect("no se pudo abrir el NDJSON");
+        sink::Sink::global()
+            .abrir(&cand)
+            .expect("no se pudo abrir el NDJSON");
 
-        let mut inter = crate::interceptor_bloqueado();
         let addr = objetivo4 as extern "C" fn(u64) -> &'static str;
         let ptr = frida_gum::NativePointer(addr as *mut c_void);
         let mut l = PlanListener {
@@ -735,9 +762,6 @@ mod tests {
             .0
             .attach(ptr, &mut l)
             .expect("gum no pudo enganchar la función de prueba");
-        // Llamada INDIRECTA: con una llamada directa, LLVM elimina la llamada
-        // (función interna de resultado constante) y el hook nunca se
-        // dispara (medido en el host: ENTER=0).
         let r = objetivo4(7);
         assert_eq!(r, "https://otro.de.prueba/v1/x");
         drop(handle);
