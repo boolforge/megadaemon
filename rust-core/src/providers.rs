@@ -499,16 +499,21 @@ fn parse_tool_calls(node: Option<&Value>) -> Vec<ParsedToolCall> {
 ///
 /// MEDIDO (2026-11-26, móvil): MiniMax, cuando la petición **no** lleva
 /// `tools`, no devuelve `tool_calls` estructuradas: deja la llamada dentro
-/// del texto con su propio protocolo
+/// del texto con su propio protocolo.  Se han medido **dos** formas:
 ///
 /// ```text
-/// <]minimax[>[<tool_call> ... <invoke name="view_file">{"AbsolutePath":"..."}
+/// # A) <]minimax[>[<tool_call>
+///    <invoke name="view_file">
+///    {"AbsolutePath":"..."}
+///    </invoke>
+///
+/// # B) <]minimax[>[<tool_call>
+///    =functions.run_command  code
+///    {"command":"...","timeout_ms":60000}
 /// ```
 ///
-/// La parte útil (y estable entre versiones) es el par
-/// `<invoke name="X">` … `</invoke>` con un objeto JSON de argumentos.  Se
-/// recupera eso, se limpian los marcadores del texto y la llamada queda
-/// disponible como `functionCall` para el agente.
+/// Se recuperan ambas, se limpian los marcadores del texto y la llamada
+/// queda disponible como `functionCall` para el agente.
 ///
 /// Función **PURO**: no toca red ni estado global.
 pub fn tool_calls_en_texto(texto: &str) -> (Vec<ParsedToolCall>, String) {
@@ -516,75 +521,135 @@ pub fn tool_calls_en_texto(texto: &str) -> (Vec<ParsedToolCall>, String) {
     let mut limpio = String::with_capacity(texto.len());
     let mut resto = texto;
     loop {
-        let Some(i) = resto.find("<invoke") else {
-            limpio.push_str(resto);
-            break;
-        };
-        limpio.push_str(&resto[..i]);
-        let after = &resto[i..];
-        // `name="X"` (con o sin espacios alrededor del `=`).
-        //  Todos los índices son ABSOLUTOS dentro de `after`.
-        let Some(ni) = after.find("name") else {
-            limpio.push_str(after);
-            break;
-        };
-        let mut p = ni + "name".len();
-        while p < after.len() && after.as_bytes()[p].is_ascii_whitespace() {
-            p += 1;
-        }
-        if p >= after.len() || after.as_bytes()[p] != b'=' {
-            limpio.push_str(after);
-            break;
-        }
-        p += 1;
-        while p < after.len() && after.as_bytes()[p].is_ascii_whitespace() {
-            p += 1;
-        }
-        let Some(comilla) = after[p..].chars().next() else {
-            limpio.push_str(after);
-            break;
-        };
-        if comilla != '"' && comilla != '\'' {
-            limpio.push_str(after);
-            break;
-        }
-        let ini_cuerpo = p + comilla.len_utf8();
-        let Some(cierre) = after[ini_cuerpo..].find(comilla) else {
-            limpio.push_str(after);
-            break;
-        };
-        let name = after[ini_cuerpo..ini_cuerpo + cierre].to_string();
-        // Los argumentos: el primer `{` DESPUÉS del cierre de la comilla.
-        let fin_nombre = ini_cuerpo + cierre;
-        let Some(bo) = after[fin_nombre..].find('{').map(|p| fin_nombre + p) else {
-            limpio.push_str(after);
-            break;
-        };
-        let (json_args, consumido) = match objeto_json_en_texto(&after[bo..]) {
-            Some(x) => x,
-            None => {
-                limpio.push_str(after);
+        // El siguiente inicio de llamada: `<invoke` (forma A) o
+        // `=functions.` (forma B).
+        let i_a = resto.find("<invoke");
+        let i_b = resto.find("=functions.");
+        let (i, forma_a) = match (i_a, i_b) {
+            (Some(a), Some(b)) => {
+                if a <= b {
+                    (a, true)
+                } else {
+                    (b, false)
+                }
+            }
+            (Some(a), None) => (a, true),
+            (None, Some(b)) => (b, false),
+            (None, None) => {
+                limpio.push_str(resto);
                 break;
             }
         };
-        let args: Value =
-            serde_json::from_str(json_args).unwrap_or(Value::Object(serde_json::Map::new()));
+        limpio.push_str(&resto[..i]);
+        let after = &resto[i..];
+        let parsed = if forma_a {
+            parse_llamada_invoke(after)
+        } else {
+            parse_llamada_functions(after)
+        };
+        let Some((call, consumido)) = parsed else {
+            limpio.push_str(after);
+            break;
+        };
         calls.push(ParsedToolCall {
             id: format!("call_texto_{}", calls.len() + 1),
-            name,
-            arguments: args,
+            ..call
         });
-        // Saltar el `</invoke>` y el resto del envoltorio del proveedor.
-        let mut fin = bo + consumido;
-        if let Some(p) = after[fin..].find("</invoke>") {
-            fin += p + "</invoke>".len();
-        }
-        resto = &after[fin..];
+        resto = &after[consumido..];
     }
     if !calls.is_empty() {
         limpio = limpiar_marcadores_de_tool_call(&limpio);
     }
     (calls, limpio)
+}
+
+/// Forma A: `<invoke name="X">{json}</invoke>`.
+///
+/// Devuelve la llamada y **cuántos bytes** se han consumido.
+fn parse_llamada_invoke(after: &str) -> Option<(ParsedToolCall, usize)> {
+    // `name="X"` (con o sin espacios alrededor del `=`).
+    //  Todos los índices son ABSOLUTOS dentro de `after`.
+    let ni = after.find("name")?;
+    let mut p = ni + "name".len();
+    while p < after.len() && after.as_bytes()[p].is_ascii_whitespace() {
+        p += 1;
+    }
+    if p >= after.len() || after.as_bytes()[p] != b'=' {
+        return None;
+    }
+    p += 1;
+    while p < after.len() && after.as_bytes()[p].is_ascii_whitespace() {
+        p += 1;
+    }
+    let comilla = after[p..].chars().next()?;
+    if comilla != '"' && comilla != '\'' {
+        return None;
+    }
+    let ini_cuerpo = p + comilla.len_utf8();
+    let cierre = after[ini_cuerpo..].find(comilla)?;
+    let name = after[ini_cuerpo..ini_cuerpo + cierre].to_string();
+    if name.is_empty() {
+        return None;
+    }
+    // Los argumentos: el primer `{` DESPUÉS del cierre de la comilla.
+    let fin_nombre = ini_cuerpo + cierre;
+    let bo = fin_nombre + after[fin_nombre..].find('{')?;
+    let (json_args, consumido) = objeto_json_en_texto(&after[bo..])?;
+    let arguments = serde_json::from_str(json_args).unwrap_or(Value::Object(serde_json::Map::new()));
+    // Saltar el `</invoke>` si está.
+    let mut fin = bo + consumido;
+    if let Some(p) = after[fin..].find("</invoke>") {
+        fin += p + "</invoke>".len();
+    }
+    Some((
+        ParsedToolCall {
+            id: String::new(),
+            name,
+            arguments,
+        },
+        fin,
+    ))
+}
+
+/// Forma B: `=functions.X  code\n{json}` (protocolo propio de MiniMax).
+fn parse_llamada_functions(after: &str) -> Option<(ParsedToolCall, usize)> {
+    let ini_nombre = after.find("=functions.")? + "=functions.".len();
+    // El nombre va hasta el primer espacio (o hasta la `{` de los args).
+    let resto_nombre = &after[ini_nombre..];
+    let fin_nombre = ini_nombre
+        + resto_nombre
+            .find(|c: char| c.is_whitespace() || c == '{')
+            .unwrap_or(resto_nombre.len());
+    let name = after[ini_nombre..fin_nombre].to_string();
+    if name.is_empty() {
+        return None;
+    }
+    // Detrás del nombre puede venir una palabra de tipo (`code`, `result`…).
+    let mut p = fin_nombre;
+    if p < after.len() && after.as_bytes()[p] != b'{' {
+        while p < after.len() && after.as_bytes()[p].is_ascii_whitespace() {
+            p += 1;
+        }
+        while p < after.len()
+            && !after.as_bytes()[p].is_ascii_whitespace()
+            && after.as_bytes()[p] != b'{'
+        {
+            p += 1;
+        }
+    }
+    // Los argumentos: el primer `{` DESPUÉS.
+    let bo = p + after[p..].find('{')?;
+    let (json_args, consumido) = objeto_json_en_texto(&after[bo..])?;
+    let arguments =
+        serde_json::from_str(json_args).unwrap_or(Value::Object(serde_json::Map::new()));
+    Some((
+        ParsedToolCall {
+            id: String::new(),
+            name,
+            arguments,
+        },
+        bo + consumido,
+    ))
 }
 
 /// Localiza un objeto JSON `{…}` completo (con llaves y comillas).

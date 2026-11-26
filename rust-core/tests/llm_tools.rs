@@ -175,6 +175,17 @@ fn texto_de_minimax() -> String {
     s
 }
 
+/// La **segunda** forma, medida en el móvil el 2026-11-26 07:06 (otro
+/// mensaje, otro modelo de tool call): `=functions.<nombre>  code` + JSON.
+fn texto_de_minimax_forma_b() -> String {
+    let mut s = String::new();
+    s.push_str("Reanudo: sincronizo `origin/main`.<]\u{200b}minimax[>[<\u{200b}tool_call>\n");
+    s.push_str("=functions.run_command  code\n");
+    s.push_str("{\"command\":\"git status -sb\",\"timeout_ms\":60000}\n");
+    s.push_str("</\u{200b}tool_call>The user says \"gg\". Use run_command.");
+    s
+}
+
 #[test]
 fn la_tool_call_en_texto_se_recupera() {
     let texto = texto_de_minimax();
@@ -186,6 +197,19 @@ fn la_tool_call_en_texto_se_recupera() {
     // El texto útil se conserva; los marcadores desaparecen.
     assert!(limpio.contains("Voy a leer el fichero."));
     assert!(!limpio.contains("invoke name="));
+    assert!(!limpio.contains("\u{200b}"));
+}
+
+#[test]
+fn la_tool_call_en_texto_se_recupera_tambien_en_la_forma_functions() {
+    let texto = texto_de_minimax_forma_b();
+    let (calls, limpio) = tool_calls_en_texto(&texto);
+    assert_eq!(calls.len(), 1, "llamadas: {:?}", calls);
+    assert_eq!(calls[0].name, "run_command");
+    assert_eq!(calls[0].arguments["command"], "git status -sb");
+    assert_eq!(calls[0].arguments["timeout_ms"], 60000);
+    assert!(limpio.contains("Reanudo: sincronizo"));
+    assert!(!limpio.contains("=functions."));
     assert!(!limpio.contains("\u{200b}"));
 }
 
