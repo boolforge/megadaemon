@@ -332,6 +332,24 @@ pub fn tool_definitions() -> Value {
                 }
             },
             {
+                "name": "re_masivo",
+                "description": "RE masivo por app: (1) WORKLIST: que apps vigilan el root, priorizadas y CON EL POR QUE (puntaje + motivos); (2) ANALIZAR: una app como unidad de trabajo con presupuesto (tiempo/bytes/señales) y bitacora NDJSON propia; (3) DIGEST: una tabla compacta (una linea por app) en vez de los volcados completos, para no gastar tokens. Solo observa: no modifica nada.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["worklist", "analizar", "analizar_lote", "digest", "bitacora"], "default": "worklist" },
+                        "paquete": { "type": "string" },
+                        "limite": { "type": "integer", "default": 25 },
+                        "solo_terceros": { "type": "boolean", "default": true },
+                        "lineas": { "type": "integer", "default": 50 },
+                        "max_apps": { "type": "integer", "default": 25 },
+                        "max_por_app_ms": { "type": "integer", "default": 20000 },
+                        "max_por_app_bytes": { "type": "integer", "default": 201326592 },
+                        "max_senales_por_app": { "type": "integer", "default": 12 }
+                    }
+                }
+            },
+            {
                 "name": "dex_decompile",
                 "description": "Decompilador DEX en Rust puro (sin Java, dex2jar ni Ghidra): pseudo-Java por clase, desensamblado Dalvik, mapa de desofuscación (nombres ofuscados, strings cifrados, flujo de control) y strings del DEX. Acepta un .dex suelto o un APK (extrae classes*.dex).",
                 "inputSchema": {
@@ -2916,6 +2934,9 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 n("limit") as usize
             }),
         },
+        // v16: RE masivo por app (worklist + analisis por unidad + digest).
+        // Modulo propio: `mass_re.rs`.
+        "re_masivo" => Some(crate::mass_re::dispatch(args)),
         // v14: decompilador DEX.  El agente externo de Android lo usa para
         // analizar APKs crudas sin invertir en Ghidra-DEX ni en smali.
         "dex_decompile" => match s("action").as_str() {
