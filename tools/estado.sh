@@ -51,6 +51,36 @@ for r in d.get('workflow_runs',[])[:4]:
 print(' '.join(out))
 " 2>/dev/null)
   [ -n "$runs" ] && k "CI (run:resultado)" "$runs"
+  # Cuota REAL del proyecto: los runner-minutos que gasta el CI.  Es la
+  # unica cuota que se puede MEDIR desde aqui (la de LLM la lleva el
+  # runtime y no la expone a los agentes: `mcode-tools auth status` solo
+  # dice "managed_by_sandbox_egress", sin numeros).
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    min=$(python3 - "$API" <<'PY' 2>/dev/null
+import json,os,sys,urllib.request,datetime
+api=sys.argv[1]
+tok=os.environ.get("GITHUB_TOKEN","")
+def get(u):
+    r=urllib.request.Request(u,headers={"Authorization":"Bearer "+tok,"Accept":"application/vnd.github+json"})
+    return json.load(urllib.request.urlopen(r,timeout=12))
+try:
+    runs=get(api+"/actions/runs?branch=main&per_page=10").get("workflow_runs",[])
+    tot=0.0; n=0
+    for r in runs:
+        try: jobs=get(api+"/actions/runs/%s/jobs?per_page=30"%r["id"]).get("jobs",[])
+        except Exception: continue
+        for j in jobs:
+            a,b=j.get("started_at"),j.get("completed_at")
+            if a and b:
+                d=datetime.datetime.fromisoformat(b.replace("Z","+00:00"))-datetime.datetime.fromisoformat(a.replace("Z","+00:00"))
+                tot+=d.total_seconds()/60; n+=1
+    print("%d runner-minutos en %d jobs (ultimos %d runs)"%(round(tot),n,len(runs)))
+except Exception:
+    pass
+PY
+)
+    [ -n "$min" ] && k "cuota CI" "$min"
+  fi
 fi
 
 # --- backlog ----------------------------------------------------------------
@@ -72,7 +102,7 @@ fi
 
 # --- gates ------------------------------------------------------------------
 if [ -f "$REPO/tools/check-sintaxis.sh" ]; then
-  s=$(sh "$REPO/tools/check-sintaxis.sh" 2>&1 | tail -1)
+  s=$(bash "$REPO/tools/check-sintaxis.sh" 2>&1 | tail -1)
   say "== GATES =="
   k "sintaxis" "$s"
 fi
