@@ -2999,12 +2999,22 @@ mod tests {
     }
 
     /// El `goto` lleva su offset con signo en el byte 1 del primer code unit.
+    ///
+    /// BUG REAL que este test cazaba: el código unit es **little-endian** y el
+    /// opcode va en el **byte BAJO**.  El test usaba `0x28ff` (que es opcode
+    /// `0xff` = reservado) en vez de `0xff28`, así que el mnemonic salía otra
+    /// cosa y el test llevaba desde su creación sin poder pasar.  Se ejecuta
+    /// en el CI desde el commit que integró el módulo.
     #[test]
     fn decodifica_un_goto_con_su_destino() {
-        let insns: Vec<u16> = vec![0x28ff];
+        // `0x1028` = opcode 0x28 (`goto`) + AA=0x10 => offset con signo +16.
+        let insns: Vec<u16> = vec![0x1028];
         let d = decode_code(&insns);
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].mnemonic, "goto");
-        assert_eq!(d[0].branch_target, Some(40));
+        // Convencion medida: el destino es `offset + delta` (offset relativo
+        // a la propia instruccion; es la que da el 100 % de destinos en una
+        // frontera de instruccion).
+        assert_eq!(d[0].branch_target, Some(16));
     }
 }
