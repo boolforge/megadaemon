@@ -154,7 +154,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android
+          targets: aarch64-linux-android, aarch64-unknown-linux-gnu
       - uses: nttld/setup-ndk@v1
         id: ndk
         with:
@@ -421,6 +421,86 @@ jobs:
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
         run: cargo test --release
 
+  # MEDIDO (2026-11-26, movil): el LS de Antigravity NO usa la libc de
+  # Bionic: corre con un runtime de GLIBC propio
+  # (/data/user/0/com.agy/files/runtime/lib/libc.so.6).  Un payload enlazado
+  # contra Bionic (NEEDED libc.so / libdl.so / liblog.so) NO se puede cargar
+  # ahi: el enlazador de glibc no encuentra esas librerias y la carga aborta
+  # con "cannot locate symbol g_get_tmp_dir" (el crate frida-gum usa la API
+  # de glib en Android y la de gum en Linux).  Por eso hace falta una SEGUNDA
+  # variante del payload, enlazada contra glibc.
+  #
+  # Es un job APARTE: si gum no llegara a compilarse para glibc, el movil
+  # sigue teniendo daemon y el payload de Bionic (el release sale igual).
+  build-hooks-payload-glibc:
+    name: payload de hooks para GLIBC (aarch64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - name: Dependencias (cross-gcc para glibc; libclang para bindgen)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu libclang-dev clang
+          aarch64-linux-gnu-gcc --version | head -1
+      - name: Cache de cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/hooks-payload/target
+          key: cargo-payload-glibc-${{ hashFiles('crates/hooks-payload/Cargo.lock') }}
+      - name: "Compilar el payload (gum) para GLIBC (aarch64-unknown-linux-gnu)"
+        working-directory: crates/hooks-payload
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+          RANLIB_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ranlib
+          # El devkit de gum (17.9.5) lo baja el propio build.rs: para este
+          # target pide `frida-gum-devkit-17.9.5-linux-arm64.tar.xz` (existe
+          # en el release de Frida).  El sysroot es el del cross-gcc, para
+          # que bindgen encuentre los headers de glibc.
+          BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_gnu: >-
+            --sysroot=/usr/aarch64-linux-gnu
+            -I/usr/aarch64-linux-gnu/include
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
+          # `-static-libgcc`: el runtime del LS (glibc propio) no tiene
+          # libgcc_s.so.1 mapeada => el payload no puede depender de ella.
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: >-
+            -C link-arg=-static-libgcc
+        run: |
+          cargo build --release --target aarch64-unknown-linux-gnu
+          mkdir -p ../dist
+          cp target/aarch64-unknown-linux-gnu/release/libhooks_payload.so ../dist/hooks-payload-linux-arm64
+          sha256sum ../dist/hooks-payload-linux-arm64 > ../dist/hooks-payload-linux-arm64.sha256
+          file ../dist/hooks-payload-linux-arm64 | tee /tmp/fichero-payload-glibc.txt
+          grep -q "ELF 64-bit LSB shared object" /tmp/fichero-payload-glibc.txt || {
+            echo "::error::el payload glibc no es una shared object ELF 64-bit"; exit 1; }
+          readelf -d ../dist/hooks-payload-linux-arm64 | tee /tmp/necesarias-glibc.txt
+          grep -q "libc.so.6" /tmp/necesarias-glibc.txt || {
+            echo "::error::el payload glibc no depende de libc.so.6"; exit 1; }
+          # MEDIDO (2026-11-26, movil): el runtime del LS tiene mapeadas
+          # libc.so.6, libm.so.6, libdl.so.2, libpthread.so.0, libresolv.so.2
+          # y librt.so.1.  El payload NO puede depender de nada mas.
+          for lib in liblog.so libstdc++.so libgcc_s.so.1 libelf.so.1; do
+            if grep -q "$lib" /tmp/necesarias-glibc.txt; then
+              echo "::error::el payload glibc depende de $lib (no lo tiene el runtime del LS)"; exit 1
+            fi
+          done
+          echo "payload de glibc compilado y verificado"
+      - name: Subir artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: hooks-payload-glibc
+          path: dist/
+
+
   release:
     name: release (auto-actualización de las instancias)
     runs-on: ubuntu-latest
@@ -487,6 +567,17 @@ jobs:
             echo "payload de hooks verificado ✓"
           else
             echo "::notice::el payload de hooks NO se publica en este run (job 'build-hooks-payload' falló o no se ejecutó)"
+          fi
+          # El payload de GLIBC (para el LS de Antigravity, que corre con un
+          # runtime de glibc) es opcional por el mismo motivo.
+          if [ -f dist/hooks-payload-linux-arm64 ]; then
+            if [ ! -f dist/hooks-payload-linux-arm64.sha256 ]; then
+              echo "::error::falta dist/hooks-payload-linux-arm64.sha256"; exit 1
+            fi
+            sha256sum -c dist/hooks-payload-linux-arm64.sha256 || exit 1
+            echo "payload de hooks (glibc) verificado ✓"
+          else
+            echo "::notice::el payload de hooks para glibc NO se publica en este run"
           fi
       - name: "Build META: bundle con TODO dentro (binario + stack + manifiesto)"
         # El bundle meta es la via de instalacion/actualizacion COMPLETA: un

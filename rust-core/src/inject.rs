@@ -994,6 +994,11 @@ const PTRACE_POKEDATA: i32 = 5;
 const PTRACE_CONT: i32 = 7;
 const PTRACE_GETREGSET: i32 = 0x4204;
 const PTRACE_SETREGSET: i32 = 0x4205;
+
+/// `__WALL` para `waitpid`: esperar **también** a los procesos que no son
+/// hijos (los attachados con ptrace).  Sin él, el stop de un proceso
+/// attachado no se ve (MEDIDO 2026-11-26, móvil).
+const WALL: i32 = 0x4000_0000;
 const PTRACE_ATTACH: i32 = 16;
 const PTRACE_DETACH: i32 = 17;
 /// Tipo de la nota de `ptrace` que lleva los registros generales.
@@ -1359,11 +1364,17 @@ fn continuar(pid: i32) -> Result<(), String> {
 }
 
 /// Espera a que el proceso se pare otra vez (con tope de tiempo).
+///
+/// MEDIDO (2026-11-26, móvil): `waitpid` **sin** `__WALL` NO ve el stop de
+/// un proceso al que se ha hecho `PTRACE_ATTACH` (no es un hijo real del
+/// inyector) ⇒ devolvía 0 sin más y el inyector acababa con "el proceso N
+/// no se ha parado en 15000 ms" con el proceso **bien** parado.  Con
+/// `__WALL` el stop se ve al instante.
 fn esperar(pid: i32, timeout_ms: u64) -> Result<i32, String> {
     let limite = Instant::now() + Duration::from_millis(timeout_ms);
     loop {
         let mut status: i32 = 0;
-        let r = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        let r = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG | WALL) };
         if r == pid {
             return Ok(status);
         }

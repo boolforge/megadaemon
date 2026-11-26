@@ -48,6 +48,73 @@ pub fn payload_remoto() -> String {
     format!("{}/hooks-payload-arm64.so", dir_remoto())
 }
 
+/// Variante del payload según la **libc del proceso objetivo**.
+///
+/// MEDIDO (2026-11-26, móvil): el LS de Antigravity NO usa la libc de
+/// Bionic: corre con un runtime de **GLIBC** propio
+/// (`/data/user/0/com.agy/files/runtime/lib/libc.so.6`, confirmado en
+/// `/proc/<pid>/maps`).  Un payload enlazado contra Bionic (NEEDED
+/// `libc.so`, `libdl.so`, `liblog.so`) **no** se puede cargar ahí: el
+/// enlazador de glibc no encuentra esas librerías.  Por eso hay dos
+/// variantes del payload: una para Bionic (Android) y otra para glibc.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum VariantePayload {
+    /// Enlazada contra Bionic (`libc.so`, `libdl.so`, `liblog.so`).
+    Bionic,
+    /// Enlazada contra glibc (`libc.so.6`, `libm.so.6`).
+    Glibc,
+}
+
+impl VariantePayload {
+    /// Nombre del asset en el release.
+    pub fn asset(&self) -> &'static str {
+        match self {
+            VariantePayload::Bionic => crate::hooks_payload::ASSET_PAYLOAD,
+            VariantePayload::Glibc => crate::hooks_payload::ASSET_PAYLOAD_GLIBC,
+        }
+    }
+
+    /// Nombre del fichero tal y como queda en el móvil.
+    pub fn nombre(&self) -> &'static str {
+        match self {
+            VariantePayload::Bionic => "hooks-payload-arm64.so",
+            VariantePayload::Glibc => "hooks-payload-linux-arm64.so",
+        }
+    }
+}
+
+/// Detecta qué libc usa el proceso `pid` leyendo su `/proc/<pid>/maps`.
+///
+/// Si el proceso tiene mapeada `libc.so.6` (o el linker de glibc) es un
+/// proceso de **glibc** ⇒ payload de glibc.  Si no se puede leer el maps se
+/// asume Bionic (el caso normal de una app de Android).
+pub fn detectar_variante(pid: i64) -> VariantePayload {
+    let mapas = crate::inject::leer_maps_en(std::path::Path::new("/proc"), pid as i32);
+    let es_glibc = mapas.iter().any(|m| {
+        let r = &m.ruta;
+        r.contains("libc.so.6") || r.contains("ld-linux-aarch64.so") || r.contains("ld-linux-x86")
+    });
+    if es_glibc {
+        VariantePayload::Glibc
+    } else {
+        VariantePayload::Bionic
+    }
+}
+
+/// Ruta del payload de una variante en el directorio remoto del móvil.
+pub fn payload_remoto_para(variante: VariantePayload) -> String {
+    format!("{}/{}", dir_remoto(), variante.nombre())
+}
+
+/// Ruta del payload de una variante en el directorio privado de la app.
+pub fn payload_privado_para(paquete: &str, variante: VariantePayload) -> String {
+    format!(
+        "/data/data/{}/files/megadaemon/{}",
+        paquete,
+        variante.nombre()
+    )
+}
+
 /// Inyector (`md-inject`) en el móvil.
 pub fn inyector_remoto() -> String {
     format!("{}/md-inject", dir_remoto())
@@ -161,6 +228,7 @@ echo '--- SELINUX ---'
 getenforce 2>&1
 echo '--- PAYLOAD-REFERENCIA ---'
 ls -lZ {p} 2>&1 | head -2
+ls -lZ {p2} 2>&1 | head -2
 echo '--- INYECTOR ---'
 ls -lZ {i} 2>&1 | head -2
 echo '--- FRIDA-SERVER ---'
@@ -172,12 +240,16 @@ echo '--- PROCESOS ---'
 ps -A -o PID,NAME 2>/dev/null | grep -i antigravity | head -5
 "#,
         p = sh_quote(&payload_remoto()),
+        p2 = sh_quote(&payload_remoto_para(VariantePayload::Glibc)),
         i = sh_quote(&inyector_remoto()),
         n = sh_quote(&ndjson_remoto()),
     );
     let r = root_exec(&script, 40_000, 32 * 1024);
     let salida = r.combined();
     let tiene_payload = salida.contains("hooks-payload-arm64.so")
+        && !salida.contains("No such file")
+        && !salida.contains("Permission denied");
+    let tiene_payload_glibc = salida.contains("hooks-payload-linux-arm64.so")
         && !salida.contains("No such file")
         && !salida.contains("Permission denied");
     let tiene_inyector = salida.contains("md-inject")
@@ -190,9 +262,11 @@ ps -A -o PID,NAME 2>/dev/null | grep -i antigravity | head -5
         "ok": true,
         "paquete": descubrir_paquete(paquete),
         "payload_presente": tiene_payload,
+        "payload_glibc_presente": tiene_payload_glibc,
         "inyector_presente": tiene_inyector,
         "frida_server_presente": tiene_frida,
         "payload_esperado": payload_remoto(),
+        "payload_esperado_glibc": payload_remoto_para(VariantePayload::Glibc),
         "inyector_esperado": inyector_remoto(),
         "ndjson_esperado": ndjson_remoto(),
         "informe": salida,
@@ -207,36 +281,50 @@ fn instalar(paquete: &str, lib_path: &str, bin_path: &str) -> Value {
     //    proceso de la app** (el directorio privado de la app: etiqueta
     //    `app_data_file`; en `/data/local/tmp` la etiqueta es
     //    `shell_data_file` y `untrusted_app` no puede leerla).
-    let destino_privado = format!("/data/data/{}/files/megadaemon/hooks-payload-arm64.so", pkg);
+    //
+    //    Se instalan LAS DOS VARIANTES (Bionic y glibc): el objetivo puede
+    //    ser un proceso de cualquiera de los dos runtimes, y `inyectar`
+    //    elige la que corresponda (ver [`detectar_variante`]).
     let mut pasos: Vec<Value> = Vec::new();
 
-    match lib_local(lib_path) {
-        Ok((base64, origen)) => {
-            let mut sub = Vec::new();
-            for destino in [destino_privado.clone(), payload_remoto()] {
-                let r = fs_write(&destino, &base64, true, PERM_PAYLOAD, false);
-                let ok = r.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
-                sub.push(json!({"destino": destino, "ok": ok, "detalle": r}));
+    for variante in [VariantePayload::Bionic, VariantePayload::Glibc] {
+        let destino_privado = payload_privado_para(&pkg, variante);
+        let origen = match variante {
+            // La de Bionic va EMBEBIDA en el daemon: siempre está.
+            VariantePayload::Bionic => lib_local(lib_path),
+            // La de glibc se DOWNLOAD del release (no cabe en el binario
+            // principal: son 3 MB de gum por variante).
+            VariantePayload::Glibc => asegurar_payload_local(lib_path, variante),
+        };
+        match origen {
+            Ok((base64, origen_local)) => {
+                let mut sub = Vec::new();
+                for destino in [destino_privado.clone(), payload_remoto_para(variante)] {
+                    let r = fs_write(&destino, &base64, true, PERM_PAYLOAD, false);
+                    let ok = r.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+                    sub.push(json!({"destino": destino, "ok": ok, "detalle": r}));
+                }
+                // Etiqueta SELinux y propietario: el proceso de la app tiene que
+                // poder LEER el fichero.
+                let fix = format!(
+                    "restorecon {d} 2>&1; chown -R {uid}:{gid} {dir} 2>&1; chmod {perm} {d} 2>&1; ls -lZ {d} 2>&1",
+                    d = sh_quote(&destino_privado),
+                    uid = sh_quote(&uid_de(&pkg)),
+                    gid = sh_quote(&gid_de(&pkg)),
+                    dir = sh_quote(&format!("/data/data/{}/files/megadaemon", pkg)),
+                    perm = PERM_PAYLOAD,
+                );
+                let r = root_exec(&fix, 30_000, 4096);
+                pasos.push(json!({
+                    "que": "payload",
+                    "variante": format!("{:?}", variante),
+                    "origen_local": origen_local,
+                    "escrituras": sub,
+                    "selinux": r.combined(),
+                }));
             }
-            // Etiqueta SELinux y propietario: el proceso de la app tiene que
-            // poder LEER el fichero.
-            let fix = format!(
-                "restorecon {d} 2>&1; chown -R {uid}:{gid} {dir} 2>&1; chmod {perm} {d} 2>&1; ls -lZ {d} 2>&1",
-                d = sh_quote(&destino_privado),
-                uid = sh_quote(&uid_de(&pkg)),
-                gid = sh_quote(&gid_de(&pkg)),
-                dir = sh_quote(&format!("/data/data/{}/files/megadaemon", pkg)),
-                perm = PERM_PAYLOAD,
-            );
-            let r = root_exec(&fix, 30_000, 4096);
-            pasos.push(json!({
-                "que": "payload",
-                "origen_local": origen,
-                "escrituras": sub,
-                "selinux": r.combined(),
-            }));
+            Err(e) => pasos.push(json!({"que": "payload", "variante": format!("{:?}", variante), "error": e})),
         }
-        Err(e) => pasos.push(json!({"que": "payload", "error": e})),
     }
 
     // 2) El inyector (`md-inject`): lo ejecuta root.
@@ -265,7 +353,8 @@ fn instalar(paquete: &str, lib_path: &str, bin_path: &str) -> Value {
     json!({
         "ok": true,
         "paquete": pkg,
-        "payload_destino": destino_privado,
+        "payload_destino": payload_privado_para(&pkg, VariantePayload::Bionic),
+        "payload_destino_glibc": payload_privado_para(&pkg, VariantePayload::Glibc),
         "pasos": pasos,
         "siguiente": "llama a la acción 'inyectar' con el pid o el paquete",
     })
@@ -303,29 +392,8 @@ fn inyectar(paquete: &str, pid: i64, via: &str) -> Value {
         }
     }
 
-    // ¿Está el payload?
-    let payload_privado = format!("/data/data/{}/files/megadaemon/hooks-payload-arm64.so", pkg);
-    let cual = root_exec(
-        &format!(
-            "for f in {a} {b}; do [ -f \"$f\" ] && echo $f; done",
-            a = sh_quote(&payload_privado),
-            b = sh_quote(&payload_remoto()),
-        ),
-        20_000,
-        2048,
-    );
-    let ruta_payload = match cual.stdout.lines().find(|l| l.trim().ends_with(".so")) {
-        Some(l) => l.trim().to_string(),
-        None => {
-            return error(
-                "falta_payload",
-                &format!(
-                    "no hay payload en {} ni en {} (instálalo con la acción 'instalar')",
-                    payload_privado, payload_remoto()
-                ),
-            )
-        }
-    };
+    // El payload se busca DESPUÉS de saber el PID: la variante depende de la
+    // libc del proceso objetivo (ver [`detectar_variante`]).
 
     // El PID: explícito o buscado por el nombre del proceso.
     let pid_real = if pid > 0 {
@@ -364,6 +432,16 @@ fn inyectar(paquete: &str, pid: i64, via: &str) -> Value {
         }
     };
 
+    // ¿Está el payload?  La VARIANTE depende de la libc del objetivo:
+    // MEDIDO (2026-11-26, móvil): el LS de Antigravity usa un runtime de
+    // **glibc** (`libc.so.6`), no la de Bionic ⇒ hay que cargarle el
+    // payload de glibc, no el de Android.
+    let variante = detectar_variante(pid_real);
+    let ruta_payload = match payload_para_inyectar(&pkg, variante) {
+        Ok(p) => p,
+        Err(e) => return error("falta_payload", &e),
+    };
+
     let via_arg = match via.trim() {
         "" | "ptrace" => "--mem=ptrace".to_string(),
         "mem" => "--mem=mem".to_string(),
@@ -397,9 +475,56 @@ fn inyectar(paquete: &str, pid: i64, via: &str) -> Value {
         "ok": informe.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
         "pid": pid_real,
         "payload": ruta_payload,
+        "variante": format!("{:?}", variante),
         "informe": informe,
         "stderr": r.stderr,
     })
+}
+
+/// Deja el payload de una variante en el directorio **privado** de la app
+/// (lo único que puede leer el proceso objetivo) y devuelve su ruta.
+///
+/// Si no está, se **descarga del release** (verificando su sha256) y se
+/// escribe troceado (`fs_write` trocea: son 3 MB).
+fn payload_para_inyectar(pkg: &str, variante: VariantePayload) -> Result<String, String> {
+    let privado = payload_privado_para(pkg, variante);
+    let remoto = payload_remoto_para(variante);
+    let cual = root_exec(
+        &format!(
+            "for f in {a} {b}; do [ -f \"$f\" ] && echo $f; done",
+            a = sh_quote(&privado),
+            b = sh_quote(&remoto),
+        ),
+        20_000,
+        2048,
+    );
+    if let Some(l) = cual.stdout.lines().map(|l| l.trim()).find(|l| l.ends_with(".so")) {
+        if l == privado {
+            return Ok(privado);
+        }
+    }
+    // No está (o sólo está en la ruta de referencia, que la app no puede
+    // leer): se consigue el binario y se escribe en la privada.
+    let (base64, _origen) = asegurar_payload_local("", variante).map_err(|e| {
+        format!(
+            "el payload de {:?} no está en {} ni en {} y no se pudo descargar: {}",
+            variante, privado, remoto, e
+        )
+    })?;
+    let r = fs_write(&privado, &base64, true, PERM_PAYLOAD, false);
+    if !r.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Err(format!("no se pudo escribir el payload en {}: {}", privado, r));
+    }
+    let fix = format!(
+        "restorecon {d} 2>&1; chown -R {uid}:{gid} {dir} 2>&1; chmod {perm} {d} 2>&1",
+        d = sh_quote(&privado),
+        uid = sh_quote(&uid_de(pkg)),
+        gid = sh_quote(&gid_de(pkg)),
+        dir = sh_quote(&format!("/data/data/{}/files/megadaemon", pkg)),
+        perm = PERM_PAYLOAD,
+    );
+    let _ = root_exec(&fix, 30_000, 2048);
+    Ok(privado)
 }
 
 /// `leer`: las últimas líneas del NDJSON de hooks.
@@ -531,6 +656,70 @@ fn injector_local(ruta: &str) -> Result<(String, String), String> {
             std::path::PathBuf::from(inyector_remoto()),
         ],
     )
+}
+
+/// Asegura que haya un payload local de una variante, **descargándolo del
+/// release** si falta (o si su sha256 no coincide con el del release actual).
+///
+/// MEDIDO (2026-11-26, móvil): el payload de **glibc** no cabe en el binario
+/// principal (son 3 MB de gum) ⇒ se descarga del release, con su `.sha256`,
+/// igual que se hace con el inyector.
+fn asegurar_payload_local(
+    ruta: &str,
+    variante: VariantePayload,
+) -> Result<(String, String), String> {
+    // 1) Ruta explícita del operador: se respeta tal cual.
+    if !ruta.trim().is_empty() {
+        let p = std::path::PathBuf::from(ruta.trim());
+        if let Ok(bytes) = std::fs::read(&p) {
+            use base64ct::Encoding;
+            return Ok((
+                base64ct::Base64::encode_string(&bytes),
+                p.to_string_lossy().to_string(),
+            ));
+        }
+    }
+    let release = crate::self_update::url_release();
+    let url = format!("{}/{}", release, variante.asset());
+    let url_sha = format!("{url}.sha256");
+    let texto_sha = crate::self_update::descargar_texto(&url_sha)
+        .map_err(|e| format!("descargar {url_sha}: {e}"))?;
+    let esperado = crate::self_update::parsear_sha256(&texto_sha)
+        .ok_or_else(|| format!("{url_sha} no trae un sha256 legible"))?;
+    // 2) Local: sólo vale si su sha256 es el del release ACTUAL.
+    let nombres = [variante.nombre(), variante.asset()];
+    if let Ok((b64, origen)) = bin_local(
+        "",
+        &nombres,
+        &[std::path::PathBuf::from(payload_remoto_para(variante))],
+    ) {
+        if let Ok(bytes) = std::fs::read(&origen) {
+            if sha256_hex(&bytes).eq_ignore_ascii_case(&esperado) {
+                return Ok((b64, origen));
+            }
+        }
+    }
+    // 3) Descargar del release y verificar.
+    let bytes = crate::self_update::descargar_bytes(&url)
+        .map_err(|e| format!("descargar {url}: {e}"))?;
+    let real = sha256_hex(&bytes);
+    if !real.eq_ignore_ascii_case(&esperado) {
+        return Err(format!(
+            "sha256 del payload {} NO coincide: esperado {esperado}, real {real}",
+            variante.asset()
+        ));
+    }
+    let destino = std::path::PathBuf::from(dir_remoto()).join(variante.asset());
+    if let Some(dir) = destino.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    std::fs::write(&destino, &bytes).map_err(|e| format!("{}: {e}", destino.display()))?;
+    set_modo(&destino, 0o700);
+    use base64ct::Encoding;
+    Ok((
+        base64ct::Base64::encode_string(&bytes),
+        destino.to_string_lossy().to_string(),
+    ))
 }
 
 /// Asegura que haya un inyector local, **descargándolo del release** si

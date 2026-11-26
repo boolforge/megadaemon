@@ -32,6 +32,14 @@ pub const RUTA_PAYLOAD: &str = "/data/local/tmp/megadaemon/hooks-payload.so";
 /// Nombre del asset en el release (el `.sha256` es el mismo + `.sha256`).
 pub const ASSET_PAYLOAD: &str = "hooks-payload-arm64";
 
+/// Variante del payload **enlazada contra glibc**.
+///
+/// MEDIDO (2026-11-26, móvil): el LS de Antigravity corre con un runtime de
+/// glibc propio (`libc.so.6`), no con la libc de Bionic ⇒ el payload de
+/// Bionic (NEEDED `libc.so`, `libdl.so`, `liblog.so`) no se puede cargar
+/// ahí.  Esta variante se compila para `aarch64-unknown-linux-gnu`.
+pub const ASSET_PAYLOAD_GLIBC: &str = "hooks-payload-linux-arm64";
+
 /// NDJSON canónico (el que escribe el payload).
 pub const RUTA_NDJSON: &str = "/data/local/tmp/megadaemon/state/hooks.ndjson";
 
