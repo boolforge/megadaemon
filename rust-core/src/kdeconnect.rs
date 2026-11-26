@@ -2605,8 +2605,20 @@ mod tests {
         // identidad cifrada → pin/pong) y el `md.request`.
         use std::net::TcpListener;
 
-        let dir_a = std::env::temp_dir().join(format!("md-kde-a-{}", std::process::id()));
-        let dir_b = std::env::temp_dir().join(format!("md-kde-b-{}", std::process::id()));
+        // MEDIDO (2026-11-26, CI): este test era **flaky** (fallaba a
+        // veces en el CI y pasaba en local).  Dos causas:
+        //   a) el directorio temporal dépendía SÓLO del PID ⇒ dos ejecuciones
+        //      (o dos binarios de test a la vez) se pisaban el estado;
+        //   b) el timeout de la sesión eran 5 s,too justos con la CI cargada
+        //      (handshake TLS + ping) ⇒ `expect("ping")` reventaba.
+        // Ahora el directorio es único por ejecución y el timeout es amplio
+        // (el RTT medido sigue teniendo que ser < 5 s).
+        let unico = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir_a = std::env::temp_dir().join(format!("md-kde-a-{}-{unico}", std::process::id()));
+        let dir_b = std::env::temp_dir().join(format!("md-kde-b-{}-{unico}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir_a);
         let _ = std::fs::remove_dir_all(&dir_b);
         let state_a = dir_a.to_string_lossy().to_string();
@@ -2645,7 +2657,10 @@ mod tests {
         let identity_b = id_b.to_identity("desktop", 0);
         let cfg = SessionConfig {
             framing: Some(Framing::LengthPrefixed),
-            timeout: Duration::from_secs(5),
+            // MEDIDO (2026-11-26, CI): 5 s era demasiado justo con la CI
+            // cargada (el test fallaba a veces).  El RTT medido sigue
+            // teniendo que ser < 5 s (eso lo comprueba el assert de abajo).
+            timeout: Duration::from_secs(20),
         };
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
