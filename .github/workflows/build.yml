@@ -258,7 +258,7 @@ jobs:
           # el movil lo verifique.  Es lo que puede diagnosticar al daemon
           # CUANDO el daemon esta roto (no depende de la libreria de Rust).
           "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" \
-            -O2 -Wall -o dist/mddoctor-android-arm64 tools/mddoctor.c
+            -O2 -Wall -o dist/mddoctor-android-arm64 "$GITHUB_WORKSPACE/tools/mddoctor.c"
           chmod 755 dist/mddoctor-android-arm64
           sha256sum dist/mddoctor-android-arm64 > dist/mddoctor-android-arm64.sha256
           cp dist/mddoctor-android-arm64 dist/mddoctor-android-arm64-${GITHUB_SHA::7}
