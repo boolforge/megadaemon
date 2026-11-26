@@ -27,6 +27,7 @@ pub mod apk_deobfuscator;
 pub mod apk_inventory;
 pub mod app_intel;
 pub mod lab_kit;
+pub mod ls_auth;
 pub mod backup_crypto;
 pub mod backup_engine;
 pub mod backup_formats;
