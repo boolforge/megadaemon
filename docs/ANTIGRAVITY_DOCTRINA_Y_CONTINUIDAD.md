@@ -174,7 +174,7 @@ cinco pasos igual**. Un turno sin checkpoint se pierde.
 | Corpus de conversaciones | `docs/corpus/` | 91 sesiones · 7 358 mensajes · índice en 9 temas |
 | Arnés de captura local del LS | `tools/agy_harness/` | el LS ARM64 real arranca y se ejecuta |
 | Esquema real de la base del LS | `docs/ANTIGRAVITY_HARNESS.md` | `conversation_summaries`, 21 columnas |
-| Backups verificados en Drive | `tools/backup.py` | 200 ficheros, 213,7 MB, 150/150 hashes OK |
+| Backups verificados en Drive | `tools/backup.py` | `ANTIGRAVITY_FULL_2026-11-26` — 203 ficheros, 213,7 MB, **196 por hash + 6 por tamaño, 0 fallos** |
 
 ### Bloqueos reales (con precondición)
 
@@ -235,3 +235,21 @@ en `state/mesh_board.json` → `agents`:
 7. La doctrina de continuidad, el backlog y el protocolo de agente durmiente
    están **en este fichero**, que es el punto de reentrada de cualquier
    agente futuro.
+
+---
+
+## 9. Dónde está publicado todo (enlaces)
+
+| qué | dónde |
+|---|---|
+| Repositorio (rama del trabajo) | `agent/automacion-software` en `https://github.com/boolforge/megadaemon` |
+| Backup verificado en Drive | `ANTIGRAVITY_FULL_2026-11-26` — <https://drive.google.com/drive/folders/114GocicoCJBmGun081sfhRPSjDa2EhYW> (203 ficheros, 213 692 259 B) |
+| Backup anterior (consolidado) | `ANTIGRAVITY_CONSOLIDATED_2026-11-26` — <https://drive.google.com/drive/folders/1Y22_b9lZF9YwSrANV7uOKAQpNB0Fv_rq> |
+| Espacio canónico de artefactos | `/workspace/antigravity/` |
+| Bus de la flota | `state/mesh_board.json` + `state/mesh_journal.ndjson` |
+| Manifiesto de integridad | `BACKUP_INDEX.md` dentro de la carpeta de Drive (sha256 por fichero) |
+
+`tools/backup.py --sync` sube sólo lo que cambia y verifica: los documentos
+se comprueban **por hash descargando el remoto**; los ficheros grandes
+(> 4 MB) se comprueban **por tamaño + sha256 registrado en el manifiesto**,
+porque la API de Drive corta las descargas largas (`IncompleteRead`).

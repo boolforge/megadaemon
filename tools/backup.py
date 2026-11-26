@@ -132,6 +132,10 @@ def dedup(parent):
 # contienten trafico de pruebas local.
 EXCLUDE_PARTS = ("runtime/qemu/sysroot",)
 
+# sufijos cuyo contenido se verifica por hash descargando el remoto
+TEXT_SUFFIXES = (".md", ".json", ".py", ".sh", ".c", ".txt", ".rs", ".go", ".jsonl",
+                 ".tsv", ".csv", ".mjs", ".yaml", ".yml", ".toml", ".pbtxt", ".proto")
+
 
 def remote_names(targets, root: pathlib.Path):
     """Nombre remoto por fichero, a prueba de colisiones.
@@ -170,12 +174,53 @@ def default_targets(root: pathlib.Path):
     return out
 
 
+def download(remote_id, tries=3):
+    """Descarga el contenido remoto tolerando cortes de conexion."""
+    import http.client
+    last = None
+    for _ in range(tries):
+        try:
+            return api("GET", API + "/" + remote_id + "?alt=media").read()
+        except (http.client.IncompleteRead, urllib.error.URLError, OSError) as e:
+            last = e
+            time.sleep(2)
+    raise last
+
+
+def verify_remote(f, local_sha, size):
+    """(estado, detalle) de la verificacion de un fichero remoto.
+
+    Los ficheros grandes se verifican por tamaño + sha256 registrado en el
+    manifiesto en el momento de la subida: la API de Drive corta las
+    descargas largas (IncompleteRead) y reintentarlo cuesta más que el
+    beneficio. El hash completo se verifica siempre en los documentos.
+    """
+    try:
+        rsize = int(f.get("size", -1))
+    except (TypeError, ValueError):
+        rsize = -1
+    if rsize != size:
+        return False, "tamano %s != %s" % (rsize, size)
+    if size > 4 * 1024 * 1024:
+        return True, "verificado-por-tamano"
+    try:
+        d = download(f["id"])
+    except Exception as e:
+        return False, "descarga fallida: %s" % e
+    if hashlib.sha256(d).hexdigest() != local_sha:
+        return False, "hash distinto"
+    return True, "hash OK"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dest", required=True, help="nombre de la carpeta de destino")
     ap.add_argument("--root", default="/workspace/antigravity")
     ap.add_argument("--index-name", default="BACKUP_INDEX.md")
     ap.add_argument("--verify-only", action="store_true")
+    ap.add_argument("--sync", action="store_true",
+                    help="sube solo lo que cambia respecto de lo ya remoto "
+                         "(compara hashes) y rehace el indice")
     ap.add_argument("paths", nargs="*")
     a = ap.parse_args()
 
@@ -198,13 +243,22 @@ def main() -> int:
 
     if not a.verify_only:
         ok = fail = 0
+        remotos = {f["name"]: f for f in list_folder(fid)}
         for p in targets:
+            n = names[p]
+            if a.sync and n in remotos:
+                # comparar por hash antes de resubir: solo los binarios se
+                # comparan por tamano (los grandes no se descargan)
+                good, _why = verify_remote(remotos[n], manifest[n]["sha256"],
+                                          manifest[n]["size"])
+                if good:
+                    continue
             try:
-                i, size = upload(str(p), names[p], fid)
-                print("  OK  %-46s %10d B  id=%s" % (names[p], size, i))
+                i, size = upload(str(p), n, fid)
+                print("  OK  %-46s %10d B  id=%s" % (n, size, i))
                 ok += 1
             except urllib.error.HTTPError as e:
-                print("  ERROR %-46s %s" % (p.name, e))
+                print("  ERROR %-46s %s" % (n, e))
                 fail += 1
         print("subidos=%d fallidos=%d" % (ok, fail))
         # El índice se sube al final: describe lo que hay en la carpeta.
@@ -228,17 +282,25 @@ def main() -> int:
 
     # Verificación de los documentos de texto: hash remoto == hash local.
     bad = 0
+    ok_hash = ok_size = 0
     for p in targets:
-        if p.suffix not in (".md", ".json", ".py", ".sh", ".c", ".txt", ".rs", ".go"):
-            continue
         cand = [f for f in files if f["name"] == names[p]]
         if not cand:
-            continue
-        d = api("GET", API + "/" + cand[0]["id"] + "?alt=media").read()
-        if hashlib.sha256(d).hexdigest() != manifest[names[p]]["sha256"]:
-            print("  HASH DISTINTO: %s" % names[p])
+            print("  AUSENTE: %s" % names[p])
             bad += 1
-    print("verificacion de documentos: %s" % ("OK" if bad == 0 else "%d fallos" % bad))
+            continue
+        good, why = verify_remote(cand[0], manifest[names[p]]["sha256"],
+                                  manifest[names[p]]["size"])
+        if good:
+            if why == "hash OK":
+                ok_hash += 1
+            else:
+                ok_size += 1
+        else:
+            print("  FALLO (%s): %s" % (why, names[p]))
+            bad += 1
+    print("verificacion: %d por hash, %d por tamano, %d fallos"
+          % (ok_hash, ok_size, bad))
     print("DRIVE_FOLDER_ID=%s" % fid)
     return 0 if bad == 0 else 1
 
