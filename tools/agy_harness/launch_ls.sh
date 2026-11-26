@@ -31,8 +31,6 @@ EXTRA="${EXTRA:-}"
 OUTDIR="$ROOT/recon/captures"
 LOCAL="${LOCAL:-/tmp/agy-harness}"
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-CAP="$OUTDIR/capture_$STAMP.jsonl"
-LOG="$OUTDIR/ls_$STAMP.log"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -40,11 +38,22 @@ while [ $# -gt 0 ]; do
     --port) PORT="$2"; shift 2;;
     --extra) EXTRA="$2"; shift 2;;
     --timeout) TIMEOUT="$2"; shift 2;;
+    --token-file) TOKEN_FILE="$2"; export TOKEN_FILE; shift 2;;
+    --no-server) NO_SERVER=1; shift;;
+    --out) CAP_OVERRIDE="$2"; export CAP_OVERRIDE; shift 2;;
+    --log) LOG_OVERRIDE="$2"; export LOG_OVERRIDE; shift 2;;
+    --home) HOME_OVERRIDE="$2"; export HOME_OVERRIDE; shift 2;;
     *) echo "opción desconocida: $1" >&2; exit 2;;
   esac
 done
 
 mkdir -p "$OUTDIR" "$LOCAL"
+
+# Rutas de salida: se calculan DESPUES de parsear los argumentos para que
+# --out / --log manden sobre el valor por defecto.
+CAP="${CAP_OVERRIDE:-$OUTDIR/capture_$STAMP.jsonl}"
+LOG="${LOG_OVERRIDE:-$OUTDIR/ls_$STAMP.log}"
+mkdir -p "$(dirname "$CAP")" "$(dirname "$LOG")"
 
 # --- copia local del binario y del sysroot (requisitos 2 y 3) -------------
 if [ ! -x "$LOCAL/language_server" ] || \
@@ -60,14 +69,20 @@ if [ ! -d "$LOCAL/sysroot/lib/aarch64-linux-gnu" ]; then
 fi
 
 # --- servidor local ------------------------------------------------------
-node "$ROOT/tools/agy_harness/fake_cloudcode.mjs" --port "$PORT" --out "$CAP" \
-  > "$OUTDIR/fake_$STAMP.log" 2>&1 &
-SRV=$!
-sleep 1
-if ! kill -0 $SRV 2>/dev/null; then
-  echo "FALLO: el servidor local no arrancó" >&2
-  cat "$OUTDIR/fake_$STAMP.log" >&2
-  exit 1
+SRV=""
+if [ -z "${NO_SERVER:-}" ]; then
+  node "$ROOT/tools/agy_harness/fake_cloudcode.mjs" --port "$PORT" --out "$CAP" \
+    > "$OUTDIR/fake_$STAMP.log" 2>&1 &
+  SRV=$!
+  sleep 1
+  if ! kill -0 $SRV 2>/dev/null; then
+    echo "FALLO: el servidor local no arrancó" >&2
+    cat "$OUTDIR/fake_$STAMP.log" >&2
+    exit 1
+  fi
+else
+  echo "== servidor local DESACTIVADO (--no-server): se espera otro oyente en $PORT"
+  : > "$CAP"
 fi
 
 # --- aislamiento de red --------------------------------------------------
@@ -78,25 +93,28 @@ export https_proxy="$HTTPS_PROXY"
 export NO_PROXY="localhost,127.0.0.1,::1"
 export no_proxy="$NO_PROXY"
 # HOME aislado: el LS escribe estado en ~/.gemini
-export HOME="$LOCAL/home"
+export HOME="${HOME_OVERRIDE:-$LOCAL/home}"
 rm -rf "$HOME/.gemini"
 mkdir -p "$HOME/.gemini"
 
 # Token OAuth.
 #   MEDIDO con strace: el LS abre exactamente
 #       $HOME/.gemini/jetski-standalone-oauth-token
-#   y lo deserializa como JSON. Con un token FALSO el LS responde
+#   y lo deserializa como JSON. Con un token FALSO responde
 #   "error getting token source: You are not logged into Antigravity" y
 #   NO emite ninguna peticion: el token tiene que ser real (firmado por
-#   Google). Por eso aqui solo se siembra un token de mentira para dejar el
-#   arnés listo, y el modo normal usa un token real.
+#   Google).
 #
-#   TOKEN_FILE=/ruta/al/token.json  -> token real (JSON) que se inyecta
-#   FAKE_TOKEN=0                     -> no sembrar nada
+#   --token-file RUTA (o TOKEN_FILE=...) -> token real JSON, instalado en el
+#       HOME aislado. Tiene PRIORIDAD sobre el token de mentira.
+#   FAKE_TOKEN=0 -> no sembrar nada.
+#
+# El token se instala DESPUES de preparar el HOME: si se sembrase antes, el
+# `rm -rf` del aislamiento lo borraria.
 if [ -n "${TOKEN_FILE:-}" ]; then
   mkdir -p "$HOME/.gemini"
   install -m 600 "$TOKEN_FILE" "$HOME/.gemini/jetski-standalone-oauth-token"
-  echo "== token real inyectado desde $TOKEN_FILE"
+  echo "== token REAL inyectado desde $TOKEN_FILE"
 elif [ "${FAKE_TOKEN:-1}" = "1" ]; then
   mkdir -p "$HOME/.gemini"
   cat > "$HOME/.gemini/jetski-standalone-oauth-token" <<'JSON'
