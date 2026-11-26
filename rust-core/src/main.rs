@@ -458,7 +458,7 @@ fn main() {
         // MEDIDO 2026-11-25 (el usuario: "que no se rompa en cada
         // auto-update"): el auto-actualizador verificaba el SHA-256 del
         // binario descargado, pero NO que el binario ARRANQUE.  Un asset
-        // corrupto en larelease (o un binario que no arranca en ese móvil)
+        // corrupto en la release (o un binario que no arranca en ese móvil)
         // se instalaba y el móvil se quedaba sin daemon: la copia al
         // `.prev` existía, pero nadie la restauraba.
         //

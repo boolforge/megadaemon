@@ -104,7 +104,7 @@ Test: `el_payload_comprimido_descomprime_al_original` (round-trip + ELF magic).
 - **`--icf=all`**: `ld.lld` puede plegar funciones *idénticas*; los hooks de
   Frida localizan su objetivo por dirección ⇒ una función plegada puede hacer
   que el hook apunte a la equivalente (o a la canónica). Se puede probar, pero
-  **no por defecto**: exige verificar en el móvil que el hook sigue 적용ando a
+  **no por defecto**: exige verificar en el móvil que el hook sigue aplicándose a
   la función correcta.
 - **mimalloc/jemalloc en Android**: añade 1-2 MiB al binario y Scudo ya
   devuelve páginas al SO. Se evalúa sólo para el build Linux (desktop), donde

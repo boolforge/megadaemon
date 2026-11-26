@@ -3652,7 +3652,7 @@ mod chunked_tests {
 
     /// MEDIDO (2026-11-26, móvil): el language server manda la petición de
     /// generación con `Transfer-Encoding: chunked` y el cockpit leía un
-    /// cuerpo VACÍO (sólo entendía `Content-Length`) ⇒ 502 del gateway.
+    /// cuerpo VACÍO (sólo miraba `Content-Length`) ⇒ 502 del gateway.
     #[test]
     fn decodifica_un_cuerpo_chunked() {
         let crudo = b"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";

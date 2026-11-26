@@ -56,7 +56,7 @@ Lo que **no** se va a hacer, y por qué:
 | 2 | El `channel.json` del repo sirve una URL vieja | El `raw` de GitHub **cachea en CDN** | `rust-core/src/channel.rs:59-61` (lo dice el propio código) |
 | 3 | El `paste` no sirve para descubrir nada | Cada publicación crea un paste **nuevo**; el siguiente es incognoscible | `rust-core/src/channel.rs:55-58` |
 | 4 | El canónico `mdtmfnc.duckdns.org` da HTTP 000 | El A record lo publica quien llama (`duckdns.org/update` pone la IP de quien pregunta) | `docs/RESILIENCE.md` §0, punto 3 |
-| 5 | No se sabe si el túnel está muerto o es la credencial | El 403 y el 530 se confundían entre sí | **Arreglado**: `channel.rs:309-361` (`probe_url_detalle`, `es_canal_muerto`) |
+| 5 | No se sabe si el túnel está muerto o es la credencial | El 403 y el 530 se tomaban por el mismo caso | **Arreglado**: `channel.rs:309-361` (`probe_url_detalle`, `es_canal_muerto`) |
 
 Los puntos 1-4 ya tienen parches (`docs/RESILIENCE.md` §2). Funcionan **hasta que
 el canal entero cae**, y entonces el emisor se queda sin ningún camino de
@@ -110,7 +110,7 @@ resultado posible (dos formatos, dos carpetas en Drive, dos "outward-facing").
 ## 2. Estado del arte
 
 La pregunta que ordena esta sección: **¿qué problema resuelve cada mecanismo?**
-Se confunden tres familias:
+Hay que distinguir tres familias:
 
 - **(A) Protocolo de transporte con reconexión**: el enlace se cae, se levanta
   y **la sesión sobrevive** porque el estado vive en los extremos.
