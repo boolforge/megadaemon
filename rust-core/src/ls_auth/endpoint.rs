@@ -6,7 +6,7 @@
 //!
 //! ```text
 //! 0x66c66a0  ldp  x3, x0, [x0]        ; itab + receptor (campo 0 = interfaz)
-//! 0x66c66a4  ldr  x3, [x3, 0x28]       ; método #5 de la interfaz
+//! 0x66c66a4  ldr  x3, [x3, 0x28]       ; método #2 (slot 2) de la interfaz
 //! 0x66c66a8  blr  x3                   ; -> URL base del backend
 //! 0x66c66bc  bl   0x4d98880            ; runtime.convTstring
 //! 0x66c66c8  stp  x3, x0, [sp, 0x38]   ; arg0 = baseURL
@@ -24,6 +24,29 @@
 //!
 //! Es decir: `Sprintf("%s/%s:%s", baseURL, "v1internal", método)` ⇒
 //! `https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist`.
+//!
+//! EL MÉTODO ES EL **SLOT 2**, NO EL 5 (VERIFICADO POR ITAB)
+//! -------------------------------------------------------
+//! El *itab* de Go lleva una cabecera de **24 bytes**, de modo que el índice
+//! de método es `(offset − 24) / 8`: el desplazamiento `0x28` corresponde al
+//! **slot 2**, no al 5.
+//!
+//! Se reconstruyeron los **siete** itabs de proveedor del binario (rachas
+//! consecutivas de punteros a `.text` con *addends* de `R_AARCH64_RELATIVE`)
+//! y en **los siete** `itab + 24 + 8*2` apunta a la implementación de
+//! `GetEndpointURL`:
+//!
+//! | itab base (VA) | proveedor                    | fun[2] |
+//! |---|---|---|
+//! | `0x8f853b8` | `IDEAuthProvider`            | `0x66aeec0` |
+//! | `0x8f851c0` | `HostAuthProvider`           | `0x66af970` |
+//! | `0x8f85310` | `StandaloneAuthProvider`     | `0x66b0180` |
+//! | `0x8f84fc8` | `CLIAuthProvider`            | `0x66b2a90` |
+//! | `0x8f85268` | `AntigravityHubAuthProvider` | `0x66b5650` |
+//! | `0x8f84f20` | `GeminiAPIKeyAuthProvider`   | `0x66be650` |
+//! | `0x8f85118` | `StubbyAuthProvider`         | `0x66b6370` |
+//!
+//! ⇒ `slot 2 == GetEndpointURL`, verificado 7/7.
 //!
 //! EL PREFIJO ES UNA GLOBAL
 //! -----------------------

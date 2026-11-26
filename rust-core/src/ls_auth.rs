@@ -41,12 +41,16 @@
 //! ----------------------------------------
 //! * **Verificado**: layout, escritores, variantes, regla terminal vs
 //!   transitoria, formato de URL, valor del prefijo `v1internal`, enum
-//!   `AuthMode`.
-//! * **NO VERIFICADO** (marcado como tal en el código): que el "slot 5" de la
-//!   interfaz `AuthProvider` sea `GetEndpointURL` (inferencia por los 7
-//!   implementadores; no se reconstruyó la tabla de métodos del *itab*) y el
-//!   texto exacto del `ui_message` para `project_required`/`license_required`
-//!   (sus variantes no llevan campos).
+//!   `AuthMode`, y el **slot 2** (`0x28`) de la interfaz `AuthProvider` como
+//!   `GetEndpointURL` (reconstruidos los 7 *itabs* de proveedor; ver
+//!   `ls_auth/endpoint.rs`).
+//! * **Verificado en la v5**: las ramas `project_required` y
+//!   `license_required` **no** escriben `ui_message` (offset `0x10`): sólo
+//!   `failure_details` (`0x48`) y `granted_scopes` (`0x50`/`0x58`/`0x68`).
+//! * **NO VERIFICADO** (marcado como tal en el código): el texto exacto que
+//!   el usuario vería en `project_required`/`license_required`, que **no
+//!   está en el binario** por lo anterior; y el punto de entrada de la app
+//!   cliente que consume el `AuthResult` (fuera de este `.so`).
 //!
 //! REGLAS
 //! ------

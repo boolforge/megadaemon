@@ -117,6 +117,46 @@ def main() -> int:
     if len(c["auth_mode"]) != 6:
         problems.append("AuthMode debe tener 6 valores")
 
+    # 7) itabs de proveedor (N1): los 7 deben estar en el código y el
+    #    índice de método debe ser 2 (offset 0x28 con cabecera de 24 B).
+    itabs = c.get("auth_provider_itabs")
+    if not itabs:
+        problems.append("falta la sección auth_provider_itabs")
+    else:
+        if itabs.get("method_slot") != 2:
+            problems.append("el slot del método GetEndpointURL debe ser 2")
+        if itabs.get("method_slot_offset") != "0x28":
+            problems.append("el offset del slot de GetEndpointURL debe ser 0x28")
+        if itabs.get("itab_header_bytes") != 24:
+            problems.append("la cabecera del itab debe medir 24 bytes")
+        provs = itabs.get("providers", [])
+        if len(provs) != 7:
+            problems.append("se esperaban 7 proveedores en auth_provider_itabs")
+        for p in provs:
+            need(p["itab"], "itab de %s" % p["name"])
+            need(p["fun2"], "GetEndpointURL de %s" % p["name"])
+
+    # 8) parche region-bypass: sus VAs deben estar en el código y el
+    #    contrato no debe seguir afirmando la inferencia del "slot 5".
+    patch = c.get("region_bypass_patch")
+    if not patch:
+        problems.append("falta la sección region_bypass_patch")
+    else:
+        if patch.get("bytes_changed") != 15:
+            problems.append("el parche region-bypass debe medir 15 bytes")
+        sites = patch.get("sites", [])
+        if len(sites) != 3:
+            problems.append("se esperaban 3 puntos de parche")
+        for s in sites:
+            need(s["va"], "punto de parche region-bypass")
+        cvc = patch.get("cross_version_check", {})
+        if cvc.get("v2.11.0_patch_site_va"):
+            need(cvc["v2.11.0_patch_site_va"], "punto de parche en v2.11.0")
+
+    for nv in c.get("not_verified", []):
+        if "slot 5" in nv:
+            problems.append("not_verified ya no debe seguir mencionando la inferencia del slot 5")
+
     # Coherencia del texto de las plantillas
     if b["template_method"]["text"] not in blob:
         problems.append("la plantilla de método no aparece en el código")

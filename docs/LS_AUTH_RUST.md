@@ -46,12 +46,37 @@ citas `fichero:línea` y los VA reales, está en `docs/LS_AUTH_ANALYSIS.md`
 
 ### Lo que NO está verificado
 
-* Que el "slot 5" de la interfaz `AuthProvider` sea `GetEndpointURL`: es una
-  **inferencia** por los 7 implementadores (no se reconstruyó la tabla de
-  métodos del *itab*).
-* El texto exacto del `ui_message` para `project_required` y
-  `license_required`: sus variantes no llevan campos ⇒ el motivo va en
-  `ui_message` o en `general_error.reason`.
+* El texto exacto que el usuario vería en `project_required` y
+  `license_required`: **no está en el binario**, porque sus ramas **no
+  escriben `ui_message`** (offset `0x10`); sólo escriben `failure_details`
+  (`0x48`) y `granted_scopes` (`0x50`/`0x58`/`0x68`). El motivo tiene que
+  llegar en `general_error.reason`.
+* El punto de entrada de la **app cliente** que consume el `AuthResult`: está
+  fuera de este `.so` (en el LS el `AuthResult` se *construye* localmente).
+
+### Cerrado en la v5 (antes NO verificado)
+
+* Que el "slot 5" de la interfaz `AuthProvider` sea `GetEndpointURL` → **es el
+  slot 2** (offset `0x28` con cabecera de *itab* de 24 B), verificado en los
+  **7** *itabs* de proveedor reconstruidos:
+
+  | Proveedor | *itab* | `fun[2]` |
+  |---|---|---|
+  | `IDEAuthProvider` | `0x8f853b8` | `0x66aeec0` |
+  | `HostAuthProvider` | `0x8f851c0` | `0x66af970` |
+  | `StandaloneAuthProvider` | `0x8f85310` | `0x66b0180` |
+  | `CLIAuthProvider` | `0x8f84fc8` | `0x66b2a90` |
+  | `AntigravityHubAuthProvider` | `0x8f85268` | `0x66b5650` |
+  | `GeminiAPIKeyAuthProvider` | `0x8f84f20` | `0x66be650` |
+  | `StubbyAuthProvider` | `0x8f85118` | `0x66b6370` |
+
+* Identidad del binario analizado: es el LS **parcheado** del APK
+  `antigravity-region-bypass.apk` de la etiqueta **v2.4.1**
+  (`sha256=f25135e4…0ff27`, idéntico al `.so` de ese APK). El parche son
+  **15 bytes** en 3 puntos y **fuerza `AuthResult.HasValidAuth = true`**;
+  este módulo reproduce el comportamiento **vanilla**. Detalle en
+  `/workspace/out/ANTIGRAVITY_BINARIES.md` §7 y
+  `/workspace/out/LS_AUTH_ANALYSIS.md` §18.
 
 ## Cómo se usa
 

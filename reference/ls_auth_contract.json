@@ -4,9 +4,24 @@
     "path": "/workspace/agy-re/liblanguage_server.so",
     "size": 181358800,
     "sha256": "f25135e4b4a2c4a8e4cb319dc36b13eb98fa4718fa80aaae5a7819935370ff27",
+    "crc32": "6207a1b8",
     "analyzed_at": "2026-11-21",
     "text_start": "0x4d0f0b0",
     "functions": 161682
+  },
+  "binary_identity": {
+    "_comment": "Identidad cerrada al 100%: el binario analizado es el Language Server parcheado del APK region-bypass de la etiqueta v2.4.1.",
+    "origin": "assets/runtime/bin/liblanguage_server.so",
+    "artifact": "antigravity-region-bypass.apk",
+    "release_tag": "v2.4.1",
+    "release_repo": "werdio325-png/antigravity-android",
+    "published": "2026-10-22",
+    "apk_size": 103469317,
+    "vanilla_crc32": "56ecf991",
+    "vanilla_sha256": "abf5881f9983fbad00c1cdf903c81f84cf36b8a21364b3476f6d19568b528527",
+    "bypass_crc32": "6207a1b8",
+    "bypass_sha256": "f25135e4b4a2c4a8e4cb319dc36b13eb98fa4718fa80aaae5a7819935370ff27",
+    "proof": "el .so descargado del APK v2.4.1 region-bypass tiene EXACTAMENTE el sha256 del binario analizado"
   },
   "auth_result": {
     "size": 168,
@@ -39,14 +54,50 @@
     "0x70e18a8", "0x70e1918", "0x70e4234", "0x70e527c",
     "0x70e59f4", "0x70e5b54", "0x70e5d68", "0x70e62c0"
   ],
+  "has_valid_auth_writers_note": {
+    "_comment": "0x70e5b54 solo ESCRIBE en el binario parcheado: en el vanilla es un 'tbz w3,#0' (lectura). El propio parche lo convierte en 'strb w3,[x0,#8]'. Ver region_bypass_patch.",
+    "vanilla_read_only": ["0x70e5b54"]
+  },
+  "auth_provider_itabs": {
+    "_comment": "Itabs reconstruidos por rachas de punteros a .text con addends de R_AARCH64_RELATIVE. La cabecera del itab de Go son 24 B, luego el indice de metodo es (offset-24)/8: 0x28 => slot 2. En los SIETE, fun[2] es GetEndpointURL.",
+    "method_slot": 2,
+    "method_slot_offset": "0x28",
+    "itab_header_bytes": 24,
+    "method": "GetEndpointURL",
+    "providers": [
+      { "name": "IDEAuthProvider", "itab": "0x8f853b8", "fun2": "0x66aeec0", "file_line": "auth_provider.go:303" },
+      { "name": "HostAuthProvider", "itab": "0x8f851c0", "fun2": "0x66af970", "file_line": "auth_provider.go:474" },
+      { "name": "StandaloneAuthProvider", "itab": "0x8f85310", "fun2": "0x66b0180", "file_line": "auth_provider.go:720" },
+      { "name": "CLIAuthProvider", "itab": "0x8f84fc8", "fun2": "0x66b2a90", "file_line": "auth_provider.go:1125" },
+      { "name": "AntigravityHubAuthProvider", "itab": "0x8f85268", "fun2": "0x66b5650", "file_line": "auth_provider.go:1499" },
+      { "name": "GeminiAPIKeyAuthProvider", "itab": "0x8f84f20", "fun2": "0x66be650", "file_line": "gemini_api_key_auth_provider.go:98" },
+      { "name": "StubbyAuthProvider", "itab": "0x8f85118", "fun2": "0x66b6370", "file_line": "auth_provider_external.go:88" }
+    ]
+  },
+  "region_bypass_patch": {
+    "_comment": "Parche del APK region-bypass respecto al vanilla de la MISMA version: 15 bytes en 4 tramos. Reemplaza 'LDRB wN,[x0,#8]' por 'MOV wN,#1'. El punto semanticamente relevante fuerza AuthResult.HasValidAuth = true.",
+    "bytes_changed": 15,
+    "runs": 4,
+    "insn_rewrite": "LDRB wN,[x0,#8] -> MOV wN,#1",
+    "sites": [
+      { "va": "0x05353a7c", "bytes": 4, "function": "grpc/internal/buffer/buffer.(*Unbounded[...]).Load", "file_line": "third_party/golang/grpc/internal/buffer/unbounded.go:72", "role": "colateral" },
+      { "va": "0x06ce96f4", "bytes": 4, "function": "completion_provider.(*DocumentCacheState).CheckAndUpdateRefreshStateForStart", "file_line": "third_party/jetski/language_server/completion_provider/command_prompt_cache_client.go:83", "role": "colateral" },
+      { "va": "0x070e5b50", "bytes": 7, "function": "authclient.(*PersonalAuthValidator).Validate", "file_line": "third_party/jetski/language_server/auth_client/validator.go:79", "role": "bypass real: fuerza AuthResult.HasValidAuth = true" }
+    ],
+    "cross_version_check": {
+      "v2.11.0_patch_bytes": 7,
+      "v2.11.0_patch_site_va": "0x0656dfbc",
+      "v2.11.0_same_function": "authclient.(*PersonalAuthValidator).Validate (validator.go:79)"
+    }
+  },
   "failure_details": [
     { "kind": "ineligible", "itab": "0x8f12448", "never_built": false, "built_at": "0x70e63bc" },
     { "kind": "verification_required", "itab": "0x8f12468", "never_built": false, "built_at": "0x70e5874" },
     { "kind": "tos_violation", "itab": "0x8f12488", "never_built": false, "built_at": "0x70e5920" },
     { "kind": "general_error", "itab": "0x8f124a8", "never_built": false, "built_at": "0x70e5490" },
-    { "kind": "project_required", "itab": "0x8f124c8", "never_built": false, "built_at": "0x70e5cd4" },
+    { "kind": "project_required", "itab": "0x8f124c8", "never_built": false, "built_at": "0x70e5cd4", "writes_ui_message": false },
     { "kind": "headless_auth_required", "itab": "0x8f124e8", "never_built": true, "built_at": null },
-    { "kind": "license_required", "itab": "0x8f12508", "never_built": false, "built_at": "0x70e5e4c" }
+    { "kind": "license_required", "itab": "0x8f12508", "never_built": false, "built_at": "0x70e5e4c", "writes_ui_message": false }
   ],
   "backend": {
     "prefix": "v1internal",
@@ -104,9 +155,16 @@
     "rpc_methods_literal": 251
   },
   "not_verified": [
-    "Que el slot 5 (0x28) de la interfaz AuthProvider sea GetEndpointURL (inferencia; falta reconstruir el itab).",
-    "El texto exacto de ui_message para project_required y license_required (sus variantes no llevan campos).",
-    "Si existe un liblanguage_server.so mas reciente que el analizado (solo hay una copia en este entorno).",
-    "clippy sobre el modulo Rust: el componente no esta instalado en este toolchain."
+    "El texto exacto de ui_message para project_required y license_required (sus variantes no llevan campos y el LS no escribe ese offset).",
+    "Los binarios concretos de las 102 versiones del CLI (1.0.0 .. 1.5.18): el bucket antigravity-public no permite listar objetos (HTTP 401), solo se conoce el build actual por URL.",
+    "Los builds historicos del IDE (2.8.0) y del Hub (2.35.2): solo se conocen 2 IDs de build, que son opacos.",
+    "El payload de los .dmg (macOS) y de los instaladores .exe (Windows, NSIS) del IDE y del Hub: no se pueden extraer en Linux (no hay 7z/p7zip/dmg2img).",
+    "El uso de qemu-aarch64 para ejecutar el LS Android y observar su entorno en vivo: no esta instalado en este toolchain."
+  ],
+  "closed": [
+    "N1: que slot de la interfaz AuthProvider devuelve GetEndpointURL -> slot 2 (offset 0x28), verificado en los 7 itabs de proveedor.",
+    "N2: que las ramas project_required y license_required escriben ui_message -> NO lo hacen (solo escriben failure_details en 0x48 y granted_scopes en 0x50/0x58/0x68); ui_message (0x10) queda vacio.",
+    "N3: si existe un Language Server mas reciente que el analizado -> si: el CLI oficial 1.5.18 (2026-11-26, build 6386224290725888) lo lleva enlazado, en 9 plataformas, con sha512 verificable; ademas el binario analizado quedo identificado como el LS parcheado de v2.4.1.",
+    "N4: clippy sobre el modulo Rust -> instalado y ejecutado (clippy 0.1.100)."
   ]
 }

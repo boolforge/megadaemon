@@ -34,7 +34,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ls_auth::failure::{general_error, FailureDetails, FailureKind};
+use crate::ls_auth::failure::{general_error, FailureDetails};
 use crate::ls_auth::model::{AuthMode, AuthResult, Tier, UserTierResponse};
 use crate::ls_auth::terminal::{classify, BackendError, TerminalRejection};
 
@@ -220,6 +220,7 @@ pub fn outcome_from_backend_error(err: &BackendError) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ls_auth::failure::FailureKind;
 
     fn tier(id: &str) -> Tier {
         Tier {

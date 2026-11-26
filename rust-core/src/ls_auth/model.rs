@@ -34,6 +34,39 @@
 //! primeros 8 B y `sizeCache`/`unknownFields` van **al final**. (La hipótesis
 //! de una cabecera de 40 B era falsa.)
 //!
+//! EL PARCHE «REGION-BYPASS» TOCA ESTE CAMPO
+//! -----------------------------------------
+//! El binario analizado es el LS **parcheado** del APK region-bypass de la
+//! etiqueta v2.4.1 (`sha256 = f25135e4…0ff27`, idéntico al `.so` de ese APK).
+//! Frente al vanilla de la misma versión, difiere en **15 bytes** en 4 tramos,
+//! y los 3 puntos reescriben la misma instrucción:
+//!
+//! ```text
+//! LDRB wN, [x0, #8]   ->   MOV wN, #1
+//! ```
+//!
+//! El punto relevante está en `(*PersonalAuthValidator).Validate`
+//! (validator.go:79), sobre el `AuthResult` que devuelve
+//! `ValidateAndOnboardAccount`:
+//!
+//! ```text
+//! 0x070e5b50  ldrb w3, [x0, #8]   ; vanilla: w3 = AuthResult.HasValidAuth
+//! 0x070e5b54  tbz  w3, #0, ...   ; vanilla: si !HasValidAuth -> error
+//! 0x070e5b50  mov  w3, #1         ; parche: forzar el flag
+//! 0x070e5b54  strb w3, [x0, #8]   ; parche: HasValidAuth = true
+//! ```
+//!
+//! ⇒ El parche hace que el LS acepte como autenticado un `AuthResult` que el
+//! backend marcó con `has_valid_auth = false`. Esta reimplementación
+//! reproduce el **comportamiento del vanilla** (no maquilla la autenticación);
+//! el modo "bypass" es una decisión explícita de quien la use.
+//!
+//! Los otros dos puntos (0x05353a7c, `grpc/internal/buffer.(*Unbounded[…]).Load`;
+//! 0x06ce96f4, `completion_provider.(*DocumentCacheState).CheckAndUpdateRefreshStateForStart`)
+//! son colaterales del mismo patrón genérico. En el LS v2.11.0 el parche
+//! equivalente son 7 bytes en un único punto, 0x0656dfbc, en la MISMA función
+//! `(*PersonalAuthValidator).Validate`: el objetivo es estable entre versiones.
+//!
 //! TAGS PROTO
 //! ----------
 //! `has_valid_auth = 1`, `ui_message = 2`, `is_gcp_tos = 3`, `project_id = 11`,
@@ -103,10 +136,11 @@ pub const HAS_VALID_AUTH_WRITERS: [u64; 12] = [
 ///
 /// VERIFICADO contra el descriptor proto embebido en el binario, no contra
 /// nombres de símbolos: el enum vive como bytes en el `FileDescriptorProto`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum AuthMode {
     /// 0 — el LS no sabe (o no quiere decir) en qué modo está.
+    #[default]
     Unspecified = 0,
     /// 1 — cuenta personal del usuario final.
     PersonalConsumer = 1,
@@ -150,12 +184,6 @@ impl AuthMode {
             5 => AuthMode::EnterpriseGateway,
             _ => AuthMode::Unspecified,
         }
-    }
-}
-
-impl Default for AuthMode {
-    fn default() -> Self {
-        AuthMode::Unspecified
     }
 }
 
