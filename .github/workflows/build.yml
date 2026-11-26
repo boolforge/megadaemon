@@ -258,7 +258,13 @@ jobs:
           # `md-clipboard` (portapapeles) y `md-dict` (diccionarios) son
           # CLIs que se ejecutan en el movil: sin publicarlos no llegan al
           # dispositivo.
-          for aux in channel-publish duckdns-updater md-lan-listen npu-probe md-clipboard md-dict; do
+          #
+          # `md-inject` es el INYECTOR ptrace: sin el no hay forma de cargar
+          # el payload de hooks (frida-gum) en el proceso de Antigravity
+          # (MEDIDO 2026-11-26, movil: el movil NO tiene frida-server
+          # arrancado ni cliente `frida`, y el payload va incrustado en el
+          # daemon ⇒ el inyector es el UNICO cargador posible).
+          for aux in channel-publish duckdns-updater md-lan-listen npu-probe md-clipboard md-dict md-inject; do
             if [ -f "target/aarch64-linux-android/release/$aux" ]; then
               cp "target/aarch64-linux-android/release/$aux" "dist/$aux-arm64"
               sha256sum "dist/$aux-arm64" > "dist/$aux-arm64.sha256"

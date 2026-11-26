@@ -236,7 +236,9 @@ fn instalar(paquete: &str, lib_path: &str, bin_path: &str) -> Value {
     }
 
     // 2) El inyector (`md-inject`): lo ejecuta root.
-    match injector_local(bin_path) {
+    //    MEDIDO (2026-11-26): si no está local, se DESCARGA del release
+    //    (ver [`asegurar_inyector_local`]): sin inyector no hay carga.
+    match asegurar_inyector_local(bin_path) {
         Ok((base64, origen)) => {
             let r = fs_write(&inyector_remoto(), &base64, true, PERM_INYECTOR, false);
             let fix = format!(
@@ -276,14 +278,25 @@ fn inyectar(paquete: &str, pid: i64, via: &str) -> Value {
         2048,
     );
     if !check.stdout.contains("md-inject") {
-        return error(
-            "falta_inyector",
-            &format!(
-                "no hay inyector en {} (instálalo con la acción 'instalar'): {}",
-                inyector_remoto(),
-                check.combined().trim()
-            ),
+        // MEDIDO (2026-11-26): el inyector no venía en el release; ahora se
+        // descarga solo (con sha256) y se deja en su sitio.  Si tampoco se
+        // puede, el error dice exactamente qué falta.
+        let _ = instalar(&pkg, "", "");
+        let check2 = root_exec(
+            &format!("ls -l {i} 2>&1", i = sh_quote(&inyector_remoto())),
+            20_000,
+            2048,
         );
+        if !check2.stdout.contains("md-inject") {
+            return error(
+                "falta_inyector",
+                &format!(
+                    "no hay inyector en {} (instálalo con la acción 'instalar'): {}",
+                    inyector_remoto(),
+                    check2.combined().trim()
+                ),
+            );
+        }
     }
 
     // ¿Está el payload?
@@ -456,6 +469,68 @@ fn lib_local(ruta: &str) -> Result<(String, String), String> {
 /// El inyector (`md-inject`).
 fn injector_local(ruta: &str) -> Result<(String, String), String> {
     bin_local(ruta, &["md-inject-arm64", "md-inject"])
+}
+
+/// Asegura que haya un inyector local, **descargándolo del release** si
+/// falta.
+///
+/// MEDIDO (2026-11-26, móvil): el inyector NO venía en el release (el CI
+/// publicaba `channel-publish`, `md-clipboard`… pero no `md-inject`) ⇒ en
+/// el móvil no había ningún cargador: ni cliente `frida`, ni `frida-server`
+/// arrancado, ni módulo Zygisk ⇒ **el payload de hooks no se podía
+/// inyectar** y no había ni una línea de datos en vivo.
+///
+/// El asset `md-inject-arm64` se verifica con su `.sha256` antes de
+/// ejecutarlo (es un binario que se va a meter en un proceso ajeno).
+fn asegurar_inyector_local(ruta: &str) -> Result<(String, String), String> {
+    if let Ok(v) = injector_local(ruta) {
+        return Ok(v);
+    }
+    let release = crate::self_update::url_release();
+    let url = format!("{release}/md-inject-arm64");
+    let url_sha = format!("{url}.sha256");
+    let texto_sha = crate::self_update::descargar_texto(&url_sha)
+        .map_err(|e| format!("descargar {url_sha}: {e}"))?;
+    let esperado = crate::self_update::parsear_sha256(&texto_sha)
+        .ok_or_else(|| format!("{url_sha} no trae un sha256 legible"))?;
+    let bytes = crate::self_update::descargar_bytes(&url)
+        .map_err(|e| format!("descargar {url}: {e}"))?;
+    let real = sha256_hex(&bytes);
+    if !real.eq_ignore_ascii_case(&esperado) {
+        return Err(format!(
+            "sha256 del inyector NO coincide: esperado {esperado}, real {real}"
+        ));
+    }
+    let destino = std::path::PathBuf::from(dir_remoto()).join("md-inject-arm64");
+    if let Some(dir) = destino.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    std::fs::write(&destino, &bytes).map_err(|e| format!("{}: {e}", destino.display()))?;
+    set_modo(&destino, 0o700);
+    use base64ct::Encoding;
+    Ok((
+        base64ct::Base64::encode_string(&bytes),
+        destino.to_string_lossy().to_string(),
+    ))
+}
+
+/// sha256 en hexadecimal de un buffer.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    let mut h = sha2::Sha256::new();
+    h.update(bytes);
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Fija los permisos de un fichero (best effort).
+fn set_modo(ruta: &std::path::Path, modo: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(ruta, std::fs::Permissions::from_mode(modo));
+    }
+    #[cfg(not(unix))]
+    let _ = (ruta, modo);
 }
 
 /// UID del paquete (para que el fichero quede legible por la app).
