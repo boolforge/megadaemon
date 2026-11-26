@@ -125,6 +125,7 @@ pub mod kernel_and_blocks;
 pub mod lab_kit;
 pub mod lan;
 pub mod magisk_module;
+pub mod mass_re;
 pub mod mcp_ext;
 pub mod mcp_server;
 pub mod mesh;
