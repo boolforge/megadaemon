@@ -95,7 +95,7 @@ def main() -> int:
                 # hash son los que documentan hechos
                 score += 3 * len(URL.findall(text)) + 2 * len(SHA.findall(text))
                 hits[tema].append((score, m["session_id"], m["idx"], m.get("agent", "?"),
-                                   m.get("title", ""), text))
+                                   m.get("title", ""), text, m.get("file", "")))
 
     out = []
     out.append("# Corpus de conversaciones — índice temático\n")
@@ -123,15 +123,16 @@ def main() -> int:
         out.append(f"_{len(v)} mensajes con señal, {len({x[1] for x in v})} sesiones._\n")
         # top por sesión para no repetir la misma sesión 10 veces
         best_per_sid = {}
-        for score, sid, idx, agent, title, text in v:
+        for score, sid, idx, agent, title, text, fn in v:
             if sid not in best_per_sid or score > best_per_sid[sid][0]:
-                best_per_sid[sid] = (score, idx, agent, title, text)
+                best_per_sid[sid] = (score, idx, agent, title, text, fn)
         top = sorted(best_per_sid.values(), key=lambda x: -x[0])[:25]
-        for score, idx, agent, title, text in top:
+        for score, idx, agent, title, text, fn in top:
             frag = re.sub(r"\n{3,}", "\n\n", text).strip()
             if len(frag) > 900:
                 frag = frag[:900] + " […]"
             out.append(f"\n### `{sid}` · mensaje {idx} · **{agent}** — {title[:70]}\n")
+            out.append(f"fichero: `sessions/{os.path.basename(fn)}`\n")
             out.append(f"```\n{frag}\n```\n")
 
     dst = os.path.join(ROOT, "FACTS.md")

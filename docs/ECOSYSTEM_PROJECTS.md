@@ -237,3 +237,29 @@ candidatos a clonar con `git clone --depth 1`, que no consume cuota de API.
 
 Artefactos del barrido: `versions/ecosystem_assets.tsv` (4 297 filas),
 `versions/ecosystem_channels.tsv` (20 canales).
+
+### 10.3 Clonados tras el barrido (referencia técnica)
+
+| repo | ficheros | licencia | qué aporta |
+|---|---|---|---|
+| `ecosystem/antigravity-proxy` (`yuaotian/antigravity-proxy`) | 228 | BSD-2-Clause (MinHook) | **parche DLL (MinHook) que enruta el tráfico de Antigravity por SOCKS5/HTTP sin TUN ni admin.** Cubre **IDE**, **desktop** y **CLI `agy`**, y el uso vía ACP desde JetBrains/Zed/VS Code (`agy acp`, `agy_acp_server`). Incluye plugin de IDE (estado de proxy, ajustes, log en vivo, IP de salida, detección de Gemini, restauración tras update) |
+| `ecosystem/opencode-antigravity-auth` (`NoeFabris/opencode-antigravity-auth`) | 157 | por revisar | autenticación de Antigravity para opencode (95 releases) |
+
+**Hallazgo de ingeniería (medido en el código, no en el README)**: el proxy
+comunitario hookea la pila de red de **Windows**, no el TLS:
+
+```
+WinHttpOpen / WinHttpConnect / WinHttpOpenRequest / WinHttpSetTimeouts
+connect   (105 referencias)     getaddrinfo (14)     WSASocketA/W (10)
+```
+
+Es decir, la familia de Antigravity habla **WinHTTP** en Windows y el proxy
+redirige a nivel de socket, **sin tocar certificados**: no hay MITM ni CA
+propia en su diseño.
+
+**Consecuencia para nuestro arnés**: en Linux/ARM64 el LS es Go y usa
+`net/http` por su cuenta, así que el equivalente no es un hook sino el
+`HTTP_PROXY`/`HTTPS_PROXY` que ya usamos (Go respeta esas variables) más
+`SSL_CERT_FILE` si hay que interceptar TLS. El proxy comunitario **confirma
+que no hace falta tocar el TLS paraobservar el tráfico**.
+

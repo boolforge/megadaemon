@@ -127,13 +127,24 @@ def dedup(parent):
     return removed
 
 
+# Ruido que NO se respalda: el sysroot de emulacion son 23 MB de glibc ARM64
+# de Debian (reproducible con `apt-get download`), y las capturas de red
+# contienten trafico de pruebas local.
+EXCLUDE_PARTS = ("runtime/qemu/sysroot",)
+
+
 def default_targets(root: pathlib.Path):
     out = []
     for sub in ("docs", "recon", "reference", "tools", "versions", "runtime"):
         d = root / sub
         if d.is_dir():
             for p in sorted(d.rglob("*")):
-                if p.is_file() and p.stat().st_size < 200 * 1024 * 1024:
+                if not p.is_file():
+                    continue
+                rel = str(p.relative_to(root))
+                if any(rel.startswith(x) for x in EXCLUDE_PARTS):
+                    continue
+                if p.stat().st_size < 200 * 1024 * 1024:
                     out.append(p)
     return out
 
