@@ -56,3 +56,7 @@ rust-core/target-test/
 # target/dist nunca se suben.
 crates/hooks-payload/target/
 crates/hooks-payload/dist/
+
+# Nucleo forense en C (binario COMPILADO: no va al repo)
+tools/mddoctor
+tools/mddoctor-arm64

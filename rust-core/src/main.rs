@@ -675,6 +675,44 @@ fn main() {
             std::process::exit(if ok { 0 } else { 1 });
         }
 
+        // v17 — Diagnóstico y recuperación.  Si esta el binario `mddoctor`
+        // (el nucleo forense en C, 26 KB, sin dependencias) se usa el: es el
+        // que sabe de bateria, termica, PSI, zombies, locks rancios y disco.
+        // Si no esta, se cae al diagnostico nativo en Rust.
+        //   megadaemon-core doctor [scan|doctor|recover] [--json]
+        // Codigo de salida: 0 = todo OK, 1 = avisos, 2 = critico.
+        "doctor" => {
+            let sub = args.get(2).cloned().unwrap_or_else(|| "doctor".to_string());
+            let mut candidatas: Vec<String> = Vec::new();
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    candidatas.push(dir.join("mddoctor").to_string_lossy().into_owned());
+                }
+            }
+            candidatas.push("mddoctor".to_string());
+            let mut ejecutado = false;
+            for c in candidatas {
+                if std::path::Path::new(&c).exists() {
+                    match std::process::Command::new(&c).arg(&sub).status() {
+                        Ok(s) => {
+                            ejecutado = true;
+                            std::process::exit(s.code().unwrap_or(1));
+                        }
+                        Err(_) => continue,
+                    }
+                }
+            }
+            if !ejecutado {
+                eprintln!(
+                    "doctor: no se encontro `mddoctor` (compilalo con: gcc -O2 -o mddoctor tools/mddoctor.c)"
+                );
+                eprintln!("doctor: se usa el diagnostico nativo de Rust");
+                let out = megadaemon_core::diagnostico::recoger();
+                println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+                std::process::exit(0);
+            }
+        }
+
         // v16 — Capa de automatización (CLI de los 5 módulos nuevos).
         //   megadaemon-core automation <list|add|remove|enable|disable|poll|events|fire|journal>
         //   megadaemon-core cron       <list|add|remove|tick|plan|resume>

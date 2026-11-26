@@ -253,6 +253,16 @@ jobs:
         run: |
           cargo build --release --target aarch64-linux-android
           mkdir -p dist
+          # El nucleo forense en C (26 KB, sin dependencias): se compila con el
+          # clang del NDK que ya esta aqui, y se publica CON sha256 para que
+          # el movil lo verifique.  Es lo que puede diagnosticar al daemon
+          # CUANDO el daemon esta roto (no depende de la libreria de Rust).
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" \
+            -O2 -Wall -o dist/mddoctor-android-arm64 tools/mddoctor.c
+          chmod 755 dist/mddoctor-android-arm64
+          sha256sum dist/mddoctor-android-arm64 > dist/mddoctor-android-arm64.sha256
+          cp dist/mddoctor-android-arm64 dist/mddoctor-android-arm64-${GITHUB_SHA::7}
+          sha256sum dist/mddoctor-android-arm64-${GITHUB_SHA::7} > dist/mddoctor-android-arm64-${GITHUB_SHA::7}.sha256
           cp target/aarch64-linux-android/release/megadaemon-core dist/megadaemon-core-android-arm64
           sha256sum dist/megadaemon-core-android-arm64 > dist/megadaemon-core-android-arm64.sha256
           # Copia VERSIONADA (mismo motivo que en el build de Linux): en el

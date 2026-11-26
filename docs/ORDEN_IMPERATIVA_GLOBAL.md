@@ -22,7 +22,8 @@ sesión nueva releyó todo desde cero, repitió cosas ya hechas, y el backlog
 vivía en la cabeza de alguien. Por eso:
 
 1. **El backlog está en el repo, en un fichero, con estados.** Nada de "lo
-   tengo en la cabeza" ni "quedó en el chat anterior".
+   tengo en la cabeza" ni "quedó en el chat anterior". (§2: la memoria en
+   disco es también la forma de no gastar tokens dos veces.)
 2. **Todo lo que se empieza, se anota antes de empezar.**
 3. **Al terminar, se actualiza el estado** (hecho / en curso / bloqueado y
    por qué). Un ítem que no se actualiza cuenta como **abandonado**.
@@ -53,7 +54,68 @@ mucho más que uno completo y falso: el segundo cuesta días.
 
 ---
 
-## 2. No saturar el entorno
+## 2. Eficiencia de tokens: automatizar y reducir el consumo, sin perder eficacia
+
+> Imperativo del usuario (2026-11-26): *«hacer análisis y todo tipo de
+> procesos ultra automatizados pero ultra eficientes con técnicas de reducción
+> masiva de consumo de tokens pero maximizando eficacia y optimizando siempre
+> para aumentar eficacia y reducción de consumo de tokens en esto, e
+> implementación de todo lo empíricamente comprobado de forma óptima en
+> MegaDaemon»*.
+
+El objetivo **no** es "gastar menos tokens" por sí mismo: es **no volver a
+pagar dos veces por la misma información**. Un token gastado en releer un
+fichero que ya se procesó es un token que no se gasta en encontrar el bug
+siguiente.
+
+### 2.1 Reglas
+
+1. **Un script, no un volcado.** Si hay que mirar 4.000 líneas, el script
+   devuelve las 20 que importan. El agente lee la **salida del script**, no el
+   fichero.
+2. **Filtros en la propia herramienta**, no en el contexto: `grep`, `head`,
+   `--max-count`, `| tail`, `jq` para lo estructurado. Lo que no se imprime,
+   no se paga.
+3. **Salida compacta y estable** en todo lo automatizado: JSON con campos
+   fijos y un resumen de una línea, nunca el volcado crudo. Un informe de
+   10.000 tokens se reduce a 40 con las cifras y los `fichero:línea`.
+4. **Memoización de lo caro**: cachear en disco lo que ya se midió (hashes,
+   inventarios, pools de strings) y reutilizarlo. Si un cálculo de 8 minutos
+   se repite porque nadie guardó el resultado, es un bug de proceso.
+5. **Una sola pasada**: si hay que analizar N ficheros, un bucle que emite una
+   tabla, no N llamadas que devuelven N volcados.
+6. **El resultado del análisis va a un fichero**, no al chat: el chat lleva el
+   resumen y el `fichero:línea`; el detalle se consulta bajo demanda.
+7. **Nada de releer lo que ya está en el repo**: antes de abrir un fichero,
+   `git log`/`grep` para saber si ya se leyó. El backlog (§0) es la memoria.
+8. **Delegar lo acotado**: un subagente con un brief de 10 líneas hace el
+   trabajo largo y devuelve 3 líneas. El contexto del root no se llena con los
+   detalles de un barrido de 300.000 líneas.
+
+### 2.2 Lo que ya está medido en este repo (y hay que reusar)
+
+| Técnica | Dónde | Qué ahorra |
+|---|---|---|
+| Lectura de NDJSON por UID + barrido acotado | `tools/leer-diagnostico.py` | no leer 473 líneas de instrumentación en crudo |
+| Publicación nativa a Drive desde Rust | `drive_vfs::write_local_file`, `drive_native::*` | no pasar por `curl` ni por el chat |
+| Cola y bus como protocolo (no chats) | `task_scheduler.rs`, `resonance.rs` | no re-transportar contexto entre agentes |
+| Un solo `bus_ejecutor::ciclo()` en vez de N llamadas | `bus_ejecutor.rs` | un ciclo = un ciclo de contexto |
+| Autodetección de "listo" | `telemetria::estado_listo()` | no preguntar "¿ya estás?" |
+| Informes con `NO VERIFICADO` explícito | esta orden | no discutir sobre lo que nadie comprobó |
+| Núcleo forense propio en C (26 KB, sin deps) | `tools/mddoctor.c` | diagnostica en **<1 s** donde el build de Rust se muere por RAM |
+| Tablón del enjambre en un comando | `tools/estado.sh` | no releer el repo para saber dónde está el trabajo |
+| Ejecutar un binario ARM64 de verdad | `tools/verificar-arm64.sh` (+ `qemu-aarch64-static`) | "compila" ⇒ "funciona", sin esperar al CI |
+
+### 2.3 Lo que NO se optimiza
+
+- **La corrección.** Reducir tokens nunca justifica saltarse una verificación.
+  Si un test cuesta 40 s, se tarda 40 s.
+- **La seguridad.** Nada de "es sólo un dato" para subirlo a un repo público.
+- **La honestidad del informe.** Un resumen corto que miente es peor que
+  un volcado largo.
+
+
+## 3. No saturar el entorno
 
 El sandbox tiene **2 CPU y 3 GB de RAM sin swap**; un `cargo test --lib` mata
 el enlazador (OOM). Reglas obligatorias:
@@ -73,7 +135,7 @@ por un OOM es el peor resultado posible.
 
 ---
 
-## 3. Coordinación: no pisar el trabajo de otro
+## 4. Coordinación: no pisar el trabajo de otro
 
 Las reglas de `docs/COORDINATION.md` siguen vigentes. En resumen:
 
@@ -90,7 +152,7 @@ Las reglas de `docs/COORDINATION.md` siguen vigentes. En resumen:
 
 ---
 
-## 4. Secretos: extraer sí, subir no
+## 5. Secretos: extraer sí, subir no
 
 * El usuario **pide** extraer credenciales para su uso. Se pueden extraer.
 * El repo es **PÚBLICO**. **Nada** de credenciales, tokens ni datos del
@@ -113,7 +175,7 @@ Las reglas de `docs/COORDINATION.md` siguen vigentes. En resumen:
 
 ---
 
-## 5. Unificar lo que es lo mismo
+## 6. Unificar lo que es lo mismo
 
 Antes de crear algo nuevo, **buscar si ya existe**:
 
@@ -130,7 +192,7 @@ con su entrada en `docs/IDEAS_BACKLOG.md`.
 
 ---
 
-## 6. El canal manda: nada de conexiones dependientes de un humano
+## 7. El canal manda: nada de conexiones dependientes de un humano
 
 MEDIDO (2026-11-26): el *quick tunnel* de Cloudflare **cambia de hostname en
 cada relanzamiento** y el relé canónico se cae ⇒ el sandbox se queda ciego y
@@ -151,7 +213,7 @@ terminado**: le falta el push o el pull.
 
 ---
 
-## 7. Batería: el móvil es un recurso compartido y limitado
+## 8. Batería: el móvil es un recurso compartido y limitado
 
 MEDIDO: el móvil estaba al 14 % de batería con la carga al 98 % de RAM.
 
@@ -163,7 +225,7 @@ MEDIDO: el móvil estaba al 14 % de batería con la carga al 98 % de RAM.
 
 ---
 
-## 8. Qué se espera de un agente al terminar
+## 9. Qué se espera de un agente al terminar
 
 1. **Estado real** en el backlog: `✅ hecho` / `🟡 en curso` / `⛔ bloqueado
    (por qué)`.
@@ -174,8 +236,9 @@ MEDIDO: el móvil estaba al 14 % de batería con la carga al 98 % de RAM.
 
 ---
 
-## 9. La frase que resume todo
+## 10. La frase que resume todo
 
-> **Apunta todo en documentos, no pierdas el hilo ni el foco, no satures la
-> máquina, coordina antes de tocar, no subas secretos a GitHub, y deja el
-> sistema funcionando aunque nadie esté mirando.**
+> **Apunta todo en documentos, no pierdas el hilo ni el foco, automatiza y no
+> repitas trabajo (que es lo que cuesta tokens), no satures la máquina,
+> coordina antes de tocar, no subas secretos a GitHub, y deja el sistema
+> funcionando aunque nadie esté mirando.**

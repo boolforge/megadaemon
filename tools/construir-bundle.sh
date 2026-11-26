@@ -36,6 +36,13 @@ mkdir -p "$STAGE/deploy" "$STAGE/web" "$STAGE/bin"
 # 1) El binario.
 cp -f "$BINARIO" "$STAGE/bin/megadaemon-core"
 chmod 755 "$STAGE/bin/megadaemon-core"
+# El mddoctor se compila aqui si no esta: en el movil no hay compilador, y en
+# el PC el gcc siempre esta.  Si falla, el bundle sigue igual (es accesorio).
+if [ ! -f "$STAGE/bin/mddoctor" ]; then
+    sh "$RAIZ/tools/build-mddoctor.sh" >/dev/null 2>&1 || true
+    [ -f "$RAIZ/tools/mddoctor" ] && cp -f "$RAIZ/tools/mddoctor" "$STAGE/bin/mddoctor"
+fi
+[ -f "$STAGE/bin/mddoctor" ] && chmod 755 "$STAGE/bin/mddoctor"
 
 # 2) El stack (los mismos ficheros que el daemon lleva embebidos).
 for f in 99-megadaemon.sh 97-megadaemon-keeper.sh 98-cloudflared.sh 91-adb-tcp.sh \
@@ -57,6 +64,9 @@ stage, prefijo, binario = sys.argv[1], sys.argv[2], sys.argv[3]
 # (origen dentro del bundle, destino, modo)
 miembros = [
     ("bin/megadaemon-core", "prefijo/megadaemon-core", 0o755),
+    # El nucleo forense en C: 26 KB, sin dependencias, y funciona aunque el
+    # daemon este roto.  Va al prefijo para que el movil lo tenga siempre.
+    ("bin/mddoctor", "prefijo/mddoctor", 0o755),
     ("deploy/99-megadaemon.sh", "servicio/99-megadaemon.sh", 0o755),
     ("deploy/97-megadaemon-keeper.sh", "servicio/97-megadaemon-keeper.sh", 0o755),
     ("deploy/98-cloudflared.sh", "servicio/98-cloudflared.sh", 0o755),

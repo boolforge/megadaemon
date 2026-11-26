@@ -587,3 +587,28 @@ secreto y poder fusionarlas a GitHub.
   nada**; ahora se aceptan las dos claves (con `accion` mandando).
   Los APK y sus volcados **no** van al repo (es público): siguen fuera, en
   `/workspace/apk_work/jazztel/`.
+
+- 2026-11-27 · agente principal · **núcleo forense y de recuperación en C**
+  (`tools/mddoctor.c`, **26 KB**, sin dependencias): hay 7 scripts de recuperación
+  dispersos y ninguno funciona cuando el daemon está roto. Este no depende de
+  la librería de MegaDaemon, así que **sí**. Recoge batería, térmica, memoria,
+  swap, **PSI** de CPU, carga, disco, red por interfaz, zombies y estado **D**,
+  el estado de MegaDaemon (`instance.json`/`channel.json`/`tunnel.url`) y los
+  clasifica `OK`/`AVISO`/`CRÍTICO` **con el motivo**; salida en tabla o
+  `--json` y **código de salida 0/1/2** para scripts. Recuperación:
+  `recover` sólo propone, `recover --apply --yes` ejecuta (temporales viejos,
+  **locks rancios** de más de 1 hora, URL de túnel ausente).
+  **Por qué en C y no en Rust**: `gcc -O2` compila en **<1 s** con ~10 MB de
+  RAM; en este sandbox (2 CPU, 3 GB sin swap) el enlazado del crate de Rust
+  de 160 MB **mata el proceso por OOM** (SIGKILL medido). Un diagnóstico tiene
+  que poder construirse donde no hay RAM. La envoltura en Rust sí es Rust:
+  `megadaemon-core doctor [scan|doctor|recover]` usa el binario C si está y
+  cae al `diagnostico::recoger()` nativo si no.
+  Também: `tools/estado.sh` (tablón del enjambre en un comando),
+  `tools/verificar-arm64.sh` (ejecutar un binario ARM64 real con
+  `qemu-aarch64-static`: convierte "compila" en "funciona").
+  **MEDIDO**: 26.352 B; `gcc -O2 -Wall` ⇒ 0 errores; `doctor` ⇒ 7 OK / 3 avisos /
+  0 críticos en este sandbox y **código de salida 1**; en el móvil hará lo mismo
+  con los sensores de verdad. **Pendiente**: la tool MCP `doctor` y la
+  publicación del binario en el bundle del móvil (CI: paso añadido, sin
+  verificar todavía contra el CI).

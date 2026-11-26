@@ -231,3 +231,23 @@
 | M7 | **Cableado**: registro en `lib.rs`, subcomando de CLI y tool MCP | ✅ | `megadaemon-core redeep <apk> [analizar\|rutas\|pins\|descifradores\|xrefs]` y tool `re_profunda` |
 | M8 | **Tests** | ✅ | **24 tests puros** (sin APK, sin red, sin móvil), incluidos los vectores SHA-256 de NIST y la regresión de los payloads de Dalvik |
 | M9 | **Cinco bugs reales** encontrados al integrar el módulo (no los había detectado quien lo escribió) | ✅ | (1) `substring` no compilaba: `s.get(rango)` devuelve `Option<&[char]>`; (2) los **payloads de Dalvik nunca se saltaban** en tres barreadores: el ident se leía como `unidad >> 8` (0x01/0x02/0x03) en vez de `unidad & 0xff00` (0x0100/0x0200/0x0300) ⇒ el barrido continuaba dentro de los datos e inventaba xrefs fantasma; ahora los cuatro barreadores comparten un único helper (`siguiente_insn`); (3) **el barrido se desalineaba tras cada `goto`**: la tabla local de anchos (por rangos) no tenía el `0x28` (`goto`, `10t`, **dos** unidades) ⇒ el offset del salto se leía como código; ahora `insn_width` delega en la tabla canónica por formato; (4) **el detector de descifradores estaba muerto**: buscaba el XOR dentro de la lista de *invocaciones* (un XOR no invoca a nadie ⇒ la condición nunca era cierta ⇒ **no encontraba ningún descifrador nunca**) y con una lista de opcodes equivocada (`0x98` = `shl-int`, `0xe0` = `shl-int/lit8`; faltaban `xor-long`, `xor-long/2addr`, `xor-int/lit16`); ahora se busca por **nombre** de opcode. Impacto en esta app: **ninguno** (esta app no cifra strings: el resultado correcto es cero); (5) **el inventario de rutas salía VACÍO en la app real**: `classify_rest_path` rechazaba las mayúsculas en cualquier segmento, y todas las rutas medidas de esta app llevan parámetros camelCase (`{subscriptionId}`, `{accountId}`, `{productId}`) ⇒ no encontraba ninguna ruta y no daba error. **MEDIDO sobre el APK real** (pool de strings de los 5 DEX, 169.488 strings únicos): el clasificador viejo encuentra **16** rutas y el nuevo **133** (superconjunto estricto: 0 perdidas, 117 ganadas), y las ganadas son las del control de gasto (`user-tariffs`, `recharges`, `recurring`, `balances`, `events`, `penalties`) |
+
+## O. Núcleo forense y recuperación (`mddoctor`) (2026-11-27)
+
+> Hay **7 scripts de recuperación/diagnóstico** dispersos
+> (`recuperar-en-movil.sh` 25 KB, `md-repair-entorno.sh` 20 KB,
+> `recuperar-movil-v2.sh` 11 KB, `recuperar-movil.sh` 12 KB,
+> `megadaemon_local_doctor.sh` 9 KB, `diagnostico-movil.sh`,
+> `estado-movil.sh`): cada uno con su formato, su salida y su forma de
+> fallar. Faltaba un **núcleo** único, diminuto y utilizable **cuando todo
+> lo demás está roto**.
+
+| # | idea | estado | detalle |
+|---|---|---|---|
+| O1 | **Núcleo forense en C** (`tools/mddoctor.c`, **26 KB**, sin dependencias: solo libc) | ✅ | `gcc -O2` en **<1 s** y ~10 MB de RAM: compila donde el enlazado de Rust **mata el proceso por OOM** (SIGKILL medido). No depende de la librería de MegaDaemon ⇒ funciona cuando el daemon está roto |
+| O2 | Recogida: batería, térmica, memoria, **swap**, **PSI** (`/proc/pressure`), carga, disco, red por interfaz, procesos (zombies y estado **D**), estado de MegaDaemon (`instance.json`, `channel.json`, `tunnel.url`) | ✅ |lee `/proc` y `/sys`; sin `curl`, sin `python`, sin `jq` |
+| O3 | Clasificación `OK` / `AVISO` / `CRÍTICO` **con el motivo** en cada hallazgo | ✅ | salida en tabla o `--json`; **código de salida 0/1/2** para scripts y para el CLI |
+| O4 | Recuperación: temporales viejos, **locks rancios** (>1 h), URL de túnel ausente | ✅ | `recover` **solo propone**; `recover --apply --yes` ejecuta |
+| O5 | **Integración en el CLI de MegaDaemon**: `megadaemon-core doctor [scan\|doctor\|recover]` | ✅ | usa el binario C si está al lado; si no, cae al `diagnostico::recoger()` nativo |
+| O6 | Build y publicación: `tools/build-mddoctor.sh` (host y aarch64 con NDK) + paso en el **CI** + entrada en el **bundle del móvil** | ✅ | el móvil recibe `mddoctor` con su `.sha256` |
+| O7 | **Tool MCP `doctor`** (acciones `scan`/`doctor`/`recover`) | ⛔ | pendiente: el CLI ya está; falta el brazo MCP |
