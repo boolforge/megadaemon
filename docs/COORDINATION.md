@@ -507,3 +507,28 @@ Rust, con las credenciales que pasó el jefe):
 histórico del repo, que es público). Y quien pueda, reescribir la historia de
 `agent/merge-flota-pendiente` y `fix/mobile-web-bridge` para quitar el
 secreto y poder fusionarlas a GitHub.
+
+---
+- 2026-11-26 · agente principal · **feat(v14) telemetría a Drive + one-liner**: el
+  cuelo de botella del enjambre era el CANAL (el quick tunnel cambia de hostname y el
+  relé canónico cae ⇒ el sandbox se queda ciego). Nuevo módulo propio
+  `rust-core/src/telemetria.rs`: el móvil **empuja** su estado (batería, red desglosada
+  **WiFi vs datos móviles** por interfaz, instrumentación viva) y sus **datos de
+  conexión** (URL, relé, puerto, build, **sha16** de las claves) a Drive con el cliente
+  **nativo** (`drive_vfs`, sin `curl` ⇒ el móvil no lo tiene); escribe primero en disco
+  para no perder nada si Drive falla. Auto-detección de "listo" con **código de salida
+  0/1**. Tool MCP `telemetria` + CLI `megadaemon-core telemetria <acción>`. Nuevo
+  `deploy/megadaemon-oneliner.sh` (instalador atómico con rollback, release en 3 capas,
+  verificación **por valor**, health-check real) y `deploy/mdo.sh` (lanzador de una
+  línea). 9 tests propios; `cargo check --lib --bins --tests` = **0 errores**; gates
+  verdes (352 ficheros / 0 errores de sintaxis; `sh -n` y `dash -n` OK). Commits
+  `9a2a133`, `8479688`, `9bbb63b`, `e6ce592`. Documentos: `docs/TELEMETRIA_DRIVE.md`,
+  `docs/ORDEN_IMPERATIVA_GLOBAL.md`, `docs/RESILIENCIA_P2P.md`,
+  `docs/RE_GASTO_DATOS_JAZZTEL.md` (los dos últimos de subagentes, sin compilar).
+  **Hallazgo verificado**: `rust-core/src/resonance.rs` YA ES un bus P2P por Drive
+  (cartas Ed25519, CRDT LWW `epoch`+`seq`, `tablon-resiliencia`) ⇒ el Nivel 2 del P2P
+  debe **extenderlo**, no duplicarlo; y los leases ya están en `board.rs`.
+  ⚠️ **Relé canónico incoherente (medido)**: `channel.rs:72` usa `mdtmfnc.duckdns.org`
+  pero `state/channel.json` dice `mdtmfnc-s21.duckdns.org` ⇒ decidir antes de la Fase 1.
+  ⚠️ **PII**: las 9 facturas de Jazztel llevan el **NIF en el nombre** ⇒ siempre
+  enmascarado en cualquier informe del repo (que es público).
