@@ -111,6 +111,7 @@ pub fn api_v2_routes() -> Vec<(&'static str, &'static str)> {
         ("GET", "/api/v2/antigravity/conversation"),
         ("GET", "/api/v2/antigravity/tasks"),
         ("POST", "/api/v2/antigravity/enqueue"),
+        ("POST", "/api/v2/antigravity/reparar-proyectos"),
         // ── Superficie nueva (2026-11-23): la UI refleja de verdad el daemon
         ("GET", "/api/v2/logs"),
         ("GET", "/api/v2/config"),
@@ -180,6 +181,7 @@ fn route_descriptions() -> Vec<(&'static str, &'static str, &'static str)> {
         ("GET", "/api/v2/antigravity/conversation", "Lee una conversación completa de Antigravity. Parámetro ?id= (cascadeId)."),
         ("GET", "/api/v2/antigravity/tasks", "Cola de tareas del daemon de Antigravity (daemon/tasks.json): hooks, trigger e intervalo."),
         ("POST", "/api/v2/antigravity/enqueue", "Encola trabajo en el agente de Antigravity (consume cuota y crea una conversación): exige confirm=true."),
+        ("POST", "/api/v2/antigravity/reparar-proyectos", "Repara la lista de PROYECTOS de Antigravity: borra las conversaciones con project_id vacio (huerfanas), que hacen que el language server falle con read_projects_empty_id y la app pida el login. Copia de seguridad antes; exige confirm=true."),
         ("POST", "/api/v2/tasks/claim", "Reclama una tarea del tablero del bus bajo lock (BEGIN IMMEDIATE) con lease y rol; won=false si otro se adelantó."),
         ("POST", "/api/v2/tasks/release", "Devuelve una tarea a `queued`; sólo quien la tiene puede soltarla."),
         ("POST", "/api/v2/tasks/report", "Reporta el resultado de una tarea (hecha/fallida) con su informe."),
@@ -5391,6 +5393,10 @@ pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
             ("POST", "/api/v2/admin/restart") => admin_restart(&b),
             ("POST", "/api/v2/admin/install_apk") => admin_install_apk(&b),
             ("POST", "/api/v2/admin/shell") => admin_shell(&b),
+            ("POST", "/api/v2/antigravity/reparar-proyectos") => {
+                let confirm = body.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false);
+                crate::antigravity_sessions::reparar_proyectos(confirm)
+            }
             ("POST", "/api/v2/antigravity/enqueue") => {
                 let prompt = s("prompt");
                 let confirm = b.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false);

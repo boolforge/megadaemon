@@ -493,6 +493,11 @@ pub fn recoger() -> Value {
         // ruta pedida, ruta REAL usada, cuantas variantes se probaron, el
         // status y la regla aplicada.
         "shim_resumen": resumen_shim("/data/adb/megadaemon/state/agyshim.ndjson", 300),
+        // MEDIDO (2026-11-26, movil): la lista de PROYECTOS de la app (la
+        // columna `project_id` de su DB).  Si alguna conversacion la tiene
+        // VACIA, el language server falla con "read_projects_empty_id" y la
+        // app pide el login de Google.  Se lee en SOLO LECTURA.
+        "agy_db": crate::antigravity_sessions::proyectos(),
         "state_dir": state,
     })
 }

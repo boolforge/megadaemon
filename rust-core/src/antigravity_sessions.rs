@@ -259,6 +259,194 @@ pub fn sesiones() -> Result<Vec<ResumenSesion>, String> {
     sesiones_en(&default_app_dir())
 }
 
+// ===========================================================================
+// PROYECTOS: la columna `project_id` (MEDIDO 2026-11-26, móvil)
+// ===========================================================================
+//
+// El language server de Antigravity construye su lista de proyectos con la
+// columna `project_id` de `conversation_summaries` y **falla si alguna
+// entrada viene vacía**:
+//
+//   errorreport.go:224] ReadProjects read_projects_empty_id: project list
+//   contained an empty ID
+//
+// y entonces el `projectID` se queda en "" ⇒ el LS consulta el estado de una
+// operación **VACÍA** (`GET /v1internal/`) ⇒ 404 ⇒ "failed to get operation
+// status" ⇒ la app vuelve a pedir el login de Google.
+//
+// MEDIDO (2026-11-26, móvil): 27 de las 32 conversaciones tenían
+// `project_id` y **5 lo tenían VACÍO** (las cinco de nuestra experimentación
+// del 2026-11-22, sin workspace y sin agente).
+//
+// La DB se lee en **solo lectura**: la app no se toca.  La reparación
+/// (borrar las huérfanas) hace copia de seguridad antes y exige `confirm`.
+
+/// Lectura de la lista de proyectos y de las conversaciones huérfanas.
+pub fn proyectos_en(app_dir: &Path) -> Value {
+    let db_path = app_dir.join("conversation_summaries.db");
+    if !db_path.exists() {
+        return json!({
+            "ok": false,
+            "error": "no_hay_db",
+            "db": db_path.to_string_lossy(),
+        });
+    }
+    let con = match open_readonly(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return json!({ "ok": false, "error": e, "db": db_path.to_string_lossy() });
+        }
+    };
+    // 1) Los proyectos (distintos) y cuantas conversaciones tiene cada uno.
+    let mut conteo: HashMap<String, i64> = HashMap::new();
+    let mut sin_project_id: i64 = 0;
+    let mut total: i64 = 0;
+    if let Ok(mut st) = con.prepare(
+        "SELECT COALESCE(NULLIF(TRIM(project_id),''),''), COUNT(*) \
+         FROM conversation_summaries GROUP BY 1",
+    ) {
+        if let Ok(filas) = st.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        }) {
+            for f in filas.flatten() {
+                total += f.1;
+                if f.0.is_empty() {
+                    sin_project_id += f.1;
+                } else {
+                    *conteo.entry(f.0).or_insert(0) += f.1;
+                }
+            }
+        }
+    }
+    // 2) Las huérfanas (para poder borrarlas o diagnosarlas).
+    let mut huerfanas: Vec<Value> = Vec::new();
+    if let Ok(mut st) = con.prepare(
+        "SELECT conversation_id, COALESCE(title,''), COALESCE(workspace_uris,''), \
+                COALESCE(last_modified_time,'') \
+         FROM conversation_summaries \
+         WHERE project_id IS NULL OR TRIM(project_id)='' ORDER BY last_modified_time",
+    ) {
+        if let Ok(filas) = st.query_map([], |r| {
+            Ok(json!({
+                "conversation_id": r.get::<_, String>(0)?,
+                "titulo": r.get::<_, String>(1)?,
+                "workspace": r.get::<_, String>(2)?,
+                "fecha": r.get::<_, String>(3)?,
+            }))
+        }) {
+            for f in filas.flatten() {
+                huerfanas.push(f);
+            }
+        }
+    }
+    let mut proyectos: Vec<Value> = conteo
+        .into_iter()
+        .map(|(id, n)| json!({ "id": id, "conversaciones": n }))
+        .collect();
+    proyectos.sort_by(|a, b| {
+        b["conversaciones"]
+            .as_i64()
+            .unwrap_or(0)
+            .cmp(&a["conversaciones"].as_i64().unwrap_or(0))
+    });
+    json!({
+        "ok": true,
+        "db": db_path.to_string_lossy(),
+        "conversaciones": total,
+        "proyectos": proyectos,
+        "sin_project_id": sin_project_id,
+        "huerfanas": huerfanas,
+        "nota": "la DB de la app se lee en SOLO LECTURA; 'sin_project_id' > 0 hace que el LS falle con 'read_projects_empty_id'",
+    })
+}
+
+/// Lectura de la lista de proyectos del directorio por defecto.
+pub fn proyectos() -> Value {
+    proyectos_en(&default_app_dir())
+}
+
+/// **Repara** la lista de proyectos: borra las conversaciones con
+/// `project_id` VACÍO (las huérfanas), que son las que hacen que el language
+/// server falle con `read_projects_empty_id` y pida el login.
+///
+/// Hace **copia de seguridad** de la DB (y de su `-wal`/`-shm`) antes de
+/// tocar nada, y exige `confirmar` (es una escritura en el estado de la
+/// app).
+pub fn reparar_proyectos_en(app_dir: &Path, confirmar: bool) -> Value {
+    let db_path = app_dir.join("conversation_summaries.db");
+    if !db_path.exists() {
+        return json!({ "ok": false, "error": "no_hay_db" });
+    }
+    let antes = proyectos_en(app_dir);
+    let huerfanas = antes["huerfanas"].as_array().map(|a| a.len()).unwrap_or(0);
+    if huerfanas == 0 {
+        return json!({
+            "ok": true,
+            "borradas": 0,
+            "detalle": "no hay conversaciones con project_id vacío",
+            "proyectos": antes,
+        });
+    }
+    if !confirmar {
+        return json!({
+            "ok": false,
+            "error": "confirmation_required",
+            "hint": "borra filas de la DB de la app: repite con confirm=true",
+            "borrarias": huerfanas,
+        });
+    }
+    // Copia de seguridad (con la fecha) antes de escribir.
+    let stamp = now_unix_secs();
+    let backup = db_path.with_extension(format!("db.bak-megadaemon-{stamp}"));
+    let copia = std::fs::copy(&db_path, &backup)
+        .map_err(|e| format!("copia de seguridad ({}): {e}", backup.display()));
+    if let Err(e) = copia {
+        return json!({ "ok": false, "error": e });
+    }
+    for ext in ["-wal", "-shm"] {
+        let extra = db_path.with_file_name(format!(
+            "conversation_summaries.db{ext}"
+        ));
+        if extra.exists() {
+            let _ = std::fs::copy(
+                &extra,
+                extra.with_file_name(format!(
+                    "conversation_summaries.db{ext}.bak-megadaemon-{stamp}"
+                )),
+            );
+        }
+    }
+    // Escritura: se abre en modo normal (lectura-escritura).
+    let con = match rusqlite::Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => return json!({ "ok": false, "error": format!("abrir para escribir: {e}") }),
+    };
+    let borradas = match con.execute(
+        "DELETE FROM conversation_summaries WHERE project_id IS NULL OR TRIM(project_id)=''",
+        [],
+    ) {
+        Ok(n) => n,
+        Err(e) => {
+            return json!({
+                "ok": false,
+                "error": format!("borrar: {e}"),
+                "backup": backup.to_string_lossy(),
+            });
+        }
+    };
+    json!({
+        "ok": true,
+        "borradas": borradas,
+        "backup": backup.to_string_lossy(),
+        "proyectos": proyectos_en(app_dir),
+    })
+}
+
+/// Reparación de la lista de proyectos del directorio por defecto.
+pub fn reparar_proyectos(confirmar: bool) -> Value {
+    reparar_proyectos_en(&default_app_dir(), confirmar)
+}
+
 /// Estado agregado de las sesiones en `app_dir`.
 pub fn estado_en(app_dir: &Path) -> Result<EstadoSesiones, String> {
     let lista = sesiones_en(app_dir)?;
@@ -819,6 +1007,63 @@ mod tests {
             rusqlite::params!["root-stuck", "Idle con trabajo", 10, "2020-05-05 12:00:00+00:00", "CASCADE_RUN_STATUS_IDLE", "",],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn los_proyectos_huerfanos_se_ven_y_se_reparan_con_backup() {
+        // MEDIDO (2026-11-26, movil): el LS falla con
+        // "read_projects_empty_id" si alguna conversacion de la DB tiene el
+        // `project_id` VACIO.
+        let dir = temp_app_dir("proyectos");
+        seed_db(&dir);
+        // Dos conversaciones con proyecto y una huerfana (project_id vacio).
+        let db = dir.join("conversation_summaries.db");
+        let con = rusqlite::Connection::open(&db).unwrap();
+        con.execute(
+            "INSERT INTO conversation_summaries (conversation_id, title, last_modified_time, project_id)
+             VALUES ('c1','Uno','2026-11-22 10:00:00+00:00','proj-1')",
+            [],
+        )
+        .unwrap();
+        con.execute(
+            "INSERT INTO conversation_summaries (conversation_id, title, last_modified_time, project_id)
+             VALUES ('c2','Dos','2026-11-22 10:00:00+00:00','proj-1')",
+            [],
+        )
+        .unwrap();
+        con.execute(
+            "INSERT INTO conversation_summaries (conversation_id, title, last_modified_time, project_id)
+             VALUES ('huerfana','Sin proyecto','2026-11-22 11:00:00+00:00','')",
+            [],
+        )
+        .unwrap();
+        drop(con);
+
+        let v = proyectos_en(&dir);
+        assert_eq!(v["ok"], json!(true));
+        assert_eq!(v["conversaciones"], json!(6)); // 3 del seed + 3 de aqui
+        // Las 3 del seed NO llevan project_id (lo meten vacio por defecto) +
+        // la huerfana de este test => 4 sin project_id.
+        assert_eq!(v["sin_project_id"], json!(4));
+        assert_eq!(v["huerfanas"].as_array().unwrap().len(), 4);
+        assert_eq!(v["proyectos"][0]["id"], json!("proj-1"));
+        assert_eq!(v["proyectos"][0]["conversaciones"], json!(2));
+
+        // Sin confirm no se toca nada.
+        let r = reparar_proyectos_en(&dir, false);
+        assert_eq!(r["ok"], json!(false));
+        assert_eq!(r["error"], json!("confirmation_required"));
+        assert_eq!(proyectos_en(&dir)["sin_project_id"], json!(4));
+
+        // Con confirm: se borra la huerfana y hay copia de seguridad.
+        let r = reparar_proyectos_en(&dir, true);
+        assert_eq!(r["ok"], json!(true));
+        assert_eq!(r["borradas"], json!(4));
+        assert_eq!(proyectos_en(&dir)["sin_project_id"], json!(0));
+        let backup = r["backup"].as_str().unwrap();
+        assert!(std::path::Path::new(backup).exists(), "debe haber backup");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
