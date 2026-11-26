@@ -54,14 +54,20 @@ Descarga el instalador completo y lo ejecuta.  El instalador autodetecta el
 entorno (móvil/Termux/Magisk o PC), resuelve el release, verifica el bundle
 por valor, instala de forma atómica con rollback, arranca el stack, ESPERA A
 QUE ESTÉ LISTO (health-check real del túnel), publica el canal en el repo y
-sube la telemetría y los datos de conexión a Google Drive.
+sube la telemetría, los datos de conexión y un INFORME DE LA INSTALACIÓN a
+Google Drive (el root lo lee desde el sandbox, sin ADB).
 
 Opciones que se pasan al instalador:
-  --diagnostico     sólo lee el estado (no toca nada)
+  --diagnostico     auditoría completa (daemon, /health, túnel, watchdog,
+                    keeper, cloudflared, canal, credenciales, disco, binario
+                    en servicio vs. en disco) y publica el informe en Drive
   --instalar        instala (por defecto)
   --pc              instala en el móvil por adb
   --force           reinstala aunque ya esté sano
   --sin-telemetria  no sube telemetría a Drive
+  --sin-publicar    no publica nada en Drive (diagnóstico local)
+  --timeout=N       presupuesto de espera del health-check (def. 120 s)
+  --reintentos=N    reintentos de descarga (def. 5)
 AYUDA
       exit 0
       ;;
@@ -147,18 +153,31 @@ if [ -n "$VER_LOCAL" ]; then
 fi
 
 # --- 4) delegar ------------------------------------------------------------
-say "delego la instalación en el instalador completo"
+# El modo lo decide el usuario: el lanzador no impone "instalar".
+MODO_INV="instalar"
+for a in "$@"; do
+  case "$a" in
+    --diagnostico|--verificar) MODO_INV="diagnostico" ;;
+    --pc)                      MODO_INV="pc" ;;
+  esac
+done
+say "delego la '$MODO_INV' en el instalador completo"
 sh "$INSTALADOR" --instalar "$@"
 RC=$?
 rm -f "$TMP" 2>/dev/null
 
 # --- 5) resumen ------------------------------------------------------------
 if [ "$RC" = "0" ]; then
-  say "OK. El móvil queda:"
-  say "  - instalado (atómico, con rollback)"
-  say "  - arrancado y auto-curado (watchdog + keeper)"
-  say "  - con telemetría y datos de conexión subidos a Google Drive"
-  say "  - listo para recibir instrumentación y tareas sin conexión directa"
+  if [ "$MODO_INV" = "diagnostico" ]; then
+    say "Diagnóstico hecho y publicado en Drive."
+    say "  el root lo lee desde el sandbox: no hace falta abrir el móvil."
+  else
+    say "OK. El móvil queda:"
+    say "  - instalado (atómico, con rollback)"
+    say "  - arrancado y auto-curado (watchdog + keeper)"
+    say "  - con telemetría, datos de conexión e informe de instalación en Drive"
+    say "  - listo para recibir instrumentación y tareas sin conexión directa"
+  fi
 else
   warn "el instalador devolvió el código $RC"
   warn "el estado queda en disco; se puede reejecutar este mismo comando (es idempotente)"
