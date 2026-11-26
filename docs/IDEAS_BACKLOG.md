@@ -116,3 +116,62 @@
 | H7 | **Fusión del GUI de Antigravity con el cockpit v2** — una sola página web con el marco de la IDE de Antigravity **y** los paneles de la API v2 | 🟡 | `web/cockpit_antigravity.html` (shell *Jetski Web* de `/workspace/agy-intel/assets_web_index.html` + `/api/v2/*` + chat por `POST /api/chat` + marco de la IDE por iframe). JS validado con `node --check`; **sin compilar** (política del sandbox) |
 | H8 | **El agente, dentro del bus**: que el `general` sea un nodo al que se le pueda asignar trabajo por la API | 🟡 | `tools/registrar-agente-general.py` (idempotente, **dry-run por defecto**) da de alta `agent-general@…` en `state/board.sqlite` (`instances`) y sus tareas; `state/agents/agent-general.json` es el registro por fichero. La API v2 ya expone `/api/v2/nodes/assign`, `/api/v2/nodes/message` y `/api/v2/tasks/claim\|release\|report` (`rust-core/src/webui.rs:74-75`, `:4120-4128`) |
 | H9 | **Que el móvil sirva la GUI fusionada** (hoy `web/cockpit_antigravity.html` está en el repo, no en el daemon) | ⏳ | falta el cableado en `cockpit_server.rs` (3 líneas, el mismo patrón que `docs/API_V2.md` §2 documenta para `/v2`) |
+
+## I. Resiliencia, autoconexión y P2P (2026-11-26) — encargo del jefe
+
+> «Haz que el sistema sea más resiliente a desconexiones prolongadas y que se
+> autoconecte (investiga proyectos tipo mosh y otros muchos, para elaborar un
+> protocolo y reutilizar, pensando en robustez y resiliencia extremas, que se
+> pueda integrar opcionalmente con WireGuard)»: un **P2P dentro de MegaDaemon**,
+> flexible y potente, fácil de implementar reutilizando código existente, para
+> reencontrarse, pasar por proxies y conexiones inestables, y migrar de
+> conexión — **sin fundir batería**.
+>
+> Diseño detallado: `docs/RESILIENCIA_P2P.md`.
+
+| # | idea | estado | detalle |
+|---|---|---|---|
+| I1 | **Nivel 1 — identidad estable + endpoint reubicable**: el nodo tiene una identidad criptográfica fija (Ed25519, `ring` ya está en las deps) y una lista de endpoints (relé duckdns de nombre fijo, quick tunnel, puertos de descubrimiento). Quien quiera alcanzarle **pregunta "dónde estás" al bus** y recibe el endpoint actual | 🟡 | `rust-core/src/channel.rs` ya publica `quick`/`duckdns`/`ip_publica`; falta el esquema de identidad + el dedo del bus |
+| I2 | **Nivel 2 — bus de control PULL** (el que rompe la dependencia de la conexión directa): el nodo **saca** órdenes del bus (repo por Contents API + Drive + relé) y las ejecuta, en vez de que le empufen. Permite **controlar el móvil y sus apps (incluso en primer plano) sin métodos directos de comunicación** | 🟡 | ⚠️ **NO es un bus nuevo**: `rust-core/src/resonance.rs` (659 líneas) **YA ES** un bus P2P por Drive — cartas firmadas Ed25519, `id = sha256(canonico)` (merge idempotente), CRDT LWW con `epoch`+`seq`, journal NDJSON + snapshot, en la carpeta privada `tablon-resiliencia`. El Nivel 2 debe **EXTENDERLO** (tipos de carta + semántica de órdenes), no duplicarlo. Los **leases NO se inventan**: `board.rs` ya los tiene (SQLite+WAL, `owner`, `lease_expires_at`, `reclaim_expired`); el bus sólo transporta órdenes. Detalle: `docs/RESILIENCIA_P2P.md` |
+| I3 | **Nivel 3 — reconexión extremo a extremo** tipo mosh: identificador de sesión + nonce + clave rotada, handshake tolerante a pérdida, y **re-emigración** cuando cambia el trans underpinnings (quick tunnel → relé, WiFi → datos móviles) | ⏳ | reutiliza el doble auth del daemon (`X-API-Key` + `X-Seere-Auth-Token`) y `channel.rs` |
+| I4 | **Cotas de batería**: en "silencioso" (sólo bus pull cada 15–30 min) el gasto no debe pasar de un X% diario. `JobScheduler`/`AlarmManager` con ventana inexact, `WorkManager` con `setRequiresCharging`, wakelocks mínimos | 🟡 | ya existe `battery_advanced::modo_ahorro_activo()` (batería <20 % y sin cargador) y la telemetría **duplica** el periodo en ese modo |
+| I5 | **Integración opcional con WireGuard**: "modo WG" del daemon (subir config, peer, allowed_ips, DNS) reutilizando `rustls`/`ring`/`ureq` ya presentes | ⏳ | opcional: no debe bloquear el modo por defecto |
+| I6 | **Unificar entornos equivalentes**: antigravity + language server + antigravity CLI + go + jetski ⇒ un único runtime, un único bus, un único modelo de credenciales | ⏡ | `rust-core/src/antigravity_env.rs`, `antigravity_clone.rs` (ya unifican el runtime), `agyshim.rs` |
+| I7 | **No fundir batería con la telemetría**: el push a Drive cada 15 min se dobla en modo ahorro | ✅ | `rust-core/src/telemetria.rs::publicar_periodico` |
+| I8 | ⚠️ **Relé canónico incoherente (medido)**: `channel.rs:72` usa `mdtmfnc.duckdns.org` pero el `state/channel.json` del repo dice `mdtmfnc-s21.duckdns.org` ⇒ dos canónicos distintos. Además el relé **no cachea** (a diferencia del `raw` de GitHub), así que es la única fuente "en vivo" fiable | ⛔ bloqueado | decidir cuál es el bueno **antes** de la Fase 1; `deploy/relay-pc.sh` y `deploy/instalador-megadaemon.sh` usan `mdtmfnc` (sin sufijo) |
+
+## J. Control de gasto de datos (Jazztel) (2026-11-26) — encargo del jefe
+
+> «Integra totalmente control de gasto de MB/GB de Jazztel dentro de MegaDaemon…
+> desofuscación extrema y descompilación total de la app de Jazztel, para
+> reimplementar e integrar sus funciones y avisos de factura; y deofuscar y
+> descompilar lo que se encarga de contar el gasto de datos; y busca cómo
+> diferenciar entre datos por WiFi y datos por conexión de datos».
+>
+> Diseño y plan de RE: `docs/RE_GASTO_DATOS_JAZZTEL.md`.
+
+| # | idea | estado | detalle |
+|---|---|---|---|
+| J1 | **Desglose WiFi vs datos móviles** en la telemetría del daemon | ✅ | `telemetria.rs`: `/proc/net/dev` clasificado por interfaz (`wlan*`→wifi, `rmnet*`/`ccmni*`/`ppp*`→móvil) y desglosado en `red.por_transporte` |
+| J2 | **Contabilidad real del sistema** (`NetworkStatsManager`, `TrafficStats`, `dumpsys netstats`, `xt_qtaguid`) y su diferencia con lo que **factura** el operador | 🟡 | `docs/RE_GASTO_DATOS_JAZZTEL.md` §A (A.1–A.10): 3 fuentes independientes, y la lista de dónde **difieren** (tethering, roaming, APN de respaldo, Data Saver, corte de ciclo de facturación). Pendiente de medir en el móvil |
+| J3 | **Desofuscación de la app `com.orange.bluu.jazztel`** (identificadores, strings, flujo de control) | ⏡ | `rust-core/src/dex_decompile.rs` + `apk_deobfuscator.rs` ya existen; cadena ordenada en `docs/RE_GASTO_DATOS_JAZZTEL.md` §B.2. **El APK está en Drive** (44 MB, `md5 de06e522…`, con splits y 9 facturas PDF) pero **no hay copia en el workspace** ⇒ el análisis de DEX/permisos queda `NO VERIFICADO` |
+| J4 | **Reimplantar en MegaDaemon**: `gasto_datos::estado()`, `comparar_con_factura()`, `avisos_factura()`, `desglose_wifi_vs_movil()` | ⏡ | diseño completo en `docs/RE_GASTO_DATOS_JAZZTEL.md` §B.4. **Decisión que lo gobierna**: `gasto_datos` NO es el contador de Android, es un **reconciliador** de 3 fuentes (contador del sistema, caché local de la app Jazztel, API/factura del operador) ⇒ el valor es *"cuánto ha gastado Jazztel y por qué no coincide con mi Android"* |
+| J5 | **Tool remota `gasto_datos`** (acciones `estado|datos_moviles|datos_wifi|comparar|avisos|refrescar`) con doble auth y `confirm: true` | ⏡ | patrón: `rust-core/src/android.rs` (dispatch) + `mcp_ext.rs` (catálogo) |
+| J6 | **Credenciales de Jazztel**: fuera del repo (el repo es PÚBLICO), sólo en ficheros 0600 | ⏡ | regla dura del encargo |
+| J7 | ⚠️ **PII en las facturas**: el **NIF del titular está en el nombre** de los 9 PDF de `Facturas jazztel` (Drive). El repo es PÚBLICO ⇒ ningún fichero del repo puede contener ese nombre ni el NIF | ⛔ regla dura | los PDF sólo se leen desde la carpeta **privada** de Drive y se **enmascaran** (`<NIF>_J….pdf`) en cualquier informe; lo mismo con el resto de datos de la factura (importe, IBAN) |
+
+## K. Telemetría a Drive + autodetección de "listo" (2026-11-26) — encargo del jefe
+
+> «Suba muchísima más telemetría automáticamente a Google Drive y que
+> autodetecte cuando esté listo y suba los datos de conexión a Google Drive, y
+> tú ya te conectes y hagas lo que tengas que hacer».
+
+| # | idea | estado | detalle |
+|---|---|---|---|
+| K1 | Módulo `telemetria`: recolección (batería, memoria, carga, uptime, red por transporte, instrumentación viva, diagnóstico) | ✅ | `rust-core/src/telemetria.rs` (nuevo) |
+| K2 | Subida **nativa** a Drive (sin `curl`: el móvil no lo tiene) + estado local en disco como fuente de verdad | ✅ | `drive_vfs::write_local_file` (subida resumible, `drive_native`) |
+| K3 | **Auto-detección de "listo"** (binario presente + URL de túnel + canal legible) y **sonda** del túnel con código HTTP | ✅ | `telemetria::estado_listo()`, `telemetria::sonda_tunel()` |
+| K4 | **Datos de conexión** publicados a Drive: URL viva, relé, puerto, build y **sha16** de las claves (nunca las claves) | ✅ | `telemetria::datos_conexion()`, `publicar_conexion()` |
+| K5 | **Subida de artefactos a Drive** (binarios e instrumentación) sin pasar por GitHub | ✅ | `telemetria::subir_artefacto()` + tool `telemetria artefacto` |
+| K6 | **One-liner de instalación y ejecución**: una línea, idempotente, con resolución del release en 3 capas, verificación **por valor**, instalación atómica con rollback, health-check real y auto-cura | ✅ | `deploy/megadaemon-oneliner.sh` + `deploy/mdo.sh` (lanzador de una línea) |
+| K7 | Publicación del canal en el **repo** desde el one-liner (`state/channel.json`) | 🟡 | lo hace `deploy/tunnel-watchdog.sh::publicar_repo()`; falta encadenarlo en el instalador |
