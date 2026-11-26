@@ -1133,8 +1133,14 @@ fn handle_client(mut stream: TcpStream) {
     let mut cuerpo_chunked: Vec<u8> = Vec::new();
     if chunked {
         // Leer hasta que llegue el chunk final (tamaño 0).
+        //
+        // MEDIDO (2026-11-26, móvil): el decoder se aplica al buffer **a
+        // partir del final de las cabeceras** (`header_end`).  Si se aplica
+        // al buffer entero, la primera línea que encuentra es la de las
+        // cabeceras HTTP ("POST … HTTP/1.1") y no el tamaño del chunk ⇒
+        // `from_str_radix` falla ⇒ el cuerpo llegaba VACÍO otra vez.
         loop {
-            if let Some((cuerpo, _)) = decodificar_chunked(&buf[..total_read]) {
+            if let Some((cuerpo, _)) = decodificar_chunked(&buf[header_end..total_read]) {
                 cuerpo_chunked = cuerpo;
                 break;
             }
@@ -3682,6 +3688,38 @@ mod chunked_tests {
         let (cuerpo, _) = decodificar_chunked(&crudo).expect("cuerpo completo");
         assert_eq!(cuerpo.len(), 65_000);
         assert_eq!(cuerpo, texto.as_bytes());
+    }
+
+    /// REGRESIÓN (medido 2026-11-26, móvil): el decoder se aplicaba al
+    /// buffer ENTERO, así que leía la línea de cabeceras HTTP como si fuera
+    /// el tamaño del chunk ⇒ `from_str_radix` fallaba ⇒ cuerpo vacío.
+    ///
+    /// Este test reproduce la petición real: cabeceras + cuerpo chunked.
+    #[test]
+    fn decodifica_una_peticion_real_con_cabeceras() {
+        let cuerpo_json = r#"{"project":"aicode-consumers","request":{"contents":[{"role":"user","parts":[{"text":"hola"}]}]}}"#;
+        let cabeceras = "POST /mda/abc/v1internal:streamGenerateContent?alt=sse HTTP/1.1\r\n\
+Host: 127.0.0.1:9090\r\n\
+User-Agent: antigravity/hub/2.11.0\r\n\
+Transfer-Encoding: chunked\r\n\
+Content-Type: application/json\r\n\r\n";
+        let mut buf: Vec<u8> = cabeceras.as_bytes().to_vec();
+        buf.extend_from_slice(format!("{:x}\r\n", cuerpo_json.len()).as_bytes());
+        buf.extend_from_slice(cuerpo_json.as_bytes());
+        buf.extend_from_slice(b"\r\n0\r\n\r\n");
+
+        // El decoder se aplica DESPUÉS de las cabeceras (como en `handle_client`).
+        let header_end = buf
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .expect("fin de cabeceras")
+            + 4;
+        let (cuerpo, _) = decodificar_chunked(&buf[header_end..]).expect("cuerpo completo");
+        assert_eq!(cuerpo, cuerpo_json.as_bytes());
+
+        // Y el decoder sobre el buffer ENTERO NO debe devolver un cuerpo
+        // (la primera línea son las cabeceras, no un tamaño de chunk).
+        assert!(decodificar_chunked(&buf).is_none());
     }
 }
 
