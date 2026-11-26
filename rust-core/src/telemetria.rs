@@ -683,7 +683,19 @@ pub fn dispatch(args: &Value) -> Value {
             .trim()
             .to_string()
     };
-    match s("action").as_str() {
+    // La tool MCP declara la clave "accion" (como las demas tools en
+    // espanol) pero el dispatch leia "action": una llamada con
+    // accion="publicar" caia en el brazo "" y devolvia el estado en vez de
+    // publicar.  Se aceptan las dos claves, con "accion" mandando.
+    let accion = {
+        let a = s("accion");
+        if a.is_empty() {
+            s("action")
+        } else {
+            a
+        }
+    };
+    match accion.as_str() {
         "estado" | "" => recoger(None),
         "publicar" => match publicar(None) {
             Ok(v) => v,
