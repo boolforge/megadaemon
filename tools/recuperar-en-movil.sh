@@ -58,9 +58,15 @@ daemon_vivo() {
 
 health() {
     # MEDIDO: /health responde sin credencial; 401/403 también significa vivo.
-    code=$(toybox wget -q -O /dev/null -T 5 "http://127.0.0.1:$PORT/health" 2>/dev/null; echo $?)
-    [ "$code" = "0" ] && return 0
-    return 1
+    #
+    # MEDIDO (2026-11-25, 23:25, movil): esta comprobación usaba
+    # `toybox wget`, que **NO EXISTE** en este movil ("toybox: Unknown
+    # command wget").  Como `toybox` devolvía un error, `health()` SIEMPRE
+    # fallaba ⇒ el script anunciaba "el daemon vivo no responde" y "AVISO:
+    # el cockpit no respondio tras 50 s" con el daemon SANO (medido:
+    # uptime 25439 s y /health status ok).  Por eso no se fiaba de nada.
+    # Ahora usa `descargar()`, que prueba curl y wget de verdad.
+    descargar "http://127.0.0.1:$PORT/health" "$STATE/health-probe.bin" 6 >/dev/null 2>&1
 }
 
 diagnostico() {
@@ -109,12 +115,13 @@ REPO_RELEASE=https://github.com/boolforge/megadaemon/releases/latest/download
 ASSET=megadaemon-core-android-arm64
 
 descargar() {
-    # $1 = url, $2 = destino
+    # $1 = url, $2 = destino, $3 = timeout en segundos (defecto 600)
+    tmo="${3:-600}"
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --max-time 600 -o "$2" "$1" && return 0
+        curl -fsSL --max-time "$tmo" -o "$2" "$1" && return 0
     fi
     if command -v wget >/dev/null 2>&1; then
-        wget -q -O "$2" "$1" && return 0
+        wget -q -T "$tmo" -O "$2" "$1" && return 0
     fi
     toybox wget -q -O "$2" "$1" 2>/dev/null && return 0
     return 1
@@ -274,9 +281,37 @@ daemon_usa_binario_nuevo() {
         *) return 0;;
     esac
 }
+# El build que DECLARA el daemon en su propio /health, frente al SHA-256
+# del binario de disco.
+#
+# MEDIDO (2026-11-25, 23:25, movil): `readlink /proc/<pid>/exe` NO marca
+# "(deleted)" cuando el binario se SUSTITUYE sobrescribiendo el fichero en
+# el sitio (mismo inode): el proceso sigue ejecutando el codigo VIEJO en
+# memoria mientras `/proc/<pid>/exe` apunta al binario nuevo.  El script
+# creia que el daemon estaba al dia y NO lo reinicio => el movil se
+# quedo 7 HORAS con el binario viejo (medido: uptime 25439 s, y el shim
+# seguia resolviendo en local `/v1internal/`, que es justo lo que
+# rompia el arranque del language server).
+#
+# La unica comprobacion fiable es el SHA-256 que el daemon declara en
+# `build.sha256` de su /health: si no coincide con el binario de disco,
+# el daemon corre otro codigo => hay que reiniciarlo.
+daemon_declara_este_binario() {
+    esperado="$1"
+    tmp="$STATE/health-probe.json"
+    descargar "http://127.0.0.1:$PORT/health" "$tmp" 8 >/dev/null 2>&1 || return 0
+    decl=$(tr ',' '\n' < "$tmp" 2>/dev/null \
+        | sed -n 's/.*"sha256":"\([0-9a-f]\{16\}\).*/\1/p' | head -1)
+    [ -n "$decl" ] || return 0   # no se puede saber: no se toca
+    [ "$decl" = "$esperado" ] && return 0
+    log "el daemon declara el build $decl y el binario de disco es $esperado: corre OTRO codigo"
+    return 1
+}
+
 REINICIAR_DAEMON=1
 if d=$(daemon_vivo); then
-    if daemon_usa_binario_nuevo "$d"; then
+    sha_disco=$(sha256_de "$BIN" 2>/dev/null | cut -c1-16)
+    if daemon_usa_binario_nuevo "$d" && daemon_declara_este_binario "$sha_disco"; then
         REINICIAR_DAEMON=0
         log "el daemon ($d) ya usa el binario actual: NO lo toco"
     else
@@ -350,21 +385,29 @@ if [ $i -ge 45 ]; then
 fi
 
 # 2) Espera a que responda y COMPRUEBA que es el daemon NUEVO.
+# MEDIDO (2026-11-25, 23:25): con el movil a 66 C y clase "thermal" el
+# arranque del daemon tarda mas de 50 s => el aviso era un falso positivo
+# (ademas de que `health` usaba toybox wget, que no existe).  Ahora se
+# esperan 90 s.
 i=0
-while [ $i -lt 25 ]; do
+while [ $i -lt 45 ]; do
     if health; then log "cockpit responde en $PORT"; break; fi
     i=$((i+1)); sleep 2
 done
-if [ $i -ge 25 ]; then
-    log "AVISO: el cockpit no respondio tras 50 s"
+if [ $i -ge 45 ]; then
+    log "AVISO: el cockpit no respondio tras 90 s"
 else
     # MEDIDO (2026-11-25): hay que comprobar que el que responde es el NUEVO:
     # si el viejo sobrevive, la UI que se ve es la VIEJA (y parece que "la UI
     # ha perdido la vista Antigravity").
     d2=$(daemon_vivo)
     log "daemon en marcha: ${d2:-desconocido}"
-    h=$(toybox wget -q -O - "http://127.0.0.1:$PORT/health" 2>/dev/null | head -c 500)
+    h=$(tr ',' '\n' < "$STATE/health-probe.bin" 2>/dev/null | head -c 500)
     log "health: $h"
+    # El build que DECLARA el daemon: si no es el binario de disco, el
+    # proceso sigue con otro codigo en memoria.
+    log "build declarado por el daemon: $(tr ',' '\n' < "$STATE/health-probe.bin" 2>/dev/null \
+        | sed -n 's/.*"short":"\([0-9a-f]*\)".*/\1/p' | head -1)"
 fi
 
 # 2.b) El LS instrumentado, DESPUES del parche.
@@ -428,7 +471,10 @@ done
 tunel_responde() {
     u=$(cat "$PREFIX/tunnel.url" 2>/dev/null)
     case "$u" in https://*) ;; *) return 1;; esac
-    code=$(toybox wget -q -S -O /dev/null "$u/health" 2>&1 | grep -m1 -o 'HTTP/[0-9.]* [0-9]*' | awk '{print $2}')
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 12 "$u/health" 2>/dev/null)
+    if [ -z "$code" ] || [ "$code" = "000" ]; then
+        code=$(wget -q -S -O /dev/null --timeout=12 "$u/health" 2>&1 | grep -m1 -o 'HTTP/[0-9.]* [0-9]*' | awk '{print $2}')
+    fi
     case "$code" in 200|401|403|502|503) return 0;; esac
     return 1
 }
