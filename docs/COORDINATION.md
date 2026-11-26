@@ -532,3 +532,28 @@ secreto y poder fusionarlas a GitHub.
   pero `state/channel.json` dice `mdtmfnc-s21.duckdns.org` ⇒ decidir antes de la Fase 1.
   ⚠️ **PII**: las 9 facturas de Jazztel llevan el **NIF en el nombre** ⇒ siempre
   enmascarado en cualquier informe del repo (que es público).
+- 2026-11-26 · agente principal · **fix(v14) el one-liner tenía 11 bugs bloqueantes**: un
+  subagente evaluador los encontró y una simulación propia los confirma. El peor: el watchdog
+  se lanzaba SIN entorno ⇒ no encontraba `tunnel.url` ⇒ mataba y relanzaba cloudflared cada
+  60 s ⇒ **el hostname cambiaba sin parar y la flota se quedaba ciega** (justo lo que el
+  proyecto quiere cerrar). Además: el estado se leía en el directorio equivocado (sin
+  `MEGADAEMON_STATE_DIR`), el health-check **nunca podía pasar**, el script decía "instalado"
+  sin instalar (mataba el daemon vivo), el canal **nunca** se publicaba en el repo, y
+  `mdo.sh` escribía en `/data/local/tmp`, que Termux no puede escribir. Todo corregido y
+  **verificado con `tools/test-oneliner.sh`: 22 checks, 0 fallos** (instalación atómica,
+  watchdog con su entorno y fuera de `service.d`, sonda real del túnel, idempotencia con la
+  URL invariante, bundle corrupto y sha incorrecto ⇒ abortan sin romper el móvil).
+  Además: `rust-core/src/bus_ejecutor.rs` (nuevo) — el móvil **tira** órdenes del bus y las
+  ejecuta, con idempotencia por `idem_key`, fail-closed ante firma inválida, `confirm: true`
+  para lo irreversible y presupuesto por ciclo ⇒ **controlar el móvil sin conexión directa**.
+  Y `megadaemon-core hash` (el móvil no tiene `sha256sum`).
+  **MEDIDO ejecutando el binario real contra la API de Drive**: `telemetria conexion` →
+  `conexion.json` (457 B) subido, id `1vrQ9cwK2xjN6LBR0seLEN_TY2fsN8Xu9`; `telemetria
+  publicar` → JSON 12.093 B + MD 225 B subidos a `MegaDaemon/telemetria/pc`; `red.por_transporte`
+  desglosa bien (eth0 → ethernet: 312.163.816.888 B); `bus` sincroniza el bus real
+  (`bus_ok: true`).
+  ⚠️ **El CI del 79dfd1e falló** por el lint de fusiones (4 hallazgos en docs míos: un CJK
+  pegado y tres fusiones) ⇒ **corregidos** en `23d73d4`. Los demás rojos del job `calidad`
+  (`audit_scout_ui`, `audit_scout_voice`, `audit_adversarial_v15`) son **preexistentes y
+  ajenos** a estos cambios.
+  Commits: `54841fb`, `97e3156`, `1ce4477`, `7595a18`, `23d73d4`.
