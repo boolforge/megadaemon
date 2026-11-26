@@ -545,9 +545,6 @@ fn injector_local(ruta: &str) -> Result<(String, String), String> {
 /// El asset `md-inject-arm64` se verifica con su `.sha256` antes de
 /// ejecutarlo (es un binario que se va a meter en un proceso ajeno).
 fn asegurar_inyector_local(ruta: &str) -> Result<(String, String), String> {
-    if let Ok(v) = injector_local(ruta) {
-        return Ok(v);
-    }
     let release = crate::self_update::url_release();
     let url = format!("{release}/md-inject-arm64");
     let url_sha = format!("{url}.sha256");
@@ -555,6 +552,19 @@ fn asegurar_inyector_local(ruta: &str) -> Result<(String, String), String> {
         .map_err(|e| format!("descargar {url_sha}: {e}"))?;
     let esperado = crate::self_update::parsear_sha256(&texto_sha)
         .ok_or_else(|| format!("{url_sha} no trae un sha256 legible"))?;
+    // MEDIDO (2026-11-26, móvil): el inyector se descargaba UNA vez y ya no
+    // se volvía a tocar ⇒ se quedaba con los bugs de aquel release (el de
+    // leer `/proc/<pid>/maps` como texto, p. ej.) aunque el daemon ya fuese
+    // nuevo.  Ahora se compara su sha256 con el del release ACTUAL y, si no
+    // coincide, se vuelve a descargar.
+    if let Ok((b64, origen)) = injector_local(ruta) {
+        if let Ok(bytes) = std::fs::read(&origen) {
+            let sha_local = sha256_hex(&bytes);
+            if sha_local.eq_ignore_ascii_case(&esperado) {
+                return Ok((b64, origen));
+            }
+        }
+    }
     let bytes = crate::self_update::descargar_bytes(&url)
         .map_err(|e| format!("descargar {url}: {e}"))?;
     let real = sha256_hex(&bytes);
