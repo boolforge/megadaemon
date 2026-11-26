@@ -201,6 +201,11 @@ pub fn limpiar_store_en(
     huerfanas: &HashSet<String>,
 ) -> Result<(usize, usize), String> {
     let ruta = app_dir.join("agyhub_summaries_proto.pb");
+    // Si la app no tiene store (o no es de esta versión), no hay nada que
+    // limpiar en él: la reparación de la DB sigue siendo válida.
+    if !ruta.exists() {
+        return Ok((0, 0));
+    }
     let datos = std::fs::read(&ruta).map_err(|e| format!("leer {}: {e}", ruta.display()))?;
     let campos = campos_proto(&datos);
     let total = campos
@@ -234,6 +239,51 @@ pub fn limpiar_store_en(
     std::fs::rename(&tmp, &ruta)
         .map_err(|e| format!("sustituir {}: {e}", ruta.display()))?;
     Ok((borrados, total))
+}
+
+/// Aparta las **DB de conversación** de las huérfanas.
+///
+/// MEDIDO (2026-11-26, móvil): con el store y la DB reparados, la app volvía a
+/// crear una huérfana al arrancar.  Motivo: la app **reindexa el directorio
+/// `conversations/`** (86 ficheros `\<id\>.db`): cada DB de conversación que
+/// encuentra vuelve a aparecer en el índice de resumenes, y las 5 huérfanas
+/// tenían la suya (`conversations/bbb5b5a9-….db`, 393 KB).
+///
+/// El `project_id` de verdad vive dentro del blob `trajectory_metadata_blob`
+/// de esa DB (medido: el de una sana contiene el UUID del proyecto; el de una
+/// huérfana, no).  Por eso hay que apartar el fichero, no sólo borrar filas.
+///
+/// No se borra: se **renombra** con sufijo `.bak-megadaemon-<stamp>` (queda
+/// reversible) y se devuelve la lista de apartados.
+pub fn apartar_conversaciones_en(
+    app_dir: &Path,
+    huerfanas: &HashSet<String>,
+    stamp: u64,
+) -> Vec<String> {
+    let dir = app_dir.join("conversations");
+    let mut apartadas = Vec::new();
+    if !dir.exists() {
+        return apartadas;
+    }
+    let entradas = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return apartadas,
+    };
+    for e in entradas.flatten() {
+        let nombre = e.file_name().to_string_lossy().to_string();
+        let Some(id) = nombre.strip_suffix(".db") else {
+            continue;
+        };
+        if !huerfanas.contains(id) {
+            continue;
+        }
+        let origen = dir.join(&nombre);
+        let destino = dir.join(format!("{id}.db.bak-megadaemon-{stamp}"));
+        if std::fs::rename(&origen, &destino).is_ok() {
+            apartadas.push(destino.to_string_lossy().to_string());
+        }
+    }
+    apartadas
 }
 
 /// Directorio activo de Antigravity (`MEGADAEMON_ANTIGRAVITY_DIR` o `APP_DIR`).
@@ -626,6 +676,14 @@ pub fn reparar_proyectos_en(app_dir: &Path, confirmar: bool) -> Value {
     }
     // Copia de seguridad (con la fecha) antes de escribir.
     let stamp = now_unix_secs();
+    // MEDIDO (2026-11-26, móvil): con el store y la DB reparados, la app
+    // volvía a crear una huérfana al arrancar.  Motivo: la app **reindexa el
+    // directorio `conversations/`** (86 ficheros `<id>.db`): cada DB de
+    // conversación que encuentra vuelve al índice de resúmenes, y las 5
+    // huérfanas tenían la suya.  El `project_id` de verdad vive en el blob
+    // `trajectory_metadata_blob` de esa DB, así que hay que **apartar** el
+    // fichero (queda reversible: se renombra con sufijo).
+    let apartadas = apartar_conversaciones_en(app_dir, &ids_huerfanas, stamp);
     let backup = db_path.with_extension(format!("db.bak-megadaemon-{stamp}"));
     let copia = std::fs::copy(&db_path, &backup)
         .map_err(|e| format!("copia de seguridad ({}): {e}", backup.display()));
@@ -694,10 +752,11 @@ pub fn reparar_proyectos_en(app_dir: &Path, confirmar: bool) -> Value {
         "ok": true,
         "borradas": borradas,
         "store": store,
+        "apartadas": apartadas,
         "backup": backup.to_string_lossy(),
         "checkpoint": checkpoint,
         "wal_borrado": wal_borrado,
-        "detalle": "store + DB reparados y checkpoint del WAL: sin esto las filas volvían al reiniciar la app",
+        "detalle": "store + DB de conversación + DB reparados y checkpoint del WAL: sin esto las filas volvían al reiniciar la app",
         "proyectos": proyectos_en(app_dir),
     })
 }
@@ -1382,6 +1441,25 @@ mod tests {
             backups.len(),
             1,
             "debe haber copia de seguridad: {backups:?}"
+        );
+
+        // MEDIDO (2026-11-26, móvil): la app reindexa `conversations/`, así
+        // que las DB de conversación huérfanas se apartan (se renombran).
+        let cd = dir.join("conversations");
+        std::fs::create_dir_all(&cd).unwrap();
+        for id in ["c1", "huerfana"] {
+            std::fs::write(cd.join(format!("{id}.db")), b"sqlite-falso").unwrap();
+        }
+        let apartadas = apartar_conversaciones_en(&dir, &ids, 12345);
+        assert_eq!(apartadas.len(), 1, "debe apartar sólo la huérfana");
+        assert!(
+            !cd.join("huerfana.db").exists(),
+            "la DB huérfana debe estar apartada"
+        );
+        assert!(cd.join("c1.db").exists(), "la sana no se toca");
+        assert!(
+            cd.join("huerfana.db.bak-megadaemon-12345").exists(),
+            "la huérfana debe quedar con sufijo (reversible)"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
