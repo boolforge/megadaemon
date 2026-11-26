@@ -723,6 +723,20 @@ pub fn tool_definitions() -> Value {
                 }
             },
             {
+                "name": "bus_ordenes",
+                "description": "BUS DE ORDENES PULL: el nodo SACA las ordenes del bus (Drive, via el tablon de resonance) y las ejecuta con su propio registro de tools — sin que nadie tenga que estar conectado. Acciones: ciclo (sincroniza, selecciona y ejecuta) | estado (solo informa). Las ordenes destructivas exigen 'confirm: true' en el cuerpo; la idempotencia la garantiza el 'idem_key' (una orden repetida NO se re-ejecuta).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "nodo": { "type": "string", "description": "Nodo destinatario (vacio = el actual)." },
+                        "maximo": { "type": "integer", "description": "Presupuesto de ordenes en este ciclo.", "default": 8 },
+                        "forzar": { "type": "boolean", "description": "Ejecutar aunque la bateria este baja.", "default": false },
+                        "simulacion": { "type": "boolean", "description": "No ejecutar: solo decir que se haria.", "default": false },
+                        "sin_verificar_firmas": { "type": "boolean", "description": "No comprobar la firma Ed25519 del emisor (inseguro).", "default": false }
+                    }
+                }
+            },
+            {
                 "name": "telemetria",
                 "description": "TELEMETRIA A DRIVE: el nodo empuja su estado (bateria, carga, red DESGLOSADA POR TRANSPORTE — wifi frente a datos moviles —, instrumentacion viva del NDJSON de hooks) y los DATOS DE CONEXION (URL del tunel, puerto, build, sha16 de las claves). Con eso el root sabe donde conectarse sin depender de que el tunel este vivo, y el nodo se autodetecta 'listo'. Acciones: estado | publicar | conexion | listo | sonda | artefacto (sube un binario/NDJSON a Drive, no a GitHub).",
                 "inputSchema": {
@@ -1463,6 +1477,31 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         // lee el estado de Drive y sabe a dónde conectarse.
         "telemetria" => {
             let v = crate::telemetria::dispatch(args);
+            json!({ "content": [{ "type": "text", "text": v.to_string() }] })
+        }
+        // v17 — Bus de órdenes PULL: el móvil TIRA del bus y ejecuta.  Es lo
+        // que permite controlar el móvil y sus apps (incluso en primer
+        // plano) SIN que nadie tenga que estar conectado.
+        "bus_ordenes" => {
+            let o = crate::bus_ejecutor::Opciones {
+                nodo: s("nodo"),
+                maximo: n("maximo") as usize,
+                forzar: b("forzar"),
+                simulacion: b("simulacion"),
+                verificar_firmas: !b("sin_verificar_firmas"),
+            };
+            let inf = crate::bus_ejecutor::ciclo(&o, None);
+            let v = json!({
+                "ok": true,
+                "ejecutadas": inf.ejecutadas,
+                "saltadas": inf.saltadas,
+                "sin_confirmar": inf.sin_confirmar,
+                "ajenas": inf.ajenas,
+                "sin_verificar": inf.sin_verificar,
+                "bus_ok": inf.bus_ok,
+                "motivo": inf.motivo,
+                "detalle": inf.detalle,
+            });
             json!({ "content": [{ "type": "text", "text": v.to_string() }] })
         }
         "stack" => {

@@ -368,6 +368,17 @@ fn main() {
                     eprintln!("telemetria: publicación en Drive cada {min} min");
                 }
             }
+            // v17: el WORKER DEL BUS tira órdenes del tablón (Drive) y las
+            // ejecuta.  Esto es lo que permite controlar el móvil y sus apps
+            // (incluso en primer plano) SIN que nadie tenga que estar
+            // conectado: el bus es el único punto de contacto.
+            {
+                let min = megadaemon_core::config_efectiva::u64_de("bus.ciclo_min", 10);
+                if min > 0 {
+                    megadaemon_core::bus_ejecutor::bucle(min, None);
+                    eprintln!("bus: worker de ordenes cada {min} min");
+                }
+            }
             // v21: el daemon RECONCILIA SU PROPIO STACK al arrancar y cada
             // 10 min.
             //
@@ -525,6 +536,29 @@ fn main() {
             }
         }
 
+        // v17 — Hash de un fichero: el móvil NO tiene `sha256sum` (el shell de
+        // Android es toybox y no lo trae) ⇒ el instalador necesita una forma
+        // NATIVA de calcular el SHA-256 para verificar el bundle por valor.
+        //   megadaemon-core hash <fichero> [<fichero> ...]
+        "hash" => {
+            let rutas: Vec<String> = args.iter().skip(2).cloned().collect();
+            if rutas.is_empty() {
+                eprintln!("uso: megadaemon-core hash <fichero> [<fichero> ...]");
+                std::process::exit(2);
+            }
+            let mut rc = 0;
+            for ruta in rutas {
+                match megadaemon_core::self_update::sha256_de_fichero(std::path::Path::new(&ruta)) {
+                    Some(h) => println!("{h}  {ruta}"),
+                    None => {
+                        eprintln!("no se pudo leer {ruta}");
+                        rc = 1;
+                    }
+                }
+            }
+            std::process::exit(rc);
+        }
+
         // v17 — Telemetría a Drive (nativa, sin curl: el móvil no lo tiene).
         //   megadaemon-core telemetria [estado|publicar|conexion|listo|sonda <url>|artefacto <ruta>]
         "telemetria" => {
@@ -566,6 +600,36 @@ fn main() {
                 _ => true,
             };
             std::process::exit(if ok { 0 } else { 1 });
+        }
+
+        // v17 — Bus de órdenes PULL (ejecuta lo que el bus trae).
+        //   megadaemon-core bus [--maximo N] [--forzar] [--simulacion]
+        "bus" => {
+            let maximo = args
+                .iter()
+                .position(|a| a == "--maximo")
+                .and_then(|i| args.get(i + 1))
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(0);
+            let o = megadaemon_core::bus_ejecutor::Opciones {
+                nodo: String::new(),
+                maximo,
+                forzar: args.iter().any(|a| a == "--forzar"),
+                simulacion: args.iter().any(|a| a == "--simulacion"),
+                verificar_firmas: !args.iter().any(|a| a == "--sin-verificar-firmas"),
+            };
+            let inf = megadaemon_core::bus_ejecutor::ciclo(&o, None);
+            let out = serde_json::json!({
+                "ejecutadas": inf.ejecutadas,
+                "saltadas": inf.saltadas,
+                "sin_confirmar": inf.sin_confirmar,
+                "ajenas": inf.ajenas,
+                "sin_verificar": inf.sin_verificar,
+                "bus_ok": inf.bus_ok,
+                "motivo": inf.motivo,
+                "detalle": inf.detalle,
+            });
+            println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
         }
 
         // v16 — Capa de automatización (CLI de los 5 módulos nuevos).
