@@ -226,7 +226,11 @@ def _upload_chunk(session_uri: str, chunk: bytes, total: int, offset: int) -> in
         return offset + len(chunk)
 
 
-def upload_item(key: str, item: dict, folder: str) -> dict:
+def upload_item(st: dict, key: str, folder: str) -> dict:
+    """Sube un item. MUTA el dict del estado in-place y lo persiste: si se
+    usa `save_state(load_state())` las mutaciones se pierden, porque el dict
+    local y el del estado son objetos distintos."""
+    item = st["items"][key]
     src = pathlib.Path(item["src"])
     total = item["size"]
     offset = int(item.get("offset") or 0)
@@ -239,7 +243,7 @@ def upload_item(key: str, item: dict, folder: str) -> dict:
                 item["session_uri"] = session_uri
                 item["state"] = "UPLOADING"
                 item["updated_at"] = _dt.datetime.now().isoformat()
-                save_state(load_state())
+                save_state(st)
             with open(src, "rb") as fh:
                 fh.seek(offset)
                 chunk = fh.read(CHUNK)
@@ -250,7 +254,7 @@ def upload_item(key: str, item: dict, folder: str) -> dict:
             item["attempts"] = 0
             item["last_error"] = None
             item["updated_at"] = _dt.datetime.now().isoformat()
-            save_state(load_state())
+            save_state(st)
         except Exception as e:
             retryable, why = _classify(e)
             attempts += 1
@@ -262,7 +266,7 @@ def upload_item(key: str, item: dict, folder: str) -> dict:
                 save_state(load_state())
                 return item
             time.sleep(backoff(attempts))
-            save_state(load_state())
+            save_state(st)
     # finalizar la sesion
     try:
         meta = json.loads(_request("GET", session_uri, raw=True).read().decode())
@@ -272,7 +276,7 @@ def upload_item(key: str, item: dict, folder: str) -> dict:
     item["state"] = "DONE"
     item["offset"] = total
     item["updated_at"] = _dt.datetime.now().isoformat()
-    save_state(load_state())
+    save_state(st)
     return item
 
 
@@ -288,8 +292,7 @@ def push(dest: str) -> None:
     for k in todo:
         item = st["items"][k]
         print("  %-52s %10d B  %s" % (item["name"][:52], item["size"], item["state"]))
-        upload_item(k, item, folder)
-        st = load_state()
+        upload_item(st, k, folder)
     st = load_state()
     ok = sum(1 for v in st["items"].values() if v["state"] == "DONE")
     bad = sum(1 for v in st["items"].values() if v["state"] == "QUARANTINE")
@@ -358,7 +361,7 @@ def status() -> None:
                  (v.get("last_error") or "")[:40]))
 
 
-def requeue(only_failed: bool) -> None:
+def requeue(only_failed: bool = True, failed: bool = True) -> None:
     st = load_state()
     n = 0
     for v in st["items"].values():
@@ -398,7 +401,7 @@ def main() -> int:
     elif a.cmd == "verify":
         return 0 if download_verified(a.file_id, pathlib.Path(a.dest), a.sha256) else 1
     elif a.cmd == "requeue":
-        requeue(failed=not a.all)
+        requeue(only_failed=not a.all, failed=True)
     return 0
 
 
