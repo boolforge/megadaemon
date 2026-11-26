@@ -1179,6 +1179,18 @@ async function agyEnqueue() {
 }
 
 
+async function agyRepararProyectos() {
+  if (!confirm("Reparar la lista de proyectos de Antigravity: se borran las conversaciones con project_id vacío (con copia de seguridad antes). ¿Seguir?")) return;
+  agyText("agyRepararState", "reparando...");
+  try {
+    var d = await apiPost("/api/v2/antigravity/reparar-proyectos", { confirm: true });
+    if (!d || d.ok === false) { agyText("agyRepararState", "error"); agyText("agyRepararNote", (d && d.error) || "error"); return; }
+    agyText("agyRepararState", "reparado");
+    agyText("agyRepararNote", (d.borradas || 0) + " huérfanas borradas · backup: " + (d.backup || "?"));
+  } catch (e) { agyText("agyRepararState", "error"); agyText("agyRepararNote", String(e)); }
+}
+
+
 async function apiGet(url) {
   const res = await mdFetch(url, { headers: authHeaders() });
   if (!res.ok) throw new Error("HTTP " + res.status);
