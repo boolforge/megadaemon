@@ -312,7 +312,12 @@ fn instalar_plan_externo(externo: &std::path::Path) -> Result<usize, String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&ruta_txt, std::fs::Permissions::from_mode(0o600));
+        // MEDIDO (2026-11-26, movil): el payload lee el plan DENTRO del
+        // proceso de la app (que corre como el usuario de la app, no como
+        // root) => con 0600 root NO lo puede leer y no se engancha ni un
+        // hook.  El plan sólo lleva direcciones y nombres de función (no
+        // hay ningun secreto) => 0644.
+        let _ = std::fs::set_permissions(&ruta_txt, std::fs::Permissions::from_mode(0o644));
     }
     let hooks = txt
         .iter()
@@ -401,7 +406,12 @@ pub fn escribir_plan_para_el_payload(base: u64) -> Result<Value, String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&ruta_txt, std::fs::Permissions::from_mode(0o600));
+        // MEDIDO (2026-11-26, movil): el payload lee el plan DENTRO del
+        // proceso de la app (que corre como el usuario de la app, no como
+        // root) => con 0600 root NO lo puede leer y no se engancha ni un
+        // hook.  El plan sólo lleva direcciones y nombres de función (no
+        // hay ningun secreto) => 0644.
+        let _ = std::fs::set_permissions(&ruta_txt, std::fs::Permissions::from_mode(0o644));
     }
 
     // 2) El JSON en el state dir (persistente y legible).
