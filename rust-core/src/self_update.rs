@@ -371,9 +371,15 @@ pub fn lanzar_auto_actualizador(ruta_bin: std::path::PathBuf, minutos: u64) {
                 % 300;
             std::thread::sleep(std::time::Duration::from_secs(jitter * 60 / 300));
             let estado = comprobar(&ruta_bin);
-            let hay = matches!(estado, Estado::Actualizable { .. });
-            if hay {
-                match aplicar(&ruta_bin) {
+            // MEDIDO (2026-11-26): antes esto era `matches!(estado,
+            // Estado::Actualizable)` y, cuando era `Actual`, NO se llamaba
+            // a `aplicar()` ⇒ la rama `r.reiniciar` (la que reinicia cuando
+            // el fichero es el nuevo pero el proceso sigue con el viejo)
+            // quedaba **MUERTA**: `comprobar()` compara el SHA **de disco**
+            // con el de la release, y ese caso da `Actual` por definición.
+            // El móvil podía seguir 7 horas con el código viejo.
+            match accion_del_actualizador(&estado, sha_de_arranque(), &sha_en_disco()) {
+                Accion::Instalar => match aplicar(&ruta_bin) {
                     Ok(r) if r.instalado => {
                         registrar(&format!(
                             "instalado {} (previo {:?}) el {}",
@@ -400,17 +406,57 @@ pub fn lanzar_auto_actualizador(ruta_bin: std::path::PathBuf, minutos: u64) {
                     }
                     Ok(_) => {}
                     Err(e) => registrar(&format!("fallo al actualizar: {e}")),
+                },
+                Accion::Reiniciar => {
+                    registrar(&format!(
+                        "el binario en disco ({}) no es el que está en servicio ({}): \
+                         reiniciando para que entre en servicio",
+                        &sha_en_disco()[..7.min(sha_en_disco().len())],
+                        &sha_de_arranque()[..7.min(sha_de_arranque().len())]
+                    ));
+                    if supervisor_presente() {
+                        std::process::exit(10);
+                    }
                 }
+                Accion::Nada => {}
             }
             std::thread::sleep(std::time::Duration::from_secs(intervalo * 60));
         })
         .ok();
 }
 
+/// Qué hay que hacer en una vuelta del auto-actualizador.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Accion {
+    /// No hay nada que hacer.
+    Nada,
+    /// Instalar la release nueva.
+    Instalar,
+    /// El binario en disco NO es el que está en servicio: hay que reiniciar.
+    Reiniciar,
+}
+
+/// Decide la acción de una vuelta del auto-actualizador (puro, testeable).
+///
+/// MEDIDO (2026-11-26, móvil): `comprobar()` compara el SHA-256 **del
+/// fichero en disco** con el de la release.  Si el fichero ya es el nuevo
+/// pero el **proceso** sigue con el viejo (el móvil estuvo 7 horas así), el
+/// estado es `Actual` y `aplicar()` —que es quien sabe reiniciar— no se
+/// llamaba nunca: la rama `r.reiniciar` era **código muerto**.  Por eso la
+/// decisión se toma aquí, mirando además el SHA **en servicio**.
+pub fn accion_del_actualizador(estado: &Estado, arranque: &str, disco: &str) -> Accion {
+    if matches!(estado, Estado::Actualizable { .. }) {
+        return Accion::Instalar;
+    }
+    if hay_que_reiniciar(arranque, disco) {
+        return Accion::Reiniciar;
+    }
+    Accion::Nada
+}
+
 /// ¿Hay un supervisor que relance el daemon?  (Magisk `service.d` o el
 /// proceso `99-megadaemon.sh`).
-fn supervisor_presente() -> bool {
-    if std::env::var("MD_NO_AUTO_UPDATE_RESTART").ok().as_deref() == Some("1") {
+fn supervisor_presente() -> bool {    if std::env::var("MD_NO_AUTO_UPDATE_RESTART").ok().as_deref() == Some("1") {
         return false;
     }
     if std::path::Path::new("/data/adb/service.d/99-megadaemon.sh").exists() {
@@ -786,20 +832,35 @@ static IDENTIDAD: std::sync::OnceLock<Identidad> = std::sync::OnceLock::new();
 /// (que no es el que se esta ejecutando).
 pub fn fijar_identidad_de_arranque() {
     let _ = IDENTIDAD.get_or_init(|| {
+        // MEDIDO (2026-11-26): hashear la **ruta** miente.  `current_exe()`
+        // devuelve "/data/adb/megadaemon/megadaemon-core" aunque el proceso
+        // esté ejecutando el inodo VIEJO (el auto-update instala con
+        // `rename(2)`), así que la "foto" podía ser la del binario **nuevo**:
+        // exactamente la mentira que este commit quiere evitar.
+        //
+        // `/proc/self/exe` lo resuelve el kernel al **inodo en ejecución** ⇒
+        // lo que se hashea es el código REAL que está corriendo, tenga o no
+        // nombre en el sistema de ficheros.
+        const PROC_EJECUCION: &str = "/proc/self/exe";
         let ruta = std::env::current_exe()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        // Se hashea por trozos (256 KiB): leer los 33 MiB de golpe en un
-        // movil puede disparar el OOM killer.
-        let (sha256, tamano) = match sha256_de_fichero(std::path::Path::new(&ruta)) {
+        let (ruta_hash, tamano) = match sha256_de_fichero(std::path::Path::new(PROC_EJECUCION)) {
             Some(s) => {
-                let t = std::fs::metadata(&ruta).map(|m| m.len()).unwrap_or(0);
+                let t = std::fs::metadata(PROC_EJECUCION).map(|m| m.len()).unwrap_or(0);
                 (s, t)
             }
-            None => ("desconocido".to_string(), 0),
+            // Si `/proc` no está disponible (PC, sandbox), se cae a la ruta.
+            None => match sha256_de_fichero(std::path::Path::new(&ruta)) {
+                Some(s) => {
+                    let t = std::fs::metadata(&ruta).map(|m| m.len()).unwrap_or(0);
+                    (s, t)
+                }
+                None => ("desconocido".to_string(), 0),
+            },
         };
         Identidad {
-            sha256,
+            sha256: ruta_hash,
             ruta,
             tamano,
         }
@@ -1253,5 +1314,50 @@ mod tests {
         // Desconocido => NO se reinicia a ciegas.
         assert!(!hay_que_reiniciar("desconocido", "abc"));
         assert!(!hay_que_reiniciar("abc", "desconocido"));
+    }
+
+    /// MEDIDO 2026-11-26: la rama `reiniciar` del auto-actualizador era
+    /// **código muerto**.  `comprobar()` compara el SHA **de disco** con el
+    /// de la release, así que el caso "el fichero es el nuevo pero el
+    /// proceso sigue con el viejo" daba `Estado::Actual` y `aplicar()` no se
+    /// llamaba nunca ⇒ el móvil seguía 7 horas con el código viejo.
+    #[test]
+    fn el_autoactualizador_reinicia_si_el_disco_no_es_el_codigo_en_servicio() {
+        // Hay release nueva => instalar (y luego reiniciar).
+        assert_eq!(
+            accion_del_actualizador(
+                &Estado::Actualizable {
+                    short: "abc1234".to_string()
+                },
+                "viejo",
+                "nuevo"
+            ),
+            Accion::Instalar
+        );
+        // Todo al día y el código en servicio ES el de disco => nada.
+        assert_eq!(
+            accion_del_actualizador(&Estado::Actual, "igual", "igual"),
+            Accion::Nada
+        );
+        // Todo al día en disco pero el proceso corre otro código => REINICIAR.
+        assert_eq!(
+            accion_del_actualizador(&Estado::Actual, "viejo", "nuevo"),
+            Accion::Reiniciar
+        );
+        // Si no se puede saber => no se reinicia a ciegas.
+        assert_eq!(
+            accion_del_actualizador(&Estado::Actual, "desconocido", "nuevo"),
+            Accion::Nada
+        );
+        assert_eq!(
+            accion_del_actualizador(
+                &Estado::Desconocido {
+                    motivo: "sin red".to_string()
+                },
+                "viejo",
+                "nuevo"
+            ),
+            Accion::Reiniciar
+        );
     }
 }
