@@ -133,6 +133,27 @@ def dedup(parent):
 EXCLUDE_PARTS = ("runtime/qemu/sysroot",)
 
 
+def remote_names(targets, root: pathlib.Path):
+    """Nombre remoto por fichero, a prueba de colisiones.
+
+    Drive guarda por nombre plano: si dos ficheros se llaman igual (p.ej.
+    `README.md` en la raiz y `docs/corpus/README.md`), el segundo pisa al
+    primero y el backup pierde ficheros silenciosamente. Cuando hay
+    colision, el remoto usa `carpeta__fichero`.
+    """
+    from collections import Counter
+    cnt = Counter(p.name for p in targets)
+    out = {}
+    for p in targets:
+        rel = p.relative_to(root)
+        if cnt[p.name] > 1:
+            name = "__".join(rel.parts)
+        else:
+            name = p.name
+        out[p] = name
+    return out
+
+
 def default_targets(root: pathlib.Path):
     out = []
     for sub in ("docs", "recon", "reference", "tools", "versions", "runtime"):
@@ -169,16 +190,18 @@ def main() -> int:
     fid = find_folder(a.dest, PRIV_FOLDER) or create_folder(a.dest, PRIV_FOLDER)
     print("carpeta id = %s" % fid)
 
+    names = remote_names(targets, root)
     manifest = {}
     for p in targets:
-        manifest[p.name] = {"size": p.stat().st_size, "sha256": sha256_file(p)}
+        manifest[names[p]] = {"size": p.stat().st_size, "sha256": sha256_file(p),
+                              "local": str(p.relative_to(root))}
 
     if not a.verify_only:
         ok = fail = 0
         for p in targets:
             try:
-                i, size = upload(str(p), p.name, fid)
-                print("  OK  %-46s %10d B  id=%s" % (p.name, size, i))
+                i, size = upload(str(p), names[p], fid)
+                print("  OK  %-46s %10d B  id=%s" % (names[p], size, i))
                 ok += 1
             except urllib.error.HTTPError as e:
                 print("  ERROR %-46s %s" % (p.name, e))
@@ -208,12 +231,12 @@ def main() -> int:
     for p in targets:
         if p.suffix not in (".md", ".json", ".py", ".sh", ".c", ".txt", ".rs", ".go"):
             continue
-        cand = [f for f in files if f["name"] == p.name]
+        cand = [f for f in files if f["name"] == names[p]]
         if not cand:
             continue
         d = api("GET", API + "/" + cand[0]["id"] + "?alt=media").read()
-        if hashlib.sha256(d).hexdigest() != manifest[p.name]["sha256"]:
-            print("  HASH DISTINTO: %s" % p.name)
+        if hashlib.sha256(d).hexdigest() != manifest[names[p]]["sha256"]:
+            print("  HASH DISTINTO: %s" % names[p])
             bad += 1
     print("verificacion de documentos: %s" % ("OK" if bad == 0 else "%d fallos" % bad))
     print("DRIVE_FOLDER_ID=%s" % fid)
