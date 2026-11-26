@@ -55,7 +55,7 @@
 #include <sys/wait.h>
 
 #define MAXF 512
-#define MAXH 64
+#define MAXH 96
 static char host[256] = "desconocido";
 
 /* ---------------------------------------------------------------------- */
@@ -217,12 +217,185 @@ static long disco_libre_mb(const char *path) {
     return (long)((double)s.f_bavail * (double)s.f_frsize / (1024.0 * 1024.0));
 }
 
+
+/* ---------------------------------------------------------------------- */
+/* PERMISOS Y ENTORNO: que se puede hacer aqui y ahora                      */
+/* ---------------------------------------------------------------------- */
+
+static int existe(const char *p) {
+    struct stat s;
+    return stat(p, &s) == 0;
+}
+
+/* Se puede escribir en este directorio?  Lo intenta de verdad. */
+static int escribible(const char *dir) {
+    char t[1200];
+    snprintf(t, sizeof(t), "%s/.mddoctor_probe", dir);
+    FILE *f = fopen(t, "w");
+    if (!f) return 0;
+    fclose(f);
+    unlink(t);
+    return 1;
+}
+
+static void permisos(void) {
+    char v[200];
+    uid_t e = geteuid();
+    snprintf(v, sizeof(v), "euid=%d uid=%d", (int)e, (int)getuid());
+    add("permisos", v, e == 0 ? VER_OK : VER_AVISO,
+        e == 0 ? "root: se puede actuar en el sistema (ajustes, hooks, reinicios)"
+               : "sin root: los ajustes de sistema y los hooks NO son posibles");
+
+    char enf[16];
+    if (read_file("/sys/fs/selinux/enforce", enf, sizeof(enf)) == 0) {
+        trim(enf);
+        int perm = (enf[0] == '0');
+        add("selinux", enf, perm ? VER_OK : VER_AVISO,
+            perm ? "SELinux permisivo: los hooks se pueden poner sin pelea"
+                  : "SELinux enforcing: hookear system_server exige el shim de Java (aun no existe)");
+    }
+
+    struct statvfs sf;
+    if (statvfs("/system", &sf) == 0) {
+        int ro = (sf.f_flag & ST_RDONLY) != 0;
+        add("sistema-fs", ro ? "/system solo lectura" : "/system escribible",
+            ro ? VER_OK : VER_AVISO,
+            ro ? "normal en Android: no se puede tocar el sistema"
+               : "/system escribible: hay Magisk o una imagen modificada");
+    }
+
+    /* Herramientas que el entorno puede usar de verdad */
+    struct { const char *n; const char *r; int clave; } h[] = {
+        {"su", "/system/bin/su", 1},
+        {"magisk", "/sbin/magisk", 0},
+        {"busybox", "/data/adb/magisk/busybox", 0},
+        {"curl", "/system/bin/curl", 0},
+        {"wget", "/system/bin/wget", 0},
+        {"adb", "/system/bin/adb", 0},
+        {"termux", "/data/data/com.termux/files/usr/bin/bash", 0},
+        {NULL, NULL, 0}
+    };
+    char faltan[256] = "", hay[256] = "";
+    for (int i = 0; h[i].n; i++) {
+        if (existe(h[i].r)) {
+            if (strlen(hay) + 4 < sizeof(hay)) { strcat(hay, h[i].n); strcat(hay, ","); }
+        } else if (h[i].clave && strlen(faltan) + 4 < sizeof(faltan)) {
+            strcat(faltan, h[i].n); strcat(faltan, ",");
+        }
+    }
+    if (faltan[0])
+        add("herramientas", faltan, VER_AVISO, "faltan herramientas clave en el entorno");
+    else
+        add("herramientas", hay[0] ? hay : "ninguna", VER_OK, "el entorno tiene lo basico");
+
+    const char *sd = getenv("MEGADAEMON_STATE_DIR");
+    if (!sd || !*sd) sd = "/data/user/0/com.agy/files/state";
+    if (existe(sd)) {
+        int w = escribible(sd);
+        add("estado-escribible", w ? "si" : "no", w ? VER_OK : VER_CRITICO,
+            w ? "el daemon puede escribir su estado"
+              : "el estado NO es escribible: el daemon no arranca");
+    }
+}
+
+/* ---------------------------------------------------------------------- */
+/* FORENSE DE DISCO: que se esta comiendo el espacio                        */
+/* ---------------------------------------------------------------------- */
+
+#define MAXG 64
+typedef struct { char ruta[192]; long bytes; } Grande;
+static Grande G[MAXG];
+static int NG = 0;
+
+static void escanear(const char *dir, int prof, long *tot, int *nf, long *viejos) {
+    if (prof > 3) return;
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *e;
+    time_t ahora = time(NULL);
+    while ((e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        char p[1024];
+        snprintf(p, sizeof(p), "%s/%s", dir, e->d_name);
+        struct stat st;
+        if (lstat(p, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) { escanear(p, prof + 1, tot, nf, viejos); continue; }
+        if (!S_ISREG(st.st_mode)) continue;
+        (*nf)++;
+        *tot += st.st_size;
+        if (ahora - st.st_mtime > 30L * 86400) (*viejos)++;
+        if (NG < MAXG) {
+            snprintf(G[NG].ruta, sizeof(G[NG].ruta), "%.190s", p);
+            G[NG].bytes = st.st_size;
+            NG++;
+        }
+    }
+    closedir(d);
+}
+
+static void forense(const char *dir) {
+    long tot = 0, viejos = 0;
+    int nf = 0;
+    NG = 0;
+    escanear(dir, 0, &tot, &nf, &viejos);
+    for (int i = 1; i < NG; i++) {          /* orden por tamano (desc) */
+        Grande t = G[i];
+        int j = i - 1;
+        while (j >= 0 && G[j].bytes < t.bytes) { G[j + 1] = G[j]; j--; }
+        G[j + 1] = t;
+    }
+    char v[200];
+    snprintf(v, sizeof(v), "%d ficheros, %ld KiB, %ld de mas de 30 dias", nf, tot / 1024, viejos);
+    add("forense-estado", v, nf ? VER_OK : VER_AVISO, "contenido del directorio de estado");
+    for (int i = 0; i < NG && i < 3; i++) {
+        char k[80], val[220];
+        snprintf(k, sizeof(k), "fichero-grande-%d", i + 1);
+        snprintf(val, sizeof(val), "%ld KiB  %.180s", G[i].bytes / 1024, G[i].ruta);
+        add(k, val, VER_OK, "ocupa espacio");
+    }
+}
+
+/* ---------------------------------------------------------------------- */
+/* AUTOTEST: el propio diagnostico se prueba a si mismo                    */
+/* ---------------------------------------------------------------------- */
+
+static int autotest(void) {
+    struct { const char *n; const char *r; } p[] = {
+        {"meminfo", "/proc/meminfo"},
+        {"loadavg", "/proc/loadavg"},
+        {"uptime", "/proc/uptime"},
+        {"self-status", "/proc/self/status"},
+        {"mounts", "/proc/mounts"},
+        {"pressure-cpu", "/proc/pressure/cpu"},
+        {"power_supply", "/sys/class/power_supply"},
+        {"thermal", "/sys/class/thermal"},
+        {"class-net", "/sys/class/net"},
+        {NULL, NULL}
+    };
+    int ok = 0, total = 0, fallos = 0;
+    printf("== AUTOTEST (las sondas que usa este binario) ==\n");
+    for (int i = 0; p[i].n; i++) {
+        char buf[64];
+        total++;
+        if (read_file(p[i].r, buf, sizeof(buf)) == 0) {
+            ok++;
+            printf("  [ OK  ] %-14s %s\n", p[i].n, p[i].r);
+        } else {
+            fallos++;
+            printf("  [FALLO] %-14s %s\n", p[i].n, p[i].r);
+        }
+    }
+    printf("autotest: %d/%d sondas responden\n", ok, total);
+    return fallos;
+}
+
 /* ---------------------------------------------------------------------- */
 /* Clasificacion                                                            */
 /* ---------------------------------------------------------------------- */
 
 static void clasificar(void) {
     char det[128];
+    permisos();
     int pct;
 
     /* --- bateria ------------------------------------------------------- */
@@ -420,7 +593,8 @@ static void clasificar(void) {
         else
             add("canal", "sin channel.json", VER_AVISO,
                 "sin canal: el root no sabe donde conectarse");
-        snprintf(f, sizeof(f), "%s/tunnel.url", sd);
+        forense(sd);
+    snprintf(f, sizeof(f), "%s/tunnel.url", sd);
         if (stat(f, &st) == 0) {
             char u[256];
             read_file(f, u, sizeof(u));
@@ -448,7 +622,7 @@ static int rm_older(const char *dir, int dias, int *borrados) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
         if (e->d_name[0] == '.') continue;
         char path[1200];
-        snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
+        snprintf(path, sizeof(path), "%.1100s/%.90s", dir, e->d_name);
         struct stat st;
         if (stat(path, &st) != 0) continue;
         if (!S_ISREG(st.st_mode)) continue;
@@ -565,7 +739,7 @@ static void uso(void) {
 int main(int argc, char **argv) {
     hostname();
     const char *modo = "doctor";
-    int json = 0, aplicar = 0, yes = 0;
+    int json = 0, aplicar = 0, yes = 0, todo = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "scan")) modo = "scan";
         else if (!strcmp(argv[i], "doctor")) modo = "doctor";
@@ -573,9 +747,15 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--json")) json = 1;
         else if (!strcmp(argv[i], "--apply")) aplicar = 1;
         else if (!strcmp(argv[i], "--yes")) yes = 1;
+        else if (!strcmp(argv[i], "--todo")) todo = 1;
+        else if (!strcmp(argv[i], "selftest")) modo = "selftest";
         else { uso(); return 3; }
     }
     (void)yes;
+
+    if (!strcmp(modo, "selftest")) {
+        return autotest() ? 1 : 0;
+    }
 
     if (!strcmp(modo, "recover")) {
         int a = recuperar(aplicar);
@@ -590,6 +770,10 @@ int main(int argc, char **argv) {
         imprimir_json();
     } else {
         imprimir_tabla();
+    }
+    if (todo) {
+        printf("\n");
+        autotest();
     }
     return peor;
 }
