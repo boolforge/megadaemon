@@ -995,6 +995,44 @@ fn panic_response_bytes() -> &'static [u8] {
     b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 }
 
+/// Decodifica un cuerpo `Transfer-Encoding: chunked`.
+///
+/// Devuelve `(cuerpo, bytes_consumidos)` si el búfer contiene la petición
+/// completa; `None` si falta algún trozo.
+///
+/// Formato (RFC 9112 §7.1):
+/// ```text
+/// <hex>[;ext]\r\n<bytes>\r\n … 0\r\n[cabeceras de cola]\r\n
+/// ```
+///
+/// MEDIDO (2026-11-26, móvil): es lo que manda el language server de
+/// Antigravity para la petición de generación (`streamGenerateContent`).
+fn decodificar_chunked(buf: &[u8]) -> Option<(Vec<u8>, usize)> {
+    let mut pos = 0usize;
+    let mut out: Vec<u8> = Vec::new();
+    loop {
+        let fin_linea = find_subsequence(&buf[pos..], b"\r\n")? + pos;
+        let cab = String::from_utf8_lossy(&buf[pos..fin_linea]).to_string();
+        // El tamaño va en hexadecimal; detrás puede haber extensiones (";a=b").
+        let hex = cab.split(';').next().unwrap_or("").trim().to_string();
+        if hex.is_empty() {
+            return None;
+        }
+        let n = usize::from_str_radix(&hex, 16).ok()?;
+        pos = fin_linea + 2;
+        if n == 0 {
+            // Chunk final: puede haber cabeceras de cola y luego CRLF.
+            let fin = find_subsequence(&buf[pos..], b"\r\n")? + pos + 2;
+            return Some((out, fin));
+        }
+        if buf.len() < pos + n + 2 {
+            return None;
+        }
+        out.extend_from_slice(&buf[pos..pos + n]);
+        pos += n + 2; // el cuerpo del chunk y su CRLF
+    }
+}
+
 fn handle_client(mut stream: TcpStream) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(60)));
@@ -1080,7 +1118,39 @@ fn handle_client(mut stream: TcpStream) {
     }
 
     let body_already = total_read.saturating_sub(header_end);
-    if content_length > body_already {
+    // MEDIDO (2026-11-26, móvil): el language server manda la petición de
+    // GENERACIÓN con `Transfer-Encoding: chunked` (escribe el cuerpo por
+    // trozos: ~65 KB) y **sin** `Content-Length`.  El cockpit sólo leía
+    // `Content-Length` ⇒ el cuerpo llegaba VACÍO al shim ⇒ el gateway
+    // respondía 502 con "'contents' debe ser una lista" y el LS reintentaba
+    // 9 veces ("Model unavailable, retrying in 13s").
+    let chunked = cabeceras_peticion.iter().any(|(k, v)| {
+        k.eq_ignore_ascii_case("transfer-encoding")
+            && v.to_ascii_lowercase().contains("chunked")
+    });
+
+    // El cuerpo decodificado (sólo se usa en la ruta chunked).
+    let mut cuerpo_chunked: Vec<u8> = Vec::new();
+    if chunked {
+        // Leer hasta que llegue el chunk final (tamaño 0).
+        loop {
+            if let Some((cuerpo, _)) = decodificar_chunked(&buf[..total_read]) {
+                cuerpo_chunked = cuerpo;
+                break;
+            }
+            if total_read == buf.len() {
+                if buf.len() >= MAX_BODY_BYTES {
+                    break;
+                }
+                buf.resize(buf.len() * 2, 0);
+            }
+            match stream.read(&mut buf[total_read..]) {
+                Ok(0) => break,
+                Ok(n) => total_read += n,
+                Err(_) => break,
+            }
+        }
+    } else if content_length > body_already {
         buf.resize(header_end + content_length, 0);
         let mut offset = total_read;
         while offset < header_end + content_length {
@@ -1093,7 +1163,9 @@ fn handle_client(mut stream: TcpStream) {
         total_read = offset;
     }
 
-    let body_slice = if header_end + content_length <= total_read {
+    let body_slice: &[u8] = if chunked {
+        &cuerpo_chunked
+    } else if header_end + content_length <= total_read {
         &buf[header_end..header_end + content_length]
     } else {
         &buf[header_end..total_read]
@@ -3565,6 +3637,51 @@ mod v2_asset_tests {
         assert_eq!(ui_source_tag(false), "embedded");
         assert_eq!(ui_source_tag(true), "disk");
         let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod chunked_tests {
+    use super::*;
+
+    /// MEDIDO (2026-11-26, móvil): el language server manda la petición de
+    /// generación con `Transfer-Encoding: chunked` y el cockpit leía un
+    /// cuerpo VACÍO (sólo entendía `Content-Length`) ⇒ 502 del gateway.
+    #[test]
+    fn decodifica_un_cuerpo_chunked() {
+        let crudo = b"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
+        let (cuerpo, consumidos) = decodificar_chunked(crudo).expect("cuerpo completo");
+        assert_eq!(cuerpo, b"hello world");
+        assert_eq!(consumidos, crudo.len());
+    }
+
+    #[test]
+    fn decodifica_con_extensions_y_cabeceras_de_cola() {
+        let crudo = b"4;foo=bar\r\nabcd\r\n0\r\nX-Extra: 1\r\n\r\n";
+        let (cuerpo, _) = decodificar_chunked(crudo).expect("cuerpo completo");
+        assert_eq!(cuerpo, b"abcd");
+    }
+
+    #[test]
+    fn si_falta_un_trozo_no_inventa_cuerpo() {
+        assert!(decodificar_chunked(b"5\r\nhel").is_none());
+        assert!(decodificar_chunked(b"").is_none());
+    }
+
+    /// El caso real del móvil: un cuerpo grande partido en trozos de 4096.
+    #[test]
+    fn decodifica_un_cuerpo_grande_en_trozos() {
+        let texto = "x".repeat(65_000);
+        let mut crudo: Vec<u8> = Vec::new();
+        for trozo in texto.as_bytes().chunks(4096) {
+            crudo.extend_from_slice(format!("{:x}\r\n", trozo.len()).as_bytes());
+            crudo.extend_from_slice(trozo);
+            crudo.extend_from_slice(b"\r\n");
+        }
+        crudo.extend_from_slice(b"0\r\n\r\n");
+        let (cuerpo, _) = decodificar_chunked(&crudo).expect("cuerpo completo");
+        assert_eq!(cuerpo.len(), 65_000);
+        assert_eq!(cuerpo, texto.as_bytes());
     }
 }
 
