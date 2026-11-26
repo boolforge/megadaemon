@@ -180,13 +180,33 @@ megadaemon-core telemetria artefacto RUTA [NOMBRE]
 
 * El hilo `publicar_periodico` **duplica el periodo** cuando
   `battery_advanced::modo_ahorro_activo()` (batería < 20 % y sin cargador).
-* El配置 del periodo: `telemetria.publicar_min` (por defecto 15).
+* La configuración del periodo: `telemetria.publicar_min` (por defecto 15).
 * La recolección lee `/proc` y `/sys`: ficheros locales, sin red ni CPU
   apreciable.
 
 ---
 
-## 8. Verificación
+## 8. Verificación (MEDIDO, no supuesto)
+
+Verificado **ejecutando** el binario real (`cargo build --bin megadaemon-core`,
+x86_64 en el sandbox) contra la API de Drive de verdad:
+
+| prueba | resultado |
+|---|---|
+| `telemetria estado` | JSON con `bateria`, `carga`, `memoria_bytes`, `uptime_seg`, `red`, `instrumentacion`, `canal`, `conexion` y `diagnostico` ✅ |
+| `red.por_transporte` | desglose correcto: en el sandbox detectó `eth0` → `ethernet_bytes: 312.163.816.888`, `wifi/movil: 0` ✅ |
+| `red.top` | lista las interfaces con más tráfico y su tipo ✅ |
+| `telemria conexion` | **subido a Drive**: `conexion.json`, 457 B, file_id `1vrQ9cwK2xjN6LBR0seLEN_TY2fsN8Xu9` ✅ (verificado por la API de Drive) |
+| `telemetria publicar` | **subido a Drive**: JSON 12.093 B (id `1nunZDP8nWll…`) + Markdown 225 B (id `1DhmZFUDgb2N…`), en `MegaDaemon/telemetria/pc` ✅ (verificado por la API) |
+| estado local | `telemetria/ultimo.json`, `ultimo.md`, `indice.json`, `conexion.json` en el state dir ✅ |
+| `telemetria listo` | **código de salida 1** cuando no hay daemon (⇒ sirve de health-check a supervisores) ✅ |
+| `megadaemon-core hash` | **coincide con `sha256sum`** (49fbc546…) ✅ — el móvil no tiene `sha256sum` |
+| `megadaemon-core bus` | sincroniza el bus de Drive real: `bus_ok: true` ✅; sin credenciales explica el motivo exacto ✅ |
+| `telemetria lista` en el móvil | `NO VERIFICADO` (el móvil sigue sin red) |
+
+---
+
+## 8 bis. Verificación
 
 * **Tests unitarios** en el propio módulo (9): clasificación de interfaces,
   parseo de `/proc/net/dev`, desglose por transporte, `sha16` (estable,

@@ -56,7 +56,7 @@ Lo que **no** se va a hacer, y por qué:
 | 2 | El `channel.json` del repo sirve una URL vieja | El `raw` de GitHub **cachea en CDN** | `rust-core/src/channel.rs:59-61` (lo dice el propio código) |
 | 3 | El `paste` no sirve para descubrir nada | Cada publicación crea un paste **nuevo**; el siguiente es incognoscible | `rust-core/src/channel.rs:55-58` |
 | 4 | El canónico `mdtmfnc.duckdns.org` da HTTP 000 | El A record lo publica quien llama (`duckdns.org/update` pone la IP de quien pregunta) | `docs/RESILIENCE.md` §0, punto 3 |
-| 5 | No se sabe si el túnel está muerto o es la credencial | El 403 y el 530 se confundían | **Arreglado**: `channel.rs:309-361` (`probe_url_detalle`, `es_canal_muerto`) |
+| 5 | No se sabe si el túnel está muerto o es la credencial | El 403 y el 530 se confundían entre sí | **Arreglado**: `channel.rs:309-361` (`probe_url_detalle`, `es_canal_muerto`) |
 
 Los puntos 1-4 ya tienen parches (`docs/RESILIENCE.md` §2). Funcionan **hasta que
 el canal entero cae**, y entonces el emisor se queda sin ningún camino de
@@ -178,7 +178,7 @@ Fuentes: <https://www.wireguard.com/protocol/> ·
 - **Identidad = clave pública Curve25519 de 32 bytes** (paper §2.1): *"Since a
   public key uniquely identifies a peer, the outer external source IP of an
   encrypted WireGuard packet is used to identify the remote endpoint of a peer,
-  enabling peers to roam freely between different external IPs, between mobile
+  allowing peers to roam freely between different external IPs, between mobile
   networks for example, similar to what is allowed by Mosh."*
 - **El endpoint es opcional y se re-ubica solo**: *"if not specified […],
   WireGuard receives a correctly authenticated packet from a peer, it will use
@@ -955,7 +955,7 @@ es una app**. Es un binario nativo bajo Magisk (`/data/adb/service.d/
 |---|---|---|
 | `JobScheduler` (ventana *inexacta*, batching de Doze) | **No directamente** | requiere una app registrada |
 | `WorkManager` (`setRequiresCharging`, `setPeriodic`) | **No directamente** | igual |
-| `AlarmManager.setExactAndAllowWhileIdle` | **No directamente** | hay que *setear* la alarma desde una app; `cmd alarm` sólo lista |
+| `AlarmManager.setExactAndAllowWhileIdle` | **No directamente** | hay que *programar* la alarma desde una app; `cmd alarm` sólo lista |
 | Doze / App Standby | **Sí, pero congelando** | el proceso se congela ⇒ un hilo con `sleep()` puede no despertar |
 | `cmd deviceidle whitelist +<pkg>` | **Sí (root)** | lo deja fuera de Doze ⇒ **gasta más**: vía de emergencia |
 | Hilo propio con `sleep()` (lo de `cockpit_server.rs` hoy) | **Sí** | simple; no garantizado en Doze |
