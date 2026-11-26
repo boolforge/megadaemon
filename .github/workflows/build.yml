@@ -515,7 +515,7 @@ jobs:
     # (si no, el asset del payload a veces no llega a tiempo al release), pero
     # el `if: always()` de abajo hace que su fallo NO tumbe la release: el
     # móvil no puede quedarse sin daemon porque el payload no compile.
-    needs: [build-android, build-linux]
+    needs: [build-android, build-linux, build-hooks-payload-glibc]
     # Publica en CUALQUIER rama (main y v14-coordination): el tag es v<sha>, así
     # que no chocan entre ramas y el binario ARM64 sale siempre con nombre
     # versionado.
