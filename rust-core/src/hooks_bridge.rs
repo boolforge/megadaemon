@@ -135,8 +135,12 @@ fn descubrir_paquete(paquete: &str) -> String {
     if !paquete.is_empty() {
         return paquete.to_string();
     }
+    // MEDIDO (2026-11-26, móvil): la app de Antigravity se llama `com.agy`
+    // (NO `com.google.antigravity`) ⇒ el grep por "antigravity" no
+    // encontraba nada y todo iba al paquete por defecto (que no existe en
+    // el móvil) ⇒ el payload se instalaba en un directorio inexistente.
     let r = root_exec(
-        "pm list packages 2>/dev/null | grep -i antigravity | head -1 | cut -d: -f2",
+        "pm list packages 2>/dev/null | grep -i -E 'antigravity|^package:com\\.agy$' | head -1 | cut -d: -f2",
         20_000,
         1024,
     );
@@ -327,7 +331,17 @@ fn inyectar(paquete: &str, pid: i64, via: &str) -> Value {
     let pid_real = if pid > 0 {
         pid
     } else {
-        let r = root_exec(
+        // MEDIDO (2026-11-26, móvil): el LS de Antigravity NO se llama como
+        // el paquete: el proceso es `libloader.so` (que carga
+        // `liblanguage_server.so`).  Buscar por el nombre del paquete
+        // inyectaba en el proceso de la APP, no en el LS ⇒ las sondas
+        // (direcciones del pclntab del LS) no enganchaban nada.
+        let r_ls = root_exec(
+            "ps -A -o PID,ARGS 2>/dev/null | grep -a liblanguage_server | grep -v grep | head -1 | awk '{print $1}'",
+            20_000,
+            1024,
+        );
+        let r_app = root_exec(
             &format!(
                 "ps -A -o PID,NAME 2>/dev/null | grep -i {p} | head -1 | awk '{{print $1}}'",
                 p = sh_quote(&pkg)
@@ -335,12 +349,16 @@ fn inyectar(paquete: &str, pid: i64, via: &str) -> Value {
             20_000,
             1024,
         );
-        match r.stdout.trim().split_whitespace().next().and_then(|s| s.parse::<i64>().ok()) {
+        let primero = |s: &str| s.trim().split_whitespace().next().and_then(|x| x.parse::<i64>().ok());
+        match primero(&r_ls.stdout).or_else(|| primero(&r_app.stdout)) {
             Some(p) => p,
             None => {
                 return error(
                     "proceso_no_encontrado",
-                    &format!("no hay ningún proceso de '{}' en el móvil", pkg),
+                    &format!(
+                        "no hay ningún proceso del LS (liblanguage_server) ni de '{}' en el móvil",
+                        pkg
+                    ),
                 )
             }
         }
@@ -387,10 +405,23 @@ fn inyectar(paquete: &str, pid: i64, via: &str) -> Value {
 /// `leer`: las últimas líneas del NDJSON de hooks.
 fn leer(paquete: &str, lineas: usize) -> Value {
     let pkg = descubrir_paquete(paquete);
-    let candidatos = [
+    // MEDIDO (2026-11-26, móvil): el PAYLOAD escribe el NDJSON en una de sus
+    // candidatas (`/data/local/tmp/megadaemon/state/hooks.ndjson`,
+    // `…/hooks-{uid}.ndjson`, `/data/user/0/<pkg>/cache/megadaemon-hooks.ndjson`…)
+    // y el LECTOR miraba otras tres ⇒ no se solapaban NINGUNA ⇒ aunque la
+    // inyección funcionase, `leer` decía "sin_ndjson".  Ahora se buscan las
+    // MISMAS candidatas que usa el payload (`hooks_payload::candidatas_ndjson`
+    // es la lista de referencia).
+    let uid = uid_de(&pkg);
+    let candidatos = vec![
         ndjson_remoto(),
-        format!("/data/data/{}/files/megadaemon/hooks.ndjson", pkg),
-        format!("/data/user/0/{}/files/megadaemon/hooks.ndjson", pkg),
+        "/data/local/tmp/megadaemon/state/hooks.ndjson".to_string(),
+        format!("/data/local/tmp/megadaemon/state/hooks-{uid}.ndjson"),
+        format!("/data/local/tmp/hooks-{uid}.ndjson"),
+        format!("/data/user/0/{pkg}/cache/megadaemon-hooks.ndjson"),
+        format!("/data/data/{pkg}/cache/megadaemon-hooks.ndjson"),
+        format!("/data/data/{pkg}/files/megadaemon/hooks.ndjson"),
+        format!("/data/user/0/{pkg}/files/megadaemon/hooks.ndjson"),
     ];
     let mut lista = String::new();
     let mut encontrado: Option<String> = None;
@@ -447,9 +478,19 @@ fn rutas_lib_local(lib_path: &str, nombres: &[&str]) -> Vec<std::path::PathBuf> 
 }
 
 /// Carga un fichero local y lo devuelve en base64.
-fn bin_local(ruta: &str, nombres: &[&str]) -> Result<(String, String), String> {
+///
+/// `extra` son rutas ADICIONALES donde se busca ese binario concreto
+/// (NO se mezclan entre binarios: el payload y el inyector tienen nombres
+/// distintos y uno no puede acabar instalado en el sitio del otro).
+fn bin_local(
+    ruta: &str,
+    nombres: &[&str],
+    extra: &[std::path::PathBuf],
+) -> Result<(String, String), String> {
     use base64ct::Encoding;
-    for candidata in rutas_lib_local(ruta, nombres) {
+    let mut candidatas = rutas_lib_local(ruta, nombres);
+    candidatas.extend(extra.iter().cloned());
+    for candidata in candidatas {
         if let Ok(bytes) = std::fs::read(&candidata) {
             let b64 = base64ct::Base64::encode_string(&bytes);
             return Ok((b64, candidata.to_string_lossy().to_string()));
@@ -462,13 +503,34 @@ fn bin_local(ruta: &str, nombres: &[&str]) -> Result<(String, String), String> {
 }
 
 /// El payload (`.so` de hooks).
+///
+/// MEDIDO (2026-11-26, móvil): el payload NO estaba en el `state_dir` (el
+/// daemon lo instala EMBEBIDO en
+/// `/data/local/tmp/megadaemon/hooks-payload.so`, ver
+/// `hooks_payload::RUTA_PAYLOAD`) ⇒ la búsqueda fallaba con "no se
+/// encuentra hooks-payload-arm64.so localmente" y la instrumentación no se
+/// podía instalar.  Ahora se busca también ahí.
 fn lib_local(ruta: &str) -> Result<(String, String), String> {
-    bin_local(ruta, &["hooks-payload-arm64.so", "hooks-payload-arm64"])
+    bin_local(
+        ruta,
+        &["hooks-payload-arm64.so", "hooks-payload-arm64"],
+        &[
+            std::path::PathBuf::from(crate::hooks_payload::RUTA_PAYLOAD),
+            std::path::PathBuf::from(payload_remoto()),
+        ],
+    )
 }
 
 /// El inyector (`md-inject`).
 fn injector_local(ruta: &str) -> Result<(String, String), String> {
-    bin_local(ruta, &["md-inject-arm64", "md-inject"])
+    bin_local(
+        ruta,
+        &["md-inject-arm64", "md-inject"],
+        &[
+            std::path::PathBuf::from(dir_remoto()).join("md-inject-arm64"),
+            std::path::PathBuf::from(inyector_remoto()),
+        ],
+    )
 }
 
 /// Asegura que haya un inyector local, **descargándolo del release** si
