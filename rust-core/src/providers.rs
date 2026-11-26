@@ -1644,7 +1644,15 @@ pub fn execute_chat_with(
 
     // Build ordered candidate cascade: requested model first -> other enabled cloud models -> local SEERE v12
     let mut candidates: Vec<ProviderEntry> = Vec::new();
-    if let Some(p) = vault.providers.iter().find(|p| p.id == actual_cloud_id) {
+    // MEDIDO (2026-11-26, móvil): el LS pide el modelo por NOMBRE
+    // ("gemini-3.8-flash"), no por id de proveedor ("google-ai-studio") ⇒
+    // el matching tiene que mirar el `model` también, o el modelo pedido
+    // no iría primero en la cascada.
+    if let Some(p) = vault
+        .providers
+        .iter()
+        .find(|p| p.id == actual_cloud_id || p.model == actual_cloud_id)
+    {
         candidates.push(p.clone());
     }
     for p in &vault.providers {

@@ -1032,7 +1032,16 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
     let mut real = String::new();
     let mut sustituido = false;
     let mut content_type = "application/json".to_string();
-    let mut salida;
+    // `salida` se inicializa vacía: si el gateway falla, no hay respuesta que
+    // aplicar (el error se responde aparte), pero el compilador no puede
+    // saber que `error` y `salida` van juntos.
+    let mut salida = String::new();
+    // MEDIDO (2026-11-26, móvil): el error del gateway (p. ej. 502 por un
+    // cuerpo que no se entiende) se guarda para responder 502 CON EL
+    // DETALLE, pero la petición **se registra igual** en el NDJSON: antes un
+    // fallo del gateway no dejaba NINGUNA traza y el diagnóstico era una
+    // caja negra ("0 llamadas de modelo, pero el chat dice que falla").
+    let mut error: Option<String> = None;
 
     match dialecto {
         Dialecto::Catalogo => {
@@ -1040,37 +1049,47 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
             salida = v.to_string();
         }
         Dialecto::OpenAi => {
-            let mut v = crate::llm_gateway::chat_completions_con_traza(&cuerpo)
-                .map_err(|e| format!("gateway OpenAI: {}", e.message))?;
-            requested = cuerpo
-                .get("model")
-                .and_then(|m| m.as_str())
-                .unwrap_or(MODELO_CANONICO)
-                .trim()
-                .to_string();
-            if requested.is_empty() {
-                requested = MODELO_CANONICO.to_string();
+            match crate::llm_gateway::chat_completions_con_traza(&cuerpo) {
+                Ok(mut v) => {
+                    requested = cuerpo
+                        .get("model")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or(MODELO_CANONICO)
+                        .trim()
+                        .to_string();
+                    if requested.is_empty() {
+                        requested = MODELO_CANONICO.to_string();
+                    }
+                    real = v
+                        .pointer("/megadaemon/provider_id")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    sustituido = v
+                        .pointer("/megadaemon/substituted")
+                        .and_then(|x| x.as_bool())
+                        .unwrap_or(false);
+                    salida = v.to_string();
+                }
+                Err(e) => {
+                    error = Some(format!("gateway OpenAI: {}", e.message));
+                }
             }
-            real = v
-                .pointer("/megadaemon/provider_id")
-                .and_then(|x| x.as_str())
-                .unwrap_or("")
-                .to_string();
-            sustituido = v
-                .pointer("/megadaemon/substituted")
-                .and_then(|x| x.as_bool())
-                .unwrap_or(false);
-            salida = v.to_string();
         }
         Dialecto::Gemini => {
             let r = crate::llm_gateway::gemini_route(&ruta);
             let stream = r.as_ref().map(|x| x.stream).unwrap_or(false);
             let modelo_ruta = r.as_ref().map(|x| x.model.clone()).unwrap_or_default();
-            requested = if modelo_ruta.trim().is_empty() {
-                MODELO_CANONICO.to_string()
-            } else {
-                modelo_ruta.trim().to_string()
-            };
+            // MEDIDO (2026-11-26, móvil): el modelo NO viene en la ruta
+            // (`/v1internal:streamGenerateContent`) sino en el CUERPO: en el
+            // campo `model` del envoltorio v1internal o en `request.model`.
+            requested = crate::llm_gateway::modelo_del_cuerpo(&cuerpo).unwrap_or_else(|| {
+                if modelo_ruta.trim().is_empty() {
+                    MODELO_CANONICO.to_string()
+                } else {
+                    modelo_ruta.trim().to_string()
+                }
+            });
             // Si el cliente pide un modelo CONCRETO, ese va primero en la
             // cascada; si pide el canónico, decide el router.
             let solicitado: Option<&str> = if crate::llm_gateway::es_alias_megadaemon(&requested) {
@@ -1078,45 +1097,85 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
             } else {
                 Some(requested.as_str())
             };
+            // MEDIDO (2026-11-26, móvil): la petición va ENVUELTA (v1internal)
+            // ⇒ la respuesta tiene que ir envuelta igual, y el cuerpo real
+            // está en `request` (lo deserialize el gateway).
+            let envuelto = crate::llm_gateway::es_envoltorio_v1internal(&cuerpo);
             if stream {
-                let mut v = crate::llm_gateway::gemini_generate_content_con_modelo_for(
+                match crate::llm_gateway::gemini_generate_content_con_modelo_for(
                     &ruta, &cuerpo, solicitado,
-                )
-                .map_err(|e| format!("gateway Gemini: {}", e.message))?;
-                real = v
-                    .pointer("/megadaemon/provider_id")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                sustituido = v
-                    .pointer("/megadaemon/substituted")
-                    .and_then(|x| x.as_bool())
-                    .unwrap_or(false);
-                let sse = crate::llm_gateway::gemini_a_sse(&v);
-                content_type = "text/event-stream; charset=utf-8".to_string();
-                salida = sse;
+                ) {
+                    Ok(v) => {
+                        real = v
+                            .pointer("/megadaemon/provider_id")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        sustituido = v
+                            .pointer("/megadaemon/substituted")
+                            .and_then(|x| x.as_bool())
+                            .unwrap_or(false);
+                        let sse = if envuelto {
+                            crate::llm_gateway::gemini_a_sse_v1internal(&v)
+                        } else {
+                            crate::llm_gateway::gemini_a_sse(&v)
+                        };
+                        content_type = "text/event-stream; charset=utf-8".to_string();
+                        salida = sse;
+                    }
+                    Err(e) => {
+                        error = Some(format!("gateway Gemini: {}", e.message));
+                    }
+                }
             } else {
-                let mut v = crate::llm_gateway::gemini_generate_content_con_modelo_for(
+                match crate::llm_gateway::gemini_generate_content_con_modelo_for(
                     &ruta, &cuerpo, solicitado,
-                )
-                .map_err(|e| format!("gateway Gemini: {}", e.message))?;
-                real = v
-                    .pointer("/megadaemon/provider_id")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                sustituido = v
-                    .pointer("/megadaemon/substituted")
-                    .and_then(|x| x.as_bool())
-                    .unwrap_or(false);
-                salida = v.to_string();
+                ) {
+                    Ok(v) => {
+                        real = v
+                            .pointer("/megadaemon/provider_id")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        sustituido = v
+                            .pointer("/megadaemon/substituted")
+                            .and_then(|x| x.as_bool())
+                            .unwrap_or(false);
+                        salida = if envuelto {
+                            crate::llm_gateway::envolver_v1internal(&v, "").to_string()
+                        } else {
+                            v.to_string()
+                        };
+                    }
+                    Err(e) => {
+                        error = Some(format!("gateway Gemini: {}", e.message));
+                    }
+                }
             }
         }
     }
 
     // Las reglas del shim se aplican ENCIMA de la respuesta del gateway:
     // es el punto donde se puede mentir a la GUI.
-    let (status, cuerpo_final, regla) = decidir(&req.metodo, &req.ruta, &req.cuerpo, &salida);
+    //
+    // MEDIDO (2026-11-26, móvil): si el gateway falló, la respuesta es el
+    // error 502 con su detalle, pero la petición SE REGISTRA igual (antes un
+    // fallo del gateway no dejaba traza ninguna).
+    let (status, cuerpo_final, regla) = match &error {
+        Some(e) => (
+            502u16,
+            json!({
+                "error": {
+                    "code": 502,
+                    "status": "SHIM_PROXY_ERROR",
+                    "message": e,
+                }
+            })
+            .to_string(),
+            None,
+        ),
+        None => decidir(&req.metodo, &req.ruta, &req.cuerpo, &salida),
+    };
 
     let redacta = redacta();
     registrar(&Entrada {
@@ -1150,6 +1209,12 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
         variantes: 1,
         query: Some(req.query.clone()),
     });
+
+    // El error se devuelve AL COCKPIT (que lo responde como 502 con el
+    // detalle), pero la traza ya está en el NDJSON.
+    if let Some(e) = error {
+        return Err(e);
+    }
 
     Ok(Respuesta {
         status,
@@ -1676,6 +1741,51 @@ mod tests {
             "minimax-m3.1-flash"
         ));
         assert!(!crate::llm_gateway::es_alias_megadaemon(""));
+    }
+
+    #[test]
+    fn un_fallo_del_gateway_deja_traza_en_el_ndjson() {
+        // MEDIDO (2026-11-26, móvil): el gateway devolvía 502 y NO dejaba
+        // NINGUNA línea en el NDJSON ⇒ el diagnóstico era una caja negra
+        // ("0 llamadas de modelo, pero el chat dice que falla").
+        let ruta = "/v1internal:streamGenerateContent";
+        // Cuerpo ENVUELTO (v1internal) sin texto: falla ANTES de la red.
+        let cuerpo = json!({"project": "x", "request": {"contents": []}}).to_string();
+        let req = Peticion {
+            metodo: "POST".to_string(),
+            ruta: ruta.to_string(),
+            cabeceras: Vec::new(),
+            query: "alt=sse".to_string(),
+            cuerpo,
+        };
+        let r = proxy(&req);
+        assert!(r.is_err(), "un cuerpo sin texto no puede generar");
+        let err = r.unwrap_err();
+        assert!(
+            err.contains("gateway Gemini"),
+            "el detalle del gateway debe viajar al cliente: {err}"
+        );
+        // Y la traza queda en el NDJSON con el 502.
+        let hay = ultimas(200).iter().any(|e| {
+            e.get("ruta").and_then(|x| x.as_str()) == Some(ruta)
+                && e.get("status").and_then(|x| x.as_u64()) == Some(502)
+        });
+        assert!(hay, "el fallo del gateway debe quedar registrado en el NDJSON");
+    }
+
+    #[test]
+    fn la_ruta_de_stream_del_ls_es_dialecto_gemini() {
+        // MEDIDO (2026-11-26, móvil, captura): el LS pide
+        // `/v1internal:streamGenerateContent?alt=sse`.
+        assert_eq!(
+            dialecto_de_segun_metodo("POST", "/v1internal:streamGenerateContent"),
+            Some(Dialecto::Gemini)
+        );
+        assert_eq!(
+            dialecto_de_segun_metodo("POST", "/v1internal:generateContent"),
+            Some(Dialecto::Gemini)
+        );
+        assert!(es_ruta_proxy("/v1internal:streamGenerateContent"));
     }
 
     #[test]

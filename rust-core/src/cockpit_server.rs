@@ -1715,22 +1715,52 @@ fn handle_client(mut stream: TcpStream) {
                 let body: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);
                 let ruta = crate::llm_gateway::gemini_route(path);
                 let stream_sse = ruta.as_ref().map(|r| r.stream).unwrap_or(false);
+                // MEDIDO (2026-11-26, móvil): si la petición va ENVUELTA
+                // (v1internal), la respuesta también tiene que ir envuelta.
+                let envuelto = crate::llm_gateway::es_envoltorio_v1internal(&body);
                 if stream_sse {
-                    match crate::llm_gateway::gemini_stream_sse_for(path, &body) {
-                        Ok(sse) => send_http_response(
-                            &mut stream,
-                            200,
-                            "text/event-stream; charset=utf-8",
-                            sse.as_bytes(),
-                        ),
-                        Err(e) => send_json(
-                            &mut stream,
-                            &json!({ "error": { "message": e.message, "code": e.status } }),
-                        ),
+                    if envuelto {
+                        match crate::llm_gateway::gemini_generate_content_for(path, &body) {
+                            Ok(v) => {
+                                let sse = crate::llm_gateway::gemini_a_sse_v1internal(&v);
+                                send_http_response(
+                                    &mut stream,
+                                    200,
+                                    "text/event-stream; charset=utf-8",
+                                    sse.as_bytes(),
+                                )
+                            }
+                            Err(e) => send_json(
+                                &mut stream,
+                                &json!({ "error": { "message": e.message, "code": e.status } }),
+                            ),
+                        }
+                    } else {
+                        match crate::llm_gateway::gemini_stream_sse_for(path, &body) {
+                            Ok(sse) => send_http_response(
+                                &mut stream,
+                                200,
+                                "text/event-stream; charset=utf-8",
+                                sse.as_bytes(),
+                            ),
+                            Err(e) => send_json(
+                                &mut stream,
+                                &json!({ "error": { "message": e.message, "code": e.status } }),
+                            ),
+                        }
                     }
                 } else {
                     match crate::llm_gateway::gemini_generate_content_for(path, &body) {
-                        Ok(v) => send_json(&mut stream, &v),
+                        Ok(v) => {
+                            if envuelto {
+                                send_json(
+                                    &mut stream,
+                                    &crate::llm_gateway::envolver_v1internal(&v, ""),
+                                )
+                            } else {
+                                send_json(&mut stream, &v)
+                            }
+                        }
                         Err(e) => send_json(
                             &mut stream,
                             &json!({ "error": { "message": e.message, "code": e.status } }),

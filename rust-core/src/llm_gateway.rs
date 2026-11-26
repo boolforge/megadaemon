@@ -407,10 +407,117 @@ pub struct GeminiPrompt {
     pub tools_requested: usize,
 }
 
+// ==================================================================
+// ENVOLTORIO v1internal (MEDIDO 2026-11-26, móvil)
+// ==================================================================
+//
+// MEDIDO (2026-11-26, móvil): captura REAL del tráfico del language server
+// (`tcpdump -i lo -w` sobre el puerto 9090 del daemon):
+//
+// ```text
+// POST /mda/<token>/v1internal:streamGenerateContent?alt=sse HTTP/1.1
+// Host: 127.0.0.1:9090
+// User-Agent: antigravity/hub/2.11.0 (aidev_client; os_type=linux; arch=arm64)
+// Transfer-Encoding: chunked
+// Content-Type: application/json
+//
+// {"project":"aicode-consumers","requestId":"agent/…",
+//  "request":{"contents":[{"role":"user","parts":[{"text":"…"}]}]}}
+// ```
+//
+// Y el esquema extraído del PROPIO `.so`
+// (`tools/proto-schema/extraer_esquema.py`) confirma la forma:
+//
+// ```proto
+// // google/internal/cloud/code/v1internal/prediction_service.proto
+// message GenerateContentRequest {
+//   string project = 1;
+//   string request_id = 2;
+//   google.cloud.aiplatform.master.GenerateContentRequest request = 3;
+//   string model = 4;
+//   ...
+// }
+// message GenerateContentResponse {
+//   google.cloud.aiplatform.master.GenerateContentResponse response = 1;
+//   string trace_id = 2;
+//   ...
+// }
+// ```
+//
+// ⇒ el LS **NO** envía el `GenerateContentRequest` pelado: lo envía
+// ENVUELTO en `request`.  Antes el gateway leía `contents` en la raíz, no
+// lo encontraba y devolvía 502:
+//
+// ```text
+// Run: attempt 1 failed (SHIM_PROXY_ERROR (code 502):
+//      gateway Gemini: 'contents' debe ser una lista), retrying in 4s
+// ```
+
+/// ¿El cuerpo es el ENVOLTORIO v1internal (`GenerateContentRequest`)?
+///
+/// MEDIDO (2026-11-26, móvil): el LS manda `{"project":…,"request":{…}}`.
+pub fn es_envoltorio_v1internal(body: &Value) -> bool {
+    body.get("request").map(|r| r.is_object()).unwrap_or(false)
+}
+
+/// El cuerpo EFECTIVO de la petición Gemini: el interior del envoltorio.
+///
+/// Si el cuerpo no viene envuelto (otro cliente habla Gemini pelado), se
+/// devuelve tal cual: la función es **total**.
+pub fn cuerpo_gemini(body: &Value) -> &Value {
+    match body.get("request") {
+        Some(r) if r.is_object() => r,
+        _ => body,
+    }
+}
+
+/// El modelo que pide el CUERPO (el LS no lo pone en la ruta).
+///
+/// MEDIDO (2026-11-26, móvil): con `/v1internal:streamGenerateContent` la
+/// ruta no nombra ningún modelo; el modelo va en `model` (envoltorio) o en
+/// `request.model` (el interior).
+pub fn modelo_del_cuerpo(body: &Value) -> Option<String> {
+    let g = cuerpo_gemini(body);
+    body.get("model")
+        .or_else(|| g.get("model"))
+        .and_then(|m| m.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// La respuesta Gemini con SÓLO los campos del proto.
+///
+/// MEDIDO (2026-11-26): el protojson de Go **falla** ante un campo
+/// desconocido ("unknown field") ⇒ nuestro bloque `megadaemon` (la
+/// trazabilidad propia) NO puede viajar dentro de `response`.
+pub fn gemini_solo_proto(v: &Value) -> Value {
+    let mut out = json!({});
+    for campo in ["candidates", "usageMetadata", "modelVersion", "promptFeedback"] {
+        if let Some(x) = v.get(campo) {
+            out[campo] = x.clone();
+        }
+    }
+    out
+}
+
+/// Envuelve la respuesta Gemini en el `GenerateContentResponse` de v1internal.
+///
+/// MEDIDO (2026-11-26, móvil): sin esta envoltura el LS no encuentra ningún
+/// `candidate` ⇒ el chat se queda vacío aunque el proveedor haya contestado.
+pub fn envolver_v1internal(gemini: &Value, trace_id: &str) -> Value {
+    json!({
+        "response": gemini_solo_proto(gemini),
+        "traceId": trace_id,
+    })
+}
+
 /// Convierte una petición Gemini (`genai`) en prompt + sistema.
 ///
 /// Es **puro**: no toca la red (testeable sin nada).
 pub fn gemini_prompt(body: &Value) -> Result<GeminiPrompt, GatewayError> {
+    // MEDIDO (2026-11-26, móvil): el LS envía el ENVOLTORIO v1internal ⇒ el
+    // `contents` de verdad está en `request.contents`.
+    let body = cuerpo_gemini(body);
     let contents = body
         .get("contents")
         .and_then(|c| c.as_array())
@@ -544,6 +651,19 @@ pub fn gemini_generate_content_con_modelo_for(
     gemini_generate_content_con_modelo_with(path, body, modelo, &deps)
 }
 
+/// ¿El modelo pedido es ALGUNO de los proveedores del vault?
+///
+/// MEDIDO (2026-11-26, móvil): el LS pide modelos de **GOOGLE**
+/// ("gemini-4-neon", "gemini-3.8-flash") que no son proveedores nuestros.
+/// Si se pasan tal cual a la cascada, ésta los ignora y arranca por el
+/// PRIMER proveedor habilitado (no por el canónico) ⇒ el "gateway canónico"
+/// dejaba de serlo.  Un modelo desconocido ⇒ routing canónico (y queda
+/// registrado igual en `requested_model`).
+fn es_modelo_del_vault(vault: &crate::providers::ProviderVault, m: &str) -> bool {
+    let t = m.trim();
+    !t.is_empty() && vault.providers.iter().any(|p| p.id == t || p.model == t)
+}
+
 /// Variante **inyectable** de [`gemini_generate_content_con_modelo_for`].
 pub fn gemini_generate_content_con_modelo_with(
     _path: &str,
@@ -553,9 +673,12 @@ pub fn gemini_generate_content_con_modelo_with(
 ) -> Result<Value, GatewayError> {
     let g = gemini_prompt(body)?;
     // Un alias NO es un modelo: que decida el router.
+    // MEDIDO (2026-11-26): un modelo que NO es proveedor nuestro tampoco
+    // (el LS pide modelos de Google) ⇒ routing canónico.
     let pedido = modelo
         .map(|m| m.trim())
-        .filter(|m| !m.is_empty() && !es_alias_megadaemon(m));
+        .filter(|m| !m.is_empty() && !es_alias_megadaemon(m))
+        .filter(|m| es_modelo_del_vault(deps.vault, m));
     let res = crate::providers::execute_chat_with(
         &g.prompt,
         pedido,
@@ -643,11 +766,8 @@ pub fn gemini_stream_sse_con_modelo(
     Ok(gemini_a_sse(&v))
 }
 
-/// Convierte una respuesta Gemini completa en el cuerpo SSE.
-///
-/// MEDIDO (2026-11-23): el chunk SSE **no** llevaba la trazabilidad => en
-/// streaming nadie sabia que modelo habia contestado.
-pub fn gemini_a_sse(v: &Value) -> String {
+/// La trama (chunk) que se envía dentro de una respuesta Gemini.
+fn gemini_chunk(v: &Value) -> Value {
     let texto = v["candidates"][0]["content"]["parts"]
         .as_array()
         .map(|ps| {
@@ -657,7 +777,7 @@ pub fn gemini_a_sse(v: &Value) -> String {
                 .join("")
         })
         .unwrap_or_default();
-    let chunk = json!({
+    json!({
         "candidates": [{
             "content": { "role": "model", "parts": [{ "text": texto }] },
             "finishReason": "STOP",
@@ -665,8 +785,32 @@ pub fn gemini_a_sse(v: &Value) -> String {
         }],
         "modelVersion": MODELO_CANONICO,
         "megadaemon": v.get("megadaemon").cloned().unwrap_or(Value::Null),
-    });
-    format!("data: {}\n\ndata: [DONE]\n\n", chunk)
+    })
+}
+
+/// Convierte una respuesta Gemini completa en el cuerpo SSE.
+///
+/// MEDIDO (2026-11-23): el chunk SSE **no** llevaba la trazabilidad => en
+/// streaming nadie sabia que modelo habia contestado.
+pub fn gemini_a_sse(v: &Value) -> String {
+    format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        gemini_chunk(v)
+    )
+}
+
+/// SSE **con el envoltorio v1internal**: cada trama es un
+/// `GenerateContentResponse` de `v1internal` (con `response` dentro).
+///
+/// MEDIDO (2026-11-26, móvil): el LS pide `?alt=sse` ⇒ espera tramas SSE
+/// `data: {json}`.
+///
+/// **NO** se manda `data: [DONE]`: el backend real de Google con `alt=sse`
+/// termina el flujo cerrando la conexión, y `[DONE]` no es un JSON válido ⇒ el
+/// decodificador protojson del cliente lo rechazaría.
+pub fn gemini_a_sse_v1internal(v: &Value) -> String {
+    let trama = envolver_v1internal(&gemini_chunk(v), "");
+    format!("data: {trama}\n\n")
 }
 
 fn now_secs() -> u64 {
@@ -790,6 +934,135 @@ mod tests {
         assert_eq!(v["usageMetadata"]["candidatesTokenCount"], 7);
         assert_eq!(v["megadaemon"]["provider_id"], "minimax-m3.1-flash");
         assert_eq!(v["megadaemon"]["tools_requested"], 3);
+    }
+
+    // -----------------------------------------------------------------
+    // ENVOLTORIO v1internal (MEDIDO 2026-11-26, móvil)
+    // -----------------------------------------------------------------
+
+    /// MEDIDO (2026-11-26, móvil, captura real del tráfico del LS con
+    /// `tcpdump`): el LS manda la petición ENVUELTA en `request`.
+    const CUERPO_V1INTERNAL: &str = r#"{
+        "project": "aicode-consumers",
+        "requestId": "agent/9dfa200c/1795662565867",
+        "model": "gemini-4-neon",
+        "request": {
+            "contents": [{"role": "user", "parts": [{"text": "hola"}]}],
+            "systemInstruction": {"parts": [{"text": "eres un agente"}]},
+            "generationConfig": {"maxOutputTokens": 321},
+            "tools": [{"functionDeclarations": [{"name": "a"}]}]
+        }
+    }"#;
+
+    #[test]
+    fn el_envoltorio_v1internal_se_reconoce_y_se_desenvuelve() {
+        let body: Value = serde_json::from_str(CUERPO_V1INTERNAL).unwrap();
+        assert!(es_envoltorio_v1internal(&body));
+        assert!(!es_envoltorio_v1internal(&json!({"contents": []})));
+        // El cuerpo efectivo es el INTERIOR del envoltorio.
+        assert_eq!(cuerpo_gemini(&body)["contents"][0]["parts"][0]["text"], "hola");
+        // MEDIDO (2026-11-26, móvil): antes esto fallaba con
+        // "'contents' debe ser una lista" (el `contents` de verdad está en
+        // `request.contents`) ⇒ el LS veía un 502 y reintentaba 9 veces.
+        let g = gemini_prompt(&body).unwrap();
+        assert_eq!(g.prompt, "hola");
+        assert_eq!(g.system.as_deref(), Some("eres un agente"));
+        assert_eq!(g.max_tokens, 321);
+        assert_eq!(g.tools_requested, 1);
+    }
+
+    #[test]
+    fn el_modelo_del_cuerpo_se_lee_del_envoltorio() {
+        let body: Value = serde_json::from_str(CUERPO_V1INTERNAL).unwrap();
+        assert_eq!(modelo_del_cuerpo(&body).as_deref(), Some("gemini-4-neon"));
+        assert_eq!(
+            modelo_del_cuerpo(&json!({"request": {"model": "otro"}})).as_deref(),
+            Some("otro")
+        );
+        assert!(modelo_del_cuerpo(&json!({})).is_none());
+        // Una petición Gemini pelada (sin envoltorio) también vale.
+        assert_eq!(
+            modelo_del_cuerpo(&json!({"contents": [], "model": "x"})).as_deref(),
+            Some("x")
+        );
+    }
+
+    #[test]
+    fn la_respuesta_se_envuelve_en_el_generatocontentresponse() {
+        let res = crate::providers::ChatResult {
+            reply: "hola".to_string(),
+            reasoning: String::new(),
+            model_id: "minimax-m3.1-flash".to_string(),
+            model_name: "MiniMax-M3.1-Flash".to_string(),
+            vendor: "MiniMax".to_string(),
+            latency_ms: 12.0,
+            tokens_used: 7,
+            tools_used: Vec::new(),
+            fallback_used: false,
+            quota: None,
+            provider_trace: Vec::new(),
+        };
+        let v = gemini_response(&res, 3);
+        let env = envolver_v1internal(&v, "trace-1");
+        assert_eq!(env["traceId"], "trace-1");
+        assert_eq!(env["response"]["candidates"][0]["content"]["parts"][0]["text"], "hola");
+        assert_eq!(env["response"]["usageMetadata"]["candidatesTokenCount"], 7);
+        // MEDIDO (2026-11-26): el protojson de Go falla con un campo
+        // desconocido ⇒ el bloque `megadaemon` NO puede ir dentro de
+        // `response` (el LS lo rechazaría).
+        assert!(env["response"].get("megadaemon").is_none());
+    }
+
+    #[test]
+    fn el_sse_v1internal_es_una_trama_con_response_y_sin_done() {
+        let res = crate::providers::ChatResult {
+            reply: "hola".to_string(),
+            reasoning: String::new(),
+            model_id: "minimax-m3.1-flash".to_string(),
+            model_name: "MiniMax-M3.1-Flash".to_string(),
+            vendor: "MiniMax".to_string(),
+            latency_ms: 12.0,
+            tokens_used: 7,
+            tools_used: Vec::new(),
+            fallback_used: false,
+            quota: None,
+            provider_trace: Vec::new(),
+        };
+        let v = gemini_response(&res, 0);
+        let sse = gemini_a_sse_v1internal(&v);
+        assert!(sse.starts_with("data: {"));
+        assert!(sse.contains("\"response\""));
+        assert!(sse.contains("hola"));
+        // `[DONE]` no es JSON: el decodificador protojson del cliente lo
+        // rechazaría.  Google con `alt=sse` termina el flujo al cerrar.
+        assert!(!sse.contains("[DONE]"));
+    }
+
+    #[test]
+    fn un_modelo_que_no_es_proveedor_va_al_routing_canonico() {
+        let vault = crate::providers::ProviderVault {
+            default_model: "local-seere".to_string(),
+            providers: vec![crate::providers::ProviderEntry {
+                id: "google-ai-studio".to_string(),
+                name: "Google AI Studio".to_string(),
+                vendor: "Google".to_string(),
+                endpoint: "https://example.invalid/v1/chat/completions".to_string(),
+                model: "gemini-3.8-flash".to_string(),
+                api_key: String::new(),
+                auth_type: "bearer".to_string(),
+                tier: "free".to_string(),
+                free_signup_url: String::new(),
+                enabled: true,
+                supports_reasoning: false,
+            }],
+        };
+        assert!(es_modelo_del_vault(&vault, "google-ai-studio"));
+        assert!(es_modelo_del_vault(&vault, "gemini-3.8-flash"));
+        // MEDIDO (2026-11-26, móvil): el LS pide modelos de GOOGLE que no
+        // son proveedores nuestros ⇒ routing canónico (no "el primero
+        // habilitado"), que es lo que hace que el gateway sea canónico.
+        assert!(!es_modelo_del_vault(&vault, "gemini-4-neon"));
+        assert!(!es_modelo_del_vault(&vault, ""));
     }
 
     #[test]
