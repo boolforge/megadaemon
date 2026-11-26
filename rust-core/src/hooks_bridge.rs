@@ -702,12 +702,27 @@ fn asegurar_payload_local(
     let release = crate::self_update::url_release();
     let url = format!("{}/{}", release, variante.asset());
     let url_sha = format!("{url}.sha256");
-    let texto_sha = crate::self_update::descargar_texto(&url_sha)
-        .map_err(|e| format!("descargar {url_sha}: {e}"))?;
+    let nombres = [variante.nombre(), variante.asset()];
+    // MEDIDO (2026-11-26, móvil): el asset puede NO estar en el release que
+    // ahora es el "latest" (los releases se solapan y el "latest" cambia
+    // con cualquier push).  Si no se puede traer el `.sha256`, se usa el
+    // payload que ya está en el móvil (validado cuando se descargó).
+    let texto_sha = match crate::self_update::descargar_texto(&url_sha) {
+        Ok(t) => t,
+        Err(e) => {
+            if let Ok((b64, origen)) = bin_local(
+                "",
+                &nombres,
+                &[std::path::PathBuf::from(payload_remoto_para(variante))],
+            ) {
+                return Ok((b64, origen));
+            }
+            return Err(format!("descargar {url_sha}: {}", e));
+        }
+    };
     let esperado = crate::self_update::parsear_sha256(&texto_sha)
         .ok_or_else(|| format!("{url_sha} no trae un sha256 legible"))?;
     // 2) Local: sólo vale si su sha256 es el del release ACTUAL.
-    let nombres = [variante.nombre(), variante.asset()];
     if let Ok((b64, origen)) = bin_local(
         "",
         &nombres,

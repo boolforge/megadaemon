@@ -1197,6 +1197,22 @@ pub struct LlamadaRemota {
 /// * Deja el `SP` apuntando a la ranura de retorno.
 /// * En x86_64 deja la dirección de retorno en la pila (como un `call`).
 /// * En arm64 la deja en `x30` (el `LR`).
+/// Dirección donde se escribe la ruta de la biblioteca en la pila del
+/// objetivo.
+///
+/// MEDIDO (2026-11-26, móvil): tiene que quedar **POR ENCIMA** del SP final.
+/// La pila de AArch64 crece hacia abajo: si la ruta queda por debajo del SP,
+/// `dlopen` la pisa al usar la pila y devuelve NULL (handle=0) sin explicar
+/// por qué.  Con la ruta por encima hay `OFFSET_RANURA` de hueco libre para
+/// que la función llamada use la pila con normalidad.
+pub fn dir_ruta_por_encima_del_sp(sp_original: u64) -> u64 {
+    let scratch = sp_original.saturating_sub(OFFSET_AUXILIAR) & !0xF;
+    let ranura = scratch + OFFSET_RANURA;
+    ranura + 16
+}
+
+/// Prepara la llamada remota: `pc` = `dir_dlopen`, `x0` = la ruta,
+/// `x1` = los flags, `lr` = la dirección mágica (0).
 pub fn preparar_llamada(r: &Registros, dir_dlopen: u64, dir_ruta: u64) -> LlamadaRemota {
     let sp_original = sp_actual(r);
     let scratch = sp_original.saturating_sub(OFFSET_AUXILIAR) & !0xF;
@@ -1767,6 +1783,13 @@ fn inyectar_parado(
     }
 
     // 5) Escribir la ruta de la `.so` (con `\0`) y preparar la llamada.
+    //
+    // MEDIDO (2026-11-26, móvil): la ruta tiene que estar **POR ENCIMA** del
+    // SP final (la pila de AArch64 crece hacia abajo: si la ruta queda por
+    // debajo del SP, `dlopen` la pisa al usar la pila y devuelve NULL sin
+    // decir por qué).  Con la ruta en `scratch` (= sp-0x100) y el SP en
+    // `ranura` (= scratch+0x100) la ruta quedaba POR DEBAJO del SP ⇒ el
+    // `dlopen` leía basura y devolvía handle=0.
     let mut memoria = Memoria::abrir(pid, via)?;
     let mut ruta = biblioteca.as_bytes().to_vec();
     ruta.push(0);
@@ -1775,10 +1798,12 @@ fn inyectar_parado(
         inf.paso(&e);
         return Err(e);
     }
-    memoria.escribir(scratch, &ruta)?;
-    inf.paso(&format!("ruta escrita en 0x{:x} ({} B)", scratch, ruta.len()));
+    // Por encima del SP final (`ranura` en aarch64, `ranura+8` en x86_64).
+    let dir_ruta = dir_ruta_por_encima_del_sp(sp_original);
+    memoria.escribir(dir_ruta, &ruta)?;
+    inf.paso(&format!("ruta escrita en 0x{:x} ({} B)", dir_ruta, ruta.len()));
 
-    let llamada = preparar_llamada(regs_originales, dir_dlopen, scratch);
+    let llamada = preparar_llamada(regs_originales, dir_dlopen, dir_ruta);
     if llamada.ranura_retorno != 0 {
         memoria.escribir(llamada.ranura_retorno, &llamada.magico.to_le_bytes())?;
     }
@@ -1914,6 +1939,26 @@ mod pruebas_llamada {
         // del SP original, y el nuevo SP apunta a la ranura.
         assert!(l.sp < sp_actual(&r), "el hueco debe quedar bajo el SP original");
         assert!(l.arg0 < sp_actual(&r), "la ruta se escribe bajo el SP");
+    }
+
+    /// MEDIDO (2026-11-26, móvil): la ruta de la biblioteca tiene que quedar
+    /// **POR ENCIMA** del SP final.  La pila de AArch64 crece hacia abajo: si
+    /// la ruta queda por debajo del SP, `dlopen` la pisa al usar la pila y
+    /// devuelve NULL (handle=0) sin decir por qué.  Este test fija eso.
+    #[test]
+    fn la_ruta_de_la_biblioteca_queda_por_encima_del_sp_final() {
+        let r = registros_con_sp();
+        let dir_ruta = dir_ruta_por_encima_del_sp(sp_actual(&r));
+        let l = preparar_llamada(&r, 0xdeadbeef, dir_ruta);
+        assert_eq!(l.arg0, dir_ruta);
+        assert!(
+            l.arg0 > l.sp,
+            "la ruta (0x{:x}) debe quedar por encima del SP final (0x{:x})",
+            l.arg0,
+            l.sp
+        );
+        // Y por debajo del SP original (sigue estando en la pila).
+        assert!(l.arg0 < sp_actual(&r));
     }
 
     #[test]
