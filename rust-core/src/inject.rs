@@ -1790,8 +1790,24 @@ fn inyectar_parado(
         llamada.pc, llamada.sp, llamada.magico
     ));
 
-    // 6) Ejecutar: el proceso vuelve de `dlopen` a la dirección mágica (0) y
-    //    recibe un SIGSEGV que nos lo señala.
+    // 6) REANUDAR el proceso: hasta aquí estaba parado desde el
+    //    `PTRACE_ATTACH`, así que `dlopen` no se ejecutaba nunca y la
+    //    espera de abajo expiraba con "el proceso N no se ha parado en
+    //    15000 ms" (MEDIDO 2026-11-26, móvil).
+    //
+    //    Se continúa con señal 0: cuando `dlopen` vuelva a la dirección
+    //    mágica (0) el kernel le entrega un SIGSEGV y eso PARA al proceso
+    //    (signal-delivery-stop), que es lo que ve la espera siguiente.
+    match continuar(pid) {
+        Ok(()) => inf.paso("proceso reanudado para ejecutar la llamada"),
+        Err(e) => {
+            inf.paso(&e);
+            return Err(e);
+        }
+    }
+
+    // 7) Esperar la vuelta: el proceso vuelve de `dlopen` a la dirección
+    //    mágica (0) y recibe un SIGSEGV que nos lo señala.
     let status = match esperar(pid, 15_000) {
         Ok(s) => s,
         Err(e) => {
