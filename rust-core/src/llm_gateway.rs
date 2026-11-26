@@ -231,6 +231,27 @@ pub fn chat_completions_with(
     if !res.tools_used.is_empty() {
         message["megadaemon_tools_used"] = json!(res.tools_used);
     }
+    // MEDIDO (2026-11-26, móvil): las tool calls del proveedor se
+    // devolvían como texto y el cliente las pintaba en vez de ejecutarlas.
+    let finish_reason = if res.tool_calls.is_empty() {
+        "stop"
+    } else {
+        "tool_calls"
+    };
+    if !res.tool_calls.is_empty() {
+        message["tool_calls"] = json!(res
+            .tool_calls
+            .iter()
+            .map(|tc| json!({
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.name,
+                    "arguments": tc.arguments.to_string(),
+                }
+            }))
+            .collect::<Vec<_>>());
+    }
     Ok(json!({
         "id": format!("chatcmpl-mgd-{}", now_millis()),
         "object": "chat.completion",
@@ -247,7 +268,7 @@ pub fn chat_completions_with(
         "choices": [{
             "index": 0,
             "message": message,
-            "finish_reason": "stop",
+            "finish_reason": finish_reason,
         }],
         "usage": usage,
         // Trazabilidad propia de MegaDaemon (no rompe el formato OpenAI).
@@ -405,6 +426,19 @@ pub struct GeminiPrompt {
     pub max_tokens: u32,
     /// Nº de declaraciones de función que pedía el cliente (informativo).
     pub tools_requested: usize,
+    /// Las herramientas del cliente, ya traducidas al formato OpenAI.
+    ///
+    /// MEDIDO (2026-11-26, móvil): el LS manda 18 `functionDeclarations`
+    /// (`view_file`, `run_command`, …) y el proveedor SÓLO devuelve tool
+    /// calls estructuradas si la petición lleva `tools`.
+    pub tools: Vec<Value>,
+    /// La conversación del cliente, en formato OpenAI (mensajes).
+    ///
+    /// MEDIDO (2026-11-26, móvil): para que el agente pueda CONTINUAR
+    /// después de ejecutar una herramienta hay que devolverle su llamada
+    /// (`assistant.tool_calls`) y el resultado (`role:"tool"`), no sólo el
+    /// texto.
+    pub mensajes: Vec<Value>,
     /// Tamaño ORIGINAL del prompt (antes de recortar).
     pub bytes_prompt: usize,
     /// ¿Se recortó el prompt por [`MAX_PROMPT_CHARS`]?
@@ -538,7 +572,11 @@ pub fn gemini_prompt(body: &Value) -> Result<GeminiPrompt, GatewayError> {
     let mut parts_out: Vec<String> = Vec::new();
     for c in contents {
         let role = c.get("role").and_then(|r| r.as_str()).unwrap_or("user");
-        let texto = gemini_partes(c.get("parts"));
+        // MEDIDO (2026-11-26, móvil): las partes de una herramienta (la
+        // llamada y su resultado) también son CONTENIDO: si sólo se copian
+        // las de texto, el motor local se queda sin saber qué devolvió la
+        // herramienta.
+        let texto = gemini_partes_completas(c.get("parts"));
         if texto.trim().is_empty() {
             continue;
         }
@@ -580,6 +618,15 @@ pub fn gemini_prompt(body: &Value) -> Result<GeminiPrompt, GatewayError> {
                 .sum::<usize>()
         })
         .unwrap_or(0);
+    // MEDIDO (2026-11-26, móvil): las herramientas del LS traducidas al
+    // formato OpenAI (sin ellas el proveedor NO devuelve tool calls).
+    let tools = tools_gemini_a_openai(body.get("tools"));
+    // La conversación en formato OpenAI (con `assistant.tool_calls` y
+    // `role:"tool"`), acotada al mismo tope.
+    let mensajes = acotar_mensajes(
+        gemini_a_mensajes_openai(&Value::Array(contents.clone())),
+        MAX_PROMPT_CHARS,
+    );
     // MEDIDO (2026-11-26, móvil): el LS manda 758 KB de contexto.  Se
     // acota a [`MAX_PROMPT_CHARS`] conservando la COLA (lo más reciente) y
     // se deja constancia (`truncado`).
@@ -599,9 +646,435 @@ pub fn gemini_prompt(body: &Value) -> Result<GeminiPrompt, GatewayError> {
         system,
         max_tokens,
         tools_requested,
+        tools,
+        mensajes,
         bytes_prompt,
         truncado,
     })
+}
+
+// ==================================================================
+// HERRAMIENTAS (MEDIDO 2026-11-26, móvil)
+// ==================================================================
+//
+// MEDIDO (2026-11-26, móvil): el LS de Antigravity manda sus herramientas
+// en `tools[].functionDeclarations[]` con el dialecto `master.Schema` del
+// proto `google/cloud/aiplatform/master/tool.proto`:
+//
+// ```json
+// {"name":"view_file","description":"…",
+//  "parameters":{"type":"OBJECT",
+//                 "properties":{"AbsolutePath":{"type":"STRING","description":"…"}},
+//                 "required":["AbsolutePath"]}}
+// ```
+//
+// El enum `master.Type` (extraído del propio `.so`) es
+// `TYPE_UNSPECIFIED|STRING|NUMBER|INTEGER|BOOLEAN|ARRAY|OBJECT|NULL` ⇒ los
+// tipos llegan en MAYÚSCULAS y hay que bajarlos para JSON Schema.
+//
+// Y el LS espera la llamada de vuelta como `functionCall` (el descriptor
+// `master.FunctionCall` del binario define `name` + `args`, con `args` como
+// `google.protobuf.Struct` ⇒ un objeto JSON plano):
+
+/// Normaliza el tipo de `master.Type` a JSON Schema (minúsculas).
+fn tipo_master_a_json_schema(t: &str) -> Option<&'static str> {
+    match t.trim().to_ascii_uppercase().as_str() {
+        "STRING" => Some("string"),
+        "NUMBER" => Some("number"),
+        "INTEGER" => Some("integer"),
+        "BOOLEAN" => Some("boolean"),
+        "ARRAY" => Some("array"),
+        "OBJECT" => Some("object"),
+        "NULL" => Some("null"),
+        _ => None,
+    }
+}
+
+/// Traduce un `master.Schema` a **JSON Schema** (el dialecto que entiende
+/// un proveedor OpenAI-compatible).
+///
+/// Función **PURO** (⇒ testeable sin nada).
+pub fn schema_master_a_json_schema(v: &Value) -> Value {
+    let obj = match v.as_object() {
+        Some(o) => o,
+        None => return v.clone(),
+    };
+    let mut out = serde_json::Map::new();
+    let mut tipo: Option<&'static str> = None;
+    let mut nullable = false;
+    for (k, val) in obj {
+        match k.as_str() {
+            "type" => {
+                if let Some(t) = val.as_str() {
+                    tipo = tipo_master_a_json_schema(t);
+                }
+            }
+            "nullable" => nullable = val.as_bool().unwrap_or(false),
+            "properties" => {
+                let mut props = serde_json::Map::new();
+                if let Some(p) = val.as_object() {
+                    for (nombre, sub) in p {
+                        props.insert(nombre.clone(), schema_master_a_json_schema(sub));
+                    }
+                }
+                out.insert("properties".to_string(), Value::Object(props));
+            }
+            "items" => {
+                out.insert("items".to_string(), schema_master_a_json_schema(val));
+            }
+            "prefixItems" | "prefix_items" => {
+                let arr = val
+                    .as_array()
+                    .map(|a| a.iter().map(schema_master_a_json_schema).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                out.insert("prefixItems".to_string(), Value::Array(arr));
+            }
+            "oneOf" | "one_of" | "anyOf" | "any_of" | "allOf" | "all_of" => {
+                let destino = match k.as_str() {
+                    "oneOf" | "one_of" => "oneOf",
+                    "anyOf" | "any_of" => "anyOf",
+                    _ => "allOf",
+                };
+                let arr = val
+                    .as_array()
+                    .map(|a| a.iter().map(schema_master_a_json_schema).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                out.insert(destino.to_string(), Value::Array(arr));
+            }
+            "not" => {
+                out.insert("not".to_string(), schema_master_a_json_schema(val));
+            }
+            "additionalProperties" | "additional_properties" => {
+                // En `master.Schema` es un Schema; en JSON Schema suele ser
+                // un booleano.  Si es booleano se copia tal cual.
+                if val.is_boolean() {
+                    out.insert("additionalProperties".to_string(), val.clone());
+                } else {
+                    out.insert(
+                        "additionalProperties".to_string(),
+                        schema_master_a_json_schema(val),
+                    );
+                }
+            }
+            "additionalPropertiesSchema" | "additional_properties_schema" => {
+                out.insert(
+                    "additionalProperties".to_string(),
+                    schema_master_a_json_schema(val),
+                );
+            }
+            "$ref" | "ref" => {
+                out.insert("$ref".to_string(), val.clone());
+            }
+            "$defs" | "defs" => {
+                let mut defs = serde_json::Map::new();
+                if let Some(d) = val.as_object() {
+                    for (nombre, sub) in d {
+                        defs.insert(nombre.clone(), schema_master_a_json_schema(sub));
+                    }
+                }
+                out.insert("$defs".to_string(), Value::Object(defs));
+            }
+            "minItems" | "min_items" => {
+                out.insert("minItems".to_string(), val.clone());
+            }
+            "maxItems" | "max_items" => {
+                out.insert("maxItems".to_string(), val.clone());
+            }
+            "minLength" | "min_length" => {
+                out.insert("minLength".to_string(), val.clone());
+            }
+            "maxLength" | "max_length" => {
+                out.insert("maxLength".to_string(), val.clone());
+            }
+            // El resto se copia tal cual (JSON Schema admite campos extra:
+            // `title`, `format`, `default`, `example`, `enum`, `pattern`,
+            // `minimum`, `maximum`, `description`…).
+            _ => {
+                out.insert(k.clone(), val.clone());
+            }
+        }
+    }
+    if let Some(t) = tipo {
+        if nullable {
+            out.insert(
+                "type".to_string(),
+                json!([t, "null"]),
+            );
+        } else {
+            out.insert("type".to_string(), json!(t));
+        }
+    }
+    Value::Object(out)
+}
+
+/// Traduce las herramientas del cliente (dialecto Gemini `master`) al
+/// formato **OpenAI** (`{type:"function",function:{…}}`).
+///
+/// MEDIDO (2026-11-26, móvil): el proveedor SÓLO devuelve tool calls
+/// estructuradas si la petición lleva `tools`; sin ellas responde con su
+/// protocolo de texto.  Función **PURO**.
+pub fn tools_gemini_a_openai(tools: Option<&Value>) -> Vec<Value> {
+    let arr = match tools.and_then(|t| t.as_array()) {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+    let mut out: Vec<Value> = Vec::new();
+    for t in arr {
+        let decls = t
+            .get("functionDeclarations")
+            .or_else(|| t.get("function_declarations"))
+            .and_then(|f| f.as_array());
+        let Some(decls) = decls else { continue };
+        for fd in decls {
+            let name = fd
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if name.is_empty() {
+                continue;
+            }
+            let description = fd
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or("")
+                .to_string();
+            // `parametersJsonSchema` ya es JSON Schema; `parameters` es el
+            // dialecto `master.Schema` y hay que bajarlo.
+            let params = fd
+                .get("parametersJsonSchema")
+                .or_else(|| fd.get("parameters_json_schema"))
+                .cloned()
+                .or_else(|| fd.get("parameters").map(schema_master_a_json_schema))
+                .unwrap_or_else(|| json!({"type": "object", "properties": {}}));
+            let mut f = json!({"name": name, "parameters": params});
+            if !description.is_empty() {
+                f["description"] = json!(description);
+            }
+            out.push(json!({"type": "function", "function": f}));
+        }
+    }
+    out
+}
+
+/// La conversación del cliente en formato **OpenAI**.
+///
+/// MEDIDO (2026-11-26, móvil): para que el agente CONTINÚE tras ejecutar
+/// una herramienta hay que devolverle su llamada (`assistant.tool_calls`) y
+/// el resultado (`role:"tool"`); si sólo se aplana el texto, el agente se
+/// queda sin saber qué devolvió la herramienta.
+///
+/// Función **PURO**.
+pub fn gemini_a_mensajes_openai(contents: &Value) -> Vec<Value> {
+    let arr = match contents.as_array() {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+    let mut out: Vec<Value> = Vec::new();
+    // Último `id` de tool call por nombre: si el LS no devuelve el `id` en
+    // el `functionResponse`, se empareja por nombre.
+    let mut ultimo_id: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for c in arr {
+        let role = c.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+        let parts = c
+            .get("parts")
+            .and_then(|p| p.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut texto = String::new();
+        let mut calls: Vec<Value> = Vec::new();
+        let mut respuestas: Vec<Value> = Vec::new();
+        for p in &parts {
+            if let Some(t) = p.get("text").and_then(|t| t.as_str()) {
+                texto.push_str(t);
+                continue;
+            }
+            if let Some(fc) = p.get("functionCall").or_else(|| p.get("function_call")) {
+                let name = fc
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if name.is_empty() {
+                    continue;
+                }
+                let args = fc
+                    .get("args")
+                    .or_else(|| fc.get("arguments"))
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                let id = fc
+                    .get("id")
+                    .and_then(|i| i.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("call_{}", calls.len() + 1));
+                ultimo_id.insert(name.clone(), id.clone());
+                calls.push(json!({
+                    "id": id,
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": args.to_string(),
+                    }
+                }));
+                continue;
+            }
+            if let Some(fr) = p.get("functionResponse").or_else(|| p.get("function_response")) {
+                let name = fr
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let id = fr
+                    .get("id")
+                    .and_then(|i| i.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| ultimo_id.get(&name).cloned().unwrap_or_default());
+                let resp = fr.get("response").cloned().unwrap_or_else(|| json!({}));
+                respuestas.push(json!({
+                    "role": "tool",
+                    "tool_call_id": id,
+                    "content": resp.to_string(),
+                }));
+            }
+        }
+        // Orden OpenAI: el mensaje del modelo con sus `tool_calls` va
+        // ANTES que los resultados (`role:"tool"`), y el texto del usuario
+        // después.
+        let hay_calls = !calls.is_empty();
+        if hay_calls {
+            let mut m = json!({
+                "role": "assistant",
+                "content": if texto.is_empty() { Value::Null } else { json!(texto) },
+            });
+            m["tool_calls"] = Value::Array(calls);
+            out.push(m);
+        }
+        for r in respuestas {
+            out.push(r);
+        }
+        if !hay_calls && !texto.is_empty() {
+            if role == "model" {
+                out.push(json!({"role": "assistant", "content": texto}));
+            } else {
+                out.push(json!({"role": "user", "content": texto}));
+            }
+        }
+    }
+    out
+}
+
+/// Acota la conversación al tope, conservando la **cola** (lo más reciente).
+///
+/// MEDIDO (2026-11-26, móvil): el LS manda 750 KB de contexto.  Se recorta
+/// por la FRENTE de los mensajes más antiguos (igual que el prompt plano)
+/// y se limpian los `role:"tool"` que se quedan sin su `assistant`.
+pub fn acotar_mensajes(mensajes: Vec<Value>, tope: usize) -> Vec<Value> {
+    fn largo(m: &Value) -> usize {
+        m.get("content")
+            .and_then(|c| c.as_str())
+            .map(|s| s.chars().count())
+            .unwrap_or(0)
+    }
+    let mut ms = mensajes;
+    let mut total: usize = ms.iter().map(largo).sum();
+    if total <= tope {
+        return ms;
+    }
+    let mut i = 0;
+    while total > tope && i < ms.len() {
+        let l = largo(&ms[i]);
+        if l == 0 {
+            i += 1;
+            continue;
+        }
+        let quitar = (total - tope).min(l);
+        let s = ms[i]["content"].as_str().unwrap_or("").to_string();
+        let nuevo: String = s.chars().skip(quitar).collect();
+        total -= quitar;
+        if nuevo.trim().is_empty() {
+            ms.remove(i);
+            continue;
+        }
+        ms[i]["content"] = json!(nuevo);
+        i += 1;
+    }
+    limpiar_mensajes_huerfanos(ms)
+}
+
+/// Quita los mensajes `role:"tool"` cuyo `tool_call_id` no corresponde a
+/// ninguna llamada viva (⇒ el proveedor los rechazaría).
+fn limpiar_mensajes_huerfanos(mensajes: Vec<Value>) -> Vec<Value> {
+    let mut vivas: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out: Vec<Value> = Vec::new();
+    for m in mensajes {
+        let rol = m.get("role").and_then(|r| r.as_str()).unwrap_or("");
+        if rol == "assistant" {
+            if let Some(tcs) = m.get("tool_calls").and_then(|t| t.as_array()) {
+                for tc in tcs {
+                    if let Some(id) = tc.get("id").and_then(|i| i.as_str()) {
+                        vivas.insert(id.to_string());
+                    }
+                }
+            }
+            out.push(m);
+            continue;
+        }
+        if rol == "tool" {
+            let id = m.get("tool_call_id").and_then(|i| i.as_str()).unwrap_or("");
+            if id.is_empty() || !vivas.contains(id) {
+                continue;
+            }
+            out.push(m);
+            continue;
+        }
+        out.push(m);
+    }
+    out
+}
+
+/// Concatena las partes de un contenido Gemini, INCLUDING las tool calls y
+/// sus resultados (como texto) ⇒ el motor local (SEERE) también ve el
+/// intercambio de herramientas.
+fn gemini_partes_completas(parts: Option<&Value>) -> String {
+    let arr = match parts.and_then(|p| p.as_array()) {
+        Some(a) => a,
+        None => return String::new(),
+    };
+    let mut out = String::new();
+    for p in arr {
+        if let Some(t) = p.get("text").and_then(|t| t.as_str()) {
+            out.push_str(t);
+            continue;
+        }
+        if let Some(fc) = p.get("functionCall").or_else(|| p.get("function_call")) {
+            let name = fc.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            let args = fc
+                .get("args")
+                .or_else(|| fc.get("arguments"))
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            out.push_str(&format!(
+                "\n[LLAMADA A LA HERRAMIENTA {}: {}]\n",
+                name, args
+            ));
+            continue;
+        }
+        if let Some(fr) = p.get("functionResponse").or_else(|| p.get("function_response")) {
+            let name = fr.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            let resp = fr.get("response").cloned().unwrap_or_else(|| json!({}));
+            out.push_str(&format!(
+                "\n[RESULTADO DE LA HERRAMIENTA {}: {}]\n",
+                name, resp
+            ));
+        }
+    }
+    out
 }
 
 /// Concatena las partes de texto de un contenido Gemini.
@@ -708,12 +1181,26 @@ pub fn gemini_generate_content_con_modelo_with(
         .map(|m| m.trim())
         .filter(|m| !m.is_empty() && !es_alias_megadaemon(m))
         .filter(|m| es_modelo_del_vault(deps.vault, m));
-    let res = crate::providers::execute_chat_with(
+    // MEDIDO (2026-11-26, móvil): la conversación se pasa YA montada (con el
+    // sistema delante) para que el bucle de herramientas llegue intacto al
+    // proveedor: sin `tools` NO devuelve tool calls, y sin la conversación
+    // el agente no puede CONTINUAR tras ejecutar una.
+    let mut msgs: Vec<Value> = Vec::new();
+    if let Some(s) = g.system.as_deref() {
+        if !s.trim().is_empty() {
+            msgs.push(json!({"role": "system", "content": s}));
+        }
+    }
+    let hay_conversacion = !g.mensajes.is_empty();
+    msgs.extend(g.mensajes.iter().cloned());
+    let res = crate::providers::execute_chat_con_tools_with(
         &g.prompt,
         pedido,
         None,
         g.system.as_deref(),
         g.max_tokens,
+        &g.tools,
+        if hay_conversacion { Some(&msgs) } else { None },
         deps,
     );
     let mut v = gemini_response(&res, g.tools_requested);
@@ -741,19 +1228,31 @@ pub fn gemini_generate_content_with(
 
 /// Envoltorio de la respuesta de `providers::execute_chat` en forma Gemini.
 fn gemini_response(res: &crate::providers::ChatResult, tools_requested: usize) -> Value {
-    let mut message = json!({
-        "role": "model",
-        "parts": [{ "text": res.reply }],
-    });
+    let mut parts: Vec<Value> = Vec::new();
+    if !res.reply.trim().is_empty() || res.tool_calls.is_empty() {
+        parts.push(json!({ "text": res.reply }));
+    }
+    // MEDIDO (2026-11-26, móvil): sin esta parte el agente de Antigravity
+    // NO ejecuta la herramienta: la muestra como texto.  El dialecto es el
+    // del proto `master` (`FunctionCall{name, args}` con `args` como
+    // `google.protobuf.Struct` ⇒ objeto JSON plano), NO el `args`/`arguments`
+    // de los dialectos públicos.
+    for tc in &res.tool_calls {
+        let mut fc = json!({"name": tc.name, "args": tc.arguments});
+        if !tc.id.is_empty() {
+            fc["id"] = json!(tc.id);
+        }
+        parts.push(json!({ "functionCall": fc }));
+    }
     if !res.reasoning.trim().is_empty() {
-        message["parts"]
-            .as_array_mut()
-            .expect("parts es un array")
-            .push(json!({ "text": res.reasoning, "thought": true }));
+        parts.push(json!({ "text": res.reasoning, "thought": true }));
     }
     json!({
         "candidates": [{
-            "content": message,
+            "content": {
+                "role": "model",
+                "parts": parts,
+            },
             "finishReason": "STOP",
             "index": 0,
         }],
@@ -779,6 +1278,8 @@ fn gemini_response(res: &crate::providers::ChatResult, tools_requested: usize) -
             // v16: la traza de la cascada y el estado de cuota.
             "provider_trace": res.provider_trace,
             "quota": res.quota,
+            // MEDIDO (2026-11-26, móvil): las tool calls que se devuelven.
+            "tool_calls": res.tool_calls.len(),
         }
     })
 }
@@ -803,18 +1304,15 @@ pub fn gemini_stream_sse_con_modelo(
 
 /// La trama (chunk) que se envía dentro de una respuesta Gemini.
 fn gemini_chunk(v: &Value) -> Value {
-    let texto = v["candidates"][0]["content"]["parts"]
+    // MEDIDO (2026-11-26, móvil): la trama se quedaba SÓLO con el texto ⇒
+    // las `functionCall` se perdían en el camino (el LS usa SSE).
+    let parts = v["candidates"][0]["content"]["parts"]
         .as_array()
-        .map(|ps| {
-            ps.iter()
-                .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
-                .collect::<Vec<_>>()
-                .join("")
-        })
+        .cloned()
         .unwrap_or_default();
     json!({
         "candidates": [{
-            "content": { "role": "model", "parts": [{ "text": texto }] },
+            "content": { "role": "model", "parts": parts },
             "finishReason": "STOP",
             "index": 0,
         }],
@@ -1180,5 +1678,173 @@ mod tests {
                 assert!(!e.message.is_empty());
             }
         }
+    }
+
+    // ==================================================================
+    // HERRAMIENTAS (MEDIDO 2026-11-26, móvil)
+    // ==================================================================
+
+    /// El dialecto REAL que manda el LS (capturado del móvil).
+    const TOOLS_DEL_LS: &str = r#"[
+      {"functionDeclarations":[
+        {"name":"view_file",
+         "description":"View the contents of a file.",
+         "parameters":{"type":"OBJECT",
+                       "properties":{
+                         "AbsolutePath":{"type":"STRING","description":"Ruta"},
+                         "StartLine":{"type":"INTEGER","description":"Linea"},
+                         "toolAction":{"type":"STRING","description":"Accion"}},
+                       "required":["AbsolutePath","toolAction"]}}]},
+      {"functionDeclarations":[
+        {"name":"run_command",
+         "description":"PROPOSE a command.",
+         "parameters":{"type":"OBJECT",
+                       "properties":{"CommandLine":{"type":"STRING"}},
+                       "required":["CommandLine"]}}]}
+    ]"#;
+
+    /// El ejemplo anterior, ya parseado (un `&str` con `json!` sería un
+    /// *string*, no el array de herramientas).
+    fn tools_del_ls() -> Value {
+        serde_json::from_str::<Value>(TOOLS_DEL_LS).expect("el ejemplo es JSON valido")
+    }
+
+    #[test]
+    fn las_tools_del_ls_se_traducen_al_formato_openai() {
+        let tools = tools_gemini_a_openai(Some(&tools_del_ls()));
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0]["type"], "function");
+        assert_eq!(tools[0]["function"]["name"], "view_file");
+        // Los tipos de `master.Type` (MAYÚSCULAS) bajan a JSON Schema.
+        assert_eq!(tools[0]["function"]["parameters"]["type"], "object");
+        assert_eq!(
+            tools[0]["function"]["parameters"]["properties"]["AbsolutePath"]["type"],
+            "string"
+        );
+        assert_eq!(
+            tools[0]["function"]["parameters"]["properties"]["StartLine"]["type"],
+            "integer"
+        );
+        assert_eq!(
+            tools[0]["function"]["parameters"]["required"][0],
+            "AbsolutePath"
+        );
+        assert_eq!(tools[1]["function"]["name"], "run_command");
+    }
+
+    #[test]
+    fn el_prompt_saca_las_tools_del_cuerpo() {
+        let body = json!({
+            "contents":[{"role":"user","parts":[{"text":"lee el fichero"}]}],
+            "tools": tools_del_ls(),
+        });
+        let g = gemini_prompt(&body).unwrap();
+        assert_eq!(g.tools_requested, 2);
+        assert_eq!(g.tools.len(), 2);
+        assert_eq!(g.tools[0]["function"]["name"], "view_file");
+    }
+
+    #[test]
+    fn la_conversacion_lleva_la_llamada_y_su_resultado() {
+        let contents = json!([
+            {"role":"user","parts":[{"text":"lee el fichero"}]},
+            {"role":"model","parts":[
+                {"functionCall":{"id":"call_1","name":"view_file",
+                                 "args":{"AbsolutePath":"/tmp/x"}}}
+            ]},
+            {"role":"user","parts":[
+                {"functionResponse":{"id":"call_1","name":"view_file",
+                                     "response":{"contenido":"hola"}}}
+            ]}
+        ]);
+        let ms = gemini_a_mensajes_openai(&contents);
+        assert_eq!(ms.len(), 3);
+        assert_eq!(ms[0]["role"], "user");
+        assert_eq!(ms[1]["role"], "assistant");
+        assert_eq!(ms[1]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(ms[1]["tool_calls"][0]["function"]["name"], "view_file");
+        // Los argumentos OpenAI viajan como TEXTO JSON.
+        assert!(ms[1]["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .unwrap()
+            .contains("AbsolutePath"));
+        assert_eq!(ms[2]["role"], "tool");
+        assert_eq!(ms[2]["tool_call_id"], "call_1");
+        assert!(ms[2]["content"].as_str().unwrap().contains("hola"));
+    }
+
+    #[test]
+    fn la_conversacion_se_acota_por_la_cola_y_no_deja_tools_huerfanas() {
+        let contents = json!([
+            {"role":"user","parts":[{"text":"a".repeat(500)}]},
+            {"role":"model","parts":[
+                {"functionCall":{"id":"call_1","name":"view_file","args":{}}}
+            ]},
+            {"role":"user","parts":[
+                {"functionResponse":{"id":"call_1","name":"view_file","response":{}}}
+            ]},
+            {"role":"user","parts":[{"text":"z".repeat(500)}]},
+        ]);
+        let ms = acotar_mensajes(gemini_a_mensajes_openai(&contents), 600);
+        // El total de texto cabe en el tope.
+        let total: usize = ms
+            .iter()
+            .map(|m| m.get("content").and_then(|c| c.as_str()).unwrap_or("").chars().count())
+            .sum();
+        assert!(total <= 600, "total={}", total);
+        // Ningún `role:"tool"` sin su `assistant`.
+        for m in &ms {
+            if m["role"] == "tool" {
+                let id = m["tool_call_id"].as_str().unwrap();
+                assert!(
+                    ms.iter().any(|a| a["role"] == "assistant"
+                        && a["tool_calls"]
+                            .as_array()
+                            .map(|t| t.iter().any(|x| x["id"] == id))
+                            .unwrap_or(false)),
+                    "tool huerfana: {}",
+                    id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn la_respuesta_emite_la_function_call_para_el_ls() {
+        let res = crate::providers::ChatResult {
+            reply: "voy a leerlo".to_string(),
+            reasoning: String::new(),
+            model_id: "minimax-m3.1-flash".to_string(),
+            model_name: "MiniMax-M3.1-Flash".to_string(),
+            vendor: "MiniMax".to_string(),
+            latency_ms: 12.0,
+            tokens_used: 7,
+            tools_used: vec!["provider_tool:view_file".to_string()],
+            fallback_used: false,
+            quota: None,
+            provider_trace: Vec::new(),
+            tool_calls: vec![crate::providers::ParsedToolCall {
+                id: "call_1".to_string(),
+                name: "view_file".to_string(),
+                arguments: json!({"AbsolutePath": "/tmp/x"}),
+            }],
+        };
+        let v = gemini_response(&res, 1);
+        let parts = v["candidates"][0]["content"]["parts"].as_array().unwrap();
+        // El texto sigue ahí...
+        assert_eq!(parts[0]["text"], "voy a leerlo");
+        // ...y la llamada viaja como `functionCall` con `args` (el dialecto
+        // `master.FunctionCall` del proto del LS: `name` + `args`).
+        let fc = parts
+            .iter()
+            .find(|p| p.get("functionCall").is_some())
+            .expect("debe haber functionCall");
+        assert_eq!(fc["functionCall"]["name"], "view_file");
+        assert_eq!(fc["functionCall"]["args"]["AbsolutePath"], "/tmp/x");
+        assert_eq!(fc["functionCall"]["id"], "call_1");
+        // Y el SSE NO se la pierde (el LS usa `alt=sse`).
+        let sse = gemini_a_sse_v1internal(&v);
+        assert!(sse.contains("functionCall"));
+        assert!(sse.contains("view_file"));
     }
 }
