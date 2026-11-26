@@ -1,0 +1,77 @@
+name: canal
+
+# ¿DÓNDE ESTÁ EL MÓVIL?
+#
+# MEDIDO (2026-11-26): el "quick tunnel" del móvil regenera el hostname cada
+# vez que cloudflared se relanza y el sandbox se queda CIEGO: el hostname
+# viejo ya no resuelve y el relay canónico (mdtmfnc.duckdns.org) puede estar
+# caído o filtrado desde la red del sandbox.
+#
+# Este workflow sondea el canal DESDE UNA RED SIN FILTROS (el runner) y
+# dice cuál de las fuentes responde y cuál es la URL VIVA:
+#
+#   1. el relay canónico (https://mdtmfnc.duckdns.org/channel.json),
+#   2. la API de Contents del repo (NO el `raw`, que cachea en CDN),
+#   3. la respuesta del propio daemon a través del `quick` publicado.
+#
+# Se puede lanzar a mano:  Actions -> canal -> Run workflow
+on:
+  workflow_dispatch:
+  schedule:
+    # cada 20 min: el watchdog del móvil puede haber cambiado el túnel
+    - cron: "*/20 * * * *"
+
+jobs:
+  sondear:
+    name: sondear el canal
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: "Sondear las tres fuentes del canal"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          echo "### 1) RELAY (canónico)"
+          code=$(curl -s -m 25 -o /tmp/relay.json -w "%{http_code}" \
+                 "https://mdtmfnc.duckdns.org/channel.json" || echo 000)
+          echo "HTTP $code"
+          head -c 600 /tmp/relay.json 2>/dev/null; echo
+          echo "### 2) REPO (API de Contents: NO el raw, que cachea)"
+          code=$(curl -s -m 25 -o /tmp/repo.json -w "%{http_code}" \
+                 -H "Accept: application/vnd.github+json" \
+                 "https://api.github.com/repos/boolforge/megadaemon/contents/state/channel.json?ref=main" || echo 000)
+          echo "HTTP $code"
+          python3 - <<'PY'
+          import base64, json
+          try:
+              d = json.load(open("/tmp/repo.json"))
+              j = json.loads(base64.b64decode(d["content"]).decode())
+              print("ts   =", j.get("ts"))
+              print("quick=", j.get("quick"))
+              print("paste=", j.get("paste"))
+          except Exception as e:
+              print("no se pudo leer:", e)
+          PY
+          echo "### 3) ¿responde el daemon por el `quick` del repo?"
+          QUICK=$(python3 - <<'PY'
+          import base64, json
+          try:
+              d = json.load(open("/tmp/repo.json"))
+              print(json.loads(base64.b64decode(d["content"]).decode()).get("quick", ""))
+          except Exception:
+              print("")
+          PY
+          )
+          echo "quick = $QUICK"
+          if [ -n "$QUICK" ]; then
+            code=$(curl -s -m 25 -o /tmp/health.json -w "%{http_code}" \
+                   "$QUICK/health" || echo 000)
+            echo "daemon HTTP $code"
+            head -c 400 /tmp/health.json 2>/dev/null; echo
+          fi
+          echo "### 4) ¿responde el relay con la URL del daemon?"
+          code=$(curl -s -m 25 -o /tmp/relay2.json -w "%{http_code}" \
+                 "https://mdtmfnc.duckdns.org/" || echo 000)
+          echo "raiz HTTP $code"
