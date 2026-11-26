@@ -203,12 +203,17 @@ jobs:
           CARGO_PROFILE_RELEASE_LTO: "false"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
           CARGO_PROFILE_RELEASE_DEBUG: "0"
+          # MEDIDO (2026-11-26): el path del payload era `../rust-core/dist`
+          # DESDE `crates/hooks-payload` ⇒ apuntaba a `crates/rust-core/dist`
+          # (que no existe) ⇒ el payload NUNCA llegaba al `dist/` real y el
+          # release no lo publicaba.  Ahora es una ruta ABSOLUTA.
+          DIST: ${{ github.workspace }}/rust-core/dist
         run: |
           cargo build --release --target aarch64-linux-android
-          mkdir -p ../rust-core/dist
-          cp target/aarch64-linux-android/release/libhooks_payload.so ../rust-core/dist/hooks-payload-arm64
-          sha256sum ../rust-core/dist/hooks-payload-arm64 > ../rust-core/dist/hooks-payload-arm64.sha256
-          file ../rust-core/dist/hooks-payload-arm64 | tee /tmp/fichero-payload.txt
+          mkdir -p "$DIST"
+          cp target/aarch64-linux-android/release/libhooks_payload.so "$DIST/hooks-payload-arm64"
+          sha256sum "$DIST/hooks-payload-arm64" > "$DIST/hooks-payload-arm64.sha256"
+          file "$DIST/hooks-payload-arm64" | tee /tmp/fichero-payload.txt
           grep -q "ELF 64-bit LSB shared object" /tmp/fichero-payload.txt || {
             echo "::error::el payload no es una shared object ELF 64-bit"; exit 1; }
           grep -q "ARM aarch64" /tmp/fichero-payload.txt || {
@@ -470,6 +475,12 @@ jobs:
           CARGO_PROFILE_RELEASE_LTO: "false"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
           CARGO_PROFILE_RELEASE_DEBUG: "0"
+          # MEDIDO (2026-11-26): `../dist` desde `crates/hooks-payload` es
+          # `crates/dist` y el `upload-artifact` subia el `dist/` del REPO
+          # (que esta versionado en git) => el artefacto no llevaba el
+          # payload y el release no lo publicaba.  Ahora: ruta ABSOLUTA y
+          # directorio PROPIO.
+          DIST: ${{ github.workspace }}/dist-glibc
           # `$ORIGIN`: el payload busca sus propias dependencias en el
           # directorio donde vive (el daemon copia ahi la `libgcc_s.so.1`
           # del runtime del LS).  MEDIDO (2026-11-26, movil): el proceso del
@@ -479,13 +490,13 @@ jobs:
             -C link-arg=-Wl,-rpath,$ORIGIN
         run: |
           cargo build --release --target aarch64-unknown-linux-gnu
-          mkdir -p ../dist
-          cp target/aarch64-unknown-linux-gnu/release/libhooks_payload.so ../dist/hooks-payload-linux-arm64
-          sha256sum ../dist/hooks-payload-linux-arm64 > ../dist/hooks-payload-linux-arm64.sha256
-          file ../dist/hooks-payload-linux-arm64 | tee /tmp/fichero-payload-glibc.txt
+          mkdir -p "$DIST"
+          cp target/aarch64-unknown-linux-gnu/release/libhooks_payload.so "$DIST/hooks-payload-linux-arm64"
+          sha256sum "$DIST/hooks-payload-linux-arm64" > "$DIST/hooks-payload-linux-arm64.sha256"
+          file "$DIST/hooks-payload-linux-arm64" | tee /tmp/fichero-payload-glibc.txt
           grep -q "ELF 64-bit LSB shared object" /tmp/fichero-payload-glibc.txt || {
             echo "::error::el payload glibc no es una shared object ELF 64-bit"; exit 1; }
-          readelf -d ../dist/hooks-payload-linux-arm64 | tee /tmp/necesarias-glibc.txt
+          readelf -d "$DIST/hooks-payload-linux-arm64" | tee /tmp/necesarias-glibc.txt
           grep -q "libc.so.6" /tmp/necesarias-glibc.txt || {
             echo "::error::el payload glibc no depende de libc.so.6"; exit 1; }
           # MEDIDO (2026-11-26, movil): el runtime del LS tiene mapeadas
@@ -506,7 +517,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: hooks-payload-glibc
-          path: dist/
+          path: ${{ github.workspace }}/dist-glibc/
 
 
   release:
