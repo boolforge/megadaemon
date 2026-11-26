@@ -101,6 +101,15 @@ pub struct ChatResult {
     /// `Vec::new()` = no hubo cascada (o no se pudo ni empezar).
     #[serde(default)]
     pub provider_trace: Vec<String>,
+    /// Tool calls ESTRUCTURADAS que pidió el proveedor.
+    ///
+    /// MEDIDO (2026-11-26, móvil): antes sólo se conservaba
+    /// `tools_used: Vec<String>` (los NOMBRES) ⇒ la tool call se perdía y el
+    /// agente de Antigravity la mostraba como texto en vez de ejecutarla.
+    /// Aquí viaja la llamada completa (id + nombre + argumentos) para poder
+    /// emitirla como `functionCall` de Gemini.
+    #[serde(default)]
+    pub tool_calls: Vec<ParsedToolCall>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -310,7 +319,7 @@ pub fn truncar(s: &str, n: usize) -> String {
 }
 
 /// Tool call nativa del proveedor (OpenAI `tool_calls`).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ParsedToolCall {
     pub id: String,
     pub name: String,
@@ -484,6 +493,164 @@ fn parse_tool_calls(node: Option<&Value>) -> Vec<ParsedToolCall> {
         });
     }
     out
+}
+
+/// Recupera del TEXTO las tool calls que el proveedor dejó ahí.
+///
+/// MEDIDO (2026-11-26, móvil): MiniMax, cuando la petición **no** lleva
+/// `tools`, no devuelve `tool_calls` estructuradas: deja la llamada dentro
+/// del texto con su propio protocolo
+///
+/// ```text
+/// <]minimax[>[<tool_call> ... <invoke name="view_file">{"AbsolutePath":"..."}
+/// ```
+///
+/// La parte útil (y estable entre versiones) es el par
+/// `<invoke name="X">` … `</invoke>` con un objeto JSON de argumentos.  Se
+/// recupera eso, se limpian los marcadores del texto y la llamada queda
+/// disponible como `functionCall` para el agente.
+///
+/// Función **PURO**: no toca red ni estado global.
+pub fn tool_calls_en_texto(texto: &str) -> (Vec<ParsedToolCall>, String) {
+    let mut calls: Vec<ParsedToolCall> = Vec::new();
+    let mut limpio = String::with_capacity(texto.len());
+    let mut resto = texto;
+    loop {
+        let Some(i) = resto.find("<invoke") else {
+            limpio.push_str(resto);
+            break;
+        };
+        limpio.push_str(&resto[..i]);
+        let after = &resto[i..];
+        // `name="X"` (con o sin espacios alrededor del `=`).
+        //  Todos los índices son ABSOLUTOS dentro de `after`.
+        let Some(ni) = after.find("name") else {
+            limpio.push_str(after);
+            break;
+        };
+        let mut p = ni + "name".len();
+        while p < after.len() && after.as_bytes()[p].is_ascii_whitespace() {
+            p += 1;
+        }
+        if p >= after.len() || after.as_bytes()[p] != b'=' {
+            limpio.push_str(after);
+            break;
+        }
+        p += 1;
+        while p < after.len() && after.as_bytes()[p].is_ascii_whitespace() {
+            p += 1;
+        }
+        let Some(comilla) = after[p..].chars().next() else {
+            limpio.push_str(after);
+            break;
+        };
+        if comilla != '"' && comilla != '\'' {
+            limpio.push_str(after);
+            break;
+        }
+        let ini_cuerpo = p + comilla.len_utf8();
+        let Some(cierre) = after[ini_cuerpo..].find(comilla) else {
+            limpio.push_str(after);
+            break;
+        };
+        let name = after[ini_cuerpo..ini_cuerpo + cierre].to_string();
+        // Los argumentos: el primer `{` DESPUÉS del cierre de la comilla.
+        let fin_nombre = ini_cuerpo + cierre;
+        let Some(bo) = after[fin_nombre..].find('{').map(|p| fin_nombre + p) else {
+            limpio.push_str(after);
+            break;
+        };
+        let (json_args, consumido) = match objeto_json_en_texto(&after[bo..]) {
+            Some(x) => x,
+            None => {
+                limpio.push_str(after);
+                break;
+            }
+        };
+        let args: Value =
+            serde_json::from_str(json_args).unwrap_or(Value::Object(serde_json::Map::new()));
+        calls.push(ParsedToolCall {
+            id: format!("call_texto_{}", calls.len() + 1),
+            name,
+            arguments: args,
+        });
+        // Saltar el `</invoke>` y el resto del envoltorio del proveedor.
+        let mut fin = bo + consumido;
+        if let Some(p) = after[fin..].find("</invoke>") {
+            fin += p + "</invoke>".len();
+        }
+        resto = &after[fin..];
+    }
+    if !calls.is_empty() {
+        limpio = limpiar_marcadores_de_tool_call(&limpio);
+    }
+    (calls, limpio)
+}
+
+/// Localiza un objeto JSON `{…}` completo (con llaves y comillas).
+///
+/// Devuelve el trozo y su longitud en bytes.
+fn objeto_json_en_texto(s: &str) -> Option<(&str, usize)> {
+    let b = s.as_bytes();
+    if b.is_empty() || b[0] != b'{' {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut en_cadena = false;
+    let mut escapado = false;
+    for (i, &c) in b.iter().enumerate() {
+        if en_cadena {
+            if escapado {
+                escapado = false;
+            } else if c == b'\\' {
+                escapado = true;
+            } else if c == b'"' {
+                en_cadena = false;
+            }
+            continue;
+        }
+        match c {
+            b'"' => en_cadena = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((&s[..=i], i + 1));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Quita los marcadores de tool call que el proveedor mete en el texto.
+///
+/// MEDIDO (2026-11-26, móvil): MiniMax envuelve sus llamadas en tokens
+/// propios que llegan como `<]minimax[>[<tool_call>` con un U+200B
+/// (zero-width space) intercalado.  Se quitan primero todos los U+200B y
+/// después los marcadores planos.  Sólo se limpia cuando se ha detectado
+/// una llamada (si no, el texto del usuario queda intacto).
+fn limpiar_marcadores_de_tool_call(texto: &str) -> String {
+    const ZWSP: char = '\u{200b}';
+    let mut t: String = texto.chars().filter(|c| *c != ZWSP).collect();
+    // El token completo va ANTES que sus trozos: si se quitan primero los
+    // trozos, el corchete final se queda solo.
+    for m in [
+        "]<]minimax[>[",
+        "]<]minimax[>",
+        "</]minimax[>[",
+        "<]minimax[>[",
+        "<]minimax[>",
+        "</]minimax[>",
+        "<]minimax[",
+        "]minimax[>",
+        "<tool_call>",
+        "</tool_call>",
+    ] {
+        t = t.replace(m, "");
+    }
+    t
 }
 
 /// Saca el mensaje de error del cuerpo de una respuesta (JSON o texto).
@@ -1547,6 +1714,41 @@ pub fn execute_chat_with(
     max_tokens: u32,
     deps: &ChatDeps<'_>,
 ) -> ChatResult {
+    execute_chat_con_tools_with(
+        prompt,
+        requested_model,
+        attachment_path,
+        system_override,
+        max_tokens,
+        &[],
+        None,
+        deps,
+    )
+}
+
+/// Núcleo de la cascada CON **herramientas** y CON **conversación ya montada**.
+///
+/// MEDIDO (2026-11-26, móvil): el language server de Antigravity manda sus
+/// `functionDeclarations` (18 herramientas) y espera recibir `functionCall`.
+/// El proveedor, en cambio, sólo devuelve tool calls si la petición lleva
+/// `tools`: sin ese campo el modelo responde con su protocolo de TEXTO
+/// (`<invoke name="...">{...}</invoke>`) y el agente enseña la llamada en vez
+/// de ejecutarla.
+///
+/// - `tools`: herramientas en formato OpenAI (`{type,function:{name,…}}`).
+/// - `mensajes`: conversación completa en formato OpenAI.  Si viene `Some`,
+///   se usa tal cual (⇒ el bucle de herramientas conserva el
+///   `assistant.tool_calls` y el `role:"tool"` con el resultado).
+pub fn execute_chat_con_tools_with(
+    prompt: &str,
+    requested_model: Option<&str>,
+    attachment_path: Option<&str>,
+    system_override: Option<&str>,
+    max_tokens: u32,
+    tools: &[Value],
+    mensajes: Option<&[Value]>,
+    deps: &ChatDeps<'_>,
+) -> ChatResult {
     let t0 = Instant::now();
     let vault = deps.vault;
     let target_id: &str = match requested_model.map(|s| s.trim()).filter(|s| !s.is_empty()) {
@@ -1573,6 +1775,7 @@ pub fn execute_chat_with(
             fallback_used: false,
             quota: None,
             provider_trace: vec![format!("{} => SALTADO (modelo retirado)", rid)],
+            tool_calls: Vec::new(),
         };
     }
 
@@ -1608,6 +1811,7 @@ pub fn execute_chat_with(
             fallback_used: false,
             quota: None,
             provider_trace: vec!["local-seere => OK (offline)".to_string()],
+            tool_calls: Vec::new(),
         };
     }
 
@@ -1724,15 +1928,29 @@ pub fn execute_chat_with(
             }
         };
 
-        let payload = json!({
-            "model": p.model,
-            "messages": [
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": enriched_prompt}
+        // MEDIDO (2026-11-26, móvil): la conversación puede venir YA montada
+        // (bucle de herramientas: `assistant.tool_calls` + `role:"tool"` con
+        // el resultado).  Si no, se usa la pareja sistema/usuario de siempre.
+        let msgs: Vec<Value> = match mensajes {
+            Some(m) if !m.is_empty() => m.to_vec(),
+            _ => vec![
+                json!({"role": "system", "content": sys_prompt}),
+                json!({"role": "user", "content": enriched_prompt}),
             ],
+        };
+        let mut payload = json!({
+            "model": p.model,
+            "messages": msgs,
             "max_tokens": capped_max_tokens,
             "temperature": 0.3
         });
+        // Las herramientas SÓLO se mandan si las pidió el cliente: sin
+        // `tools` el proveedor responde con su protocolo de TEXTO en vez de
+        // con `tool_calls` (MEDIDO 2026-11-26, móvil, contra MiniMax).
+        if !tools.is_empty() {
+            payload["tools"] = json!(tools);
+            payload["tool_choice"] = json!("auto");
+        }
         let req = LlmRequest {
             endpoint: p.endpoint.clone(),
             model: p.model.clone(),
@@ -1768,6 +1986,25 @@ pub fn execute_chat_with(
                             for tc in &parsed.tool_calls {
                                 tools_used.push(format!("provider_tool:{}", tc.name));
                             }
+                            // MEDIDO (2026-11-26, móvil): hay proveedores
+                            // (MiniMax) que, cuando NO reciben `tools`,
+                            // dejan la llamada DENTRO del texto con su
+                            // propio protocolo (`<invoke name="…">`).
+                            // Se recupera para que el agente pueda
+                            // ejecutarla igual, y se limpia el texto.
+                            let (tool_calls, reply) = if parsed.tool_calls.is_empty() {
+                                let (cs, limpio) = tool_calls_en_texto(&parsed.content);
+                                if cs.is_empty() {
+                                    (Vec::new(), parsed.content)
+                                } else {
+                                    for tc in &cs {
+                                        tools_used.push(format!("provider_tool:{}", tc.name));
+                                    }
+                                    (cs, limpio)
+                                }
+                            } else {
+                                (parsed.tool_calls.clone(), parsed.content)
+                            };
                             let tokens_in = parsed.prompt_tokens;
                             let tokens_out = parsed.completion_tokens;
                             let total_tokens = parsed
@@ -1786,7 +2023,7 @@ pub fn execute_chat_with(
                             // es VISIBLE (tier "paid"/"free"), no silencioso.
                             trace.push(format!("{} => OK (tier {})", p.id, p.tier));
                             return ChatResult {
-                                reply: parsed.content,
+                                reply,
                                 reasoning: parsed.reasoning,
                                 model_id: p.id.clone(),
                                 model_name: p.name.clone(),
@@ -1797,6 +2034,7 @@ pub fn execute_chat_with(
                                 fallback_used: idx > 0,
                                 quota: Some(crate::quota_guard::snapshot_compacto_de(Some(&p.id))),
                                 provider_trace: trace,
+                                tool_calls,
                             };
                         }
                         Err(e) => {
@@ -1866,6 +2104,7 @@ pub fn execute_chat_with(
         fallback_used: true,
         quota: Some(crate::quota_guard::snapshot_compacto()),
         provider_trace: trace,
+        tool_calls: Vec::new(),
     }
 }
 

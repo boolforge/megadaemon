@@ -961,6 +961,7 @@ mod tests {
             fallback_used: false,
             quota: None,
             provider_trace: Vec::new(),
+            tool_calls: Vec::new(),
         };
         let v = gemini_response(&res, 3);
         assert_eq!(v["candidates"][0]["content"]["parts"][0]["text"], "hola");
@@ -1036,6 +1037,7 @@ mod tests {
             fallback_used: false,
             quota: None,
             provider_trace: Vec::new(),
+            tool_calls: Vec::new(),
         };
         let v = gemini_response(&res, 3);
         let env = envolver_v1internal(&v, "trace-1");
@@ -1062,6 +1064,7 @@ mod tests {
             fallback_used: false,
             quota: None,
             provider_trace: Vec::new(),
+            tool_calls: Vec::new(),
         };
         let v = gemini_response(&res, 0);
         let sse = gemini_a_sse_v1internal(&v);
