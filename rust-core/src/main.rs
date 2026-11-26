@@ -88,6 +88,11 @@ fn install_panic_hook() {
 
 fn main() {
     install_panic_hook();
+    // MEDIDO (2026-11-25, movil): el daemon anunciaba el SHA del binario de
+    // DISCO mientras ejecutaba otro en memoria (7 horas de desfase, login
+    // roto).  La foto del binario en servicio se toma lo primero, antes de
+    // que nada pueda sustituir el fichero.
+    megadaemon_core::self_update::fijar_identidad_de_arranque();
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         print_usage();

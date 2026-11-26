@@ -281,37 +281,62 @@ daemon_usa_binario_nuevo() {
         *) return 0;;
     esac
 }
-# El build que DECLARA el daemon en su propio /health, frente al SHA-256
-# del binario de disco.
+# Epoch (segundos) en que arranco el proceso `pid`.
 #
-# MEDIDO (2026-11-25, 23:25, movil): `readlink /proc/<pid>/exe` NO marca
-# "(deleted)" cuando el binario se SUSTITUYE sobrescribiendo el fichero en
-# el sitio (mismo inode): el proceso sigue ejecutando el codigo VIEJO en
-# memoria mientras `/proc/<pid>/exe` apunta al binario nuevo.  El script
-# creia que el daemon estaba al dia y NO lo reinicio => el movil se
-# quedo 7 HORAS con el binario viejo (medido: uptime 25439 s, y el shim
-# seguia resolviendo en local `/v1internal/`, que es justo lo que
-# rompia el arranque del language server).
+# `starttime` de /proc/<pid>/stat (campo 22) son jiffies desde el boot;
+# con `btime` de /proc/stat y HZ=100 sale el epoch.  Es el MISMO criterio
+# que usa el daemon para saber si el language server tiene el binario
+# viejo.
+arranque_epoch() {
+    pid="$1"
+    st=$(cat "/proc/$pid/stat" 2>/dev/null) || return 1
+    # El nombre del proceso va entre parentesis y puede contener espacios:
+    # se parte por el ULTIMO ") ".
+    rest=${st##*) }
+    # shellcheck disable=SC2086
+    set -- $rest
+    starttime=${20}
+    btime=$(awk '/^btime /{print $2; exit}' /proc/stat 2>/dev/null)
+    [ -n "$starttime" ] && [ -n "$btime" ] || return 1
+    echo $(( btime + starttime / 100 ))
+}
+
+# ¿El daemon corre el binario que hay en disco?
 #
-# La unica comprobacion fiable es el SHA-256 que el daemon declara en
-# `build.sha256` de su /health: si no coincide con el binario de disco,
-# el daemon corre otro codigo => hay que reiniciarlo.
-daemon_declara_este_binario() {
-    esperado="$1"
-    tmp="$STATE/health-probe.json"
-    descargar "http://127.0.0.1:$PORT/health" "$tmp" 8 >/dev/null 2>&1 || return 0
-    decl=$(tr ',' '\n' < "$tmp" 2>/dev/null \
-        | sed -n 's/.*"sha256":"\([0-9a-f]\{16\}\).*/\1/p' | head -1)
-    [ -n "$decl" ] || return 0   # no se puede saber: no se toca
-    [ "$decl" = "$esperado" ] && return 0
-    log "el daemon declara el build $decl y el binario de disco es $esperado: corre OTRO codigo"
-    return 1
+# MEDIDO (2026-11-25, 23:19, movil): `readlink /proc/<pid>/exe` NO marca
+# "(deleted)" cuando el binario se SUSTITUYE sobrescribiendo el fichero
+# en el sitio (mismo inode): el proceso sigue ejecutando el codigo VIEJO
+# en memoria mientras el symlink apunta al binario nuevo.  El script
+# creia que el daemon estaba al dia y NO lo reinicio => el movil se quedo
+# 7 HORAS con el binario viejo (medido: uptime 25439 s, y el shim seguia
+# resolviendo en local `/v1internal/`, que es justo lo que rompia el
+# arranque del language server y el login).
+#
+# EL CRITERIO FIABLE: si el binario en disco es MAS NUEVO que el proceso,
+# el proceso corre el codigo viejo => hay que reiniciarlo.
+daemon_usa_binario_nuevo() {
+    d="$1"
+    pid=$(basename "$d")
+    exe=$(readlink "/proc/$pid/exe" 2>/dev/null)
+    case "$exe" in
+        *"(deleted)") return 1;;   # corre el binario viejo
+        "$BIN") ;;
+        "") return 0;;             # no se puede saber: no se toca
+        *) return 0;;
+    esac
+    mtime=$(stat -c %Y "$BIN" 2>/dev/null)
+    arr=$(arranque_epoch "$pid")
+    [ -n "$mtime" ] && [ -n "$arr" ] || return 0
+    if [ "$mtime" -gt "$arr" ]; then
+        log "el binario en disco (mtime $mtime) es mas nuevo que el arranque del daemon ($arr): corre el codigo VIEJO"
+        return 1
+    fi
+    return 0
 }
 
 REINICIAR_DAEMON=1
 if d=$(daemon_vivo); then
-    sha_disco=$(sha256_de "$BIN" 2>/dev/null | cut -c1-16)
-    if daemon_usa_binario_nuevo "$d" && daemon_declara_este_binario "$sha_disco"; then
+    if daemon_usa_binario_nuevo "$d"; then
         REINICIAR_DAEMON=0
         log "el daemon ($d) ya usa el binario actual: NO lo toco"
     else
@@ -553,12 +578,22 @@ if [ -x "$BIN" ]; then
     # shim resolvia en local una ruta que NO existe en Google; ya está
     # corregido (el shim es transparente).  Aqui se reactiva sola, para
     # que el usuario no tenga que tocar nada.
+    #
+    # MEDIDO (2026-11-26, 01:45): sin exportar MEGADAEMON_STATE_DIR, el
+    # binario escribe la config en `/data/user/0/com.agy/files/megadaemon/
+    # state` (su STATE_DIR por defecto) y NO en `/data/adb/megadaemon/state`
+    # (donde la lee el daemon) => el `config-set` decia "reactivada" y la
+    # instrumentacion seguia DESACTIVADA (medido: `activa: false`,
+    # `modo_so: "ninguno"`).  Ahora se exporta el state_dir y se comprueba
+    # el valor efectivo.
+    export MEGADAEMON_STATE_DIR="$STATE"
     if "$BIN" config-set instrumentacion_agy.activa true >/dev/null 2>&1; then
-        log "instrumentacion de Antigravity reactivada"
+        log "instrumentacion de Antigravity reactivada (en $STATE/config.json)"
     else
         log "AVISO: no se pudo reactivar la instrumentacion (config-set)"
     fi
     "$BIN" config-set instrumentacion_agy.modo_so '"falso"' >/dev/null 2>&1
     "$BIN" config-set instrumentacion_agy.relanzar_ls true >/dev/null 2>&1
-    "$BIN" config-set instrumentacion_agy.payload_frida true >/dev/null 2>&1
+    "$BIN" config-set instrumentacion_agy.payload_frida false >/dev/null 2>&1
+    log "instrumentacion ahora: $("$BIN" config-get instrumentacion_agy 2>/dev/null | tr -d '\n ' | head -c 200)"
 fi

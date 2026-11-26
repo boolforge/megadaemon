@@ -962,7 +962,10 @@ start_daemon() {
     # MEDIDO (2026-11-25): el log de texto se trunca a 46 lineas en el
     # diagnostico y no se veía si el daemon se reiniciaba en bucle.  Este
     # registro es dedicado y lo lee el diagnostico.
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] arrancado PID $pid puerto=$PORT" \
+    # MEDIDO (2026-11-25): con el sha16 del binario se sabe de un vistazo
+    # que CODIGO esta en servicio (el build puede estar en disco y el
+    # proceso con otro: asi se detecto el desfase de 7 horas).
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] arrancado PID $pid puerto=$PORT sha16=$(sha256sum "$BIN" 2>/dev/null | cut -c1-16)" \
         >> "$PREFIX/reinicios.log" 2>/dev/null
 
     # --- lmkd / OOM killer: el daemon NO debe ser la primera victima -----
