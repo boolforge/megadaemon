@@ -31,10 +31,62 @@ set -u
 REPO="boolforge/megadaemon"
 RAW="https://raw.githubusercontent.com/$REPO/main"
 API="https://api.github.com/repos/$REPO"
-TMP="/data/local/tmp/mdo.$$.sh"
+# ⚠️ `/data/local/tmp` NO es escribible por el uid de Termux (pertenece a
+# shell:shell) ⇒ el lanzador no podía ni descargar el instalador.  Termux
+# define TMPDIR; si no, /tmp.
+TMP="${TMPDIR:-/tmp}/mdo.$$.sh"
 
 say() { printf '[mdo] %s\n' "$*"; }
 warn() { printf '[mdo] AVISO: %s\n' "$*" >&2; }
+
+# --- ayuda ------------------------------------------------------------------
+# ⚠️ El script puede llegar por `curl | sh`: entonces `$0` es "sh" y no hay
+# fichero que leer.  La ayuda va en un `case` aparte, con su propio texto.
+for a in "$@"; do
+  case "$a" in
+    -h|--help)
+      cat <<'AYUDA'
+mdo.sh — el one-liner de MegaDaemon.
+
+  sh -c 'curl -fsSL https://raw.githubusercontent.com/boolforge/megadaemon/main/deploy/mdo.sh | sh'
+
+Descarga el instalador completo y lo ejecuta.  El instalador autodetecta el
+entorno (móvil/Termux/Magisk o PC), resuelve el release, verifica el bundle
+por valor, instala de forma atómica con rollback, arranca el stack, ESPERA A
+QUE ESTÉ LISTO (health-check real del túnel), publica el canal en el repo y
+sube la telemetría y los datos de conexión a Google Drive.
+
+Opciones que se pasan al instalador:
+  --diagnostico     sólo lee el estado (no toca nada)
+  --instalar        instala (por defecto)
+  --pc              instala en el móvil por adb
+  --force           reinstala aunque ya esté sano
+  --sin-telemetria  no sube telemetría a Drive
+AYUDA
+      exit 0
+      ;;
+  esac
+done
+
+# --- 0) downloader (curl > wget) --------------------------------------------
+CURL=""
+for c in curl wget; do
+  if command -v "$c" >/dev/null 2>&1; then CURL="$c"; break; fi
+done
+if [ -z "$CURL" ]; then
+  warn "no hay curl ni wget: no puedo descargar el instalador."
+  warn "en Termux: 'pkg install curl'  ·  o usa el modo PC (--pc)"
+  exit 1
+fi
+
+descargar_a() {
+  url="$1"; dest="$2"
+  if [ "$CURL" = "curl" ]; then
+    curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120 -o "$dest" "$url" 2>/dev/null
+  else
+    wget -q -T 30 -O "$dest" "$url" 2>/dev/null
+  fi
+}
 
 # --- 1) guardar el script (por si viene por tubería) -----------------------
 # Si el script llegó por `curl | sh`, stdin es el propio script: no se puede
@@ -50,7 +102,7 @@ for cand in \
   "https://github.com/$REPO/raw/main/deploy/megadaemon-oneliner.sh" \
   "$RAW/deploy/instalador-megadaemon.sh"
 do
-  if curl -fsSL --connect-timeout 15 --max-time 60 "$cand" -o "$TMP" 2>/dev/null && [ -s "$TMP" ]; then
+  if descargar_a "$cand" "$TMP" && [ -s "$TMP" ]; then
     INSTALADOR="$TMP"
     say "instalador descargado de: $cand"
     break
@@ -61,7 +113,10 @@ if [ -z "$INSTALADOR" ]; then
   # Último recurso: el propio daemon ya instalado sabe actualizarse.
   if [ -x "/data/adb/megadaemon/megadaemon-core" ]; then
     say "sin red para el instalador: delego en el daemon instalado (auto-actualizador)"
-    exec /data/adb/megadaemon/megadaemon-core update
+    # ⚠️ `update` actualiza $MEGADAEMON_BIN (main.rs), no el binario que hay
+    # al lado: sin esto escribía en la ruta legacy /data/local/tmp.
+    MEGADAEMON_BIN=/data/adb/megadaemon/megadaemon-core \
+      exec /data/adb/megadaemon/megadaemon-core update
   fi
   warn "no se pudo descargar el instalador y no hay daemon instalado."
   warn "Comprueba la red del móvil (o instálalo desde el PC: --pc)."
@@ -71,14 +126,21 @@ fi
 chmod 755 "$INSTALADOR" 2>/dev/null
 
 # --- 3) aviso de versión (la API no cachea; el raw sí) --------------------
-# Se compara el sha del instalador en disco con el de la API de Contents.
-VER_LOCAL=$(sha256sum "$INSTALADOR" 2>/dev/null | awk '{print $1}')
+# ⚠️ python3 NO existe en Android/Termux por defecto ⇒ el aviso nunca se
+# ejecutaba.  Se compara el "size" que devuelve la API de Contents (que NO
+# cachea) con el tamaño local: shell puro.
+VER_LOCAL=$(wc -c < "$INSTALADOR" 2>/dev/null | tr -d ' ')
 if [ -n "$VER_LOCAL" ]; then
-  VER_API=$(curl -fsSL --connect-timeout 15 -H "Accept: application/vnd.github+json" \
-      "$API/contents/deploy/megadaemon-oneliner.sh?ref=main" 2>/dev/null \
-      | python3 -c 'import sys,json,base64;d=json.load(sys.stdin);print(base64.b64decode(d["content"]).decode("utf-8","replace"))' 2>/dev/null \
-      | sha256sum 2>/dev/null | awk '{print $1}')
-  if [ -n "$VER_API" ] && [ "$VER_API" != "$VER_LOCAL" ]; then
+  SZ_API=$(
+    if [ "$CURL" = "curl" ]; then
+      curl -fsSL --connect-timeout 15 -H "Accept: application/vnd.github+json" \
+        "$API/contents/deploy/megadaemon-oneliner.sh?ref=main" 2>/dev/null
+    else
+      wget -q -T 20 -O - --header="Accept: application/vnd.github+json" \
+        "$API/contents/deploy/megadaemon-oneliner.sh?ref=main" 2>/dev/null
+    fi | tr ',' '\n' | sed -n 's/.*"size"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1
+  )
+  if [ -n "$SZ_API" ] && [ "$SZ_API" != "$VER_LOCAL" ]; then
     warn "el instalador ejecutado NO es el último (CDN cacheado). Se ejecuta igualmente,"
     warn "pero conviene reintentar en un par de minutos para coger la versión nueva."
   fi

@@ -71,8 +71,19 @@ PREFIX="/data/adb/megadaemon"          # persistente, lo usa Magisk
 STATE="$PREFIX/state"
 LOGDIR="$PREFIX/state"
 BUNDLE_ASSET="megadaemon-movil.tar.gz"
+PUBLISH_ASSET="channel-publish-arm64"
 DAEMON="$PREFIX/megadaemon-core"
-ENV_FILE="$STATE/megadaemon.env"
+ENV_FILE="$PREFIX/megadaemon.env"
+
+# --- entorno del daemon (CRÍTICO) ------------------------------------------
+# ⚠️ Sin esto el daemon lee/escribe el estado en
+# `/data/user/0/com.agy/files/megadaemon/state` (el de la app Antigravity,
+# `rust-core/src/state_dir.rs:17`) y NO en el nuestro ⇒ el canal queda
+# vacío y la telemetría se sube a Drive sin la URL del túnel.  El supervisor
+# (`deploy/99-megadaemon.sh:48`) lo exporta; aquí también.
+export MEGADAEMON_PREFIX="$PREFIX"
+export MEGADAEMON_STATE_DIR="$STATE"
+export MEGADAEMON_BIN="$DAEMON"
 
 # --- opciones ---------------------------------------------------------------
 MODO="instalar"          # instalar | diagnostico | solo-telemetria | pc
@@ -95,6 +106,14 @@ for a in "$@"; do
     *) printf 'opción desconocida: %s\n' "$a" >&2; exit 2 ;;
   esac
 done
+
+# Validación de las opciones numéricas (un `--reintentos=abc` rompería el
+# bucle `[ "$i" -le "abc" ]` con un error de shell).
+case "$REINTENTOS" in ''|*[!0-9]*) REINTENTOS=5 ;; esac
+case "$TIMEOUT_S" in ''|*[!0-9]*) TIMEOUT_S=120 ;; esac
+[ "$REINTENTOS" -lt 1 ] && REINTENTOS=1
+[ "$REINTENTOS" -gt 20 ] && REINTENTOS=20
+[ "$TIMEOUT_S" -lt 30 ] && TIMEOUT_S=30
 
 # --- log --------------------------------------------------------------------
 say()  { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
@@ -213,41 +232,64 @@ RESUELTO=0
 
 resolver_release() {
   # Capa 1: la URL estable (no usa la API, que se agota por cuota de IP).
+  # ⚠️ NO se descarga el tarball entero para comprobar que existe (¡varios MB
+  # de datos móviles del Jazztel!): se pide sólo el primer byte con un
+  # Range, o se hace un HEAD.
   ESTABLE="$RELEASES_LATEST/download/$BUNDLE_ASSET"
-  CODE=$(texto_url "$ESTABLE" >/dev/null 2>&1; echo $?)
-  # La URL estable redirige a /releases/tag/v<sha>.  Sacamos el tag de ahí.
-  LOC=$(curl -sI "$RELEASES_LATEST" 2>/dev/null | tr -d '\r' | sed -n 's/^[Ll]ocation:[[:space:]]*\(.*\/releases\/tag\/[^[:space:]]*\).*/\1/p' | head -1)
-  if [ -n "$LOC" ]; then
-    TAG=$(printf '%s' "$LOC" | sed -n 's/.*\/releases\/tag\/\([^/?]*\).*/\1/p')
+  if [ -n "$CURL" ]; then
+    if [ "$CURL" = "curl" ]; then
+      CODE=$(curl -sI -L -o /dev/null -w '%{http_code}' --connect-timeout 15 --max-time 30 "$ESTABLE" 2>/dev/null)
+    else
+      CODE=$(wget -S --spider -T 20 "$ESTABLE" 2>&1 | sed -n 's/.*HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' | tail -1)
+    fi
+    case "$CODE" in
+      200|206|302|301)
+        TAG=$(etiqueta_release)
+        if [ -n "$TAG" ]; then
+          ASSET_URL="$ESTABLE"
+          RESUELTO=1
+          return 0
+        fi
+        ;;
+    esac
   fi
-  if [ -n "$TAG" ]; then
-    ASSET_URL="$RELEASES_LATEST/download/$BUNDLE_ASSET"
-    RESUELTO=1
-    return 0
-  fi
-  # Capa 2: la API.
-  J=$(texto_url "$REPO_API/releases/latest" 2>/dev/null)
+  # Capa 2: el manifiesto `latest.json` del release (asset real; la API de
+  # Contents NO cachea, el `raw` sí).
+  J=$(texto_url "$RELEASES_LATEST/download/latest.json" 2>/dev/null)
   if [ -n "$J" ]; then
-    TAG=$(printf '%s' "$J" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-    U=$(printf '%s' "$J" | tr ',' '\n' | grep 'browser_download_url' | grep "$BUNDLE_ASSET\"" | grep -v '\.sha256' | sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-    [ -n "$TAG" ] && {
-      ASSET_URL="${U:-$RELEASES_LATEST/download/$BUNDLE_ASSET}"
-      RESUELTO=1
-      return 0
-    }
-  fi
-  # Capa 3: si ya hay un daemon instalado, que consulte él el manifiesto.
-  if [ -x "$DAEMON" ]; then
-    M=$("$DAEMON" update --check 2>/dev/null)
-    T=$(printf '%s' "$M" | sed -n 's/.*"tag"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-    if [ -n "$T" ]; then
-      TAG="$T"
+    V=$(printf '%s' "$J" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+    if [ -n "$V" ]; then
+      TAG="v$V"
       ASSET_URL="$RELEASES_LATEST/download/$BUNDLE_ASSET"
       RESUELTO=1
       return 0
     fi
   fi
+  # Capa 3: la API de releases (más cara, se agota por cuota de IP).
+  J=$(texto_url "$REPO_API/releases/latest" 2>/dev/null)
+  if [ -n "$J" ]; then
+    TAG=$(printf '%s' "$J" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+    U=$(printf '%s' "$J" | tr ',' '\n' | grep 'browser_download_url' | grep "$BUNDLE_ASSET\"" | grep -v '\.sha256' | sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+    if [ -n "$TAG" ]; then
+      ASSET_URL="${U:-$RELEASES_LATEST/download/$BUNDLE_ASSET}"
+      RESUELTO=1
+      return 0
+    fi
+  fi
   return 1
+}
+
+# Etiqueta (`v<sha>`) del último release, sacada de la redirección de
+# /releases/latest.  Los tags SON `v<sha>`: NO existe un tag "latest".
+etiqueta_release() {
+  LOC=""
+  if [ "$CURL" = "curl" ]; then
+    LOC=$(curl -sI "$RELEASES_LATEST" 2>/dev/null | tr -d '\r' | sed -n 's/^[Ll]ocation:[[:space:]]*\(.*\/releases\/tag\/[^[:space:]]*\).*/\1/p' | head -1)
+  elif [ "$CURL" = "wget" ]; then
+    LOC=$(wget -S --spider "$RELEASES_LATEST" 2>&1 | tr -d '\r' | sed -n 's/.*[Ll]ocation:[[:space:]]*\(.*\/releases\/tag\/[^[:space:]]*\).*/\1/p' | head -1)
+  fi
+  [ -n "$LOC" ] || return 1
+  printf '%s' "$LOC" | sed -n 's/.*\/releases\/tag\/\([^/?]*\).*/\1/p'
 }
 
 # ===========================================================================
@@ -260,17 +302,19 @@ verificar_sha() {
   f="$1"; s="$2"
   [ -f "$f" ] || return 1
   [ -f "$s" ] || return 1
+  # El `.sha256` del CI lleva la RUTA del job (`dist/megadaemon-movil.tar.gz`)
+  # ⇒ se compara SÓLO el hash (el primer token), nunca el nombre.
   esperado=$(tr -d '\r\n' < "$s" | awk '{print $1}')
   [ -n "$esperado" ] || return 1
-  # `sha256sum` no está en el shell de Android: se usa el daemon.
+  real=""
   if command -v sha256sum >/dev/null 2>&1; then
     real=$(sha256sum "$f" | awk '{print $1}')
-  elif [ -x "$DAEMON" ]; then
-    real=$("$DAEMON" update --check 2>/dev/null | sed -n 's/.*"sha256"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-    [ -z "$real" ] && return 1
   else
-    return 1
+    # Sin `sha256sum` (el shell de Android no lo trae): el daemon calcula el
+    # hash con su cliente nativo.
+    real=$(r "'$DAEMON' hash '$f' 2>/dev/null" | tr -d '\r\n ' | awk '{print $1}')
   fi
+  [ -n "$real" ] || return 2
   [ "$esperado" = "$real" ] || return 1
   return 0
 }
@@ -287,10 +331,17 @@ diagnostico() {
     say "daemon: NO INSTALADO"
   fi
   say "--- stack ---"
-  for f in 99-megadaemon.sh 97-megadaemon-keeper.sh 98-cloudflared.sh tunnel-watchdog.sh; do
+  # El watchdog NO está en service.d (Magisk lo ejecutaría sin entorno):
+  # vive en el prefijo y lo lanza 98-cloudflared.sh.
+  for f in 99-megadaemon.sh 97-megadaemon-keeper.sh 98-cloudflared.sh 91-adb-tcp.sh; do
     p="/data/adb/service.d/$f"
     if [ -f "$p" ]; then say "  $f: OK ($(wc -c < "$p" | tr -d ' ') B)"; else warn "  $f: FALTA"; fi
   done
+  if [ -f "$PREFIX/tunnel-watchdog.sh" ]; then
+    say "  tunnel-watchdog.sh: OK en el prefijo ($(wc -c < "$PREFIX/tunnel-watchdog.sh" | tr -d ' ') B)"
+  else
+    warn "  tunnel-watchdog.sh: FALTA en el prefijo"
+  fi
   say "--- procesos ---"
   r "ps -A -o PID,NAME 2>/dev/null | grep -E 'megadaemon|cloudflared' | grep -v grep | head -8" | sed 's/^/  /'
   say "--- canal ---"
@@ -313,53 +364,94 @@ diagnostico() {
 # 5) INSTALACIÓN
 # ===========================================================================
 instalar() {
+  # --- atajo de idempotencia -------------------------------------------------
+  # Si ya está instalado Y el túnel responde, NO se toca nada: matar el
+  # daemon y relanzar cloudflared cambiaría el hostname y ciegaría a la flota
+  # en cada reejecución (el bug más caro de este script).
+  if [ "$FORCE" != "1" ] && [ -x "$DAEMON" ]; then
+    URL0=$(r "cat '$STATE/tunnel.url' 2>/dev/null" | tr -d '\r\n ')
+    if [ -n "$URL0" ] && r "'$DAEMON' telemetria sonda '$URL0'" >/dev/null 2>&1; then
+      say "ya está instalado y el túnel responde ($URL0): no toco nada."
+      say "usa --force si de verdad quieres reinstalar."
+      say ""
+      say "estado:"
+      diagnostico
+      return 0
+    fi
+  fi
+
   say "=== 1/8 resolviendo el release ==="
   if ! resolver_release; then
     die "no se pudo resolver el release (sin tag). ¿Hay red? ¿El repo es público?"
   fi
-  say "release: $TAG"
+  say "release: ${TAG:-(última)}"
 
   say "=== 2/8 descargando el bundle ==="
-  WORK=$(mktemp -d 2>/dev/null || echo "/data/local/tmp/mdo.$$")
-  mkdir -p "$WORK"
+  # ⚠️ `/data/local/tmp` NO es escribible por el uid de Termux ⇒ el temporal
+  # va a $TMPDIR (Termux lo define) o a /tmp.
+  WORK=$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/mdo.$$")
+  mkdir -p "$WORK" 2>/dev/null || die "no se pudo crear el temporal en $WORK"
   TAR="$WORK/$BUNDLE_ASSET"
   SHA="$TAR.sha256"
+  # Limpieza al salir, pase lo que pase (incluido un `die`).
+  trap 'rm -rf "$WORK" "$PREFIX/.stage.$$" 2>/dev/null' EXIT INT TERM
 
   i=1; ok=0
   while [ "$i" -le "$REINTENTOS" ]; do
     if descargar "$ASSET_URL" "$TAR" && [ -s "$TAR" ]; then ok=1; break; fi
-    warn "  descarga fallida (intento $i/$REINTENTOS); reintento en $((i*3))s"
-    sleep $((i * 3))
+    # Backoff cuadrático con tope (no lineal: si la red está caída, insistir
+    # cada 3 s no ayuda y gasta datos).
+    d=$((i * i)); [ "$d" -gt 30 ] && d=30
+    warn "  descarga fallida (intento $i/$REINTENTOS); reintento en ${d}s"
+    sleep "$d"
     i=$((i + 1))
   done
   [ "$ok" = "1" ] || die "no se pudo descargar el bundle tras $REINTENTOS intentos"
 
-  # El `.sha256` es opcional: si no existe, se avisa pero se continúa (el
-  # bundle se verifica por tamaño y por el test de arranque).
-  if descargar "$ASSET_URL.sha256" "$SHA"; then
-    if verificar_sha "$TAR" "$SHA"; then
+  # El `.sha256`: si existe, la verificación es OBLIGATORIA.  Si el hash
+  # NO cuadra, el bundle está manipulado ⇒ se aborta (no se instala).
+  if descargar "$ASSET_URL.sha256" "$SHA" && [ -s "$SHA" ]; then
+    verificar_sha "$TAR" "$SHA"
+    rc=$?
+    if [ "$rc" = "0" ]; then
       say "sha256: VERIFICADO por valor"
+    elif [ "$rc" = "2" ]; then
+      die "no se pudo calcular el sha256 del bundle (ni sha256sum ni el daemon) => no instalo nada"
     else
-      warn "sha256: no cuadra (o no hay forma de calcularlo aquí)"
+      die "el sha256 del bundle NO cuadra => el fichero está manipulado o corrupto. NO instalo nada"
     fi
   else
-    warn "sha256: no disponible en el release (sigo: la verificación real es el arranque)"
+    warn "sha256: no disponible en el release (sigo: la verificación real es que el daemon arranque)"
   fi
   say "bundle: $(wc -c < "$TAR" | tr -d ' ') B"
+
+  # El publicador del canal (lo necesita para publicar en el REPO, que es el
+  # punto canónico de descubrimiento: el `raw` de GitHub cachea en CDN).
+  PUBLISH_BIN="$PREFIX/channel-publish"
+  if [ ! -x "$PUBLISH_BIN" ]; then
+    if descargar "$RELEASES_LATEST/download/$PUBLISH_ASSET" "$WORK/$PUBLISH_ASSET"; then
+      r "cp -f '$WORK/$PUBLISH_ASSET' '$PUBLISH_BIN' && chmod 755 '$PUBLISH_BIN'" >/dev/null 2>&1 \
+        && say "channel-publish instalado" \
+        || warn "no se pudo instalar channel-publish (el canal no irá al repo)"
+    else
+      warn "no se pudo descargar channel-publish (el canal no irá al repo)"
+    fi
+  fi
 
   say "=== 3/8 instalando (atómico, con rollback) ==="
   BACKUP=""
   if [ -f "$DAEMON" ]; then
     BACKUP="$PREFIX/megadaemon-core.prev"
-    cp -f "$DAEMON" "$BACKUP" 2>/dev/null && say "respaldo del binario actual: $BACKUP"
+    r "cp -f '$DAEMON' '$BACKUP'" >/dev/null 2>&1 && say "respaldo del binario actual: $BACKUP"
   fi
 
   STAGE="$PREFIX/.stage.$$"
   r "rm -rf '$STAGE' && mkdir -p '$STAGE'" >/dev/null
-  if ! r "tar -xzf '$TAR' -C '$STAGE' 2>/dev/null"; then
-    # El tar de Android puede no estar: se usa el binario del daemon... o se
-    # degrada a instalar sólo el binario.
-    warn "no se pudo extraer el bundle con tar"
+  # Si el bundle no se extrae, NO se toca nada y se aborta: el peor resultado
+  # posible es "móvil sin daemon + dice que lo instaló".
+  if ! r "tar -xzf '$TAR' -C '$STAGE'"; then
+    r "rm -rf '$STAGE'" >/dev/null 2>&1
+    die "no se pudo extraer el bundle (tar) => no instalo nada"
   fi
 
   # Instalar el binario (del stage o del propio bundle).
@@ -368,18 +460,29 @@ instalar() {
     [ -f "$cand" ] && { NUEVO="$cand"; break; }
   done
   if [ -z "$NUEVO" ]; then
-    warn "el bundle no trae el binario en una ruta conocida: busco…"
     NUEVO=$(r "find '$STAGE' -name 'megadaemon-core' -type f 2>/dev/null | head -1" | tr -d '\r\n')
   fi
-  if [ -n "$NUEVO" ] && [ -f "$NUEVO" ]; then
-    r "mkdir -p '$PREFIX' && cp -f '$NUEVO' '$DAEMON' && chmod 755 '$DAEMON'" >/dev/null
-    say "binario instalado: $(wc -c < "$DAEMON" | tr -d ' ') B"
-  else
-    warn "no se pudo instalar el binario desde el bundle"
-  fi
+  [ -n "$NUEVO" ] && [ -f "$NUEVO" ] || {
+    r "rm -rf '$STAGE'" >/dev/null 2>&1
+    die "el bundle no trae el binario (esperado: bin/megadaemon-core)"
+  }
+  # .new + mv (atómico en el MISMO sistema de ficheros) + ejecutable.
+  # Nunca se copia ENCIMA del binario en ejecución: si el móvil se duerme a
+  # mitad, el binario queda truncado y el móvil se queda sin daemon.
+  r "mkdir -p '$PREFIX' && cp -f '$NUEVO' '$DAEMON.new' && chmod 755 '$DAEMON.new' && mv -f '$DAEMON.new' '$DAEMON'" >/dev/null
+  r "test -x '$DAEMON'" >/dev/null 2>&1 || {
+    [ -n "$BACKUP" ] && r "cp -f '$BACKUP' '$DAEMON' && chmod 755 '$DAEMON'" >/dev/null 2>&1
+    die "el binario nuevo no quedó ejecutable: binario anterior restaurado"
+  }
+  say "binario instalado: $(r "wc -c < '$DAEMON'" | tr -d ' \r\n') B"
 
   # Instalar el stack (Magisk service.d) desde el bundle.
-  for f in 99-megadaemon.sh 97-megadaemon-keeper.sh 98-cloudflared.sh tunnel-watchdog.sh; do
+  # ⚠️ `tunnel-watchdog.sh` NO va a service.d: Magisk lo ejecutaría en cada
+  # arranque SIN entorno (LOG_DIR, DAEMON_BIN, MEGADAEMON_STATE_DIR) ⇒
+  # entraría en un ciclo de relanzamiento de cloudflared (cambia el hostname
+  # cada 60 s y ciega a la flota).  Su sitio es el PREFIJO
+  # (`rust-core/src/stack.rs`: `Destino::Prefijo("tunnel-watchdog.sh")`).
+  for f in 99-megadaemon.sh 97-megadaemon-keeper.sh 98-cloudflared.sh 91-adb-tcp.sh; do
     for cand in "$STAGE/deploy/$f" "$STAGE/megadaemon-movil/$f" "$STAGE/$f"; do
       if [ -f "$cand" ]; then
         r "mkdir -p /data/adb/service.d && cp -f '$cand' /data/adb/service.d/$f && chmod 755 /data/adb/service.d/$f" >/dev/null
@@ -387,66 +490,140 @@ instalar() {
       fi
     done
   done
-  # El watchdog también en el prefijo (lo usa el daemon y el bundle).
-  for f in tunnel-watchdog.sh; do
-    [ -f "/data/adb/service.d/$f" ] && r "cp -f /data/adb/service.d/$f '$PREFIX/$f' 2>/dev/null && chmod 755 '$PREFIX/$f'" >/dev/null
+  # El watchdog, al prefijo (lo lanza 98-cloudflared.sh con su entorno).
+  for cand in "$STAGE/deploy/tunnel-watchdog.sh" "$STAGE/tunnel-watchdog.sh"; do
+    if [ -f "$cand" ]; then
+      r "cp -f '$cand' '$PREFIX/tunnel-watchdog.sh' && chmod 755 '$PREFIX/tunnel-watchdog.sh'" >/dev/null
+      break
+    fi
   done
   say "stack instalado"
 
   say "=== 4/8 arrancando el stack ==="
   r "mkdir -p '$STATE' '$LOGDIR'" >/dev/null
-  # El daemon se relanza desde el propio servicio Magisk; aquí se fuerza el
-  # arranque inmediato para no esperar al próximo reinicio.
-  r "pkill -f megadaemon-core 2>/dev/null; sleep 1; setsid nohup '$DAEMON' cockpit 9090 >> '$LOGDIR/daemon.log' 2>&1 &" >/dev/null
-  r "pkill -f 'cloudflared tunnel' 2>/dev/null; sleep 1; setsid nohup /data/data/com.termux/files/usr/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:9090 >> '$LOGDIR/tunnel.log' 2>&1 &" >/dev/null
-  r "setsid nohup sh /data/adb/service.d/tunnel-watchdog.sh >> '$LOGDIR/tunnel-watchdog.log' 2>&1 &" >/dev/null
+  # El daemon, CON SU ENTORNO (sin esto escribe el estado en el sitio
+  # equivocado) y CON `< /dev/null` (si hereda el stdin, la sesión adb se
+  # queda colgada).
+  r "pkill -f 'megadaemon-core cockpit' 2>/dev/null; sleep 1" >/dev/null
+  r "MEGADAEMON_PREFIX='$PREFIX' MEGADAEMON_STATE_DIR='$STATE' MEGADAEMON_BIN='$DAEMON' setsid nohup '$DAEMON' cockpit 9090 >> '$LOGDIR/daemon.log' 2>&1 < /dev/null &" >/dev/null
+
+  # El túnel: si ya hay un cloudflared (el supervisor puede estar vivo), se
+  # RESPETA.  Relanzarlo a ciegas genera un hostname nuevo ⇒ la flota se
+  # queda ciega, que es justo lo que este script debe evitar.
+  CF_BIN="$PREFIX/cloudflared"
+  [ -x "$CF_BIN" ] || CF_BIN="/data/data/com.termux/files/usr/bin/cloudflared"
+  if ! r "ps -A -o NAME 2>/dev/null | grep -q '^cloudflared$'" >/dev/null 2>&1; then
+    r "setsid nohup '$CF_BIN' tunnel --no-autoupdate --url http://127.0.0.1:9090 >> '$LOGDIR/tunnel.log' 2>&1 < /dev/null &" >/dev/null
+  else
+    say "hay un cloudflared vivo: no lo relanzo (el hostname se conservaría)"
+  fi
+
+  # El watchdog, con SU entorno (tunnel-watchdog.sh:25,39,40,43,52,53).
+  r "LOG_DIR='$PREFIX' DAEMON_BIN='$DAEMON' PUBLISH='$PREFIX/channel-publish' MEGADAEMON_STATE_DIR='$STATE' MEGADAEMON_ENV='$PREFIX/megadaemon.env' CF='$CF_BIN' CFT_TARGET='http://127.0.0.1:9090' setsid nohup sh '$PREFIX/tunnel-watchdog.sh' >> '$LOGDIR/tunnel-watchdog.log' 2>&1 < /dev/null &" >/dev/null
   say "servicios lanzados"
 
+  # El daemon tiene que ARRANCAR: si no, se restaura el anterior.
+  i=0
+  while [ "$i" -lt 25 ]; do
+    r "pgrep -f 'megadaemon-core cockpit' >/dev/null 2>&1" && break
+    sleep 1
+    i=$((i + 1))
+  done
+  if [ "$i" -ge 25 ]; then
+    [ -n "$BACKUP" ] && r "cp -f '$BACKUP' '$DAEMON' && chmod 755 '$DAEMON'" >/dev/null 2>&1
+    r "pkill -f 'megadaemon-core cockpit' 2>/dev/null" >/dev/null
+    r "setsid nohup '$DAEMON' cockpit 9090 >> '$LOGDIR/daemon.log' 2>&1 < /dev/null &" >/dev/null
+    die "el daemon no arrancó con el binario nuevo: binario anterior restaurado"
+  fi
+
   say "=== 5/8 esperando a que esté LISTO (health-check real) ==="
+  # La URL viva: del log de cloudflared -> <state_dir>/tunnel.url (lo lee el
+  # daemon: `channel.rs`).  Sin esto, `telemetria listo` NUNCA es true.
+  URL=""
+  i=1
+  while [ "$i" -le 24 ]; do
+    URL=$(r "cat '$STATE/tunnel.url' 2>/dev/null" | tr -d '\r\n ')
+    [ -n "$URL" ] && break
+    URL=$(r "grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' '$LOGDIR/tunnel.log' 2>/dev/null | tail -1" | tr -d '\r\n ')
+    if [ -n "$URL" ]; then
+      r "printf '%s' '$URL' > '$STATE/tunnel.url' && chmod 644 '$STATE/tunnel.url'" >/dev/null
+      r "printf '%s' '$URL' > '$PREFIX/tunnel.url'" >/dev/null 2>&1
+      break
+    fi
+    sleep 5
+    i=$((i + 1))
+  done
+  [ -n "$URL" ] || warn "no se encontró la URL del túnel (mira $LOGDIR/tunnel.log)"
+
   listo=0
   i=1
   while [ "$i" -le 12 ]; do
-    if [ -x "$DAEMON" ]; then
-      if "$DAEMON" telemetria listo >/dev/null 2>&1; then
-        listo=1
-        say "el daemon responde (intento $i)"
-        break
-      fi
+    # El health-check REAL: 401/403 = el daemon contesta = túnel VIVO;
+    # 0/502/503/504/530 = muerto (`channel.rs::es_canal_muerto`).
+    if [ -n "$URL" ] && r "'$DAEMON' telemetria sonda '$URL'" >/dev/null 2>&1; then
+      listo=1
+      say "el túnel responde (intento $i): $URL"
+      break
     fi
     sleep 5
     i=$((i + 1))
   done
   if [ "$listo" = "1" ]; then
-    say "LISTO: el daemon responde"
+    say "LISTO: el móvil es alcanzable en $URL"
   else
-    warn "el daemon no responde todavía (sigo: puede que aún esté arrancando)"
+    warn "el móvil NO es alcanzable todavía (daemon vivo ≠ túnel vivo)"
     say "  log: $LOGDIR/daemon.log"
   fi
 
   say "=== 6/8 publicando el canal (repo + relé + paste + Drive) ==="
   if [ -x "$DAEMON" ]; then
-    "$DAEMON" channel publish 2>/dev/null | head -12 | sed 's/^/  /'
+    r "'$DAEMON' channel publish" 2>/dev/null | head -12 | sed 's/^/  /'
+  fi
+  # El REPO (Contents API: NO cachea en CDN) es el punto canónico de
+  # descubrimiento: sin esto, cuando cambia el hostname del quick tunnel la
+  # flota se queda ciega.  Lo publica `channel-publish --repo-publish`.
+  if [ -x "$PREFIX/channel-publish" ]; then
+    publico=0
+    for t in "$PREFIX/.gh_token" "$PREFIX/github.token" "$STATE/.gh_token" "$STATE/github.token"; do
+      [ -f "$t" ] || continue
+      r "'$PREFIX/channel-publish' --repo-publish --state-dir '$STATE' --token-file '$t'" >/dev/null 2>&1 && publico=1
+      break
+    done
+    if [ "$publico" = "1" ]; then
+      say "  canal publicado en el repo (state/channel.json)"
+    else
+      warn "  el canal NO se pudo publicar en el repo (¿token de GitHub?)"
+    fi
+  else
+    warn "  falta channel-publish: el canal no se publica en el repo"
   fi
 
   say "=== 7/8 subiendo telemetría a Google Drive ==="
   if [ "$SIN_TELEMETRIA" = "1" ]; then
     say "  omitida por --sin-telemetria"
   elif [ -x "$DAEMON" ]; then
-    if "$DAEMON" telemetria publicar 2>&1 | head -12 | sed 's/^/  /'; then
+    if r "'$DAEMON' telemetria publicar" 2>&1 | head -12 | sed 's/^/  /'; then
       say "  telemetría publicada"
     else
       warn "  la telemetría NO se pudo publicar (¿credenciales de Drive? ¿red?)"
       say "  el estado queda en disco y se reintentará en el siguiente ciclo"
     fi
-    "$DAEMON" telemetria conexion 2>/dev/null | head -12 | sed 's/^/  /'
+    r "'$DAEMON' telemetria conexion" 2>/dev/null | head -12 | sed 's/^/  /'
   fi
 
   say "=== 8/8 comprobación final ==="
   diagnostico
   r "rm -rf '$STAGE' '$WORK'" >/dev/null 2>&1
   say ""
-  say "instalación terminada. Si el estado dice LISTO, el móvil se puede alcanzar"
-  say "y su telemetría se lee desde Drive sin depender del túnel."
+  if [ "$listo" = "1" ]; then
+    say "instalación terminada: el móvil es alcanzable en $URL"
+    say "y su telemetría se lee desde Drive sin depender del túnel."
+  else
+    warn "instalación terminada, pero el túnel no responde aún."
+    warn "revisar $LOGDIR/daemon.log y $LOGDIR/tunnel.log"
+    return 1
+  fi
+  return 0
 }
 
 # ===========================================================================
