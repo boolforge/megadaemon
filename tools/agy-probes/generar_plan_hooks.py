@@ -53,8 +53,18 @@ def cargar(tsv):
 
 
 def id_de(simbolo):
-    """El ID que usa el daemon: el último trozo tras el punto."""
+    """El ID que usa el daemon: el último trozo tras el punto.
+
+    OJO: con los símbolos aplanados de Go eso NO es único (hay muchos
+    `Set`, `func1`, `_uint8_`...).  Por defecto se usa el **path Go**,
+    que sí es único y además se lee como el código original.
+    """
     return simbolo.rsplit(".", 1)[-1] if "." in simbolo else simbolo
+
+
+def id_go(go_path):
+    """ID único y legible: el path Go tal cual (`pkg.Func` o `pkg.(*T).M`)."""
+    return go_path.replace(" ", "") or "desconocido"
 
 
 def main():
@@ -68,6 +78,8 @@ def main():
     ap.add_argument("--salida", help="fichero donde escribir el plan")
     ap.add_argument("--listar", action="store_true", help="solo listar, sin escribir")
     ap.add_argument("--maximo", type=int, default=0)
+    ap.add_argument("--id", default="go", choices=["go", "short"],
+                    help="formato del ID: 'go' (único, legible) o 'short'")
     a = ap.parse_args()
 
     rx_f = re.compile(a.fichero) if a.fichero else None
@@ -82,22 +94,26 @@ def main():
             continue
         if rx_g and not rx_g.search(go_path):
             continue
-        filas.append((va, simbolo, fichero, linea))
+        filas.append((va, simbolo, fichero, linea, go_path))
     # Orden estable: por fichero y línea (así se lee como el código).
     filas.sort(key=lambda f: (f[2], f[3], f[1]))
     if a.maximo and len(filas) > a.maximo:
         filas = filas[: a.maximo]
 
     print(f"hooks seleccionados: {len(filas)}  tarea={a.tarea}")
-    for va, simbolo, fichero, linea in filas[:20]:
+    for va, simbolo, fichero, linea, go_path in filas[:20]:
         print(f"  {va}  {fichero}:{linea}  {simbolo}")
     if len(filas) > 20:
         print(f"  ... y {len(filas) - 20} más")
 
     if a.listar:
         return 0
+    def ident(simbolo, go_path):
+        return id_go(go_path) if a.id == "go" else id_de(simbolo)
+
     texto = "".join(
-        f"{a.modulo}\t{va}\t{id_de(simbolo)}\t{a.tarea}\n" for va, simbolo, _, _ in filas
+        f"{a.modulo}\t{va}\t{ident(simbolo, go_path)}\t{a.tarea}\n"
+        for va, simbolo, _, _, go_path in filas
     )
     if a.salida:
         with open(a.salida, "w") as f:
