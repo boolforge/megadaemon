@@ -405,7 +405,20 @@ pub struct GeminiPrompt {
     pub max_tokens: u32,
     /// Nº de declaraciones de función que pedía el cliente (informativo).
     pub tools_requested: usize,
+    /// Tamaño ORIGINAL del prompt (antes de recortar).
+    pub bytes_prompt: usize,
+    /// ¿Se recortó el prompt por [`MAX_PROMPT_CHARS`]?
+    pub truncado: bool,
 }
+
+/// Tope del prompt que sale del gateway hacia el proveedor.
+///
+/// MEDIDO (2026-11-26, móvil): el language server manda el contexto
+/// COMPLETO de la conversación: 758 KB en un solo POST (`b937b` bytes de
+/// chunk).  Ningún proveedor aguanta eso (y el motor local SEERE tampoco):
+/// hay que acotarlo.  Se conserva la **cola** (lo más reciente es lo que
+/// importa) y se deja constancia en la traza (`prompt_truncado`).
+pub const MAX_PROMPT_CHARS: usize = 120_000;
 
 // ==================================================================
 // ENVOLTORIO v1internal (MEDIDO 2026-11-26, móvil)
@@ -567,11 +580,27 @@ pub fn gemini_prompt(body: &Value) -> Result<GeminiPrompt, GatewayError> {
                 .sum::<usize>()
         })
         .unwrap_or(0);
+    // MEDIDO (2026-11-26, móvil): el LS manda 758 KB de contexto.  Se
+    // acota a [`MAX_PROMPT_CHARS`] conservando la COLA (lo más reciente) y
+    // se deja constancia (`truncado`).
+    let completo = parts_out.join("\n\n");
+    let bytes_prompt = completo.chars().count();
+    let (recortado, truncado) = if bytes_prompt > MAX_PROMPT_CHARS {
+        let cola: String = completo
+            .chars()
+            .skip(bytes_prompt - MAX_PROMPT_CHARS)
+            .collect();
+        (cola, true)
+    } else {
+        (completo, false)
+    };
     Ok(GeminiPrompt {
-        prompt: parts_out.join("\n\n"),
+        prompt: recortado,
         system,
         max_tokens,
         tools_requested,
+        bytes_prompt,
+        truncado,
     })
 }
 
@@ -688,6 +717,12 @@ pub fn gemini_generate_content_con_modelo_with(
         deps,
     );
     let mut v = gemini_response(&res, g.tools_requested);
+    // Traza del recorte: el gateway no puede callarse que recortó el
+    // contexto (MEDIDO 2026-11-26, móvil: el LS manda 758 KB).
+    if let Some(md) = v.get_mut("megadaemon").and_then(|x| x.as_object_mut()) {
+        md.insert("prompt_bytes".to_string(), json!(g.bytes_prompt));
+        md.insert("prompt_truncado".to_string(), json!(g.truncado));
+    }
     let requested = modelo
         .map(|m| m.trim().to_string())
         .filter(|m| !m.is_empty())
@@ -1063,6 +1098,28 @@ mod tests {
         // habilitado"), que es lo que hace que el gateway sea canónico.
         assert!(!es_modelo_del_vault(&vault, "gemini-4-neon"));
         assert!(!es_modelo_del_vault(&vault, ""));
+    }
+
+    #[test]
+    fn un_prompt_enorme_se_recorta_conservando_la_cola() {
+        // MEDIDO (2026-11-26, móvil): el LS manda 758 KB de contexto.
+        let enorme = "a".repeat(MAX_PROMPT_CHARS + 5_000) + "FINAL";
+        let body = json!({
+            "contents": [{"role": "user", "parts": [{"text": enorme}]}]
+        });
+        let g = gemini_prompt(&body).unwrap();
+        assert!(g.truncado, "un prompt de 125k debe recortarse");
+        assert_eq!(g.bytes_prompt, enorme.chars().count());
+        assert!(g.prompt.chars().count() <= MAX_PROMPT_CHARS);
+        // Se conserva la COLA: lo más reciente.
+        assert!(g.prompt.ends_with("FINAL"));
+        // Un prompt normal NO se toca.
+        let g2 = gemini_prompt(&json!({
+            "contents": [{"role": "user", "parts": [{"text": "hola"}]}]
+        }))
+        .unwrap();
+        assert!(!g2.truncado);
+        assert_eq!(g2.bytes_prompt, 4);
     }
 
     #[test]
