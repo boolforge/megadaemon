@@ -787,6 +787,59 @@ fn send_http_response(stream: &mut TcpStream, status: u16, content_type: &str, b
     send_http_response_with(stream, status, content_type, body, "")
 }
 
+/// Razón textual de un código de estado.
+///
+/// MEDIDO (2026-11-26): el shim devuelve **verbatim** las respuestas de
+/// Google (401, 403, 429, 500...), y antes todo lo que no fuera
+/// {200, 400, 403, 404, 413} salía como "Internal Server Error": el código
+/// era correcto pero la razón mentía.  El cliente (Go) lee el código, así que
+/// no rompía nada, pero el log del LS y las herramientas de red quedan
+/// descolocados.
+fn motivo_http(status: u16) -> &'static str {
+    match status {
+        100 => "Continue",
+        101 => "Switching Protocols",
+        200 => "OK",
+        201 => "Created",
+        202 => "Accepted",
+        203 => "Non-Authoritative Information",
+        204 => "No Content",
+        206 => "Partial Content",
+        301 => "Moved Permanently",
+        302 => "Found",
+        303 => "See Other",
+        304 => "Not Modified",
+        307 => "Temporary Redirect",
+        308 => "Permanent Redirect",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        402 => "Payment Required",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        406 => "Not Acceptable",
+        408 => "Request Timeout",
+        409 => "Conflict",
+        410 => "Gone",
+        411 => "Length Required",
+        412 => "Precondition Failed",
+        413 => "Payload Too Large",
+        414 => "URI Too Long",
+        415 => "Unsupported Media Type",
+        429 => "Too Many Requests",
+        431 => "Request Header Fields Too Large",
+        499 => "Client Closed Request",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        507 => "Insufficient Storage",
+        511 => "Network Authentication Required",
+        _ => "Status",
+    }
+}
+
 /// Como [`send_http_response`] pero con una cabecera extra.
 fn send_http_response_with(
     stream: &mut TcpStream,
@@ -795,14 +848,7 @@ fn send_http_response_with(
     body: &[u8],
     extra_header: &str,
 ) {
-    let status_text = match status {
-        200 => "OK",
-        400 => "Bad Request",
-        404 => "Not Found",
-        413 => "Payload Too Large",
-        403 => "Forbidden",
-        _ => "Internal Server Error",
-    };
+    let status_text = motivo_http(status);
     let cors = CORS_ORIGIN.with(|c| c.borrow().clone());
     let header = format!(
         "HTTP/1.1 {} {}\r\n\

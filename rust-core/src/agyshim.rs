@@ -632,6 +632,40 @@ pub fn dialecto_de(ruta: &str) -> Option<Dialecto> {
     let r = normalizar_ruta_proxy(ruta);
     // MEDIDO 2026-11-24 (movil): el LS pide el catalogo como
     // `/v1internal/listModels` (con barra) y antes nos devolvia 404.
+    //
+    // MEDIDO 2026-11-26 (movil, 03:0x): **`:fetchAvailableModels` NO es un
+    // catálogo Gemini**: es una ruta de **CUENTA** y su respuesta es un
+    // **protojson** (`FetchAvailableModelsResponse`), NO el `ListModelsResponse`
+    // del SDK de Gemini.  El esquema está EMBEBIDO en el binario del
+    // language server y se ha extraído del `.so` (ver
+    // `agy-re/tools/proto-schema/extraer_esquema.py`):
+    //
+    //   message FetchAvailableModelsResponse {
+    //     map FetchAvailableModelsResponse.ModelsEntry models = 1;   // MAP
+    //     optional string default_agent_model_id = 2;
+    //     repeated ModelSort agent_model_sorts = 3;
+    //     repeated string command_model_ids = 4;
+    //     ...
+    //   }
+    //
+    // `models` es un **MAP** (objeto JSON), no una lista.  El shim servía
+    // AHÍ el catálogo de MegaDaemon, que es una **lista** (`{"models":[...]}`),
+    // y el LS lo parsea con protojson ⇒ petaba **exactamente** en la llave:
+    //
+    //   E1126 01:52:15 cache.go:135] Cache(availableModels): Singleflight
+    //   refresh failed: proto: syntax error (line 1:11): unexpected token [
+    //   E1126 01:52:15 errorreport.go:224] proto: syntax error (line 1:11):
+    //   unexpected token [
+    //
+    // ⇒ cada 60 s el LS reportaba un error de sesión y la app volvía a pedir
+    // el login de Google (el bucle).
+    //
+    // Por eso la decisión es **sensible al método** (ver
+    // [`dialecto_de_segun_metodo`]): el **POST** (el que consume el LS) va
+    // por passthrough a Google —es una ruta de cuenta: la petición lleva
+    // `project` y `entitlement`—, y el **GET** (que lo consume la UI y
+    // tolera la lista) sigue con el catálogo local.  El MODELO lo sigue
+    // sirviendo el gateway canónico.
     if r.ends_with(":fetchAvailableModels")
         || r.ends_with("/models")
         || r == "/models"
@@ -647,6 +681,26 @@ pub fn dialecto_de(ruta: &str) -> Option<Dialecto> {
         return Some(Dialecto::Gemini);
     }
     None
+}
+
+/// Dialecto **sensible al método**.
+///
+/// MEDIDO 2026-11-26 (móvil): `:fetchAvailableModels` llega por **POST** (la
+/// que consume el LS para su caché de modelos) y por **GET** (la que consume
+/// la UI).  El POST espera el **protojson de Google** (`models` = MAP) y el
+/// GET tolera la lista local estilo Gemini.
+///
+/// Con el catálogo local en el POST, el LS fallaba **cada 60 s** con
+/// `proto: syntax error (line 1:11): unexpected token [` y la app pedía el
+/// login de Google en bucle.
+pub fn dialecto_de_segun_metodo(metodo: &str, ruta: &str) -> Option<Dialecto> {
+    let m = metodo.trim().to_ascii_uppercase();
+    let r = normalizar_ruta_proxy(ruta);
+    if m == "POST" && r.ends_with(":fetchAvailableModels") {
+        // Ruta de CUENTA: la respuesta es un proto de Google (map).
+        return None;
+    }
+    dialecto_de(ruta)
 }
 
 /// Una petición que entra al shim.
@@ -925,7 +979,7 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
             variantes: 1,
         });
     }
-    let dialecto = match dialecto_de(&req.ruta) {
+    let dialecto = match dialecto_de_segun_metodo(&req.metodo, &req.ruta) {
         Some(d) => d,
         None => {
             // Ruta de cuenta/sesión (no de modelo): passthrough al backend
@@ -1423,16 +1477,51 @@ mod tests {
             assert!(es_ruta_passthrough(r), "{r} debe ir a Google tal cual");
             assert_eq!(dialecto_de(r), None, "{r} no es una ruta de modelo");
         }
-        // El MODELO sí es del gateway canónico (dialecto Gemini) y el
-        // catálogo también (para que el LS use los modelos de MegaDaemon).
+        // El MODELO sí es del gateway canónico (dialecto Gemini).
         assert_eq!(
             dialecto_de("/v1internal:generateContent"),
             Some(Dialecto::Gemini)
         );
+    }
+
+    /// MEDIDO 2026-11-26 (móvil, log del LS): `Cache(availableModels)` fallaba
+    /// con `proto: syntax error (line 1:11): unexpected token [` cada 60 s
+    /// ⇒ la app pedía el login en bucle.
+    ///
+    /// La causa: el **POST** de `:fetchAvailableModels` devuelve un
+    /// **protojson** (`FetchAvailableModelsResponse.models` es un **MAP**), y
+    /// el shim le servía el catálogo de MegaDaemon, que es una **lista**.
+    #[test]
+    fn el_catalogo_de_cuenta_va_a_google_y_el_de_gemini_sigue_siendo_local() {
+        let r = "/v1internal:fetchAvailableModels";
+        assert!(es_ruta_proxy(r), "{r} debe entrar por el shim");
+        assert!(es_ruta_passthrough(r), "{r} debe ir a Google tal cual");
+        // El POST (el que consume el LS) va a Google: su respuesta es un
+        // proto con `models` como MAP y nuestro catálogo es una lista.
         assert_eq!(
-            dialecto_de("/v1internal:fetchAvailableModels"),
+            dialecto_de_segun_metodo("POST", r),
+            None,
+            "el POST de {r} NO es un catálogo local: su `models` es un map de protojson"
+        );
+        // El GET (el que consume la UI) sí tolera la lista local.
+        assert_eq!(
+            dialecto_de_segun_metodo("GET", r),
             Some(Dialecto::Catalogo)
         );
+        // Las rutas **Gemini** (lista) siguen siendo locales, para que el LS
+        // pueda usar los modelos de MegaDaemon.
+        for r in [
+            "/v1beta/models",
+            "/models",
+            "/v1internal/listModels",
+            "/v1internal:listModels",
+        ] {
+            assert_eq!(
+                dialecto_de(r),
+                Some(Dialecto::Catalogo),
+                "{r} debe seguir siendo el catálogo local"
+            );
+        }
     }
 
     #[test]
