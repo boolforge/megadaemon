@@ -322,6 +322,26 @@ fn instalar(paquete: &str, lib_path: &str, bin_path: &str) -> Value {
                     "escrituras": sub,
                     "selinux": r.combined(),
                 }));
+                // MEDIDO (2026-11-26, móvil): el payload de glibc tiene
+                // NEEDED `libgcc_s.so.1`, que está en el runtime del LS pero
+                // el proceso NO tiene DT_RPATH (su `--library-path` de glibc
+                // no se traduce a un RPATH del ELF) ⇒ se copia junto al
+                // payload, que la busca con `$ORIGIN`.
+                if variante == VariantePayload::Glibc {
+                    let runtime = format!("/data/user/0/{}/files/runtime/lib", pkg);
+                    let dir = format!("/data/data/{}/files/megadaemon", pkg);
+                    let deps = format!(
+                        "for l in libgcc_s.so.1; do if [ -f {r}/$l ]; then cp -f {r}/$l {d}/ 2>&1; \
+                         chmod 755 {d}/$l 2>&1; fi; done; ls -l {d} 2>&1 | head -8",
+                        r = sh_quote(&runtime),
+                        d = sh_quote(&dir),
+                    );
+                    let r = root_exec(&deps, 30_000, 4096);
+                    pasos.push(json!({
+                        "que": "dependencias del payload (glibc)",
+                        "salida": r.combined(),
+                    }));
+                }
             }
             Err(e) => pasos.push(json!({"que": "payload", "variante": format!("{:?}", variante), "error": e})),
         }

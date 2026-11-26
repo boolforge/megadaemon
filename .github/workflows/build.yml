@@ -470,10 +470,13 @@ jobs:
           CARGO_PROFILE_RELEASE_LTO: "false"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
           CARGO_PROFILE_RELEASE_DEBUG: "0"
-          # `-static-libgcc`: el runtime del LS (glibc propio) no tiene
-          # libgcc_s.so.1 mapeada => el payload no puede depender de ella.
+          # `$ORIGIN`: el payload busca sus propias dependencias en el
+          # directorio donde vive (el daemon copia ahi la `libgcc_s.so.1`
+          # del runtime del LS).  MEDIDO (2026-11-26, movil): el proceso del
+          # LS NO tiene DT_RPATH ni DT_RUNPATH (su `--library-path` es de
+          # glibc y no se traduce a un RPATH del ELF).
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: >-
-            -C link-arg=-static-libgcc
+            -C link-arg=-Wl,-rpath,$ORIGIN
         run: |
           cargo build --release --target aarch64-unknown-linux-gnu
           mkdir -p ../dist
@@ -488,11 +491,16 @@ jobs:
           # MEDIDO (2026-11-26, movil): el runtime del LS tiene mapeadas
           # libc.so.6, libm.so.6, libdl.so.2, libpthread.so.0, libresolv.so.2
           # y librt.so.1.  El payload NO puede depender de nada mas.
-          for lib in liblog.so libstdc++.so libgcc_s.so.1 libelf.so.1; do
+          # `libgcc_s.so.1` SI puede: esta en el runtime del LS
+          # (/data/user/0/com.agy/files/runtime/lib) y el daemon la copia
+          # junto al payload, que la busca con $ORIGIN.
+          for lib in liblog.so libstdc++.so libelf.so.1; do
             if grep -q "$lib" /tmp/necesarias-glibc.txt; then
               echo "::error::el payload glibc depende de $lib (no lo tiene el runtime del LS)"; exit 1
             fi
           done
+          grep -q "RPATH\|RUNPATH" /tmp/necesarias-glibc.txt || {
+            echo "::error::el payload glibc no tiene RUNPATH (\$ORIGIN)"; exit 1; }
           echo "payload de glibc compilado y verificado"
       - name: Subir artefacto
         uses: actions/upload-artifact@v4
