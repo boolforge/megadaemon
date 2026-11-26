@@ -132,6 +132,7 @@
 | # | idea | estado | detalle |
 |---|---|---|---|
 | I1 | **Nivel 1 — identidad estable + endpoint reubicable**: el nodo tiene una identidad criptográfica fija (Ed25519, `ring` ya está en las deps) y una lista de endpoints (relé duckdns de nombre fijo, quick tunnel, puertos de descubrimiento). Quien quiera alcanzarle **pregunta "dónde estás" al bus** y recibe el endpoint actual | 🟡 | `rust-core/src/channel.rs` ya publica `quick`/`duckdns`/`ip_publica`; falta el esquema de identidad + el dedo del bus |
+| I2b | **Ejecutor de órdenes del bus** (el que hace que el control funcione SIN conexión directa): el móvil sincroniza el tablón, selecciona las cartas `tipo=orden` que van para él, las **ejecuta con el registro de tools del daemon** (`android::dispatch` ⇒ el MISMO camino que la API y el MCP, no dos implementaciones) y responde por el bus | 🟡 | `rust-core/src/bus_ejecutor.rs` (nuevo): idempotencia por `idem_key` (una orden repetida NO se re-ejecuta), fail-closed ante firma inválida o sin clave pública, `confirm: true` exigido para lo irreversible, presupuesto de órdenes por ciclo y respeto del modo ahorro de batería. Tool MCP `bus_ordenes` + CLI `megadaemon-core bus` |
 | I2 | **Nivel 2 — bus de control PULL** (el que rompe la dependencia de la conexión directa): el nodo **saca** órdenes del bus (repo por Contents API + Drive + relé) y las ejecuta, en vez de que le empufen. Permite **controlar el móvil y sus apps (incluso en primer plano) sin métodos directos de comunicación** | 🟡 | ⚠️ **NO es un bus nuevo**: `rust-core/src/resonance.rs` (659 líneas) **YA ES** un bus P2P por Drive — cartas firmadas Ed25519, `id = sha256(canonico)` (merge idempotente), CRDT LWW con `epoch`+`seq`, journal NDJSON + snapshot, en la carpeta privada `tablon-resiliencia`. El Nivel 2 debe **EXTENDERLO** (tipos de carta + semántica de órdenes), no duplicarlo. Los **leases NO se inventan**: `board.rs` ya los tiene (SQLite+WAL, `owner`, `lease_expires_at`, `reclaim_expired`); el bus sólo transporta órdenes. Detalle: `docs/RESILIENCIA_P2P.md` |
 | I3 | **Nivel 3 — reconexión extremo a extremo** tipo mosh: identificador de sesión + nonce + clave rotada, handshake tolerante a pérdida, y **re-emigración** cuando cambia el trans underpinnings (quick tunnel → relé, WiFi → datos móviles) | ⏳ | reutiliza el doble auth del daemon (`X-API-Key` + `X-Seere-Auth-Token`) y `channel.rs` |
 | I4 | **Cotas de batería**: en "silencioso" (sólo bus pull cada 15–30 min) el gasto no debe pasar de un X% diario. `JobScheduler`/`AlarmManager` con ventana inexact, `WorkManager` con `setRequiresCharging`, wakelocks mínimos | 🟡 | ya existe `battery_advanced::modo_ahorro_activo()` (batería <20 % y sin cargador) y la telemetría **duplica** el periodo en ese modo |
@@ -174,4 +175,25 @@
 | K4 | **Datos de conexión** publicados a Drive: URL viva, relé, puerto, build y **sha16** de las claves (nunca las claves) | ✅ | `telemetria::datos_conexion()`, `publicar_conexion()` |
 | K5 | **Subida de artefactos a Drive** (binarios e instrumentación) sin pasar por GitHub | ✅ | `telemetria::subir_artefacto()` + tool `telemetria artefacto` |
 | K6 | **One-liner de instalación y ejecución**: una línea, idempotente, con resolución del release en 3 capas, verificación **por valor**, instalación atómica con rollback, health-check real y auto-cura | ✅ | `deploy/megadaemon-oneliner.sh` + `deploy/mdo.sh` (lanzador de una línea). **Verificado en el sandbox**: descarga del asset real (12.881.744 B) y **sha256 por valor VERIFICADO** (el `.sha256` del CI trae la ruta `dist/…` ⇒ la comparación por valor es obligatoria, no opcional); el bundle contiene las rutas que el script busca (`bin/megadaemon-core`, `deploy/*.sh`); el binario extraído es **ELF aarch64**; `sh -n` y `dash -n` OK |
-| K7 | Publicación del canal en el **repo** desde el one-liner (`state/channel.json`) | 🟡 | lo hace `deploy/tunnel-watchdog.sh::publicar_repo()`; falta encadenarlo en el instalador |
+| K7 | Publicación del canal en el **repo** desde el one-liner (`state/channel.json`) | ✅ | el one-liner descarga `channel-publish-arm64` y lo llama con `--repo-publish --token-file` (el token nunca va en la línea de comandos) |
+
+## L. Verificación del one-liner (2026-11-26) — lo que está medido
+
+> Un subagente evaluador revisó los dos scripts y encontró **11 bugs
+> bloqueantes** (el watchdog sin entorno, el estado en el sitio equivocado,
+> el health-check que nunca podía pasar, el script que decía "instalado"
+> sin instalar y dejaba el móvil con el hostname cambiando cada 60 s…).
+> Todos corregidos y verificados con una simulación propia.
+
+| # | idea | estado | detalle |
+|---|---|---|---|
+| L1 | **Simulación del instalador** sin móvil: rutas reescritas a un temporal y binario/curl/cloudflared falsos con la misma interfaz | ✅ | `tools/test-oneliner.sh` — **22 checks, 0 fallos** |
+| L2 | El watchdog se lanza con su entorno y **NO** está en `service.d` | ✅ | verificado por el arnés (si estuviera, Magisk lo ejecutaría sin entorno y relanzaría cloudflared en bucle) |
+| L3 | El daemon se lanza con `MEGADAEMON_STATE_DIR`/`PREFIX`/`BIN` y `< /dev/null` | ✅ | verificado por el arnés |
+| L4 | El health-check usa la URL real + `telemetria sonda` (no "esperar 10 s") | ✅ | verificado por el arnés |
+| L5 | **Idempotencia real**: la 2ª ejecución no toca nada y la URL no cambia | ✅ | verificado por el arnés (antes mataba cloudflared en cada ejecución) |
+| L6 | Un bundle **corrupto** aborta con código ≠ 0 y el binario vivo sigue ahí | ✅ | verificado por el arnés (antes decía "instalado" sin instalar) |
+| L7 | Un **sha256 que no cuadra** aborta y lo dice claro | ✅ | verificado por el arnés (antes sólo avisaba e instalaba igual) |
+| L8 | El `hash` nativo del daemon (el móvil NO tiene `sha256sum`) | ✅ | `megadaemon-core hash <fichero>` |
+| L9 | Prueba real contra el release publicado | ✅ | descarga del bundle real (12.881.744 B) + **sha256 verificado por valor** (el `.sha256` del CI lleva la ruta `dist/…` ⇒ la comparación por valor es obligatoria) |
+| L10 | Prueba real en el móvil | ⛔ | `NO VERIFICADO`: el móvil está inalcanzable. Comandos exactos en `docs/TELEMETRIA_DRIVE.md` y en el propio script (`--diagnostico`) |
