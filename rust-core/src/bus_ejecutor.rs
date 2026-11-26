@@ -162,16 +162,32 @@ pub fn idem_key(carta: &crate::resonance::Carta) -> String {
 ///
 /// Las acciones destructivas (`root_exec` con `confirm_destructive`, o las
 /// que el propio daemon marca como irreversibles) exigen `confirm: true`.
+///
+/// ⚠️ MEDIDO (CI del 2026-11-26): la primera versión exigía la confirmación
+/// sólo si el propio emisor marcaba `confirm_destructive` en los args ⇒ una
+/// orden `rm -rf /data` **sin** esa marca pasaba sin confirmar.  Ahora se
+/// mira el **contenido**: una orden de shell potencialmente destructiva
+/// (detectada con el mismo criterio que `android::is_destructive`) SIEMPRE
+/// exige confirmación, la marque o no el emisor.
 pub fn exige_confirmacion(cuerpo: &Value) -> bool {
     if cuerpo["confirm"].as_bool().unwrap_or(false) {
         return false; // ya viene confirmada
     }
     let tool = cuerpo["tool"].as_str().unwrap_or("");
     match tool {
-        "root_exec" => cuerpo["args"]
-            .get("confirm_destructive")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
+        "root_exec" => {
+            // Marcada por el emisor…
+            if cuerpo["args"]
+                .get("confirm_destructive")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                return false;
+            }
+            // …o detectada aquí por el contenido del comando.
+            let cmd = cuerpo["args"]["command"].as_str().unwrap_or("");
+            crate::android::is_destructive(cmd)
+        }
         "app_control" => matches!(
             cuerpo["args"]["action"].as_str().unwrap_or(""),
             "disable" | "uninstall" | "clear_data" | "reset"
@@ -447,8 +463,14 @@ mod tests {
 
     #[test]
     fn lo_destructivo_exige_confirmacion() {
+        // ⚠️ Regresión (CI del 2026-11-26): una orden destructiva sin la
+        // marca `confirm_destructive` del emisor NO debe pasar sin
+        // confirmar.  Se mira el CONTENIDO del comando.
         assert!(exige_confirmacion(&json!({
             "tool": "root_exec", "args": {"command": "rm -rf /data"}
+        })));
+        assert!(exige_confirmacion(&json!({
+            "tool": "root_exec", "args": {"command": "dd if=/dev/zero of=/dev/block/sda"}
         })));
         assert!(!exige_confirmacion(&json!({
             "tool": "root_exec", "args": {"command": "ls", "confirm_destructive": false}

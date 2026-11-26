@@ -776,7 +776,9 @@ mod tests {
         let md = a_markdown(&v);
         assert!(md.contains("android"));
         assert!(md.contains("batería"));
-        assert!(md.contains("movil"));
+        // El Markdown usa "móvil" con tilde (el test miraba "movil" sin
+        // ella y fallaba en el CI del 2026-11-26).
+        assert!(md.contains("móvil"), "{}", md);
         assert!(md.contains("https://x.trycloudflare.com"));
     }
 
