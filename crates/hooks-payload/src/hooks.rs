@@ -579,6 +579,19 @@ mod tests {
     /// (puntero, longitud) IGUAL que una `string` de Go ⇒ sirve para probar
     /// la lectura del retorno).
     ///
+    /// `black_box` en el argumento: sin él, LLVM **elimina la llamada**
+    /// (función interna, sin efectos, resultado constante) ⇒ el hook no se
+    /// disparaba nunca y el test era falso (medido: ENTER=0).
+    #[inline(never)]
+    #[no_mangle]
+    pub extern "C" fn objetivo3(x: u64) -> &'static str {
+        if std::hint::black_box(x) == 7 {
+            "https://endpoint.de.prueba/v1/x"
+        } else {
+            "https://otro.de.prueba/"
+        }
+    }
+
     /// CUARTA función (otra `&str`): cada test hookea una DISTINTA porque
     /// enganchar dos veces la misma en el mismo proceso rompe el trampolín
     /// de gum (medido: SIGABRT con una reserva gigante) y los tests del CI
@@ -590,25 +603,6 @@ mod tests {
             "https://otro.de.prueba/v1/x"
         } else {
             "https://cuarto.de.prueba/"
-        }
-    }
-
-    /// `black_box` en el argumento: sin él, LLVM **elimina la llamada**
-    /// (función interna, sin efectos, resultado constante) ⇒ el hook no se
-    /// disparaba nunca y el test era falso (medido: ENTER=0).
-    #[inline(never)]
-    #[no_mangle]
-    pub extern "C" fn objetivo3(x: u64) -> &'static str {
-        // MEDIDO (2026-11-26, host): una función "hoja" (sin marco de pila)
-        // NO dispara el `on_leave` de gum (sí el `on_enter`) ⇒ el marco se
-        // fuerza con un array local.
-        let mut marco = [0u8; 16];
-        marco[0] = (std::hint::black_box(x) & 0xff) as u8;
-        std::hint::black_box(&marco);
-        if std::hint::black_box(x) == 7 {
-            "https://endpoint.de.prueba/v1/x"
-        } else {
-            "https://otro.de.prueba/"
         }
     }
 
