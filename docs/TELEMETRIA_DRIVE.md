@@ -221,7 +221,48 @@ x86_64 en el sandbox) contra la API de Drive de verdad:
 
 ---
 
-## 9. Relación con el resto
+## 9. El bus de órdenes (control sin conexión directa)
+
+Este módulo es el **Nivel 0** (empujar el estado). El **Nivel 2** (tirar
+órdenes) lo implementa `rust-core/src/bus_ejecutor.rs`, y ambos se apoyan en
+el mismo bus por Drive (`rust-core/src/resonance.rs`, que YA existía: cartas
+firmadas Ed25519, `id = sha256(canonico)`, CRDT LWW con `epoch`+`seq`, en la
+carpeta privada `tablon-resiliencia`).
+
+```
+                 raíz (sandbox)                    móvil
+                      │                              │
+        publica carta │                              │  tira del bus
+        tipo="orden"   │                              │  (cada 10 min)
+        ──────────────►│  Drive (tablon-resiliencia) │◄──────┘
+                      │                              │
+                      │◄── carta "respuesta" ────────┘
+                      │   (+ idem_key + resultado)
+```
+
+* `megadaemon-core bus` ⇒ un ciclo a mano (`--simulacion` no ejecuta nada).
+* Tool MCP `bus_ordenes` (ciclo | estado).
+* **Idempotencia**: la `idem_key` (o, si no viene, el `id` de la carta) se
+  guarda tras ejecutarse ⇒ una orden repetida **no** se re-ejecuta.
+* **Fail-closed**: sin firma válida, o sin clave pública del emisor, la
+  orden se cuenta como `sin verificar` y **no** se ejecuta.
+* **Lo irreversible exige `confirm: true`** en el cuerpo, igual que la API.
+* **Presupuesto**: máximo de órdenes por ciclo; con la batería baja y sin
+  cargador no se ejecuta nada.
+
+```sh
+megadaemon-core bus                 # un ciclo
+megadaemon-core bus --simulacion    # qué haría, sin hacerlo
+megadaemon-core bus --maximo 3     # presupuesto
+```
+
+**MEDIDO**: `megadaemon-core bus` sincroniza el bus real de Drive
+(`bus_ok: true`); sin credenciales da el motivo exacto
+(*"no se puede leer la credencial …/gdrive_credentials.json"*).
+
+---
+
+## 10. Relación con el resto
 
 | pieza | fichero | relación |
 |---|---|---|
