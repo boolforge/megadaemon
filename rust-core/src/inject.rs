@@ -234,11 +234,18 @@ pub fn leer_maps(pid: i32) -> Vec<Mapa> {
 /// Igual que [`leer_maps`] pero con la raíz de `/proc` parametrizable.
 pub fn leer_maps_en(raiz: &Path, pid: i32) -> Vec<Mapa> {
     let ruta = raiz.join(pid.to_string()).join("maps");
-    let texto = match std::fs::read_to_string(ruta) {
-        Ok(t) => t,
+    // MEDIDO (2026-11-26, móvil): `/proc/<pid>/maps` puede contener bytes
+    // **NO UTF-8**: los nombres de las regiones `[anon:…]` son arbitrarios
+    // (p. ej. `[anon:(??Lq]`).  `read_to_string` falla entonces con
+    // `InvalidData` ⇒ el inyector concluía "no se puede leer
+    // /proc/<pid>/maps (¿el proceso ha muerto?)" con el proceso VIVO y
+    // respondiendo.  Ahora se lee en BYTES y se decodifica con permisión de
+    // pérdidas (los nombres no importan para calcular direcciones).
+    let bytes = match std::fs::read(&ruta) {
+        Ok(b) => b,
         Err(_) => return Vec::new(),
     };
-    parse_maps(&texto)
+    parse_maps(&String::from_utf8_lossy(&bytes))
 }
 
 /// Parsea el texto de `/proc/<pid>/maps`.
@@ -655,6 +662,28 @@ mod tests {
         );
         assert_eq!(bias_de_carga(&mapas, "/a/lib.so"), Some(0x1000));
         assert_eq!(bias_de_carga(&mapas, "/b/otro.so"), None);
+    }
+
+    /// MEDIDO (2026-11-26, móvil): `/proc/<pid>/maps` del LS de Antigravity
+    /// tiene bytes **NO UTF-8** en los nombres `[anon:…]`.  Con
+    /// `read_to_string` la lectura falla (`InvalidData`) y el inyector
+    /// decía "no se puede leer /proc/<pid>/maps (¿el proceso ha muerto?)"
+    /// con el proceso VIVO.  Este test fija esa regresión.
+    #[test]
+    fn lee_los_maps_aunque_tengan_bytes_no_utf8() {
+        let raiz = std::env::temp_dir().join(format!("md_maps_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&raiz);
+        let pid_dir = raiz.join("4242");
+        let _ = std::fs::create_dir_all(&pid_dir);
+        // Los mismos bytes que se midieron en el móvil: `[anon:(??Lq]`.
+        let contenido: &[u8] = b"70ccc00000-70d0000000 ---p 00000000 00:00 0 [anon:(\xf3\x9cLq]\n\
+                                    7f000000-7f002000 r-xp 00000000 00:00 0 /system/lib64/libc.so\n";
+        std::fs::write(pid_dir.join("maps"), contenido).unwrap();
+        let mapas = leer_maps_en(&raiz, 4242);
+        assert_eq!(mapas.len(), 2, "los maps deben leerse: {:?}", mapas);
+        assert_eq!(mapas[0].inicio, 0x70ccc00000);
+        assert!(mapas[1].ruta.contains("libc.so"));
+        let _ = std::fs::remove_dir_all(&raiz);
     }
 
     /// Comprueba el parser de ELF **contra el propio proceso**: la dirección
