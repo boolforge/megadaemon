@@ -31,6 +31,211 @@ pub const DAEMON_TASKS: &str =
 pub const DAEMON_LOG: &str =
     "/data/user/0/com.agy/files/.gemini/antigravity-app/daemon/daemon.log";
 
+/// **Store proto** de la app: la fuente de verdad de los resúmenes.
+///
+/// MEDIDO (2026-11-26, móvil): la app **re-sincroniza** este fichero con la
+/// DB al arrancar ("summary store: starting background reconciliation
+/// (trigger=startup)" ⇒ "reconciliation complete, synced 32 records"), así
+/// que **borrar filas en la DB no basta**: al reiniciar la app las
+/// huérfanas volvían (medido: las 5 con `project_id` vacío reaparecieron).
+///
+/// Por eso la reparación tiene que tocar **las dos** cosas: el store (que
+/// manda) y la DB (que es su reflejo).
+pub const STORE_SUMMARIES: &str =
+    "/data/user/0/com.agy/files/.gemini/antigravity-app/agyhub_summaries_proto.pb";
+
+/// Un campo del formato de cable de protobuf (lo justo para reescribir el
+/// store sin tocar lo que no se entiende).
+#[derive(Debug, Clone)]
+enum Campo {
+    Varint(u64),
+    Fijo64([u8; 8]),
+    Fijo32([u8; 4]),
+    Bytes(Vec<u8>),
+}
+
+/// Lee un varint del formato de cable.
+fn leer_varint(d: &[u8], i: usize) -> Option<(u64, usize)> {
+    let mut v: u64 = 0;
+    let mut s = 0u32;
+    let mut i = i;
+    while i < d.len() {
+        let b = d[i];
+        i += 1;
+        v |= ((b & 0x7f) as u64) << s;
+        if b & 0x80 == 0 {
+            return Some((v, i));
+        }
+        s += 7;
+        if s > 63 {
+            return None;
+        }
+    }
+    None
+}
+
+/// Trocea un blob protobuf en sus campos (nivel superior).
+fn campos_proto(d: &[u8]) -> Vec<(u64, Campo)> {
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < d.len() {
+        let (key, j) = match leer_varint(d, i) {
+            Some(v) => v,
+            None => break,
+        };
+        let num = key >> 3;
+        let wt = (key & 7) as u8;
+        i = j;
+        let c = match wt {
+            0 => match leer_varint(d, i) {
+                Some((v, j)) => {
+                    i = j;
+                    Campo::Varint(v)
+                }
+                None => break,
+            },
+            1 => {
+                if i + 8 > d.len() {
+                    break;
+                }
+                let mut b = [0u8; 8];
+                b.copy_from_slice(&d[i..i + 8]);
+                i += 8;
+                Campo::Fijo64(b)
+            }
+            2 => {
+                let (ln, j) = match leer_varint(d, i) {
+                    Some(v) => v,
+                    None => break,
+                };
+                let j = j as usize;
+                if j + ln as usize > d.len() {
+                    break;
+                }
+                i = j + ln as usize;
+                Campo::Bytes(d[j..j + ln as usize].to_vec())
+            }
+            5 => {
+                if i + 4 > d.len() {
+                    break;
+                }
+                let mut b = [0u8; 4];
+                b.copy_from_slice(&d[i..i + 4]);
+                i += 4;
+                Campo::Fijo32(b)
+            }
+            _ => break,
+        };
+        out.push((num, c));
+    }
+    out
+}
+
+/// Vuelca un campo al formato de cable.
+fn escribir_campo(num: u64, c: &Campo, out: &mut Vec<u8>) {
+    let (wt, cuerpo): (u64, Vec<u8>) = match c {
+        Campo::Varint(v) => (0, v.to_le_bytes().to_vec()),
+        Campo::Fijo64(b) => (1, b.to_vec()),
+        Campo::Fijo32(b) => (5, b.to_vec()),
+        Campo::Bytes(b) => (2, b.clone()),
+    };
+    let key = (num << 3) | wt;
+    escribir_varint(key, out);
+    if wt == 0 {
+        let v = match c {
+            Campo::Varint(v) => *v,
+            _ => 0,
+        };
+        escribir_varint(v, out);
+    } else if wt == 2 {
+        let b = match c {
+            Campo::Bytes(b) => b.clone(),
+            _ => Vec::new(),
+        };
+        escribir_varint(b.len() as u64, out);
+        out.extend_from_slice(&b);
+    } else {
+        out.extend_from_slice(&cuerpo);
+    }
+}
+
+/// Escribe un varint al formato de cable.
+fn escribir_varint(mut v: u64, out: &mut Vec<u8>) {
+    loop {
+        let b = (v & 0x7f) as u8;
+        v >>= 7;
+        if v == 0 {
+            out.push(b);
+            return;
+        }
+        out.push(b | 0x80);
+    }
+}
+
+/// `conversation_id` de un registro del store (campo 1 del registro).
+fn conversation_id_de_registro(reg: &[u8]) -> Option<String> {
+    for (num, c) in campos_proto(reg) {
+        if num == 1 {
+            if let Campo::Bytes(b) = c {
+                return String::from_utf8(b).ok();
+            }
+        }
+    }
+    None
+}
+
+/// Borra del **store proto** los registros de las conversaciones huérfanas.
+///
+/// MEDIDO (2026-11-26, móvil): borrar en la DB no bastaba; la app volvía a
+/// escribir las huérfanas al arrancar porque el store es la fuente de verdad
+/// ("reconciliation complete, synced 32 records").  Aquí se quitan del store
+/// los registros cuyo `conversation_id` está en `huerfanas`.
+///
+/// Devuelve `(borrados, total_registros)`.  Con copia de seguridad y
+/// escritura atómica (`.new` + `rename`).
+///
+/// ⚠️ La app debe estar **parada**: si está viva, su reconciliación puede
+/// reescribir el store mientras lo cambiamos.
+pub fn limpiar_store_en(
+    app_dir: &Path,
+    huerfanas: &HashSet<String>,
+) -> Result<(usize, usize), String> {
+    let ruta = app_dir.join("agyhub_summaries_proto.pb");
+    let datos = std::fs::read(&ruta).map_err(|e| format!("leer {}: {e}", ruta.display()))?;
+    let campos = campos_proto(&datos);
+    let total = campos
+        .iter()
+        .filter(|(n, _)| *n == 1)
+        .count();
+    let mut fuera: Vec<u8> = Vec::with_capacity(datos.len());
+    let mut borrados = 0usize;
+    for (num, c) in &campos {
+        if *num == 1 {
+            if let Campo::Bytes(b) = c {
+                if let Some(id) = conversation_id_de_registro(b) {
+                    if huerfanas.contains(&id) {
+                        borrados += 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        escribir_campo(*num, c, &mut fuera);
+    }
+    if borrados == 0 {
+        return Ok((0, total));
+    }
+    let stamp = now_unix_secs();
+    let backup = app_dir.join(format!("agyhub_summaries_proto.pb.bak-megadaemon-{stamp}"));
+    std::fs::copy(&ruta, &backup)
+        .map_err(|e| format!("copia de seguridad ({}): {e}", backup.display()))?;
+    let tmp = app_dir.join("agyhub_summaries_proto.pb.new");
+    std::fs::write(&tmp, &fuera).map_err(|e| format!("escribir {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &ruta)
+        .map_err(|e| format!("sustituir {}: {e}", ruta.display()))?;
+    Ok((borrados, total))
+}
+
 /// Directorio activo de Antigravity (`MEGADAEMON_ANTIGRAVITY_DIR` o `APP_DIR`).
 pub fn default_app_dir() -> PathBuf {
     match std::env::var("MEGADAEMON_ANTIGRAVITY_DIR") {
@@ -391,8 +596,32 @@ pub fn reparar_proyectos_en(app_dir: &Path, confirmar: bool) -> Value {
         return json!({
             "ok": false,
             "error": "confirmation_required",
-            "hint": "borra filas de la DB de la app: repite con confirm=true",
+            "hint": "borra filas de la DB de la app y sus registros del store proto: repite con confirm=true",
             "borrarias": huerfanas,
+        });
+    }
+    // Los identificadores de las huérfanas (los necesita el store).
+    let ids_huerfanas: HashSet<String> = antes["huerfanas"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|h| h["conversation_id"].as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    // MEDIDO (2026-11-26, móvil): el STORE es la fuente de verdad.  La app
+    // re-sincroniza el store con la DB al arrancar ("reconciliation complete,
+    // synced 32 records"), así que al borrar sólo en la DB las huérfanas
+    // VOLVÍAN al reiniciar la app.  Por eso se limpia el store **primero**.
+    let store = match limpiar_store_en(app_dir, &ids_huerfanas) {
+        Ok((b, t)) => json!({ "ok": true, "borrados": b, "registros": t }),
+        Err(e) => json!({ "ok": false, "error": e }),
+    };
+    if store["ok"] == json!(false) {
+        return json!({
+            "ok": false,
+            "error": store["error"].clone(),
+            "hint": "no se ha tocado la DB: el store no se pudo reparer",
         });
     }
     // Copia de seguridad (con la fecha) antes de escribir.
@@ -434,10 +663,41 @@ pub fn reparar_proyectos_en(app_dir: &Path, confirmar: bool) -> Value {
             });
         }
     };
+    // MEDIDO (2026-11-26, móvil): sin esto el borrado **se deshacía**: las
+    // 5 huérfanas volvían al reiniciar la app.  El motivo es el WAL: las
+    // filas borradas siguen en el `-wal` y el store de la app las vuelve a
+    // aplicar.  Hay que hacer CHECKPOINT y vaciar el WAL.
+    let checkpoint = con
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+        })
+        .map(|(busy, log, cp)| {
+            json!({ "busy": busy, "log": log, "checkpointed": cp })
+        })
+        .unwrap_or_else(|e| json!({ "error": e.to_string() }));
+    // El WAL y el índice se vacían del disco: si no, el proceso que los
+    // tenga abiertos puede reescribirlos.
+    drop(con);
+    let mut wal_borrado = false;
+    for ext in ["-wal", "-shm"] {
+        let extra = db_path.with_file_name(format!("conversation_summaries.db{ext}"));
+        if extra.exists() {
+            match std::fs::remove_file(&extra) {
+                Ok(()) => wal_borrado = true,
+                Err(e) => {
+                    let _ = e;
+                }
+            }
+        }
+    }
     json!({
         "ok": true,
         "borradas": borradas,
+        "store": store,
         "backup": backup.to_string_lossy(),
+        "checkpoint": checkpoint,
+        "wal_borrado": wal_borrado,
+        "detalle": "store + DB reparados y checkpoint del WAL: sin esto las filas volvían al reiniciar la app",
         "proyectos": proyectos_en(app_dir),
     })
 }
@@ -1062,6 +1322,67 @@ mod tests {
         assert_eq!(proyectos_en(&dir)["sin_project_id"], json!(0));
         let backup = r["backup"].as_str().unwrap();
         assert!(std::path::Path::new(backup).exists(), "debe haber backup");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// MEDIDO (2026-11-26, móvil): borrar en la DB **no bastaba**; al
+    /// reiniciar la app las huérfanas volvían porque el STORE proto es la
+    /// fuente de verdad y la app lo re-sincroniza con la DB al arrancar.
+    #[test]
+    fn el_store_proto_se_limpia_de_las_huerfanas() {
+        let dir = temp_app_dir("store");
+        // Un store sintético: campo 1 = registro, y en el registro el
+        // campo 1 = conversation_id.
+        let mut store: Vec<u8> = Vec::new();
+        for id in ["c1", "c2", "huerfana"] {
+            let mut registro: Vec<u8> = Vec::new();
+            escribir_campo(
+                1,
+                &Campo::Bytes(id.as_bytes().to_vec()),
+                &mut registro,
+            );
+            escribir_campo(2, &Campo::Bytes(vec![0x08, 0x01]), &mut registro);
+            escribir_campo(1, &Campo::Bytes(registro), &mut store);
+        }
+        std::fs::write(dir.join("agyhub_summaries_proto.pb"), &store).unwrap();
+
+        // Sin la huérfana en el conjunto => no se toca nada.
+        let vacio: HashSet<String> = HashSet::new();
+        assert_eq!(limpiar_store_en(&dir, &vacio).unwrap(), (0, 3));
+
+        // Con la huérfana => se borra SÓLO ese registro.
+        let ids: HashSet<String> = ["huerfana".to_string()].into_iter().collect();
+        let (borrados, total) = limpiar_store_en(&dir, &ids).unwrap();
+        assert_eq!(borrados, 1);
+        assert_eq!(total, 3);
+        let nuevo = std::fs::read(dir.join("agyhub_summaries_proto.pb")).unwrap();
+        let texto = String::from_utf8_lossy(&nuevo);
+        assert!(!texto.contains("huerfana"), "la huerfana sigue en el store");
+        assert!(
+            texto.contains("c1") && texto.contains("c2"),
+            "se perdieron los sana"
+        );
+        // Quedan 2 registros.
+        assert_eq!(
+            campos_proto(&nuevo)
+                .iter()
+                .filter(|(n, _)| *n == 1)
+                .count(),
+            2
+        );
+        // Y hay copia de seguridad del original.
+        let backups: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.starts_with("agyhub_summaries_proto.pb.bak-megadaemon-"))
+            .collect();
+        assert_eq!(
+            backups.len(),
+            1,
+            "debe haber copia de seguridad: {backups:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
