@@ -119,6 +119,17 @@ pub struct Entrada {
     /// Cuántas variantes de ruta se probaron (1 = a la primera).
     #[serde(default)]
     pub variantes: u32,
+    /// La **query string** que pidió el cliente (sin el `?`).
+    ///
+    /// MEDIDO (2026-11-26, móvil, captura cruda): el NDJSON guardaba la ruta
+    /// pero NO la query, y sin ella no se puede saber qué pide el LS.  En el
+    /// caso que motivó esto (`GET /v1internal/`) la query venía **vacía**:
+    /// el nombre de la operación faltaba en la URL porque la respuesta de
+    /// `POST /v1internal:onboardUser` nunca llegó (el router POST del
+    /// cockpit no tenía brazo de shim).  Con el query registrado, cualquier
+    /// atypicala se ve sin tener que instrumentar el móvil.
+    #[serde(default)]
+    pub query: Option<String>,
 }
 
 /// Estadísticas en memoria.
@@ -571,32 +582,35 @@ pub fn normalizar_ruta_proxy(path: &str) -> String {
 /// variantes (ver [`variantes_de_ruta`]).
 ///
 /// Y `/v1internal/` pelada NO existe en ninguna forma ⇒ passthrough al
-/// backend SIEMPRE da 404.  Aqui se responde con el **catalogo** de
-/// MegaDaemon (que es lo que el LS quiere saber: que modelos hay), con el
-/// mismo formato que el catalogo de `/v1internal/listModels`.
+/// backend SIEMPRE da 404.  El shim es **transparente**: devuelve ese mismo
+/// 404 (lo que vería la app si hablara con Google directamente).
+///
+/// MEDIDO (2026-11-26, móvil): las rutas de MODELO (`:fetchAvailableModels`
+/// y las de generación) sí las sirve MegaDaemon, pero eso se decide en
+/// [`dialecto_de`], no aquí.
 pub fn es_ruta_resoluble_local(ruta: &str) -> bool {
     let r = normalizar_ruta_proxy(ruta);
-    // MEDIDO (2026-11-25, movil): `/v1internal/` y `/v1internal` PELADAS
-    // NO existen en Google (404 medido contra el backend real).  Resolverlas
-    // EN LOCAL con el catalogo de MegaDaemon rompia el arranque del
-    // language server:
+    // MEDIDO (2026-11-26, movil, A/B con el `.so` ORIGINAL): la pelada
+    // `/v1internal/` **NO se resuelve en local**: tiene que ir al PASSTHROUGH
+    // (que la devuelve a Google tal cual, 404 incluido) para que el shim sea
+    // **transparente**.
     //
-    //   - con el shim: el LS pedia `/v1internal/` 32 veces seguidas y NUNCA
-    //     llegaba a "core ready" (log: "core did not become ready within
-    //     60000ms") => la app de Antigravity se quedaba sin core y el
-    //     login ("Continue with Google") no avanzaba;
-    //   - con el `.so` ORIGINAL (sin shim): el LS anuncia "core ready on
-    //     127.0.0.1:45157" y acepta conexiones (medido: el propio LS
-    //     registra "http: TLS handshake error from 127.0.0.1:42274: EOF").
+    // MEDIDO: con la pelada resuelta en local (catalogo de MegaDaemon) el LS
+    // la pedia **78 veces seguidas** (1/s) y NUNCA llegaba a "core ready"
+    // (log: "core did not become ready within 60000ms") => la app se quedaba
+    // sin core.  Con el 404 de Google (lo que responde el backend real) el LS
+    // **si** llega a "core ready" y sigue => el 404 es el comportamiento de
+    // referencia, no un fallo del shim.
     //
-    // TRANSPARENCIA: el shim debe devolver EXACTAMENTE lo que devolveria
-    // Google.  La unica excepcion son las rutas de MODELO
-    // (`:fetchAvailableModels` y las de generacion), que si deben devolver
-    // el catalogo de MegaDaemon (el modelo real detras de megadaemon);
-    // esas se resuelven por `dialecto_de`, no por aqui.
-    //
-    // Por tanto: la pelada se deja al PASSTHROUGH (que la devuelve a Google
-    // tal cual, 404 incluido) => el LS se comporta igual que sin shim.
+    // MEDIDO (2026-11-26): el problema REAL del login era otro: los **POST**
+    // del LS (`/v1internal:loadCodeAssist`, `:onboardUser`, `:listExperiments`,
+    // `:fetchUserInfo`) NO llegaban al shim (el router POST del cockpit no
+    // tenia brazo de shim) y caian en un catch-all que devolvia una
+    // respuesta INVENTADA sin nombre de operacion => el LS consultaba el
+    // estado de una operacion VACIA (`GET /v1internal/`) => 404 => "failed to
+    // get operation status" => la app volvia a pedir el login de Google.
+    // Arreglado en `cockpit_server.rs` (brazo POST del shim => passthrough a
+    // Google con el `Authorization` que ya envia la app).
     let pelada = r.trim_end_matches('/');
     let _ = pelada;
     false
@@ -897,6 +911,7 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
             proxy: true,
             ruta_real: Some(ruta.clone()),
             variantes: 1,
+            query: Some(req.query.clone()),
         });
         return Ok(Respuesta {
             status: 200,
@@ -949,6 +964,7 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
                     proxy: true,
                     ruta_real,
                     variantes,
+                    query: Some(req.query.clone()),
                 });
                 return r;
             }
@@ -1078,6 +1094,7 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
         proxy: true,
         ruta_real: Some(ruta.clone()),
         variantes: 1,
+        query: Some(req.query.clone()),
     });
 
     Ok(Respuesta {
@@ -1155,6 +1172,9 @@ pub fn procesar(metodo: &str, ruta: &str, cuerpo: &str) -> (u16, String) {
         proxy: false,
         ruta_real: None,
         variantes: 0,
+        // `procesar()` no recibe la query (la firma es historica): se deja
+        // vacia en vez de inventarla.
+        query: None,
         // MEDIDO (2026-11-23, auditoría de calidad): la RUTA se guardaba en
         // claro mientras que el cuerpo y la respuesta pasaban por el
         // redactor.  La ruta de una llamada a la API puede llevar la
@@ -1374,17 +1394,45 @@ mod tests {
 
     #[test]
     fn la_ruta_pelada_no_se_resuelve_en_local() {
-        // MEDIDO (2026-11-25, movil): resolver `/v1internal/` en local
-        // impedia que el language server llegara a "core ready" (el LS
-        // pedia 32 veces y la app se quedaba sin core => el login no
-        // avanzaba).  La pelada tiene que ir al PASSTHROUGH para que el
-        // shim sea transparente.
+        // MEDIDO (2026-11-26, móvil): el shim tiene que ser TRANSPARENTE.
+        // Resolver `/v1internal/` en local con el catálogo hacía que el LS la
+        // pidiera 78 veces seguidas y nunca llegara a "core ready".
         assert!(!es_ruta_resoluble_local("/v1internal/"));
         assert!(!es_ruta_resoluble_local("/v1internal"));
         assert!(!es_ruta_resoluble_local("/proxy/v1internal/"));
         // Y la pelada SI es passthrough (la devuelve a Google tal cual).
         assert!(es_ruta_passthrough("/v1internal/"));
         assert!(es_ruta_passthrough("/v1internal"));
+    }
+
+    #[test]
+    fn las_rutas_de_cuenta_del_ls_se_pasan_a_google() {
+        // MEDIDO (2026-11-26, móvil, captura cruda de las peticiones del LS):
+        // estos POST son los que traen la cuenta y, sobre todo, el NOMBRE de
+        // la operación de `onboardUser`.  Si no entran por el shim, el
+        // catch-all del router POST inventa la respuesta y el LS consulta el
+        // estado de una operación VACÍA (`GET /v1internal/`) ⇒ 404 ⇒ "failed
+        // to get operation status" ⇒ la app vuelve a pedir el login.
+        for r in [
+            "/v1internal:loadCodeAssist",
+            "/v1internal:onboardUser",
+            "/v1internal:listExperiments",
+            "/v1internal:fetchUserInfo",
+        ] {
+            assert!(es_ruta_proxy(r), "{r} debe entrar por el shim");
+            assert!(es_ruta_passthrough(r), "{r} debe ir a Google tal cual");
+            assert_eq!(dialecto_de(r), None, "{r} no es una ruta de modelo");
+        }
+        // El MODELO sí es del gateway canónico (dialecto Gemini) y el
+        // catálogo también (para que el LS use los modelos de MegaDaemon).
+        assert_eq!(
+            dialecto_de("/v1internal:generateContent"),
+            Some(Dialecto::Gemini)
+        );
+        assert_eq!(
+            dialecto_de("/v1internal:fetchAvailableModels"),
+            Some(Dialecto::Catalogo)
+        );
     }
 
     #[test]

@@ -2305,6 +2305,76 @@ fn handle_client(mut stream: TcpStream) {
     let qp = parse_query_params(query);
     match path {
         // ------------------------------------------------------------------
+        // PROXY REAL (agyshim) en POST — MEDIDO (2026-11-26, móvil)
+        // ------------------------------------------------------------------
+        //
+        // BUG CRÍTICO (MEDIDO 2026-11-26, móvil): el brazo del shim sólo
+        // existía en el router **GET** (el de más arriba, ~línea 1311).  Los
+        // **POST** del language server caían en el `_ =>` final del router
+        // POST, que responde con una respuesta **inventada**:
+        //
+        //     {"status":"executed","endpoint":"…","engine":"rust-arm64-v13.0",…}
+        //
+        // Lo que el LS manda por POST (capturado en crudo en el móvil):
+        //
+        //     POST /v1internal:loadCodeAssist      {"metadata":{"ideType":"ANTIGRAVITY"}}
+        //     POST /v1internal:listExperiments     {"metadata":{"updateChannel":"stable"}}
+        //     POST /v1internal:fetchUserInfo       {}
+        //     POST /v1internal:fetchAvailableModels {}
+        //     POST /v1internal:onboardUser         {"tierId":"free-tier",…}
+        //
+        // **`onboardUser` devuelve una google.longrunning.Operation**; de ahí
+        // sale el NOMBRE de la operación que el LS consulta después:
+        //
+        //     GET /v1internal/<nombre-de-la-operación>
+        //
+        // Con la respuesta inventada no hay nombre ⇒ el LS consulta la ruta
+        // **vacía** `GET /v1internal/` ⇒ 404 (Google tampoco tiene esa ruta)
+        // ⇒ el auth provider acaba con
+        // `failed to get operation status: request failed (code 404)` ⇒
+        // **la app vuelve a pedir el login de Google** ("Continue with
+        // Google") al pinchar un proyecto.
+        //
+        // MEDIDO (2026-11-26, móvil): pasando esos POST a Google real (con el
+        // `Authorization` que ya envía la app) desaparecen el "empty ID" y el
+        // `generalError` del estado de autenticación.
+        //
+        // Además, por el mismo bug, las llamadas de **MODELO** del LS
+        // (`POST /v1internal:generateContent`, `:streamGenerateContent`) NUNCA
+        // llegaban al gateway canónico ⇒ el modelo de MegaDaemon no se usaba.
+        //
+        // El shim NO ve la credencial de Google: la reenvía tal cual (la
+        // cabecera `Authorization` de la app) y devuelve la respuesta
+        // verbatim.  El MODELO sí lo sirve el gateway (dialecto Gemini) con
+        // las credenciales del vault.
+        p if crate::agyshim::es_ruta_proxy(p) => {
+            let peticion = crate::agyshim::Peticion {
+                metodo: method.to_string(),
+                ruta: p.to_string(),
+                cabeceras: cabeceras_peticion.clone(),
+                query: query.to_string(),
+                cuerpo: String::from_utf8_lossy(body_slice).to_string(),
+            };
+            match crate::agyshim::proxy(&peticion) {
+                Ok(r) => send_http_response(
+                    &mut stream,
+                    r.status,
+                    &r.content_type,
+                    r.cuerpo.as_bytes(),
+                ),
+                Err(e) => send_json(
+                    &mut stream,
+                    &json!({
+                        "error": {
+                            "message": e,
+                            "code": 502,
+                            "status": "SHIM_PROXY_ERROR",
+                        }
+                    }),
+                ),
+            }
+        }
+        // ------------------------------------------------------------------
         // v14 (UI-16 · CRÍTICA) — Intercambio: API key → token de sesión.
         //
         // La página pública `GET /` NO lleva el token incrustado (si lo

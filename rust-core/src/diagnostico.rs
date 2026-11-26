@@ -73,6 +73,10 @@ fn resumen_shim(ruta: &str, max: usize) -> Vec<Value> {
             "ts": v.get("ts").cloned().unwrap_or(Value::Null),
             "m": v.get("metodo").cloned().unwrap_or(Value::Null),
             "ruta": v.get("ruta").cloned().unwrap_or(Value::Null),
+            // MEDIDO (2026-11-26): el LS consulta el estado de una operacion
+            // en `/v1internal/` CON query (`?operationId=…`).  Sin este
+            // campo no se puede saber que pide ni por que se atasca.
+            "query": v.get("query").cloned().unwrap_or(Value::Null),
             "ruta_real": v.get("ruta_real").cloned().unwrap_or(Value::Null),
             "variantes": v.get("variantes").cloned().unwrap_or(Value::Null),
             "status": v.get("status").cloned().unwrap_or(Value::Null),
