@@ -225,12 +225,17 @@ selftest() {
 # cada reinicio y la flota se queda ciega (el "quick" de channel.json
 # salia vacio).  Con un token de escritura en el repo, el movil publica
 # su URL viva en state/channel.json y la flota la lee siempre de ahi.
-find_gh_token() {
+find_gh_token_file() {
   for t in "$MD_DIR/.gh_token" "$MD_DIR/github.token" "$HOME/.mavis/github.token" \
            "$STATE_REAL/.gh_token" "$MD_DIR/state/.gh_token"; do
-    [ -f "$t" ] && tr -d '\r\n ' < "$t" && return 0
+    [ -f "$t" ] && { echo "$t"; return 0; }
   done
   return 1
+}
+
+find_gh_token() {
+  t=$(find_gh_token_file) || return 1
+  tr -d '\r\n ' < "$t"
 }
 
 # --- publicar la URL viva al repo (channel.json) --------------------------
@@ -242,9 +247,14 @@ publicar_canal() {
     "$CURL" -fsSL -o "$PUB" "https://github.com/$REPO_SLUG/releases/latest/download/channel-publish-arm64" 2>/dev/null \
       && chmod 755 "$PUB" || { warn "  no pude bajar channel-publish"; return 1; }
   fi
-  TOKGH="$(find_gh_token)" || { warn "  no hay token de GitHub en el movil (ponlo en $MD_DIR/.gh_token, 0600)"; return 1; }
+  # MEDIDO (2026-11-26): el token pasaba por `GITHUB_TOKEN=` pero el binario
+  # leia `MEGADAEMON_GITHUB_TOKEN` => la publicacion al repo fallaba siempre
+  # ("no_github_token") y el `raw` del repo se quedaba con la URL VIEJA => el
+  # sandbox no podia redescubrir el movil tras un cambio de tunel.  Ahora se
+  # pasa el FICHERO (--token-file): el token no viaja por el entorno.
+  TOKGH_FILE="$(find_gh_token_file)" || { warn "  no hay token de GitHub en el movil (ponlo en $MD_DIR/.gh_token, 0600)"; return 1; }
   say "  publicando la URL al repo (state/channel.json)..."
-  OUT="$(GITHUB_TOKEN="$TOKGH" "$PUB" --repo-publish --url "$TURL" 2>&1)"
+  OUT="$("$PUB" --repo-publish --token-file "$TOKGH_FILE" --state-dir "$STATE_REAL" 2>&1)"
   printf '%s\n' "$OUT" | tail -3 | while read -r l; do say "    $l"; done
   case "$OUT" in
     *OK*|*ok*|*publicado*) say "  canal publicado: la flota lo leerá de state/channel.json" ;;

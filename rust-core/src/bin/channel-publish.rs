@@ -46,6 +46,34 @@ fn flag(name: &str) -> bool {
     std::env::args().any(|a| a == name)
 }
 
+/// El token de GitHub del entorno.
+///
+/// MEDIDO (2026-11-26): el instalador (`deploy/instalador-megadaemon.sh`)
+/// publica el canal con `GITHUB_TOKEN="$TOKGH"` pero el binario sólo leía
+/// `MEGADAEMON_GITHUB_TOKEN` ⇒ la publicación al repo **fallaba siempre**
+/// ("no_github_token") y el `raw` del repo se quedaba con la URL vieja ⇒ el
+/// sandbox no podía redescubrir el móvil tras un cambio de túnel.
+///
+/// Se aceptan los DOS nombres (el estándar `GITHUB_TOKEN` y el propio).
+fn token_github() -> Option<String> {
+    token_entre(&[
+        std::env::var("MEGADAEMON_GITHUB_TOKEN").ok(),
+        std::env::var("GITHUB_TOKEN").ok(),
+    ])
+}
+
+/// El primer token no vacío de la lista (orden de preferencia).
+fn token_entre(vals: &[Option<String>]) -> Option<String> {
+    vals.iter().flatten().find_map(|v| {
+        let v = v.trim();
+        if v.is_empty() {
+            None
+        } else {
+            Some(v.to_string())
+        }
+    })
+}
+
 fn main() -> ExitCode {
     let state_dir = arg("--state-dir");
     let quick = arg("--quick").filter(|s| !s.trim().is_empty());
@@ -116,7 +144,7 @@ fn main() -> ExitCode {
         let path = arg("--path").unwrap_or_else(|| "state/channel.json".to_string());
         let token = match arg("--token-file") {
             Some(p) => std::fs::read_to_string(p).ok().map(|s| s.trim().to_string()),
-            None => std::env::var("MEGADAEMON_GITHUB_TOKEN").ok(),
+            None => token_github(),
         }
         .filter(|t| !t.is_empty());
         let Some(token) = token else {
@@ -165,4 +193,29 @@ fn main() -> ExitCode {
     } else {
         1
     })
+}
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+
+    #[test]
+    fn el_token_propio_tiene_preferencia() {
+        let t = token_entre(&[
+            Some("propio".to_string()),
+            Some("generico".to_string()),
+        ]);
+        assert_eq!(t.as_deref(), Some("propio"));
+    }
+
+    #[test]
+    fn un_token_vacio_no_cuenta() {
+        let t = token_entre(&[Some("   ".to_string()), Some("generico".to_string())]);
+        assert_eq!(t.as_deref(), Some("generico"));
+    }
+
+    #[test]
+    fn sin_token_no_hay_token() {
+        assert!(token_entre(&[None, Some(String::new())]).is_none());
+    }
 }

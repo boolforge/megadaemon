@@ -108,6 +108,17 @@ pub const STACK: &[Entrada] = &[
         contenido: include_str!("../../deploy/98-cloudflared.sh"),
     },
     Entrada {
+        // MEDIDO (2026-11-26): el watchdog del túnel estaba FUERA del stack
+        // embebido ⇒ sólo lo instalaba el instalador manual ⇒ la
+        // auto-actualización del daemon NUNCA lo refrescaba (y `98-cloudflared.sh`
+        // lo lanza: sin él, "NO existe $WATCHDOG").  Con el watchdog en el
+        // stack, el móvil se autorrepara también con este script.
+        origen: "deploy/tunnel-watchdog.sh",
+        destino: Destino::Prefijo("tunnel-watchdog.sh"),
+        modo: 0o755,
+        contenido: include_str!("../../deploy/tunnel-watchdog.sh"),
+    },
+    Entrada {
         origen: "deploy/91-adb-tcp.sh",
         destino: Destino::Servicio("91-adb-tcp.sh"),
         modo: 0o755,
@@ -475,6 +486,28 @@ mod tests {
                 e.origen
             );
         }
+    }
+
+    /// El watchdog del túnel tiene que estar en el stack: `98-cloudflared.sh`
+    /// lo LANZA (sin él, el túnel se queda sin vigilante y el móvil se queda
+    /// inalcanzable cuando cloudflared muere).
+    ///
+    /// MEDIDO (2026-11-26): estaba fuera del stack ⇒ la auto-actualización
+    /// del daemon nunca lo refrescaba.
+    #[test]
+    fn el_watchdog_del_tunel_esta_en_el_stack() {
+        let w = STACK
+            .iter()
+            .find(|e| e.origen == "deploy/tunnel-watchdog.sh")
+            .expect("el watchdog del tunel esta en el stack");
+        assert!(
+            w.contenido.contains("publicar_repo"),
+            "el watchdog embebido no publica el canal en el repo"
+        );
+        assert!(
+            matches!(w.destino, Destino::Prefijo(_)),
+            "el watchdog va al prefijo (lo lanza 98-cloudflared.sh desde ahi)"
+        );
     }
 
     /// El supervisor embebido DEBE usar el prefijo persistente.

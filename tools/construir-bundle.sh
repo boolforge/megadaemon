@@ -39,7 +39,7 @@ chmod 755 "$STAGE/bin/megadaemon-core"
 
 # 2) El stack (los mismos ficheros que el daemon lleva embebidos).
 for f in 99-megadaemon.sh 97-megadaemon-keeper.sh 98-cloudflared.sh 91-adb-tcp.sh \
-         antigravity-task-runner.sh antigravity-task-supervisor.sh; do
+         antigravity-task-runner.sh antigravity-task-supervisor.sh tunnel-watchdog.sh; do
     cp -f "$RAIZ/deploy/$f" "$STAGE/deploy/$f"
     chmod 755 "$STAGE/deploy/$f"
 done

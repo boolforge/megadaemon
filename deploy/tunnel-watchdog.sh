@@ -118,6 +118,7 @@ publicar() {
     if [ -x "$DAEMON_BIN" ]; then
         "$DAEMON_BIN" channel publish >>"$LOG" 2>&1
         log "publicado (daemon): $url (pids: $pids)"
+        publicar_repo
         return
     fi
     if [ -x "$PUBLISH" ]; then
@@ -125,9 +126,44 @@ publicar() {
         # (otra ruta) => el estado se escribiría donde el daemon no lo lee.
         "$PUBLISH" --state-dir "$STATE_DIR" --quick "$url" --pids "$pids" >>"$LOG" 2>&1
         log "publicado: $url (pids: $pids)"
+        publicar_repo
         return
     fi
     log "sin binario de publicacion: no puedo publicar (channel.json + paste)"
+}
+
+# Publica la URL VIVA en el REPO (state/channel.json).
+#
+# MEDIDO (2026-11-26): el "quick tunnel" regenera el hostname cada vez que
+# cloudflared se relanza => si el relay (canónico) está caído, el sandbox se
+# queda CIEGO: la URL nueva sólo existe en el paste (que rota y no se puede
+# descubrir) y en el móvil.  El repo NO cachea (Contents API) => publicando
+# allí, la flota siempre puede redescubrir el móvil.
+publicar_repo() {
+    tok=""
+    for t in "$LOG_DIR/.gh_token" "$LOG_DIR/github.token" \
+             "$STATE_DIR/.gh_token" "$STATE_DIR/github.token" \
+             "$HOME/.mavis/github.token"; do
+        if [ -f "$t" ]; then
+            tok=$(tr -d '\r\n ' < "$t")
+            break
+        fi
+    done
+    if [ -z "$tok" ]; then
+        log "sin token de GitHub: no puedo publicar el canal en el repo"
+        return 1
+    fi
+    pub="$LOG_DIR/channel-publish"
+    [ -x "$pub" ] || pub="$PUBLISH"
+    if [ ! -x "$pub" ]; then
+        log "sin channel-publish: no puedo publicar el canal en el repo"
+        return 1
+    fi
+    # MEGADAEMON_GITHUB_TOKEN: el nombre que lee el binario (también acepta
+    # GITHUB_TOKEN).  El token NUNCA se imprime.
+    MEGADAEMON_GITHUB_TOKEN="$tok" "$pub" --repo-publish --state-dir "$STATE_DIR" \
+        >>"$LOG" 2>&1
+    log "canal publicado en el repo (state/channel.json)"
 }
 
 log "watchdog arrancado (interval=${INTERVAL}s max_load=${MAX_LOAD})"
