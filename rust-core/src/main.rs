@@ -353,6 +353,21 @@ fn main() {
                     eprintln!("diagnostico: publicación en Drive cada {min} min");
                 }
             }
+            // v17: TELEMETRIA A DRIVE + DATOS DE CONEXION.
+            //
+            // MEDIDO (2026-11-26): cuando el túnel del móvil cae (el quick
+            // tunnel cambia de hostname y el relé canónico se cae), el
+            // sandbox se queda CIEGO y hay queiagnosticar "a mano".  Con esto
+            // el móvil EMPUJA su estado y sus datos de conexión a Drive ⇒ el
+            // root puede leerlos desde donde esté, sin depender del túnel.
+            // El periodo se duplica solo en modo ahorro (batería baja).
+            {
+                let min = megadaemon_core::config_efectiva::u64_de("telemetria.publicar_min", 15);
+                if min > 0 {
+                    megadaemon_core::telemetria::publicar_periodico(min);
+                    eprintln!("telemetria: publicación en Drive cada {min} min");
+                }
+            }
             // v21: el daemon RECONCILIA SU PROPIO STACK al arrancar y cada
             // 10 min.
             //
@@ -508,6 +523,49 @@ fn main() {
                     std::process::exit(2);
                 }
             }
+        }
+
+        // v17 — Telemetría a Drive (nativa, sin curl: el móvil no lo tiene).
+        //   megadaemon-core telemetria [estado|publicar|conexion|listo|sonda <url>|artefacto <ruta>]
+        "telemetria" => {
+            let sub = args.get(2).cloned().unwrap_or_else(|| "estado".to_string());
+            let sd = std::env::var("MEGADAEMON_STATE_DIR").ok();
+            let out: serde_json::Value = match sub.as_str() {
+                "publicar" => match megadaemon_core::telemetria::publicar(sd.as_deref()) {
+                    Ok(v) => v,
+                    Err(e) => serde_json::json!({"ok": false, "error": e}),
+                },
+                "conexion" => match megadaemon_core::telemetria::publicar_conexion(sd.as_deref()) {
+                    Ok(v) => v,
+                    Err(e) => serde_json::json!({"ok": false, "error": e}),
+                },
+                "listo" => megadaemon_core::telemetria::estado_listo(sd.as_deref()),
+                "sonda" => megadaemon_core::telemetria::sonda_tunel(
+                    args.get(3).map(|s| s.as_str()).unwrap_or(""),
+                ),
+                "artefacto" => {
+                    let ruta = args.get(3).cloned().unwrap_or_default();
+                    match megadaemon_core::telemetria::subir_artefacto(
+                        &ruta,
+                        args.get(4).map(|s| s.as_str()),
+                        None,
+                        sd.as_deref(),
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => serde_json::json!({"ok": false, "error": e}),
+                    }
+                }
+                _ => megadaemon_core::telemetria::recoger(sd.as_deref()),
+            };
+            println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+            // "listo" y "sonda" son las dos consultas que un supervisor
+            // necesita: el código de salida dice si el nodo sirve.
+            let ok = match sub.as_str() {
+                "listo" => out["listo"].as_bool().unwrap_or(false),
+                "sonda" => out["ok"].as_bool().unwrap_or(false),
+                _ => true,
+            };
+            std::process::exit(if ok { 0 } else { 1 });
         }
 
         // v16 — Capa de automatización (CLI de los 5 módulos nuevos).

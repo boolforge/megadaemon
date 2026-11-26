@@ -723,6 +723,24 @@ pub fn tool_definitions() -> Value {
                 }
             },
             {
+                "name": "telemetria",
+                "description": "TELEMETRIA A DRIVE: el nodo empuja su estado (bateria, carga, red DESGLOSADA POR TRANSPORTE — wifi frente a datos moviles —, instrumentacion viva del NDJSON de hooks) y los DATOS DE CONEXION (URL del tunel, puerto, build, sha16 de las claves). Con eso el root sabe donde conectarse sin depender de que el tunel este vivo, y el nodo se autodetecta 'listo'. Acciones: estado | publicar | conexion | listo | sonda | artefacto (sube un binario/NDJSON a Drive, no a GitHub).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": {
+                            "type": "string",
+                            "description": "estado | publicar | conexion | listo | sonda | artefacto",
+                            "default": "estado"
+                        },
+                        "url": { "type": "string", "description": "URL a sondear (accion sonda)." },
+                        "ruta": { "type": "string", "description": "Ruta local del artefacto (accion artefacto)." },
+                        "nombre": { "type": "string", "description": "Nombre en Drive del artefacto." },
+                        "carpeta": { "type": "string", "description": "Carpeta VFS de destino del artefacto." }
+                    }
+                }
+            },
+            {
                 "name": "stack",
                 "description": "STACK AUTOCONTENIDO: el daemon lleva DENTRO el supervisor, el keeper, cloudflared, los scripts de Antigravity y la Web UI, y los reconcilia solo (SHA-256 embebido vs el de disco). Es lo que evita que el movil se rompa al actualizar (medido el 2026-11-25: el supervisor viejo no encontraba el binario nuevo y no podia relanzar el daemon). Acciones: estado (solo mira) | reconciliar (reescribe lo que difiere y reinicia el supervisor si cambio; es idempotente).",
                 "inputSchema": {
@@ -1437,6 +1455,14 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 },
                 _ => crate::diagnostico::recoger(),
             };
+            json!({ "content": [{ "type": "text", "text": v.to_string() }] })
+        }
+        // v17 — Telemetría a Drive: el móvil **empuja** su estado (red
+        // desglosada wifi/móvil, batería, instrumentación viva) y los datos
+        // de conexión.  Así el root no depende de que el túnel esté vivo:
+        // lee el estado de Drive y sabe a dónde conectarse.
+        "telemetria" => {
+            let v = crate::telemetria::dispatch(args);
             json!({ "content": [{ "type": "text", "text": v.to_string() }] })
         }
         "stack" => {
