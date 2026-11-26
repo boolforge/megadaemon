@@ -32,12 +32,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # `set -u` (variables definidas) pero NO `set -e`: el runner usa
+          # `bash -e` y un `head` sobre un fichero inexistente abortaba el
+          # paso entero (medido 2026-11-26: el sondeo moría en el primer
+          # HTTP 000 y no llegaba a decir nada más).
           set -u
+          set +e
           echo "### 1) RELAY (canónico)"
           code=$(curl -s -m 25 -o /tmp/relay.json -w "%{http_code}" \
                  "https://mdtmfnc.duckdns.org/channel.json" || echo 000)
           echo "HTTP $code"
-          head -c 600 /tmp/relay.json 2>/dev/null; echo
+          [ -f /tmp/relay.json ] && head -c 600 /tmp/relay.json 2>/dev/null
+          echo
           echo "### 2) REPO (API de Contents: NO el raw, que cachea)"
           code=$(curl -s -m 25 -o /tmp/repo.json -w "%{http_code}" \
                  -H "Accept: application/vnd.github+json" \
@@ -69,9 +75,15 @@ jobs:
             code=$(curl -s -m 25 -o /tmp/health.json -w "%{http_code}" \
                    "$QUICK/health" || echo 000)
             echo "daemon HTTP $code"
-            head -c 400 /tmp/health.json 2>/dev/null; echo
+            [ -f /tmp/health.json ] && head -c 400 /tmp/health.json 2>/dev/null
+            echo
           fi
           echo "### 4) ¿responde el relay con la URL del daemon?"
           code=$(curl -s -m 25 -o /tmp/relay2.json -w "%{http_code}" \
                  "https://mdtmfnc.duckdns.org/" || echo 000)
           echo "raiz HTTP $code"
+          echo "### 5) RESUMEN"
+          echo "si el relay no responde, el canal canonico esta CAIDO y el"
+          echo "movil solo puede publicarse en el repo (que es lo que hace"
+          echo "el watchdog nuevo del commit a1d8e94)."
+          exit 0
