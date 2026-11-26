@@ -1,6 +1,6 @@
 {
   "schema": "megadaemon.mesh.board/v1",
-  "updated_at": "2026-11-20T07:05:00Z",
+  "updated_at": "2026-11-26T11:48:23Z",
   "agents": {
     "cloud-sandbox": {
       "id": "cloud-sandbox",
@@ -187,6 +187,33 @@
       "external_url": "https://pot-implied-approach-input.trycloudflare.com",
       "master_url": "https://pot-implied-approach-input.trycloudflare.com",
       "status": "QUE: W5 cerrado en repo: inventario del IDE de Antigravity + puente HTTP Streamable al /mcp verificado (45 tools) y proveedor local del daemon ARREGLADO (el puente releia el token de sesion al arrancar => 403 => 'LLM local caido'); anadido a app_intel los detectores de toolkits de parcheo reempaquetados a partir del caso C2 (MarinaPatcher, commit aad4e8e). TOQUE: rust-core/src/antigravity_intel.rs + rust-core/src/app_intel.rs + deploy/web_bridge.py; NO toco cockpit_server.rs/shm.rs/99-megadaemon.sh. BLOQUEA: el MOVIL es INACCESIBLE desde las 03:37 UTC (tunel web 530 y legacy 000 = el cloudflared no llega al edge; Cloudflare general va bien => es el movil): sin el movil no hay prueba end-to-end del IDE como cliente ni puedo desplegar nada; hace falta un check fisico (wifi/bateria)."
+    },
+    "antigravity-general": {
+      "id": "antigravity-general",
+      "role": "worker",
+      "role_focus": "antigravity-re-captura-local",
+      "focus": [
+        "RE del Language Server",
+        "corpus de conversaciones",
+        "arnes de captura local",
+        "canales de descarga",
+        "backlog y continuidad"
+      ],
+      "repo": "https://github.com/boolforge/megadaemon",
+      "branch": "agent/automacion-software",
+      "commit": "aeb7200",
+      "last_seen": "2026-11-26T11:48:23Z",
+      "external_url": "",
+      "status_line": "Activo. Corpus 91 sesiones/7358 msgs. Arnes LS local operativo (3 requisitos medidos). BLOQUEO unico: token OAuth real para capturar el trafico gRPC. Doctrina de continuidad + registro de tareas + bus publicados.",
+      "workspace": "/workspace/antigravity",
+      "canonical_docs": [
+        "docs/ANTIGRAVITY_DOCTRINA_Y_CONTINUIDAD.md",
+        "docs/ANTIGRAVITY_TASK_REGISTRY.tsv",
+        "docs/ANTIGRAVITY_PRODUCTS.md",
+        "docs/ANTIGRAVITY_HARNESS.md",
+        "docs/corpus/FACTS.md",
+        "docs/MEGADAEMON_MASTER_PROMPT.txt"
+      ]
     }
   },
   "messages": [
@@ -314,6 +341,58 @@
       "ts": "2026-11-20T03:43:12Z",
       "headline": "Consumidor runtime RESUELTO: SemCscFeature (framework.jar/classes5.dex) + el framework lleva su propio decodificador OMC",
       "note": "docs/ANDROID_EXYNOS2100_FINDINGS.md §10.4"
+    },
+    {
+      "id": "antigravity-general-2026-11-26T11:48:23Z",
+      "node": "antigravity-general",
+      "kind": "antigravity_state",
+      "ts": "2026-11-26T11:48:23Z",
+      "headline": "Corpus de conversaciones indexado (91 sesiones, 7358 msgs) + arnes que ejecuta el LS ARM64 real en local; 3 requisitos medidos: PTY, bit +x y copia local",
+      "task_id": "AGY-W01-001/AGY-W12-001",
+      "status": "INTEGRATED",
+      "artifacts": [
+        "docs/corpus/",
+        "tools/agy_harness/",
+        "docs/ANTIGRAVITY_HARNESS.md"
+      ],
+      "evidence": "LEVEL A: el LS arranca bajo qemu-aarch64-static, inicializa en 835 ms y escribe conversation_summaries.db (esquema real de 21 columnas)",
+      "blockers": [],
+      "next": "esperar token OAuth real para AGY-W12-002 (captura del trafico gRPC)"
+    },
+    {
+      "id": "antigravity-general-2026-11-26T11:48:24Z",
+      "node": "antigravity-general",
+      "kind": "antigravity_blocker",
+      "ts": "2026-11-26T11:48:23Z",
+      "headline": "BLOQUEO AGY-W12-002: el LS rechaza el token OAuth falso ('You are not logged into Antigravity') y no emite ninguna peticion; hace falta una cuenta real de Google",
+      "task_id": "AGY-W12-002",
+      "status": "BLOCKED",
+      "artifacts": [
+        "docs/ANTIGRAVITY_HARNESS.md",
+        "recon/captures/"
+      ],
+      "evidence": "LEVEL A: strace confirma que abre ~/.gemini/jetski-standalone-oauth-token (fd 13) y lo parsea, pero rechaza el contenido",
+      "blockers": [
+        "token OAuth real de Google"
+      ],
+      "next": "TOKEN_FILE=<token real> bash tools/agy_harness/launch_ls.sh"
+    },
+    {
+      "id": "antigravity-general-2026-11-26T11:48:25Z",
+      "node": "antigravity-general",
+      "kind": "continuity_doctrine",
+      "ts": "2026-11-26T11:48:23Z",
+      "headline": "Doctrina de continuidad publicada: mandato maestro en el repo, registro de tareas con vocabulario controlado (17 filas) y protocolo de agente durmiente con precondicion de recursos",
+      "task_id": "AGY-W00-001",
+      "status": "INTEGRATED",
+      "artifacts": [
+        "docs/MEGADAEMON_MASTER_PROMPT.txt",
+        "docs/ANTIGRAVITY_DOCTRINA_Y_CONTINUIDAD.md",
+        "docs/ANTIGRAVITY_TASK_REGISTRY.tsv"
+      ],
+      "evidence": "LEVEL A: el mandato esta almacenado y es la entrada de cualquier agente futuro",
+      "blockers": [],
+      "next": "todo agente lee los 7 ficheros de la doctrina antes de tocar nada y cierra su turno con checkpoint escrito"
     }
   ],
   "links": {
@@ -324,6 +403,15 @@
       "total_mb": 34065.2,
       "updated_at": "2026-11-19T23:13:31Z",
       "access": "solo la cuenta con la que se creo la carpeta; no lleva tokens en el estado"
+    },
+    "drive_antigravity_full_2026_11_26": {
+      "url": "https://drive.google.com/drive/folders/114GocicoCJBmGun081sfhRPSjDa2EhYW",
+      "folder_id": "114GocicoCJBmGun081sfhRPSjDa2EhYW",
+      "files": 200,
+      "total_mb": 203.8,
+      "updated_at": "2026-11-26T11:48:23Z",
+      "access": "solo la cuenta con la que se creo la carpeta; manifiesto sha256 en BACKUP_INDEX.md",
+      "verified": "150/150 documentos con hash remoto == hash local"
     }
   }
 }
