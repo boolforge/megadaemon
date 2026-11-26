@@ -1,0 +1,112 @@
+{
+  "_comment": "Contrato verificable de la semántica de auth del Language Server de Antigravity. Todo valor tiene su procedencia (VA real del binario PIE + fichero:línea). Lo comprueba tools/ls_auth_contract_check.py contra el código Rust (rust-core/src/ls_auth/) y Go (reference/go/lsauth/).",
+  "binary": {
+    "path": "/workspace/agy-re/liblanguage_server.so",
+    "size": 181358800,
+    "sha256": "f25135e4b4a2c4a8e4cb319dc36b13eb98fa4718fa80aaae5a7819935370ff27",
+    "analyzed_at": "2026-11-21",
+    "text_start": "0x4d0f0b0",
+    "functions": 161682
+  },
+  "auth_result": {
+    "size": 168,
+    "has_valid_auth_offset": 8,
+    "fields": [
+      { "name": "state", "offset": "0x00", "size": 8 },
+      { "name": "has_valid_auth", "offset": "0x08", "size": 1 },
+      { "name": "ui_message", "offset": "0x10", "size": 16 },
+      { "name": "is_gcp_tos", "offset": "0x20", "size": 1 },
+      { "name": "project_id", "offset": "0x28", "size": 16 },
+      { "name": "location", "offset": "0x38", "size": 16 },
+      { "name": "failure_details", "offset": "0x48", "size": 16 },
+      { "name": "granted_scopes", "offset": "0x58", "size": 24 },
+      { "name": "wif_provider", "offset": "0x70", "size": 16 },
+      { "name": "auth_mode", "offset": "0x80", "size": 4 },
+      { "name": "unknown_fields", "offset": "0x88", "size": 24 },
+      { "name": "size_cache", "offset": "0xA0", "size": 4 }
+    ]
+  },
+  "auth_mode": {
+    "0": "AUTH_MODE_UNSPECIFIED",
+    "1": "AUTH_MODE_PERSONAL_CONSUMER",
+    "2": "AUTH_MODE_BUSINESS_LICENSED_ENTERPRISE",
+    "3": "AUTH_MODE_BUSINESS_AGENT_PLATFORM_PAYGO",
+    "4": "AUTH_MODE_GEMINI_API_KEY",
+    "5": "AUTH_MODE_ENTERPRISE_GATEWAY"
+  },
+  "has_valid_auth_writers": [
+    "0x70f9514", "0x70fae5c", "0x70e1748", "0x70e1798",
+    "0x70e18a8", "0x70e1918", "0x70e4234", "0x70e527c",
+    "0x70e59f4", "0x70e5b54", "0x70e5d68", "0x70e62c0"
+  ],
+  "failure_details": [
+    { "kind": "ineligible", "itab": "0x8f12448", "never_built": false, "built_at": "0x70e63bc" },
+    { "kind": "verification_required", "itab": "0x8f12468", "never_built": false, "built_at": "0x70e5874" },
+    { "kind": "tos_violation", "itab": "0x8f12488", "never_built": false, "built_at": "0x70e5920" },
+    { "kind": "general_error", "itab": "0x8f124a8", "never_built": false, "built_at": "0x70e5490" },
+    { "kind": "project_required", "itab": "0x8f124c8", "never_built": false, "built_at": "0x70e5cd4" },
+    { "kind": "headless_auth_required", "itab": "0x8f124e8", "never_built": true, "built_at": null },
+    { "kind": "license_required", "itab": "0x8f12508", "never_built": false, "built_at": "0x70e5e4c" }
+  ],
+  "backend": {
+    "prefix": "v1internal",
+    "prefix_global_va": "0x799ff50",
+    "prefix_global_len_word_va": "0x799ff58",
+    "prefix_reloc_addend": "0x42a68b1",
+    "template_method": { "text": "%s/%s:%s", "va": "0x4279a33", "len": 8 },
+    "template_resource": { "text": "%s/%s/%s", "va": "0x4279a3b", "len": 8 },
+    "constructors": [
+      { "name": "constructCodeAssistEndpoint", "file_line": "http_helpers.go:153", "va": "0x66c6680" },
+      { "name": "constructResourceURL", "file_line": "http_helpers.go:177", "va": "0x66c6950" },
+      { "name": "constructJetskiEndpoint", "file_line": "http_helpers.go:204", "va": "0x66c6ba0" },
+      { "name": "constructJetskiResourceURL", "file_line": "http_helpers.go:213", "va": "0x66c6cb0" }
+    ],
+    "methods": [
+      { "name": "loadCodeAssist", "literal_va": "0x430116e", "len": 14 },
+      { "name": "onboardUser", "literal_va": "0x42be8e4", "len": 11 },
+      { "name": "fetchUserInfo", "literal_va": "0x42ec2f7", "len": 13 },
+      { "name": "listExperiments", "literal_va": "0x4313d0c", "len": 15 },
+      { "name": "fetchAvailableModels", "literal_va": "0x4366c57", "len": 20 },
+      { "name": "fetchAdminControls", "literal_va": "0x4348106", "len": 18 },
+      { "name": "fetchConfig", "literal_va": "0x42be860", "len": 11 },
+      { "name": "entitlement.userTier", "literal_va": "0x4366c1b", "len": 20 },
+      { "name": "generateContent", "literal_va": "0x4313ca3", "len": 15 },
+      { "name": "streamGenerateContent", "literal_va": "0x4375583", "len": 21 },
+      { "name": "setUserSettings", "literal_va": "0x4313d75", "len": 15 },
+      { "name": "rewriteUri", "literal_va": "0x42a690b", "len": 10 },
+      { "name": "retrieveUserQuotaSummary", "literal_va": "0x43a6942", "len": 24 }
+    ]
+  },
+  "http": {
+    "only_status_check_in_backend_client": 200,
+    "post_check_va": "0x66e8b38",
+    "get_check_va": "0x66e8f9c",
+    "terminal_rule": {
+      "reason_equals": "invalid_grant",
+      "reason_len": 13,
+      "status_min": 400,
+      "status_max": 499,
+      "excluded": [408, 429],
+      "va": "0x70e1c10"
+    }
+  },
+  "globals": {
+    "log_std_va": "0x957c848",
+    "log_std_single_write_va": "0x4e40e08",
+    "log_std_write_owner": "log.init",
+    "log_std_readers": 78,
+    "log_std_accesses": 108
+  },
+  "rpc_surface": {
+    "service": "exa.language_server_pb.LanguageServerService",
+    "methods": 331,
+    "handlers": 331,
+    "rpc_methods_literal": 251
+  },
+  "not_verified": [
+    "Que el slot 5 (0x28) de la interfaz AuthProvider sea GetEndpointURL (inferencia; falta reconstruir el itab).",
+    "El texto exacto de ui_message para project_required y license_required (sus variantes no llevan campos).",
+    "Si existe un liblanguage_server.so mas reciente que el analizado (solo hay una copia en este entorno).",
+    "clippy sobre el modulo Rust: el componente no esta instalado en este toolchain."
+  ]
+}

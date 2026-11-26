@@ -53,6 +53,52 @@ pub const AUTH_RESULT_SIZE: usize = 168;
 /// `GetHasValidAuth` (0x5b36560) lee `ldrb w0,[x0,#8]` ⇒ offset 8.
 pub const HAS_VALID_AUTH_OFFSET: usize = 0x08;
 
+/// Layout verificado del `AuthResult`: (nombre, offset, tamaño) de los 12
+/// campos, en el orden real en memoria.
+///
+/// Es la misma tabla que el informe documenta (§11) y que
+/// `reference/ls_auth_contract.json` fija como contrato. Se declara aquí
+/// para que el módulo Rust sea **autocontenido**: la procedencia vive junto
+/// al código, no en un documento que se puede desincronizar.
+pub const AUTH_RESULT_LAYOUT: [(&str, u16, u16); 12] = [
+    ("state", 0x00, 8),
+    ("has_valid_auth", 0x08, 1),
+    ("ui_message", 0x10, 16),
+    ("is_gcp_tos", 0x20, 1),
+    ("project_id", 0x28, 16),
+    ("location", 0x38, 16),
+    ("failure_details", 0x48, 16),
+    ("granted_scopes", 0x58, 24),
+    ("wif_provider", 0x70, 16),
+    ("auth_mode", 0x80, 4),
+    ("unknown_fields", 0x88, 24),
+    ("size_cache", 0xA0, 4),
+];
+
+/// Los **12** sitios del binario que escriben `has_valid_auth`.
+///
+/// Verificado por un barrido exhaustivo de las instrucciones `STRB [Xn,#8]`
+/// de todo `.text` (645 546 `ADRP` revisados): 21 candidatos en el área de
+/// auth, de los cuales 12 son escritores reales y 9 falsos positivos
+/// (longitud de `string` de 16 B, stores a la pila, otro mensaje).
+///
+/// `buildErrorResp` **no** está: su `AuthResult` nace a cero y por tanto
+/// `has_valid_auth` queda en `false` sin escribir nada.
+pub const HAS_VALID_AUTH_WRITERS: [u64; 12] = [
+    0x70f9514, // (*Server).GetAuthStatus
+    0x70fae5c, // (*Server).cliSessionAuthResult
+    0x70e1748, // (*GatewayAuthClient) stub 1
+    0x70e1798, // (*GatewayAuthClient) stub 2
+    0x70e18a8, // (*GatewayAuthClient) stub 3
+    0x70e1918, // (*GatewayAuthClient) stub 4
+    0x70e4234, // (*AuthClient).ValidateProject
+    0x70e527c, // (*AuthClient).SelectLicense
+    0x70e59f4, // (*InternalAuthValidator).Validate
+    0x70e5b54, // (*PersonalAuthValidator).Validate
+    0x70e5d68, // (*EnterpriseAuthValidator).Validate
+    0x70e62c0, // ValidateAndOnboardAccount
+];
+
 /// Modo de autenticación que el LS publica en `auth_mode` (campo 16).
 ///
 /// VERIFICADO contra el descriptor proto embebido en el binario, no contra
@@ -223,6 +269,40 @@ mod tests {
     fn auth_result_size_is_the_verified_one() {
         assert_eq!(AUTH_RESULT_SIZE, 168);
         assert_eq!(HAS_VALID_AUTH_OFFSET, 8);
+    }
+
+    #[test]
+    fn layout_table_matches_the_binary() {
+        assert_eq!(AUTH_RESULT_LAYOUT.len(), 12);
+        assert_eq!(AUTH_RESULT_LAYOUT[0].0, "state");
+        assert_eq!(AUTH_RESULT_LAYOUT[1].0, "has_valid_auth");
+        assert_eq!(AUTH_RESULT_LAYOUT[1].1, 0x08);
+        assert_eq!(AUTH_RESULT_LAYOUT[11].0, "size_cache");
+        assert_eq!(AUTH_RESULT_LAYOUT[11].1, 0xA0);
+        // El último campo acaba en 0xA4 y el struct se rellena a 0xA8.
+        let end = AUTH_RESULT_LAYOUT[11].1 as usize + AUTH_RESULT_LAYOUT[11].2 as usize;
+        assert_eq!(end, 0xA4);
+        assert_eq!(end + 4, AUTH_RESULT_SIZE);
+        // Los campos no se solapan y van en orden creciente.
+        for w in AUTH_RESULT_LAYOUT.windows(2) {
+            assert!(
+                (w[0].1 as usize + w[0].2 as usize) <= w[1].1 as usize,
+                "{} se solapa con {}",
+                w[0].0,
+                w[1].0
+            );
+        }
+    }
+
+    #[test]
+    fn there_are_twelve_has_valid_auth_writers() {
+        assert_eq!(HAS_VALID_AUTH_WRITERS.len(), 12);
+        let mut sorted = HAS_VALID_AUTH_WRITERS.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 12, "hay VAs duplicados");
+        assert_eq!(sorted[0], 0x70e1748);
+        assert_eq!(sorted[11], 0x70fae5c);
     }
 
     #[test]

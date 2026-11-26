@@ -90,6 +90,11 @@ assert!(!out.transient);            // 404 es TERMINAL: cierra sesión
 ## Cómo se verifica
 
 ```bash
+# Contrato: comprueba que el código (Rust y Go) sigue cuadrando con la
+# tabla de VA verificados del binario. Sale distinto de 0 si alguien cambia
+# un itab, un offset o un nombre de método sin actualizar el contrato.
+python3 tools/ls_auth_contract_check.py
+
 # En el crate completo (compila todo MegaDaemon):
 cd rust-core && cargo test --lib ls_auth
 
@@ -97,9 +102,24 @@ cd rust-core && cargo test --lib ls_auth
 #   copia byte a byte de src/ls_auth{,/*} + cargo test --offline --lib
 ```
 
-* **32 tests** en verde (`cargo test --offline --lib`).
+* **34 tests** en verde (`cargo test --offline --lib`).
 * `rustfmt --check` limpio sobre `src/ls_auth.rs` y `src/ls_auth/*.rs`.
 * `clippy` **no está instalado** en este toolchain ⇒ NO VERIFICADO.
+
+## El contrato verificado
+
+`reference/ls_auth_contract.json` es la fuente de verdad **legible por
+máquina**: cada valor (offsets del `AuthResult`, itabs de `failure_details`,
+escritores de `has_valid_auth`, VA de los literales de método, plantillas de
+URL, regla de rechazo terminal) con su procedencia. `tools/ls_auth_contract_check.py`
+comprueba que el código de `rust-core/src/ls_auth/` y de
+`reference/go/lsauth/` sigue conteniendo esos valores ⇒ si alguien toca el
+código sin actualizar el contrato, el CI falla en vez de mentir.
+
+Es también el **contrato de compatibilidad** con una futura versión del
+`.so`: si un binario nuevo mantiene esos seis puntos (tamaño y layout del
+`AuthResult`, itabs, escritores, rutas, regla terminal), este módulo sigue
+siendo válido sin cambios.
 
 ## El bug que este módulo evita
 
