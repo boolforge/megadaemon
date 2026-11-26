@@ -602,6 +602,22 @@ fn main() {
             std::process::exit(if ok { 0 } else { 1 });
         }
 
+        // v17 — Gasto de datos de Jazztel (el desglose WiFi vs móvil y la
+        // comparación con la cifra del operador).
+        //   megadaemon-core gasto <estado|movil|wifi|avisos|desglose>
+        "gasto" => {
+            let sub = args.get(2).cloned().unwrap_or_else(|| "estado".to_string());
+            let sd = std::env::var("MEGADAEMON_STATE_DIR").ok();
+            let out: serde_json::Value = match sub.as_str() {
+                "movil" => megadaemon_core::gasto_datos::dispatch(&serde_json::json!({"accion": "movil"})),
+                "wifi" => megadaemon_core::gasto_datos::dispatch(&serde_json::json!({"accion": "wifi"})),
+                "avisos" => megadaemon_core::gasto_datos::avisos(sd.as_deref(), None),
+                "desglose" => megadaemon_core::gasto_datos::desglose(sd.as_deref()),
+                _ => megadaemon_core::gasto_datos::estado(sd.as_deref()),
+            };
+            println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+        }
+
         // v17 — Bus de órdenes PULL (ejecuta lo que el bus trae).
         //   megadaemon-core bus [--maximo N] [--forzar] [--simulacion]
         "bus" => {

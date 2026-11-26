@@ -723,6 +723,29 @@ pub fn tool_definitions() -> Value {
                 }
             },
             {
+                "name": "gasto_datos",
+                "description": "GASTO DE DATOS de Jazztel (MNO 21403): mide el tráfico del sistema DESGLOSADO POR TRANSPORTE (WiFi frente a datos moviles, clasificando la interfaz) y lo compara con el estado del operador (la cifra que factura), avisando de umbrales, renovacion y DISCREPANCIA entre ambas (que es lo que explica por qué no coincide con Android). Acciones: estado | movil | wifi | avisos | desglose | guardar (escribe el estado del operador, 0600, fuera del repo).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": {
+                            "type": "string",
+                            "enum": ["estado", "movil", "wifi", "avisos", "desglose", "guardar"],
+                            "default": "estado"
+                        },
+                        "estado_operador": {
+                            "type": "object",
+                            "description": "Estado del operador (accion guardar): consumed_bytes, included_bytes, remaining_bytes, expiration_date, consumption_type, source."
+                        },
+                        "umbral_mb": {
+                            "type": "integer",
+                            "description": "Umbral de aviso en MiB (accion avisos; defecto 500).",
+                            "default": 500
+                        }
+                    }
+                }
+            },
+            {
                 "name": "bus_ordenes",
                 "description": "BUS DE ORDENES PULL: el nodo SACA las ordenes del bus (Drive, via el tablon de resonance) y las ejecuta con su propio registro de tools — sin que nadie tenga que estar conectado. Acciones: ciclo (sincroniza, selecciona y ejecuta) | estado (solo informa). Las ordenes destructivas exigen 'confirm: true' en el cuerpo; la idempotencia la garantiza el 'idem_key' (una orden repetida NO se re-ejecuta).",
                 "inputSchema": {
@@ -1477,6 +1500,12 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         // lee el estado de Drive y sabe a dónde conectarse.
         "telemetria" => {
             let v = crate::telemetria::dispatch(args);
+            json!({ "content": [{ "type": "text", "text": v.to_string() }] })
+        }
+        // v17 — Gasto de datos de Jazztel: el desglose WiFi vs datos
+        // móviles y la comparación con la cifra que factura el operador.
+        "gasto_datos" => {
+            let v = crate::gasto_datos::dispatch(args);
             json!({ "content": [{ "type": "text", "text": v.to_string() }] })
         }
         // v17 — Bus de órdenes PULL: el móvil TIRA del bus y ejecuta.  Es lo
