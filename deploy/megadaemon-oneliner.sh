@@ -1233,6 +1233,9 @@ instalar() {
     # COMO ROOT, y se deja UN solo daemon de verdad (los envoltorios `sh -c`
     # no cuentan: si cuentan, se mata el daemon bueno y se queda el envoltorio).
     for p in $(r "grep -lsa 'megadaemon-core cockpit' /proc/[0-9]*/cmdline 2>/dev/null" | sed 's#^.*/##; s#/cmdline$##'); do
+      # Si la linea de comandos es un envoltorio `sh -c ...`, NO es el daemon:
+      # matarlo no mata al daemon (y al revés: matar al hijo del daemon SI
+      # lo rompe).  MEDIDO (2026-11-27, movil).
       CMDLINE=$(r "tr '\0' ' ' < '/proc/$p/cmdline' 2>/dev/null")
       case "$CMDLINE" in
         *"sh -c"*) continue ;;

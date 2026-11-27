@@ -33,6 +33,35 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] keeper: $*" >> "$LOG" 2>/dev/null
 }
 
+# --- ¿hay proceso vivo? (portable, sin `pgrep -f`) -------------------------
+# MEDIDO (2026-11-27, movil): `pgrep -f` NO es de fiar en toybox (el shell de
+# Android) y ademas cuenta como "vivo" a los ENVOLTORIOS `sh -c ...` (que no
+# son el proceso real) => el guardian creia que el supervisor estaba muerto y
+# lo relanzaba DETRAS de otro (6 supervisores, 6 daemons, 6 cloudflared y 5
+# watchdogs en el movil: load 58 => el tunel no podia arrancar).
+# Ahora: se listan los PIDs leyendo /proc, se descartan los envoltorios
+# `sh -c` y se pueden pedir VARIAS subcadenas (todas tienen que estar).
+# PROC_DIR se puede cambiar para poder PROBAR la funcion sin /proc real.
+PROC_DIR="${PROC_DIR:-/proc}"
+proc_pids() {
+    _pat=$1; shift
+    for _pp in "$PROC_DIR"/[0-9]*; do
+        [ -r "$_pp/cmdline" ] || continue
+        _pc=$(tr '\0' ' ' < "$_pp/cmdline" 2>/dev/null) || continue
+        case "$_pc" in
+            "sh -c "*|*/sh\ -c\ *) continue ;;
+        esac
+        _ok=1
+        case "$_pc" in *$_pat*) ;; *) _ok=0 ;; esac
+        for _x in "$@"; do
+            case "$_pc" in *"$_x"*) ;; *) _ok=0 ;; esac
+        done
+        [ "$_ok" = "1" ] && printf '%s\n' "${_pp##*/}"
+    done
+    return 0
+}
+proc_vivo() { [ -n "$(proc_pids "$@")" ]; }
+
 # Al arrancar, Magisk lanza TODOS los scripts de service.d a la vez: dar
 # margen para que el supervisor se instale y el sistema se asiente.
 sleep 90
@@ -40,12 +69,12 @@ sleep 90
 while true; do
     sleep 60
     # Si el supervisor no esta vivo, relanzarlo.
-    if ! pgrep -f "service.d/99-megadaemon.sh" > /dev/null 2>&1; then
+    if ! proc_vivo "service.d/99-megadaemon.sh"; then
         log "el supervisor no esta vivo: lo relanzo"
         if [ -x "$SUPERVISOR" ]; then
             setsid nohup sh "$SUPERVISOR" >/dev/null 2>&1 &
             sleep 20
-            if pgrep -f "service.d/99-megadaemon.sh" > /dev/null 2>&1; then
+            if proc_vivo "service.d/99-megadaemon.sh"; then
                 log "supervisor relanzado"
             else
                 log "AVISO: el supervisor no arranco"
