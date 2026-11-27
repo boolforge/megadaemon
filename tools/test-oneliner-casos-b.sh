@@ -714,32 +714,31 @@ caso_b_30_diagnostic_counts_daemons() {
 #            lleva días ejecutando el código anterior al instalado.
 # MEDIDO/NO MEDIDO: MEDIDO 2026-11-27 (laboratorio falso del banco).
 caso_b_31_diagnostic_detects_old_binary() {
+  preparar_lab
+  # MEDIDO (2026-11-27): esto NO puede depender de un proceso real.  En el
+  # runner del CI el `sleep` es el binario MULTICALL de coreutils (que muere
+  # si el argv[0] no es un programa suyo) y el resultado no era el mismo que
+  # en local => el escenario era NO DETERMINISTA.  Ahora el /proc del
+  # laboratorio es SINTETICO (MD_STARTTIME = el arranque; MD_EXE = el exe),
+  # y se comprueban las DOS ramas:
+  #   * el proceso arrancó ANTES de que el binario en disco cambiara =>
+  #     el daemon corre el binario VIEJO (hay que reiniciarlo);
+  #   * el proceso arrancó DESPUES => el binario en servicio es el nuevo.
+  DAEMONS=1
+  preparar_lab
+  # El daemon tiene que estar INSTALADO (para que exista su mtime) y VIVO
+  # (para que el diagnostico lo mire).
   correr_instalador --instalar --sin-telemetria
-  # Para que la comparación de fechas sea REAL hace falta un proceso de
-  # verdad (con /proc/<pid>/stat) y un binario ELF (para que readlink
-  # /proc/<pid>/exe apunte al daemon y no al intérprete).
-  SLEEP_BIN="$(command -v sleep 2>/dev/null || echo /bin/sleep)"
-  if ! cp "$SLEEP_BIN" "$PRE/megadaemon-core" 2>/dev/null; then
-    omitir "no se pudo copiar un ELF como daemon"
-    return
-  fi
-  # OJO (MEDIDO 2026-11-27 en el CI): en Debian, /usr/bin/sleep es el
-  # binario MULTICALL de coreutils, que decide qué hacer por argv[0]: al
-  # copiarlo como "megadaemon-core" y ejecutarlo con ese nombre dice
-  # "coreutils: unknown program 'megadaemon-core'" y se muere => el
-  # diagnóstico no tenía ningún proceso que mirar.  Con `exec -a sleep`
-  # el binario se comporta como sleep (y /proc/<pid>/exe sigue apuntando
-  # al daemon, que es lo que el instalador comprueba).
-  ( exec -a sleep "$PRE/megadaemon-core" 300 ) &
-  PID=$!
-  sleep 1
-  # El binario en disco es más nuevo que el arranque del proceso.
-  touch "$PRE/megadaemon-core"
-  fijar_pids megadaemon-core "$PID"
+  MD_STARTTIME=100
+  MD_EXE="$PRE/megadaemon-core"
   correr_instalador --diagnostico --sin-telemetria
   salida_mensaje "detectó que el proceso corre el binario VIEJO" \
     'el proceso corre el binario VIEJO'
-  kill "$PID" 2>/dev/null
+  # La otra rama: el proceso arrancó despues del binario => esta al dia.
+  MD_STARTTIME=99999999999
+  correr_instalador --diagnostico --sin-telemetria
+  salida_mensaje "con el proceso posterior, el binario en servicio es el nuevo" \
+    'binario en servicio = binario en disco'
   return 0
 }
 

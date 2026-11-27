@@ -116,6 +116,13 @@ knobs_reset() {
   # llamada => se puede MEDIR el presupuesto de espera del instalador sin
   # esperar de verdad (y comparar --timeout=30 con el de por defecto).
   RELOJ_VIRTUAL=0
+  # /proc SINTETICO: el arranque del proceso (starttime) y el exe.  Sin esto
+  # la comprobacion "el binario en servicio es el nuevo" depende de un
+  # proceso REAL => no es igual entre runners (MEDIDO 2026-11-27: en el CI
+  # el `sleep` del runner es el binario MULTICALL de coreutils y el
+  # escenario fallaba; en local pasaba).  Con esto, DETERMINISTA.
+  MD_STARTTIME=100
+  MD_EXE=""
   # Por defecto el móvil está VACÍO (instalación en limpio): nada corriendo.
   # Los escenarios que necesitan "ya hay un daemon/supervisor/watchdog vivo"
   # lo piden con DAEMONS=1 / SUPERVISORS=1 / WATCHDOGS=1.
@@ -527,6 +534,41 @@ EOF
   # --- df de mentira (el escenario "disco lleno") ----------------------------
   local KB
   KB=$(( ${ESPACIO_MB:-999999} * 1024 ))
+  # `cat` de mentira: si lee /proc/<pid>/stat devuelve una linea SINTETICA
+  # con el starttime que fija el escenario (campo 22 = la posicion 20 tras
+  # el comm).  En cualquier otro caso, el cat de verdad.
+  local real_cat; real_cat="$(command -v cat || true)"
+  rm -f "$TBR/cat"
+  cat > "$TBR/cat" <<EOF
+#!/bin/sh
+for a in "\$@"; do
+  case "\$a" in
+    /proc/*/stat)
+      # El starttime es el campo 22 de /proc/<pid>/stat; tras quitar
+      # "pid (comm) " es la posicion 20 => van 19 palabras delante.
+      printf '9999 (megadaemon-core) S 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 %s 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n' "\${MD_STARTTIME:-100}"
+      exit 0 ;;
+  esac
+done
+exec "$real_cat" "\$@"
+EOF
+  chmod 755 "$TBR/cat"
+
+  # `readlink` de mentira: /proc/<pid>/exe devuelve el exe que fija el
+  # escenario (por defecto, el propio daemon; se puede poner "(deleted)").
+  local real_readlink; real_readlink="$(command -v readlink || true)"
+  rm -f "$TBR/readlink"
+  cat > "$TBR/readlink" <<EOF
+#!/bin/sh
+for a in "\$@"; do
+  case "\$a" in
+    /proc/*/exe) printf '%s\n' "\${MD_EXE:-$PRE/megadaemon-core}"; exit 0 ;;
+  esac
+done
+exec "$real_readlink" "\$@"
+EOF
+  chmod 755 "$TBR/readlink"
+
   # `mv` de mentira: REGISTRA lo que renombra (para comprobar que el binario
   # se instala con .new + mv y no sobrescribiendo el que está en ejecución).
   local real_mv; real_mv="$(command -v mv || true)"
@@ -869,7 +911,10 @@ ejecutar_uno() {
     HOME="$dir/home"
     TMPDIR="$dir/tmp"
     MD_LOG="$dir/invocaciones.log"
+    MD_STARTTIME=100
+    MD_EXE=""
     export L PRE ST SB TBR SVC LOG OUT LAB_PROC HOME TMPDIR MD_LOG LAB_RELOJ
+    export MD_STARTTIME MD_EXE
     mkdir -p "$HOME" "$TMPDIR" "$LAB_PROC"
     : > "$LOG"
     : > "$dir/fallos.txt"
