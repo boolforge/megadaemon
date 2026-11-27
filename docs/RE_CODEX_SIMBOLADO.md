@@ -215,6 +215,36 @@ sólo queda el resumen por crate y el índice de las funciones de contrato.
 > seguía escribiendo** ⇒ un fichero quedó con padding. Renombrado a
 > `codex-decomp-2026-11-27.tar.gz.INCOMPLETO-con-padding` (no se borra nada).
 
+## 7.3 La arquitectura interna, medida (lo que las strings noaban)
+
+Con el mapa de ficheros fuente por crate se ve la **estructura real** del
+producto, que antes sólo se conocía por strings:
+
+| crate | funciones | ficheros fuente mas poblados |
+|---|---:|---|
+| `codex_core` | 4.885 | `mod.rs` (777), `src/callsite.rs` (412), `option.rs` (295), `boxed.rs` (213) |
+| `codex_protocol` | 4.874 | `option.rs` (931), `protocol.rs` (603), `models.rs` (423), `src/ser.rs` (358) |
+| `codex_app_server_protocol` | 2.652 | `src/ser.rs` (708), `src/lib.rs` (83), `item.rs` (94) |
+| `codex_app_server` | 1.111 | **`workspace_routing.rs` (84)**, **`thread_processor.rs` (82)**, `outgoing_message.rs` (46) |
+| `codex_config` | 1.111 | `local.rs` (86), **`config_requirements.rs` (72)**, `src/value.rs` (57) |
+| `codex_rmcp_client` | 859 | **`rmcp_client.rs` (198)**, **`oauth.rs` (80)**, **`credential_store.rs` (62)** |
+| `codex_linux_sandbox` | 320 | **`linux_run_main.rs` (25)**, `path.rs` (11), **`tcp_namespace.rs` (4)** |
+
+Lo que esto añade a lo ya medido (`docs/RE_CODEX_CONTRATOS.md`):
+
+* El **app-server es multi-hilo con enrutado por workspace**
+  (`workspace_routing.rs` + `thread_processor.rs`): cada workspace tiene su
+  hilo y sus mensajes salen por `outgoing_message.rs`.
+* La **configuración tiene una capa de requisitos** propia
+  (`config_requirements.rs`), además de `local.rs` (config local) y
+  `value.rs` (valores tipados).
+* El **cliente MCP trae OAuth y almacén de credenciales** como módulos
+  separados (`oauth.rs`, `credential_store.rs`), no como parte del cliente.
+* El **sandbox de Linux trabaja con namespaces de red**
+  (`tcp_namespace.rs`) además del `linux_run_main.rs` y el manejo de rutas.
+
+Ficheros `.rs` distintos referenciados por el binario: **1.326**.
+
 ## 8. Lo que NO se ha medido
 
 - **NO MEDIDO**: pseudocódigo de las ~356 k funciones; sólo de un subconjunto.
