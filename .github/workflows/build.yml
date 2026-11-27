@@ -40,6 +40,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: parsear cada .rs
         run: bash tools/check-sintaxis.sh
+      # El nucleo forense en C se prueba aqui (no en 'calidad'): compila en
+      # un segundo y su banco contrasta el SHA-256 contra `sha256sum`, el
+      # cliente HTTP contra un servidor local y el parser del tunel contra un
+      # log con trampas.  Sin esto, un hash mal calculado haria que el
+      # verificador de "la build en servicio es la nueva" mintiera.
+      - name: banco de pruebas del nucleo forense (C)
+        run: |
+          bash tools/test-mddoctor.sh
+          gcc -O2 -Wall -Werror -o /tmp/mddoctor tools/mddoctor.c
+          echo "mddoctor: $(wc -c < /tmp/mddoctor) B, compila con -Werror"
 
   quality:
     name: calidad (fmt + clippy + tests)

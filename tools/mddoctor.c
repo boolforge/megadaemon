@@ -53,6 +53,10 @@
 #include <sys/statvfs.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <stdint.h>
 
 #define MAXF 512
 #define MAXH 96
@@ -64,6 +68,20 @@ static char host[256] = "desconocido";
 
 static void hostname(void) {
     if (gethostname(host, sizeof(host) - 1) != 0) strcpy(host, "?");
+}
+
+/* Prefijos de donde vive el daemon en el movil.  Por defecto son los del
+ * telefono, pero se pueden mover con el entorno: asi el banco de pruebas
+ * (tools/test-mddoctor.c) puede trabajar en un directorio temporal, y un
+ * movil con otro layout no necesita recompilar el binario. */
+static const char *prefijo(void) {
+    const char *p = getenv("MDDOCTOR_PREFIX");
+    return (p && *p) ? p : "/data/local/tmp/megadaemon";
+}
+
+static const char *serviced(void) {
+    const char *p = getenv("MDDOCTOR_SERVICE_D");
+    return (p && *p) ? p : "/data/adb/service.d";
 }
 
 static int read_file(const char *path, char *buf, size_t n) {
@@ -726,28 +744,393 @@ static void imprimir_json(void) {
 
 /* ---------------------------------------------------------------------- */
 
+/* ---------------------------------------------------------------------- */
+/* SHA-256: para verificar el binario EN SERVICIO contra el .sha256        */
+/* ---------------------------------------------------------------------- */
+
+typedef struct { uint32_t h[8]; uint64_t bits; unsigned char buf[64]; size_t n; } Sha256;
+
+static const uint32_t SHA_K[64] = {
+0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
+
+static uint32_t ror32(uint32_t x, int n) { return (x >> n) | (x << (32 - n)); }
+
+static void sha256_block(Sha256 *s, const unsigned char *p) {
+    uint32_t w[64];
+    for (int i = 0; i < 16; i++)
+        w[i] = ((uint32_t)p[i*4] << 24) | ((uint32_t)p[i*4+1] << 16) |
+               ((uint32_t)p[i*4+2] << 8) | (uint32_t)p[i*4+3];
+    for (int i = 16; i < 64; i++) {
+        uint32_t s0 = ror32(w[i-15], 7) ^ ror32(w[i-15], 18) ^ (w[i-15] >> 3);
+        uint32_t s1 = ror32(w[i-2], 17) ^ ror32(w[i-2], 19) ^ (w[i-2] >> 10);
+        w[i] = w[i-16] + s0 + w[i-7] + s1;
+    }
+    uint32_t a = s->h[0], b = s->h[1], c = s->h[2], d = s->h[3];
+    uint32_t e = s->h[4], f = s->h[5], g = s->h[6], h = s->h[7];
+    for (int i = 0; i < 64; i++) {
+        uint32_t S1 = ror32(e, 6) ^ ror32(e, 11) ^ ror32(e, 25);
+        uint32_t ch = (e & f) ^ ((~e) & g);
+        uint32_t t1 = h + S1 + ch + SHA_K[i] + w[i];
+        uint32_t S0 = ror32(a, 2) ^ ror32(a, 13) ^ ror32(a, 22);
+        uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+        uint32_t t2 = S0 + maj;
+        h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+    }
+    s->h[0] += a; s->h[1] += b; s->h[2] += c; s->h[3] += d;
+    s->h[4] += e; s->h[5] += f; s->h[6] += g; s->h[7] += h;
+}
+
+/* sha256 en hexadecimal de un fichero.  Deja "?" si no se puede leer.
+ * Sirve para COMPARAR el binario que corre en el movil con el .sha256 que
+ * publica el CI: si no coinciden, hay una build vieja (o manipulada). */
+static void sha256_hex(const char *path, char *hex) {
+    snprintf(hex, 65, "?");
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return;
+    Sha256 s = {{0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
+                 0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19},0,{0},0};
+    unsigned char buf[65536];
+    ssize_t r;
+    while ((r = read(fd, buf, sizeof(buf))) > 0) {
+        for (ssize_t i = 0; i < r; i++) {
+            s.buf[s.n++] = buf[i];
+            if (s.n == 64) { sha256_block(&s, s.buf); s.n = 0; }
+            s.bits += 8;
+        }
+    }
+    close(fd);
+    s.buf[s.n++] = 0x80;
+    if (s.n > 56) { while (s.n < 64) s.buf[s.n++] = 0; sha256_block(&s, s.buf); s.n = 0; }
+    while (s.n < 56) s.buf[s.n++] = 0;
+    for (int i = 0; i < 8; i++) s.buf[56 + i] = (unsigned char)(s.bits >> (56 - 8 * i));
+    sha256_block(&s, s.buf);
+    static const char *hx = "0123456789abcdef";
+    for (int i = 0; i < 8; i++)
+        for (int j = 0; j < 4; j++) {
+            unsigned char b = (unsigned char)(s.h[i] >> (24 - 8 * j));
+            hex[i*8 + j*2]     = hx[b >> 4];
+            hex[i*8 + j*2 + 1] = hx[b & 15];
+        }
+    hex[64] = 0;
+}
+
+/* ---------------------------------------------------------------------- */
+/* SALUD DEL MOVIL: estado-movil.sh + verificar-movil.sh en C              */
+/* ---------------------------------------------------------------------- */
+/* POR QUE EN C Y NO EN SHELL
+ *   MEDIDO: el shell de Android NO tiene curl ni wget.  Los scripts de
+ *   estado tenian que traer `toybox wget` o resignarse a no mirar /health.
+ *   Aqui el chequeo HTTP va con sockets POSIX: sin curl, sin wget, sin
+ *   binario externo, y con 30 KB de binario.
+ *   MEDIDO: el tunnel.log puede traer `api.trycloudflare.com`, que NO es un
+ *   tunel (es la API de Cloudflare).  Aqui se filtra en codigo.
+ */
+
+/* GET HTTP en crudo a un host IPv4.  Devuelve el codigo HTTP (0 si fallo) y
+ * deja el cuerpo en out.  Sin TLS: solo para el origen local (127.0.0.1). */
+static int http_get(const char *host, int port, const char *path,
+                    char *out, size_t n) {
+    if (!n) return 0;
+    out[0] = 0;
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return 0;
+    struct timeval tv = {8, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET, host, &a.sin_addr) != 1) { close(fd); return 0; }
+    if (connect(fd, (struct sockaddr *)&a, sizeof(a)) != 0) { close(fd); return 0; }
+    char req[512];
+    int rl = snprintf(req, sizeof(req),
+                      "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: mddoctor\r\n"
+                      "Connection: close\r\n\r\n", path, host);
+    if (rl <= 0 || write(fd, req, (size_t)rl) != rl) { close(fd); return 0; }
+    size_t got = 0;
+    ssize_t r;
+    while (got + 1 < n && (r = read(fd, out + got, n - 1 - got)) > 0) got += (size_t)r;
+    close(fd);
+    out[got] = 0;
+    if (strncmp(out, "HTTP/", 5) != 0) return 0;
+    const char *sp = strchr(out, ' ');
+    if (!sp) return 0;
+    return atoi(sp + 1);
+}
+
+/* Extrae "campo":"valor" de un JSON sin parsearlo entero.  Heuristico a
+ * proposito: el cuerpo de /health lo produce el daemon y aqui solo se
+ * MUESTRA, no se decide nada con el. */
+static void json_campo(const char *json, const char *campo, char *out, size_t on) {
+    snprintf(out, on, "?");
+    char patron[64];
+    snprintf(patron, sizeof(patron), "\"%s\"", campo);
+    const char *p = strstr(json, patron);
+    if (!p) return;
+    p += strlen(patron);
+    while (*p && *p != ':') p++;
+    if (!*p) return;
+    p++;
+    while (*p == ' ' || *p == ':') p++;
+    if (*p != '"') {
+        size_t k = 0;
+        while (*p && *p != ',' && *p != '}' && *p != ' ' && k < on - 1) out[k++] = *p++;
+        out[k] = 0;
+        return;
+    }
+    p++;
+    size_t k = 0;
+    while (*p && *p != '"' && k < on - 1) out[k++] = *p++;
+    out[k] = 0;
+}
+
+/* La URL REAL del tunel: la ultima de tunnel.log que NO sea api.*, y si no
+ * hay, el fichero tunnel.url.  Es lo que pedia estado-movil.sh. */
+static void leer_tunel(char *out, size_t on) {
+    out[0] = 0;
+    char p1[256], p2[256];
+    snprintf(p1, sizeof(p1), "%s", prefijo());
+    snprintf(p2, sizeof(p2), "/data/adb/megadaemon");
+    const char *prefs[2];
+    prefs[0] = p1;
+    prefs[1] = p2;
+    char mejor[512] = "";
+    for (unsigned i = 0; i < sizeof(prefs) / sizeof(prefs[0]); i++) {
+        char log[512];
+        snprintf(log, sizeof(log), "%s/tunnel.log", prefs[i]);
+        FILE *f = fopen(log, "r");
+        if (!f) continue;
+        char linea[1024];
+        while (fgets(linea, sizeof(linea), f)) {
+            char *p = linea;
+            while ((p = strstr(p, "https://")) != NULL) {
+                p += 8;
+                char h[256];
+                size_t k = 0;
+                while (*p && *p != '/' && *p != '"' && *p != ' ' && *p != '\n' &&
+                       k < sizeof(h) - 1)
+                    h[k++] = *p++;
+                h[k] = 0;
+                /* api.trycloudflare.com es la API de Cloudflare, NO el tunel */
+                if (strstr(h, ".trycloudflare.com") && strncmp(h, "api.", 4) != 0)
+                    snprintf(mejor, sizeof(mejor), "https://%s", h);
+            }
+        }
+        fclose(f);
+    }
+    if (mejor[0]) { snprintf(out, on, "%.400s", mejor); return; }
+    for (unsigned i = 0; i < sizeof(prefs) / sizeof(prefs[0]); i++) {
+        char u[512], b[512];
+        snprintf(u, sizeof(u), "%s/tunnel.url", prefs[i]);
+        if (read_file(u, b, sizeof(b)) == 0) {
+            trim(b);
+            if (b[0]) { snprintf(out, on, "%.400s", b); return; }
+        }
+    }
+}
+
+/* Procesos de MegaDaemon leyendo /proc (sin pgrep: pgrep no existe en
+ * todos los Android y hay que depender de busybox si lo hay). */
+static void procesos_megadaemon(char *out, size_t on) {
+    out[0] = 0;
+    DIR *d = opendir("/proc");
+    if (!d) { snprintf(out, on, "no se pudo leer /proc"); return; }
+    struct dirent *e;
+    size_t used = 0;
+    int n = 0;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+        char p[256], cmd[600];
+        snprintf(p, sizeof(p), "/proc/%.200s/cmdline", e->d_name);
+        if (read_file(p, cmd, sizeof(cmd)) != 0) continue;
+        if (!strstr(cmd, "megadaemon") && !strstr(cmd, "cloudflared")) continue;
+        char item[640];
+        snprintf(item, sizeof(item), "%.100s %.400s", e->d_name, cmd);
+        size_t l = strlen(item);
+        if (used + l + 2 >= on) break;
+        memcpy(out + used, item, l);
+        used += l;
+        out[used++] = '\n';
+        out[used] = 0;
+        if (++n >= 8) break;
+    }
+    closedir(d);
+    if (!n) snprintf(out, on, "ninguno");
+}
+
+/* Ultimas n lineas de un fichero.  out queda con lo que haya. */
+static void tail_file(const char *path, int n, char *out, size_t on) {
+    out[0] = 0;
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    char *linea = malloc(1024);
+    char **ventana = calloc((size_t)n, sizeof(char *));
+    if (!linea || !ventana) { free(linea); free(ventana); fclose(f); return; }
+    int i = 0, c = 0;
+    while (fgets(linea, 1024, f)) {
+        char *cp = strdup(linea);
+        if (!cp) break;
+        free(ventana[i]);
+        ventana[i] = cp;
+        i = (i + 1) % n;
+        c++;
+    }
+    fclose(f);
+    free(linea);
+    int total = c >= n ? n : c;
+    int ini = c >= n ? i : 0;
+    size_t used = 0;
+    for (int k = 0; k < total; k++) {
+        char *ln = ventana[(ini + k) % n];
+        if (!ln) continue;
+        size_t len = strlen(ln);
+        if (used + len + 2 >= on) break;
+        memcpy(out + used, ln, len);
+        used += len;
+        if (len && out[used - 1] != '\n') out[used++] = '\n';
+    }
+    out[used] = 0;
+    for (int k = 0; k < n; k++) free(ventana[k]);
+    free(ventana);
+}
+
+/* Recoge la salud del movil.  `espera` son segundos de espera por /health
+ * (el bucle de espera de verificar-movil.sh, contra el ORIGEN local: la
+ * parte que funciona sin TLS). */
+static void salud(int espera) {
+    char v[220];
+
+    char url[512] = "";
+    leer_tunel(url, sizeof(url));
+    if (url[0]) add("tunel", url, VER_OK, "la URL publica del movil");
+    else add("tunel", "NO ENCONTRADO", VER_AVISO,
+             "ni tunnel.log ni tunnel.url: el tunel no esta levantado");
+
+    char body[4096];
+    int code = 0;
+    time_t limite = time(NULL) + (espera > 0 ? espera : 0);
+    do {
+        code = http_get("127.0.0.1", 9090, "/health", body, sizeof(body));
+        if (code == 200 || espera <= 0 || time(NULL) >= limite) break;
+        sleep(3);
+    } while (1);
+
+    if (code == 200) {
+        char build[64];
+        json_campo(body, "short", build, sizeof(build));
+        snprintf(v, sizeof(v), "HTTP 200 (build %s)", build);
+        add("daemon-health", v, VER_OK, "el daemon responde en 127.0.0.1:9090");
+    } else if (code > 0) {
+        snprintf(v, sizeof(v), "HTTP %d", code);
+        add("daemon-health", v, VER_CRITICO, "el daemon contesta pero con error");
+    } else {
+        add("daemon-health", "sin respuesta", VER_CRITICO,
+            "el daemon NO responde en 127.0.0.1:9090: muerto o el puerto esta ocupado");
+    }
+
+    char procs[1024];
+    procesos_megadaemon(procs, sizeof(procs));
+    snprintf(v, sizeof(v), "%.200s", procs);
+    add("procesos-mv", v, strstr(procs, "megadaemon-core") ? VER_OK : VER_AVISO,
+        strstr(procs, "megadaemon-core") ? "el daemon esta en ejecucion"
+                                         : "no hay ningun megadaemon-core vivo");
+
+    char svc_sup[512], svc_kep[512];
+    snprintf(svc_sup, sizeof(svc_sup), "%s/99-megadaemon.sh", serviced());
+    snprintf(svc_kep, sizeof(svc_kep), "%s/97-megadaemon-keeper.sh", serviced());
+    int hay_sup = existe(svc_sup);
+    int hay_kep = existe(svc_kep);
+    snprintf(v, sizeof(v), "supervisor=%s keeper=%s",
+             hay_sup ? "si" : "no", hay_kep ? "si" : "no");
+    add("autoarranque", v, hay_sup ? VER_OK : VER_CRITICO,
+        hay_sup ? "el supervisor esta instalado: el daemon arranca solo"
+                : "NO hay supervisor: el daemon no se levanta tras un reinicio");
+
+    char bin1[512], bin2[512];
+    snprintf(bin1, sizeof(bin1), "%s/megadaemon-core", prefijo());
+    snprintf(bin2, sizeof(bin2), "/data/adb/megadaemon/megadaemon-core");
+    const char *bins[2];
+    bins[0] = bin1;
+    bins[1] = bin2;
+    const char *binpath = NULL;
+    for (unsigned i = 0; i < sizeof(bins) / sizeof(bins[0]); i++)
+        if (existe(bins[i])) { binpath = bins[i]; break; }
+    if (binpath) {
+        char hex[65];
+        sha256_hex(binpath, hex);
+        snprintf(v, sizeof(v), "%.64s", hex);
+        add("sha-servicio", v, VER_OK, "sha256 del binario en servicio");
+    } else {
+        add("sha-servicio", "sin binario", VER_AVISO,
+            "no se encuentra megadaemon-core en el movil");
+    }
+
+    char ult[1024];
+    char autolog[512];
+    snprintf(autolog, sizeof(autolog), "%s/state/auto_update.log", prefijo());
+    tail_file(autolog, 1, ult, sizeof(ult));
+    trim(ult);
+    if (ult[0]) {
+        snprintf(v, sizeof(v), "%.200s", ult);
+        add("auto-update", v, VER_OK, "ultima linea del log del auto-actualizador");
+    }
+}
+
+/* Texto extra del modo salud (solo modo texto): las colas de log. */
+static void salud_tails(void) {
+    char b[2048];
+    char autolog[512], daemonlog[512];
+    snprintf(autolog, sizeof(autolog), "%s/state/auto_update.log", prefijo());
+    snprintf(daemonlog, sizeof(daemonlog), "/sdcard/megadaemon.log");
+    printf("\n--- ultimo estado del auto-actualizador ---\n");
+    tail_file(autolog, 6, b, sizeof(b));
+    printf("%s", b);
+    printf("--- ultimas lineas del log del daemon ---\n");
+    tail_file(daemonlog, 12, b, sizeof(b));
+    printf("%s", b);
+    printf("--- cuerpo de /health (primeros 600 bytes) ---\n");
+    char body[4096];
+    if (http_get("127.0.0.1", 9090, "/health", body, sizeof(body)))
+        printf("%.600s\n", body);
+}
+
+/* ---------------------------------------------------------------------- */
+
 static void uso(void) {
     fprintf(stderr,
-            "mddoctor — diagnostico y recuperacion de MegaDaemon\n"
-            "uso: mddoctor [scan|doctor|recover] [--json] [--apply] [--yes]\n"
-            "  scan     recoge los hechos y los lista\n"
-            "  doctor   recoge, clasifica y dice que esta mal\n"
-            "  recover  plan de recuperacion (--apply lo ejecuta)\n"
-            "  --json   salida en JSON\n");
+            "mddoctor — diagnostico, salud y recuperacion de MegaDaemon\n"
+            "uso: mddoctor [doctor|salud|scan|recover|selftest] [--json] [--apply] [--espera N]\n"
+            "  doctor    recoge los hechos y dice que esta mal\n"
+            "  salud     estado del movil: tunel real, /health, procesos, sha256 del binario\n"
+            "            (--espera N reintenta /health hasta N segundos)\n"
+            "  scan      recoge los hechos y los lista\n"
+            "  recover   plan de recuperacion (--apply lo ejecuta)\n"
+            "  selftest  prueba las sondas que usa este binario\n"
+            "  --json    salida en JSON\n");
 }
 
 int main(int argc, char **argv) {
     hostname();
     const char *modo = "doctor";
-    int json = 0, aplicar = 0, yes = 0, todo = 0;
+    int json = 0, aplicar = 0, yes = 0, todo = 0, espera = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "scan")) modo = "scan";
         else if (!strcmp(argv[i], "doctor")) modo = "doctor";
         else if (!strcmp(argv[i], "recover")) modo = "recover";
+        else if (!strcmp(argv[i], "salud")) modo = "salud";
         else if (!strcmp(argv[i], "--json")) json = 1;
         else if (!strcmp(argv[i], "--apply")) aplicar = 1;
         else if (!strcmp(argv[i], "--yes")) yes = 1;
         else if (!strcmp(argv[i], "--todo")) todo = 1;
+        else if (!strcmp(argv[i], "--espera") && i + 1 < argc) espera = atoi(argv[++i]);
         else if (!strcmp(argv[i], "selftest")) modo = "selftest";
         else { uso(); return 3; }
     }
@@ -760,6 +1143,13 @@ int main(int argc, char **argv) {
     if (!strcmp(modo, "recover")) {
         int a = recuperar(aplicar);
         return a ? 1 : 0;
+    }
+
+    if (!strcmp(modo, "salud")) {
+        salud(espera);
+        if (json) imprimir_json();
+        else { imprimir_tabla(); salud_tails(); }
+        return peor;
     }
 
     clasificar();
