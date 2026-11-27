@@ -86,7 +86,7 @@ where
 // ---------------------------------------------------------------------------
 
 /// Identificador de petición JSON-RPC: número o cadena.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RequestId {
     /// Identificador numérico.
@@ -117,7 +117,7 @@ impl std::fmt::Display for RequestId {
 }
 
 /// Identificador de sesión.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SessionId(pub String);
 
@@ -140,7 +140,7 @@ impl std::fmt::Display for SessionId {
 }
 
 /// Modo de sesión (p.ej. el modo de permisos o el "modo agente").
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionMode {
     /// Sesión normal.
@@ -165,7 +165,7 @@ pub enum SessionMode {
 ///
 /// Compatible con MCP, de modo que la salida de una herramienta se puede
 /// reenviar sin transformar.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
     /// Texto plano o Markdown.
@@ -193,7 +193,7 @@ impl From<&str> for ContentBlock {
 }
 
 /// Texto del modelo o del usuario.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextContent {
     /// Anotaciones de presentación.
@@ -218,7 +218,7 @@ impl TextContent {
 }
 
 /// Imagen para contexto visual.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageContent {
     /// Tipo MIME.
@@ -231,7 +231,7 @@ pub struct ImageContent {
 }
 
 /// Audio para transcripción o análisis.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioContent {
     /// Tipo MIME.
@@ -244,7 +244,7 @@ pub struct AudioContent {
 }
 
 /// Referencia a un recurso.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceLink {
     /// URI del recurso.
@@ -261,7 +261,7 @@ pub struct ResourceLink {
 }
 
 /// Recurso con el contenido embebido.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmbeddedResource {
     /// El recurso.
@@ -272,7 +272,7 @@ pub struct EmbeddedResource {
 }
 
 /// Contenido de un recurso.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceContents {
     /// URI del recurso.
@@ -309,7 +309,7 @@ pub struct Annotations {
 // ---------------------------------------------------------------------------
 
 /// Llamada a una herramienta.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCall {
     /// Identificador de la llamada.
@@ -339,7 +339,7 @@ pub struct ToolCall {
 }
 
 /// Clase de herramienta.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolKind {
     /// Lee recursos.
@@ -363,7 +363,7 @@ pub enum ToolKind {
 }
 
 /// Estado de una llamada a herramienta.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolCallStatus {
     /// En cola.
@@ -377,7 +377,7 @@ pub enum ToolCallStatus {
 }
 
 /// Contenido de una llamada a herramienta.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolCallContent {
     /// Texto.
@@ -389,7 +389,7 @@ pub enum ToolCallContent {
 }
 
 /// Diff unificado entre dos versiones.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiffContent {
     /// Ruta del fichero.
@@ -403,7 +403,7 @@ pub struct DiffContent {
 }
 
 /// Posición en el código.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallLocation {
     /// Ruta del fichero.
@@ -414,7 +414,7 @@ pub struct ToolCallLocation {
 }
 
 /// Actualización de una llamada a herramienta.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallUpdate {
     /// Identificador de la llamada.
@@ -450,7 +450,7 @@ pub struct ToolCallUpdate {
 ///
 /// Se vendorizan las variantes **estables** del upstream; las `unstable_*` y las
 /// de capacidades nuevas no se incluyen a propósito.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "sessionUpdate", rename_all = "camelCase")]
 pub enum SessionUpdate {
     /// Fragmento del mensaje del usuario.
@@ -470,7 +470,7 @@ pub enum SessionUpdate {
 }
 
 /// Fragmento de contenido en streaming.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContentChunk {
     /// Contenido.
@@ -481,7 +481,7 @@ pub struct ContentChunk {
 }
 
 /// Comandos que el agente pone a disposición.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AvailableCommandsUpdate {
     /// Lista de comandos.
@@ -492,7 +492,7 @@ pub struct AvailableCommandsUpdate {
 }
 
 /// Un comando disponible.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AvailableCommand {
     /// Nombre del comando.
@@ -505,7 +505,7 @@ pub struct AvailableCommand {
 }
 
 /// Entrada de un comando disponible.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AvailableCommandInput {
     /// Si la entrada es texto libre.
@@ -514,7 +514,7 @@ pub struct AvailableCommandInput {
 }
 
 /// El modo actual de la sesión ha cambiado.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CurrentModeUpdate {
     /// Identificador del modo actual.
@@ -525,7 +525,7 @@ pub struct CurrentModeUpdate {
 }
 
 /// Motivo por el que termina un turno.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StopReason {
     /// Fin natural del turno.
@@ -545,7 +545,7 @@ pub enum StopReason {
 // ---------------------------------------------------------------------------
 
 /// Lo que el cliente puede hacer.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientCapabilities {
     /// Capacidades de prompt.
@@ -560,7 +560,7 @@ pub struct ClientCapabilities {
 }
 
 /// Capacidades de prompt del cliente.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptCapabilities {
     /// Si el cliente acepta contenido de imagen.
@@ -575,7 +575,7 @@ pub struct PromptCapabilities {
 }
 
 /// Lo que el agente sabe hacer.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentCapabilities {
     /// Si el agente carga sesiones.
@@ -587,7 +587,7 @@ pub struct AgentCapabilities {
 }
 
 /// Petición `initialize`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeRequest {
     /// Versión del protocolo que pide el cliente.
@@ -601,7 +601,7 @@ pub struct InitializeRequest {
 }
 
 /// Respuesta `initialize`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResponse {
     /// Versión del protocolo que responde el agente.
@@ -618,7 +618,7 @@ pub struct InitializeResponse {
 }
 
 /// Identidad del agente.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentInfo {
     /// Nombre.
@@ -629,7 +629,7 @@ pub struct AgentInfo {
 }
 
 /// Método de autenticación.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuthMethod {
     /// Token/API key.
@@ -645,7 +645,7 @@ pub enum AuthMethod {
 // ---------------------------------------------------------------------------
 
 /// Petición `session/new`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewSessionRequest {
     /// Directorio de trabajo.
@@ -659,7 +659,7 @@ pub struct NewSessionRequest {
 }
 
 /// Respuesta `session/new`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewSessionResponse {
     /// Identificador de la sesión creada.
@@ -673,7 +673,7 @@ pub struct NewSessionResponse {
 }
 
 /// Estado de modos de una sesión.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionModeState {
     /// Modo actual.
@@ -684,7 +684,7 @@ pub struct SessionModeState {
 }
 
 /// Petición `session/prompt`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptRequest {
     /// Identificador de la sesión.
@@ -697,7 +697,7 @@ pub struct PromptRequest {
 }
 
 /// Respuesta `session/prompt`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptResponse {
     /// Motivo de fin de turno.
@@ -708,7 +708,7 @@ pub struct PromptResponse {
 }
 
 /// Servidor MCP disponible para la sesión.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum McpServer {
     /// Servidor local por línea de comandos.
@@ -737,7 +737,7 @@ pub enum McpServer {
 }
 
 /// Variable de entorno para un servidor MCP por proceso.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvVar {
     /// Nombre.
@@ -747,7 +747,7 @@ pub struct EnvVar {
 }
 
 /// Cabecera HTTP para un servidor MCP.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpHeader {
     /// Nombre.
@@ -761,7 +761,7 @@ pub struct HttpHeader {
 // ---------------------------------------------------------------------------
 
 /// Error de la capa ACP.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Error {
     /// Código.
@@ -779,7 +779,7 @@ pub struct Error {
 // MEDIDO (2026-11-27): el derive de `Serialize`/`Deserialize` emitia el
 // NOMBRE del variant (`"methodNotFound"`); pero el JSON-RPC lleva el
 // **NUMERO** del codigo (`-32601`).  Se implementan a mano.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ErrorCode {
     /// JSON inválido.
     ParseError,
