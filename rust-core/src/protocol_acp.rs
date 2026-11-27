@@ -19,7 +19,11 @@
 //!
 //! Lo que este módulo hace:
 //!
-//! 1. Reexporta el esquema canónico (`acp::v1::…`).
+//! 1. Reexporta el **esquema canónico vendorizado** (`crate::acp_schema`),
+//!    que es el subconjunto estable del crate oficial
+//!    `agent-client-protocol-schema` 1.22.0 (Apache-2.0) reimplementado sin
+//!    dependencias nuevas — ver `rust-core/src/acp_schema.rs` y
+//!    `docs/ACP_VENDOR.md`.
 //! 2. Define **nuestro espacio de extensiones** (`mdaemon/…`), que es donde
 //!    viven lo que ACP no cubre: la política de permisos, el tablón, la
 //!    automatización y el RE.
@@ -31,11 +35,11 @@
 //! en `docs/RE_ACP_COMPARADO.md` para saber qué convergencias industriales
 //! existen (p.ej. `acpira/rewind` ≈ `cognition.ai/revert`).
 
-/// El esquema canónico de ACP (crate oficial, Apache-2.0).
-pub use agent_client_protocol_schema as acp;
+/// El esquema canónico de ACP, **vendorizado** (núcleo estable de ACP v1).
+pub use crate::acp_schema as acp;
 
 /// Versión del crate del esquema canónico que usamos.
-pub const ESQUEMA_CANONICO: &str = "1.22.0";
+pub const ESQUEMA_CANONICO: &str = acp_schema::ESQUEMA_CANONICO;
 
 /// Versión del protocolo que hablamos por defecto.
 ///
