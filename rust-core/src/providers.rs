@@ -84,6 +84,12 @@ pub struct ChatResult {
     pub vendor: String,
     pub latency_ms: f64,
     pub tokens_used: u64,
+    /// Tokens de **entrada** (los reporta el proveedor; 0 si no los dice).
+    #[serde(default)]
+    pub prompt_tokens: u64,
+    /// Tokens de **salida** (los reporta el proveedor; 0 si no los dice).
+    #[serde(default)]
+    pub completion_tokens: u64,
     pub tools_used: Vec<String>,
     pub fallback_used: bool,
     /// Estado de la cuota del proveedor (snapshot MUY compacto).
@@ -1206,6 +1212,555 @@ pub fn daily_budget_snapshot() -> Value {
     })
 }
 
+impl ChatResult {
+    /// JSON **sin** el razonamiento interno.
+    ///
+    /// v16 (AUDIT-LLM-16-E): el razonamiento es cadena-de-pensamiento del
+    /// modelo.  Antes `execute_chat` lo devolvía tal cual y lo imprimían
+    /// el CLI (`serde_json::to_string_pretty(&res)`) y la tool MCP
+    /// `minimax_chat` (`<reasoning>...</reasoning>`): el cliente recibía el
+    /// CoT crudo.  Ahora el razonamiento sólo sale si se pide explícitamente.
+    pub fn public_json(&self, include_reasoning: bool) -> Value {
+        let mut v = serde_json::to_value(self).unwrap_or(Value::Null);
+        if !include_reasoning {
+            if let Some(o) = v.as_object_mut() {
+                o.remove("reasoning");
+            }
+        }
+        v
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v16 — Errores tipados, transporte inyectable y parseo robusto
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Tope duro de `max_tokens` que se envía a un proveedor.
+///
+/// v16: un `max_tokens` absurdo (10_000_000) hace que el proveedor
+/// responda 400 y el daemon lo trata como un fallo del PROVEEDOR => cae al
+/// siguiente sin avisar de que el problema era el `max_tokens`.  El límite
+/// se aplica ANTES de salir a la red.
+pub const MAX_TOKENS_CAP: u32 = 32_768;
+
+/// `max_tokens` por defecto cuando el llamante no dice nada.
+pub const DEFAULT_MAX_TOKENS: u32 = 4_096;
+
+/// Error TIPADO de una llamada a proveedor.
+///
+/// v16: antes todo era `String`.  Con `String` no se puede distinguir
+/// "esto se reintenta" de "esto no" (429/5xx vs 401/404), ni "te falta la
+/// key" de "el proveedor está retirado", ni redactar el secreto de forma
+/// fiable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderError {
+    /// Fallo de transporte (DNS, TLS, conexión rechazada, corte).
+    Transport { provider: String, detail: String },
+    /// Timeout: el proveedor no respondió a tiempo.
+    Timeout { provider: String, detail: String },
+    /// Status HTTP >= 400.
+    Http { provider: String, status: u16, detail: String },
+    /// Status 2xx pero cuerpo no interpretable.
+    Parse { provider: String, detail: String },
+    /// Falta la credencial (o no se pudo resolver).
+    MissingKey { provider: String, detail: String },
+    /// Proveedor o modelo RETIRADO del catálogo.
+    Retired { provider: String, model: String, note: String },
+    /// El presupuesto no permite la llamada.
+    Budget { provider: String, detail: String },
+}
+
+impl ProviderError {
+    /// Id del proveedor que falló.
+    pub fn provider(&self) -> &str {
+        match self {
+            ProviderError::Transport { provider, .. }
+            | ProviderError::Timeout { provider, .. }
+            | ProviderError::Http { provider, .. }
+            | ProviderError::Parse { provider, .. }
+            | ProviderError::MissingKey { provider, .. }
+            | ProviderError::Budget { provider, .. } => provider,
+            ProviderError::Retired { provider, .. } => provider,
+        }
+    }
+
+    /// Status HTTP, si lo hubo.
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            ProviderError::Http { status, .. } => Some(*status),
+            _ => None,
+        }
+    }
+
+    /// Etiqueta estable (para logs y tests).
+    pub fn kind(&self) -> &'static str {
+        match self {
+            ProviderError::Transport { .. } => "transport",
+            ProviderError::Timeout { .. } => "timeout",
+            ProviderError::Http { .. } => "http",
+            ProviderError::Parse { .. } => "parse",
+            ProviderError::MissingKey { .. } => "missing_key",
+            ProviderError::Retired { .. } => "retired",
+            ProviderError::Budget { .. } => "budget",
+        }
+    }
+
+    /// ¿Tiene sentido reintentar?
+    ///
+    /// Regla v16: **nunca** un 4xx (salvo 429 = rate limit) ni un error de
+    /// credenciales.  Un 401/404 no mejora reintentando: se pierde tiempo y
+    /// se puede disparar el *rate limit* del propio proveedor.
+    pub fn retryable(&self) -> bool {
+        match self {
+            ProviderError::Transport { .. } | ProviderError::Timeout { .. } => true,
+            ProviderError::Http { status, .. } => *status == 429 || (500..=599).contains(status),
+            _ => false,
+        }
+    }
+
+    /// Devuelve una copia con el secreto sustituido por `***`.
+    ///
+    /// v16: el cuerpo de error de un proveedor puede ecoar la API key
+    /// ("Invalid API key: sk-abc…").  Ese texto acababa dentro de `reply`
+    /// (el fallback offline concatena los errores) y por tanto **en el
+    /// cliente**.
+    pub fn redacted(&self, secret: &str) -> ProviderError {
+        let s = secret.trim();
+        if s.is_empty() {
+            return self.clone();
+        }
+        let mut e = self.clone();
+        let fix = |d: &mut String| *d = redact_secret(d, s);
+        match &mut e {
+            ProviderError::Transport { detail, .. }
+            | ProviderError::Timeout { detail, .. }
+            | ProviderError::Parse { detail, .. }
+            | ProviderError::MissingKey { detail, .. }
+            | ProviderError::Budget { detail, .. } => fix(detail),
+            ProviderError::Http { detail, .. } => fix(detail),
+            ProviderError::Retired { .. } => {}
+        }
+        e
+    }
+}
+
+impl std::fmt::Display for ProviderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProviderError::Transport { provider, detail } => {
+                write!(f, "HTTP transport error ({}): {}", provider, detail)
+            }
+            ProviderError::Timeout { provider, detail } => {
+                write!(f, "timeout ({}): {}", provider, detail)
+            }
+            ProviderError::Http {
+                provider,
+                status,
+                detail,
+            } => write!(f, "HTTP {} ({}): {}", status, provider, detail),
+            ProviderError::Parse { provider, detail } => {
+                write!(f, "respuesta ilegible ({}): {}", provider, detail)
+            }
+            ProviderError::MissingKey { provider, detail } => {
+                write!(f, "sin credencial ({}): {}", provider, detail)
+            }
+            ProviderError::Retired {
+                provider,
+                model,
+                note,
+            } => write!(f, "MODELO RETIRADO: {} ({}) -> {}", model, provider, note),
+            ProviderError::Budget { provider, detail } => {
+                write!(f, "fuera de presupuesto ({}): {}", provider, detail)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProviderError {}
+
+/// Sustituye cualquier aparición del secreto por `***`.
+///
+/// Também tapa los prefijos típicos (`Bearer `, `sk-`, `key=`) para que un
+/// secreto pegado con prefijo tampoco escape.
+pub fn redact_secret(text: &str, secret: &str) -> String {
+    let s = secret.trim();
+    if s.is_empty() {
+        return text.to_string();
+    }
+    let mut out = text.replace(s, "***");
+    // El proveedor puede devolver la key con el prefijo pegado ("Bearer sk-x").
+    for pre in ["Bearer ", "bearer ", "sk-", "sk_"] {
+        let with = format!("{}{}", pre, s);
+        if with != s {
+            out = out.replace(&with, &format!("{}***", pre));
+        }
+    }
+    out
+}
+
+/// Redacta varios secretos a la vez.
+pub fn redact_all(text: &str, secrets: &[&str]) -> String {
+    let mut out = text.to_string();
+    for s in secrets {
+        out = redact_secret(&out, s);
+    }
+    out
+}
+
+/// Tool call nativa del proveedor (OpenAI `tool_calls`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
+/// Respuesta del proveedor ya interpretada.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ParsedReply {
+    /// Texto final para el cliente (sin el `<think>`).
+    pub content: String,
+    /// Razonamiento interno (viene en `reasoning_content` o en `<think>`).
+    pub reasoning: String,
+    /// Tokens consumidos (`usage.total_tokens`).
+    pub tokens_used: u64,
+    /// Tokens de entrada (`usage.prompt_tokens`).
+    pub prompt_tokens: u64,
+    /// Tokens de salida (`usage.completion_tokens`).
+    pub completion_tokens: u64,
+    /// Tool calls nativas que pidió el proveedor.
+    pub tool_calls: Vec<ParsedToolCall>,
+    /// `finish_reason` del proveedor (`stop`, `length`, `tool_calls`…).
+    pub finish_reason: String,
+}
+
+/// Petición HTTP a un proveedor (todo lo que necesita el transporte).
+#[derive(Debug, Clone)]
+pub struct LlmRequest {
+    pub endpoint: String,
+    pub model: String,
+    pub api_key: String,
+    pub auth_type: String,
+    pub body: Value,
+}
+
+/// Respuesta HTTP cruda de un proveedor.
+#[derive(Debug, Clone)]
+pub struct LlmResponse {
+    pub status: u16,
+    pub body: String,
+}
+
+/// Transporte HTTP **inyectable**.
+///
+/// v16: hasta ahora `call_openai_http` hacía el POST in situ con `ureq`, lo
+/// que hacía IMPOSIBLE testear la cascada, el fallback y el parseo sin
+/// red.  Con este trait, los tests inyectan un transporte de mentira y la
+/// suite es determinista y offline.
+pub trait LlmTransport: Send + Sync {
+    /// Ejecuta el POST.  Devuelve el status y el cuerpo SIEMPRE que haya
+    /// respuesta HTTP (incluido 4xx/5xx): el status lo interpreta la capa
+    /// de arriba.
+    fn post(&self, req: &LlmRequest, timeout: Duration) -> Result<LlmResponse, ProviderError>;
+
+    /// Nombre del transporte (para logs).
+    fn name(&self) -> &'static str {
+        "transport"
+    }
+}
+
+/// Transporte real (ureq + rustls).  Sin curl, sin fork/exec.
+#[derive(Debug, Clone)]
+pub struct UreqTransport {
+    /// Timeout de conexión.
+    pub connect_timeout: Duration,
+    /// Timeout de escritura.
+    pub write_timeout: Duration,
+}
+
+impl Default for UreqTransport {
+    fn default() -> Self {
+        UreqTransport {
+            connect_timeout: Duration::from_secs(10),
+            write_timeout: Duration::from_secs(10),
+        }
+    }
+}
+
+impl LlmTransport for UreqTransport {
+    fn name(&self) -> &'static str {
+        "ureq"
+    }
+
+    fn post(&self, req: &LlmRequest, timeout: Duration) -> Result<LlmResponse, ProviderError> {
+        let config = ureq::Agent::config_builder()
+            .timeout_global(Some(timeout))
+            .timeout_connect(Some(self.connect_timeout))
+            .timeout_per_write(Some(self.write_timeout))
+            // v16: por defecto ureq convierte 4xx/5xx en `Err`, y entonces el
+            // código NUNCA llegaba al bloque que distingue 401 (key mala) de
+            // 402 (sin saldo) de 404 (modelo muerto) de 429 (rate limit):
+            // el diagnóstico-rich was dead code.
+            .http_status_as_error(false)
+            .build();
+        let agent = ureq::Agent::new_with_config(config);
+
+        let mut r = agent.post(&req.endpoint);
+        let key = req.api_key.trim();
+        match req.auth_type.as_str() {
+            "anthropic" => {
+                if !key.is_empty() {
+                    r = r.header("x-api-key", key);
+                }
+                r = r.header("anthropic-version", "2023-06-01");
+            }
+            "none" | "local" => {}
+            _ => {
+                if !key.is_empty() {
+                    r = r.header("Authorization", &format!("Bearer {}", key));
+                }
+            }
+        }
+        r = r
+            .header("Content-Type", "application/json")
+            .header("HTTP-Referer", "https://github.com/boolforge/megadaemon")
+            .header("X-Title", "MegaDaemon Zenith v16");
+
+        let body = serde_json::to_vec(&req.body).map_err(|e| ProviderError::Transport {
+            provider: req.model.clone(),
+            detail: format!("cuerpo no serializable: {}", e),
+        })?;
+
+        let resp = match r.send(body.as_slice()) {
+            Ok(resp) => resp,
+            Err(e) => return Err(map_ureq_error(&req.model, e)),
+        };
+        let status = resp.status().as_u16();
+        let text = resp
+            .into_body()
+            .read_to_string()
+            .map_err(|e| ProviderError::Transport {
+                provider: req.model.clone(),
+                detail: format!("HTTP body read error: {}", e),
+            })?;
+        Ok(LlmResponse { status, body: text })
+    }
+}
+
+/// Traduce un error de `ureq` al error tipado.
+fn map_ureq_error(provider: &str, e: ureq::Error) -> ProviderError {
+    match e {
+        ureq::Error::Timeout(_) => ProviderError::Timeout {
+            provider: provider.to_string(),
+            detail: "el proveedor no respondió a tiempo".to_string(),
+        },
+        ureq::Error::Io(io) => {
+            let kind = io.kind();
+            if kind == std::io::ErrorKind::TimedOut {
+                ProviderError::Timeout {
+                    provider: provider.to_string(),
+                    detail: io.to_string(),
+                }
+            } else {
+                ProviderError::Transport {
+                    provider: provider.to_string(),
+                    detail: io.to_string(),
+                }
+            }
+        }
+        // v16: `http_status_as_error(false)` evita este caso, pero si algún
+        // transporte lo devuelve, el status es información útil.
+        ureq::Error::StatusCode(code) => ProviderError::Http {
+            provider: provider.to_string(),
+            status: code,
+            detail: String::new(),
+        },
+        other => ProviderError::Transport {
+            provider: provider.to_string(),
+            detail: other.to_string(),
+        },
+    }
+}
+
+/// Motor local (SEERE) inyectable.
+///
+/// v16: `execute_chat` llamaba a `seere_v11::run_seere_v11` in situ, que
+/// intenta hablar con `127.0.0.1:8080`.  Para que la suite sea offline y
+/// determinista, el motor local también se inyecta.
+pub trait LocalFallback: Send + Sync {
+    /// Ejecuta el motor local y devuelve `{"answer","tools","tokens"}`.
+    fn run(&self, prompt: &str, max_turns: usize) -> Value;
+
+    /// Nombre legible.
+    fn name(&self) -> &'static str {
+        "local"
+    }
+}
+
+/// Motor local real: SEERE v13 (GBNF, offline).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SeereLocal;
+
+impl LocalFallback for SeereLocal {
+    fn name(&self) -> &'static str {
+        "seere"
+    }
+
+    fn run(&self, prompt: &str, max_turns: usize) -> Value {
+        let (_, pol) = crate::power_policy::current_policy();
+        seere_v11::run_seere_v11(
+            prompt,
+            max_turns.max(1),
+            true,
+            false,
+            false,
+            true,
+            true,
+        )
+    }
+}
+
+/// Política de la cascada de proveedores.
+#[derive(Debug, Clone)]
+pub struct ChatPolicy {
+    /// ¿Se puede caer a un proveedor **de pago** durante el fallback?
+    ///
+    /// v16 (AUDIT-LLM-16-C): antes, sí, y sin avisar.  Pedir un proveedor
+    /// free que fallaba acababa gastando dinero en MiniMax/DeepSeek/Anthropic
+    /// sin que nadie lo pidiera ni se dijera.  Por defecto **NO**: el
+    /// fallback sólo usa proveedores free/keyless/local.  El proveedor
+    /// **pedido explícitamente** siempre se puede usar (es lo que el usuario
+    /// pidió), sea del tier que sea.
+    pub allow_paid_fallback: bool,
+    /// Tope de `max_tokens` (0 = `MAX_TOKENS_CAP`).
+    pub max_tokens_cap: u32,
+    /// Reintentos para 429/5xx y fallos de transporte.
+    pub max_retries: u32,
+    /// Espera base del backoff en ms (0 = sin espera; lo usan los tests).
+    pub backoff_base_ms: u64,
+    /// Timeout por defecto de un proveedor (segundos).
+    pub timeout_secs: u32,
+    /// Presupuesto propio.
+    ///
+    /// `None` = el presupuesto **global** del proceso
+    /// (`service_bus::global_budget`), que es el que se comparte entre
+    /// llamadas.  La suite inyecta uno propio para ser determinista.
+    pub budget: Option<std::sync::Arc<std::sync::Mutex<crate::service_bus::Budget>>>,
+}
+
+impl Default for ChatPolicy {
+    fn default() -> Self {
+        ChatPolicy {
+            allow_paid_fallback: false,
+            max_tokens_cap: MAX_TOKENS_CAP,
+            max_retries: 2,
+            backoff_base_ms: 250,
+            timeout_secs: 45,
+            budget: None,
+        }
+    }
+}
+
+impl ChatPolicy {
+    /// Política de pruebas: sin esperas de backoff y con presupuesto propio.
+    pub fn for_tests(budget: crate::service_bus::Budget) -> ChatPolicy {
+        ChatPolicy {
+            backoff_base_ms: 0,
+            max_retries: 2,
+            budget: Some(std::sync::Arc::new(std::sync::Mutex::new(budget))),
+            ..ChatPolicy::default()
+        }
+    }
+
+    /// Reserva coste en el presupuesto de la política.
+    pub(crate) fn reserve_budget(
+        &self,
+        cost: f64,
+    ) -> Option<crate::service_bus::BudgetReservation> {
+        match &self.budget {
+            Some(m) => {
+                let mut g = match m.lock() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                g.try_reserve(cost)
+            }
+            None => crate::service_bus::with_global_budget(|b| b.try_reserve(cost)),
+        }
+    }
+
+    /// Devuelve el coste reservado al presupuesto de la política.
+    pub(crate) fn release_budget(&self, r: crate::service_bus::BudgetReservation) {
+        match &self.budget {
+            Some(m) => {
+                let mut g = match m.lock() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                r.release(&mut g);
+            }
+            None => crate::service_bus::with_global_budget(|b| r.release(b)),
+        }
+    }
+
+    fn cap(&self) -> u32 {
+        if self.max_tokens_cap == 0 {
+            MAX_TOKENS_CAP
+        } else {
+            self.max_tokens_cap.min(MAX_TOKENS_CAP)
+        }
+    }
+
+    /// Normaliza el `max_tokens` pedido: 0 => por defecto, y nunca por
+    /// encima del tope.
+    pub fn clamp_tokens(&self, max_tokens: u32) -> u32 {
+        if max_tokens == 0 {
+            return DEFAULT_MAX_TOKENS.min(self.cap());
+        }
+        max_tokens.min(self.cap())
+    }
+}
+
+/// Petición de chat normalizada.
+#[derive(Debug, Clone, Default)]
+pub struct ChatRequest {
+    pub prompt: String,
+    pub requested_model: Option<String>,
+    pub attachment_path: Option<String>,
+    pub system: Option<String>,
+    pub max_tokens: u32,
+    /// Mensajes ya construidos en formato OpenAI.
+    ///
+    /// Si no está vacío, se envían TAL CUAL al proveedor (conversación
+    /// multi-turno con roles) y se ignoran `prompt` y `system`.  Antes el
+    /// gateway concatenaba los mensajes de usuario y assistant en un único
+    /// prompt: el modelo recibía su propia respuesta anterior como si fuera
+    /// una frase del usuario.
+    pub messages: Vec<Value>,
+}
+
+impl ChatRequest {
+    /// Petición mínima con el prompt.
+    pub fn new(prompt: &str) -> ChatRequest {
+        ChatRequest {
+            prompt: prompt.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Fija el modelo pedido.
+    pub fn with_model(mut self, model: &str) -> ChatRequest {
+        self.requested_model = Some(model.to_string());
+        self
+    }
+
+    /// Fija el `max_tokens`.
+    pub fn with_max_tokens(mut self, n: u32) -> ChatRequest {
+        self.max_tokens = n;
+        self
+    }
+}
+
 fn default_vault() -> ProviderVault {
     ProviderVault {
         // El default es el LOCAL: gratis, offline y sin latencia de red.  La
@@ -1430,16 +1985,24 @@ pub fn update_provider(
     for p in &mut vault.providers {
         if p.id == id {
             if let Some(k) = api_key {
-                p.api_key = k.trim().to_string();
+                let k = k.trim();
+                if !k.is_empty() && k.chars().any(|c| c.is_control()) {
+                    return Err("API key invalida: contiene caracteres de control".to_string());
+                }
+                p.api_key = k.to_string();
                 if !p.api_key.is_empty() {
                     p.enabled = true;
-                    p.tier = "configured".to_string();
+                    // v16 (AUDIT-LLM-16-D): el tier **NO** se sobreescribe con
+                    // "configured".  Eso destruía la clasificación de coste
+                    // del proveedor: `tier_free()` dejaba de devolver true
+                    // para un Groq/Google gratis, y el bus lo pasaba a la
+                    // lista de "de pago" (presupuesto y política "Cheapest"
+                    // equivocados).  El tier original se conserva; que haya
+                    // key ya se ve en `ready`/`has_key`.
                 }
             }
-            if let Some(m) = model {
-                if !m.trim().is_empty() {
-                    p.model = m.trim().to_string();
-                }
+            if let Some(m) = nuevo_modelo.as_ref() {
+                p.model = m.clone();
             }
             if let Some(nuevo) = nuevo_endpoint.as_ref() {
                 // v13.2 (HW-03): cambiar el endpoint de un proveedor que ya
@@ -1467,19 +2030,19 @@ pub fn update_provider(
             break;
         }
     }
-    // Si el usuario pide un modelo RETIRADO, se avisa en lugar de fallar
-    // en silencio contra la API (M2.7/M2.5 se retiró el 2026-11-18; GitHub Models
-    // se retiró el 2026-07-30).
-    if let Some((rid, rmodel, rnote)) = provider_catalog::is_retired(id) {
-        return Err(format!(
-            "MODELO RETIRADO: {} ({}) -> {}",
-            rmodel, rid, rnote
-        ));
-    }
-    if !found && !id.is_empty() {
+    if !found {
         // Allow creating custom OpenAI-compatible provider dynamically
+        let id = validate_provider_id(id)?;
+        let ep = match nuevo_endpoint.as_ref() {
+            Some(e) => e.clone(),
+            None => "https://openrouter.ai/api/v1/chat/completions".to_string(),
+        };
+        let m = match nuevo_modelo.as_ref() {
+            Some(m) => m.clone(),
+            None => "openai/gpt-4o-mini".to_string(),
+        };
         vault.providers.push(ProviderEntry {
-            id: id.to_string(),
+            id: id.clone(),
             name: format!("Custom ({})", id),
             vendor: "Custom".to_string(),
             endpoint: nuevo_endpoint.clone().unwrap_or_else(|| {
@@ -1494,7 +2057,16 @@ pub fn update_provider(
             supports_reasoning: true,
         });
     }
-    if set_default && !id.is_empty() {
+    if set_default {
+        // v16: el modelo por defecto tampoco puede ser uno RETIRADO ni
+        // uno que no exista en la boveda (si no, el daemon arrancaba ya con
+        // un default muerto).
+        if provider_catalog::is_retired(&id).is_some() {
+            return Err(format!("el modelo por defecto '{}' esta RETIRADO", id));
+        }
+        if !vault.providers.iter().any(|p| p.id == id) {
+            return Err(format!("el modelo por defecto '{}' no existe", id));
+        }
         vault.default_model = id.to_string();
     }
     save_vault(&vault)?;
@@ -1532,23 +2104,39 @@ fn resolve_gh_token() -> Option<String> {
     fresh
 }
 
-fn split_think_tags(raw: &str) -> (String, String) {
+/// Separa el razonamiento `<think>…</think>` del texto final.
+///
+/// v16 (AUDIT-LLM-16-F): el código viejo buscaba el **primer** `</think>` en
+/// todo el texto.  Si el modelo emitía un `</think>` huérfano ANTES del
+/// `<think>` (típico de los razonadores chinos: cierran un bloque vacío al
+/// principio), la comparación `end > start + 7` fallaba y el texto entero
+/// (con las etiquetas y el razonamiento) se devolvía como respuesta.
+///
+/// Ahora se busca el `</think>` **después** del `<think>`, y si no hay
+/// cierre se descarta el `<think>` parcial (respuesta truncada) en vez de
+/// devolverlo crudo.
+pub fn split_think_tags(raw: &str) -> (String, String) {
     if let Some(start) = raw.find("<think>") {
-        if let Some(end) = raw.find("</think>") {
-            if end > start + 7 {
-                let thought = raw[start + 7..end].trim().to_string();
-                let before = raw[..start].trim();
-                let after = raw[end + 8..].trim();
-                let clean = if before.is_empty() {
-                    after.to_string()
-                } else if after.is_empty() {
-                    before.to_string()
-                } else {
-                    format!("{}\n{}", before, after)
-                };
-                return (clean, thought);
-            }
+        let after = &raw[start + 7..];
+        if let Some(rel_end) = after.find("</think>") {
+            let end = start + 7 + rel_end;
+            let thought = after[..rel_end].trim().to_string();
+            let before = raw[..start].trim();
+            let after_text = after[rel_end + 8..].trim();
+            let clean = if before.is_empty() {
+                after_text.to_string()
+            } else if after_text.is_empty() {
+                before.to_string()
+            } else {
+                format!("{}\n{}", before, after_text)
+            };
+            return (clean, thought);
         }
+        // `<think>` sin cerrar: respuesta truncada.  Se devuelve el texto
+        // visible (nada) y el razonamiento parcial aparte.
+        let before = raw[..start].trim().to_string();
+        let partial = after.trim().to_string();
+        return (before, partial);
     }
     (raw.trim().to_string(), String::new())
 }
@@ -1743,6 +2331,16 @@ fn build_grounded_re_context(prompt: &str, attachment_path: Option<&str>) -> (St
     (ctx, tools)
 }
 
+/// Coste estimado (USD) de una llamada a este proveedor.
+///
+/// Usa la misma tabla de precios que el bus de servicios
+/// (`service_bus::cost_for_model`), para que el presupuesto del bus y el
+/// de la cascada no se contradigan.
+pub fn estimate_call_cost(p: &ProviderEntry, max_tokens: u32) -> f64 {
+    let est = crate::service_bus::cost_for_model(&p.model, &p.tier);
+    est.estimate(0, max_tokens.max(1))
+}
+
 /// Master Pure Rust Chat Orchestrator — handles explicit model selection, Hybrid Rust-Tools+Cloud,
 /// Local SEERE v12 offline execution, and automatic zero-downtime fallback!
 pub fn execute_chat(
@@ -1836,6 +2434,8 @@ pub fn execute_chat_con_tools_with(
             vendor: "catalog".to_string(),
             latency_ms: (t0.elapsed().as_secs_f64() * 1000.0).round(),
             tokens_used: 0,
+            prompt_tokens: 0,
+            completion_tokens: 0,
             tools_used: Vec::new(),
             fallback_used: false,
             quota: None,
@@ -1844,19 +2444,22 @@ pub fn execute_chat_con_tools_with(
         };
     }
 
-    let (re_ctx, mut tools_used) = build_grounded_re_context(prompt, attachment_path);
-    let enriched_prompt = if re_ctx.is_empty() {
-        prompt.to_string()
+    let (re_ctx, mut tools_used) =
+        build_grounded_re_context(&req.prompt, req.attachment_path.as_deref());
+    let mut enriched_prompt = if re_ctx.is_empty() {
+        req.prompt.clone()
     } else {
-        format!("{}\n\n[PREGUNTA DEL USUARIO]\n{}", re_ctx, prompt)
+        format!("{}\n\n[PREGUNTA DEL USUARIO]\n{}", re_ctx, req.prompt)
     };
 
     // Explicit Local SEERE v12 offline path
     if target_id == "local-seere" || target_id == "local" {
-        // v13.2 (S09): el fallback local respeta la política de energía.
         let (_, pol) = crate::power_policy::current_policy();
-        let res = seere_v11::run_seere_v11(&enriched_prompt, pol.max_turns.max(1), true, false, false, true, true);
-        let ans = res["answer"].as_str().unwrap_or("Sin respuesta local").to_string();
+        let res = local.run(&enriched_prompt, pol.max_turns.max(1));
+        let ans = res["answer"]
+            .as_str()
+            .unwrap_or("Sin respuesta local")
+            .to_string();
         if let Some(arr) = res["tools"].as_array() {
             for t in arr {
                 let tn = t["tool"].as_str().unwrap_or("TOOL");
@@ -1872,6 +2475,8 @@ pub fn execute_chat_con_tools_with(
             vendor: "Local-Exynos".to_string(),
             latency_ms: (t0.elapsed().as_secs_f64() * 1000.0).round(),
             tokens_used: res["tokens"].as_u64().unwrap_or(0),
+            prompt_tokens: 0,
+            completion_tokens: 0,
             tools_used,
             fallback_used: false,
             quota: None,
@@ -1880,9 +2485,9 @@ pub fn execute_chat_con_tools_with(
         };
     }
 
-    // Hybrid path: run SEERE local shell/root tool discovery if shell/root intent + synthesize with MiniMax M2.7
+    // Hybrid path: run SEERE local shell/root tool discovery if shell/root intent + synthesize with MiniMax
     let actual_cloud_id = if target_id == "hybrid-seere" {
-        let low = prompt.to_lowercase();
+        let low = req.prompt.to_lowercase();
         if low.contains("pid")
             || low.contains("root")
             || low.contains("ls ")
@@ -1894,7 +2499,16 @@ pub fn execute_chat_con_tools_with(
             let arsenal = seere_v11::Arsenal::new(false, true, true);
             let sys_snap = arsenal.exec_root("uname -r; id; free -m | head -n 2");
             tools_used.push("RootSnap".to_string());
-            let _ = sys_snap;
+            // v16 (AUDIT-LLM-16-B): la telemetría se ejecutaba y se
+            // DESCARTABA (`let _ = sys_snap;`): `tools_used` decía "RootSnap"
+            // pero el modelo NUNCA veía la salida.  Ahora la salida entra en
+            // el prompt => lo que se declara es lo que se usó.
+            if !sys_snap.trim().is_empty() && !sys_snap.starts_with("ERR") {
+                enriched_prompt = format!(
+                    "{}\n\n[TELEMETRÍA LOCAL (RootSnap)]\n{}\n\n[PREGUNTA DEL USUARIO]\n{}",
+                    re_ctx, sys_snap.trim(), req.prompt
+                );
+            }
         }
         "minimax-m3.1-flash"
     } else {
@@ -2149,12 +2763,23 @@ pub fn execute_chat_con_tools_with(
 
     // Final guaranteed offline fallback to Local SEERE v12 Rust GBNF
     let (_, pol) = crate::power_policy::current_policy();
-    let res = seere_v11::run_seere_v11(&enriched_prompt, pol.max_turns.max(1), true, false, false, true, true);
+    let res = local.run(&enriched_prompt, pol.max_turns.max(1));
     let ans = res["answer"].as_str().unwrap_or("Sin respuesta").to_string();
-    let note = if errors.is_empty() {
+    if let Some(arr) = res["tools"].as_array() {
+        for t in arr {
+            let tn = t["tool"].as_str().unwrap_or("TOOL");
+            let ta = t["arg"].as_str().unwrap_or("");
+            tools_used.push(format!("{}:{}", tn, ta));
+        }
+    }
+    let mut note = if errors.is_empty() {
         ans
     } else {
-        format!("{}\n\n[Fallback offline activo — errores cloud: {}]", ans, errors.join(" | "))
+        format!(
+            "{}\n\n[Fallback offline activo — errores cloud: {}]",
+            ans,
+            errors.join(" | ")
+        )
     };
     trace.push("local-seere => OK (offline, último recurso)".to_string());
     ChatResult {
@@ -2165,6 +2790,8 @@ pub fn execute_chat_con_tools_with(
         vendor: "Local-Exynos".to_string(),
         latency_ms: (t0.elapsed().as_secs_f64() * 1000.0).round(),
         tokens_used: res["tokens"].as_u64().unwrap_or(0),
+        prompt_tokens: 0,
+        completion_tokens: 0,
         tools_used,
         fallback_used: true,
         quota: Some(crate::quota_guard::snapshot_compacto()),

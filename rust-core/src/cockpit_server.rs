@@ -1702,16 +1702,19 @@ fn handle_client(mut stream: TcpStream) {
                         send_json(&mut stream, &v)
                     }
                     Err(e) => {
+                        // v16 (AUDIT-LLM-16-F): antes el error de gateway
+                        // (p.ej. "messages vacía") volvía con HTTP **200** y
+                        // un cuerpo de error: el cliente OpenAI lo leía como
+                        // una respuesta válida.  Ahora el status HTTP es el
+                        // correcto (400/502).
                         let code = if e.status >= 400 { e.status } else { 400 };
-                        send_json(
+                        let payload = serde_json::to_string(&e.to_json())
+                            .unwrap_or_else(|_| "{\"error\":{\"message\":\"error\"}}".to_string());
+                        send_http_response(
                             &mut stream,
-                            &json!({
-                                "error": {
-                                    "message": e.message,
-                                    "type": "invalid_request_error",
-                                    "code": code,
-                                }
-                            }),
+                            code,
+                            "application/json; charset=utf-8",
+                            payload.as_bytes(),
                         );
                     }
                 }

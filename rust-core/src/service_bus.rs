@@ -44,6 +44,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 /// Versión del esquema del catálogo (la UI la usa para detectar deriva).
 pub const SERVICE_BUS_SCHEMA: &str = "service-bus/v1";
@@ -416,7 +417,18 @@ impl Budget {
     }
 
     /// Lo que queda del día.
+    ///
+    /// v16 (AUDIT-LLM-16-D): el giro de día sólo ocurría dentro de
+    /// [`Budget::spend`].  Si el proceso gastaba el presupuesto del día y
+    /// pasaba la medianoche **sin gastar nada**, `spent_day_usd` se quedaba
+    /// en el valor del día anterior ⇒ `remaining_day()` = 0 ⇒ **todos los
+    /// proveedores de pago quedaban bloqueados hasta la siguiente llamada
+    /// que gastara algo**.  Ahora el giro se hace al LEER también.
     pub fn remaining_day(&self) -> f64 {
+        let today = today_epoch();
+        if today != self.day_epoch {
+            return self.per_day_usd.max(0.0);
+        }
         (self.per_day_usd - self.spent_day_usd).max(0.0)
     }
 
@@ -440,6 +452,72 @@ impl Budget {
     pub fn reset_tick(&mut self) {
         self.spent_tick_usd = 0.0;
     }
+
+    /// **Reserva** un gasto: comprueba Y aparta el dinero de una vez.
+    ///
+    /// v16 (AUDIT-LLM-16-D): `allows()` + `spend()` es un *check-then-act*:
+    /// dos hilos que miran el presupuesto a la vez ven el mismo "queda" y
+    /// los dos gastan.  Con la reserva, el que llega segundo ve el dinero ya
+    /// apartado y se le rechaza la llamada.
+    ///
+    /// Devuelve `None` si el presupuesto no permite el gasto.
+    pub fn try_reserve(&mut self, cost_usd: f64) -> Option<BudgetReservation> {
+        if !self.allows(cost_usd) {
+            return None;
+        }
+        let today = today_epoch();
+        if today != self.day_epoch {
+            self.day_epoch = today;
+            self.spent_day_usd = 0.0;
+        }
+        self.spent_tick_usd += cost_usd;
+        self.spent_day_usd += cost_usd;
+        Some(BudgetReservation { cost_usd })
+    }
+}
+
+/// Reserva de presupuesto: se **confirma** si la llamada tuvo éxito y se
+/// **libera** si falló (una llamada que no llegó al proveedor no se cobra).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BudgetReservation {
+    cost_usd: f64,
+}
+
+impl BudgetReservation {
+    /// Coste reservado (USD).
+    pub fn cost_usd(&self) -> f64 {
+        self.cost_usd
+    }
+
+    /// Devuelve el dinero al presupuesto (la llamada falló).
+    pub fn release(self, budget: &mut Budget) {
+        budget.spent_tick_usd = (budget.spent_tick_usd - self.cost_usd).max(0.0);
+        budget.spent_day_usd = (budget.spent_day_usd - self.cost_usd).max(0.0);
+    }
+}
+
+/// Presupuesto **compartido por todo el proceso**.
+///
+/// v16 (AUDIT-LLM-16-D): el presupuesto vivía **dentro** de cada
+/// `ServiceBus`, y `mcp_ext.rs` construye un bus NUEVO en cada invocación
+/// de la tool ⇒ cada llamada veía el presupuesto entero ⇒ N llamadas
+/// concurrentes gastaban N× el tope.  Además el estado no se persistía, así
+/// que reiniciar el daemon reseteaba el gasto del día.
+///
+/// Ahora hay un presupuesto global (mutex) que todas las instancias
+/// comparten, con reserva atómica.
+pub fn global_budget() -> &'static Mutex<Budget> {
+    static GLOBAL: OnceLock<Mutex<Budget>> = OnceLock::new();
+    GLOBAL.get_or_init(|| Mutex::new(Budget::default()))
+}
+
+/// Ejecuta `f` con el presupuesto global (bloqueando).
+pub fn with_global_budget<R>(f: impl FnOnce(&mut Budget) -> R) -> R {
+    let mut g = match global_budget().lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    f(&mut g)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -622,11 +700,16 @@ impl Prober for PathProber {
 pub struct ServiceBus {
     entries: Vec<ServiceEntry>,
     budget: Budget,
+    /// v16: usar el presupuesto **global** del proceso en vez del local.
+    shared_budget: bool,
 }
 
 impl ServiceBus {
     /// Crea el bus con un catálogo (los ids duplicados se colapsan: gana el
     /// primero).
+    ///
+    /// El presupuesto es **local** a esta instancia (determinista y
+    /// aislado: lo usan los tests).
     pub fn new(entries: Vec<ServiceEntry>) -> ServiceBus {
         let mut out: Vec<ServiceEntry> = Vec::new();
         for e in entries {
@@ -641,7 +724,21 @@ impl ServiceBus {
         ServiceBus {
             entries: out,
             budget: Budget::default(),
+            shared_budget: false,
         }
+    }
+
+    /// Crea el bus con el presupuesto **global** del proceso.
+    ///
+    /// v16 (AUDIT-LLM-16-D): el llamante real (`mcp_ext.rs`) construye un
+    /// bus nuevo en cada invocación ⇒ con el presupuesto local cada llamada
+    /// veía el tope COMPLETO ⇒ N llamadas concurrentes gastaban N× el
+    /// presupuesto.  Con el global, el tope se respeta entre llamadas y
+    /// entre hilos.
+    pub fn with_global_budget(entries: Vec<ServiceEntry>) -> ServiceBus {
+        let mut b = ServiceBus::new(entries);
+        b.shared_budget = true;
+        b
     }
 
     /// Todas las entradas.
@@ -779,6 +876,24 @@ impl ServiceBus {
         Ok(h)
     }
 
+    /// ¿Permite el presupuesto activo este gasto?
+    fn budget_allows(&self, cost_usd: f64) -> bool {
+        if self.shared_budget {
+            with_global_budget(|b| b.allows(cost_usd))
+        } else {
+            self.budget.allows(cost_usd)
+        }
+    }
+
+    /// Lo que queda del tick en el presupuesto activo.
+    fn budget_remaining_tick(&self) -> f64 {
+        if self.shared_budget {
+            with_global_budget(|b| b.remaining_tick())
+        } else {
+            self.budget.remaining_tick()
+        }
+    }
+
     /// Candidatos válidos para un tipo de tarea, **en orden de preferencia**.
     /// Quedan fuera (y se anota por qué): los deshabilitados, los que no
     /// tienen la capacidad, los que se sabe caídos (comprobados y con
@@ -811,13 +926,13 @@ impl ServiceBus {
                 continue;
             }
             let cost = e.cost_estimate.estimate_call(DEFAULT_OUTPUT_TOKENS);
-            if !self.budget.allows(cost) {
+            if !self.budget_allows(cost) {
                 rejected.push((
                     e.id.clone(),
                     format!(
                         "fuera de presupuesto (${:.6} > ${:.6} del tick)",
                         cost,
-                        self.budget.remaining_tick()
+                        self.budget_remaining_tick()
                     ),
                 ));
                 continue;
@@ -914,6 +1029,13 @@ impl ServiceBus {
     }
 
     /// Igual que [`ServiceBus::route`] pero con política explícita.
+    ///
+    /// v16 (AUDIT-LLM-16-D): la comprobación del presupuesto era un
+    /// *check-then-act* (`allows()` y luego, tras la llamada, `spend()`).
+    /// Con dos llamadas concurrentes, las dos veían el mismo "queda" y las
+    /// dos gastaban ⇒ se pasaba el tope.  Ahora se **reserva** el coste
+    /// antes de llamar (atómico) y, si la llamada falla, la reserva se
+    /// **libera** (una llamada que no llegó al proveedor no se cobra).
     pub fn route_with(
         &mut self,
         policy: SelectionPolicy,
@@ -932,14 +1054,22 @@ impl ServiceBus {
                 let c = e.cost_estimate.estimate_call(DEFAULT_OUTPUT_TOKENS);
                 (e.clone(), c)
             };
-            if !self.budget.allows(cost) {
-                attempts.push((id.clone(), "sin presupuesto".to_string()));
-                continue;
-            }
+            // Reserva ATÓMICA del presupuesto.
+            let reservation = if self.shared_budget {
+                with_global_budget(|b| b.try_reserve(cost))
+            } else {
+                self.budget.try_reserve(cost)
+            };
+            let reservation = match reservation {
+                Some(r) => r,
+                None => {
+                    attempts.push((id.clone(), "sin presupuesto".to_string()));
+                    continue;
+                }
+            };
             match call(&entry) {
                 Ok(reply) => {
-                    self.budget.spend(cost);
-                    spent += cost;
+                    spent += reservation.cost_usd();
                     if let Some(e) = self.entries.iter_mut().find(|x| x.id == *id) {
                         e.health = Health::ok(e.latency_ms.unwrap_or(0));
                     }
@@ -953,6 +1083,12 @@ impl ServiceBus {
                     };
                 }
                 Err(err) => {
+                    // La llamada falló: el dinero vuelve al presupuesto.
+                    if self.shared_budget {
+                        with_global_budget(|b| reservation.release(b));
+                    } else {
+                        reservation.release(&mut self.budget);
+                    }
                     attempts.push((id.clone(), err.clone()));
                     // Evidencia real: este servicio falló ahora mismo.
                     if let Some(e) = self.entries.iter_mut().find(|x| x.id == *id) {

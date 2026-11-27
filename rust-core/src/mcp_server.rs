@@ -79,6 +79,21 @@ fn tool_definitions_core() -> Value {
             }
         },
         {
+            "name": "megadaemon_chat",
+            "description": "Gateway OpenAI-compatible de MegaDaemon: el 'modelo' es SIEMPRE 'megadaemon' y MegaDaemon enruta (proveedor pedido -> fallback -> SEERE local) con trazabilidad. Misma ruta que POST /v1/chat/completions.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "model": { "type": "string", "default": "megadaemon", "description": "'megadaemon' (routing completo) o el id de un proveedor concreto." },
+                    "messages": { "type": "array", "description": "Mensajes OpenAI (role + content). El content puede ser texto o un array de partes." },
+                    "max_tokens": { "type": "integer", "default": 2048 },
+                    "include_trace": { "type": "boolean", "default": false, "description": "Anade el bloque 'megadaemon' con la trazabilidad (proveedor, latencia, fallback)." },
+                    "include_reasoning": { "type": "boolean", "default": false, "description": "Anade 'reasoning_content' con el razonamiento del modelo." }
+                },
+                "required": ["messages"]
+            }
+        },
+        {
             "name": "megadaemon_voice",
             "description": "La VOZ de MegaDaemon: el daemon como agente del enjambre (identidad, plan, accion y difusion). Acciones: plan | act | speak | whoami | status. Plan decide con criterio fijo o con LLM (degrada al criterio fijo si el modelo no responde). Act ejecuta por la misma registry que /api/tool/<n> (tools de lectura/accion; las destructivas estan vetadas).",
             "inputSchema": {
@@ -309,6 +324,21 @@ pub fn dispatch_tool(name: &str, args: &Value) -> Value {
                 )
             };
             json!({ "content": [{ "type": "text", "text": txt }] })
+        }
+        // v16: gateway OpenAI-compatible por MCP (paridad con el CLI
+        // `gateway` y con el endpoint HTTP `/v1/chat/completions`).
+        "megadaemon_chat" => {
+            let body = args.clone();
+            match crate::llm_gateway::chat_completions(&body) {
+                Ok(v) => {
+                    let txt = serde_json::to_string_pretty(&v).unwrap_or_default();
+                    json!({ "content": [{ "type": "text", "text": txt }], "structuredContent": v })
+                }
+                Err(e) => json!({
+                    "content": [{ "type": "text", "text": serde_json::to_string_pretty(&e.to_json()).unwrap_or_default() }],
+                    "isError": true
+                }),
+            }
         }
         "swarm_chat" => {
             let prompt = args["prompt"].as_str().unwrap_or("");

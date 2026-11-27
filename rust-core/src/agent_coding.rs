@@ -1515,6 +1515,37 @@ pub fn call_provider_messages(
     tools: &Value,
     max_tokens: u32,
 ) -> Result<AssistantTurn, String> {
+    call_provider_messages_with(
+        &providers::UreqTransport::default(),
+        &providers::ChatPolicy::default(),
+        provider,
+        messages,
+        tools,
+        max_tokens,
+    )
+}
+
+/// Igual que [`call_provider_messages`] pero con el **transporte
+/// inyectado** (para la suite determinista y sin red) y con la política de
+/// reintentos del daemon.
+///
+/// v16 (AUDIT-LLM-16-B): esta función tenía su **propia** implementación
+/// del POST y su **propio** parseo, distintos de los de `providers.rs`:
+///   * no redactaba la API key ⇒ un cuerpo de error del proveedor que la
+///     ecoaba acababa en el informe de la sesión (que se publica en el
+///     tablón del bus);
+///   * no reintentaba los 429/5xx;
+///   * su parseo de `<think>` tenía el mismo defecto que el de
+///     `providers.rs` (buscaba el primer `</think>` en todo el texto).
+/// Ahora comparte el parseo, el retr y la redacción de `providers.rs`.
+pub fn call_provider_messages_with(
+    transport: &dyn providers::LlmTransport,
+    policy: &providers::ChatPolicy,
+    provider: &ProviderEntry,
+    messages: &[ChatMessage],
+    tools: &Value,
+    max_tokens: u32,
+) -> Result<AssistantTurn, String> {
     let api_key = resolve_provider_key(provider)?;
     let wire_messages: Vec<Value> = messages.iter().map(ChatMessage::to_openai_json).collect();
 
@@ -1637,46 +1668,23 @@ pub fn call_provider_messages(
         ));
     }
 
-    let msg_node = &v["choices"][0]["message"];
-    let raw_content = msg_node["content"].as_str().unwrap_or("");
-    let extra_reason = msg_node["reasoning_content"]
-        .as_str()
-        .or_else(|| msg_node["reasoning"].as_str())
-        .unwrap_or("");
-    let tokens = v["usage"]["total_tokens"].as_u64().unwrap_or(0);
-
-    let (clean_content, think_tag) = split_think_tags(raw_content);
-    let reasoning = if !extra_reason.is_empty() {
-        extra_reason.to_string()
-    } else {
-        think_tag
-    };
-
-    // 1) Parse native OpenAI `tool_calls` array if present.
-    let mut tool_calls = parse_native_tool_calls(msg_node);
-
-    // 2) Fallback: parse fenced JSON `{"tool": "...", "args": {...}}` blocks if no native calls.
-    let final_content = if tool_calls.is_empty() {
-        let (stripped, parsed) = parse_fenced_tool_calls(&clean_content);
-        tool_calls = parsed;
-        stripped
-    } else {
-        clean_content
-    };
-
-    if final_content.is_empty() && tool_calls.is_empty() && reasoning.is_empty() {
+    if final_content.is_empty() && tool_calls.is_empty() && parsed.reasoning.is_empty() {
         return Err(format!(
-            "unexpected empty assistant turn from {}: {}",
+            "respuesta vacia del proveedor {} (finish_reason={})",
             provider.id,
-            truncate_utf8_prefix(trimmed, 200)
+            if parsed.finish_reason.is_empty() {
+                "-"
+            } else {
+                &parsed.finish_reason
+            }
         ));
     }
 
     Ok(AssistantTurn {
         content: final_content,
-        reasoning,
+        reasoning: parsed.reasoning,
         tool_calls,
-        tokens_used: tokens,
+        tokens_used: parsed.tokens_used,
         model_id: provider.id.clone(),
     })
 }
@@ -1707,36 +1715,20 @@ fn resolve_provider_key(provider: &ProviderEntry) -> Result<String, String> {
     }
 }
 
+/// Tool calls nativas de OpenAI.
+///
+/// v16: delegamos en `providers::parse_native_tool_calls` para que el
+/// motor de codificación y el chat del daemon interpreten las `tool_calls`
+/// **exactamente igual** (paridad).
 fn parse_native_tool_calls(msg_node: &Value) -> Vec<ToolCall> {
-    let mut out = Vec::new();
-    let Some(arr) = msg_node.get("tool_calls").and_then(Value::as_array) else {
-        return out;
-    };
-    for (idx, item) in arr.iter().enumerate() {
-        let id = item
-            .get("id")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .map(String::from)
-            .unwrap_or_else(|| format!("call_native_{}", idx + 1));
-
-        let func = item.get("function").unwrap_or(item);
-        let Some(name) = func.get("name").and_then(Value::as_str) else {
-            continue;
-        };
-        let raw_args = func.get("arguments");
-        let arguments = match raw_args {
-            Some(Value::String(s)) => serde_json::from_str::<Value>(s).unwrap_or_else(|_| json!({})),
-            Some(Value::Object(_)) => raw_args.cloned().unwrap_or_else(|| json!({})),
-            _ => json!({}),
-        };
-        out.push(ToolCall {
-            id,
-            name: name.to_string(),
-            arguments,
-        });
-    }
-    out
+    providers::parse_native_tool_calls(msg_node)
+        .into_iter()
+        .map(|tc| ToolCall {
+            id: tc.id,
+            name: tc.name,
+            arguments: tc.arguments,
+        })
+        .collect()
 }
 
 /// Extracts fallback tool calls of the form `{"tool": "<name>", "args": {...}}`
@@ -1816,24 +1808,11 @@ fn try_parse_tool_json(raw: &str, id_offset: usize) -> Option<Vec<ToolCall>> {
 }
 
 fn split_think_tags(raw: &str) -> (String, String) {
-    if let Some(start) = raw.find("<think>") {
-        if let Some(end) = raw.find("</think>") {
-            if end > start + 7 {
-                let thought = raw[start + 7..end].trim().to_string();
-                let before = raw[..start].trim();
-                let after = raw[end + 8..].trim();
-                let clean = if before.is_empty() {
-                    after.to_string()
-                } else if after.is_empty() {
-                    before.to_string()
-                } else {
-                    format!("{}\n{}", before, after)
-                };
-                return (clean, thought);
-            }
-        }
-    }
-    (raw.trim().to_string(), String::new())
+    // v16: delegamos en `providers::split_think_tags` (paridad con el chat
+    // del daemon): el código local buscaba el **primer** `</think>` de todo
+    // el texto, así que un `</think>` huérfano al principio hacía que el
+    // razonamiento se colara en la respuesta final.
+    providers::split_think_tags(raw)
 }
 
 /// Live backend backed by MegaDaemon's provider vault with automatic failover
@@ -1920,32 +1899,50 @@ impl CodingBackend for LiveVaultBackend {
             return Ok(self.run_local_seere_turn(messages));
         }
 
-        let mut candidates: Vec<ProviderEntry> = Vec::new();
-        if let Some(p) = vault.providers.iter().find(|p| p.id == target_id) {
-            if p.auth_type != "local" && p.auth_type != "hybrid" {
-                candidates.push(p.clone());
-            }
-        }
-        for p in &vault.providers {
-            if p.id != target_id
-                && p.enabled
-                && p.auth_type != "local"
-                && p.auth_type != "hybrid"
-            {
-                candidates.push(p.clone());
-            }
-        }
+        // v16 (AUDIT-LLM-16-C): la cascada del motor de codificación era una
+        // COPIA de la de `providers.rs` y con los MISMOS defectos:
+        //   * el proveedor pedido se usaba aunque estuviera DESHABILITADO;
+        //   * la reserva entraban los proveedores RETIRADOS;
+        //   * la reserva entraban los proveedores DE PAGO (gastar dinero);
+        //   * un proveedor pedido INEXISTENTE caía al primero de la lista
+        //     con `fallback_used = false` (mentira);
+        //   * `resolve_provider_key(p).is_err()` se saltaba al proveedor
+        //     SIN AVISAR.
+        // Ahora se usa la MISMA función de cascada que el chat del daemon
+        // (`providers::build_candidates`): una sola fuente de verdad.
+        let policy = providers::ChatPolicy::default();
+        let (candidates, notes) = providers::build_candidates(&vault, target_id, &policy);
 
         let mut errors: Vec<String> = Vec::new();
         for (idx, p) in candidates.iter().enumerate() {
-            if resolve_provider_key(p).is_err() {
-                continue;
-            }
-            match call_provider_messages(p, messages, tools, max_tokens) {
+            let key = match resolve_provider_key(p) {
+                Ok(k) => k,
+                Err(e) => {
+                    errors.push(format!("{}: {}", p.id, e));
+                    continue;
+                }
+            };
+            match call_provider_messages_with(
+                &providers::UreqTransport::default(),
+                &policy,
+                p,
+                messages,
+                tools,
+                max_tokens,
+            ) {
                 Ok(turn) => {
-                    if idx > 0 {
+                    if idx > 0 || p.id != target_id {
                         self.fallback_used = true;
                     }
+                    let mut turn = turn;
+                    if !notes.is_empty() {
+                        turn.content = format!(
+                            "{}\n\n[Nota del enrutador: {}]",
+                            turn.content,
+                            notes.join(" | ")
+                        );
+                    }
+                    let _ = key;
                     return Ok(turn);
                 }
                 Err(e) => errors.push(e),
@@ -2015,6 +2012,12 @@ pub struct CodingSessionReport {
     pub turns_taken: usize,
     pub total_tokens: u64,
     pub tool_calls_executed: usize,
+    /// v16 (AUDIT-LLM-16-B): las tools que se EJECUTARON de verdad (por
+    /// nombre, en orden).  Antes sólo había un contador (`tool_calls_executed`)
+    /// y la traza por turno: no se podía decir "qué tools se usaron" sin
+    /// recorrer la traza, y nada impedía declarar tools que no se llegaron
+    /// a ejecutar.  Esta lista se llena **al despachar** cada tool.
+    pub tools_used: Vec<String>,
     pub files_modified: Vec<String>,
     pub model_id: String,
     pub fallback_used: bool,
@@ -2082,6 +2085,7 @@ pub fn run_coding_session_with_store(
 
     let mut total_tokens: u64 = 0;
     let mut tool_calls_executed: usize = 0;
+    let mut tools_used: Vec<String> = Vec::new();
     let mut modified_set: HashSet<String> = HashSet::new();
     let mut trace: Vec<TurnTrace> = Vec::new();
     let mut failing_signatures: HashMap<String, usize> = HashMap::new();
@@ -2139,6 +2143,8 @@ pub fn run_coding_session_with_store(
         for tc in &turn.tool_calls {
             called_names.push(tc.name.clone());
             tool_calls_executed += 1;
+            // v16: se anota la tool **al despacharla** (no al pedirla).
+            tools_used.push(tc.name.clone());
 
             let exec = dispatch_tool(
                 &tc.name,
@@ -2213,6 +2219,7 @@ pub fn run_coding_session_with_store(
         turns_taken: trace.len(),
         total_tokens,
         tool_calls_executed,
+        tools_used,
         files_modified,
         model_id: last_model_id,
         fallback_used: backend.fallback_used(),
