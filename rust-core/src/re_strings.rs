@@ -282,3 +282,120 @@ pub fn collect_symbols(data: &[u8]) -> Vec<SymbolHit> {
     }
     Vec::new()
 }
+
+// ---------------------------------------------------------------- tests
+//
+// MEDIDO (2026-11-28): este módulo tenía 284 líneas y **CERO** tests (uno de
+// los 45 módulos sin cobertura que enumera `docs/VERIFICACION_AGENTES.md`).
+// Los extractores son puros (sobre un slice de bytes) => se testean OFFLINE.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extrae_un_string_ascii() {
+        let datos = b"\x00\x01Hello, world!\x00";
+        let hits = extract_ascii(datos, 6, 0);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].offset, 2, "el offset es del primer byte imprimible");
+        assert_eq!(hits[0].length, 13);
+        assert_eq!(hits[0].text, "Hello, world!");
+        assert_eq!(hits[0].encoding, StrEncoding::Ascii);
+    }
+
+    #[test]
+    fn respeta_la_longitud_minima() {
+        let datos = b"\x00\x01Hello, world!\x00";
+        assert_eq!(extract_ascii(datos, 20, 0).len(), 0, "13 < 20");
+        assert_eq!(extract_ascii(datos, 13, 0).len(), 1, "13 >= 13");
+    }
+
+    #[test]
+    fn el_limite_corta_la_lista() {
+        let datos = b"primero\x00segundo\x00";
+        let todos = extract_ascii(datos, 4, 0);
+        assert_eq!(todos.len(), 2);
+        assert_eq!(todos[0].offset, 0);
+        assert_eq!(todos[1].offset, 8);
+        assert_eq!(extract_ascii(datos, 4, 1).len(), 1, "el limite acota la salida");
+    }
+
+    #[test]
+    fn un_string_al_final_sin_terminador_tambien_se_encuentra() {
+        // El ultimo run no tiene byte que lo cierre: se emite igual.
+        let datos = b"\x00abcdefgh";
+        let hits = extract_ascii(datos, 6, 0);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].offset, 1);
+        assert_eq!(hits[0].length, 8);
+        assert_eq!(hits[0].text, "abcdefgh");
+    }
+
+    #[test]
+    fn extrae_un_string_utf16le() {
+        let datos = [0x41u8, 0x00, 0x42, 0x00, 0x43, 0x00];
+        let hits = extract_utf16le(&datos, 2, 0);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].text, "ABC");
+        assert_eq!(hits[0].length, 6, "la longitud es en BYTES, no en caracteres");
+        assert_eq!(hits[0].encoding, StrEncoding::Utf16Le);
+        assert_eq!(hits[0].offset, 0);
+    }
+
+    #[test]
+    fn el_utf16_no_confunde_el_ascii() {
+        // "A" en ASCII son 2 bytes: con min_len 2 no sale.
+        let datos = [0x41u8, 0x00, 0x42, 0x00];
+        assert_eq!(extract_ascii(&datos, 2, 0).len(), 0);
+        assert_eq!(extract_utf16le(&datos, 2, 0).len(), 1);
+    }
+
+    #[test]
+    fn extract_strings_une_las_dos_codificaciones_por_offset() {
+        let mut datos = b"ASCIIuno".to_vec();
+        datos.extend_from_slice(&[0x00, 0x00]);
+        datos.extend_from_slice(&[0x55, 0x00, 0x54, 0x00]); // "UT" en UTF-16LE
+        let hits = extract_strings(&datos, 2, 0);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].offset, 0);
+        assert_eq!(hits[0].text, "ASCIIuno");
+        assert_eq!(hits[0].encoding, StrEncoding::Ascii);
+        assert_eq!(hits[1].offset, 10, "el UTF-16 empieza en su primer byte");
+        assert_eq!(hits[1].text, "UT");
+        assert_eq!(hits[1].encoding, StrEncoding::Utf16Le);
+        assert!(hits[0].offset < hits[1].offset, "vienen ordenados por offset");
+    }
+
+    #[test]
+    fn un_binario_vacio_no_produce_nada() {
+        assert!(extract_ascii(&[], 6, 0).is_empty());
+        assert!(extract_utf16le(&[], 6, 0).is_empty());
+        assert!(extract_strings(&[], 6, 0).is_empty());
+    }
+
+    #[test]
+    fn la_longitud_minima_por_defecto() {
+        assert_eq!(DEFAULT_MIN_LEN, 6);
+    }
+
+    #[test]
+    fn los_simbolos_de_un_fichero_que_no_es_elf_ni_pe_estan_vacios() {
+        let basura = vec![0x41u8; 128];
+        assert!(elf_symbols(&basura).is_empty());
+        assert!(pe_symbols(&basura).is_empty());
+        assert!(collect_symbols(&basura).is_empty());
+    }
+
+    #[test]
+    fn collect_symbols_elige_por_la_magic() {
+        // Con la magic ELF se pasa al parser de ELF (que fallara, pero no
+        // con panic): lo que se comprueba es que NO se entra en panic.
+        let mut elf = b"\x7fELF".to_vec();
+        elf.extend_from_slice(&[0u8; 60]);
+        let _ = collect_symbols(&elf);
+        let mut mz = b"MZ".to_vec();
+        mz.extend_from_slice(&[0u8; 60]);
+        let _ = collect_symbols(&mz);
+    }
+}

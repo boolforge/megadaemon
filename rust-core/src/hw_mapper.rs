@@ -201,3 +201,142 @@ pub fn analyze_text_for_mmio_and_structs(plat: &str, text: &str) -> HardwareMapR
         engine: "rust-arm64-v12.0-hw-mapper".to_string(),
     }
 }
+
+// ---------------------------------------------------------------- tests
+//
+// MEDIDO (2026-11-28): este módulo tenía 203 líneas y **CERO** tests (uno de
+// los 45 módulos sin cobertura que enumera `docs/VERIFICACION_AGENTES.md`).
+// Es puro (tabla de MMIO + análisis de texto) => se testea OFFLINE.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ps1_reconoce_los_registros_clave() {
+        let a = lookup_mmio("ps1", 0x1F801070).expect("PS1_I_STAT deberia estar");
+        assert_eq!(a.register_name, "PS1_I_STAT");
+        assert_eq!(a.subsystem, "IRQ_CTRL");
+        assert_eq!(a.address_hex, "0x1F801070");
+
+        let g = lookup_mmio("ps1", 0x1F801810).expect("GP0 deberia estar");
+        assert_eq!(g.register_name, "PS1_GPU_GP0");
+        assert_eq!(g.subsystem, "GPU_RENDER");
+    }
+
+    #[test]
+    fn la_plataforma_no_distingue_mayusculas() {
+        assert!(lookup_mmio("PS1", 0x1F801070).is_some());
+        assert!(lookup_mmio("Ps1", 0x1F801070).is_some());
+    }
+
+    #[test]
+    fn un_rango_entero_tiene_el_mismo_registro() {
+        // 0x1F801080..=0x1F8010FF es el control del DMA.
+        for a in [0x1F801080u64, 0x1F801090, 0x1F8010FF] {
+            let r = lookup_mmio("ps1", a).expect("deberia estar");
+            assert_eq!(r.register_name, "PS1_DMA_CTRL");
+            assert_eq!(r.subsystem, "DMA_ENGINE");
+        }
+        assert!(lookup_mmio("ps1", 0x1F80107F).is_none(), "justo antes no");
+        assert!(lookup_mmio("ps1", 0x1F801100).is_none(), "justo despues no");
+    }
+
+    #[test]
+    fn una_direccion_o_plataforma_desconocida_no_inventa() {
+        assert!(lookup_mmio("ps1", 0xDEAD_BEEF).is_none());
+        assert!(lookup_mmio("plataforma-que-no-existe", 0x1F801070).is_none());
+    }
+
+    #[test]
+    fn el_mega_drive_mascara_la_direccion() {
+        // El Sega CD usa una ventana de 24 bits: la misma direccion con el
+        // bit alto puesto es el mismo registro.
+        let a = lookup_mmio("segacd", 0xFF8000).expect("SCD_GA_RESET_LED");
+        let b = lookup_mmio("segacd", 0x1FF8000).expect("la mascara debe dar lo mismo");
+        assert_eq!(a.register_name, "SCD_GA_RESET_LED");
+        assert_eq!(b.register_name, a.register_name);
+        assert_eq!(b.subsystem, "GATE_ARRAY");
+    }
+
+    #[test]
+    fn saturn_pce_msx_y_pc88_tienen_sus_registros() {
+        assert_eq!(
+            lookup_mmio("saturn", 0x25C00000).unwrap().register_name,
+            "SAT_VDP1_VRAM"
+        );
+        assert_eq!(
+            lookup_mmio("pce", 0x0000).unwrap().register_name,
+            "HUC6270_VDC_REG"
+        );
+        assert_eq!(
+            lookup_mmio("pce", 0x1FE000).unwrap().register_name,
+            "HUC6270_VDC_REG",
+            "el PCE tiene alias en el banco alto"
+        );
+        assert_eq!(
+            lookup_mmio("msx2", 0x98).unwrap().register_name,
+            "V9938_VDP_PORT"
+        );
+        assert_eq!(
+            lookup_mmio("pc88", 0x44).unwrap().register_name,
+            "YM2608_OPNA_FM"
+        );
+    }
+
+    #[test]
+    fn el_analisis_de_texto_encuentra_las_direcciones() {
+        let r = analyze_text_for_mmio_and_structs("ps1", "v = *(DAT_1F801070);");
+        assert_eq!(r.mmio_hits.len(), 1);
+        assert_eq!(r.mmio_hits[0].register_name, "PS1_I_STAT");
+        assert_eq!(r.platform, "PS1");
+        assert_eq!(r.subsystem_summary.get("IRQ_CTRL"), Some(&1));
+    }
+
+    #[test]
+    fn una_direccion_repetida_solo_cuenta_una() {
+        let r = analyze_text_for_mmio_and_structs(
+            "ps1",
+            "a = DAT_1F801070; b = DAT_1F801070; c = 0x1F801070;",
+        );
+        assert_eq!(r.mmio_hits.len(), 1, "la misma direccion se ve una vez");
+        assert_eq!(r.subsystem_summary.get("IRQ_CTRL"), Some(&1));
+    }
+
+    #[test]
+    fn sin_hits_se_devuelven_los_hitos_de_la_plataforma() {
+        let r = analyze_text_for_mmio_and_structs("ps1", "no hay direcciones aqui");
+        assert_eq!(r.mmio_hits.len(), 5, "los 5 hitos por defecto de PS1");
+        assert!(r.mmio_hits.iter().any(|h| h.register_name == "PS1_GPU_GP0"));
+        assert!(r.mmio_hits.iter().any(|h| h.register_name == "PS1_SPU_VOICE"));
+    }
+
+    #[test]
+    fn las_estructuras_inferidas_cubren_sus_campos() {
+        // v13.2 (HW-14): la estructura del actorcontext es de 72 bytes y sus
+        // campos LLEGAN hasta 0x48.  Antes declaraba 34 con campos hasta
+        // 0x48: el tamaño no cubria los campos.
+        let r = analyze_text_for_mmio_and_structs("ps1", "x");
+        assert_eq!(r.inferred_structs.len(), 2);
+        let cmd = &r.inferred_structs[0];
+        assert_eq!(cmd.struct_name, "SnatcherPS1CommandSlot");
+        assert_eq!(cmd.total_size_est, 12);
+        assert_eq!(cmd.fields.len(), 4);
+        let actor = &r.inferred_structs[1];
+        assert_eq!(actor.struct_name, "SnatcherPS1ActorContext");
+        assert_eq!(actor.total_size_est, 72);
+        assert_eq!(actor.fields.len(), 3);
+        let ultimo = actor.fields.last().unwrap();
+        assert_eq!(ultimo.offset_dec, 68);
+        assert!(
+            ultimo.offset_dec + 4 <= actor.total_size_est,
+            "el ultimo campo tiene que caber en la estructura"
+        );
+    }
+
+    #[test]
+    fn el_informe_declara_su_motor() {
+        let r = analyze_text_for_mmio_and_structs("ps1", "x");
+        assert_eq!(r.engine, "rust-arm64-v12.0-hw-mapper");
+    }
+}
