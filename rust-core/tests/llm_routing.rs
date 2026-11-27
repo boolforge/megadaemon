@@ -721,10 +721,27 @@ fn la_traza_va_dentro_del_json_del_resultado() {
     let res = execute_chat_with("hola", Some("p1"), None, None, 128, &d);
     let json = serde_json::to_value(&res).unwrap();
     assert!(json["provider_trace"].is_array());
-    assert_eq!(
-        json["provider_trace"][0].as_str().unwrap(),
-        "p1 => OK (tier free)",
-        "la traza dice el tier del proveedor (DEFECTO-18)"
+    let traza = json["provider_trace"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap_or("").to_string())
+        .collect::<Vec<_>>();
+    // MEDIDO (2026-11-27): la traza es una CRONOLOGÍA de la cascada, así que
+    // ya no empieza por el "OK" (ahora empieza por la línea del POST: qué
+    // endpoint, qué modelo y cuántos caracteres se mandaron — sin eso no se
+    // podía diagnosticar el 400 de google-ai-studio).  El contenido del
+    // "tier" se sigue exigiendo (DEFECTO-18), sólo que buscandolo donde
+    // está.  Los tests hermanos ya usaban `contains` para lo mismo.
+    assert!(
+        traza.iter().any(|t| t == "p1 => OK (tier free)"),
+        "la traza dice el tier del proveedor (DEFECTO-18): {:?}",
+        traza
+    );
+    assert!(
+        traza.iter().any(|t| t.contains("=> POST https://p1.test/v1")),
+        "la traza dice a qué endpoint se mandó y con qué tamaño: {:?}",
+        traza
     );
     // Y el campo nuevo NO rompe la forma antigua: un JSON sin
     // `provider_trace` se sigue deserializando (serde default).

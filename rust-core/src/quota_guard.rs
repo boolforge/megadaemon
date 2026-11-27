@@ -468,10 +468,12 @@ pub fn en_pausa(provider: &str) -> bool {
             Some(e) => evaluar_pausa(e, ahora(), COOLDOWN_POR_DEFECTO_S),
         }
     };
-    if en_pausa && caducada {
+    // Si la pausa caducó, el estado guardado dice "pausa" y la UI lo
+    // pintaría como si el proveedor siguiera quemado: se limpia.
+    if caducada {
         limpiar_pausa(provider);
     }
-    en_pausa && !caducada
+    en_pausa
 }
 
 /// Decisión de pausa para un estado concreto. **Puro** (sin estado global):
@@ -497,7 +499,11 @@ pub fn evaluar_pausa(e: &Estado, now: u64, cooldown_s: u64) -> (bool, bool) {
         .any(|v| v.nombre == "cupo" && v.reset_at.is_some());
     let expirada_por_cooldown =
         !con_reset && now >= e.actualizado_at.saturating_add(cooldown_s);
-    (true, expirada_por_reset || expirada_por_cooldown)
+    let caducada = expirada_por_reset || expirada_por_cooldown;
+    // Si caducó, el proveedor **vuelve a la cascada** (media abierta): la
+    // pausa ya no aplica, aunque el nivel guardado siga siendo "Pausa"
+    // (por eso hay que limpiar el estado).
+    (!caducada, caducada)
 }
 
 /// Quita la ventana de cuota caducada y baja el nivel a `Normal`.

@@ -539,7 +539,27 @@ pub fn llamadas(texto: &str) -> BTreeSet<String> {
                 j += 1;
             }
             if j < bytes.len() && bytes[j] == '(' && j > inicio {
-                out.insert(bytes[inicio..i].iter().collect());
+                // MEDIDO (2026-11-27): `nombre()` seguido de `{` es la
+                // DEFINICION de una funcion, no una llamada: si se contaba,
+                // cada funcion figuraba como si se llamara a si misma (y el
+                // nombre de la funcion no es informacion de similitud entre
+                // dos ficheros).
+                let mut k = j + 1;
+                while k < bytes.len() && bytes[k].is_whitespace() {
+                    k += 1;
+                }
+                let definicion = k < bytes.len()
+                    && bytes[k] == ')'
+                    && {
+                        let mut m = k + 1;
+                        while m < bytes.len() && bytes[m].is_whitespace() {
+                            m += 1;
+                        }
+                        m < bytes.len() && bytes[m] == '{'
+                    };
+                if !definicion {
+                    out.insert(bytes[inicio..i].iter().collect());
+                }
             }
         } else {
             i += 1;
@@ -643,6 +663,13 @@ pub fn leer_informe(path: &Path) -> DeResult<Vec<DecompileRow>> {
         }
         let p: Vec<&str> = line.split('\t').collect();
         if p.len() < 11 {
+            continue;
+        }
+        // MEDIDO (2026-11-27): la primera linea del informe de Ghidra es la
+        // CABECERA ("addr\tname\torig\tloc\t..."), no una fila: se leia
+        // como si fuera una función mas (y con 11 columnas, el filtro de
+        // "p.len() < 11" no la descartaba).
+        if p[0] == "addr" {
             continue;
         }
         out.push(DecompileRow {

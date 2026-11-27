@@ -1076,8 +1076,11 @@ pub fn trocear_texto(texto: &str, n: usize) -> Vec<String> {
             while i > limite && !chars[i - 1].is_whitespace() {
                 i -= 1;
             }
+            // El blanco va al trozo SIGUIENTE: así el trozo actual no
+            // acaba en blanco (el texto se ve limpio en la UI) y, a la vez,
+            // la concatenación de los trozos reproduce el original exacto.
             if chars.get(i - 1).map(|c| c.is_whitespace()).unwrap_or(false) {
-                corte = i;
+                corte = if i - 1 > ini { i - 1 } else { i };
             }
         }
         let trozo: String = chars[ini..corte].iter().collect();

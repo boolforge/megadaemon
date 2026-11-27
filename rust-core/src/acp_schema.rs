@@ -78,7 +78,15 @@ where
     D: Deserializer<'de>,
     T: Deserialize<'de> + Default,
 {
-    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+    // MEDIDO (2026-11-27): la funcion se llama "default_on_error" pero NO
+    // se tragaba el error (`?` lo propagaba): un campo ROTO del cliente
+    // (`"annotations": 42`) tumbaba la sesion entera en vez de caer al
+    // valor por defecto.
+    match Option::<T>::deserialize(d) {
+        Ok(Some(v)) => Ok(v),
+        Ok(None) => Ok(T::default()),
+        Err(_) => Ok(T::default()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +205,15 @@ impl From<&str> for ContentBlock {
 #[serde(rename_all = "camelCase")]
 pub struct TextContent {
     /// Anotaciones de presentación.
-    #[serde(default, deserialize_with = "default_on_error")]
+    ///
+    /// MEDIDO (2026-11-27): sin `skip_serializing_if` salía
+    /// `"annotations":null` en el JSON ⇒ el texto no era
+    /// `{"text":"x"}` (lo que exige el protocolo).
+    #[serde(
+        default,
+        deserialize_with = "default_on_error",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub annotations: Option<Annotations>,
     /// El texto.
     pub text: String,
@@ -451,7 +467,12 @@ pub struct ToolCallUpdate {
 /// Se vendorizan las variantes **estables** del upstream; las `unstable_*` y las
 /// de capacidades nuevas no se incluyen a propósito.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "sessionUpdate", rename_all = "camelCase")]
+// MEDIDO (2026-11-27): las VARIANTES van en snake_case
+// ("agent_message_chunk") y los CAMPOS en camelCase.  El `rename_all` del
+// enum afecta a las VARIANTES, asi que aqui va "snake_case"; el camelCase
+// de los campos lo pone cada struct.  Ver docs/ACP_VENDOR.md:100 y
+// docs/RE_ACP.md:252.
+#[serde(tag = "sessionUpdate", rename_all = "snake_case")]
 pub enum SessionUpdate {
     /// Fragmento del mensaje del usuario.
     UserMessageChunk(ContentChunk),
