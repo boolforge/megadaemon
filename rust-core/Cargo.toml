@@ -109,7 +109,13 @@ iz80 = "0.5"
 default = []
 # Servidor SSH nativo (russh). Sólo Linux/Android-ARM64: el PC Linux es su
 # destino natural; en el móvil queda opcional por peso de compilación.
-ssh = ["dep:russh", "dep:tokio", "dep:tokio-rustls", "dep:rustls"]
+#
+# MEDIDO (2026-11-28): `dep:rustls` estaba aquí y ROMPIÑA el manifiesto
+# entero (`feature 'ssh' includes 'dep:rustls', but 'rustls' is not an
+# optional dependency`).  El prefijo `dep:` sólo vale para dependencias
+# OPCIONALES; `rustls` es obligatoria (línea 49), así que ya está activa
+# siempre y no hace falta (ni se puede) listarla aquí.
+ssh = ["dep:russh", "dep:tokio", "dep:tokio-rustls"]
 
 [dependencies.russh]
 version = "0.49"
