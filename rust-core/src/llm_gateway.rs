@@ -1651,6 +1651,8 @@ mod tests {
             quota: None,
             provider_trace: Vec::new(),
             finish_reason: String::new(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
             tool_calls: Vec::new(),
         };
         let v = gemini_response(&res, 3);
@@ -1728,6 +1730,8 @@ mod tests {
             quota: None,
             provider_trace: Vec::new(),
             finish_reason: String::new(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
             tool_calls: Vec::new(),
         };
         let v = gemini_response(&res, 3);
@@ -1756,6 +1760,8 @@ mod tests {
             quota: None,
             provider_trace: Vec::new(),
             finish_reason: String::new(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
             tool_calls: Vec::new(),
         };
         let v = gemini_response(&res, 0);
@@ -2008,6 +2014,8 @@ mod tests {
             quota: None,
             provider_trace: Vec::new(),
             finish_reason: String::new(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
             tool_calls: vec![crate::providers::ParsedToolCall {
                 id: "call_1".to_string(),
                 name: "view_file".to_string(),
