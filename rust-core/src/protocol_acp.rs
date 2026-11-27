@@ -39,7 +39,12 @@
 pub use crate::acp_schema as acp;
 
 /// Versión del crate del esquema canónico que usamos.
-pub const ESQUEMA_CANONICO: &str = acp_schema::ESQUEMA_CANONICO;
+///
+/// MEDIDO (2026-11-27): el `pub use` de arriba renombra el modulo a `acp`,
+/// asi que aqui va `crate::acp_schema::` (con el `crate::` explicito): sin
+/// el, el compilador buscaba un modulo `acp_schema` en el ambito del
+/// fichero => E0433 "cannot find module or crate `acp_schema`".
+pub const ESQUEMA_CANONICO: &str = crate::acp_schema::ESQUEMA_CANONICO;
 
 /// Versión del protocolo que hablamos por defecto.
 ///

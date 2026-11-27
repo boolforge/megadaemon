@@ -394,7 +394,11 @@ fn decompile_lote(
     sizes: &std::collections::BTreeMap<u64, u64>,
     out_dir: &Path,
 ) -> DeResult<(Vec<DecompileRow>, Vec<String>)> {
-    let script = build_r2_script(lote, sizes, out_dir);
+    // MEDIDO (2026-11-27): `lote` es `&[&Anchor]` (el lote se arma con
+    // referencias para no copiar los anchors) pero `build_r2_script` toma
+    // `&[Anchor]` => E0308.  Se desreferencia el lote aqui.
+    let lote_plano: Vec<Anchor> = lote.iter().map(|a| (*a).clone()).collect();
+    let script = build_r2_script(&lote_plano, sizes, out_dir);
     let ruta_script = out_dir.join("_lote.r2");
     fs::write(&ruta_script, &script)
         .map_err(|e| DeError::Io(format!("no se pudo escribir {}: {}", ruta_script.display(), e)))?;

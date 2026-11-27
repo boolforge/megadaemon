@@ -289,7 +289,11 @@ pub struct ResourceContents {
 }
 
 /// Anotaciones de presentación de un bloque de texto.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// MEDIDO (2026-11-27): `priority` es un `Option<f64>` (0..1, como en el
+/// upstream) y `f64` NO implementa `Eq` => el derive `Eq` rompia la
+/// compilacion.  Se queda `PartialEq`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Annotations {
     /// Audiencia: `user` o `assistant`.
@@ -772,8 +776,10 @@ pub struct Error {
 /// Códigos de error de ACP.
 ///
 /// Se replican los del JSON-RPC más los específicos del protocolo.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camel_case")]
+// MEDIDO (2026-11-27): el derive de `Serialize`/`Deserialize` emitia el
+// NOMBRE del variant (`"methodNotFound"`); pero el JSON-RPC lleva el
+// **NUMERO** del codigo (`-32601`).  Se implementan a mano.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
     /// JSON inválido.
     ParseError,
@@ -821,6 +827,20 @@ impl ErrorCode {
             -32002 => ErrorCode::ResourceNotFound,
             _ => return None,
         })
+    }
+}
+
+impl Serialize for ErrorCode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_i64(self.as_i64())
+    }
+}
+
+impl<'de> Deserialize<'de> for ErrorCode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let n = i64::deserialize(deserializer)?;
+        ErrorCode::from_i64(n)
+            .ok_or_else(|| serde::de::Error::custom(format!("codigo ACP desconocido: {}", n)))
     }
 }
 
