@@ -53,10 +53,16 @@ jobs:
       # El instalador del movil es la PUERTA DE ENTRADA del usuario (un
       # one-liner).  Antes solo se probaba en el movil real: un fallo de
       # root, de permisos o de idempotencia sólo aparecia alli.  Aqui se
-      # comprueban sus 8 escenarios en un laboratorio falso (instalacion,
-      # entorno del daemon, watchdog, health-check, idempotencia, bundle
-      # corrupto, sha256 erroneo, modo PC) y la politica de energia (que no
-      # puede parpadear: MEDIDO 2026-11-27, el brillo iba 247 -> 60 -> 247).
+      # comprueban 119 ESCENARIOS en un laboratorio falso y AISLADO (uno por
+      # escenario: prefijo, estado, /proc y red falsos, PATH restringido como
+      # el shell de Android): deteccion, root y escalada, las tres capas de
+      # resolucion del release, la descarga con reintentos, la verificacion
+      # por valor del sha256, la instalacion atomica con rollback, el stack y
+      # su entorno, el tunel y el health-check, la idempotencia, el
+      # diagnostico, los secretos, el informe, los modos (doctor/reconectar/
+      # pc) y la autoreparacion.  Ese banco ha destapado 6 bugs REALES del
+      # instalador (docs/BANCO_INSTALADOR.md).  Y la politica de energia (que
+      # no puede parpadear: MEDIDO 2026-11-27, el brillo iba 247 -> 60 -> 247).
       - name: banco del instalador (one-liner) y politica de energia
         run: |
           bash tools/test-oneliner.sh
