@@ -250,6 +250,36 @@ Las 5 sin fuente son de módulos que no están en la caché local
 (`github.com/pion/ice/v4`, `github.com/go-git/go-git/v5`); su call site sigue
 siendo real y basta con el módulo para reconstruir el wrapper.
 
+### 4.4 El relévo: barrido de r2dec sobre el hueco real
+
+Las 103 no eran el hueco de cobertura: lo eran las ~99.800 funciones de
+**protobuf generado y wrappers del compilador** (1,11 % y 0,15 %). Para ese
+hueco, y con el único motor que funciona donde Ghidra no (r2dec), hay un
+barrido reanudable:
+
+```bash
+python3 tools/regenerar-go/decomp-r2dec.py     --tsv /workspace/agy-re/tools-out/go.funcs.tsv     --bin /workspace/agy-re/liblanguage_server.so     --out /workspace/agy-re/tools-out/todo/rzD     --skip-indice     todo/s0/_index.tsv todo/s1/_index.tsv todo/s2/_index.tsv     --skip-indice-r2  todo/rz0/_index.tsv todo/rzA/_index.tsv todo/rzB/_index.tsv todo/rzC/_index.tsv     --chunk 1500 --prioridad
+```
+
+Medido:
+
+| | |
+|---|---:|
+| rendimiento de r2dec (muestra de 400 funciones sintéticas) | **4,2 fn/s**, 400/400 no vacías, ~8 KB por función |
+| pendientes tras lo ya hecho por Ghidra + r2ghidra | **91.474** |
+| tiempo estimado del barrido completo | ~6 h (1 worker) |
+| salidas por función | `todo/rzD/<ruta_go>/<simbolo>.c` — **el mismo layout que las shards de r2ghidra**, así que `regenerar.py` las recoge sin cambios |
+
+Dos detalles que hay que respetar (los dos dan errores silenciosos):
+
+* Los índices de **Ghidra** traen las direcciones con **+0x100000** (image base)
+  y los de **r2ghidra/r2dec** con la **VADDR real**: mezclarlos descarta
+  funciones equivocadas, porque `vaddr - 0x100000` puede ser la dirección de
+  *otra* función. Por eso el script tiene `--skip-indice` (base 0x100000) y
+  `--skip-indice-r2` (base 0) separados.
+* El pseudo-C de r2dec tiene otra forma (`// callconv: ...` y `void f1 (void) {`);
+  `regenerar.py` lo reconoce desde el arreglo del layout de r2ghidra.
+
 ---
 
 ## 5. Tabla completa (las 103, con su evidencia)
