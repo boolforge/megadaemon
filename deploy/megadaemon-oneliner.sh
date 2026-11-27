@@ -508,7 +508,12 @@ verificar_sha() {
   else
     # Sin `sha256sum` (el shell de Android no lo trae): el daemon calcula el
     # hash con su cliente nativo.
-    real=$(r "'$DAEMON' hash '$f' 2>/dev/null" | tr -d '\r\n ' | awk '{print $1}')
+    # ⚠️ MEDIDO (2026-11-27) por el banco del instalador: `tr -d ' '` pegaba
+    # el hash con el nombre del fichero ("<hash>  <ruta>" -> "<hash><ruta>")
+    # y la comparación NUNCA cuadraba => en el móvil (sin `sha256sum`) el
+    # instalador moría siempre con "el sha256 NO cuadra".  Ahora se quita
+    # sólo el CR/LF y se coge el PRIMER campo.
+    real=$(r "'$DAEMON' hash '$f' 2>/dev/null" | tr -d '\r\n' | awk '{print $1}')
   fi
   [ -n "$real" ] || return 2
   [ "$esperado" = "$real" ] || return 1
@@ -524,7 +529,7 @@ sha16_de() {
     h=$(sha256sum "$1" 2>/dev/null | cut -c1-16)
     [ -n "$h" ] && { printf '%s' "$h"; return 0; }
   fi
-  r "'$DAEMON' hash '$1' 2>/dev/null" | tr -d '\r\n ' | cut -c1-16
+  r "'$DAEMON' hash '$1' 2>/dev/null" | tr -d '\r\n' | awk '{print $1}' | cut -c1-16
 }
 
 # ===========================================================================
@@ -1001,16 +1006,35 @@ instalar() {
 
   # El `.sha256`: si existe, la verificación es OBLIGATORIA.  Si el hash
   # NO cuadra, el bundle está manipulado ⇒ se aborta (no se instala).
-  if descargar "$ASSET_URL.sha256" "$SHA" 120 && [ -s "$SHA" ]; then
+  # ⚠️ MEDIDO (2026-11-27) por el banco del instalador: un `.sha256` VACÍO
+  # no es lo mismo que "no disponible".  Antes, el `&& [ -s "$SHA" ]` lo
+  # treataba como ausente (=> "sigo sin verificar nada"), con lo que un
+  # fichero corrupto o manipulado pasaba el control.  Ahora: si el `.sha256`
+  # se descarga pero viene VACÍO, no se puede verificar NADA => no se instala.
+  if descargar "$ASSET_URL.sha256" "$SHA" 120; then
+    if [ ! -s "$SHA" ]; then
+      informe_paso "sha256" false "vacío"
+      informe_cierra
+      die "el .sha256 del bundle está VACÍO => no puedo verificar nada => no instalo nada"
+    fi
     verificar_sha "$TAR" "$SHA"
     rc=$?
     if [ "$rc" = "0" ]; then
       say "sha256: VERIFICADO por valor"
       informe_paso "sha256" true "verificado por valor"
     elif [ "$rc" = "2" ]; then
-      informe_paso "sha256" false "no se pudo calcular"
-      informe_cierra
-      die "no se pudo calcular el sha256 del bundle (ni sha256sum ni el daemon) => no instalo nada"
+      # ⚠️ MEDIDO (2026-11-27) por el banco del instalador: en una
+      # instalación EN LIMPIO no hay `sha256sum` (el shell de Android no lo
+      # trae) y el daemon aún NO está instalado => el hash no se puede
+      # calcular aquí.  Antes el instalador MORÍA ("no se pudo calcular el
+      # sha256") y NO INSTALABA NADA: el móvil se quedaba sin daemon.
+      # Ahora la verificación se difiere: se hace con el daemon recién
+      # extraído, ANTES de instalarlo (ver más abajo, tras extraer).
+      say "sha256: no se puede calcular AÚN (ni sha256sum ni el daemon instalado)"
+      say "  lo verifico con el daemon del propio bundle antes de instalarlo"
+      SHA_PENDIENTE=1
+      SHA_ESPERADO=$(tr -d '\r\n' < "$SHA" | awk '{print $1}')
+      informe_paso "sha256" true "pendiente de verificar (sin sha256sum)"
     else
       informe_paso "sha256" false "NO cuadra"
       informe_cierra
@@ -1050,6 +1074,35 @@ instalar() {
     informe_paso "extraer" false "tar"
     informe_cierra
     die "no se pudo extraer el bundle (tar) => no instalo nada"
+  fi
+
+  # Verificación DIFERIDA: si el hash no se pudo calcular antes (no hay
+  # `sha256sum` y el daemon aún no estaba instalado), se calcula AHORA con
+  # el daemon recién extraído, y se compara con el hash esperado.  Si no
+  # cuadra, NO se instala nada.
+  if [ "${SHA_PENDIENTE:-0}" = "1" ] && [ -n "${SHA_ESPERADO:-}" ]; then
+    NUEVO_HASH=""
+    for cand in "$STAGE/bin/megadaemon-core" "$STAGE/megadaemon-core" "$STAGE/megadaemon-movil/megadaemon-core"; do
+      if ejecutable "$cand"; then
+        NUEVO_HASH=$(r "'$cand' hash '$TAR' 2>/dev/null" | tr -d '\r\n' | awk '{print $1}')
+        [ -n "$NUEVO_HASH" ] && break
+      fi
+    done
+    if [ -z "$NUEVO_HASH" ]; then
+      r "rm -rf '$STAGE'" >/dev/null 2>&1
+      informe_paso "sha256" false "no se pudo calcular"
+      informe_cierra
+      die "no se pudo calcular el sha256 del bundle (ni sha256sum ni el daemon) => no instalo nada"
+    fi
+    if [ "$NUEVO_HASH" = "$SHA_ESPERADO" ]; then
+      say "sha256: VERIFICADO por valor (con el daemon del bundle)"
+      informe_paso "sha256" true "verificado por valor (con el daemon del bundle)"
+    else
+      r "rm -rf '$STAGE'" >/dev/null 2>&1
+      informe_paso "sha256" false "NO cuadra"
+      informe_cierra
+      die "el sha256 del bundle NO cuadra => el fichero está manipulado o corrupto. NO instalo nada"
+    fi
   fi
 
   # Instalar el binario (del stage o del propio bundle).
