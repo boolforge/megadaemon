@@ -307,12 +307,23 @@ pub fn chat_completions_with(
         deps,
     );
 
+    // MEDIDO (2026-11-27): el proveedor reporta tokens de entrada y de salida
+    // por separado (`res.prompt_tokens`/`res.completion_tokens`); `tokens_used`
+    // es el contador de salida de los caminos LOCALES (SEERE), donde
+    // `completion_tokens` viene a 0 porque no hay `usage` del proveedor.
+    // Por eso se usa el que haya de los dos: 0 = "no lo dice" (no se
+    // inventa un número), pero si hay dato real se usa el real.
+    let completion_tokens = if res.completion_tokens > 0 {
+        res.completion_tokens
+    } else {
+        res.tokens_used
+    };
     let usage = json!({
         // El proveedor no siempre reporta los tokens de ENTRADA; 0 = "no lo
         // dice el proveedor" (no se inventa un número).
-        "prompt_tokens": 0,
-        "completion_tokens": res.tokens_used,
-        "total_tokens": res.tokens_used,
+        "prompt_tokens": res.prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": res.prompt_tokens + completion_tokens,
     });
     let mut message = json!({
         "role": "assistant",
@@ -353,7 +364,7 @@ pub fn chat_completions_with(
             }))
             .collect::<Vec<_>>());
     }
-    Ok(json!({
+    let mut out = json!({
         "id": format!("chatcmpl-mgd-{}", now_millis()),
         "object": "chat.completion",
         "created": now_secs(),
@@ -374,11 +385,7 @@ pub fn chat_completions_with(
             // ve en la respuesta en vez de creer que terminó bien.
             "finish_reason": finish_reason,
         }],
-        "usage": {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": total_tokens,
-        },
+        "usage": usage,
     });
 
     if include_trace {
@@ -404,8 +411,10 @@ pub fn chat_completions_with(
             "provider_trace": res.provider_trace,
             // v16: el estado de la cuota viaja DENTRO de la respuesta.
             "quota": res.quota,
-        }
-    }))
+        });
+    }
+
+    Ok(out)
 }
 
 /// La misma respuesta de [`chat_completions_with`] pero con la
