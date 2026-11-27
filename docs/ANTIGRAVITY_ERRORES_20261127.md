@@ -94,7 +94,7 @@ La nuestra está en **`/agy`** (también `/antigravity`), con:
 | (a) streaming token a token | `POST /api/antigravity/stream` → `text/event-stream`, un evento SSE por trozo, con `flush` en cada uno. Eventos: `estado`, `token`, `fin`. |
 | (b) selector de modelo que cambia el backend | `GET /api/antigravity/modelos` ⇒ los proveedores **listos** del vault. El `<select>` usa el **ID** del proveedor (lo que `execute_chat` entiende) y la UI enseña **quién contestó de verdad**. |
 | (c) reconexión sin perder el hilo | Si el stream se corta sin evento de cierre ⇒ reintento con backoff (1/2/4/8 s, 4 intentos) reenviando el **mismo** prompt. El hilo se conserva en memoria y se manda en cada intento. |
-| (d) los 3 niveles de error en una línea | `GET /api/antigravity/estado` ⇒ `LLM local OK \| cuota: 0 en pausa \| prompt 12000/16000 chars`, más una ficha por nivel. |
+| (d) los 3 niveles de error en una línea | `GET /api/antigravity/diagnostico` ⇒ `LLM local OK \| cuota: 0 en pausa \| prompt 12000/16000 chars`, más una ficha por nivel. |
 | (e) nada de texto corrupto | Todo en español, `lang="es"`, UTF-8. Y el gate `tools/check_idioma.py` (CJK/cirílico + mojibake) lo prohíbe para siempre: **encontró un caso real** en el repo (una palabra en chino en un comentario en español de `antigravity_intercept.rs`). |
 
 ### Cómo llegar a la UI en el móvil
@@ -128,11 +128,11 @@ tail -40 /sdcard/megadaemon.log | grep -i "LLM local"
 TOK=$(cat /data/adb/megadaemon/state/cockpit_token)
 KEY=$(cat /data/adb/megadaemon/state/megadaemon_api.key)
 curl -s -m 5 -H "X-Seere-Auth-Token: $TOK" -H "X-API-Key: $KEY" \
-     http://127.0.0.1:9090/api/antigravity/estado
+     http://127.0.0.1:9090/api/antigravity/diagnostico
 
 # (3) ¿Qué proveedores están en pausa y cuándo vuelven?
 curl -s -m 5 -H "X-Seere-Auth-Token: $TOK" -H "X-API-Key: $KEY" \
-     http://127.0.0.1:9090/api/antigravity/estado | python3 -m json.tool
+     http://127.0.0.1:9090/api/antigravity/diagnostico | python3 -m json.tool
 
 # (4) ¿Cuánto prompt manda de verdad el gateway?  (el 413 de pollinations)
 tail -5 /data/adb/megadaemon/state/antigravity_gateway.ndjson \
@@ -192,6 +192,6 @@ para que el selector de modelos de su propia GUI funcione).
 | `rust-core/src/seere_v11.rs` | El LLM local pasa a **8081** (fuera del puerto del alias del cockpit). |
 | `deploy/99-megadaemon.sh` | `ensure_llama_server()` con keeper (bug 1) + `export SEERE_LLM`. |
 | `rust-core/src/llm_gateway.rs` | `finishReason` real (bug 4), `max_tokens` 4.096, `MAX_PROMPT_CHARS` documentado frente al límite de 16.000. |
-| `rust-core/src/cockpit_server.rs` | `/agy`, `/api/antigravity/modelos`, `/api/antigravity/estado`, `/api/antigravity/stream` (SSE). |
+| `rust-core/src/cockpit_server.rs` | `/agy`, `/api/antigravity/modelos`, `/api/antigravity/diagnostico`, `/api/antigravity/stream` (SSE). |
 | `web/cockpit_antigravity.html` | La UI nueva (los 5 requisitos). |
 | `tools/check_idioma.py` | Gate de texto corrupto / idiomas mezclados (en el CI). |

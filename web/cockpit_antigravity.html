@@ -243,7 +243,7 @@ function nivel(el, ok, texto){
 }
 async function refrescarEstado(){
   try{
-    const r = await fetch("/api/antigravity/estado", { headers: cabeceras() });
+    const r = await fetch("/api/antigravity/diagnostico", { headers: cabeceras() });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const d = await r.json();
     const nv = d.niveles || {};

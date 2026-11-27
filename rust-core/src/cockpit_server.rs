@@ -1944,7 +1944,7 @@ fn handle_client(mut stream: TcpStream) {
                     &json!({ "ok": true, "modelos": items, "por_defecto": "local-seere" }),
                 );
             }
-            "/api/antigravity/estado" => {
+            "/api/antigravity/diagnostico" => {
                 // Los 3 niveles de error del jefe, EN UNA LÍNEA:
                 //   * unreachable  → el LLM local (127.0.0.1:8081) está caído
                 //   * 429 / cuota   → qué proveedores están quemados y cuándo vuelven
