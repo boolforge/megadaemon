@@ -1483,6 +1483,15 @@ impl Estado {
                 .get("bajo_politica")
                 .and_then(|x| x.as_bool())
                 .unwrap_or(false),
+            eventos_recibidos: v
+                .get("eventos_recibidos")
+                .and_then(|x| x.as_u64())
+                .unwrap_or(0),
+            sondeos: v
+                .get("sondeos")
+                .and_then(|x| x.as_u64())
+                .unwrap_or(0),
+            ultimo_evento: v.get("ultimo_evento").cloned(),
             ultima_accion: v
                 .get("ultima_accion")
                 .and_then(|x| x.as_str())
@@ -2430,7 +2439,7 @@ pub fn tick(state_dir: Option<&str>) -> Value {
         });
     }
 
-    let r = reafirmar_con(&ctx, firma, state_dir);
+    let r = reafirmar_con(&ctx, Some(firma), state_dir, None);
     let mut out = r.clone();
     out["costo"] = json!("1 lectura de ajustes (+1 si hay que escribir)");
     out

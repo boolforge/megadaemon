@@ -75,6 +75,7 @@ pub mod bookmarks;
 pub mod call_recorder;
 pub mod board;
 pub mod brightness;
+pub mod brillo_events;
 pub mod capability;
 pub mod cert_vault;
 pub mod cert_android;
