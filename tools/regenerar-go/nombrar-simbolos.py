@@ -6,7 +6,7 @@ LLAMADAS salen como `fcn.0778b670` (direccion) mientras el motor propio de
 MegaDaemon (Ghidra + MdGhidra.java) ya trae el simbolo Go porque aplica los
 161.682 nombres del pclntab.
 
-Este post-proceso cierra ese hueco: reemplaza cada `fcn.<hex>` por el simbolo
+Este post-proceso cierra ese hueco: reemplaza cada `func_0x<hex>` por el simbolo
 Go de esa direccion (mapa de `go.funcs.tsv`), dejando `sub_<hex>` si la
 direccion no esta en el pclntab.
 
@@ -20,10 +20,12 @@ import os
 import re
 import sys
 
-FCN = re.compile(r"\bfcn\.([0-9a-fA-F]{4,16})\b")
+# MEDIDO: r2ghidra nombra las llamadas como func_0x<hex> (no fcn.<hex>)
+FCN = re.compile(r"\bfunc_0x([0-9a-fA-F]{4,16})\b")
 
 
-def cargar_mapa(tsv: str) -> dict:
+def cargar_mapa(tsv: str) -> tuple:
+    """Devuelve (direccion -> simbolo, lista ordenada de direcciones)."""
     mapa = {}
     with open(tsv, encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -34,10 +36,18 @@ def cargar_mapa(tsv: str) -> dict:
                 mapa[int(p[0], 16)] = p[1]
             except ValueError:
                 continue
-    return mapa
+    return mapa, sorted(mapa)
 
 
-def renombrar(texto: str, mapa: dict) -> tuple[str, int, int]:
+def renombrar(texto: str, mapa: dict, orden: list) -> tuple[str, int, int]:
+    """Sustituye func_0x<hex> por el simbolo Go.
+
+    Si la direccion no es una entrada de funcion (p.ej. una etiqueta a mitad de
+    cuerpo), se nombra con la funcion que la contiene + el desplazamiento:
+    `internal_abi.Foo+0x40`. Eso deja el pseudocodigo legible sin inventar.
+    """
+    import bisect
+
     hits = [0]
     falls = [0]
 
@@ -51,6 +61,13 @@ def renombrar(texto: str, mapa: dict) -> tuple[str, int, int]:
         if nombre:
             hits[0] += 1
             return nombre
+        i = bisect.bisect_right(orden, addr) - 1
+        if i >= 0:
+            base = orden[i]
+            delta = addr - base
+            if delta < 0x10000:
+                hits[0] += 1
+                return f"{mapa[base]}+0x{delta:x}"
         falls[0] += 1
         return f"sub_{v}"
 
@@ -65,7 +82,7 @@ def main() -> int:
     ap.add_argument("--limite", type=int, default=0)
     args = ap.parse_args()
 
-    mapa = cargar_mapa(args.tsv)
+    mapa, orden = cargar_mapa(args.tsv)
     print(f"[nombres] mapa: {len(mapa)} direcciones Go")
 
     ficheros = []
@@ -86,9 +103,9 @@ def main() -> int:
             txt = open(ruta, encoding="utf-8", errors="replace").read()
         except OSError:
             continue
-        if "fcn." not in txt:
+        if "func_0x" not in txt:
             continue
-        nuevo, hits, falls = renombrar(txt, mapa)
+        nuevo, hits, falls = renombrar(txt, mapa, orden)
         if hits or falls:
             with open(ruta, "w", encoding="utf-8") as fh:
                 fh.write(nuevo)
