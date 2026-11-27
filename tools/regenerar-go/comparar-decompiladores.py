@@ -116,14 +116,19 @@ def main():
     # --- r2ghidra: una sola sesion para toda la muestra ---
     t0 = time.time()
     tmp = "/workspace/agy-re/tools-out/todo/_cmp"
+    # MEDIDO: Ghidra carga este ELF con image base 0x100000 => sus direcciones
+    # son vaddr + 0x100000. Para r2 hay que quitarlo.
+    BASE_GHIDRA = 0x100000
     os.makedirs(tmp, exist_ok=True)
     script = os.path.join(tmp, "cmp.r2")
     with open(script, "w", encoding="utf-8") as fh:
         for f in muestra:
             tam = int(f["bytes"]) if f["bytes"].isdigit() else 0x100
-            destino = os.path.join(tmp, f"{f['addr']:x}.c")
-            fh.write(f"af+ {f['addr']:#x} f; afb+ {f['addr']:#x} {f['addr']:#x} {tam:#x}; ")
-            fh.write(f"pdg @ {f['addr']:#x} > {destino}\n")
+            va = f["addr"] - BASE_GHIDRA
+            destino = os.path.join(tmp, f"{va:x}.c")
+            nombre = "f_" + f"{va:x}"
+            fh.write(f"af+ {va:#x} {nombre}; afb+ {va:#x} {va:#x} {tam:#x}; ")
+            fh.write(f"pdg @ {va:#x} > {destino}\n")
     subprocess.run(
         [R2, "-q", "-N", "-e", "scr.color=0", "-i", script, args.bin],
         capture_output=True, text=True, timeout=3600,
@@ -137,9 +142,15 @@ def main():
 
     filas_cmp = []
     for f in muestra:
-        bloques = cargar_bloques_ghidra(os.path.join(args.ghidra, f["file"] + ".c"))
+        # el indice guarda el fichero Go (x.go) y el arbol guarda el .c (x.c)
+        base = f["file"]
+        if base.endswith(".go"):
+            base = base[:-3] + ".c"
+        else:
+            base = base + ".c"
+        bloques = cargar_bloques_ghidra(os.path.join(args.ghidra, base))
         g = bloques.get(f["name"], "")
-        ruta_r2 = os.path.join(tmp, f"{f['addr']:x}.c")
+        ruta_r2 = os.path.join(tmp, f"{f['addr'] - BASE_GHIDRA:x}.c")
         r = open(ruta_r2, encoding="utf-8", errors="replace").read() if os.path.exists(ruta_r2) else ""
         ig, ir = identificadores(g), identificadores(r)
         cg, cr = llamadas(g), llamadas(r)

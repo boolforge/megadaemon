@@ -156,8 +156,7 @@ def main() -> int:
     if args.prioridad:
         pendientes.sort(key=lambda f: (rango_prioridad(f[2]), f[0]))
     if args.paridad >= 0:
-        p = args.paridad
-        pendientes = pendientes.into_iter().skip(p).step_by(2).collect()
+        pendientes = pendientes[args.paridad :: 2]
     print(f"[decomp] pendientes: {len(pendientes)}", flush=True)
     if not pendientes:
         return 0
