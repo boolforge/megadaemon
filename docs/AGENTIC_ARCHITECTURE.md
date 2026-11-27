@@ -201,6 +201,13 @@ a hablar con un esquema versionado en vez de adivinar JSON.
 
 ---
 
+## 8bis. Benchmark externo: 59 proyectos más
+
+`docs/BENCHMARK_AGENTICO_59_PROYECTOS.md` (2026-11-27): 59 proyectos medidos
+(GraphQL, 1 consulta), el árbol de 31, 6 fuentes primarias leídas, y **qué
+copiar de cada uno** mapeado a los ficheros reales de MegaDaemon, con el plan
+de refactor P0..P5. Las medidas crudas están en `docs/medidas/`.
+
 ## 9. Claude Code (medido) — la segunda referencia
 
 Del árbol real de `src/` en el código recuperado de `@anthropic-ai/claude-code@2.1.88`:
