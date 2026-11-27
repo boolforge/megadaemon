@@ -54,6 +54,13 @@ def main() -> int:
     p.add_argument("--parent", default=RAIZ_BACKUP)
     p.add_argument("--salida", default=None)
 
+    p = sub.add_parser("tubo", help="subir + VERIFICAR + borrar la copia local")
+    p.add_argument("ruta", help="fichero o carpeta")
+    p.add_argument("--parent", default=RAIZ_BACKUP)
+    p.add_argument("--nombre", default=None)
+    p.add_argument("--borrar_local", action="store_true",
+                   help="borrar la copia local SOLO si el sha256 verifica")
+
     args = ap.parse_args()
     d = Drive(creds=args.creds,
               api_base=args.api_base or "https://www.googleapis.com/drive/v3",
@@ -75,6 +82,49 @@ def main() -> int:
                 import shutil
                 shutil.rmtree(args.carpeta, ignore_errors=True)
                 print("copia local borrada (queda en Drive)")
+        elif args.accion == "tubo":
+            # EL TUBO: subir + verificar + (opcionalmente) borrar local.
+            # REGLA DURA: no se borra nada hasta que el sha256 cuadra.
+            import hashlib
+            import shutil
+            es_dir = os.path.isdir(args.ruta)
+            if es_dir:
+                info = d.subir_carpeta(args.ruta, args.parent, args.nombre)
+            else:
+                info = d.subir(args.ruta, args.parent, args.nombre)
+            print(json.dumps(info))
+            if args.borrar_local:
+                # `info["sha256"]` es el hash del CONTENIDO subido; el local se
+                # compara con el mismo criterio (el tar, si es carpeta).
+                if es_dir:
+                    import tarfile
+                    tmp = os.path.join("/tmp", "_tubo_verifica.tar.gz")
+                    with tarfile.open(tmp, "w:gz") as t:
+                        t.add(args.ruta, arcname=os.path.basename(args.ruta.rstrip("/")))
+                    h = hashlib.sha256()
+                    with open(tmp, "rb") as fh:
+                        for b in iter(lambda: fh.read(1 << 20), b""):
+                            h.update(b)
+                    os.remove(tmp)
+                    local_sha = h.hexdigest()
+                else:
+                    h = hashlib.sha256()
+                    with open(args.ruta, "rb") as fh:
+                        for b in iter(lambda: fh.read(1 << 20), b""):
+                            h.update(b)
+                    local_sha = h.hexdigest()
+                remoto = info.get("sha256")
+                if remoto and remoto == local_sha:
+                    if es_dir:
+                        shutil.rmtree(args.ruta, ignore_errors=True)
+                    else:
+                        try:
+                            os.remove(args.ruta)
+                        except OSError:
+                            pass
+                    print("verificado: copia local borrada (queda en Drive)")
+                else:
+                    print("AVISO: la subida NO verifica el sha256; no se borra nada")
         elif args.accion == "bajar":
             n = d.descargar(args.file_id, args.destino)
             print(f"{n} B -> {args.destino}")

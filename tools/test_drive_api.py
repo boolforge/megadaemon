@@ -168,6 +168,37 @@ class TestDriveApi(unittest.TestCase):
         self.assertEqual(len(info["sha256"]), 64)
         self.assertIn(".tar.gz", info["name"])
 
+    def test_el_tubo_no_borra_si_el_sha256_no_cuadra(self):
+        """REGLA DURA del tubo: la copia local solo se borra si el sha256 de
+        lo subido coincide con el del local.
+
+        Se prueba la CLI de verdad (`drive_tube.py tubo --borrar_local`)
+        contra el servidor falso: si el sha256 que devuelve el servidor no
+        cuadra con el del local, la carpeta local TIENE que seguir ahi.
+        """
+        import shutil
+        import subprocess
+        carpeta = os.path.join(self.tmp, "tubo_codigo")
+        os.makedirs(carpeta, exist_ok=True)
+        with open(os.path.join(carpeta, "a.rs"), "w", encoding="utf-8") as fh:
+            fh.write("fn main() {}\n")
+        aqui = os.path.dirname(os.path.abspath(__file__))
+        r = subprocess.run(
+            [sys.executable, os.path.join(aqui, "drive_tube.py"),
+             "--creds", self.creds,
+             "--api-base", f"{self.url}/drive/v3",
+             "--upload-base", f"{self.url}/upload/drive/v3",
+             "--token-url", f"{self.url}/token",
+             "tubo", carpeta, "--parent", "RAIZ", "--borrar_local"],
+            capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # el servidor falso devuelve un sha256 que NO es el del tar local
+        # => la CLI avisa y NO borra la copia local.
+        self.assertIn("AVISO", r.stdout + r.stderr)
+        self.assertTrue(os.path.isdir(carpeta),
+                        "la copia local se borro pese a no verificar el sha256")
+        shutil.rmtree(carpeta, ignore_errors=True)
+
     def test_huella_fp1a_conocida(self):
         # MEDIDO: vector SINTETICO (no es ninguna clave real).  La huella
         # esperada se calculó con una implementacion FNV-1a 64 independiente
