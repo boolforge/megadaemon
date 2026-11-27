@@ -68,3 +68,8 @@ artifacts/vendor/
 artifacts/acp-comparado/acpira_*
 artifacts/acp-comparado/acpschema_*
 artifacts/acp-comparado/mcode_*
+
+# --- RE simbolado de Codex: las tablas mas grandes van a Drive, no al repo ---
+artifacts/codex/simbolos/codex-app-server-simbolos.tsv
+artifacts/codex/simbolos/codex-app-server-simbolos.tsv-crates.tsv
+artifacts/codex/simbolos/codex-app-server-funciones.tsv

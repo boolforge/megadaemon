@@ -744,19 +744,41 @@ def buscar_indices_ghidra(raiz: Path) -> List[Path]:
 
 
 def cuerpo_r2ghidra(texto: str) -> str:
-    """Cuerpo de la funcion en el formato de r2ghidra.
+    """Cuerpo de la funcion en el formato de r2ghidra (o de r2dec).
 
     Un fichero de r2ghidra es UNA funcion: despues de la cabecera y del
     comentario ``/* go: <simbolo> */`` viene la definicion (una linea con el
     prototipo) y su cuerpo.  Se devuelve desde el prototipo (que es la linea
     que `Bloque.prototipo` necesita para traducir la firma a Go).
+
+    El pseudo-C de **r2dec** (el decompilador propio de radare2) tiene otra
+    forma: ``// callconv: ...`` y luego ``void f1 (void) {`` — la definicion
+    ACABA en ``{``, no en ``)``.  Se acepta cualquiera de las dos formas y se
+    recorta la definicion hasta el parentesis que cierra la lista de args.
     """
     lineas = texto.splitlines()
     for i, ln in enumerate(lineas):
         s = ln.strip()
         if not s or s.startswith("/*") or s.startswith("//") or s.startswith("*"):
             continue
-        if "(" in s and s.endswith(")"):
+        if "(" not in s:
+            continue
+        # se recorta la definicion hasta el parentesis que cierra los args
+        prof = 0
+        corte = None
+        for j, ch in enumerate(s):
+            if ch == "(":
+                prof += 1
+            elif ch == ")":
+                prof -= 1
+                if prof == 0:
+                    corte = j + 1
+                    break
+        if corte is None:
+            continue
+        if s[:corte].rstrip().endswith(")") and (" " in s[:corte] or s[:corte].startswith("void")):
+            # prototipo completo: se devuelve tal cual (r2ghidra) o con el
+            # cuerpo a partir de la llave (r2dec)
             return "\n".join(lineas[i:]).strip("\n")
     return ""
 

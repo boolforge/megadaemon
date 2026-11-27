@@ -323,7 +323,7 @@ instalar_stack() {
 # se repone lo que falte y, si el tunel no responde, se relanza el stack
 # con el nucleo forense (que sabe relanzar el tunel y el daemon).
 autorreparar() {
-  say "--- autoreparacion (lo que falte, se repone) ---"
+  say "--- autorreparacion (lo que falte, se repone) ---"
   faltan=0
   for f in 99-megadaemon.sh 97-megadaemon-keeper.sh 98-cloudflared.sh 91-adb-tcp.sh; do
     ejecutable "/data/adb/service.d/$f" || { warn "falta /data/adb/service.d/$f"; faltan=1; }
@@ -346,10 +346,10 @@ autorreparar() {
     if [ -n "$U2" ] && r "'$DAEMON' telemetria sonda '$U2'" >/dev/null 2>&1; then
       listo=1
       URL="$U2"
-      say "el tunel responde TRAS la autoreparacion: $URL"
+      say "el tunel responde TRAS la autorreparacion: $URL"
       informe_paso "autorreparacion" true "el tunel responde: $URL"
     else
-      warn "tras la autoreparacion el tunel sigue sin responder"
+      warn "tras la autorreparacion el tunel sigue sin responder"
       informe_paso "autorreparacion" false "el tunel sigue caido"
     fi
   fi
@@ -508,7 +508,12 @@ verificar_sha() {
   else
     # Sin `sha256sum` (el shell de Android no lo trae): el daemon calcula el
     # hash con su cliente nativo.
-    real=$(r "'$DAEMON' hash '$f' 2>/dev/null" | tr -d '\r\n ' | awk '{print $1}')
+    # ⚠️ MEDIDO (2026-11-27) por el banco del instalador: `tr -d ' '` pegaba
+    # el hash con el nombre del fichero ("<hash>  <ruta>" -> "<hash><ruta>")
+    # y la comparación NUNCA cuadraba => en el móvil (sin `sha256sum`) el
+    # instalador moría siempre con "el sha256 NO cuadra".  Ahora se quita
+    # sólo el CR/LF y se coge el PRIMER campo.
+    real=$(r "'$DAEMON' hash '$f' 2>/dev/null" | tr -d '\r\n' | awk '{print $1}')
   fi
   [ -n "$real" ] || return 2
   [ "$esperado" = "$real" ] || return 1
@@ -524,7 +529,7 @@ sha16_de() {
     h=$(sha256sum "$1" 2>/dev/null | cut -c1-16)
     [ -n "$h" ] && { printf '%s' "$h"; return 0; }
   fi
-  r "'$DAEMON' hash '$1' 2>/dev/null" | tr -d '\r\n ' | cut -c1-16
+  r "'$DAEMON' hash '$1' 2>/dev/null" | tr -d '\r\n' | awk '{print $1}' | cut -c1-16
 }
 
 # ===========================================================================
@@ -532,12 +537,19 @@ sha16_de() {
 # ===========================================================================
 # ¿Hay un proceso megadaemon-core?  Devuelve el PID.
 daemon_vivo() {
-  for p in /proc/[0-9]*; do
-    [ -r "$p/cmdline" ] || continue
-    d_c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
-    case "$d_c" in *megadaemon-core*) printf '%s' "${p#/proc/}"; return 0 ;; esac
-  done
-  return 1
+  # MEDIDO (2026-11-27, movil): como usuario normal, `/proc/<pid>/cmdline` de
+  # un proceso de ROOT no se puede leer => el daemon NUNCA aparecia como
+  # vivo.  Se busca en el ambito de ROOT.
+  #
+  # ⚠️ MEDIDO (2026-11-27) por el banco del instalador: `grep -l` devuelve la
+  # RUTA del fichero que casa ("/proc/1234/cmdline").  Con `sed 's#.*/##'`
+  # salia "cmdline" (no el PID) => el diagnostico decia
+  #   "cannot open /proc/cmdline/cmdline"
+  # y la comprobacion de "el binario en servicio es el nuevo" NUNCA podia
+  # hacerse (miraba /proc/cmdline/stat).  Ahora se quita "/cmdline" y LUEGO
+  # el directorio, que es el PID.
+  r "grep -lsa megadaemon-core /proc/[0-9]*/cmdline 2>/dev/null | head -1" \
+    | tr -d ' \r\n' | sed 's#/cmdline$##; s#.*/##'
 }
 
 # Cuántos daemons hay (2 o más = fought: matan al otro).
@@ -568,22 +580,22 @@ CONTAR_SUP=0
 CONTAR_WD=0
 CONTAR_CF=0
 contar_procesos() {
-  CONTAR_DAEMONS=0
-  CONTAR_SUP=0
-  CONTAR_WD=0
-  CONTAR_CF=0
-  for p in /proc/[0-9]*; do
-    [ -r "$p/cmdline" ] || continue
-    c_c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
-    case "$c_c" in *megadaemon-core*) CONTAR_DAEMONS=$((CONTAR_DAEMONS + 1)) ;; esac
-    case "$c_c" in *99-megadaemon.sh*) CONTAR_SUP=$((CONTAR_SUP + 1)) ;; esac
-    case "$c_c" in *tunnel-watchdog.sh*) CONTAR_WD=$((CONTAR_WD + 1)) ;; esac
-    # El envoltorio `sh -c "… cloudflared …"` no es un cloudflared: no cuenta.
-    case "$c_c" in
-      "sh -c"*) ;;
-      *cloudflared*) CONTAR_CF=$((CONTAR_CF + 1)) ;;
-    esac
-  done
+  # MEDIDO (2026-11-27, movil SM-G998B): esto leia `/proc/*/cmdline` como
+  # USUARIO NORMAL.  Los daemons corren como ROOT => su `cmdline` da
+  # "Permission denied" => se contaban 0 => el diagnostico decia "NO
+  # CORRE" y "vivos: supervisor=0 watchdog=0 cloudflared=0" CON EL DAEMON
+  # SANO (el `/health` respondia 200 y el watchdog logueaba "tunel vivo").
+  # Ahora se cuenta COMO ROOT (los helpers `daemon_vivo` y los contadores
+  # ya usaban `r`; aqui faltaba el counting).
+  CONTAR_DAEMONS=$(r "grep -lsa megadaemon-core /proc/[0-9]*/cmdline 2>/dev/null | wc -l" | tr -d ' \r\n')
+  CONTAR_SUP=$(r "grep -lsa 99-megadaemon.sh /proc/[0-9]*/cmdline 2>/dev/null | wc -l" | tr -d ' \r\n')
+  CONTAR_WD=$(r "grep -lsa tunnel-watchdog.sh /proc/[0-9]*/cmdline 2>/dev/null | wc -l" | tr -d ' \r\n')
+  # El envoltorio `sh -c "… cloudflared …"` NO es un cloudflared: no cuenta.
+  CONTAR_CF=$(r "grep -lsa cloudflared /proc/[0-9]*/cmdline 2>/dev/null | grep -v 'sh -c' | wc -l" | tr -d ' \r\n')
+  [ -n "$CONTAR_DAEMONS" ] || CONTAR_DAEMONS=0
+  [ -n "$CONTAR_SUP" ] || CONTAR_SUP=0
+  [ -n "$CONTAR_WD" ] || CONTAR_WD=0
+  [ -n "$CONTAR_CF" ] || CONTAR_CF=0
 }
 
 # ¿El cockpit local responde?  (/health va sin credencial; 401/403 = vivo).
@@ -713,9 +725,17 @@ informe_paso() {
 informe_cierra() {
   {
     printf '{\n'
-    sed '$ s/,$//' "$INFORME_TMP" 2>/dev/null
-    printf ',\n  "pasos": [\n'
-    sed '$ s/,$//' "$INFORME_PASOS_TMP" 2>/dev/null
+    # Los campos de nivel superior: si NO hay ninguno (instalación que ha
+    # muerto antes de cerrar el informe) NO se pone la coma, o el JSON sale
+    # INVÁLIDO ("{,").  MEDIDO (2026-11-27) por el banco del instalador.
+    if [ -s "$INFORME_TMP" ]; then
+      sed '$ s/,$//' "$INFORME_TMP" 2>/dev/null
+      printf ',\n'
+    fi
+    printf '  "pasos": [\n'
+    if [ -s "$INFORME_PASOS_TMP" ]; then
+      sed '$ s/,$//' "$INFORME_PASOS_TMP" 2>/dev/null
+    fi
     printf '\n  ]\n}\n'
   } > "$WORKDIR/instalacion.json.final" 2>/dev/null
   # El informe final vive en $STATE (lo lee el root desde Drive): se escribe
@@ -850,7 +870,12 @@ diagnostico() {
   DIAG_DRIVE=false
   if existe "$STATE/gdrive_credentials.json"; then
     DIAG_DRIVE=true
-    say "  Drive: credenciales presentes ($(wc -c < "$STATE/gdrive_credentials.json" | tr -d ' ') B)"
+    # MEDIDO (2026-11-27, movil): el `wc -c < fichero` se ejecutaba como
+    # USUARIO NORMAL y el fichero de credenciales es de ROOT con 0600 =>
+    # "Permission denied" (y el tamaño salia vacio).  El tamano se pide en
+    # el ambito de ROOT (`r`), que si puede leerlo.
+    BYTES=$(r "wc -c < '$STATE/gdrive_credentials.json' 2>/dev/null" | tr -d ' \r\n')
+    say "  Drive: credenciales presentes (${BYTES:-?} B)"
   else
     warn "  Drive: NO HAY credenciales (no podrá subir telemetría)"
   fi
@@ -981,16 +1006,35 @@ instalar() {
 
   # El `.sha256`: si existe, la verificación es OBLIGATORIA.  Si el hash
   # NO cuadra, el bundle está manipulado ⇒ se aborta (no se instala).
-  if descargar "$ASSET_URL.sha256" "$SHA" 120 && [ -s "$SHA" ]; then
+  # ⚠️ MEDIDO (2026-11-27) por el banco del instalador: un `.sha256` VACÍO
+  # no es lo mismo que "no disponible".  Antes, el `&& [ -s "$SHA" ]` lo
+  # treataba como ausente (=> "sigo sin verificar nada"), con lo que un
+  # fichero corrupto o manipulado pasaba el control.  Ahora: si el `.sha256`
+  # se descarga pero viene VACÍO, no se puede verificar NADA => no se instala.
+  if descargar "$ASSET_URL.sha256" "$SHA" 120; then
+    if [ ! -s "$SHA" ]; then
+      informe_paso "sha256" false "vacío"
+      informe_cierra
+      die "el .sha256 del bundle está VACÍO => no puedo verificar nada => no instalo nada"
+    fi
     verificar_sha "$TAR" "$SHA"
     rc=$?
     if [ "$rc" = "0" ]; then
       say "sha256: VERIFICADO por valor"
       informe_paso "sha256" true "verificado por valor"
     elif [ "$rc" = "2" ]; then
-      informe_paso "sha256" false "no se pudo calcular"
-      informe_cierra
-      die "no se pudo calcular el sha256 del bundle (ni sha256sum ni el daemon) => no instalo nada"
+      # ⚠️ MEDIDO (2026-11-27) por el banco del instalador: en una
+      # instalación EN LIMPIO no hay `sha256sum` (el shell de Android no lo
+      # trae) y el daemon aún NO está instalado => el hash no se puede
+      # calcular aquí.  Antes el instalador MORÍA ("no se pudo calcular el
+      # sha256") y NO INSTALABA NADA: el móvil se quedaba sin daemon.
+      # Ahora la verificación se difiere: se hace con el daemon recién
+      # extraído, ANTES de instalarlo (ver más abajo, tras extraer).
+      say "sha256: no se puede calcular AÚN (ni sha256sum ni el daemon instalado)"
+      say "  lo verifico con el daemon del propio bundle antes de instalarlo"
+      SHA_PENDIENTE=1
+      SHA_ESPERADO=$(tr -d '\r\n' < "$SHA" | awk '{print $1}')
+      informe_paso "sha256" true "pendiente de verificar (sin sha256sum)"
     else
       informe_paso "sha256" false "NO cuadra"
       informe_cierra
@@ -1030,6 +1074,35 @@ instalar() {
     informe_paso "extraer" false "tar"
     informe_cierra
     die "no se pudo extraer el bundle (tar) => no instalo nada"
+  fi
+
+  # Verificación DIFERIDA: si el hash no se pudo calcular antes (no hay
+  # `sha256sum` y el daemon aún no estaba instalado), se calcula AHORA con
+  # el daemon recién extraído, y se compara con el hash esperado.  Si no
+  # cuadra, NO se instala nada.
+  if [ "${SHA_PENDIENTE:-0}" = "1" ] && [ -n "${SHA_ESPERADO:-}" ]; then
+    NUEVO_HASH=""
+    for cand in "$STAGE/bin/megadaemon-core" "$STAGE/megadaemon-core" "$STAGE/megadaemon-movil/megadaemon-core"; do
+      if ejecutable "$cand"; then
+        NUEVO_HASH=$(r "'$cand' hash '$TAR' 2>/dev/null" | tr -d '\r\n' | awk '{print $1}')
+        [ -n "$NUEVO_HASH" ] && break
+      fi
+    done
+    if [ -z "$NUEVO_HASH" ]; then
+      r "rm -rf '$STAGE'" >/dev/null 2>&1
+      informe_paso "sha256" false "no se pudo calcular"
+      informe_cierra
+      die "no se pudo calcular el sha256 del bundle (ni sha256sum ni el daemon) => no instalo nada"
+    fi
+    if [ "$NUEVO_HASH" = "$SHA_ESPERADO" ]; then
+      say "sha256: VERIFICADO por valor (con el daemon del bundle)"
+      informe_paso "sha256" true "verificado por valor (con el daemon del bundle)"
+    else
+      r "rm -rf '$STAGE'" >/dev/null 2>&1
+      informe_paso "sha256" false "NO cuadra"
+      informe_cierra
+      die "el sha256 del bundle NO cuadra => el fichero está manipulado o corrupto. NO instalo nada"
+    fi
   fi
 
   # Instalar el binario (del stage o del propio bundle).
@@ -1112,7 +1185,17 @@ instalar() {
   fi
 
   # El watchdog, con SU entorno (tunnel-watchdog.sh:25,39,40,43,52,53).
-  r "LOG_DIR='$PREFIX' DAEMON_BIN='$DAEMON' PUBLISH='$PREFIX/channel-publish' MEGADAEMON_STATE_DIR='$STATE' MEGADAEMON_ENV='$PREFIX/megadaemon.env' CF='$CF_BIN' CFT_TARGET='http://127.0.0.1:$PORT' setsid nohup sh '$PREFIX/tunnel-watchdog.sh' >> '$LOGDIR/tunnel-watchdog.log' 2>&1 < /dev/null &" >/dev/null
+  # ⚠️ MEDIDO (2026-11-27) por el banco del instalador: relanzar el watchdog
+  # a ciegas deja DOS watchdogs vivos (este + el que arranca 98-cloudflared.sh
+  # en el boot) y se pelean por el túnel: cada uno relanza cloudflared y el
+  # hostname cambia cada 60 s => la flota se queda ciega.  Igual que con
+  # cloudflared, si ya hay uno vivo, NO se relanza.
+  contar_procesos
+  if [ "${CONTAR_WD:-0}" -gt 0 ]; then
+    say "hay $CONTAR_WD watchdogs vivos: no relanzo (se pelean por el túnel)"
+  else
+    r "LOG_DIR='$PREFIX' DAEMON_BIN='$DAEMON' PUBLISH='$PREFIX/channel-publish' MEGADAEMON_STATE_DIR='$STATE' MEGADAEMON_ENV='$PREFIX/megadaemon.env' CF='$CF_BIN' CFT_TARGET='http://127.0.0.1:$PORT' setsid nohup sh '$PREFIX/tunnel-watchdog.sh' >> '$LOGDIR/tunnel-watchdog.log' 2>&1 < /dev/null &" >/dev/null
+  fi
   say "servicios lanzados"
 
   # El daemon tiene que ARRANCAR: si no, se restaura el anterior.
@@ -1223,7 +1306,14 @@ instalar() {
 
   say "=== 8/8 comprobación final ==="
   # Si el movil no ha quedado alcanzable, se ARREGLA antes de rendirse.
-  [ "$listo" = "1" ] || autoreparar
+  # ⚠️ MEDIDO (2026-11-27) por el banco del instalador: la llamada estaba
+  # escrita "autoreparar" (una sola r) y la función se llama
+  # "autorreparar" (dos r) => en el móvil salía
+  #   "sh: 1226: autoreparar: not found"
+  # y el móvil quedaba MUERTO sin que nadie lo arreglara.  El atajo de
+  # idempotencia (que sí funciona) lo camufla: el 2º arranque dice "no toco
+  # nada" y no repara nada.
+  [ "$listo" = "1" ] || autorreparar
   diagnostico
   if r "test -x '$DOC'" >/dev/null 2>&1; then
     say "--- veredicto del nucleo forense (root) ---"
