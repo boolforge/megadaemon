@@ -31,6 +31,261 @@ pub const DAEMON_TASKS: &str =
 pub const DAEMON_LOG: &str =
     "/data/user/0/com.agy/files/.gemini/antigravity-app/daemon/daemon.log";
 
+/// **Store proto** de la app: la fuente de verdad de los resúmenes.
+///
+/// MEDIDO (2026-11-26, móvil): la app **re-sincroniza** este fichero con la
+/// DB al arrancar ("summary store: starting background reconciliation
+/// (trigger=startup)" ⇒ "reconciliation complete, synced 32 records"), así
+/// que **borrar filas en la DB no basta**: al reiniciar la app las
+/// huérfanas volvían (medido: las 5 con `project_id` vacío reaparecieron).
+///
+/// Por eso la reparación tiene que tocar **las dos** cosas: el store (que
+/// manda) y la DB (que es su reflejo).
+pub const STORE_SUMMARIES: &str =
+    "/data/user/0/com.agy/files/.gemini/antigravity-app/agyhub_summaries_proto.pb";
+
+/// Un campo del formato de cable de protobuf (lo justo para reescribir el
+/// store sin tocar lo que no se entiende).
+#[derive(Debug, Clone)]
+enum Campo {
+    Varint(u64),
+    Fijo64([u8; 8]),
+    Fijo32([u8; 4]),
+    Bytes(Vec<u8>),
+}
+
+/// Lee un varint del formato de cable.
+fn leer_varint(d: &[u8], i: usize) -> Option<(u64, usize)> {
+    let mut v: u64 = 0;
+    let mut s = 0u32;
+    let mut i = i;
+    while i < d.len() {
+        let b = d[i];
+        i += 1;
+        v |= ((b & 0x7f) as u64) << s;
+        if b & 0x80 == 0 {
+            return Some((v, i));
+        }
+        s += 7;
+        if s > 63 {
+            return None;
+        }
+    }
+    None
+}
+
+/// Trocea un blob protobuf en sus campos (nivel superior).
+fn campos_proto(d: &[u8]) -> Vec<(u64, Campo)> {
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < d.len() {
+        let (key, j) = match leer_varint(d, i) {
+            Some(v) => v,
+            None => break,
+        };
+        let num = key >> 3;
+        let wt = (key & 7) as u8;
+        i = j;
+        let c = match wt {
+            0 => match leer_varint(d, i) {
+                Some((v, j)) => {
+                    i = j;
+                    Campo::Varint(v)
+                }
+                None => break,
+            },
+            1 => {
+                if i + 8 > d.len() {
+                    break;
+                }
+                let mut b = [0u8; 8];
+                b.copy_from_slice(&d[i..i + 8]);
+                i += 8;
+                Campo::Fijo64(b)
+            }
+            2 => {
+                let (ln, j) = match leer_varint(d, i) {
+                    Some(v) => v,
+                    None => break,
+                };
+                let j = j as usize;
+                if j + ln as usize > d.len() {
+                    break;
+                }
+                i = j + ln as usize;
+                Campo::Bytes(d[j..j + ln as usize].to_vec())
+            }
+            5 => {
+                if i + 4 > d.len() {
+                    break;
+                }
+                let mut b = [0u8; 4];
+                b.copy_from_slice(&d[i..i + 4]);
+                i += 4;
+                Campo::Fijo32(b)
+            }
+            _ => break,
+        };
+        out.push((num, c));
+    }
+    out
+}
+
+/// Vuelca un campo al formato de cable.
+fn escribir_campo(num: u64, c: &Campo, out: &mut Vec<u8>) {
+    let (wt, cuerpo): (u64, Vec<u8>) = match c {
+        Campo::Varint(v) => (0, v.to_le_bytes().to_vec()),
+        Campo::Fijo64(b) => (1, b.to_vec()),
+        Campo::Fijo32(b) => (5, b.to_vec()),
+        Campo::Bytes(b) => (2, b.clone()),
+    };
+    let key = (num << 3) | wt;
+    escribir_varint(key, out);
+    if wt == 0 {
+        let v = match c {
+            Campo::Varint(v) => *v,
+            _ => 0,
+        };
+        escribir_varint(v, out);
+    } else if wt == 2 {
+        let b = match c {
+            Campo::Bytes(b) => b.clone(),
+            _ => Vec::new(),
+        };
+        escribir_varint(b.len() as u64, out);
+        out.extend_from_slice(&b);
+    } else {
+        out.extend_from_slice(&cuerpo);
+    }
+}
+
+/// Escribe un varint al formato de cable.
+fn escribir_varint(mut v: u64, out: &mut Vec<u8>) {
+    loop {
+        let b = (v & 0x7f) as u8;
+        v >>= 7;
+        if v == 0 {
+            out.push(b);
+            return;
+        }
+        out.push(b | 0x80);
+    }
+}
+
+/// `conversation_id` de un registro del store (campo 1 del registro).
+fn conversation_id_de_registro(reg: &[u8]) -> Option<String> {
+    for (num, c) in campos_proto(reg) {
+        if num == 1 {
+            if let Campo::Bytes(b) = c {
+                return String::from_utf8(b).ok();
+            }
+        }
+    }
+    None
+}
+
+/// Borra del **store proto** los registros de las conversaciones huérfanas.
+///
+/// MEDIDO (2026-11-26, móvil): borrar en la DB no bastaba; la app volvía a
+/// escribir las huérfanas al arrancar porque el store es la fuente de verdad
+/// ("reconciliation complete, synced 32 records").  Aquí se quitan del store
+/// los registros cuyo `conversation_id` está en `huerfanas`.
+///
+/// Devuelve `(borrados, total_registros)`.  Con copia de seguridad y
+/// escritura atómica (`.new` + `rename`).
+///
+/// ⚠️ La app debe estar **parada**: si está viva, su reconciliación puede
+/// reescribir el store mientras lo cambiamos.
+pub fn limpiar_store_en(
+    app_dir: &Path,
+    huerfanas: &HashSet<String>,
+) -> Result<(usize, usize), String> {
+    let ruta = app_dir.join("agyhub_summaries_proto.pb");
+    // Si la app no tiene store (o no es de esta versión), no hay nada que
+    // limpiar en él: la reparación de la DB sigue siendo válida.
+    if !ruta.exists() {
+        return Ok((0, 0));
+    }
+    let datos = std::fs::read(&ruta).map_err(|e| format!("leer {}: {e}", ruta.display()))?;
+    let campos = campos_proto(&datos);
+    let total = campos
+        .iter()
+        .filter(|(n, _)| *n == 1)
+        .count();
+    let mut fuera: Vec<u8> = Vec::with_capacity(datos.len());
+    let mut borrados = 0usize;
+    for (num, c) in &campos {
+        if *num == 1 {
+            if let Campo::Bytes(b) = c {
+                if let Some(id) = conversation_id_de_registro(b) {
+                    if huerfanas.contains(&id) {
+                        borrados += 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        escribir_campo(*num, c, &mut fuera);
+    }
+    if borrados == 0 {
+        return Ok((0, total));
+    }
+    let stamp = now_unix_secs();
+    let backup = app_dir.join(format!("agyhub_summaries_proto.pb.bak-megadaemon-{stamp}"));
+    std::fs::copy(&ruta, &backup)
+        .map_err(|e| format!("copia de seguridad ({}): {e}", backup.display()))?;
+    let tmp = app_dir.join("agyhub_summaries_proto.pb.new");
+    std::fs::write(&tmp, &fuera).map_err(|e| format!("escribir {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &ruta)
+        .map_err(|e| format!("sustituir {}: {e}", ruta.display()))?;
+    Ok((borrados, total))
+}
+
+/// Aparta las **DB de conversación** de las huérfanas.
+///
+/// MEDIDO (2026-11-26, móvil): con el store y la DB reparados, la app volvía a
+/// crear una huérfana al arrancar.  Motivo: la app **reindexa el directorio
+/// `conversations/`** (86 ficheros `\<id\>.db`): cada DB de conversación que
+/// encuentra vuelve a aparecer en el índice de resumenes, y las 5 huérfanas
+/// tenían la suya (`conversations/bbb5b5a9-….db`, 393 KB).
+///
+/// El `project_id` de verdad vive dentro del blob `trajectory_metadata_blob`
+/// de esa DB (medido: el de una sana contiene el UUID del proyecto; el de una
+/// huérfana, no).  Por eso hay que apartar el fichero, no sólo borrar filas.
+///
+/// No se borra: se **renombra** con sufijo `.bak-megadaemon-<stamp>` (queda
+/// reversible) y se devuelve la lista de apartados.
+pub fn apartar_conversaciones_en(
+    app_dir: &Path,
+    huerfanas: &HashSet<String>,
+    stamp: u64,
+) -> Vec<String> {
+    let dir = app_dir.join("conversations");
+    let mut apartadas = Vec::new();
+    if !dir.exists() {
+        return apartadas;
+    }
+    let entradas = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return apartadas,
+    };
+    for e in entradas.flatten() {
+        let nombre = e.file_name().to_string_lossy().to_string();
+        let Some(id) = nombre.strip_suffix(".db") else {
+            continue;
+        };
+        if !huerfanas.contains(id) {
+            continue;
+        }
+        let origen = dir.join(&nombre);
+        let destino = dir.join(format!("{id}.db.bak-megadaemon-{stamp}"));
+        if std::fs::rename(&origen, &destino).is_ok() {
+            apartadas.push(destino.to_string_lossy().to_string());
+        }
+    }
+    apartadas
+}
+
 /// Directorio activo de Antigravity (`MEGADAEMON_ANTIGRAVITY_DIR` o `APP_DIR`).
 pub fn default_app_dir() -> PathBuf {
     match std::env::var("MEGADAEMON_ANTIGRAVITY_DIR") {
@@ -257,6 +512,258 @@ pub fn sesiones_en(app_dir: &Path) -> Result<Vec<ResumenSesion>, String> {
 /// Lee el índice de conversaciones del directorio por defecto.
 pub fn sesiones() -> Result<Vec<ResumenSesion>, String> {
     sesiones_en(&default_app_dir())
+}
+
+// ===========================================================================
+// PROYECTOS: la columna `project_id` (MEDIDO 2026-11-26, móvil)
+// ===========================================================================
+//
+// El language server de Antigravity construye su lista de proyectos con la
+// columna `project_id` de `conversation_summaries` y **falla si alguna
+// entrada viene vacía**:
+//
+//   errorreport.go:224] ReadProjects read_projects_empty_id: project list
+//   contained an empty ID
+//
+// y entonces el `projectID` se queda en "" ⇒ el LS consulta el estado de una
+// operación **VACÍA** (`GET /v1internal/`) ⇒ 404 ⇒ "failed to get operation
+// status" ⇒ la app vuelve a pedir el login de Google.
+//
+// MEDIDO (2026-11-26, móvil): 27 de las 32 conversaciones tenían
+// `project_id` y **5 lo tenían VACÍO** (las cinco de nuestra experimentación
+// del 2026-11-22, sin workspace y sin agente).
+//
+// La DB se lee en **solo lectura**: la app no se toca.  La reparación
+/// (borrar las huérfanas) hace copia de seguridad antes y exige `confirm`.
+
+/// Lectura de la lista de proyectos y de las conversaciones huérfanas.
+pub fn proyectos_en(app_dir: &Path) -> Value {
+    let db_path = app_dir.join("conversation_summaries.db");
+    if !db_path.exists() {
+        return json!({
+            "ok": false,
+            "error": "no_hay_db",
+            "db": db_path.to_string_lossy(),
+        });
+    }
+    let con = match open_readonly(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return json!({ "ok": false, "error": e, "db": db_path.to_string_lossy() });
+        }
+    };
+    // 1) Los proyectos (distintos) y cuantas conversaciones tiene cada uno.
+    let mut conteo: HashMap<String, i64> = HashMap::new();
+    let mut sin_project_id: i64 = 0;
+    let mut total: i64 = 0;
+    if let Ok(mut st) = con.prepare(
+        "SELECT COALESCE(NULLIF(TRIM(project_id),''),''), COUNT(*) \
+         FROM conversation_summaries GROUP BY 1",
+    ) {
+        if let Ok(filas) = st.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        }) {
+            for f in filas.flatten() {
+                total += f.1;
+                if f.0.is_empty() {
+                    sin_project_id += f.1;
+                } else {
+                    *conteo.entry(f.0).or_insert(0) += f.1;
+                }
+            }
+        }
+    }
+    // 2) Las huérfanas (para poder borrarlas o diagnosarlas).
+    let mut huerfanas: Vec<Value> = Vec::new();
+    if let Ok(mut st) = con.prepare(
+        "SELECT conversation_id, COALESCE(title,''), COALESCE(workspace_uris,''), \
+                COALESCE(last_modified_time,'') \
+         FROM conversation_summaries \
+         WHERE project_id IS NULL OR TRIM(project_id)='' ORDER BY last_modified_time",
+    ) {
+        if let Ok(filas) = st.query_map([], |r| {
+            Ok(json!({
+                "conversation_id": r.get::<_, String>(0)?,
+                "titulo": r.get::<_, String>(1)?,
+                "workspace": r.get::<_, String>(2)?,
+                "fecha": r.get::<_, String>(3)?,
+            }))
+        }) {
+            for f in filas.flatten() {
+                huerfanas.push(f);
+            }
+        }
+    }
+    let mut proyectos: Vec<Value> = conteo
+        .into_iter()
+        .map(|(id, n)| json!({ "id": id, "conversaciones": n }))
+        .collect();
+    proyectos.sort_by(|a, b| {
+        b["conversaciones"]
+            .as_i64()
+            .unwrap_or(0)
+            .cmp(&a["conversaciones"].as_i64().unwrap_or(0))
+    });
+    json!({
+        "ok": true,
+        "db": db_path.to_string_lossy(),
+        "conversaciones": total,
+        "proyectos": proyectos,
+        "sin_project_id": sin_project_id,
+        "huerfanas": huerfanas,
+        "nota": "la DB de la app se lee en SOLO LECTURA; 'sin_project_id' > 0 hace que el LS falle con 'read_projects_empty_id'",
+    })
+}
+
+/// Lectura de la lista de proyectos del directorio por defecto.
+pub fn proyectos() -> Value {
+    proyectos_en(&default_app_dir())
+}
+
+/// **Repara** la lista de proyectos: borra las conversaciones con
+/// `project_id` VACÍO (las huérfanas), que son las que hacen que el language
+/// server falle con `read_projects_empty_id` y pida el login.
+///
+/// Hace **copia de seguridad** de la DB (y de su `-wal`/`-shm`) antes de
+/// tocar nada, y exige `confirmar` (es una escritura en el estado de la
+/// app).
+pub fn reparar_proyectos_en(app_dir: &Path, confirmar: bool) -> Value {
+    let db_path = app_dir.join("conversation_summaries.db");
+    if !db_path.exists() {
+        return json!({ "ok": false, "error": "no_hay_db" });
+    }
+    let antes = proyectos_en(app_dir);
+    let huerfanas = antes["huerfanas"].as_array().map(|a| a.len()).unwrap_or(0);
+    if huerfanas == 0 {
+        return json!({
+            "ok": true,
+            "borradas": 0,
+            "detalle": "no hay conversaciones con project_id vacío",
+            "proyectos": antes,
+        });
+    }
+    if !confirmar {
+        return json!({
+            "ok": false,
+            "error": "confirmation_required",
+            "hint": "borra filas de la DB de la app y sus registros del store proto: repite con confirm=true",
+            "borrarias": huerfanas,
+        });
+    }
+    // Los identificadores de las huérfanas (los necesita el store).
+    let ids_huerfanas: HashSet<String> = antes["huerfanas"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|h| h["conversation_id"].as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    // MEDIDO (2026-11-26, móvil): el STORE es la fuente de verdad.  La app
+    // re-sincroniza el store con la DB al arrancar ("reconciliation complete,
+    // synced 32 records"), así que al borrar sólo en la DB las huérfanas
+    // VOLVÍAN al reiniciar la app.  Por eso se limpia el store **primero**.
+    let store = match limpiar_store_en(app_dir, &ids_huerfanas) {
+        Ok((b, t)) => json!({ "ok": true, "borrados": b, "registros": t }),
+        Err(e) => json!({ "ok": false, "error": e }),
+    };
+    if store["ok"] == json!(false) {
+        return json!({
+            "ok": false,
+            "error": store["error"].clone(),
+            "hint": "no se ha tocado la DB: el store no se pudo reparer",
+        });
+    }
+    // Copia de seguridad (con la fecha) antes de escribir.
+    let stamp = now_unix_secs();
+    // MEDIDO (2026-11-26, móvil): con el store y la DB reparados, la app
+    // volvía a crear una huérfana al arrancar.  Motivo: la app **reindexa el
+    // directorio `conversations/`** (86 ficheros `<id>.db`): cada DB de
+    // conversación que encuentra vuelve al índice de resúmenes, y las 5
+    // huérfanas tenían la suya.  El `project_id` de verdad vive en el blob
+    // `trajectory_metadata_blob` de esa DB, así que hay que **apartar** el
+    // fichero (queda reversible: se renombra con sufijo).
+    let apartadas = apartar_conversaciones_en(app_dir, &ids_huerfanas, stamp);
+    let backup = db_path.with_extension(format!("db.bak-megadaemon-{stamp}"));
+    let copia = std::fs::copy(&db_path, &backup)
+        .map_err(|e| format!("copia de seguridad ({}): {e}", backup.display()));
+    if let Err(e) = copia {
+        return json!({ "ok": false, "error": e });
+    }
+    for ext in ["-wal", "-shm"] {
+        let extra = db_path.with_file_name(format!(
+            "conversation_summaries.db{ext}"
+        ));
+        if extra.exists() {
+            let _ = std::fs::copy(
+                &extra,
+                extra.with_file_name(format!(
+                    "conversation_summaries.db{ext}.bak-megadaemon-{stamp}"
+                )),
+            );
+        }
+    }
+    // Escritura: se abre en modo normal (lectura-escritura).
+    let con = match rusqlite::Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => return json!({ "ok": false, "error": format!("abrir para escribir: {e}") }),
+    };
+    let borradas = match con.execute(
+        "DELETE FROM conversation_summaries WHERE project_id IS NULL OR TRIM(project_id)=''",
+        [],
+    ) {
+        Ok(n) => n,
+        Err(e) => {
+            return json!({
+                "ok": false,
+                "error": format!("borrar: {e}"),
+                "backup": backup.to_string_lossy(),
+            });
+        }
+    };
+    // MEDIDO (2026-11-26, móvil): sin esto el borrado **se deshacía**: las
+    // 5 huérfanas volvían al reiniciar la app.  El motivo es el WAL: las
+    // filas borradas siguen en el `-wal` y el store de la app las vuelve a
+    // aplicar.  Hay que hacer CHECKPOINT y vaciar el WAL.
+    let checkpoint = con
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+        })
+        .map(|(busy, log, cp)| {
+            json!({ "busy": busy, "log": log, "checkpointed": cp })
+        })
+        .unwrap_or_else(|e| json!({ "error": e.to_string() }));
+    // El WAL y el índice se vacían del disco: si no, el proceso que los
+    // tenga abiertos puede reescribirlos.
+    drop(con);
+    let mut wal_borrado = false;
+    for ext in ["-wal", "-shm"] {
+        let extra = db_path.with_file_name(format!("conversation_summaries.db{ext}"));
+        if extra.exists() {
+            match std::fs::remove_file(&extra) {
+                Ok(()) => wal_borrado = true,
+                Err(e) => {
+                    let _ = e;
+                }
+            }
+        }
+    }
+    json!({
+        "ok": true,
+        "borradas": borradas,
+        "store": store,
+        "apartadas": apartadas,
+        "backup": backup.to_string_lossy(),
+        "checkpoint": checkpoint,
+        "wal_borrado": wal_borrado,
+        "detalle": "store + DB de conversación + DB reparados y checkpoint del WAL: sin esto las filas volvían al reiniciar la app",
+        "proyectos": proyectos_en(app_dir),
+    })
+}
+
+/// Reparación de la lista de proyectos del directorio por defecto.
+pub fn reparar_proyectos(confirmar: bool) -> Value {
+    reparar_proyectos_en(&default_app_dir(), confirmar)
 }
 
 /// Estado agregado de las sesiones en `app_dir`.
@@ -819,6 +1326,143 @@ mod tests {
             rusqlite::params!["root-stuck", "Idle con trabajo", 10, "2020-05-05 12:00:00+00:00", "CASCADE_RUN_STATUS_IDLE", "",],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn los_proyectos_huerfanos_se_ven_y_se_reparan_con_backup() {
+        // MEDIDO (2026-11-26, movil): el LS falla con
+        // "read_projects_empty_id" si alguna conversacion de la DB tiene el
+        // `project_id` VACIO.
+        let dir = temp_app_dir("proyectos");
+        seed_db(&dir);
+        // Dos conversaciones con proyecto y una huerfana (project_id vacio).
+        let db = dir.join("conversation_summaries.db");
+        let con = rusqlite::Connection::open(&db).unwrap();
+        con.execute(
+            "INSERT INTO conversation_summaries (conversation_id, title, last_modified_time, project_id)
+             VALUES ('c1','Uno','2026-11-22 10:00:00+00:00','proj-1')",
+            [],
+        )
+        .unwrap();
+        con.execute(
+            "INSERT INTO conversation_summaries (conversation_id, title, last_modified_time, project_id)
+             VALUES ('c2','Dos','2026-11-22 10:00:00+00:00','proj-1')",
+            [],
+        )
+        .unwrap();
+        con.execute(
+            "INSERT INTO conversation_summaries (conversation_id, title, last_modified_time, project_id)
+             VALUES ('huerfana','Sin proyecto','2026-11-22 11:00:00+00:00','')",
+            [],
+        )
+        .unwrap();
+        drop(con);
+
+        let v = proyectos_en(&dir);
+        assert_eq!(v["ok"], json!(true));
+        assert_eq!(v["conversaciones"], json!(6)); // 3 del seed + 3 de aqui
+        // Las 3 del seed NO llevan project_id (lo meten vacio por defecto) +
+        // la huerfana de este test => 4 sin project_id.
+        assert_eq!(v["sin_project_id"], json!(4));
+        assert_eq!(v["huerfanas"].as_array().unwrap().len(), 4);
+        assert_eq!(v["proyectos"][0]["id"], json!("proj-1"));
+        assert_eq!(v["proyectos"][0]["conversaciones"], json!(2));
+
+        // Sin confirm no se toca nada.
+        let r = reparar_proyectos_en(&dir, false);
+        assert_eq!(r["ok"], json!(false));
+        assert_eq!(r["error"], json!("confirmation_required"));
+        assert_eq!(proyectos_en(&dir)["sin_project_id"], json!(4));
+
+        // Con confirm: se borra la huerfana y hay copia de seguridad.
+        let r = reparar_proyectos_en(&dir, true);
+        assert_eq!(r["ok"], json!(true));
+        assert_eq!(r["borradas"], json!(4));
+        assert_eq!(proyectos_en(&dir)["sin_project_id"], json!(0));
+        let backup = r["backup"].as_str().unwrap();
+        assert!(std::path::Path::new(backup).exists(), "debe haber backup");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// MEDIDO (2026-11-26, móvil): borrar en la DB **no bastaba**; al
+    /// reiniciar la app las huérfanas volvían porque el STORE proto es la
+    /// fuente de verdad y la app lo re-sincroniza con la DB al arrancar.
+    #[test]
+    fn el_store_proto_se_limpia_de_las_huerfanas() {
+        let dir = temp_app_dir("store");
+        // Un store sintético: campo 1 = registro, y en el registro el
+        // campo 1 = conversation_id.
+        let mut store: Vec<u8> = Vec::new();
+        for id in ["c1", "c2", "huerfana"] {
+            let mut registro: Vec<u8> = Vec::new();
+            escribir_campo(
+                1,
+                &Campo::Bytes(id.as_bytes().to_vec()),
+                &mut registro,
+            );
+            escribir_campo(2, &Campo::Bytes(vec![0x08, 0x01]), &mut registro);
+            escribir_campo(1, &Campo::Bytes(registro), &mut store);
+        }
+        std::fs::write(dir.join("agyhub_summaries_proto.pb"), &store).unwrap();
+
+        // Sin la huérfana en el conjunto => no se toca nada.
+        let vacio: HashSet<String> = HashSet::new();
+        assert_eq!(limpiar_store_en(&dir, &vacio).unwrap(), (0, 3));
+
+        // Con la huérfana => se borra SÓLO ese registro.
+        let ids: HashSet<String> = ["huerfana".to_string()].into_iter().collect();
+        let (borrados, total) = limpiar_store_en(&dir, &ids).unwrap();
+        assert_eq!(borrados, 1);
+        assert_eq!(total, 3);
+        let nuevo = std::fs::read(dir.join("agyhub_summaries_proto.pb")).unwrap();
+        let texto = String::from_utf8_lossy(&nuevo);
+        assert!(!texto.contains("huerfana"), "la huerfana sigue en el store");
+        assert!(
+            texto.contains("c1") && texto.contains("c2"),
+            "se perdieron los sana"
+        );
+        // Quedan 2 registros.
+        assert_eq!(
+            campos_proto(&nuevo)
+                .iter()
+                .filter(|(n, _)| *n == 1)
+                .count(),
+            2
+        );
+        // Y hay copia de seguridad del original.
+        let backups: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.starts_with("agyhub_summaries_proto.pb.bak-megadaemon-"))
+            .collect();
+        assert_eq!(
+            backups.len(),
+            1,
+            "debe haber copia de seguridad: {backups:?}"
+        );
+
+        // MEDIDO (2026-11-26, móvil): la app reindexa `conversations/`, así
+        // que las DB de conversación huérfanas se apartan (se renombran).
+        let cd = dir.join("conversations");
+        std::fs::create_dir_all(&cd).unwrap();
+        for id in ["c1", "huerfana"] {
+            std::fs::write(cd.join(format!("{id}.db")), b"sqlite-falso").unwrap();
+        }
+        let apartadas = apartar_conversaciones_en(&dir, &ids, 12345);
+        assert_eq!(apartadas.len(), 1, "debe apartar sólo la huérfana");
+        assert!(
+            !cd.join("huerfana.db").exists(),
+            "la DB huérfana debe estar apartada"
+        );
+        assert!(cd.join("c1.db").exists(), "la sana no se toca");
+        assert!(
+            cd.join("huerfana.db.bak-megadaemon-12345").exists(),
+            "la huérfana debe quedar con sufijo (reversible)"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

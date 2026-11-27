@@ -270,7 +270,9 @@ fn la_verificacion_del_stream_detecta_una_corrupcion() {
     let v = bp::verify_stream(&out, &manifest).unwrap();
     assert!(v.ok, "debería cuadrar: {:?}", v.chunks_bad);
     // Corrupto: se toca un byte del tramo.
-    let part = out.join("part00");
+    // MEDIDO (2026-11-25): el tramo se llama como lo escribe el sink,
+    // `{prefijo}.part{NN}` (= "perfil.part00"), NO "part00".
+    let part = out.join(&manifest.parts[0].name);
     let mut data = std::fs::read(&part).unwrap();
     data[0] ^= 0xFF;
     std::fs::write(&part, &data).unwrap();

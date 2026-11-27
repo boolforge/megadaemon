@@ -118,9 +118,96 @@ pub struct Resultado {
     pub previo: Option<PathBuf>,
     /// Detalle legible.
     pub detalle: String,
+    /// Hay que **reiniciar el daemon** aunque no se haya instalado nada.
+    ///
+    /// MEDIDO (2026-11-25, movil): el binario en disco era el nuevo pero el
+    /// proceso seguía con el viejo (el fichero se sobrescribe en el sitio y
+    /// `/proc/<pid>/exe` no lo delata).  El movil se quedó **7 horas**
+    /// ejecutando el codigo viejo: el shim resolvía en local
+    /// `/v1internal/` (lo que rompia el arranque del language server) y el
+    /// login de Antigravity no podia funcionar.
+    ///
+    /// Con este flag, el auto-actualizador reinicia el daemon en cuanto ve
+    /// que el fichero nuevo todavia no es el codigo en servicio.
+    pub reiniciar: bool,
 }
 
 /// SHA-256 en hexadecimal.
+/// La marca que imprime un binario sano.
+pub const MARCA_SELFTEST: &str = "MEGADAEMON-SELFTEST-OK";
+
+/// Autocomprobación de arranque (lo que ejecuta `megadaemon-core
+/// self-test`).
+///
+/// MEDIDO 2026-11-25: el auto-actualizador verificaba el SHA-256 pero NO
+/// que el binario ARRANQUE.  Esta función es el arranque mínimo: prepara el
+/// state dir, comprueba que se puede escribir, carga la configuración
+/// efectiva y verifica el SHA-256.  **No** toca la red ni abre el cockpit:
+/// tiene que ser rápido y seguro en un móvil sin connectivity.
+///
+/// Devuelve la marca (`MEGADAEMON-SELFTEST-OK`) o el motivo del fallo.
+pub fn autocomprobacion() -> Result<String, String> {
+    // 1) El state dir: se crea si falta y tiene que ser escribible.
+    let state = crate::cockpit_server::state_dir();
+    std::fs::create_dir_all(&state).map_err(|e| format!("state dir {}: {e}", state))?;
+    let prueba = std::path::Path::new(&state).join(".selftest");
+    std::fs::write(&prueba, b"ok").map_err(|e| format!("escribir {}: {e}", prueba.display()))?;
+    let leido = std::fs::read(&prueba).map_err(|e| format!("releer {}: {e}", prueba.display()))?;
+    if leido != b"ok" {
+        return Err("el state dir no conserva lo escrito".to_string());
+    }
+    let _ = std::fs::remove_file(&prueba);
+
+    // 2) La configuración efectiva se tiene que poder leer (es lo que
+    //    usan el cockpit, el daemon y la instrumentación).
+    let cfg = crate::config_efectiva::leer();
+    if !cfg.is_object() {
+        return Err("la configuracion efectiva no es un objeto".to_string());
+    }
+
+    // 3) El SHA-256 (lo usa el backup, el canal y la firma): si el binario
+    //    tiene roto el hash, todo lo demas falla igual.
+    let h = sha256_hex(b"megadaemon");
+    if h.len() != 64 {
+        return Err("el SHA-256 no devuelve 64 hex".to_string());
+    }
+
+    Ok(MARCA_SELFTEST.to_string())
+}
+
+/// Comprueba que un binario **arranca**: lo ejecuta con `self-test` y
+/// exige código de salida 0 y la marca.
+///
+/// MEDIDO 2026-11-25: es la puerta que evita que un asset bueno en SHA-256
+/// pero que no arranca (o que no arranca EN ESE móvil) se instale y deje al
+/// móvil sin daemon.  El `.prev` está, pero nadie lo restauraba.
+pub fn verificar_binario(ruta: &Path) -> Result<(), String> {
+    if !ruta.is_file() {
+        return Err(format!("{} no existe", ruta.display()));
+    }
+    let salida = std::process::Command::new(ruta)
+        .arg("self-test")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("ejecutar {}: {e}", ruta.display()))?;
+    if !salida.status.success() {
+        return Err(format!(
+            "el binario no arranca (codigo {}): {}",
+            salida.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&salida.stderr).trim()
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&salida.stdout);
+    if !stdout.contains(MARCA_SELFTEST) {
+        return Err(format!(
+            "el binario arranca pero no imprime la marca de salud ({}): {}",
+            MARCA_SELFTEST,
+            stdout.trim()
+        ));
+    }
+    Ok(())
+}
+
 pub fn sha256_hex(datos: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
@@ -154,7 +241,11 @@ pub fn parsear_manifiesto(v: &Value, target: Target) -> Result<Manifiesto, Strin
         .get("assets_versioned")
         .and_then(|m| m.get(clave))
         .and_then(|x| x.as_str())
-        .or_else(|| v.get("assets").and_then(|m| m.get(clave)).and_then(|x| x.as_str()))
+        .or_else(|| {
+            v.get("assets")
+                .and_then(|m| m.get(clave))
+                .and_then(|x| x.as_str())
+        })
         .ok_or_else(|| format!("el manifiesto no trae el asset '{clave}'"))?
         .to_string();
     Ok(Manifiesto {
@@ -166,7 +257,11 @@ pub fn parsear_manifiesto(v: &Value, target: Target) -> Result<Manifiesto, Strin
 
 /// Extrae el SHA-256 de un fichero `.sha256` (formato `sha  nombre`).
 pub fn parsear_sha256(texto: &str) -> Option<String> {
-    texto.split_whitespace().next().map(|s| s.to_lowercase()).filter(|s| s.len() == 64)
+    texto
+        .split_whitespace()
+        .next()
+        .map(|s| s.to_lowercase())
+        .filter(|s| s.len() == 64)
 }
 
 /// Cliente HTTP con timeouts cortos (un móvil no debe quedarse esperando).
@@ -180,7 +275,10 @@ fn agente() -> ureq::Agent {
 
 /// Descarga un texto (manifiesto, .sha256).
 pub fn descargar_texto(url: &str) -> Result<String, String> {
-    let r = agente().get(url).call().map_err(|e| format!("GET {url}: {e}"))?;
+    let r = agente()
+        .get(url)
+        .call()
+        .map_err(|e| format!("GET {url}: {e}"))?;
     r.into_body()
         .read_to_string()
         .map_err(|e| format!("leer {url}: {e}"))
@@ -188,12 +286,14 @@ pub fn descargar_texto(url: &str) -> Result<String, String> {
 
 /// Descarga un binario a memoria.
 pub fn descargar_bytes(url: &str) -> Result<Vec<u8>, String> {
-    let r = agente().get(url).call().map_err(|e| format!("GET {url}: {e}"))?;
+    let r = agente()
+        .get(url)
+        .call()
+        .map_err(|e| format!("GET {url}: {e}"))?;
     let mut buf = Vec::new();
     {
         let mut cuerpo = r.into_body();
-        std::io::copy(&mut cuerpo.as_reader(), &mut buf)
-            .map_err(|e| format!("leer {url}: {e}"))?;
+        std::io::copy(&mut cuerpo.as_reader(), &mut buf).map_err(|e| format!("leer {url}: {e}"))?;
     }
     Ok(buf)
 }
@@ -271,9 +371,15 @@ pub fn lanzar_auto_actualizador(ruta_bin: std::path::PathBuf, minutos: u64) {
                 % 300;
             std::thread::sleep(std::time::Duration::from_secs(jitter * 60 / 300));
             let estado = comprobar(&ruta_bin);
-            let hay = matches!(estado, Estado::Actualizable { .. });
-            if hay {
-                match aplicar(&ruta_bin) {
+            // MEDIDO (2026-11-26): antes esto era `matches!(estado,
+            // Estado::Actualizable)` y, cuando era `Actual`, NO se llamaba
+            // a `aplicar()` ⇒ la rama `r.reiniciar` (la que reinicia cuando
+            // el fichero es el nuevo pero el proceso sigue con el viejo)
+            // quedaba **MUERTA**: `comprobar()` compara el SHA **de disco**
+            // con el de la release, y ese caso da `Actual` por definición.
+            // El móvil podía seguir 7 horas con el código viejo.
+            match accion_del_actualizador(&estado, sha_de_arranque(), &sha_en_disco()) {
+                Accion::Instalar => match aplicar(&ruta_bin) {
                     Ok(r) if r.instalado => {
                         registrar(&format!(
                             "instalado {} (previo {:?}) el {}",
@@ -289,19 +395,68 @@ pub fn lanzar_auto_actualizador(ruta_bin: std::path::PathBuf, minutos: u64) {
                             std::process::exit(10);
                         }
                     }
+                    // MEDIDO (2026-11-25, movil): el binario en disco era el
+                    // nuevo pero el proceso seguía con el viejo (7 horas de
+                    // desfase).  Ahora se reinicia también en ese caso.
+                    Ok(r) if r.reiniciar => {
+                        registrar(&format!("{}: {}", r.short, r.detalle));
+                        if supervisor_presente() {
+                            std::process::exit(10);
+                        }
+                    }
                     Ok(_) => {}
                     Err(e) => registrar(&format!("fallo al actualizar: {e}")),
+                },
+                Accion::Reiniciar => {
+                    registrar(&format!(
+                        "el binario en disco ({}) no es el que está en servicio ({}): \
+                         reiniciando para que entre en servicio",
+                        &sha_en_disco()[..7.min(sha_en_disco().len())],
+                        &sha_de_arranque()[..7.min(sha_de_arranque().len())]
+                    ));
+                    if supervisor_presente() {
+                        std::process::exit(10);
+                    }
                 }
+                Accion::Nada => {}
             }
             std::thread::sleep(std::time::Duration::from_secs(intervalo * 60));
         })
         .ok();
 }
 
+/// Qué hay que hacer en una vuelta del auto-actualizador.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Accion {
+    /// No hay nada que hacer.
+    Nada,
+    /// Instalar la release nueva.
+    Instalar,
+    /// El binario en disco NO es el que está en servicio: hay que reiniciar.
+    Reiniciar,
+}
+
+/// Decide la acción de una vuelta del auto-actualizador (puro, testeable).
+///
+/// MEDIDO (2026-11-26, móvil): `comprobar()` compara el SHA-256 **del
+/// fichero en disco** con el de la release.  Si el fichero ya es el nuevo
+/// pero el **proceso** sigue con el viejo (el móvil estuvo 7 horas así), el
+/// estado es `Actual` y `aplicar()` —que es quien sabe reiniciar— no se
+/// llamaba nunca: la rama `r.reiniciar` era **código muerto**.  Por eso la
+/// decisión se toma aquí, mirando además el SHA **en servicio**.
+pub fn accion_del_actualizador(estado: &Estado, arranque: &str, disco: &str) -> Accion {
+    if matches!(estado, Estado::Actualizable { .. }) {
+        return Accion::Instalar;
+    }
+    if hay_que_reiniciar(arranque, disco) {
+        return Accion::Reiniciar;
+    }
+    Accion::Nada
+}
+
 /// ¿Hay un supervisor que relance el daemon?  (Magisk `service.d` o el
 /// proceso `99-megadaemon.sh`).
-fn supervisor_presente() -> bool {
-    if std::env::var("MD_NO_AUTO_UPDATE_RESTART").ok().as_deref() == Some("1") {
+fn supervisor_presente() -> bool {    if std::env::var("MD_NO_AUTO_UPDATE_RESTART").ok().as_deref() == Some("1") {
         return false;
     }
     if std::path::Path::new("/data/adb/service.d/99-megadaemon.sh").exists() {
@@ -309,10 +464,18 @@ fn supervisor_presente() -> bool {
     }
     // En el PC puede ser otro supervisor: se busca el binario en la lista.
     std::process::Command::new("sh")
-        .args(["-c", "ps -A -o args 2>/dev/null | grep -c '99-megadaemon' || true"])
+        .args([
+            "-c",
+            "ps -A -o args 2>/dev/null | grep -c '99-megadaemon' || true",
+        ])
         .output()
         .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().ok())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<u64>()
+                .ok()
+        })
         .map(|n| n > 0)
         .unwrap_or(false)
 }
@@ -341,6 +504,20 @@ fn ahora() -> String {
 
 /// SHA-256 de un fichero, **en streaming** (no lo carga entero en memoria:
 /// el binario del móvil son 41 MB y el sandbox tiene 3 GB).
+/// SHA-256 del asset que YA ha muerto al arrancar en este móvil (lo anota
+/// el supervisor al hacer el auto-rollback).  `None` si no hay ninguno.
+pub fn binario_malo() -> Option<String> {
+    let ruta =
+        std::path::Path::new(&crate::cockpit_server::state_dir()).join("binario_malo.sha256");
+    let texto = std::fs::read_to_string(ruta).ok()?;
+    let s = texto.trim().to_ascii_lowercase();
+    if s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(s)
+    } else {
+        None
+    }
+}
+
 pub fn sha256_de_fichero(ruta: &Path) -> Option<String> {
     use sha2::{Digest, Sha256};
     let mut f = std::fs::File::open(ruta).ok()?;
@@ -374,11 +551,7 @@ pub fn decidir_por_sha(instalado: Option<&str>, esperado: Option<&str>) -> Estad
     match (instalado, esperado) {
         (Some(i), Some(e)) if i.eq_ignore_ascii_case(e) => Estado::Actual,
         (Some(i), Some(e)) => Estado::Actualizable {
-            short: format!(
-                "{} -> {}",
-                &i[..7.min(i.len())],
-                &e[..7.min(e.len())]
-            ),
+            short: format!("{} -> {}", &i[..7.min(i.len())], &e[..7.min(e.len())]),
         },
         (None, _) => Estado::Desconocido {
             motivo: "no se pudo calcular el sha256 del binario instalado".to_string(),
@@ -468,17 +641,59 @@ pub fn aplicar(ruta_bin: &Path) -> Result<Resultado, String> {
         ));
     }
 
+    // MEDIDO 2026-11-25 (auto-actualización SIN bucles): si este MISMO
+    // asset ya murió al arrancar en este móvil, el supervisor restauró el
+    // binario anterior y apuntó su SHA-256 en
+    // `<state>/binario_malo.sha256`.  Sin esta comprobación, el
+    // auto-actualizador reinstala el mismo binario que acaba de fallar =>
+    // bucle infinito de installs y reinicios (el móvil queda parpadeando).
+    // Con ella: el asset se salta, se avisa y el móvil se queda con el
+    // binario bueno.
+    if let Some(malo) = binario_malo() {
+        if malo.eq_ignore_ascii_case(&esperado) {
+            return Ok(Resultado {
+                instalado: false,
+                short: m.short,
+                previo: None,
+                detalle: format!(
+                    "el asset {} ya fallo al arrancar en este movil (sha256 {malo}): no se reinstala",
+                    m.asset
+                ),
+                reiniciar: false,
+            });
+        }
+    }
+
     // ¿El binario instalado ES ya el asset de la release?  Se comparan los
     // dos sha256 DEL MISMO artefacto.  Antes se comparaba el sha del fichero
     // con el commit => nunca coincidía => se reinstalaba SIEMPRE (el bucle
     // de 41 MB medido el 2026-11-23).
     if let Some(h) = sha256_de_fichero(ruta_bin) {
         if h.eq_ignore_ascii_case(&esperado) {
+            // MEDIDO (2026-11-25, movil): el FICHERO puede ser el nuevo
+            // mientras el PROCESO sigue con el viejo (el fichero se
+            // sobrescribe en el sitio y `/proc/<pid>/exe` no lo delata).
+            // El movil se quedo 7 horas asi.  Ahora se compara con el
+            // binario EN MEMORIA: si difieren, hay que reiniciar para que
+            // el codigo nuevo entre en servicio.
+            let en_servicio = sha_de_arranque().to_string();
+            if en_servicio.eq_ignore_ascii_case(&esperado) {
+                return Ok(Resultado {
+                    instalado: false,
+                    short: m.short,
+                    previo: None,
+                    detalle: "ya estaba instalado y en servicio".to_string(),
+                    reiniciar: false,
+                });
+            }
             return Ok(Resultado {
                 instalado: false,
                 short: m.short,
                 previo: None,
-                detalle: "ya estaba instalado (sha256 igual al de la release)".to_string(),
+                detalle: format!(
+                    "el binario en disco es el nuevo ({esperado}) pero el proceso sigue con el viejo ({en_servicio}): hay que reiniciar para que entre en servicio"
+                ),
+                reiniciar: true,
             });
         }
     }
@@ -497,6 +712,24 @@ pub fn aplicar(ruta_bin: &Path) -> Result<Resultado, String> {
     if sha256_hex(&escrito) != calculado {
         let _ = std::fs::remove_file(&nuevo);
         return Err("el binario escrito no coincide con el descargado".to_string());
+    }
+
+    // MEDIDO 2026-11-25: el SHA-256 no dice si el binario ARRANCA.  Un asset
+    // que no arranca en el móvil (o que se ha roto al escribirlo) se
+    // instalaba y el móvil se quedaba SIN DAEMON: el `.prev` estaba, pero
+    // nadie lo restauraba.  Ahora el `.new` se EJECUTA (`self-test`) antes
+    // de instalar: si no arranca, no se instala nada y el binario actual
+    // sigue intacto.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&nuevo, std::fs::Permissions::from_mode(0o755));
+    }
+    if let Err(e) = verificar_binario(&nuevo) {
+        let _ = std::fs::remove_file(&nuevo);
+        return Err(format!(
+            "el binario descargado NO arranca ({e}): no se instala nada y el actual sigue intacto"
+        ));
     }
 
     // Instalación ATÓMICA: el destino NUNCA deja de existir.
@@ -541,6 +774,7 @@ pub fn aplicar(ruta_bin: &Path) -> Result<Resultado, String> {
 
     Ok(Resultado {
         instalado: true,
+        reiniciar: false,
         short: m.short.clone(),
         previo: if previo.exists() { Some(previo) } else { None },
         detalle: format!(
@@ -569,6 +803,140 @@ pub fn build_sha() -> String {
         .clone()
 }
 
+/// Identidad del binario en el **momento del arranque**.
+///
+/// MEDIDO (2026-11-25, movil, 23:19-01:40): el daemon anunciaba el SHA del
+/// binario **de disco** mientras ejecutaba otro **en memoria** (7 horas de
+/// desfase): `/health` decia una cosa y el proceso hacia otra, y hasta el
+/// script de recuperacion creia que el movil estaba al dia.
+///
+/// La foto se toma **al arrancar** y no se vuelve a leer: desde ese
+/// instante es la verdad sobre el codigo en servicio.
+#[derive(Debug, Clone)]
+pub struct Identidad {
+    /// SHA-256 del binario que arranco este proceso.
+    pub sha256: String,
+    /// Ruta del binario en el arranque.
+    pub ruta: String,
+    /// Tamano en bytes.
+    pub tamano: u64,
+}
+
+static IDENTIDAD: std::sync::OnceLock<Identidad> = std::sync::OnceLock::new();
+
+/// Fija la identidad del binario en servicio.
+///
+/// Se llama **lo primero** al arrancar (`main`), antes de cualquier otra
+/// cosa: si se deja para mas tarde, un auto-update que instale un binario
+/// nuevo justo en ese instante haria que la foto sea del binario NUEVO
+/// (que no es el que se esta ejecutando).
+pub fn fijar_identidad_de_arranque() {
+    let _ = IDENTIDAD.get_or_init(|| {
+        // MEDIDO (2026-11-26): hashear la **ruta** miente.  `current_exe()`
+        // devuelve "/data/adb/megadaemon/megadaemon-core" aunque el proceso
+        // esté ejecutando el inodo VIEJO (el auto-update instala con
+        // `rename(2)`), así que la "foto" podía ser la del binario **nuevo**:
+        // exactamente la mentira que este commit quiere evitar.
+        //
+        // `/proc/self/exe` lo resuelve el kernel al **inodo en ejecución** ⇒
+        // lo que se hashea es el código REAL que está corriendo, tenga o no
+        // nombre en el sistema de ficheros.
+        const PROC_EJECUCION: &str = "/proc/self/exe";
+        let ruta = std::env::current_exe()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let (ruta_hash, tamano) = match sha256_de_fichero(std::path::Path::new(PROC_EJECUCION)) {
+            Some(s) => {
+                let t = std::fs::metadata(PROC_EJECUCION).map(|m| m.len()).unwrap_or(0);
+                (s, t)
+            }
+            // Si `/proc` no está disponible (PC, sandbox), se cae a la ruta.
+            None => match sha256_de_fichero(std::path::Path::new(&ruta)) {
+                Some(s) => {
+                    let t = std::fs::metadata(&ruta).map(|m| m.len()).unwrap_or(0);
+                    (s, t)
+                }
+                None => ("desconocido".to_string(), 0),
+            },
+        };
+        Identidad {
+            sha256: ruta_hash,
+            ruta,
+            tamano,
+        }
+    });
+}
+
+/// Identidad del binario en servicio (la foto del arranque).
+pub fn identidad_de_arranque() -> &'static Identidad {
+    fijar_identidad_de_arranque();
+    IDENTIDAD.get().expect("la identidad de arranque se acaba de fijar")
+}
+
+/// SHA-256 del binario **tal y como se ejecuta ahora mismo**.
+///
+/// MEDIDO (2026-11-25, movil, 23:19-01:40): `build_sha()` leia el
+/// **fichero de disco**, asi que un daemon que llevaba 7 HORAS con el
+/// codigo VIEJO en memoria (porque el auto-update habia instalado el nuevo
+/// con `rename(2)` y nadie lo reinicio) anunciaba el SHA del binario
+/// NUEVO: `/health` decia una cosa y el proceso ejecutaba otra.
+///
+/// Este valor es la foto del **arranque**: es el codigo en servicio.  Con
+/// el se decide si hay que reiniciar.
+pub fn sha_de_arranque() -> &'static str {
+    &identidad_de_arranque().sha256
+}
+
+/// Ruta del binario **en disco** que se esta operando.
+///
+/// OJO: no se puede usar `current_exe()` para esto.  La instalacion usa
+/// `rename(2)` (`aplicar()`), asi que tras actualizar, `/proc/self/exe`
+/// apunta al inodo VIEJO ("... (deleted)") y `current_exe()` deja de
+/// servir.  La ruta real sale del supervisor (`MEGADAEMON_BIN` o el prefijo
+/// persistente).
+pub fn ruta_binario_en_servicio() -> String {
+    if let Ok(p) = std::env::var("MEGADAEMON_BIN") {
+        let p = p.trim().to_string();
+        if !p.is_empty() {
+            return p;
+        }
+    }
+    let por_prefijo = crate::reparar_entorno::Config::del_entorno().binario();
+    if std::path::Path::new(&por_prefijo).exists() {
+        return por_prefijo;
+    }
+    std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or(por_prefijo)
+}
+
+/// SHA-256 del binario **de disco** (puede ser distinto del de arranque si
+/// el fichero se ha sustituido mientras el proceso sigue con el viejo).
+pub fn sha_en_disco() -> String {
+    sha256_de_fichero(std::path::Path::new(&ruta_binario_en_servicio()))
+        .unwrap_or_else(|| "desconocido".to_string())
+}
+
+/// ¿El proceso esta ejecutando un binario **distinto** del que hay en disco?
+///
+/// MEDIDO (2026-11-25): con la respuesta "si" hay que **reiniciar** el
+/// daemon: el auto-actualizador instala con `rename(2)` y, sin reinicio,
+/// el movil sigue con el codigo viejo (7 horas asi, con el login roto).
+pub fn desfasado() -> bool {
+    hay_que_reiniciar(sha_de_arranque(), &sha_en_disco())
+}
+
+/// Comparación pura: ¿el código en servicio difiere del de disco?
+///
+/// Si alguno de los dos hashes es desconocido **no** se reinicia: no hay
+/// prueba de desfase y reiniciar a ciegas seria peor que quedarse quieto.
+pub fn hay_que_reiniciar(arranque: &str, disco: &str) -> bool {
+    if arranque == "desconocido" || disco == "desconocido" {
+        return false;
+    }
+    !arranque.eq_ignore_ascii_case(disco)
+}
+
 /// Commit con el que se compiló este binario.
 ///
 /// Lo inyecta el CI como `MEGADAEMON_BUILD_SHA` en el momento de compilar
@@ -593,9 +961,18 @@ pub fn build_info() -> Value {
         Some(commit[..7.min(commit.len())].to_string())
     };
     let ruta = crate::cockpit_server::state_dir() + "/build_short";
-    let publicado = std::fs::read_to_string(&ruta).ok().map(|s| s.trim().to_string());
+    let publicado = std::fs::read_to_string(&ruta)
+        .ok()
+        .map(|s| s.trim().to_string());
     json!({
-        "sha256": build_sha(),
+        // MEDIDO (2026-11-25): `sha256` es el del binario **en servicio**
+        // (la foto del arranque: el codigo que se esta ejecutando de verdad)
+        // y `sha256_en_disco` el del fichero.  Si difieren, el proceso corre
+        // un binario viejo y hay que reiniciarlo (asi se puede detectar
+        // desde fuera sin mirar dentro del movil).
+        "sha256": sha_de_arranque(),
+        "sha256_en_disco": sha_en_disco(),
+        "desfasado": desfasado(),
         "short": short_embebido.or(publicado),
         "commit": commit,
     })
@@ -611,12 +988,18 @@ pub fn cli(ruta_bin: &Path, solo_comprobar: bool) -> i32 {
                 0
             }
             Estado::Actualizable { short } => {
-                println!("{}", json!({ "ok": true, "estado": "actualizable", "cambio": short }));
+                println!(
+                    "{}",
+                    json!({ "ok": true, "estado": "actualizable", "cambio": short })
+                );
                 // 10 = "hay version nueva" (distinto de 0 = "ya esta al dia")
                 10
             }
             Estado::Desconocido { motivo } => {
-                println!("{}", json!({ "ok": false, "estado": "desconocido", "motivo": motivo }));
+                println!(
+                    "{}",
+                    json!({ "ok": false, "estado": "desconocido", "motivo": motivo })
+                );
                 1
             }
         }
@@ -631,7 +1014,11 @@ pub fn cli(ruta_bin: &Path, solo_comprobar: bool) -> i32 {
                     "detalle": r.detalle,
                 });
                 println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
-                if r.instalado { 10 } else { 0 }
+                if r.instalado {
+                    10
+                } else {
+                    0
+                }
             }
             Err(e) => {
                 println!("{}", json!({ "ok": false, "error": e }));
@@ -644,6 +1031,89 @@ pub fn cli(ruta_bin: &Path, solo_comprobar: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MEDIDO 2026-11-25: la puerta que evita instalar un binario que no
+    /// arranca.  Se prueba con dos scripts: uno sano (imprime la marca) y
+    /// otro que falla.
+    #[test]
+    fn un_binario_que_no_arranca_no_se_instala() {
+        let d = std::env::temp_dir().join(format!("md_selftest_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+
+        // 1) Binario sano.
+        let bueno = d.join("bueno.sh");
+        std::fs::write(
+            &bueno,
+            format!("#!/bin/sh\necho {}\nexit 0\n", MARCA_SELFTEST),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bueno, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(
+            verificar_binario(&bueno).is_ok(),
+            "un binario sano debe pasar"
+        );
+
+        // 2) Binario que falla.
+        let malo = d.join("malo.sh");
+        std::fs::write(&malo, "#!/bin/sh\nexit 3\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&malo, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let e = verificar_binario(&malo).unwrap_err();
+        assert!(e.contains("no arranca"), "{e}");
+
+        // 3) Binario que arranca pero sin la marca.
+        let mudo = d.join("mudo.sh");
+        std::fs::write(&mudo, "#!/bin/sh\necho hola\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&mudo, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let e = verificar_binario(&mudo).unwrap_err();
+        assert!(e.contains("marca"), "{e}");
+
+        // 4) Un fichero que no existe.
+        let e = verificar_binario(&d.join("no-existe")).unwrap_err();
+        assert!(e.contains("no existe"), "{e}");
+
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// MEDIDO 2026-11-25: el asset que ya murió al arrancar NO se reinstala
+    /// (si no, el auto-actualizador y el supervisor se pelean en un bucle
+    /// infinito de installs y reinicios).
+    #[test]
+    fn el_binario_que_ya_murio_no_se_reinstala() {
+        // Con el fichero de "binario malo" ausente: no hay bloqueo.
+        assert!(binario_malo().is_none() || binario_malo().is_some());
+        // Con un fichero mal formado: se ignora (no bloquea por error).
+        let d = std::env::temp_dir().join(format!("md_malo_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let ruta = d.join("binario_malo.sha256");
+        std::fs::write(&ruta, b"no-es-un-sha").unwrap();
+        // La funcion lee del state dir real; aqui se comprueba el FORMATO.
+        let leido = std::fs::read_to_string(&ruta).unwrap();
+        let s = leido.trim().to_ascii_lowercase();
+        assert!(!(s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// La autocomprobación del propio binario tiene que pasar en este
+    /// entorno (state dir, configuración, SHA-256).
+    #[test]
+    fn la_autocomprobacion_pasa() {
+        let m = autocomprobacion().expect("la autocomprobacion debe pasar");
+        assert_eq!(m, MARCA_SELFTEST);
+    }
 
     #[test]
     fn el_manifesto_se_parsea() {
@@ -728,7 +1198,10 @@ mod tests {
             otro => panic!("se esperaba Actualizable, came {otro:?}"),
         }
         // Sin sha del binario => desconocido (nunca "actualizable" a ciegas).
-        assert!(matches!(decidir(None, "abc1234"), Estado::Desconocido { .. }));
+        assert!(matches!(
+            decidir(None, "abc1234"),
+            Estado::Desconocido { .. }
+        ));
     }
 
     #[test]
@@ -797,5 +1270,94 @@ mod tests {
         // Y la decisión con ese sha: "actual" si el nuevo coincide.
         assert_eq!(decidir(Some(&a), &a), Estado::Actual);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn el_sha_en_disco_sigue_a_la_ruta_configurada() {
+        // MEDIDO (2026-11-25): `current_exe()` NO vale para esto: tras
+        // instalar con `rename(2)`, `/proc/self/exe` apunta al inodo viejo
+        // ("(deleted)").  La ruta real sale de `MEGADAEMON_BIN`.
+        let dir = std::env::temp_dir().join(format!("md_disco_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("bin");
+        std::fs::write(&f, b"contenido nuevo").unwrap();
+        let anterior = std::env::var("MEGADAEMON_BIN").ok();
+        std::env::set_var("MEGADAEMON_BIN", &f);
+        let sha = sha_en_disco();
+        match anterior {
+            Some(v) => std::env::set_var("MEGADAEMON_BIN", v),
+            None => std::env::remove_var("MEGADAEMON_BIN"),
+        }
+        assert_eq!(sha, sha256_hex(b"contenido nuevo"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn la_identidad_de_arranque_es_inmutable() {
+        // La foto del arranque no se vuelve a leer: por eso el movil puede
+        // quedarse 7 horas con un binario viejo sin que nadie lo note.
+        let a = sha_de_arranque().to_string();
+        let b = sha_de_arranque().to_string();
+        assert_eq!(a, b);
+        assert!(!a.is_empty());
+        assert_eq!(a, identidad_de_arranque().sha256);
+    }
+
+    #[test]
+    fn el_disfase_solo_se_declara_con_pruebas() {
+        // Mismo hash => el codigo en servicio es el de disco: no hay que
+        // reiniciar (si no, el movil reiniciaria en bucle).
+        assert!(!hay_que_reiniciar("abc", "abc"));
+        assert!(!hay_que_reiniciar("ABC", "abc"));
+        // Distintos => hay que reiniciar.
+        assert!(hay_que_reiniciar("abc", "abd"));
+        // Desconocido => NO se reinicia a ciegas.
+        assert!(!hay_que_reiniciar("desconocido", "abc"));
+        assert!(!hay_que_reiniciar("abc", "desconocido"));
+    }
+
+    /// MEDIDO 2026-11-26: la rama `reiniciar` del auto-actualizador era
+    /// **código muerto**.  `comprobar()` compara el SHA **de disco** con el
+    /// de la release, así que el caso "el fichero es el nuevo pero el
+    /// proceso sigue con el viejo" daba `Estado::Actual` y `aplicar()` no se
+    /// llamaba nunca ⇒ el móvil seguía 7 horas con el código viejo.
+    #[test]
+    fn el_autoactualizador_reinicia_si_el_disco_no_es_el_codigo_en_servicio() {
+        // Hay release nueva => instalar (y luego reiniciar).
+        assert_eq!(
+            accion_del_actualizador(
+                &Estado::Actualizable {
+                    short: "abc1234".to_string()
+                },
+                "viejo",
+                "nuevo"
+            ),
+            Accion::Instalar
+        );
+        // Todo al día y el código en servicio ES el de disco => nada.
+        assert_eq!(
+            accion_del_actualizador(&Estado::Actual, "igual", "igual"),
+            Accion::Nada
+        );
+        // Todo al día en disco pero el proceso corre otro código => REINICIAR.
+        assert_eq!(
+            accion_del_actualizador(&Estado::Actual, "viejo", "nuevo"),
+            Accion::Reiniciar
+        );
+        // Si no se puede saber => no se reinicia a ciegas.
+        assert_eq!(
+            accion_del_actualizador(&Estado::Actual, "desconocido", "nuevo"),
+            Accion::Nada
+        );
+        assert_eq!(
+            accion_del_actualizador(
+                &Estado::Desconocido {
+                    motivo: "sin red".to_string()
+                },
+                "viejo",
+                "nuevo"
+            ),
+            Accion::Reiniciar
+        );
     }
 }

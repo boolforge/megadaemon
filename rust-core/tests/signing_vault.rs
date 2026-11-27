@@ -112,3 +112,10 @@ fn corrupt_bundle_is_rejected_at_destination() {
     let _ = fs::remove_dir_all(&primary_dir);
     let _ = fs::remove_dir_all(&replica_dir);
 }
+
+// MEDIDO (2026-11-25): este arnés ya usa `megadaemon_core::` para el
+// módulo bajo prueba, así que el `#[path = "../src/util_text.rs"]` era un
+// residuo (y `tests/declared_modules.rs` prohíbe copiar módulos de la
+// librería).  `util_text` es `pub mod` de la librería: se usa desde allí.
+#[allow(unused_imports)]
+use megadaemon_core::util_text;

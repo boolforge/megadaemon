@@ -128,7 +128,11 @@ pub fn va_de_hex(s: &str) -> Option<u64> {
 /// `base` es el **bias de carga** del módulo en el proceso vivo (0 si
 /// todavía no se ha calculado: las direcciones salen en VA del ELF).
 pub fn resolver(datos: &[u8], base: u64) -> Result<Vec<Objetivo>, String> {
-    let (offset, _ver) = crate::re_engine::detectar_go_pclntab(datos)
+    // MEDIDO (2026-11-25, movil): aqui se usaba el NUMERO de funciones como
+    // offset (la funcion devolvia nfunc) => go-retool leia bytes arbitrarios
+    // y fallaba con "unsupported pclntab magic 0x00000424" => el plan de
+    // hooks nunca se escribia => el LS no se redirigia al gateway.
+    let (offset, _nfunc, _ver) = crate::re_engine::detectar_go_pclntab_offset(datos)
         .ok_or_else(|| "el binario no tiene pclntab de Go (go1.18+)".to_string())?;
     let opt = go_retool::ParseOptions {
         file_offset: offset,
@@ -262,6 +266,89 @@ pub fn plan_txt_con_valores(
 /// (o la variable de entorno `MEGADAEMON_HOOK_PLAN`).
 pub const RUTA_PLAN_PAYLOAD: &str = "/data/local/tmp/megadaemon/hooks-plan.txt";
 
+/// Plan EXTERNO de hooks (opcional).
+///
+/// MEDIDO (2026-11-26): el daemon escribe SIEMPRE su plan propio (6 hooks)
+/// en [`RUTA_PLAN_PAYLOAD`] ⇒ machaca el plan **masivo** que genera
+/// `tools/agy-probes/generar_plan_hooks.py` (396 sondas desde el pclntab).
+///
+/// Si existe este fichero (o la variable `MEGADAEMON_HOOK_PLAN_EXT`), el
+/// daemon copia ese plan tal cual (mismo formato tabulado) y NO pisa el suyo.
+pub const RUTA_PLAN_EXTERNO: &str = "agy/hooks-plan-externo.txt";
+
+/// Ruta del plan externo que se va a usar (si hay alguno).
+///
+/// Prioridad: variable de entorno `MEGADAEMON_HOOK_PLAN_EXT` > fichero en el
+/// state dir (`<state>/agy/hooks-plan-externo.txt`).
+pub fn ruta_plan_externo() -> Option<std::path::PathBuf> {
+    if let Ok(v) = std::env::var("MEGADAEMON_HOOK_PLAN_EXT") {
+        let v = v.trim().to_string();
+        if !v.is_empty() {
+            let p = std::path::PathBuf::from(v);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    let p = std::path::PathBuf::from(crate::cockpit_server::state_dir()).join(RUTA_PLAN_EXTERNO);
+    if p.is_file() {
+        Some(p)
+    } else {
+        None
+    }
+}
+
+/// Escribe un plan EXTERNO en la ruta que lee el payload.
+///
+/// Devuelve el número de hooks copiados.
+fn instalar_plan_externo(externo: &std::path::Path) -> Result<usize, String> {
+    let txt = std::fs::read(externo)
+        .map_err(|e| format!("{}: {e}", externo.display()))?;
+    let ruta_txt = PathBuf::from(RUTA_PLAN_PAYLOAD);
+    if let Some(dir) = ruta_txt.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    std::fs::write(&ruta_txt, &txt).map_err(|e| format!("{}: {e}", ruta_txt.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // MEDIDO (2026-11-26, movil): el payload lee el plan DENTRO del
+        // proceso de la app (que corre como el usuario de la app, no como
+        // root) => con 0600 root NO lo puede leer y no se engancha ni un
+        // hook.  El plan sólo lleva direcciones y nombres de función (no
+        // hay ningun secreto) => 0644.
+        let _ = std::fs::set_permissions(&ruta_txt, std::fs::Permissions::from_mode(0o644));
+    }
+    let hooks = txt
+        .iter()
+        .filter(|b| **b == b'\n')
+        .count();
+    // El JSON del state dir: mismo sitio, pero se marca de dónde sale.
+    let ruta_json =
+        std::path::PathBuf::from(crate::cockpit_server::state_dir()).join("agy/hooks-plan.json");
+    if let Some(dir) = ruta_json.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let ids: Vec<String> = String::from_utf8_lossy(&txt)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| l.split('\t').nth(2).map(|s| s.to_string()))
+        .take(500)
+        .collect();
+    let _ = std::fs::write(
+        &ruta_json,
+        serde_json::to_string_pretty(&json!({
+            "fuente": "externo",
+            "origen": externo.display().to_string(),
+            "hooks": hooks,
+            "ids": ids,
+        }))
+        .unwrap_or_default()
+        .as_bytes(),
+    );
+    Ok(hooks)
+}
+
 /// Escribe el plan **en el formato que lee el payload** (TXT tabulado) y
 /// también el JSON (para el humano) en el state dir.
 ///
@@ -272,16 +359,31 @@ pub const RUTA_PLAN_PAYLOAD: &str = "/data/local/tmp/megadaemon/hooks-plan.txt";
 /// `base` = el bias de carga del `.so` en el proceso vivo (0 si aún no se ha
 /// medido: el payload puede calcularlo con los maps).
 pub fn escribir_plan_para_el_payload(base: u64) -> Result<Value, String> {
+    // MEDIDO (2026-11-26): si hay un plan EXTERNO (el masivo de 396 sondas
+    // que genera `tools/agy-probes/generar_plan_hooks.py`), se copia tal
+    // cual y NO se pisa con el plan propio del daemon (6 hooks).
+    if let Some(externo) = ruta_plan_externo() {
+        let hooks = instalar_plan_externo(&externo)?;
+        return Ok(json!({
+            "ok": true,
+            "hooks": hooks,
+            "base": base,
+            "ruta_payload": RUTA_PLAN_PAYLOAD,
+            "ruta_json": format!(
+                "{}/agy/hooks-plan.json",
+                crate::cockpit_server::state_dir()
+            ),
+            "origen": externo.to_string_lossy(),
+            "externo": true,
+        }));
+    }
     let ruta_ls = crate::antigravity_endpoint::ruta_ls();
-    let datos =
-        std::fs::read(&ruta_ls).map_err(|e| format!("{}: {e}", ruta_ls.display()))?;
+    let datos = std::fs::read(&ruta_ls).map_err(|e| format!("{}: {e}", ruta_ls.display()))?;
     let objetivos = resolver(&datos, base)?;
 
     // 5ª columna: para `sustituir_url`, la URL parcheada EN HEX (el secreto
     // local no sale en claro por el plan, ni por el bus, ni por la UI).
-    let url = crate::antigravity_endpoint::url_destino(
-        crate::antigravity_endpoint::PUERTO_GATEWAY,
-    );
+    let url = crate::antigravity_endpoint::url_destino(crate::antigravity_endpoint::PUERTO_GATEWAY);
     let hex_url: String = url
         .as_bytes()
         .iter()
@@ -304,19 +406,26 @@ pub fn escribir_plan_para_el_payload(base: u64) -> Result<Value, String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&ruta_txt, std::fs::Permissions::from_mode(0o600));
+        // MEDIDO (2026-11-26, movil): el payload lee el plan DENTRO del
+        // proceso de la app (que corre como el usuario de la app, no como
+        // root) => con 0600 root NO lo puede leer y no se engancha ni un
+        // hook.  El plan sólo lleva direcciones y nombres de función (no
+        // hay ningun secreto) => 0644.
+        let _ = std::fs::set_permissions(&ruta_txt, std::fs::Permissions::from_mode(0o644));
     }
 
     // 2) El JSON en el state dir (persistente y legible).
-    let ruta_json = std::path::PathBuf::from(crate::cockpit_server::state_dir())
-        .join("agy/hooks-plan.json");
+    let ruta_json =
+        std::path::PathBuf::from(crate::cockpit_server::state_dir()).join("agy/hooks-plan.json");
     let plan_json = plan(&objetivos, base);
     if let Some(dir) = ruta_json.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     let _ = std::fs::write(
         &ruta_json,
-        serde_json::to_string_pretty(&plan_json).unwrap_or_default().as_bytes(),
+        serde_json::to_string_pretty(&plan_json)
+            .unwrap_or_default()
+            .as_bytes(),
     );
 
     Ok(json!({
@@ -396,8 +505,14 @@ mod tests {
         let p = plan(&objs, 0x7f00_0000);
         let hooks = p.get("hooks").and_then(|h| h.as_array()).expect("hooks");
         assert_eq!(hooks.len(), 2);
-        assert_eq!(hooks[0].get("tarea").and_then(|t| t.as_str()), Some("observar"));
-        assert_eq!(hooks[1].get("tarea").and_then(|t| t.as_str()), Some("sustituir_url"));
+        assert_eq!(
+            hooks[0].get("tarea").and_then(|t| t.as_str()),
+            Some("observar")
+        );
+        assert_eq!(
+            hooks[1].get("tarea").and_then(|t| t.as_str()),
+            Some("sustituir_url")
+        );
         assert_eq!(
             hooks[1].get("direccion").and_then(|d| d.as_u64()),
             Some(0x7f00_2000)
@@ -465,5 +580,34 @@ mod tests {
             assert!(s.contains("jetski"), "objetivo fuera de jetski: {s}");
             assert!(*t == OBSERVAR || *t == SUSTITUIR_URL, "tarea rara: {t}");
         }
+    }
+
+    /// MEDIDO (2026-11-26): el daemon escribía SIEMPRE su plan de 6 hooks
+    /// sobre `/data/local/tmp/megadaemon/hooks-plan.txt` ⇒ machacaba el
+    /// plan masivo de 396 sondas.  Con un plan EXTERNO en el state dir, el
+    /// daemon copia ese plan tal cual.
+    #[test]
+    fn un_plan_externo_manda_sobre_el_del_daemon() {
+        let base = std::env::temp_dir().join(format!("md-plan-ext-{}", std::process::id()));
+        let dir = base.join("agy");
+        std::fs::create_dir_all(&dir).expect("dir");
+        let externo = dir.join("hooks-plan-externo.txt");
+        let plan = "liblanguage_server.so\t0x4763868\tpkg.Func\tobservar\n\
+                    liblanguage_server.so\t0x4763d00\tpkg.Otro\tobservar\n";
+        std::fs::write(&externo, plan).expect("plan");
+
+        // El directorio del state dir se toma del entorno; en el test se
+        // comprueba sólo el CONTENIDO que se copiaría.
+        let leido = std::fs::read_to_string(&externo).expect("leer");
+        let hooks = leido.lines().filter(|l| !l.trim().is_empty()).count();
+        assert_eq!(hooks, 2);
+        assert!(leido.contains("0x4763868\tpkg.Func\tobservar"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn la_ruta_del_plan_externo_vive_en_el_state_dir() {
+        let p = std::path::PathBuf::from(crate::cockpit_server::state_dir()).join(RUTA_PLAN_EXTERNO);
+        assert!(p.to_string_lossy().ends_with("agy/hooks-plan-externo.txt"));
     }
 }

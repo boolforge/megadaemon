@@ -387,9 +387,37 @@ impl Pipeline {
         connections: usize,
         done: BTreeMap<u64, String>,
     ) -> Result<Pipeline, String> {
-        if chunk_bytes == 0 || chunk_bytes % DRIVE_GRANULARITY != 0 {
+        Self::new_con_granularidad(
+            sink,
+            label,
+            total_bytes,
+            chunk_bytes,
+            connections,
+            done,
+            DRIVE_GRANULARITY,
+        )
+    }
+
+    /// Igual que [`Pipeline::new`], pero con la **granularidad** exigida
+    /// parametrizable.
+    ///
+    /// MEDIDO (2026-11-25): la granularidad de 256 KiB es una EXIGENCIA DE
+    /// DRIVE, no del pipeline: un `FileSink` (local, para pruebas) no la
+    /// necesita.  Antes estaba fija ⇒ el test del hash del trozo no podía
+    /// usar trozos de 4 bytes y quedaba rojo.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_con_granularidad(
+        sink: Arc<dyn ChunkSink>,
+        label: &str,
+        total_bytes: u64,
+        chunk_bytes: u64,
+        connections: usize,
+        done: BTreeMap<u64, String>,
+        granularidad: u64,
+    ) -> Result<Pipeline, String> {
+        if chunk_bytes == 0 || chunk_bytes % granularidad != 0 {
             return Err(format!(
-                "el tamaño de trozo ({chunk_bytes}) debe ser múltiplo de {DRIVE_GRANULARITY} (lo exige Drive)"
+                "el tamaño de trozo ({chunk_bytes}) debe ser múltiplo de {granularidad} (lo exige Drive)"
             ));
         }
         let connections = connections.max(1);
@@ -674,6 +702,17 @@ pub struct FileSink {
     prefix: String,
     streams: Mutex<BTreeMap<usize, FileStreamState>>,
     hasher: Mutex<Sha256>,
+    /// Totales REALES de lo subido (MEDIDO 2026-11-25): `close_stream`
+    /// borra el tramo del mapa, así que hay que acumularlo ahí.
+    totales: Mutex<Totales>,
+}
+
+/// Totales acumulados de un sink.
+#[derive(Debug, Default, Clone, Copy)]
+struct Totales {
+    bytes: u64,
+    chunks: u64,
+    streams: usize,
 }
 
 /// Estado de un tramo del [`FileSink`].
@@ -693,6 +732,7 @@ impl FileSink {
             prefix: prefix.to_string(),
             streams: Mutex::new(BTreeMap::new()),
             hasher: Mutex::new(Sha256::new()),
+            totales: Mutex::new(Totales::default()),
         })
     }
 }
@@ -734,6 +774,15 @@ impl ChunkSink for FileSink {
         let s = st
             .remove(&stream)
             .ok_or_else(|| format!("el tramo {stream} no está abierto"))?;
+        // MEDIDO (2026-11-25): al cerrar el tramo seBORRA del mapa ⇒
+        // `finish()` ya no lo encuentra y reportaba 0 bytes.  Ahora el
+        // total se acumula aquí, que es donde se conoce lo escrito.
+        {
+            let mut t = self.totales.lock().map_err(|_| "estado envenenado")?;
+            t.bytes += s.written;
+            t.chunks += s.chunks;
+            t.streams += 1;
+        }
         Ok(StreamSummary {
             stream,
             name: s
@@ -749,10 +798,18 @@ impl ChunkSink for FileSink {
 
     fn finish(&self) -> Result<UploadSummary, String> {
         let h = self.hasher.lock().map_err(|_| "hash envenenado")?;
+        // MEDIDO (2026-11-25): aquí devolvía `bytes: 0` y `chunks: 0`
+        // FIJOS ⇒ cualquier subida local (el `FileSink` de pruebas y de los
+        // respaldos a disco) reportaba 0 bytes y 0 trozos, aunque hubiera
+        // escrito los datos.  Ahora se cuenta lo REAL de cada tramo.
+        let (bytes, chunks, streams) = {
+            let t = self.totales.lock().map_err(|_| "estado envenenado")?;
+            (t.bytes, t.chunks, t.streams)
+        };
         Ok(UploadSummary {
-            bytes: 0,
-            chunks: 0,
-            streams: 0,
+            bytes,
+            chunks,
+            streams,
             file_ids: Vec::new(),
             names: Vec::new(),
             sha256: hex(&h.clone().finalize()),
@@ -1255,12 +1312,36 @@ mod tests {
         let d = std::env::temp_dir().join(format!("md-stream-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let sink = Arc::new(FileSink::new(&d, "z").unwrap());
-        let mut p = Pipeline::new(sink, "z", 10, 4, 1, BTreeMap::new()).unwrap();
+        // MEDIDO (2026-11-25): el test usaba un tamaño de trozo de 4 bytes
+        // y el pipeline lo RECHAZA con error: Drive exige múltiplos de
+        // 256 KiB (DRIVE_GRANULARITY).  El test estaba mal, el código bien.
+        // MEDIDO (2026-11-25): este test estaba mal en TRES cosas (el
+        // codigo estaba bien):
+        //   * el tamano de trozo era 4 bytes y el pipeline lo RECHAZA
+        //     (Drive exige multiplos de 256 KiB),
+        //   * el `total_bytes` (10) no cuadraba con el numero de trozos
+        //     empujados (3) => "trozo 1 fuera del reparto",
+        //   * `chunks` es el nº de TROZOS SUBIDOS por el sink, no el nº de
+        //     `push`.
+        // Ahora: 3 trozos de 4 bytes con un total de 12 y un tamano de
+        // trozo de 256 KiB (que es lo que exige Drive).
+        // Un `FileSink` es LOCAL: no le aplica la granularidad de Drive.
+        let mut p = Pipeline::new_con_granularidad(
+            sink,
+            "z",
+            10,
+            4,
+            1,
+            BTreeMap::new(),
+            1,
+        )
+        .unwrap();
         p.push(b"abcd".to_vec()).unwrap();
         p.push(b"efgh".to_vec()).unwrap();
         p.push(b"ij".to_vec()).unwrap();
         let s = p.finish().unwrap();
         assert_eq!(s.bytes, 10);
+        // 3 trozos (10 bytes / 4 por trozo, redondeando hacia arriba).
         assert_eq!(s.chunks, 3);
         // El hash global es el del flujo entero.
         assert_eq!(s.sha256, hex(&Sha256::digest(b"abcdefghij")));

@@ -487,3 +487,128 @@ rotar la clave**).
 * La subida a Drive la hace el nodo con token (`megadaemon-core drive-sync`).
 * **La clave hay que rotarla YA**: es la única medida que la deja de estar
   expuesta.
+
+---
+
+## 2026-11-24 02:0x · root · el paquete con el secreto YA ESTÁ EN GOOGLE DRIVE
+
+Subido con el **uploader nativo** del daemon (`megadaemon-core drive-sync`,
+Rust, con las credenciales que pasó el jefe):
+
+* Carpeta: **https://drive.google.com/drive/folders/1ZMQOrjvZ1MsgkpbhdXyvopY356GYDYKw**
+  (dentro de `megadaemon-backup` ✓)
+* 6 ficheros, 10,28 MB, **verificado listando la carpeta por la API de Drive** ✓:
+  `ramas-bloqueadas-secreto.bundle` (las dos ramas que GitHub bloquea),
+  `cc-deobfuscated-2.1.331.tar.gz` (el bundle deofuscado de Claude Code
+  2.1.331) y los tres informes + manifiesto.
+* Detalle en `state/drive_handoff_2026-11-24.json` ✓.
+
+**Sigue pendiente lo de siempre: ROTAR la clave de Highnote** (está en el
+histórico del repo, que es público). Y quien pueda, reescribir la historia de
+`agent/merge-flota-pendiente` y `fix/mobile-web-bridge` para quitar el
+secreto y poder fusionarlas a GitHub.
+
+---
+- 2026-11-26 · agente principal · **feat(v14) telemetría a Drive + one-liner**: el
+  cuelo de botella del enjambre era el CANAL (el quick tunnel cambia de hostname y el
+  relé canónico cae ⇒ el sandbox se queda ciego). Nuevo módulo propio
+  `rust-core/src/telemetria.rs`: el móvil **empuja** su estado (batería, red desglosada
+  **WiFi vs datos móviles** por interfaz, instrumentación viva) y sus **datos de
+  conexión** (URL, relé, puerto, build, **sha16** de las claves) a Drive con el cliente
+  **nativo** (`drive_vfs`, sin `curl` ⇒ el móvil no lo tiene); escribe primero en disco
+  para no perder nada si Drive falla. Auto-detección de "listo" con **código de salida
+  0/1**. Tool MCP `telemetria` + CLI `megadaemon-core telemetria <acción>`. Nuevo
+  `deploy/megadaemon-oneliner.sh` (instalador atómico con rollback, release en 3 capas,
+  verificación **por valor**, health-check real) y `deploy/mdo.sh` (lanzador de una
+  línea). 9 tests propios; `cargo check --lib --bins --tests` = **0 errores**; gates
+  verdes (352 ficheros / 0 errores de sintaxis; `sh -n` y `dash -n` OK). Commits
+  `9a2a133`, `8479688`, `9bbb63b`, `e6ce592`. Documentos: `docs/TELEMETRIA_DRIVE.md`,
+  `docs/ORDEN_IMPERATIVA_GLOBAL.md`, `docs/RESILIENCIA_P2P.md`,
+  `docs/RE_GASTO_DATOS_JAZZTEL.md` (los dos últimos de subagentes, sin compilar).
+  **Hallazgo verificado**: `rust-core/src/resonance.rs` YA ES un bus P2P por Drive
+  (cartas Ed25519, CRDT LWW `epoch`+`seq`, `tablon-resiliencia`) ⇒ el Nivel 2 del P2P
+  debe **extenderlo**, no duplicarlo; y los leases ya están en `board.rs`.
+  ⚠️ **Relé canónico incoherente (medido)**: `channel.rs:72` usa `mdtmfnc.duckdns.org`
+  pero `state/channel.json` dice `mdtmfnc-s21.duckdns.org` ⇒ decidir antes de la Fase 1.
+  ⚠️ **PII**: las 9 facturas de Jazztel llevan el **NIF en el nombre** ⇒ siempre
+  enmascarado en cualquier informe del repo (que es público).
+- 2026-11-26 · agente principal · **fix(v14) el one-liner tenía 11 bugs bloqueantes**: un
+  subagente evaluador los encontró y una simulación propia los confirma. El peor: el watchdog
+  se lanzaba SIN entorno ⇒ no encontraba `tunnel.url` ⇒ mataba y relanzaba cloudflared cada
+  60 s ⇒ **el hostname cambiaba sin parar y la flota se quedaba ciega** (justo lo que el
+  proyecto quiere cerrar). Además: el estado se leía en el directorio equivocado (sin
+  `MEGADAEMON_STATE_DIR`), el health-check **nunca podía pasar**, el script decía "instalado"
+  sin instalar (mataba el daemon vivo), el canal **nunca** se publicaba en el repo, y
+  `mdo.sh` escribía en `/data/local/tmp`, que Termux no puede escribir. Todo corregido y
+  **verificado con `tools/test-oneliner.sh`: 22 checks, 0 fallos** (instalación atómica,
+  watchdog con su entorno y fuera de `service.d`, sonda real del túnel, idempotencia con la
+  URL invariante, bundle corrupto y sha incorrecto ⇒ abortan sin romper el móvil).
+  Además: `rust-core/src/bus_ejecutor.rs` (nuevo) — el móvil **tira** órdenes del bus y las
+  ejecuta, con idempotencia por `idem_key`, fail-closed ante firma inválida, `confirm: true`
+  para lo irreversible y presupuesto por ciclo ⇒ **controlar el móvil sin conexión directa**.
+  Y `megadaemon-core hash` (el móvil no tiene `sha256sum`).
+  **MEDIDO ejecutando el binario real contra la API de Drive**: `telemetria conexion` →
+  `conexion.json` (457 B) subido, id `1vrQ9cwK2xjN6LBR0seLEN_TY2fsN8Xu9`; `telemetria
+  publicar` → JSON 12.093 B + MD 225 B subidos a `MegaDaemon/telemetria/pc`; `red.por_transporte`
+  desglosa bien (eth0 → ethernet: 312.163.816.888 B); `bus` sincroniza el bus real
+  (`bus_ok: true`).
+  ⚠️ **El CI del 79dfd1e falló** por el lint de fusiones (4 hallazgos en docs míos: un CJK
+  pegado y tres fusiones) ⇒ **corregidos** en `23d73d4`. Los demás rojos del job `calidad`
+  (`audit_scout_ui`, `audit_scout_voice`, `audit_adversarial_v15`) son **preexistentes y
+  ajenos** a estos cambios.
+  Commits: `54841fb`, `97e3156`, `1ce4477`, `7595a18`, `23d73d4`.
+
+- 2026-11-26 · agente principal · **módulo `re_deep` (RE profunda de APK) integrado y
+  cableado**: `rust-core/src/re_deep.rs` (nuevo, ~1.900 líneas) da lo que
+  `dex_decompile`/`apk_inventory` **no** cubren: xrefs (string → clase + método),
+  rutas REST **relativas** con su familia de API, entropía de los assets (payload
+  cifrado), pin de certificado frente a los certificados de firma (⇒ si el pin no es de
+  firma, es **del servidor**), descifradores de strings **discriminados** (un candidato con
+  `javax/crypto/*` es un SDK de pago 3DS2, no un ofuscador) y ejecución simbólica acotada.
+  Cableado: `pub mod re_deep;` en `lib.rs`, subcomando `megadaemon-core redeep <apk>
+  [analizar|rutas|pins|descifradores|xrefs]` y tool MCP `re_profunda`.
+  **Tres bugs reales** los encontró la integración, no el autor: (1) `substring` no
+  compilaba (`s.get(rango)` devuelve `Option<&[char]>`); (2) los **payloads de Dalvik
+  nunca se saltaban** en tres barreadores (el ident se leía `unidad >> 8` ⇒ 0x01/0x02/0x03,
+  nunca 0x0100/0x0200/0x0300) ⇒ el barrido continuaba **dentro de los datos** e inventaba
+  xrefs y llamadas fantasma; ahora usa `unidad & 0xff00`, igual que el parser canónico
+  `dex_decompile::disassemble_code`; (3) **el inventario de rutas salía VACÍO en la app
+  real**: `classify_rest_path` rechazaba las mayúsculas en cualquier segmento, y todas
+  las rutas medidas de esta app llevan parámetros camelCase (`{subscriptionId}`,
+  `{accountId}`, `{productId}`) ⇒ no encontraba ninguna ruta y **no daba error**.
+  **MEDIDO sobre el APK real** (pool de strings de los 5 DEX, 169.488 strings únicos):
+  el clasificador viejo encuentra **16** rutas y el nuevo **133** (superconjunto estricto:
+  0 perdidas, 117 ganadas), y las ganadas son justo las del control de gasto
+  (`user-tariffs`, `recharges`, `recurring`, `balances`, `events`, `penalties`).
+  **24 tests puros** (sin APK, sin red, sin móvil), incluidos los vectores SHA-256 de
+  NIST, la regresión de los payloads y las 8 rutas reales medidas de la app.
+  Además, **fix de la tool MCP `telemetria`**: su esquema declara la clave `accion` pero
+  el dispatch leía `action` ⇒ `accion="publicar"` devolvía el estado **sin publicar
+  nada**; ahora se aceptan las dos claves (con `accion` mandando).
+  Los APK y sus volcados **no** van al repo (es público): siguen fuera, en
+  `/workspace/apk_work/jazztel/`.
+
+- 2026-11-27 · agente principal · **núcleo forense y de recuperación en C**
+  (`tools/mddoctor.c`, **26 KB**, sin dependencias): hay 7 scripts de recuperación
+  dispersos y ninguno funciona cuando el daemon está roto. Este no depende de
+  la librería de MegaDaemon, así que **sí**. Recoge batería, térmica, memoria,
+  swap, **PSI** de CPU, carga, disco, red por interfaz, zombies y estado **D**,
+  el estado de MegaDaemon (`instance.json`/`channel.json`/`tunnel.url`) y los
+  clasifica `OK`/`AVISO`/`CRÍTICO` **con el motivo**; salida en tabla o
+  `--json` y **código de salida 0/1/2** para scripts. Recuperación:
+  `recover` sólo propone, `recover --apply --yes` ejecuta (temporales viejos,
+  **locks rancios** de más de 1 hora, URL de túnel ausente).
+  **Por qué en C y no en Rust**: `gcc -O2` compila en **<1 s** con ~10 MB de
+  RAM; en este sandbox (2 CPU, 3 GB sin swap) el enlazado del crate de Rust
+  de 160 MB **mata el proceso por OOM** (SIGKILL medido). Un diagnóstico tiene
+  que poder construirse donde no hay RAM. La envoltura en Rust sí es Rust:
+  `megadaemon-core doctor [scan|doctor|recover]` usa el binario C si está y
+  cae al `diagnostico::recoger()` nativo si no.
+  Também: `tools/estado.sh` (tablón del enjambre en un comando),
+  `tools/verificar-arm64.sh` (ejecutar un binario ARM64 real con
+  `qemu-aarch64-static`: convierte "compila" en "funciona").
+  **MEDIDO**: 26.352 B; `gcc -O2 -Wall` ⇒ 0 errores; `doctor` ⇒ 7 OK / 3 avisos /
+  0 críticos en este sandbox y **código de salida 1**; en el móvil hará lo mismo
+  con los sensores de verdad. **Pendiente**: la tool MCP `doctor` y la
+  publicación del binario en el bundle del móvil (CI: paso añadido, sin
+  verificar todavía contra el CI).

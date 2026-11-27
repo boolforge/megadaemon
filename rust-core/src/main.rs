@@ -17,39 +17,50 @@ fn print_usage() {
     eprintln!("  cirx-ssa [mas]                              LTO-Decomp v3.4 CIRX Micro-RTL SSA, Risk Score S/R & SMT-LIB2 Export");
     eprintln!("  mba <expr>                                  D810/Goomba Mixed Boolean-Arithmetic (MBA) Algebraic Simplifier");
     eprintln!("  kaitai <file> [template] [offset]           ImHex/Kaitai Struct Declarative Binary Parser");
-    eprintln!("  rizin <file> [mode] [arch]                  Native ARM64 Rizin 0.9.1 Multi-OS Inspector");
+    eprintln!(
+        "  rizin <file> [mode] [arch]                  Native ARM64 Rizin 0.9.1 Multi-OS Inspector"
+    );
     eprintln!("  frida <mode> <module> <sym_or_off> [proc]   Frida DBI Script Generator (attach|stalker|native_call|android_jni|tenet_mem)");
     eprintln!("  npu-cv                                      Exynos 2100 NPU + Mali-G78 + VLA Computer Vision ROI Telemetry");
     eprintln!("  unifier                                     Scan & Unify All 9 Projects Across the Device Ecosystem");
     eprintln!("  rea <plat> [query] [max]                    REA Ghidra 2.7MB C Corpus Indexer & ScummVM C++ Transpiler");
     eprintln!("  cfg <plat> [offset] [count]                 Native Control Flow Graph (CFG) Lifter & Mermaid Generator");
-    eprintln!("  bindiff <plat>                              Multi-ISA Cross-Platform Function Matcher");
+    eprintln!(
+        "  bindiff <plat>                              Multi-ISA Cross-Platform Function Matcher"
+    );
     eprintln!("  hw-mmio <plat>                              Hardware MMIO Register Annotator & Auto-Struct Reconstructor");
     eprintln!("  crypto-scan <plat>                          Shift-JIS String Decoder & Konami LZSS/RLE Scanner");
     eprintln!("  seere <query> [--max-turns N] [--env-in-prompt]   Execute SEERE v13.1 GBNF Local Harness (0 tokens if possible)");
     eprintln!("  seere-prompt [es|en]                         Dump the static SEERE system prompt (for token accounting)");
     eprintln!("  seere-grammar                                Dump the active GBNF grammar");
     eprintln!("  power                                        Show battery/charging/thermal state and the active policy");
+    eprintln!("  brillo <sub> [n] [aplicar]                    Brillo del movil: estado | fijar N | maximo | config | reafirmar | shim | sensor | diagnostico [aplicar] | observar [muestras] [s] | adaptativo [aplicar] | vigilante (arrancar|parar|tick)");
     eprintln!("  seere-selftest                              Run SEERE v12 Assertion Suites & Export Shared GBNF/Prompts");
     eprintln!("  npu-probe                                   Probe Exynos 2100 NPU (/dev/vertex10, EDEN, KleidiAI) & Pin Cores 4-7");
     eprintln!("  npu-probe --vs4l                            Sondea el driver VS4L/NPU (ioctl SIN argumento => devuelve el tamano que espera)");
     eprintln!("  csc-verify                                Verifica en el movil si la feature de grabacion nativa (CSC) esta activa");
     eprintln!("  rootcheck <paquete>[,...]                 Banco de pruebas de ocultacion de root: veredicto + evidencia");
     eprintln!("  rootcheck --state                        Que senales de root quedan a la vista ahora mismo");
-    eprintln!("  rootcheck --exec <paquete>               Arranca la app y captura su logcat filtrado");
+    eprintln!(
+        "  rootcheck --exec <paquete>               Arranca la app y captura su logcat filtrado"
+    );
     eprintln!("  magisk list|enable|disable|install       Gestion real de modulos Magisk (install valida el ZIP)");
     eprintln!("  magisk shamiko [<zip>]                   Ficha de la release oficial + estado real en el movil");
     eprintln!("  locate-roms [refresh]                       Native Multi-Platform ROM & Binary Auto-Discovery");
     eprintln!("  disasm <plat> <file> [offset] [count]       Native Multi-Arch Disassembler");
     eprintln!("  hex <file> [offset] [length]                Native Hex & ASCII Inspector");
-    eprintln!("  deobfuscate <plat> <file>                   Native Konami XOR Script Deobfuscator");
+    eprintln!(
+        "  deobfuscate <plat> <file>                   Native Konami XOR Script Deobfuscator"
+    );
     eprintln!("  dumper <plat> <file>                        Native Asset Signature Extractor");
     eprintln!("  entropy <file> [block_size]                 Shannon Entropy Block Classifier");
     eprintln!("  pattern <file> <pattern_str> [max_matches]  Wildcard AOB Pattern Scanner");
     eprintln!("  pointers <file> <base_hex> [is_be] [max]    32-bit Pointer Table Miner");
     eprintln!("  diff <file_a> <file_b> [base_hex] [max]     Memory Snapshot Differential Engine");
     eprintln!("  shm-status                                  Zero-Copy VLA SHM Bus Header Status");
-    eprintln!("  shm-frame-bmp                               Render Live 24-bit BMP Frame from SHM");
+    eprintln!(
+        "  shm-frame-bmp                               Render Live 24-bit BMP Frame from SHM"
+    );
 }
 
 /// D-10 (P0): hook de panic con backtrace.
@@ -78,6 +89,11 @@ fn install_panic_hook() {
 
 fn main() {
     install_panic_hook();
+    // MEDIDO (2026-11-25, movil): el daemon anunciaba el SHA del binario de
+    // DISCO mientras ejecutaba otro en memoria (7 horas de desfase, login
+    // roto).  La foto del binario en servicio se toma lo primero, antes de
+    // que nada pueda sustituir el fichero.
+    megadaemon_core::self_update::fijar_identidad_de_arranque();
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         print_usage();
@@ -86,7 +102,10 @@ fn main() {
 
     match args[1].as_str() {
         "cockpit" => {
-            let port = args.get(2).and_then(|s| s.parse::<u16>().ok()).unwrap_or(3000);
+            let port = args
+                .get(2)
+                .and_then(|s| s.parse::<u16>().ok())
+                .unwrap_or(3000);
             // v15 (W0): bucle autónomo de la voz.  Opt-in explícito
             // (MEGADAEMON_VOICE=1): 1 acción por tick, cooldown, presupuesto
             // por hora y NUNCA reinicios ni procesos nuevos.
@@ -187,14 +206,80 @@ fn main() {
                                 "url": url,
                                 "puerto": 9090,
                             });
-                            if let Ok(mut t) =
-                                megadaemon_core::resonance::Tablon::abrir(&dir)
-                            {
+                            if let Ok(mut t) = megadaemon_core::resonance::Tablon::abrir(&dir) {
                                 t.publicar("latido", cuerpo);
                             }
                             break;
                         }
                     }
+                }
+                // v21: ANUNCIO CONTINUO DEL TÚNEL.
+                //
+                // MEDIDO (2026-11-25): el quick tunnel de Cloudflare genera
+                // una URL ALEATORIA nueva cada vez que se reconecta (y se
+                // reconecta al cambiar de WiFi a datos, al perder cobertura
+                // o al morir cloudflared).  Antes la URL solo se publicaba
+                // al ARRANCAR el daemon => el root se quedaba horas con una
+                // URL muerta sin saber que habia otra viva.
+                //
+                // Aqui se vigila `tunnel.url` y se publica en el tablón de
+                // Drive en cuanto cambia (y cada 5 min para que el "latido"
+                // siga fresco).  El root lo lee con tools/ver-tunel.py y se
+                // conecta solo: esto es el equivalente a "mosh" aqui, donde
+                // lo que migra es la URL, no la IP.
+                {
+                    let dir = std::env::var("MEGADAEMON_STATE_DIR")
+                        .unwrap_or_else(|_| megadaemon_core::cockpit_server::state_dir());
+                    let dir2 = dir.clone();
+                    std::thread::Builder::new()
+                        .name("anuncio-tunel".to_string())
+                        .spawn(move || {
+                            let mut ultima: String = String::new();
+                            loop {
+                                // La URL vigente: la del daemon, o la del
+                                // watchdog si el daemon no la ha escrito.
+                                let mut url = String::new();
+                                for cand in [
+                                    format!("{dir2}/tunnel.url"),
+                                    format!("{dir2}/../tunnel.url"),
+                                    "/data/adb/megadaemon/tunnel.url".to_string(),
+                                ] {
+                                    if let Ok(t) = std::fs::read_to_string(&cand) {
+                                        let t = t.trim().to_string();
+                                        if t.starts_with("https://") {
+                                            url = t;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if !url.is_empty() && url != ultima {
+                                    ultima = url.clone();
+                                    let cuerpo = serde_json::json!({
+                                        "url": url,
+                                        "puerto": 9090,
+                                        "build": megadaemon_core::self_update::build_commit(),
+                                    });
+                                    if let Ok(mut t) =
+                                        megadaemon_core::resonance::Tablon::abrir(&dir2)
+                                    {
+                                        t.publicar("latido", cuerpo);
+                                        eprintln!("tunel anunciado: {url}");
+                                    }
+                                    // Y el MARCADOR DE PRESENCIA en Drive: es
+                                    // lo que sigue el root (tools/ver-tunel.py)
+                                    // para migrar solo cuando la URL cambia.
+                                    match megadaemon_core::diagnostico::publicar_presencia(&url) {
+                                        Ok(_) => eprintln!("presencia publicada: {url}"),
+                                        Err(e) => eprintln!("presencia: no se pudo publicar: {e}"),
+                                    }
+                                }
+                                // Cada 60 s: el hilo comprueba la URL y, si
+                                // ha cambiado, la republica (por si el
+                                // primer intento fallo sin red).
+                                std::thread::sleep(std::time::Duration::from_secs(60));
+                            }
+                        })
+                        .map_err(|e| eprintln!("anuncio de tunel: no se pudo arrancar: {e}"));
                 }
                 // v18: sincroniza el runtime unificado de Antigravity al arrancar.
                 if let Err(e) = megadaemon_core::antigravity_clone::unificar_runtime() {
@@ -234,25 +319,137 @@ fn main() {
                 // si la app restaura su `.so`, se repone sin que nadie toque
                 // nada.  Es lo que faltaba para que "arrancar Antigravity"
                 // se notase (queja del usuario, 2026-11-23).
-                if megadaemon_core::config_efectiva::bool_de(
-                    "instrumentacion_agy.automatica",
-                    true,
-                ) {
-                    let puerto = megadaemon_core::config_efectiva::u64_de(
-                        "general.puerto_gateway",
-                        9090,
-                    ) as u16;
+                if megadaemon_core::config_efectiva::bool_de("instrumentacion_agy.automatica", true)
+                {
+                    let puerto =
+                        megadaemon_core::config_efectiva::u64_de("general.puerto_gateway", 9090)
+                            as u16;
                     std::thread::Builder::new()
                         .name("instrumentacion-agy".to_string())
                         .spawn(move || {
                             megadaemon_core::instrumentacion_agy::bucle_automatico(puerto)
                         })
                         .map(|_| {
-                            eprintln!("instrumentación AGY: ciclo automático cada 60 s (configurable)");
+                            eprintln!(
+                                "instrumentación AGY: ciclo automático cada 60 s (configurable)"
+                            );
                         })
                         .map_err(|e| {
                             eprintln!("instrumentación AGY: no se pudo arrancar el ciclo: {e}");
                         });
+                }
+            }
+            // v21: el daemon PUBLICA SU DIAGNOSTICO en Drive cada N min.
+            //
+            // MEDIDO (2026-11-25): el diagnóstico dependía de que el
+            // usuario pegase texto en el chat.  Con esto el móvil publica
+            // su estado (procesos, puertos, /health, stack, binario, log y
+            // NDJSON del shim) en `MegaDaemon/diagnostico/<nodo>/` y el
+            // root lo lee desde el sandbox con tools/leer-diagnostico.py:
+            // sin ADB, sin túnel y sin pegar nada.
+            {
+                let min = megadaemon_core::config_efectiva::u64_de("diagnostico.publicar_min", 30);
+                if min > 0 {
+                    megadaemon_core::diagnostico::publicar_periodico(min);
+                    eprintln!("diagnostico: publicación en Drive cada {min} min");
+                }
+            }
+            // v17: TELEMETRIA A DRIVE + DATOS DE CONEXION.
+            //
+            // MEDIDO (2026-11-26): cuando el túnel del móvil cae (el quick
+            // tunnel cambia de hostname y el relé canónico se cae), el
+            // sandbox se queda CIEGO y hay queiagnosticar "a mano".  Con esto
+            // el móvil EMPUJA su estado y sus datos de conexión a Drive ⇒ el
+            // root puede leerlos desde donde esté, sin depender del túnel.
+            // El periodo se duplica solo en modo ahorro (batería baja).
+            {
+                let min = megadaemon_core::config_efectiva::u64_de("telemetria.publicar_min", 15);
+                if min > 0 {
+                    megadaemon_core::telemetria::publicar_periodico(min);
+                    eprintln!("telemetria: publicación en Drive cada {min} min");
+                }
+            }
+            // v17: el WORKER DEL BUS tira órdenes del tablón (Drive) y las
+            // ejecuta.  Esto es lo que permite controlar el móvil y sus apps
+            // (incluso en primer plano) SIN que nadie tenga que estar
+            // conectado: el bus es el único punto de contacto.
+            {
+                let min = megadaemon_core::config_efectiva::u64_de("bus.ciclo_min", 10);
+                if min > 0 {
+                    megadaemon_core::bus_ejecutor::bucle(min, None);
+                    eprintln!("bus: worker de ordenes cada {min} min");
+                }
+            }
+            // v21: el daemon RECONCILIA SU PROPIO STACK al arrancar y cada
+            // 10 min.
+            //
+            // MEDIDO (2026-11-25, movil): el binario se actualizaba pero el
+            // supervisor se quedaba viejo (con el prefijo VOLATIL) => no
+            // encontraba el binario => no podia relanzar el daemon => movil
+            // sin daemon y en bucle de reinicios.  Ademas la Web UI servida
+            // era la V1 (7 vistas, sin Antigravity) porque el HTML en disco
+            // era viejo.
+            //
+            // Aqui el daemon lleva DENTRO el supervisor, el keeper, los
+            // scripts de Antigravity y la Web UI (ver `stack`), y reescribe
+            // lo que difiera.  Es idempotente y no hace nada si todo esta
+            // en su sitio.  Si el supervisor cambio, se le mata para que
+            // cargue la version nueva (lo revive el keeper).
+            {
+                std::thread::Builder::new()
+                    .name("stack-reconciliacion".to_string())
+                    .spawn(|| {
+                        let cfg = megadaemon_core::stack::Config::del_entorno();
+                        // En un PC (no Android) no se toca /data/adb.
+                        let puede = cfg.android
+                            || std::fs::create_dir_all(&cfg.prefijo).is_ok();
+                        if !puede {
+                            return;
+                        }
+                        loop {
+                            let inf = megadaemon_core::stack::reconciliar(&cfg);
+                            if inf.cambio() {
+                                eprintln!("stack: {}", inf.linea());
+                                for e in &inf.escritos {
+                                    eprintln!("stack: escrito {e}");
+                                }
+                                for (r, m) in &inf.fallidos {
+                                    eprintln!("stack: FALLO {r}: {m}");
+                                }
+                                if inf.supervisor_cambiado {
+                                    let ok = megadaemon_core::stack::reiniciar_supervisor();
+                                    eprintln!(
+                                        "stack: el supervisor cambio y se reinicio={ok} (lo revive el keeper)"
+                                    );
+                                }
+                            }
+                            // MEDIDO (2026-11-25, movil): con la bateria en
+                            // "seal" (<20 % sin cargador) la reconciliacion
+                            // se espacia: es trabajo discrecional y solo
+                            // importa que el stack este en su sitio.
+                            let espera = if megadaemon_core::battery_advanced::modo_ahorro_activo() {
+                                1800
+                            } else {
+                                600
+                            };
+                            std::thread::sleep(std::time::Duration::from_secs(espera));
+                        }
+                    })
+                    .map_err(|e| eprintln!("stack: no se pudo arrancar la reconciliacion: {e}"));
+            }
+            // v19 — Brillo: el vigilante (shim de política) mantiene el
+            // brillo en MANUAL y al máximo, y respeta lo que haga el usuario
+            // con los botones del sistema.  Sólo arranca en un móvil Android
+            // (en la nube no hay pantalla) y se puede apagar con
+            // MEGADAEMON_BRILLO=0.
+            {
+                let sd = std::env::var("MEGADAEMON_STATE_DIR").ok();
+                let r = megadaemon_core::brightness::arrancar_si_movil(sd.as_deref());
+                if r.get("accion").and_then(|v| v.as_str()) == Some("vigilante_arrancado") {
+                    eprintln!(
+                        "brillo: vigilante arrancado (intervalo {} s)",
+                        r.get("intervalo_s").and_then(|v| v.as_u64()).unwrap_or(0)
+                    );
                 }
             }
             if let Err(e) = cockpit_server::run_server(port) {
@@ -272,6 +469,30 @@ fn main() {
         //
         // Codigo de salida 10 = "se instalo una version nueva" => el
         // supervisor reinicia el daemon con el binario nuevo.
+        // `megadaemon-core self-test` — AUTOCOMPROBACIÓN de arranque.
+        //
+        // MEDIDO 2026-11-25 (el usuario: "que no se rompa en cada
+        // auto-update"): el auto-actualizador verificaba el SHA-256 del
+        // binario descargado, pero NO que el binario ARRANQUE.  Un asset
+        // corrupto en la release (o un binario que no arranca en ese móvil)
+        // se instalaba y el móvil se quedaba sin daemon: la copia al
+        // `.prev` existía, pero nadie la restauraba.
+        //
+        // Este comando hace un arranque mínimo (state dir, escritura,
+        // configuracion, SHA-256) SIN red y SIN abrir el cockpit, e imprime
+        // una marca.  El auto-actualizador lo ejecuta sobre el `.new` ANTES
+        // de instalarlo: si no arranca, no se instala nada.
+        "self-test" => match megadaemon_core::self_update::autocomprobacion() {
+            Ok(marca) => {
+                println!("{marca}");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("SELFTEST-FALLO: {e}");
+                std::process::exit(1);
+            }
+        },
+
         "update" => {
             let solo_comprobar = args.iter().any(|a| a == "--check");
             let ruta = std::env::var("MEGADAEMON_BIN")
@@ -320,13 +541,239 @@ fn main() {
                 }
                 "publish" => {
                     let sd = std::env::var("MEGADAEMON_STATE_DIR").ok();
-                    let out = megadaemon_core::channel::publish(sd.as_deref(), None, None, None, None);
+                    let out =
+                        megadaemon_core::channel::publish(sd.as_deref(), None, None, None, None);
                     println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
                 }
                 _ => {
                     eprintln!("uso: megadaemon-core channel [publish|probe <url>]");
                     std::process::exit(2);
                 }
+            }
+        }
+
+        // v17 — Hash de un fichero: el móvil NO tiene `sha256sum` (el shell de
+        // Android es toybox y no lo trae) ⇒ el instalador necesita una forma
+        // NATIVA de calcular el SHA-256 para verificar el bundle por valor.
+        //   megadaemon-core hash <fichero> [<fichero> ...]
+        "hash" => {
+            let rutas: Vec<String> = args.iter().skip(2).cloned().collect();
+            if rutas.is_empty() {
+                eprintln!("uso: megadaemon-core hash <fichero> [<fichero> ...]");
+                std::process::exit(2);
+            }
+            let mut rc = 0;
+            for ruta in rutas {
+                match megadaemon_core::self_update::sha256_de_fichero(std::path::Path::new(&ruta)) {
+                    Some(h) => println!("{h}  {ruta}"),
+                    None => {
+                        eprintln!("no se pudo leer {ruta}");
+                        rc = 1;
+                    }
+                }
+            }
+            std::process::exit(rc);
+        }
+
+        // v17 — Telemetría a Drive (nativa, sin curl: el móvil no lo tiene).
+        //   megadaemon-core telemetria [estado|publicar|conexion|listo|sonda <url>|artefacto <ruta>]
+        "telemetria" => {
+            let sub = args.get(2).cloned().unwrap_or_else(|| "estado".to_string());
+            let sd = std::env::var("MEGADAEMON_STATE_DIR").ok();
+            let out: serde_json::Value = match sub.as_str() {
+                "publicar" => match megadaemon_core::telemetria::publicar(sd.as_deref()) {
+                    Ok(v) => v,
+                    Err(e) => serde_json::json!({"ok": false, "error": e}),
+                },
+                "conexion" => match megadaemon_core::telemetria::publicar_conexion(sd.as_deref()) {
+                    Ok(v) => v,
+                    Err(e) => serde_json::json!({"ok": false, "error": e}),
+                },
+                "listo" => megadaemon_core::telemetria::estado_listo(sd.as_deref()),
+                "sonda" => megadaemon_core::telemetria::sonda_tunel(
+                    args.get(3).map(|s| s.as_str()).unwrap_or(""),
+                ),
+                "artefacto" => {
+                    let ruta = args.get(3).cloned().unwrap_or_default();
+                    match megadaemon_core::telemetria::subir_artefacto(
+                        &ruta,
+                        args.get(4).map(|s| s.as_str()),
+                        None,
+                        sd.as_deref(),
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => serde_json::json!({"ok": false, "error": e}),
+                    }
+                }
+                _ => megadaemon_core::telemetria::recoger(sd.as_deref()),
+            };
+            println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+            // "listo" y "sonda" son las dos consultas que un supervisor
+            // necesita: el código de salida dice si el nodo sirve.
+            let ok = match sub.as_str() {
+                "listo" => out["listo"].as_bool().unwrap_or(false),
+                "sonda" => out["ok"].as_bool().unwrap_or(false),
+                _ => true,
+            };
+            std::process::exit(if ok { 0 } else { 1 });
+        }
+
+        // v17 — Gasto de datos de Jazztel (el desglose WiFi vs móvil y la
+        // comparación con la cifra del operador).
+        //   megadaemon-core gasto <estado|movil|wifi|avisos|desglose>
+        "gasto" => {
+            let sub = args.get(2).cloned().unwrap_or_else(|| "estado".to_string());
+            let sd = std::env::var("MEGADAEMON_STATE_DIR").ok();
+            let out: serde_json::Value = match sub.as_str() {
+                "movil" => megadaemon_core::gasto_datos::dispatch(&serde_json::json!({"accion": "movil"})),
+                "wifi" => megadaemon_core::gasto_datos::dispatch(&serde_json::json!({"accion": "wifi"})),
+                "avisos" => megadaemon_core::gasto_datos::avisos(sd.as_deref(), None),
+                "desglose" => megadaemon_core::gasto_datos::desglose(sd.as_deref()),
+                _ => megadaemon_core::gasto_datos::estado(sd.as_deref()),
+            };
+            println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+        }
+
+        // v19 — Brillo del móvil: shim de política sobre
+        // `screen_brightness_mode` (manual ⇒ el sensor de luz ambiente deja de
+        // mandar), brillo al máximo por defecto y respeto por los botones
+        // del sistema.  Cada escritura se verifica contra el brillo aplicado.
+        //   megadaemon-core brillo <estado|fijar N|maximo|config|reafirmar|shim|vigilante>
+        "brillo" => {
+            let sub = args.get(2).cloned().unwrap_or_else(|| "estado".to_string());
+            let sd = std::env::var("MEGADAEMON_STATE_DIR").ok();
+            let valor = args.get(3).and_then(|v| v.parse::<u64>().ok());
+            let out: serde_json::Value = match sub.as_str() {
+                "fijar" => megadaemon_core::brightness::fijar(
+                    valor.unwrap_or(255).min(255) as u8,
+                    sd.as_deref(),
+                ),
+                "maximo" => megadaemon_core::brightness::maximo(sd.as_deref()),
+                "config" => megadaemon_core::brightness::config(sd.as_deref()),
+                "reafirmar" => megadaemon_core::brightness::reafirmar(sd.as_deref()),
+                "shim" => megadaemon_core::brightness::shim_estado(sd.as_deref()),
+                "observar" => megadaemon_core::brightness::observar(
+                    args.get(3)
+                        .and_then(|v| v.parse::<u32>().ok())
+                        .unwrap_or(12),
+                    args.get(4).and_then(|v| v.parse::<u64>().ok()).unwrap_or(5),
+                ),
+                "adaptativo" => megadaemon_core::brightness::dispatch(&serde_json::json!({
+                    "accion": "adaptativo",
+                    "aplicar": args.get(3).map(|s| s.as_str()) == Some("aplicar"),
+                })),
+                "costo" => megadaemon_core::brightness::costo(sd.as_deref()),
+                "shim_probar" => megadaemon_core::brightness::dispatch(&serde_json::json!({
+                    "accion": "shim_probar",
+                    "clave": args.get(3).cloned().unwrap_or_else(|| "screen_brightness".to_string()),
+                    "valor": args.get(4).cloned().unwrap_or_else(|| "247".to_string()),
+                })),
+                "diagnostico" => megadaemon_core::brightness::diagnostico(
+                    sd.as_deref(),
+                    args.get(4).map(|s| s.as_str()) == Some("aplicar"),
+                ),
+                "vigilante" => match args.get(3).map(|s| s.as_str()).unwrap_or("tick") {
+                    "arrancar" => megadaemon_core::brightness::arrancar_vigilante(sd.as_deref()),
+                    "parar" => megadaemon_core::brightness::parar_vigilante(),
+                    _ => megadaemon_core::brightness::tick(sd.as_deref()),
+                },
+                _ => megadaemon_core::brightness::estado(sd.as_deref()),
+            };
+            println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+        }
+
+        // v17 — Bus de órdenes PULL (ejecuta lo que el bus trae).
+        //   megadaemon-core bus [--maximo N] [--forzar] [--simulacion]
+        "bus" => {
+            let maximo = args
+                .iter()
+                .position(|a| a == "--maximo")
+                .and_then(|i| args.get(i + 1))
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(0);
+            let o = megadaemon_core::bus_ejecutor::Opciones {
+                nodo: String::new(),
+                maximo,
+                forzar: args.iter().any(|a| a == "--forzar"),
+                simulacion: args.iter().any(|a| a == "--simulacion"),
+                verificar_firmas: !args.iter().any(|a| a == "--sin-verificar-firmas"),
+            };
+            let inf = megadaemon_core::bus_ejecutor::ciclo(&o, None);
+            let out = serde_json::json!({
+                "ejecutadas": inf.ejecutadas,
+                "saltadas": inf.saltadas,
+                "sin_confirmar": inf.sin_confirmar,
+                "ajenas": inf.ajenas,
+                "sin_verificar": inf.sin_verificar,
+                "bus_ok": inf.bus_ok,
+                "motivo": inf.motivo,
+                "detalle": inf.detalle,
+            });
+            println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+        }
+
+        // v17 — RE profunda de APK (xrefs, rutas REST, pins y descifradores).
+        //   megadaemon-core redeep <apk> [analizar|rutas|pins|descifradores|xrefs] [buscar]
+        "redeep" => {
+            let sub = args.get(2).cloned().unwrap_or_else(|| "analizar".to_string());
+            let apk = args.get(3).cloned().unwrap_or_default();
+            let buscar = args.get(4).cloned().unwrap_or_default();
+            if apk.is_empty() {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": false,
+                        "error": "falta la ruta del APK (megadaemon-core redeep <apk> [accion])"
+                    }))
+                    .unwrap_or_default()
+                );
+                std::process::exit(2);
+            }
+            let out = megadaemon_core::re_deep::dispatch(&serde_json::json!({
+                "accion": sub,
+                "ruta": apk,
+                "buscar": buscar,
+            }));
+            println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+            let ok = out["ok"].as_bool().unwrap_or(false);
+            std::process::exit(if ok { 0 } else { 1 });
+        }
+
+        // v17 — Diagnóstico y recuperación.  Si esta el binario `mddoctor`
+        // (el nucleo forense en C, 26 KB, sin dependencias) se usa el: es el
+        // que sabe de bateria, termica, PSI, zombies, locks rancios y disco.
+        // Si no esta, se cae al diagnostico nativo en Rust.
+        //   megadaemon-core doctor [scan|doctor|recover] [--json]
+        // Codigo de salida: 0 = todo OK, 1 = avisos, 2 = critico.
+        "doctor" => {
+            let sub = args.get(2).cloned().unwrap_or_else(|| "doctor".to_string());
+            let mut candidatas: Vec<String> = Vec::new();
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    candidatas.push(dir.join("mddoctor").to_string_lossy().into_owned());
+                }
+            }
+            candidatas.push("mddoctor".to_string());
+            let mut ejecutado = false;
+            for c in candidatas {
+                if std::path::Path::new(&c).exists() {
+                    match std::process::Command::new(&c).arg(&sub).status() {
+                        Ok(s) => {
+                            ejecutado = true;
+                            std::process::exit(s.code().unwrap_or(1));
+                        }
+                        Err(_) => continue,
+                    }
+                }
+            }
+            if !ejecutado {
+                eprintln!(
+                    "doctor: no se encontro `mddoctor` (compilalo con: gcc -O2 -o mddoctor tools/mddoctor.c)"
+                );
+                eprintln!("doctor: se usa el diagnostico nativo de Rust");
+                let out = megadaemon_core::diagnostico::recoger();
+                println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+                std::process::exit(0);
             }
         }
 
@@ -345,22 +792,31 @@ fn main() {
                     "add" => {
                         // La regla llega como JSON en el último argumento.
                         let raw = rest.join(" ");
-                        let rule: serde_json::Value = serde_json::from_str(&raw)
-                            .unwrap_or_else(|e| serde_json::json!({"ok": false, "error": e.to_string()}));
+                        let rule: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(
+                            |e| serde_json::json!({"ok": false, "error": e.to_string()}),
+                        );
                         match megadaemon_core::automation_runtime::automation_add(&rule) {
                             Ok(v) => v,
                             Err(e) => serde_json::json!({"ok": false, "error": e}),
                         }
                     }
-                    "remove" => match megadaemon_core::automation_runtime::automation_remove(rest.first().map(|s| s.as_str()).unwrap_or("")) {
+                    "remove" => match megadaemon_core::automation_runtime::automation_remove(
+                        rest.first().map(|s| s.as_str()).unwrap_or(""),
+                    ) {
                         Ok(v) => v,
                         Err(e) => serde_json::json!({"ok": false, "error": e}),
                     },
-                    "enable" => match megadaemon_core::automation_runtime::automation_toggle(rest.first().map(|s| s.as_str()).unwrap_or(""), true) {
+                    "enable" => match megadaemon_core::automation_runtime::automation_toggle(
+                        rest.first().map(|s| s.as_str()).unwrap_or(""),
+                        true,
+                    ) {
                         Ok(v) => v,
                         Err(e) => serde_json::json!({"ok": false, "error": e}),
                     },
-                    "disable" => match megadaemon_core::automation_runtime::automation_toggle(rest.first().map(|s| s.as_str()).unwrap_or(""), false) {
+                    "disable" => match megadaemon_core::automation_runtime::automation_toggle(
+                        rest.first().map(|s| s.as_str()).unwrap_or(""),
+                        false,
+                    ) {
                         Ok(v) => v,
                         Err(e) => serde_json::json!({"ok": false, "error": e}),
                     },
@@ -375,7 +831,9 @@ fn main() {
                         let kind = rest.first().cloned().unwrap_or_default();
                         let key = rest.get(1).cloned().unwrap_or_default();
                         let text = rest.get(2).cloned().unwrap_or_default();
-                        match megadaemon_core::automation_runtime::automation_fire(&kind, &key, None, &text, false) {
+                        match megadaemon_core::automation_runtime::automation_fire(
+                            &kind, &key, None, &text, false,
+                        ) {
                             Ok(v) => v,
                             Err(e) => serde_json::json!({"ok": false, "error": e}),
                         }
@@ -386,14 +844,17 @@ fn main() {
                 "cron" => match action.as_str() {
                     "add" => {
                         let raw = rest.join(" ");
-                        let job: serde_json::Value = serde_json::from_str(&raw)
-                            .unwrap_or_else(|e| serde_json::json!({"ok": false, "error": e.to_string()}));
+                        let job: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(
+                            |e| serde_json::json!({"ok": false, "error": e.to_string()}),
+                        );
                         match megadaemon_core::automation_runtime::cron_add(&job) {
                             Ok(v) => v,
                             Err(e) => serde_json::json!({"ok": false, "error": e}),
                         }
                     }
-                    "remove" => match megadaemon_core::automation_runtime::cron_remove(rest.first().map(|s| s.as_str()).unwrap_or("")) {
+                    "remove" => match megadaemon_core::automation_runtime::cron_remove(
+                        rest.first().map(|s| s.as_str()).unwrap_or(""),
+                    ) {
                         Ok(v) => v,
                         Err(e) => serde_json::json!({"ok": false, "error": e}),
                     },
@@ -411,8 +872,12 @@ fn main() {
                         ),
                     }),
                     "profiles" => megadaemon_core::automation_runtime::energy_profiles(),
-                    "apply" => megadaemon_core::automation_runtime::energy_apply(rest.first().map(|s| s.as_str()).unwrap_or("")),
-                    "set_profile" => match megadaemon_core::automation_runtime::energy_set_profile(rest.first().map(|s| s.as_str()).unwrap_or("")) {
+                    "apply" => megadaemon_core::automation_runtime::energy_apply(
+                        rest.first().map(|s| s.as_str()).unwrap_or(""),
+                    ),
+                    "set_profile" => match megadaemon_core::automation_runtime::energy_set_profile(
+                        rest.first().map(|s| s.as_str()).unwrap_or(""),
+                    ) {
                         Ok(v) => v,
                         Err(e) => serde_json::json!({"ok": false, "error": e}),
                     },
@@ -482,14 +947,20 @@ fn main() {
                     }
                 }
             }
-            let r = megadaemon_core::voice_runtime::handle(&action, &serde_json::Value::Object(payload));
+            let r = megadaemon_core::voice_runtime::handle(
+                &action,
+                &serde_json::Value::Object(payload),
+            );
             println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
         }
 
         // v13.3 — Motor de sincronización de conversaciones (CLI).
         "sync" => {
             let services: Option<Vec<String>> = args.get(2).map(|s| {
-                s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()
+                s.split(',')
+                    .map(|x| x.trim().to_string())
+                    .filter(|x| !x.is_empty())
+                    .collect()
             });
             let cookies = args.iter().any(|a| a == "--cookies");
             let r = megadaemon_core::sync::run_sync(services, cookies);
@@ -545,24 +1016,47 @@ fn main() {
                 };
                 match sub {
                     "scan" => {
-                        let analysis = megadaemon_core::daad::DAADBytecodeParser::parse_ddb(&data, &target_path);
-                        println!("{}", serde_json::to_string_pretty(&analysis).unwrap_or_default());
+                        let analysis = megadaemon_core::daad::DAADBytecodeParser::parse_ddb(
+                            &data,
+                            &target_path,
+                        );
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&analysis).unwrap_or_default()
+                        );
                     }
                     "embedded" => {
-                        if let Some((offset, size, analysis)) = megadaemon_core::daad::DAADBytecodeParser::find_embedded_ddb(&data) {
-                            println!("Encontrado DDB embebido en offset 0x{:08X} ({} bytes):", offset, size);
-                            println!("{}", serde_json::to_string_pretty(&analysis).unwrap_or_default());
+                        if let Some((offset, size, analysis)) =
+                            megadaemon_core::daad::DAADBytecodeParser::find_embedded_ddb(&data)
+                        {
+                            println!(
+                                "Encontrado DDB embebido en offset 0x{:08X} ({} bytes):",
+                                offset, size
+                            );
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&analysis).unwrap_or_default()
+                            );
                         } else {
                             println!("No se encontró DDB embebido.");
                         }
                     }
                     "media" => {
-                        let media = megadaemon_core::daad::MediaInspector::inspect_media(&data, &target_path);
-                        println!("{}", serde_json::to_string_pretty(&media).unwrap_or_default());
+                        let media = megadaemon_core::daad::MediaInspector::inspect_media(
+                            &data,
+                            &target_path,
+                        );
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&media).unwrap_or_default()
+                        );
                     }
                     "disasm" => {
                         let dialect = args.get(4).map(|s| s.as_str()).unwrap_or("v2");
-                        let (condacts, next_offset) = megadaemon_core::daad::CondActDisassembler::disassemble_stream(&data, 0, dialect);
+                        let (condacts, next_offset) =
+                            megadaemon_core::daad::CondActDisassembler::disassemble_stream(
+                                &data, 0, dialect,
+                            );
                         let out = serde_json::json!({
                             "dialect": dialect,
                             "count": condacts.len(),
@@ -598,7 +1092,11 @@ fn main() {
                 model = Some(rest[0]);
                 rest.remove(0);
             }
-            let prompt = if rest.is_empty() { "Hello".to_string() } else { rest.join(" ") };
+            let prompt = if rest.is_empty() {
+                "Hello".to_string()
+            } else {
+                rest.join(" ")
+            };
             let mut res = providers::execute_chat(&prompt, model, None, None, 1024);
             if !want_reasoning {
                 res.reasoning = String::new();
@@ -607,7 +1105,8 @@ fn main() {
         }
 
         "code" => {
-            let mut workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let mut workspace =
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let mut model: Option<String> = None;
             let mut session_id: Option<String> = None;
             let mut max_turns: usize = 20;
@@ -669,7 +1168,10 @@ fn main() {
                 allow_outside_workspace: allow_outside,
             };
             let report = megadaemon_core::agent_coding::run_coding_session_live(&goal, &cfg);
-            println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).unwrap_or_default()
+            );
         }
 
         "go-retool" => {
@@ -714,7 +1216,11 @@ fn main() {
                     let hex_str = args.get(3).map(|s| s.as_str()).unwrap_or("");
                     let bytes: Vec<u8> = (0..hex_str.len())
                         .step_by(2)
-                        .filter_map(|i| hex_str.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
+                        .filter_map(|i| {
+                            hex_str
+                                .get(i..i + 2)
+                                .and_then(|h| u8::from_str_radix(h, 16).ok())
+                        })
                         .collect();
                     let res = megadaemon_core::es_eid::inspect_dnie_atr(&bytes);
                     println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
@@ -749,11 +1255,17 @@ fn main() {
             }
             let bytes: Vec<u8> = (0..hex_str.len())
                 .step_by(2)
-                .filter_map(|i| hex_str.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
+                .filter_map(|i| {
+                    hex_str
+                        .get(i..i + 2)
+                        .and_then(|h| u8::from_str_radix(h, 16).ok())
+                })
                 .collect();
             let res = if arch == "x86_32" || arch == "x86_64" {
                 let bits = if arch == "x86_32" { 32 } else { 64 };
-                Ok(megadaemon_core::re_disasm::disasm_x86_iced(&bytes, bits, 0x400000, 128))
+                Ok(megadaemon_core::re_disasm::disasm_x86_iced(
+                    &bytes, bits, 0x400000, 128,
+                ))
             } else {
                 megadaemon_core::re_disasm::disasm_capstone(&bytes, arch, 0x400000, 128)
             };
@@ -773,18 +1285,62 @@ fn main() {
         }
 
         "jobs" => {
-            let db = std::path::Path::new(&megadaemon_core::cockpit_server::state_dir()).join("megadaemon_jobs.db");
+            let db = std::path::Path::new(&megadaemon_core::cockpit_server::state_dir())
+                .join("megadaemon_jobs.db");
             let q = megadaemon_core::job_queue::JobQueue::open(&db).expect("open job queue");
             let list = q.list(50).unwrap_or_default();
-            println!("{}", serde_json::to_string_pretty(&list).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&list).unwrap_or_default()
+            );
         }
 
         "audit" => {
-            let db = std::path::Path::new(&megadaemon_core::cockpit_server::state_dir()).join("megadaemon_audit.db");
+            let db = std::path::Path::new(&megadaemon_core::cockpit_server::state_dir())
+                .join("megadaemon_audit.db");
             let rows = megadaemon_core::tool_policy::AuditJournal::open(&db)
                 .and_then(|j| j.recent(50))
                 .unwrap_or_default();
-            println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&rows).unwrap_or_default()
+            );
+        }
+
+        //   megadaemon-core agy-logs [--json] [--n 200]
+        //
+        //   Los logs de la PROPIA app de Antigravity (donde esta el error
+        //   real del login) y el estado de la cuenta.  Se pueden volcar a
+        //   stdout o subir a Drive con `--publicar` (util desde el movil,
+        //   sin ADB ni que el root tenga que pegar texto).
+        "agy-logs" => {
+            let json = args[2..].iter().any(|a| a == "--json");
+            let publicar = args[2..].iter().any(|a| a == "--publicar");
+            let n: usize = args[2..]
+                .iter()
+                .position(|a| a == "--n")
+                .and_then(|i| args[2 + i + 1].parse().ok())
+                .unwrap_or(200);
+            let v = megadaemon_core::diagnostico::logs_de_la_app_publicos(n);
+            if publicar {
+                match megadaemon_core::diagnostico::publicar_logs_agy(&v) {
+                    Ok(r) => println!("{}", r),
+                    Err(e) => {
+                        eprintln!("agy-logs: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            } else if json {
+                println!("{}", v);
+            } else {
+                for f in v["ficheros"].as_array().cloned().unwrap_or_default() {
+                    println!("== {}", f["fichero"].as_str().unwrap_or("?"));
+                    for l in f["lineas"].as_array().cloned().unwrap_or_default() {
+                        println!("{}", l.as_str().unwrap_or(""));
+                    }
+                }
+            }
+            std::process::exit(0);
         }
 
         "drive-vfs" => {
@@ -813,6 +1369,15 @@ fn main() {
             }
         }
 
+        //   megadaemon-core drive-tubo <listar|inventario|subir|bajar|tubo> [args]
+        //     EL TUBO: Google Drive como almacen EXTERNO.  `tubo` sube un
+        //     fichero o una carpeta, VERIFICA el sha256 y (si todo cuadra)
+        //     borra la copia local; en local queda solo el inventario.
+        "drive-tubo" | "drive-tube" => {
+            let rc = megadaemon_core::drive_tube::run_cli(&args[2..]);
+            std::process::exit(rc);
+        }
+
         //   megadaemon-core reparar [--diagnostico] [--json]
         //     Diagnostica y REPARA el entorno del propio nodo (prefijo
         //     persistente, binario, watchdog, keeper, API key, credenciales
@@ -820,6 +1385,176 @@ fn main() {
         "reparar" | "repair" => {
             let rc = megadaemon_core::reparar_entorno::run_cli(&args[2..]);
             std::process::exit(rc);
+        }
+
+        //   megadaemon-core stack [--reconciliar] [--json]
+        //
+        //   El daemon lleva DENTRO el supervisor, el keeper, cloudflared,
+        //   los scripts de Antigravity y la Web UI.  "stack" dice si lo que
+        //   hay en disco es exactamente lo que lleva el binario;
+        //   "--reconciliar" reescribe lo que difiere (idempotente) y
+        //   reinicia el supervisor si este cambio.
+        //
+        //   MEDIDO (2026-11-25, movil): el supervisor instalado era una
+        //   version vieja con el prefijo VOLATIL => no encontraba el
+        //   binario => no podia relanzar el daemon => movil sin daemon.
+        "stack" => {
+            let cfg = megadaemon_core::stack::Config::del_entorno();
+            let json = args[2..].iter().any(|a| a == "--json");
+            let reconciliar = args[2..]
+                .iter()
+                .any(|a| a == "--reconciliar" || a == "reconciliar" || a == "reparar");
+            if !reconciliar {
+                let v = megadaemon_core::stack::estado_json(&cfg);
+                if json {
+                    println!("{}", v);
+                } else {
+                    println!("stack (prefijo {}):", cfg.prefijo);
+                    for f in v["ficheros"].as_array().cloned().unwrap_or_default() {
+                        println!(
+                            "  [{}] {}  (origen {})",
+                            if f["ok"].as_bool().unwrap_or(false) {
+                                "ok"
+                            } else {
+                                "DESFASADO"
+                            },
+                            f["ruta"].as_str().unwrap_or("?"),
+                            f["origen"].as_str().unwrap_or("?")
+                        );
+                    }
+                    println!(
+                        "  {} de {} correctos",
+                        v["correctos"].as_u64().unwrap_or(0),
+                        v["total"].as_u64().unwrap_or(0)
+                    );
+                }
+                std::process::exit(0);
+            }
+            let inf = megadaemon_core::stack::reconciliar(&cfg);
+            let reiniciado = if inf.supervisor_cambiado {
+                megadaemon_core::stack::reiniciar_supervisor()
+            } else {
+                false
+            };
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "ok": inf.ok(),
+                        "informe": inf.a_json(),
+                        "supervisor_reiniciado": reiniciado,
+                        "estado": megadaemon_core::stack::estado_json(&cfg),
+                    })
+                );
+            } else {
+                println!("{}", inf.linea());
+                for e in &inf.escritos {
+                    println!("  escrito: {e}");
+                }
+                for (r, m) in &inf.fallidos {
+                    eprintln!("  FALLO {r}: {m}");
+                }
+                if inf.supervisor_cambiado {
+                    println!(
+                        "  el supervisor cambio: reiniciado={reiniciado} (lo revive el keeper)"
+                    );
+                }
+            }
+            std::process::exit(if inf.ok() { 0 } else { 1 });
+        }
+
+        //   megadaemon-core bundle [--instalar] [--json]
+        //
+        //   Descarga el ARTEFACTO META (un unico .tar.gz con el binario, el
+        //   supervisor, el keeper, los scripts de Antigravity y la Web UI),
+        //   verifica el SHA-256 de CADA fichero contra su manifest.json y lo
+        //   instala todo.  Si un solo hash no coincide, no instala nada.
+        //
+        //   Es la via de instalacion/actualizacion COMPLETA; el stack
+        //   autocontenido (comando `stack`) es la via de autorreparacion
+        //   offline.
+        "bundle" => {
+            let json = args[2..].iter().any(|a| a == "--json");
+            let instalar = args[2..]
+                .iter()
+                .any(|a| a == "--instalar" || a == "instalar" || a == "install");
+            if !instalar {
+                let url = megadaemon_core::bundle::url_bundle();
+                match megadaemon_core::bundle::sha256_bundle() {
+                    Ok(sha) => {
+                        if json {
+                            println!("{}", serde_json::json!({"url": url, "sha256": sha}));
+                        } else {
+                            println!("bundle: {url}");
+                            println!("  sha256: {sha}");
+                            println!("  usa: megadaemon-core bundle --instalar");
+                        }
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        eprintln!("bundle: no se pudo consultar: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            match megadaemon_core::bundle::instalar() {
+                Ok(inf) => {
+                    if json {
+                        println!("{}", inf.a_json());
+                    } else {
+                        println!("bundle instalado (build {})", inf.build);
+                        for i in &inf.instalados {
+                            println!("  instalado: {i}");
+                        }
+                        for (r, m) in &inf.fallidos {
+                            eprintln!("  FALLO {r}: {m}");
+                        }
+                    }
+                    std::process::exit(if inf.ok() { 0 } else { 1 });
+                }
+                Err(e) => {
+                    eprintln!("bundle: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        //   megadaemon-core diagnostico [--publicar] [--json]
+        //
+        //   Recoge el estado completo del nodo y, con --publicar, lo sube a
+        //   Drive (MegaDaemon/diagnostico/<nodo>/).  Asi el root ve el
+        //   estado del movil sin ADB y sin pegar texto en el chat.
+        "diagnostico" | "diagnostics" => {
+            let json = args[2..].iter().any(|a| a == "--json");
+            let publicar = args[2..]
+                .iter()
+                .any(|a| a == "--publicar" || a == "publicar" || a == "publish");
+            if publicar {
+                match megadaemon_core::diagnostico::publicar() {
+                    Ok(v) => {
+                        if json {
+                            println!("{}", v);
+                        } else {
+                            println!(
+                                "diagnostico publicado en Drive: {}",
+                                v["vfs"].as_str().unwrap_or("?")
+                            );
+                        }
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        eprintln!("diagnostico: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            let v = megadaemon_core::diagnostico::recoger();
+            if json {
+                println!("{}", v);
+            } else {
+                println!("{}", megadaemon_core::diagnostico::a_markdown(&v));
+            }
+            std::process::exit(0);
         }
 
         "retro-tools" => {
@@ -895,24 +1630,37 @@ fn main() {
         }
 
         "cirx-ssa" => {
-            let mas = args.get(2).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.75);
+            let mas = args
+                .get(2)
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.75);
             let rep = cirx_rtl::run_reference_pipeline(mas, 10, 0.05, 3, 1, 0);
             println!("{}", serde_json::to_string_pretty(&rep).unwrap());
         }
 
         "mba" => {
-            let expr = if args.len() > 2 { args[2..].join(" ") } else { "(x ^ y) + 2*(x & y)".into() };
+            let expr = if args.len() > 2 {
+                args[2..].join(" ")
+            } else {
+                "(x ^ y) + 2*(x & y)".into()
+            };
             let rep = kaitai_imhex::simplify_mba_expression(&expr);
             println!("{}", serde_json::to_string_pretty(&rep).unwrap());
         }
 
         "kaitai" => {
             let fp = args.get(2).map(|s| s.as_str()).unwrap_or("");
-            let tmpl = args.get(3).map(|s| s.as_str()).unwrap_or("sega_m68k_vectors");
+            let tmpl = args
+                .get(3)
+                .map(|s| s.as_str())
+                .unwrap_or("sega_m68k_vectors");
             let off = args.get(4).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
             match kaitai_imhex::parse_struct_at_offset(fp, tmpl, off, None) {
                 Ok(rep) => println!("{}", serde_json::to_string_pretty(&rep).unwrap()),
-                Err(e) => { eprintln!("{}", e); std::process::exit(1); }
+                Err(e) => {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
             }
         }
 
@@ -928,7 +1676,10 @@ fn main() {
             let mode = args.get(2).map(|s| s.as_str()).unwrap_or("attach");
             let module = args.get(3).map(|s| s.as_str()).unwrap_or("libtarget.so");
             let sym = args.get(4).map(|s| s.as_str()).unwrap_or("0x1000");
-            let proc_n = args.get(5).map(|s| s.as_str()).unwrap_or("com.example.target");
+            let proc_n = args
+                .get(5)
+                .map(|s| s.as_str())
+                .unwrap_or("com.example.target");
             let rep = frida_dbi::generate_frida_script(mode, module, sym, proc_n);
             println!("{}", serde_json::to_string_pretty(&rep).unwrap());
         }
@@ -946,17 +1697,78 @@ fn main() {
         "rea" => {
             let plat = args.get(2).map(|s| s.as_str()).unwrap_or("segacd");
             let query = args.get(3).map(|s| s.as_str()).unwrap_or("");
-            let max_r = args.get(4).and_then(|s| s.parse::<usize>().ok()).unwrap_or(5);
+            let max_r = args
+                .get(4)
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(5);
             let rep = rea_assistant::analyze_ghidra_corpus(plat, query, max_r);
             println!("{}", serde_json::to_string_pretty(&rep).unwrap());
         }
 
+        // v21: `megadaemon-core config-set <ruta.punteada> <json>`
+        //
+        // MEDIDO (2026-11-25, movil): la instrumentacion de Antigravity
+        // hubo que DESACTIVAR a mano (por HTTP) para que el language server
+        // arrancara, y reactivarla exigia el token de sesion.  Con este
+        // CLI el script de recuperacion la reactiva sin HTTP ni token.
+        //
+        //   megadaemon-core config-set instrumentacion_agy.activa true
+        //   megadaemon-core config-set instrumentacion_agy.modo_so '"falso"'
+        //   megadaemon-core config-get instrumentacion_agy.activa
+        "config-set" | "config-get" => {
+            let ruta = args.get(2).cloned().unwrap_or_default();
+            if ruta.is_empty() {
+                eprintln!(
+                    "uso: megadaemon-core <config-set|config-get> <ruta.punteada> [valor-json]"
+                );
+                std::process::exit(2);
+            }
+            if args[1] == "config-get" {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &megadaemon_core::config_efectiva::valor(&ruta)
+                            .unwrap_or(serde_json::Value::Null)
+                    )
+                    .unwrap_or_default()
+                );
+                return;
+            }
+            let valor_txt = args.get(3).cloned().unwrap_or_default();
+            let valor: serde_json::Value = serde_json::from_str(&valor_txt)
+                .unwrap_or_else(|_| serde_json::Value::String(valor_txt.clone()));
+            // De "a.b.c" a {"a":{"b":{"c":valor}}}.
+            let mut anidado = valor.clone();
+            let mut partes: Vec<&str> = ruta.split('.').rev().collect();
+            let primera = partes.remove(0);
+            for p in partes.into_iter().rev() {
+                anidado = serde_json::json!({ p: anidado });
+            }
+            let cambios = serde_json::json!({ primera: anidado });
+            match megadaemon_core::config_efectiva::escribir(&cambios) {
+                Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default()),
+                Err(e) => {
+                    eprintln!("config-set error: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
         "cfg" => {
             let plat = args.get(2).map(|s| s.as_str()).unwrap_or("segacd");
             let offset = args.get(3).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-            let count = args.get(4).and_then(|s| s.parse::<usize>().ok()).unwrap_or(28);
+            let count = args
+                .get(4)
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(28);
             if let Some(rom) = rom_locator::resolve_binary(plat) {
-                match cfg_lifter::lift_cfg(plat, &rom.platform_name, &rom.arch, &rom.path, offset, count) {
+                match cfg_lifter::lift_cfg(
+                    plat,
+                    &rom.platform_name,
+                    &rom.arch,
+                    &rom.path,
+                    offset,
+                    count,
+                ) {
                     Ok(rep) => println!("{}", serde_json::to_string_pretty(&rep).unwrap()),
                     Err(e) => {
                         eprintln!("CFG error: {}", e);
@@ -1049,18 +1861,26 @@ fn main() {
 
         "power" => {
             let (st, pol) = power_policy::current_policy();
-            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                "policy": pol.name, "max_turns": pol.max_turns,
-                "prefer_local": pol.prefer_local, "allow_heavy": pol.allow_heavy,
-                "max_tokens": pol.max_tokens, "reason": pol.reason,
-                "charging": st.charging, "battery_pct": st.capacity_pct,
-                "battery_temp_c": st.battery_temp_c, "cpu_temp_c": st.cpu_temp_c,
-                "thermal_hot": st.thermal_hot, "system_power_save": st.system_power_save,
-                "governor": st.governor
-            })).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "policy": pol.name, "max_turns": pol.max_turns,
+                    "prefer_local": pol.prefer_local, "allow_heavy": pol.allow_heavy,
+                    "max_tokens": pol.max_tokens, "reason": pol.reason,
+                    "charging": st.charging, "battery_pct": st.capacity_pct,
+                    "battery_temp_c": st.battery_temp_c, "cpu_temp_c": st.cpu_temp_c,
+                    "thermal_hot": st.thermal_hot, "system_power_save": st.system_power_save,
+                    "governor": st.governor
+                }))
+                .unwrap()
+            );
         }
         "seere-prompt" => {
-            let lang = if args.len() > 2 { args[2].clone() } else { "es".to_string() };
+            let lang = if args.len() > 2 {
+                args[2].clone()
+            } else {
+                "es".to_string()
+            };
             println!("{}", seere_v11::sys_prompt("REACT", &lang));
         }
         "seere-grammar" => {
@@ -1120,7 +1940,9 @@ fn main() {
                 .unwrap_or_else(|| "CscFeature_VoiceCall_ConfigRecording".to_string());
             let apply = args.iter().any(|a| a == "--apply");
             let Some(valor) = value else {
-                eprintln!("Uso: megadaemon-core csc-patch --value <valor> [--feature <nombre>] [--apply]");
+                eprintln!(
+                    "Uso: megadaemon-core csc-patch --value <valor> [--feature <nombre>] [--apply]"
+                );
                 std::process::exit(2);
             };
             let csc = csc_patch::active_csc().unwrap_or_else(|| "AMO".to_string());
@@ -1152,11 +1974,10 @@ fn main() {
             // sha256, se descodifica (OMC) y se comprueba el valor.
             let bytes = std::fs::read(&rep.modulo).unwrap_or_default();
             let despues = root_occlusion::sha256_hex(&bytes);
-            let leido = root_occlusion::read_device_file(&rep.modulo, 1 << 20)
-                .and_then(|b| {
-                    let (xml, _enc, _err) = csc_verify::decode_csc_file(&b);
-                    xml.and_then(|x| rom_migration::csc_feature_get(&x, &feature))
-                });
+            let leido = root_occlusion::read_device_file(&rep.modulo, 1 << 20).and_then(|b| {
+                let (xml, _enc, _err) = csc_verify::decode_csc_file(&b);
+                xml.and_then(|x| rom_migration::csc_feature_get(&x, &feature))
+            });
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
@@ -1260,7 +2081,10 @@ fn main() {
         }
 
         "locate-roms" => {
-            let refresh = args.get(2).map(|s| s == "1" || s == "true").unwrap_or(false);
+            let refresh = args
+                .get(2)
+                .map(|s| s == "1" || s == "true")
+                .unwrap_or(false);
             let roms = rom_locator::locate_all(refresh);
             println!("{}", serde_json::to_string(&roms).unwrap());
         }
@@ -1273,7 +2097,10 @@ fn main() {
             let plat = &args[2];
             let file_path = &args[3];
             let offset = args.get(4).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-            let count = args.get(5).and_then(|s| s.parse::<usize>().ok()).unwrap_or(16);
+            let count = args
+                .get(5)
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(16);
             let (plat_name, arch, _, _, _) = rom_locator::platform_metadata(plat);
             match disasm::disassemble_file(plat, plat_name, arch, file_path, offset, count) {
                 Ok(rep) => println!("{}", serde_json::to_string(&rep).unwrap()),
@@ -1291,7 +2118,10 @@ fn main() {
             }
             let file_path = &args[2];
             let offset = args.get(3).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-            let length = args.get(4).and_then(|s| s.parse::<usize>().ok()).unwrap_or(256);
+            let length = args
+                .get(4)
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(256);
             match disasm::inspect_hex(file_path, "ARM64/Retro", offset, length) {
                 Ok(rep) => println!("{}", serde_json::to_string(&rep).unwrap()),
                 Err(e) => {
@@ -1383,7 +2213,10 @@ fn main() {
             let file_path = &args[2];
             let base_hex = args[3].trim_start_matches("0x");
             let base_vaddr = u32::from_str_radix(base_hex, 16).unwrap_or(0);
-            let is_be = args.get(4).map(|s| s == "1" || s == "true").unwrap_or(false);
+            let is_be = args
+                .get(4)
+                .map(|s| s == "1" || s == "true")
+                .unwrap_or(false);
             let max_res = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(128);
 
             let mut f = match File::open(file_path) {
@@ -1410,7 +2243,10 @@ fn main() {
             }
             let file_a_path = &args[2];
             let file_b_path = &args[3];
-            let base_hex = args.get(4).map(|s| s.trim_start_matches("0x")).unwrap_or("0");
+            let base_hex = args
+                .get(4)
+                .map(|s| s.trim_start_matches("0x"))
+                .unwrap_or("0");
             let base_vaddr = u32::from_str_radix(base_hex, 16).unwrap_or(0);
             let max_res = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(256);
 

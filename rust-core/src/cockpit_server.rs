@@ -38,6 +38,9 @@ const SCUMMVM_TOOLS_DIR: &str = "/data/user/0/com.agy/files/scummvm/tools/re_pip
 /// ~2,2 GB al rustc y el OOM killer lo mataba en un contenedor de 3 GB).
 /// Aquí **delega**: una sola fuente de verdad.
 pub fn state_dir() -> String {
+    // UNA sola fuente de verdad: `state_dir::state_dir()` ya aísla por
+    // hilo en los tests (MEDIDO 2026-11-25: `devlog` escribía en la ruta
+    // del móvil y en el CI no era escribible).
     crate::state_dir::state_dir()
 }
 /// Directorio BASE de la instancia: el **padre** de `state_dir()`.
@@ -919,6 +922,59 @@ fn send_http_response(stream: &mut TcpStream, status: u16, content_type: &str, b
     send_http_response_with(stream, status, content_type, body, "")
 }
 
+/// Razón textual de un código de estado.
+///
+/// MEDIDO (2026-11-26): el shim devuelve **verbatim** las respuestas de
+/// Google (401, 403, 429, 500...), y antes todo lo que no fuera
+/// {200, 400, 403, 404, 413} salía como "Internal Server Error": el código
+/// era correcto pero la razón mentía.  El cliente (Go) lee el código, así que
+/// no rompía nada, pero el log del LS y las herramientas de red quedan
+/// descolocados.
+fn motivo_http(status: u16) -> &'static str {
+    match status {
+        100 => "Continue",
+        101 => "Switching Protocols",
+        200 => "OK",
+        201 => "Created",
+        202 => "Accepted",
+        203 => "Non-Authoritative Information",
+        204 => "No Content",
+        206 => "Partial Content",
+        301 => "Moved Permanently",
+        302 => "Found",
+        303 => "See Other",
+        304 => "Not Modified",
+        307 => "Temporary Redirect",
+        308 => "Permanent Redirect",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        402 => "Payment Required",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        406 => "Not Acceptable",
+        408 => "Request Timeout",
+        409 => "Conflict",
+        410 => "Gone",
+        411 => "Length Required",
+        412 => "Precondition Failed",
+        413 => "Payload Too Large",
+        414 => "URI Too Long",
+        415 => "Unsupported Media Type",
+        429 => "Too Many Requests",
+        431 => "Request Header Fields Too Large",
+        499 => "Client Closed Request",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        507 => "Insufficient Storage",
+        511 => "Network Authentication Required",
+        _ => "Status",
+    }
+}
+
 /// Como [`send_http_response`] pero con una cabecera extra.
 fn send_http_response_with(
     stream: &mut TcpStream,
@@ -927,14 +983,7 @@ fn send_http_response_with(
     body: &[u8],
     extra_header: &str,
 ) {
-    let status_text = match status {
-        200 => "OK",
-        400 => "Bad Request",
-        404 => "Not Found",
-        413 => "Payload Too Large",
-        403 => "Forbidden",
-        _ => "Internal Server Error",
-    };
+    let status_text = motivo_http(status);
     let cors = CORS_ORIGIN.with(|c| c.borrow().clone());
     let header = format!(
         "HTTP/1.1 {} {}\r\n\
@@ -1159,6 +1208,44 @@ fn panic_response_bytes() -> &'static [u8] {
     b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 }
 
+/// Decodifica un cuerpo `Transfer-Encoding: chunked`.
+///
+/// Devuelve `(cuerpo, bytes_consumidos)` si el búfer contiene la petición
+/// completa; `None` si falta algún trozo.
+///
+/// Formato (RFC 9112 §7.1):
+/// ```text
+/// <hex>[;ext]\r\n<bytes>\r\n … 0\r\n[cabeceras de cola]\r\n
+/// ```
+///
+/// MEDIDO (2026-11-26, móvil): es lo que manda el language server de
+/// Antigravity para la petición de generación (`streamGenerateContent`).
+fn decodificar_chunked(buf: &[u8]) -> Option<(Vec<u8>, usize)> {
+    let mut pos = 0usize;
+    let mut out: Vec<u8> = Vec::new();
+    loop {
+        let fin_linea = find_subsequence(&buf[pos..], b"\r\n")? + pos;
+        let cab = String::from_utf8_lossy(&buf[pos..fin_linea]).to_string();
+        // El tamaño va en hexadecimal; detrás puede haber extensiones (";a=b").
+        let hex = cab.split(';').next().unwrap_or("").trim().to_string();
+        if hex.is_empty() {
+            return None;
+        }
+        let n = usize::from_str_radix(&hex, 16).ok()?;
+        pos = fin_linea + 2;
+        if n == 0 {
+            // Chunk final: puede haber cabeceras de cola y luego CRLF.
+            let fin = find_subsequence(&buf[pos..], b"\r\n")? + pos + 2;
+            return Some((out, fin));
+        }
+        if buf.len() < pos + n + 2 {
+            return None;
+        }
+        out.extend_from_slice(&buf[pos..pos + n]);
+        pos += n + 2; // el cuerpo del chunk y su CRLF
+    }
+}
+
 fn handle_client(mut stream: TcpStream) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(60)));
@@ -1244,7 +1331,45 @@ fn handle_client(mut stream: TcpStream) {
     }
 
     let body_already = total_read.saturating_sub(header_end);
-    if content_length > body_already {
+    // MEDIDO (2026-11-26, móvil): el language server manda la petición de
+    // GENERACIÓN con `Transfer-Encoding: chunked` (escribe el cuerpo por
+    // trozos: ~65 KB) y **sin** `Content-Length`.  El cockpit sólo leía
+    // `Content-Length` ⇒ el cuerpo llegaba VACÍO al shim ⇒ el gateway
+    // respondía 502 con "'contents' debe ser una lista" y el LS reintentaba
+    // 9 veces ("Model unavailable, retrying in 13s").
+    let chunked = cabeceras_peticion.iter().any(|(k, v)| {
+        k.eq_ignore_ascii_case("transfer-encoding")
+            && v.to_ascii_lowercase().contains("chunked")
+    });
+
+    // El cuerpo decodificado (sólo se usa en la ruta chunked).
+    let mut cuerpo_chunked: Vec<u8> = Vec::new();
+    if chunked {
+        // Leer hasta que llegue el chunk final (tamaño 0).
+        //
+        // MEDIDO (2026-11-26, móvil): el decoder se aplica al buffer **a
+        // partir del final de las cabeceras** (`header_end`).  Si se aplica
+        // al buffer entero, la primera línea que encuentra es la de las
+        // cabeceras HTTP ("POST … HTTP/1.1") y no el tamaño del chunk ⇒
+        // `from_str_radix` falla ⇒ el cuerpo llegaba VACÍO otra vez.
+        loop {
+            if let Some((cuerpo, _)) = decodificar_chunked(&buf[header_end..total_read]) {
+                cuerpo_chunked = cuerpo;
+                break;
+            }
+            if total_read == buf.len() {
+                if buf.len() >= MAX_BODY_BYTES {
+                    break;
+                }
+                buf.resize(buf.len() * 2, 0);
+            }
+            match stream.read(&mut buf[total_read..]) {
+                Ok(0) => break,
+                Ok(n) => total_read += n,
+                Err(_) => break,
+            }
+        }
+    } else if content_length > body_already {
         buf.resize(header_end + content_length, 0);
         let mut offset = total_read;
         while offset < header_end + content_length {
@@ -1257,7 +1382,9 @@ fn handle_client(mut stream: TcpStream) {
         total_read = offset;
     }
 
-    let body_slice = if header_end + content_length <= total_read {
+    let body_slice: &[u8] = if chunked {
+        &cuerpo_chunked
+    } else if header_end + content_length <= total_read {
         &buf[header_end..header_end + content_length]
     } else {
         &buf[header_end..total_read]
@@ -1957,22 +2084,52 @@ fn handle_client(mut stream: TcpStream) {
                 let body: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);
                 let ruta = crate::llm_gateway::gemini_route(path);
                 let stream_sse = ruta.as_ref().map(|r| r.stream).unwrap_or(false);
+                // MEDIDO (2026-11-26, móvil): si la petición va ENVUELTA
+                // (v1internal), la respuesta también tiene que ir envuelta.
+                let envuelto = crate::llm_gateway::es_envoltorio_v1internal(&body);
                 if stream_sse {
-                    match crate::llm_gateway::gemini_stream_sse_for(path, &body) {
-                        Ok(sse) => send_http_response(
-                            &mut stream,
-                            200,
-                            "text/event-stream; charset=utf-8",
-                            sse.as_bytes(),
-                        ),
-                        Err(e) => send_json(
-                            &mut stream,
-                            &json!({ "error": { "message": e.message, "code": e.status } }),
-                        ),
+                    if envuelto {
+                        match crate::llm_gateway::gemini_generate_content_for(path, &body) {
+                            Ok(v) => {
+                                let sse = crate::llm_gateway::gemini_a_sse_v1internal(&v);
+                                send_http_response(
+                                    &mut stream,
+                                    200,
+                                    "text/event-stream; charset=utf-8",
+                                    sse.as_bytes(),
+                                )
+                            }
+                            Err(e) => send_json(
+                                &mut stream,
+                                &json!({ "error": { "message": e.message, "code": e.status } }),
+                            ),
+                        }
+                    } else {
+                        match crate::llm_gateway::gemini_stream_sse_for(path, &body) {
+                            Ok(sse) => send_http_response(
+                                &mut stream,
+                                200,
+                                "text/event-stream; charset=utf-8",
+                                sse.as_bytes(),
+                            ),
+                            Err(e) => send_json(
+                                &mut stream,
+                                &json!({ "error": { "message": e.message, "code": e.status } }),
+                            ),
+                        }
                     }
                 } else {
                     match crate::llm_gateway::gemini_generate_content_for(path, &body) {
-                        Ok(v) => send_json(&mut stream, &v),
+                        Ok(v) => {
+                            if envuelto {
+                                send_json(
+                                    &mut stream,
+                                    &crate::llm_gateway::envolver_v1internal(&v, ""),
+                                )
+                            } else {
+                                send_json(&mut stream, &v)
+                            }
+                        }
                         Err(e) => send_json(
                             &mut stream,
                             &json!({ "error": { "message": e.message, "code": e.status } }),
@@ -2592,6 +2749,76 @@ fn handle_client(mut stream: TcpStream) {
 
     let qp = parse_query_params(query);
     match path {
+        // ------------------------------------------------------------------
+        // PROXY REAL (agyshim) en POST — MEDIDO (2026-11-26, móvil)
+        // ------------------------------------------------------------------
+        //
+        // BUG CRÍTICO (MEDIDO 2026-11-26, móvil): el brazo del shim sólo
+        // existía en el router **GET** (el de más arriba, ~línea 1311).  Los
+        // **POST** del language server caían en el `_ =>` final del router
+        // POST, que responde con una respuesta **inventada**:
+        //
+        //     {"status":"executed","endpoint":"…","engine":"rust-arm64-v13.0",…}
+        //
+        // Lo que el LS manda por POST (capturado en crudo en el móvil):
+        //
+        //     POST /v1internal:loadCodeAssist      {"metadata":{"ideType":"ANTIGRAVITY"}}
+        //     POST /v1internal:listExperiments     {"metadata":{"updateChannel":"stable"}}
+        //     POST /v1internal:fetchUserInfo       {}
+        //     POST /v1internal:fetchAvailableModels {}
+        //     POST /v1internal:onboardUser         {"tierId":"free-tier",…}
+        //
+        // **`onboardUser` devuelve una google.longrunning.Operation**; de ahí
+        // sale el NOMBRE de la operación que el LS consulta después:
+        //
+        //     GET /v1internal/<nombre-de-la-operación>
+        //
+        // Con la respuesta inventada no hay nombre ⇒ el LS consulta la ruta
+        // **vacía** `GET /v1internal/` ⇒ 404 (Google tampoco tiene esa ruta)
+        // ⇒ el auth provider acaba con
+        // `failed to get operation status: request failed (code 404)` ⇒
+        // **la app vuelve a pedir el login de Google** ("Continue with
+        // Google") al pinchar un proyecto.
+        //
+        // MEDIDO (2026-11-26, móvil): pasando esos POST a Google real (con el
+        // `Authorization` que ya envía la app) desaparecen el "empty ID" y el
+        // `generalError` del estado de autenticación.
+        //
+        // Además, por el mismo bug, las llamadas de **MODELO** del LS
+        // (`POST /v1internal:generateContent`, `:streamGenerateContent`) NUNCA
+        // llegaban al gateway canónico ⇒ el modelo de MegaDaemon no se usaba.
+        //
+        // El shim NO ve la credencial de Google: la reenvía tal cual (la
+        // cabecera `Authorization` de la app) y devuelve la respuesta
+        // verbatim.  El MODELO sí lo sirve el gateway (dialecto Gemini) con
+        // las credenciales del vault.
+        p if crate::agyshim::es_ruta_proxy(p) => {
+            let peticion = crate::agyshim::Peticion {
+                metodo: method.to_string(),
+                ruta: p.to_string(),
+                cabeceras: cabeceras_peticion.clone(),
+                query: query.to_string(),
+                cuerpo: String::from_utf8_lossy(body_slice).to_string(),
+            };
+            match crate::agyshim::proxy(&peticion) {
+                Ok(r) => send_http_response(
+                    &mut stream,
+                    r.status,
+                    &r.content_type,
+                    r.cuerpo.as_bytes(),
+                ),
+                Err(e) => send_json(
+                    &mut stream,
+                    &json!({
+                        "error": {
+                            "message": e,
+                            "code": 502,
+                            "status": "SHIM_PROXY_ERROR",
+                        }
+                    }),
+                ),
+            }
+        }
         // ------------------------------------------------------------------
         // v14 (UI-16 · CRÍTICA) — Intercambio: API key → token de sesión.
         //
@@ -3859,6 +4086,84 @@ mod antigravity_cockpit_tests {
             crate::providers::PROMPT_MAX_CHARS <= crate::providers::PROMPT_LIMITE_ESTRICTO,
             "el presupuesto no cabe en el límite del proveedor"
         );
+}
+}
+
+
+#[cfg(test)]
+mod chunked_tests {
+    use super::*;
+
+    /// MEDIDO (2026-11-26, móvil): el language server manda la petición de
+    /// generación con `Transfer-Encoding: chunked` y el cockpit leía un
+    /// cuerpo VACÍO (sólo miraba `Content-Length`) ⇒ 502 del gateway.
+    #[test]
+    fn decodifica_un_cuerpo_chunked() {
+        let crudo = b"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
+        let (cuerpo, consumidos) = decodificar_chunked(crudo).expect("cuerpo completo");
+        assert_eq!(cuerpo, b"hello world");
+        assert_eq!(consumidos, crudo.len());
+    }
+
+    #[test]
+    fn decodifica_con_extensions_y_cabeceras_de_cola() {
+        let crudo = b"4;foo=bar\r\nabcd\r\n0\r\nX-Extra: 1\r\n\r\n";
+        let (cuerpo, _) = decodificar_chunked(crudo).expect("cuerpo completo");
+        assert_eq!(cuerpo, b"abcd");
+    }
+
+    #[test]
+    fn si_falta_un_trozo_no_inventa_cuerpo() {
+        assert!(decodificar_chunked(b"5\r\nhel").is_none());
+        assert!(decodificar_chunked(b"").is_none());
+    }
+
+    /// El caso real del móvil: un cuerpo grande partido en trozos de 4096.
+    #[test]
+    fn decodifica_un_cuerpo_grande_en_trozos() {
+        let texto = "x".repeat(65_000);
+        let mut crudo: Vec<u8> = Vec::new();
+        for trozo in texto.as_bytes().chunks(4096) {
+            crudo.extend_from_slice(format!("{:x}\r\n", trozo.len()).as_bytes());
+            crudo.extend_from_slice(trozo);
+            crudo.extend_from_slice(b"\r\n");
+        }
+        crudo.extend_from_slice(b"0\r\n\r\n");
+        let (cuerpo, _) = decodificar_chunked(&crudo).expect("cuerpo completo");
+        assert_eq!(cuerpo.len(), 65_000);
+        assert_eq!(cuerpo, texto.as_bytes());
+    }
+
+    /// REGRESIÓN (medido 2026-11-26, móvil): el decoder se aplicaba al
+    /// buffer ENTERO, así que leía la línea de cabeceras HTTP como si fuera
+    /// el tamaño del chunk ⇒ `from_str_radix` fallaba ⇒ cuerpo vacío.
+    ///
+    /// Este test reproduce la petición real: cabeceras + cuerpo chunked.
+    #[test]
+    fn decodifica_una_peticion_real_con_cabeceras() {
+        let cuerpo_json = r#"{"project":"aicode-consumers","request":{"contents":[{"role":"user","parts":[{"text":"hola"}]}]}}"#;
+        let cabeceras = "POST /mda/abc/v1internal:streamGenerateContent?alt=sse HTTP/1.1\r\n\
+Host: 127.0.0.1:9090\r\n\
+User-Agent: antigravity/hub/2.11.0\r\n\
+Transfer-Encoding: chunked\r\n\
+Content-Type: application/json\r\n\r\n";
+        let mut buf: Vec<u8> = cabeceras.as_bytes().to_vec();
+        buf.extend_from_slice(format!("{:x}\r\n", cuerpo_json.len()).as_bytes());
+        buf.extend_from_slice(cuerpo_json.as_bytes());
+        buf.extend_from_slice(b"\r\n0\r\n\r\n");
+
+        // El decoder se aplica DESPUÉS de las cabeceras (como en `handle_client`).
+        let header_end = buf
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .expect("fin de cabeceras")
+            + 4;
+        let (cuerpo, _) = decodificar_chunked(&buf[header_end..]).expect("cuerpo completo");
+        assert_eq!(cuerpo, cuerpo_json.as_bytes());
+
+        // Y el decoder sobre el buffer ENTERO NO debe devolver un cuerpo
+        // (la primera línea son las cabeceras, no un tamaño de chunk).
+        assert!(decodificar_chunked(&buf).is_none());
     }
 }
 

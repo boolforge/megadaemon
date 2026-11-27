@@ -234,11 +234,18 @@ pub fn leer_maps(pid: i32) -> Vec<Mapa> {
 /// Igual que [`leer_maps`] pero con la raíz de `/proc` parametrizable.
 pub fn leer_maps_en(raiz: &Path, pid: i32) -> Vec<Mapa> {
     let ruta = raiz.join(pid.to_string()).join("maps");
-    let texto = match std::fs::read_to_string(ruta) {
-        Ok(t) => t,
+    // MEDIDO (2026-11-26, móvil): `/proc/<pid>/maps` puede contener bytes
+    // **NO UTF-8**: los nombres de las regiones `[anon:…]` son arbitrarios
+    // (p. ej. `[anon:(??Lq]`).  `read_to_string` falla entonces con
+    // `InvalidData` ⇒ el inyector concluía "no se puede leer
+    // /proc/<pid>/maps (¿el proceso ha muerto?)" con el proceso VIVO y
+    // respondiendo.  Ahora se lee en BYTES y se decodifica con permisión de
+    // pérdidas (los nombres no importan para calcular direcciones).
+    let bytes = match std::fs::read(&ruta) {
+        Ok(b) => b,
         Err(_) => return Vec::new(),
     };
-    parse_maps(&texto)
+    parse_maps(&String::from_utf8_lossy(&bytes))
 }
 
 /// Parsea el texto de `/proc/<pid>/maps`.
@@ -319,9 +326,79 @@ const DT_HASH: i64 = 4;
 const DT_STRTAB: i64 = 5;
 const DT_SYMTAB: i64 = 6;
 const DT_SYMENT: i64 = 11;
+/// `DT_GNU_HASH`: la tabla de hash estilo GNU.  **Medido (2026-11-26, móvil)**
+/// las librerías del runtime de Antigravity (`libc.so.6` de glibc) **sólo**
+/// declaran `DT_GNU_HASH` y **no** `DT_HASH`: un parser que exija `DT_HASH`
+/// no ve ningún símbolo y falla siempre.
+const DT_GNU_HASH: i64 = 0x6ffffef5;
 
 /// Tope de seguridad: no se leen librerías de más de 64 MB.
 const MAX_ELF: usize = 64 * 1024 * 1024;
+
+/// Índices de los símbolos **hasheados** de una tabla `DT_GNU_HASH`.
+///
+/// Estructura de la tabla (ELF gABI, GNU extension):
+///
+/// ```text
+///   nbuckets   (u32)
+///   symoffset  (u32)   <- primer símbolo con hash
+///   bloom_size (u32)   <- palabras del filtro de Bloom
+///   bloom_shift(u32)
+///   bloom[bloom_size]
+///   buckets[nbuckets]  <- índice del primer símbolo de cada hash
+///   chain[]            <- eslabones; el bit 0 marca el último
+/// ```
+///
+/// El símbolo `symoffset + k` está en `chain[k]`: si el bit 0 de la palabra es
+/// 1, ése es el último de la cadena.  El bucket 0 se reserva ("vacío"), por
+/// eso `symoffset` es siempre ≥ 1.
+///
+/// Devuelve los índices **en la tabla de símbolos** (relativos a `symtab`).
+pub fn indices_gnu_hash(datos: &[u8], gnu_off: usize) -> Vec<usize> {
+    let rd_u32 = |off: usize| -> u64 {
+        if off + 4 > datos.len() {
+            return 0;
+        }
+        u32::from_le_bytes([datos[off], datos[off + 1], datos[off + 2], datos[off + 3]]) as u64
+    };
+    if gnu_off + 16 > datos.len() {
+        return Vec::new();
+    }
+    let nbuckets = rd_u32(gnu_off) as usize;
+    let symoffset = rd_u32(gnu_off + 4) as usize;
+    let bloom_size = rd_u32(gnu_off + 8) as usize;
+    // Se salta el filtro de Bloom: `bloom_size` palabras de 8 bytes.
+    let buckets_off = gnu_off + 16 + bloom_size * 8;
+    let chain_off = buckets_off + nbuckets * 4;
+    if buckets_off + nbuckets * 4 > datos.len() {
+        return Vec::new();
+    }
+    let mut vistos: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    for b in 0..nbuckets {
+        let bucket = rd_u32(buckets_off + b * 4) as usize;
+        // El bucket 0 significa "cadena vacía"; los índices válidos son
+        // ≥ symoffset.
+        if bucket == 0 || bucket < symoffset {
+            continue;
+        }
+        let mut idx = bucket;
+        let mut k = bucket - symoffset;
+        loop {
+            let coff = chain_off + k * 4;
+            if coff + 4 > datos.len() || idx > 10_000_000 {
+                break;
+            }
+            let c = rd_u32(coff) as u32;
+            vistos.insert(idx);
+            if c & 1 != 0 {
+                break; // último eslabón de la cadena
+            }
+            idx += 1;
+            k += 1;
+        }
+    }
+    vistos.into_iter().collect()
+}
 
 /// Devuelve la dirección **en el espacio del proceso cargado** del símbolo
 /// `nombre` exportado por la librería `ruta` (bias de carga `bias`).
@@ -442,8 +519,9 @@ pub fn buscar_simbolo_elf(ruta: &str, mapas: &[Mapa], nombre: &str) -> Result<u6
         None
     };
 
-    // Tabla dinámica: se buscan DT_HASH / DT_SYMTAB / DT_STRTAB.
+    // Tabla dinámica: se buscan DT_HASH / DT_GNU_HASH / DT_SYMTAB / DT_STRTAB.
     let mut dt_hash: Option<u64> = None;
+    let mut dt_gnu_hash: Option<u64> = None;
     let mut dt_symtab: Option<u64> = None;
     let mut dt_strtab: Option<u64> = None;
     let mut dt_syment: u64 = 24;
@@ -457,6 +535,7 @@ pub fn buscar_simbolo_elf(ruta: &str, mapas: &[Mapa], nombre: &str) -> Result<u6
         }
         match tag {
             DT_HASH => dt_hash = Some(val),
+            DT_GNU_HASH => dt_gnu_hash = Some(val),
             DT_SYMTAB => dt_symtab = Some(val),
             DT_STRTAB => dt_strtab = Some(val),
             DT_SYMENT => dt_syment = val,
@@ -472,39 +551,45 @@ pub fn buscar_simbolo_elf(ruta: &str, mapas: &[Mapa], nombre: &str) -> Result<u6
     let strtab_off = vaddr_a_offset(strtab_v)
         .ok_or_else(|| format!("{}: DT_STRTAB fuera de los segmentos PT_LOAD", ruta))?;
 
-    // Número de símbolos: DT_HASH.nchain es el número exacto.
-    let n_simbolos: usize = match dt_hash {
-        Some(h) => {
-            let ho = vaddr_a_offset(h).unwrap_or(0);
-            if ho + 8 <= datos.len() {
-                (rd_u32(ho + 4)) as usize
-            } else {
-                0
-            }
+    // Índices de los símbolos a revisar:
+    //  * con `DT_HASH` → `nchain` es el número exacto (todos los símbolos);
+    //  * sin `DT_HASH` pero con `DT_GNU_HASH` → los símbolos hasheados se
+    //    recorren por buckets+chains.  **Es el caso de las librerías del
+    //    runtime de Antigravity** (glibc con `--hash-style=gnu`).
+    let indices: Vec<usize> = if let Some(h) = dt_hash {
+        let ho = vaddr_a_offset(h).unwrap_or(0);
+        if ho + 8 <= datos.len() {
+            (0..(rd_u32(ho + 4) as usize)).collect()
+        } else {
+            Vec::new()
         }
-        None => {
-            // Sin DT_HASH no se sabe cuántos símbolos hay: no se inventa.
-            0
+    } else if let Some(g) = dt_gnu_hash {
+        match vaddr_a_offset(g) {
+            Some(go) => indices_gnu_hash(&datos, go),
+            None => Vec::new(),
         }
+    } else {
+        Vec::new()
     };
 
-    if n_simbolos == 0 {
+    if indices.is_empty() {
         return Err(format!(
-            "{} no declara DT_HASH: no se puede saber cuántos símbolos hay",
+            "{} no declara DT_HASH ni DT_GNU_HASH: no se puede saber qué símbolos exporta",
             ruta
         ));
     }
 
     let syment = if dt_syment == 0 { 24 } else { dt_syment as usize };
-    for i in 0..n_simbolos {
+    for i in indices {
         let s = symtab_off + i * syment;
         if s + 24 > datos.len() {
             break;
         }
         let st_name = rd_u32(s) as usize;
         let st_value = rd_u64(s + 8);
-        if st_name == 0 || st_value == 0 {
-            continue; // símbolo sin nombre o indefinido
+        let st_shndx = rd_u16(s + 6);
+        if st_name == 0 || st_value == 0 || st_shndx == 0 {
+            continue; // símbolo sin nombre, sin dirección o indefinido (UND)
         }
         let n = strtab_off + st_name;
         if n >= datos.len() {
@@ -528,6 +613,10 @@ pub fn buscar_simbolo_elf(ruta: &str, mapas: &[Mapa], nombre: &str) -> Result<u6
 /// Se recorren las librerías mapeadas por el objetivo buscando una que
 /// exporte `dlopen` (en Android suele ser `libdl.so` o `libc.so`; en
 /// glibc, `libc.so.6`).
+/// Nombres que se prueban para la carga dinámica.  Todos tienen la **misma
+/// firma** `void *f(const char *, int)`, que es la que usa la llamada remota.
+pub const NOMBRES_CARGA: [&str; 3] = ["dlopen", "__libc_dlopen", "__libc_dlopen_mode"];
+
 pub fn resolver_dlopen(pid: i32) -> Result<u64, String> {
     resolver_dlopen_en(Path::new("/proc"), pid)
 }
@@ -542,6 +631,7 @@ pub fn resolver_dlopen_en(raiz: &Path, pid: i32) -> Result<u64, String> {
         ));
     }
     let mut probadas: Vec<String> = Vec::new();
+    let mut motivos: Vec<String> = Vec::new();
     // Candidatas: las librerías del sistema (dlopen vive en libdl/libc).
     // Se recorren rutas **únicas**: la misma libc sale mapeada en 4 trozos.
     let mut vistas: Vec<String> = Vec::new();
@@ -559,17 +649,30 @@ pub fn resolver_dlopen_en(raiz: &Path, pid: i32) -> Result<u64, String> {
         }
         vistas.push(m.ruta.clone());
         probadas.push(m.ruta.clone());
-        match buscar_simbolo_elf(&m.ruta, &mapas, "dlopen") {
-            Ok(direccion) => return Ok(direccion),
-            Err(_) => continue,
+        for nombre in NOMBRES_CARGA {
+            match buscar_simbolo_elf(&m.ruta, &mapas, nombre) {
+                Ok(direccion) => return Ok(direccion),
+                Err(e) => {
+                    if nombre == NOMBRES_CARGA[0] {
+                        // Sólo se guarda el motivo del nombre principal: los
+                        // demás son alias y el mensaje se llenaría de ruido.
+                        motivos.push(format!("{}: {}", m.ruta, e));
+                    }
+                }
+            }
         }
     }
     Err(format!(
-        "no se ha encontrado 'dlopen' en ninguna librería del objetivo (probadas: {})",
+        "no se ha encontrado 'dlopen' en ninguna librería del objetivo (probadas: {}; {})",
         if probadas.is_empty() {
             "ninguna".to_string()
         } else {
             probadas.join(", ")
+        },
+        if motivos.is_empty() {
+            "sin detalles".to_string()
+        } else {
+            motivos.join(" | ")
         }
     ))
 }
@@ -657,6 +760,189 @@ mod tests {
         assert_eq!(bias_de_carga(&mapas, "/b/otro.so"), None);
     }
 
+    /// MEDIDO (2026-11-26, móvil): `/proc/<pid>/maps` del LS de Antigravity
+    /// tiene bytes **NO UTF-8** en los nombres `[anon:…]`.  Con
+    /// `read_to_string` la lectura falla (`InvalidData`) y el inyector
+    /// decía "no se puede leer /proc/<pid>/maps (¿el proceso ha muerto?)"
+    /// con el proceso VIVO.  Este test fija esa regresión.
+    #[test]
+    fn lee_los_maps_aunque_tengan_bytes_no_utf8() {
+        let raiz = std::env::temp_dir().join(format!("md_maps_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&raiz);
+        let pid_dir = raiz.join("4242");
+        let _ = std::fs::create_dir_all(&pid_dir);
+        // Los mismos bytes que se midieron en el móvil: `[anon:(??Lq]`.
+        let contenido: &[u8] = b"70ccc00000-70d0000000 ---p 00000000 00:00 0 [anon:(\xf3\x9cLq]\n\
+                                    7f000000-7f002000 r-xp 00000000 00:00 0 /system/lib64/libc.so\n";
+        std::fs::write(pid_dir.join("maps"), contenido).unwrap();
+        let mapas = leer_maps_en(&raiz, 4242);
+        assert_eq!(mapas.len(), 2, "los maps deben leerse: {:?}", mapas);
+        assert_eq!(mapas[0].inicio, 0x70ccc00000);
+        assert!(mapas[1].ruta.contains("libc.so"));
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    /// Construye un ELF64 mínimo con tabla de símbolos y una tabla de hash,
+    /// para probar el parser sin depender del sistema.
+    ///
+    /// `con_gnu_hash`/`con_hash` eligen qué tabla declara la sección
+    /// dinámica: `true/false` → sólo `DT_GNU_HASH`; `false/true` → sólo
+    /// `DT_HASH`; `false/false` → ninguna (el parser debe avisar).
+    ///
+    /// Exporta `dlopen` en 0x1234 y `dlsym` en 0x5678.
+    fn elf_de_prueba(con_gnu_hash: bool, con_hash: bool) -> Vec<u8> {
+        let off_datos = 0x200usize;
+        let strtab: &[u8] = b"\0dlopen\0dlsym\0";
+        let off_str = off_datos;
+        let off_sym = off_str + strtab.len();
+        let off_gnu = off_sym + 3 * 24; // 3 símbolos: el nulo + los dos reales
+        let off_hash = off_gnu + 40;
+        let off_dyn = off_hash + 8;
+        let total = off_dyn + 5 * 16;
+
+        let mut d = vec![0u8; total];
+        let put16 = |d: &mut Vec<u8>, at: usize, v: u16| {
+            d[at..at + 2].copy_from_slice(&v.to_le_bytes());
+        };
+        let put32 = |d: &mut Vec<u8>, at: usize, v: u32| {
+            d[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        };
+        let put64 = |d: &mut Vec<u8>, at: usize, v: u64| {
+            d[at..at + 8].copy_from_slice(&v.to_le_bytes());
+        };
+
+        // --- Cabecera ELF64 ---
+        d[0..4].copy_from_slice(b"\x7fELF");
+        d[4] = 2; // ELFCLASS64
+        d[5] = 1; // ELFDATA2LSB
+        d[6] = 1; // EV_CURRENT
+        put16(&mut d, 16, 3); // ET_DYN
+        put16(&mut d, 18, 0xb7); // EM_AARCH64
+        put32(&mut d, 20, 1); // e_version
+        put64(&mut d, 0x20, 0x40); // e_phoff
+        put16(&mut d, 0x34, 64); // e_ehsize
+        put16(&mut d, 0x36, 56); // e_phentsize
+        put16(&mut d, 0x38, 3); // e_phnum
+
+        // --- Tres program headers ---
+        let ph = |i: usize| 0x40 + i * 56;
+        // PT_LOAD: cubre todo el fichero (vaddr == offset).
+        let p = ph(0);
+        put32(&mut d, p, 1);
+        put32(&mut d, p + 4, 5);
+        put64(&mut d, p + 8, 0);
+        put64(&mut d, p + 16, 0);
+        put64(&mut d, p + 24, 0);
+        put64(&mut d, p + 32, total as u64);
+        put64(&mut d, p + 40, total as u64);
+        put64(&mut d, p + 48, 0x1000);
+        // PT_DYNAMIC
+        let p = ph(1);
+        put32(&mut d, p, 2);
+        put32(&mut d, p + 4, 6);
+        put64(&mut d, p + 8, off_dyn as u64);
+        put64(&mut d, p + 16, off_dyn as u64);
+        put64(&mut d, p + 32, (5 * 16) as u64);
+        put64(&mut d, p + 40, (5 * 16) as u64);
+        put64(&mut d, p + 48, 8);
+        // PT_GNU_STACK (ignorado por el parser, pero completa e_phnum)
+        let p = ph(2);
+        put32(&mut d, p, 0x6474e551);
+        put32(&mut d, p + 4, 7);
+        put64(&mut d, p + 16, 0);
+        put64(&mut d, p + 32, total as u64);
+        put64(&mut d, p + 40, total as u64);
+
+        // --- Tabla de nombres ---
+        d[off_str..off_str + strtab.len()].copy_from_slice(strtab);
+        // --- Tabla de símbolos (2 entradas de 24 bytes) ---
+        let entrada = |d: &mut Vec<u8>, at: usize, nombre: u32, valor: u64| {
+            put32(d, at, nombre);
+            d[at + 4] = 0x12; // GLOBAL | FUNC
+            d[at + 5] = 0;
+            put16(d, at + 6, 1); // st_shndx = 1 (definido)
+            put64(d, at + 8, valor);
+            put64(d, at + 16, 0x20);
+        };
+        entrada(&mut d, off_sym, 0, 0); // entrada nula
+        entrada(&mut d, off_sym + 24, 1, 0x1234); // "dlopen"
+        entrada(&mut d, off_sym + 48, 8, 0x5678); // "dlsym"
+        // --- GNU_HASH: 1 bucket, symoffset=1, cadena de 2 ---
+        put32(&mut d, off_gnu, 1); // nbuckets
+        put32(&mut d, off_gnu + 4, 1); // symoffset
+        put32(&mut d, off_gnu + 8, 1); // bloom_size
+        put32(&mut d, off_gnu + 12, 0); // bloom_shift
+        put64(&mut d, off_gnu + 16, 0); // bloom[0]
+        put32(&mut d, off_gnu + 24, 1); // buckets[0] -> símbolo 1
+        put32(&mut d, off_gnu + 28, 0); // chain[0]: sigue
+        put32(&mut d, off_gnu + 32, 1); // chain[1]: fin (bit 0)
+        // --- DT_HASH clásico ---
+        put32(&mut d, off_hash, 1); // nbucket
+        put32(&mut d, off_hash + 4, 3); // nchain (nº de símbolos)
+
+        // --- Tabla dinámica ---
+        let mut e = 0usize;
+        let tag = |d: &mut Vec<u8>, at: usize, t: u64, v: u64| {
+            put64(d, at, t);
+            put64(d, at + 8, v);
+        };
+        tag(&mut d, off_dyn + e * 16, 6, off_sym as u64); // DT_SYMTAB
+        e += 1;
+        tag(&mut d, off_dyn + e * 16, 5, off_str as u64); // DT_STRTAB
+        e += 1;
+        tag(&mut d, off_dyn + e * 16, 11, 24); // DT_SYMENT
+        e += 1;
+        if con_gnu_hash {
+            tag(&mut d, off_dyn + e * 16, DT_GNU_HASH as u64, off_gnu as u64);
+            e += 1;
+        }
+        if con_hash {
+            tag(&mut d, off_dyn + e * 16, DT_HASH as u64, off_hash as u64);
+            e += 1;
+        }
+        tag(&mut d, off_dyn + e * 16, 0, 0); // DT_NULL
+        d
+    }
+
+    /// MEDIDO (2026-11-26, móvil): la libc del runtime de Antigravity
+    /// (`/data/user/0/com.agy/files/runtime/lib/libc.so.6`) declara **sólo**
+    /// `DT_GNU_HASH` (no `DT_HASH`) y exporta `dlopen` en 0x871e0.  El
+    /// parser exigía `DT_HASH`, así que no veía **ningún** símbolo y la
+    /// inyección moría con "no se ha encontrado 'dlopen' en ninguna librería
+    /// del objetivo".  Este test fija esa regresión.
+    #[test]
+    fn encuentra_simbolos_en_elf_con_solo_gnu_hash() {
+        let dir = std::env::temp_dir().join(format!("md_elf_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let mapas: Vec<Mapa> = Vec::new();
+
+        let ruta = dir.join("libgnu.so");
+        std::fs::write(&ruta, elf_de_prueba(true, false)).unwrap();
+        let r = ruta.to_str().unwrap();
+        assert_eq!(
+            buscar_simbolo_elf(r, &mapas, "dlopen").unwrap(),
+            0x1234,
+            "con sólo DT_GNU_HASH hay que encontrar dlopen"
+        );
+        assert_eq!(buscar_simbolo_elf(r, &mapas, "dlsym").unwrap(), 0x5678);
+
+        // El camino clásico (DT_HASH) sigue funcionando.
+        let ruta2 = dir.join("libhash.so");
+        std::fs::write(&ruta2, elf_de_prueba(false, true)).unwrap();
+        assert_eq!(
+            buscar_simbolo_elf(ruta2.to_str().unwrap(), &mapas, "dlopen").unwrap(),
+            0x1234
+        );
+
+        // Sin ninguna tabla de hash el error tiene que decirlo claro.
+        let ruta3 = dir.join("libnada.so");
+        std::fs::write(&ruta3, elf_de_prueba(false, false)).unwrap();
+        let e = buscar_simbolo_elf(ruta3.to_str().unwrap(), &mapas, "dlopen").unwrap_err();
+        assert!(e.contains("DT_GNU_HASH"), "el error debe nombrar la tabla: {}", e);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Comprueba el parser de ELF **contra el propio proceso**: la dirección
     /// que devuelve para `dlopen` tiene que coincidir (módulo el bias) con la
     /// que devuelve `dlsym`.  Si el parser se equivoca, este test falla.
@@ -708,6 +994,11 @@ const PTRACE_POKEDATA: i32 = 5;
 const PTRACE_CONT: i32 = 7;
 const PTRACE_GETREGSET: i32 = 0x4204;
 const PTRACE_SETREGSET: i32 = 0x4205;
+
+/// `__WALL` para `waitpid`: esperar **también** a los procesos que no son
+/// hijos (los attachados con ptrace).  Sin él, el stop de un proceso
+/// attachado no se ve (MEDIDO 2026-11-26, móvil).
+const WALL: i32 = 0x4000_0000;
 const PTRACE_ATTACH: i32 = 16;
 const PTRACE_DETACH: i32 = 17;
 /// Tipo de la nota de `ptrace` que lleva los registros generales.
@@ -906,6 +1197,22 @@ pub struct LlamadaRemota {
 /// * Deja el `SP` apuntando a la ranura de retorno.
 /// * En x86_64 deja la dirección de retorno en la pila (como un `call`).
 /// * En arm64 la deja en `x30` (el `LR`).
+/// Dirección donde se escribe la ruta de la biblioteca en la pila del
+/// objetivo.
+///
+/// MEDIDO (2026-11-26, móvil): tiene que quedar **POR ENCIMA** del SP final.
+/// La pila de AArch64 crece hacia abajo: si la ruta queda por debajo del SP,
+/// `dlopen` la pisa al usar la pila y devuelve NULL (handle=0) sin explicar
+/// por qué.  Con la ruta por encima hay `OFFSET_RANURA` de hueco libre para
+/// que la función llamada use la pila con normalidad.
+pub fn dir_ruta_por_encima_del_sp(sp_original: u64) -> u64 {
+    let scratch = sp_original.saturating_sub(OFFSET_AUXILIAR) & !0xF;
+    let ranura = scratch + OFFSET_RANURA;
+    ranura + 16
+}
+
+/// Prepara la llamada remota: `pc` = `dir_dlopen`, `x0` = la ruta,
+/// `x1` = los flags, `lr` = la dirección mágica (0).
 pub fn preparar_llamada(r: &Registros, dir_dlopen: u64, dir_ruta: u64) -> LlamadaRemota {
     let sp_original = sp_actual(r);
     let scratch = sp_original.saturating_sub(OFFSET_AUXILIAR) & !0xF;
@@ -1073,11 +1380,17 @@ fn continuar(pid: i32) -> Result<(), String> {
 }
 
 /// Espera a que el proceso se pare otra vez (con tope de tiempo).
+///
+/// MEDIDO (2026-11-26, móvil): `waitpid` **sin** `__WALL` NO ve el stop de
+/// un proceso al que se ha hecho `PTRACE_ATTACH` (no es un hijo real del
+/// inyector) ⇒ devolvía 0 sin más y el inyector acababa con "el proceso N
+/// no se ha parado en 15000 ms" con el proceso **bien** parado.  Con
+/// `__WALL` el stop se ve al instante.
 fn esperar(pid: i32, timeout_ms: u64) -> Result<i32, String> {
     let limite = Instant::now() + Duration::from_millis(timeout_ms);
     loop {
         let mut status: i32 = 0;
-        let r = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        let r = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG | WALL) };
         if r == pid {
             return Ok(status);
         }
@@ -1470,6 +1783,13 @@ fn inyectar_parado(
     }
 
     // 5) Escribir la ruta de la `.so` (con `\0`) y preparar la llamada.
+    //
+    // MEDIDO (2026-11-26, móvil): la ruta tiene que estar **POR ENCIMA** del
+    // SP final (la pila de AArch64 crece hacia abajo: si la ruta queda por
+    // debajo del SP, `dlopen` la pisa al usar la pila y devuelve NULL sin
+    // decir por qué).  Con la ruta en `scratch` (= sp-0x100) y el SP en
+    // `ranura` (= scratch+0x100) la ruta quedaba POR DEBAJO del SP ⇒ el
+    // `dlopen` leía basura y devolvía handle=0.
     let mut memoria = Memoria::abrir(pid, via)?;
     let mut ruta = biblioteca.as_bytes().to_vec();
     ruta.push(0);
@@ -1478,10 +1798,12 @@ fn inyectar_parado(
         inf.paso(&e);
         return Err(e);
     }
-    memoria.escribir(scratch, &ruta)?;
-    inf.paso(&format!("ruta escrita en 0x{:x} ({} B)", scratch, ruta.len()));
+    // Por encima del SP final (`ranura` en aarch64, `ranura+8` en x86_64).
+    let dir_ruta = dir_ruta_por_encima_del_sp(sp_original);
+    memoria.escribir(dir_ruta, &ruta)?;
+    inf.paso(&format!("ruta escrita en 0x{:x} ({} B)", dir_ruta, ruta.len()));
 
-    let llamada = preparar_llamada(regs_originales, dir_dlopen, scratch);
+    let llamada = preparar_llamada(regs_originales, dir_dlopen, dir_ruta);
     if llamada.ranura_retorno != 0 {
         memoria.escribir(llamada.ranura_retorno, &llamada.magico.to_le_bytes())?;
     }
@@ -1493,8 +1815,24 @@ fn inyectar_parado(
         llamada.pc, llamada.sp, llamada.magico
     ));
 
-    // 6) Ejecutar: el proceso vuelve de `dlopen` a la dirección mágica (0) y
-    //    recibe un SIGSEGV que nos lo señala.
+    // 6) REANUDAR el proceso: hasta aquí estaba parado desde el
+    //    `PTRACE_ATTACH`, así que `dlopen` no se ejecutaba nunca y la
+    //    espera de abajo expiraba con "el proceso N no se ha parado en
+    //    15000 ms" (MEDIDO 2026-11-26, móvil).
+    //
+    //    Se continúa con señal 0: cuando `dlopen` vuelva a la dirección
+    //    mágica (0) el kernel le entrega un SIGSEGV y eso PARA al proceso
+    //    (signal-delivery-stop), que es lo que ve la espera siguiente.
+    match continuar(pid) {
+        Ok(()) => inf.paso("proceso reanudado para ejecutar la llamada"),
+        Err(e) => {
+            inf.paso(&e);
+            return Err(e);
+        }
+    }
+
+    // 7) Esperar la vuelta: el proceso vuelve de `dlopen` a la dirección
+    //    mágica (0) y recibe un SIGSEGV que nos lo señala.
     let status = match esperar(pid, 15_000) {
         Ok(s) => s,
         Err(e) => {
@@ -1601,6 +1939,26 @@ mod pruebas_llamada {
         // del SP original, y el nuevo SP apunta a la ranura.
         assert!(l.sp < sp_actual(&r), "el hueco debe quedar bajo el SP original");
         assert!(l.arg0 < sp_actual(&r), "la ruta se escribe bajo el SP");
+    }
+
+    /// MEDIDO (2026-11-26, móvil): la ruta de la biblioteca tiene que quedar
+    /// **POR ENCIMA** del SP final.  La pila de AArch64 crece hacia abajo: si
+    /// la ruta queda por debajo del SP, `dlopen` la pisa al usar la pila y
+    /// devuelve NULL (handle=0) sin decir por qué.  Este test fija eso.
+    #[test]
+    fn la_ruta_de_la_biblioteca_queda_por_encima_del_sp_final() {
+        let r = registros_con_sp();
+        let dir_ruta = dir_ruta_por_encima_del_sp(sp_actual(&r));
+        let l = preparar_llamada(&r, 0xdeadbeef, dir_ruta);
+        assert_eq!(l.arg0, dir_ruta);
+        assert!(
+            l.arg0 > l.sp,
+            "la ruta (0x{:x}) debe quedar por encima del SP final (0x{:x})",
+            l.arg0,
+            l.sp
+        );
+        // Y por debajo del SP original (sigue estando en la pila).
+        assert!(l.arg0 < sp_actual(&r));
     }
 
     #[test]

@@ -72,8 +72,8 @@ pub fn reiniciar_app_para_el_binario_nuevo() -> Option<Value> {
     if !proceso_vivo("com.agy") {
         return None;
     }
-    let marca = std::path::PathBuf::from(crate::cockpit_server::state_dir())
-        .join("agy/restart_app.ts");
+    let marca =
+        std::path::PathBuf::from(crate::cockpit_server::state_dir()).join("agy/restart_app.ts");
     let ahora = crate::webui::now_epoch();
     if let Ok(txt) = std::fs::read_to_string(&marca) {
         if let Ok(prev) = txt.trim().parse::<i64>() {
@@ -82,7 +82,8 @@ pub fn reiniciar_app_para_el_binario_nuevo() -> Option<Value> {
             }
         }
     }
-    let cmd = "am force-stop com.agy; sleep 2; am start -n com.agy/.ui.launcher.LauncherDarkActivity";
+    let cmd =
+        "am force-stop com.agy; sleep 2; am start -n com.agy/.ui.launcher.LauncherDarkActivity";
     let r = crate::android::root_exec(cmd, 20_000, 2048);
     let _ = std::fs::create_dir_all(marca.parent().unwrap());
     let _ = std::fs::write(&marca, format!("{ahora}\n"));
@@ -114,8 +115,8 @@ pub fn relanzar_ls_para_el_binario_nuevo() -> Option<Value> {
         return None;
     }
     let pid = pid_del_language_server()?;
-    let marca = std::path::PathBuf::from(crate::cockpit_server::state_dir())
-        .join("agy/relanzar_ls.ts");
+    let marca =
+        std::path::PathBuf::from(crate::cockpit_server::state_dir()).join("agy/relanzar_ls.ts");
     let ahora = crate::webui::now_epoch();
     if let Ok(txt) = std::fs::read_to_string(&marca) {
         if let Ok(prev) = txt.trim().parse::<i64>() {
@@ -143,7 +144,9 @@ pub fn bias_del_ls() -> u64 {
     let Some(pid) = pid_del_language_server() else {
         return 0;
     };
-    let ruta = crate::antigravity_endpoint::ruta_ls().to_string_lossy().to_string();
+    let ruta = crate::antigravity_endpoint::ruta_ls()
+        .to_string_lossy()
+        .to_string();
     crate::antigravity_intercept::bias_del_proceso(pid as i32, &ruta).unwrap_or(0)
 }
 
@@ -169,6 +172,98 @@ pub fn pid_del_language_server() -> Option<u32> {
         }
     }
     None
+}
+
+/// Epoch (segundos) en que arrancó el proceso `pid`.
+///
+/// Se lee `starttime` de `/proc/<pid>/stat` (campo 22) y se convierte a
+/// epoch con `btime` de `/proc/stat` y la frecuencia de reloj (100 Hz en
+/// Android).  Sirve para saber si un proceso es más ANTIGUO que un
+/// fichero: si el binario del LS se parcheó después de que el LS
+/// arrancara, el LS tiene la versión VIEJA en memoria.
+///
+/// MEDIDO (2026-11-25, móvil): esto era el bug que bloqueaba el login de
+/// Antigravity.  El `.so` estaba parcheado en disco, pero el LS llevaba
+/// horas en marcha con el binario viejo ⇒ sus peticiones NO pasaban por el
+/// shim ⇒ el NDJSON no tenía ni una línea desde las 12:53 y el login no
+/// avanzaba.  Tras `kill -9` del LS, el shim empezó a registrar
+/// `GET /v1internal/` → 200 (medido).
+pub fn arranque_de_proceso(pid: &str) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // El nombre del proceso va entre paréntesis y puede contener espacios
+    // y paréntesis: se parte por el ÚLTIMO ") ".
+    let resto = stat.rsplit_once(") ")?.1;
+    let campos: Vec<&str> = resto.split_whitespace().collect();
+    // campos[0] es `state` (campo 3 del stat) ⇒ starttime (campo 22) es el
+    // índice 22 - 3 = 19.
+    let starttime: u64 = campos.get(19)?.parse().ok()?;
+    const HZ: u64 = 100; // SC_CLK_TCK en Android
+    let btime = std::fs::read_to_string("/proc/stat")
+        .ok()?
+        .lines()
+        .find(|l| l.starts_with("btime "))?
+        .split_whitespace()
+        .nth(1)?
+        .parse::<u64>()
+        .ok()?;
+    Some(btime + starttime / HZ)
+}
+
+/// Relanza el language server si tiene el binario VIEJO en memoria.
+///
+/// MEDIDO (2026-11-25, móvil): el daemon sólo relanzaba el LS cuando el
+/// `.so` se parcheaba EN ESE MOMENTO.  Como el parche ya estaba aplicado
+/// (y la app re-extrae su runtime en cada arranque), el LS se quedaba con
+/// la URL vieja en memoria para siempre ⇒ el shim no veía ni una petición
+/// ⇒ **el login de Antigravity nunca avanzaba**.
+///
+/// Aquí el criterio es determinista y no depende de "acabar de parchar":
+/// si el proceso del LS arrancó ANTES que el mtime del `.so` parcheado,
+/// el LS tiene el binario viejo ⇒ se relanza (la app lo vuelve a
+/// levantar).
+pub fn relanzar_ls_si_tiene_el_binario_viejo() -> Option<Value> {
+    if !on("relanzar_ls", true) {
+        return None;
+    }
+    if !proceso_vivo("com.agy") {
+        return None;
+    }
+    let pid = pid_del_language_server()?;
+    let so = crate::antigravity_endpoint::ruta_ls();
+    let mtime = std::fs::metadata(&so)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let arranque = arranque_de_proceso(&pid.to_string())?;
+    // El LS ya tiene el binario actual: no se toca nada.
+    if mtime <= arranque {
+        return None;
+    }
+    // Anti-bucle: como mucho una vez cada 2 minutos.
+    let marca =
+        std::path::PathBuf::from(crate::cockpit_server::state_dir()).join("agy/relanzar_ls.ts");
+    let ahora = crate::webui::now_epoch();
+    if let Ok(txt) = std::fs::read_to_string(&marca) {
+        if let Ok(prev) = txt.trim().parse::<i64>() {
+            if ahora - prev < 120 {
+                return None;
+            }
+        }
+    }
+    let _ = std::fs::create_dir_all(marca.parent().unwrap());
+    let _ = std::fs::write(&marca, format!("{ahora}\n"));
+    let r = crate::android::root_exec(&format!("kill -9 {pid}"), 5_000, 1_024);
+    Some(json!({
+        "pid": pid,
+        "mtime_so": mtime,
+        "arranque_ls": arranque,
+        "ok": !r.combined().to_lowercase().contains("no such process"),
+        "detalle": r.combined().trim().chars().take(160).collect::<String>(),
+        "ts": ahora,
+    }))
 }
 
 /// Ruta del fichero de estado de la instrumentación.
@@ -202,7 +297,8 @@ pub fn estado() -> Value {
     let endpoint = crate::antigravity_endpoint::estado();
     let falso = crate::antigravity_fake_so::estado();
     let modelo = crate::antigravity_model::integracion_estado();
-    let mitm = crate::sqlite_mitm::estado_mitm().unwrap_or_else(|e| json!({"ok": false, "error": e}));
+    let mitm =
+        crate::sqlite_mitm::estado_mitm().unwrap_or_else(|e| json!({"ok": false, "error": e}));
 
     // ¿Está la app de Antigravity corriendo?  (si no, no tiene sentido
     // instrumentarla todavía, pero tampoco es un error).
@@ -297,7 +393,9 @@ fn puente_mcp_estado() -> Value {
                         servidores = map.len();
                         for (_, spec) in map {
                             let url = spec.get("url").and_then(|u| u.as_str()).unwrap_or("");
-                            if url.contains("127.0.0.1:9090/mcp") || url.contains("localhost:9090/mcp") {
+                            if url.contains("127.0.0.1:9090/mcp")
+                                || url.contains("localhost:9090/mcp")
+                            {
                                 let h = spec
                                     .get("headers")
                                     .and_then(|h| h.get("X-Seere-Auth-Token"))
@@ -391,7 +489,9 @@ pub fn sincronizar_puente_mcp() -> Result<Value, String> {
         .ok_or("mcpServers no es un objeto")?;
     let mut cambios = 0usize;
     for (_, spec) in servers.iter_mut() {
-        let Some(obj) = spec.as_object_mut() else { continue };
+        let Some(obj) = spec.as_object_mut() else {
+            continue;
+        };
         let url = obj.get("url").and_then(|u| u.as_str()).unwrap_or("");
         if !url.contains("127.0.0.1:9090/mcp") && !url.contains("localhost:9090/mcp") {
             continue;
@@ -479,18 +579,17 @@ pub fn revision_cheap() -> Vec<String> {
         }
     } else if modo == "in situ" {
         let e = crate::antigravity_endpoint::estado();
-        if !e
-            .get("aplicado")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-        {
+        if !e.get("aplicado").and_then(|v| v.as_bool()).unwrap_or(false) {
             faltan.push("so".to_string());
         }
     }
     if on("puente_mcp", true) {
         let p = puente_mcp_estado();
         let existe = p.get("existe").and_then(|v| v.as_bool()).unwrap_or(false);
-        let al_dia = p.get("token_al_dia").and_then(|v| v.as_bool()).unwrap_or(false);
+        let al_dia = p
+            .get("token_al_dia")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         if existe && !al_dia {
             faltan.push("puente_mcp".to_string());
         }
@@ -514,11 +613,8 @@ pub fn revision_cheap() -> Vec<String> {
 /// detectar la manipulación), el daemon vuelve a poner el suyo sin que nadie
 /// toque nada.  Es idempotente y barato: en el caso normal no hace nada.
 pub fn bucle_automatico(puerto: u16) {
-    let intervalo = crate::config_efectiva::u64_de(
-        "instrumentacion_agy.intervalo_s",
-        60,
-    )
-    .clamp(15, 3600);
+    let intervalo =
+        crate::config_efectiva::u64_de("instrumentacion_agy.intervalo_s", 60).clamp(15, 3600);
     // MEDIDO (2026-11-24): el plan de hooks sólo se escribía cuando
     // `aplicar()` encontraba algo que hacer ⇒ si todo estaba en su sitio, el
     // payload se quedaba SIN plan.  Se escribe al arrancar (una vez): el
@@ -529,16 +625,40 @@ pub fn bucle_automatico(puerto: u16) {
                 eprintln!(
                     "instrumentación AGY: plan de hooks listo ({} hooks → {})",
                     v.get("hooks").and_then(|x| x.as_u64()).unwrap_or(0),
-                    v.get("ruta_payload").and_then(|x| x.as_str()).unwrap_or("?")
+                    v.get("ruta_payload")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("?")
                 );
             }
             Err(e) => eprintln!("instrumentación AGY: no se pudo escribir el plan de hooks: {e}"),
         }
     }
     loop {
-        std::thread::sleep(std::time::Duration::from_secs(intervalo));
+        // MEDIDO (2026-11-25, movil): la bateria bajo al 14 % con el movil
+        // descargando y el ciclo de instrumentacion cada 60 s.  Ese ciclo
+        // comprueba metadatos y reaplica hooks: con la bateria en "seal" hay
+        // que ALARGARLO, porque el trabajo discrecional es lo primero que
+        // debe caer (la politica de energia ya define "seal" por debajo del
+        // 20 %).
+        let espera = if crate::battery_advanced::modo_ahorro_activo() {
+            (intervalo * 5).clamp(60, 3600)
+        } else {
+            intervalo
+        };
+        std::thread::sleep(std::time::Duration::from_secs(espera));
         if !on("automatica", true) {
             continue;
+        }
+        // MEDIDO (2026-11-25): el LS puede llevar horas en marcha con el
+        // binario VIEJO en memoria (el `.so` parcheado en disco, pero el
+        // proceso arrancó antes del parche).  Entonces sus peticiones NO
+        // pasan por el shim y el login de Antigravity no avanza.  Se
+        // comprueba en cada ciclo, con el criterio determinista del mtime.
+        if let Some(r) = relanzar_ls_si_tiene_el_binario_viejo() {
+            eprintln!(
+                "instrumentación AGY: el LS tenía el binario viejo; relanzado (pid {})",
+                r.get("pid").and_then(|v| v.as_u64()).unwrap_or(0)
+            );
         }
         let faltan = revision_cheap();
         if faltan.is_empty() {
@@ -606,7 +726,10 @@ pub fn aplicar(puerto: u16, confirmar: bool) -> Value {
     } else if modo == "falso" {
         match crate::antigravity_fake_so::activar(puerto, confirmar) {
             Ok(v) => {
-                let ya = v.get("ya_activo").and_then(|x| x.as_bool()).unwrap_or(false);
+                let ya = v
+                    .get("ya_activo")
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false);
                 piezas.push(json!({
                     "pieza": "so", "modo": modo,
                     "estado": if ya { "aplicado" } else { "aplicado_ahora" },
@@ -620,7 +743,10 @@ pub fn aplicar(puerto: u16, confirmar: bool) -> Value {
     } else {
         match crate::antigravity_endpoint::aplicar_endpoint(puerto, confirmar) {
             Ok(v) => {
-                let ya = v.get("ya_aplicado").and_then(|x| x.as_bool()).unwrap_or(false);
+                let ya = v
+                    .get("ya_aplicado")
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false);
                 piezas.push(json!({
                     "pieza": "so", "modo": modo,
                     "estado": if ya { "aplicado" } else { "aplicado_ahora" },
@@ -702,14 +828,13 @@ pub fn aplicar(puerto: u16, confirmar: bool) -> Value {
 
     // --- 4) MITM de la DB de conversaciones ---------------------------
     if on("mitm_db", false) {
-        let ocultar: Vec<String> = crate::config_efectiva::vector_de("instrumentacion_agy.ocultar")
-            .unwrap_or_default();
-        let reescribir: Vec<(String, String)> = crate::config_efectiva::pares_de(
-            "instrumentacion_agy.reescribir",
-        )
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
+        let ocultar: Vec<String> =
+            crate::config_efectiva::vector_de("instrumentacion_agy.ocultar").unwrap_or_default();
+        let reescribir: Vec<(String, String)> =
+            crate::config_efectiva::pares_de("instrumentacion_agy.reescribir")
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
         match crate::sqlite_mitm::activar(&ocultar, &reescribir) {
             Ok(v) => {
                 let ya = v
@@ -734,6 +859,23 @@ pub fn aplicar(puerto: u16, confirmar: bool) -> Value {
         }));
     }
 
+    // --- 4b) El payload de frida-gum va EMBEBIDO en el daemon: se instala
+    // solo (sin red, sin Release).  MEDIDO (2026-11-24): antes era un
+    // crate aislado con su propio build y el movil lo bajaba de un Release
+    // aparte ⇒ si ese job fallaba, el movil se quedaba sin instrumentación.
+    if on("payload_frida", true) {
+        match crate::hooks_payload::instalar_embebido() {
+            None => {}
+            Some(v) if v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false) => {
+                piezas
+                    .push(json!({ "pieza": "payload_frida", "estado": "aplicado", "detalle": v }));
+            }
+            Some(v) => {
+                piezas.push(json!({ "pieza": "payload_frida", "estado": "fallo", "detalle": v }))
+            }
+        }
+    }
+
     // --- 5) Los grants de permisos: el LS sólo acepta `command(...)` y
     // `n(...)`.  Cualquier otra forma la rechaza y **la app la pinta en la
     // UI** (el "muro de texto").  Se sanean en cuanto aparecen.
@@ -754,8 +896,12 @@ pub fn aplicar(puerto: u16, confirmar: bool) -> Value {
     // lee de `/data/local/tmp/megadaemon/hooks-plan.txt`).
     if on("plan_hooks", true) {
         match crate::antigravity_intercept::escribir_plan_para_el_payload(bias_del_ls()) {
-            Ok(v) => piezas.push(json!({ "pieza": "plan_hooks", "estado": "aplicado", "detalle": v })),
-            Err(e) => piezas.push(json!({ "pieza": "plan_hooks", "estado": "fallo", "detalle": e })),
+            Ok(v) => {
+                piezas.push(json!({ "pieza": "plan_hooks", "estado": "aplicado", "detalle": v }))
+            }
+            Err(e) => {
+                piezas.push(json!({ "pieza": "plan_hooks", "estado": "fallo", "detalle": e }))
+            }
         }
     }
 
@@ -852,13 +998,33 @@ pub fn dispatch(args: &Value) -> Value {
                 "estado": estado(),
             })
         }
-        other => json!({"ok": false, "error": format!("accion desconocida: {other} (estado|plan|aplicar|restore)")}),
+        other => {
+            json!({"ok": false, "error": format!("accion desconocida: {other} (estado|plan|aplicar|restore)")})
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn el_arranque_de_un_proceso_se_calcula_en_epoch() {
+        // El proceso actual existe en Linux: su arranque debe ser un epoch
+        // plausible (mismo orden de magnitud que ahora).
+        let pid = std::process::id().to_string();
+        let a = arranque_de_proceso(&pid).expect("arranque del proceso actual");
+        let ahora = crate::webui::now_epoch() as u64;
+        assert!(
+            a <= ahora && ahora - a < 86_400,
+            "arranque {a} fuera de rango (ahora {ahora})"
+        );
+    }
+
+    #[test]
+    fn el_arranque_de_un_pid_inexistente_es_none() {
+        assert!(arranque_de_proceso("999999999").is_none());
+    }
 
     #[test]
     fn el_estado_no_rompe_sin_antigravity() {

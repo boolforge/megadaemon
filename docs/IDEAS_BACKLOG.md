@@ -116,3 +116,138 @@
 | H7 | **Fusión del GUI de Antigravity con el cockpit v2** — una sola página web con el marco de la IDE de Antigravity **y** los paneles de la API v2 | 🟡 | `web/cockpit_antigravity.html` (shell *Jetski Web* de `/workspace/agy-intel/assets_web_index.html` + `/api/v2/*` + chat por `POST /api/chat` + marco de la IDE por iframe). JS validado con `node --check`; **sin compilar** (política del sandbox) |
 | H8 | **El agente, dentro del bus**: que el `general` sea un nodo al que se le pueda asignar trabajo por la API | 🟡 | `tools/registrar-agente-general.py` (idempotente, **dry-run por defecto**) da de alta `agent-general@…` en `state/board.sqlite` (`instances`) y sus tareas; `state/agents/agent-general.json` es el registro por fichero. La API v2 ya expone `/api/v2/nodes/assign`, `/api/v2/nodes/message` y `/api/v2/tasks/claim\|release\|report` (`rust-core/src/webui.rs:74-75`, `:4120-4128`) |
 | H9 | **Que el móvil sirva la GUI fusionada** (hoy `web/cockpit_antigravity.html` está en el repo, no en el daemon) | ⏳ | falta el cableado en `cockpit_server.rs` (3 líneas, el mismo patrón que `docs/API_V2.md` §2 documenta para `/v2`) |
+
+## I. Resiliencia, autoconexión y P2P (2026-11-26) — encargo del jefe
+
+> «Haz que el sistema sea más resiliente a desconexiones prolongadas y que se
+> autoconecte (investiga proyectos tipo mosh y otros muchos, para elaborar un
+> protocolo y reutilizar, pensando en robustez y resiliencia extremas, que se
+> pueda integrar opcionalmente con WireGuard)»: un **P2P dentro de MegaDaemon**,
+> flexible y potente, fácil de implementar reutilizando código existente, para
+> reencontrarse, pasar por proxies y conexiones inestables, y migrar de
+> conexión — **sin fundir batería**.
+>
+> Diseño detallado: `docs/RESILIENCIA_P2P.md`.
+
+| # | idea | estado | detalle |
+|---|---|---|---|
+| I1 | **Nivel 1 — identidad estable + endpoint reubicable**: el nodo tiene una identidad criptográfica fija (Ed25519, `ring` ya está en las deps) y una lista de endpoints (relé duckdns de nombre fijo, quick tunnel, puertos de descubrimiento). Quien quiera alcanzarle **pregunta "dónde estás" al bus** y recibe el endpoint actual | 🟡 | `rust-core/src/channel.rs` ya publica `quick`/`duckdns`/`ip_publica`; falta el esquema de identidad + el dedo del bus |
+| I2b | **Ejecutor de órdenes del bus** (el que hace que el control funcione SIN conexión directa): el móvil sincroniza el tablón, selecciona las cartas `tipo=orden` que van para él, las **ejecuta con el registro de tools del daemon** (`android::dispatch` ⇒ el MISMO camino que la API y el MCP, no dos implementaciones) y responde por el bus | 🟡 | `rust-core/src/bus_ejecutor.rs` (nuevo): idempotencia por `idem_key` (una orden repetida NO se re-ejecuta), fail-closed ante firma inválida o sin clave pública, `confirm: true` exigido para lo irreversible, presupuesto de órdenes por ciclo y respeto del modo ahorro de batería. Tool MCP `bus_ordenes` + CLI `megadaemon-core bus` |
+| I2 | **Nivel 2 — bus de control PULL** (el que rompe la dependencia de la conexión directa): el nodo **saca** órdenes del bus (repo por Contents API + Drive + relé) y las ejecuta, en vez de que le empufen. Permite **controlar el móvil y sus apps (incluso en primer plano) sin métodos directos de comunicación** | 🟡 | ⚠️ **NO es un bus nuevo**: `rust-core/src/resonance.rs` (659 líneas) **YA ES** un bus P2P por Drive — cartas firmadas Ed25519, `id = sha256(canonico)` (merge idempotente), CRDT LWW con `epoch`+`seq`, journal NDJSON + snapshot, en la carpeta privada `tablon-resiliencia`. El Nivel 2 debe **EXTENDERLO** (tipos de carta + semántica de órdenes), no duplicarlo. Los **leases NO se inventan**: `board.rs` ya los tiene (SQLite+WAL, `owner`, `lease_expires_at`, `reclaim_expired`); el bus sólo transporta órdenes. Detalle: `docs/RESILIENCIA_P2P.md` |
+| I3 | **Nivel 3 — reconexión extremo a extremo** tipo mosh: identificador de sesión + nonce + clave rotada, handshake tolerante a pérdida, y **re-emigración** cuando cambia el trans underpinnings (quick tunnel → relé, WiFi → datos móviles) | ⏳ | reutiliza el doble auth del daemon (`X-API-Key` + `X-Seere-Auth-Token`) y `channel.rs` |
+| I4 | **Cotas de batería**: en "silencioso" (sólo bus pull cada 15–30 min) el gasto no debe pasar de un X% diario. `JobScheduler`/`AlarmManager` con ventana inexact, `WorkManager` con `setRequiresCharging`, wakelocks mínimos | 🟡 | ya existe `battery_advanced::modo_ahorro_activo()` (batería <20 % y sin cargador) y la telemetría **duplica** el periodo en ese modo |
+| I5 | **Integración opcional con WireGuard**: "modo WG" del daemon (subir config, peer, allowed_ips, DNS) reutilizando `rustls`/`ring`/`ureq` ya presentes | ⏳ | opcional: no debe bloquear el modo por defecto |
+| I6 | **Unificar entornos equivalentes**: antigravity + language server + antigravity CLI + go + jetski ⇒ un único runtime, un único bus, un único modelo de credenciales | ⏡ | `rust-core/src/antigravity_env.rs`, `antigravity_clone.rs` (ya unifican el runtime), `agyshim.rs` |
+| I7 | **No fundir batería con la telemetría**: el push a Drive cada 15 min se dobla en modo ahorro | ✅ | `rust-core/src/telemetria.rs::publicar_periodico` |
+| I8 | ⚠️ **Relé canónico incoherente (medido)**: `channel.rs:72` usa `mdtmfnc.duckdns.org` pero el `state/channel.json` del repo dice `mdtmfnc-s21.duckdns.org` ⇒ dos canónicos distintos. Además el relé **no cachea** (a diferencia del `raw` de GitHub), así que es la única fuente "en vivo" fiable | ⛔ bloqueado | decidir cuál es el bueno **antes** de la Fase 1; `deploy/relay-pc.sh` y `deploy/instalador-megadaemon.sh` usan `mdtmfnc` (sin sufijo) |
+
+## J. Control de gasto de datos (Jazztel) (2026-11-26) — encargo del jefe
+
+> «Integra totalmente control de gasto de MB/GB de Jazztel dentro de MegaDaemon…
+> desofuscación extrema y descompilación total de la app de Jazztel, para
+> reimplementar e integrar sus funciones y avisos de factura; y deofuscar y
+> descompilar lo que se encarga de contar el gasto de datos; y busca cómo
+> diferenciar entre datos por WiFi y datos por conexión de datos».
+>
+> Diseño y plan de RE: `docs/RE_GASTO_DATOS_JAZZTEL.md`.
+
+| # | idea | estado | detalle |
+|---|---|---|---|
+| J1 | **Desglose WiFi vs datos móviles** en la telemetría del daemon | ✅ | `telemetria.rs`: `/proc/net/dev` clasificado por interfaz (`wlan*`→wifi, `rmnet*`/`ccmni*`/`ppp*`→móvil) y desglosado en `red.por_transporte` |
+| J2 | **Contabilidad real del sistema** (`NetworkStatsManager`, `TrafficStats`, `dumpsys netstats`, `xt_qtaguid`) y su diferencia con lo que **factura** el operador | 🟡 | `docs/RE_GASTO_DATOS_JAZZTEL.md` §A (A.1–A.10): 3 fuentes independientes, y la lista de dónde **difieren** (tethering, roaming, APN de respaldo, Data Saver, corte de ciclo de facturación). Pendiente de medir en el móvil |
+| J3 | **Desofuscación de la app `com.orange.bluu.jazztel`** (identificadores, strings, flujo de control) | ✅ | **HECHO**: APK descargado (44.050.916 B, `md5 de06e522…` verificado) y analizado byte a byte: 36.248 clases, 323.861 métodos. La app NO está empaquetada y NO cifra strings (los 200 "descifradores" son cripto de un SDK 3DS2). Artefactos (83 MB) **fuera del repo** en `/workspace/apk_work/jazztel/`. Detalle: `docs/RE_GASTO_DATOS_JAZZTEL.md` §B |
+| J4 | **Reimplantar en MegaDaemon**: `gasto_datos::estado()`, `avisos()`, `desglose()` (WiFi vs móvil) | 🟡 | **diseño completo** en `docs/RE_GASTO_DATOS_JAZZTEL.md` §C.1–C.3. Con la RE hecha se sabe el contrato real de la API (rutas, hosts, métodos y claves JSON exactas), que el modelo de datos ya trae costes en euros (`BigDecimal`) y que hay endpoints de recargos y de ciclos de facturación ⇒ el estimador de factura tiene de dónde sacarlo. Falta escribir el módulo |
+| J5 | **Tool remota `gasto_datos`** (acciones `estado|movil|wifi|avisos|desglose|guardar`) | ✅ | `rust-core/src/gasto_datos.rs` (nuevo) + tool MCP `gasto_datos` + CLI `megadaemon-core gasto <accion>`. Avisa de umbral, plan agotado, renovación y **discrepancia** entre lo que ve el sistema y lo que factura el operador (con las causas posibles: tethering, roaming, APN de respaldo, Data Saver, corte de ciclo). El estado del operador se guarda en **0600** |
+| J6 | **Credenciales de Jazztel**: fuera del repo (el repo es PÚBLICO), sólo en ficheros 0600 | ⏡ | regla dura del encargo |
+| J7 | ⚠️ **PII en las facturas**: el **NIF del titular está en el nombre** de los 9 PDF de `Facturas jazztel` (Drive). El repo es PÚBLICO ⇒ ningún fichero del repo puede contener ese nombre ni el NIF | ⛔ regla dura | los PDF sólo se leen desde la carpeta **privada** de Drive y se **enmascaran** (`<NIF>_J….pdf`) en cualquier informe; lo mismo con el resto de datos de la factura (importe, IBAN) |
+
+## K. Telemetría a Drive + autodetección de "listo" (2026-11-26) — encargo del jefe
+
+> «Suba muchísima más telemetría automáticamente a Google Drive y que
+> autodetecte cuando esté listo y suba los datos de conexión a Google Drive, y
+> tú ya te conectes y hagas lo que tengas que hacer».
+
+| # | idea | estado | detalle |
+|---|---|---|---|
+| K1 | Módulo `telemetria`: recolección (batería, memoria, carga, uptime, red por transporte, instrumentación viva, diagnóstico) | ✅ | `rust-core/src/telemetria.rs` (nuevo) |
+| K2 | Subida **nativa** a Drive (sin `curl`: el móvil no lo tiene) + estado local en disco como fuente de verdad | ✅ | `drive_vfs::write_local_file` (subida resumible, `drive_native`) |
+| K3 | **Auto-detección de "listo"** (binario presente + URL de túnel + canal legible) y **sonda** del túnel con código HTTP | ✅ | `telemetria::estado_listo()`, `telemetria::sonda_tunel()` |
+| K4 | **Datos de conexión** publicados a Drive: URL viva, relé, puerto, build y **sha16** de las claves (nunca las claves) | ✅ | `telemetria::datos_conexion()`, `publicar_conexion()` |
+| K5 | **Subida de artefactos a Drive** (binarios e instrumentación) sin pasar por GitHub | ✅ | `telemetria::subir_artefacto()` + tool `telemetria artefacto` |
+| K6 | **One-liner de instalación y ejecución**: una línea, idempotente, con resolución del release en 3 capas, verificación **por valor**, instalación atómica con rollback, health-check real y auto-cura | ✅ | `deploy/megadaemon-oneliner.sh` + `deploy/mdo.sh` (lanzador de una línea). **Verificado en el sandbox**: descarga del asset real (12.881.744 B) y **sha256 por valor VERIFICADO** (el `.sha256` del CI trae la ruta `dist/…` ⇒ la comparación por valor es obligatoria, no opcional); el bundle contiene las rutas que el script busca (`bin/megadaemon-core`, `deploy/*.sh`); el binario extraído es **ELF aarch64**; `sh -n` y `dash -n` OK |
+| K7 | Publicación del canal en el **repo** desde el one-liner (`state/channel.json`) | ✅ | el one-liner descarga `channel-publish-arm64` y lo llama con `--repo-publish --token-file` (el token nunca va en la línea de comandos) |
+
+## L. Verificación del one-liner (2026-11-26) — lo que está medido
+
+> Un subagente evaluador revisó los dos scripts y encontró **11 bugs
+> bloqueantes** (el watchdog sin entorno, el estado en el sitio equivocado,
+> el health-check que nunca podía pasar, el script que decía "instalado"
+> sin instalar y dejaba el móvil con el hostname cambiando cada 60 s…).
+> Todos corregidos y verificados con una simulación propia.
+
+| # | idea | estado | detalle |
+|---|---|---|---|
+| L1 | **Simulación del instalador** sin móvil: rutas reescritas a un temporal y binario/curl/cloudflared falsos con la misma interfaz | ✅ | `tools/test-oneliner.sh` — **22 checks, 0 fallos** |
+| L2 | El watchdog se lanza con su entorno y **NO** está en `service.d` | ✅ | verificado por el arnés (si estuviera, Magisk lo ejecutaría sin entorno y relanzaría cloudflared en bucle) |
+| L3 | El daemon se lanza con `MEGADAEMON_STATE_DIR`/`PREFIX`/`BIN` y `< /dev/null` | ✅ | verificado por el arnés |
+| L4 | El health-check usa la URL real + `telemetria sonda` (no "esperar 10 s") | ✅ | verificado por el arnés |
+| L5 | **Idempotencia real**: la 2ª ejecución no toca nada y la URL no cambia | ✅ | verificado por el arnés (antes mataba cloudflared en cada ejecución) |
+| L6 | Un bundle **corrupto** aborta con código ≠ 0 y el binario vivo sigue ahí | ✅ | verificado por el arnés (antes decía "instalado" sin instalar) |
+| L7 | Un **sha256 que no cuadra** aborta y lo dice claro | ✅ | verificado por el arnés (antes sólo avisaba e instalaba igual) |
+| L8 | El `hash` nativo del daemon (el móvil NO tiene `sha256sum`) | ✅ | `megadaemon-core hash <fichero>` |
+| L9 | Prueba real contra el release publicado | ✅ | descarga del bundle real (12.881.744 B) + **sha256 verificado por valor** (el `.sha256` del CI lleva la ruta `dist/…` ⇒ la comparación por valor es obligatoria) |
+| L10 | Prueba real en el móvil | ⛔ | `NO VERIFICADO`: el móvil está inalcanzable. Comandos exactos en `docs/TELEMETRIA_DRIVE.md` y en el propio script (`--diagnostico`) |
+
+## N. Hallazgos medidos en los decodificadores DEX del repo (2026-11-26) — para el dueño de cada módulo
+
+> Salieron al integrar `re_deep`: la tabla de anchos y el reparto de operandos
+> de los decodificadores **del repo** no coinciden con lo que se mide en un APK
+> real. No se tocan aquí (un agente = un módulo): quedan documentados y
+> medidos para que los dueños los arreglen con sus propios tests.
+
+| # | módulo | hallazgo | evidencia | estado |
+|---|---|---|---|---|
+| N1 | `dex_decompile::instruction_width` | el `goto` (0x28, `10t`) figura con **2** code units; el medido es **1** (offset con signo en el byte 1 de `unit0`) | APK real (5 DEX, 36.248 clases): con 2 aparecen **5.549 opcodes reservados** (que ningún compilador emite) y sólo el 93,60 % de los métodos termina en `return`/`throw`; con 1: **0 reservados** y **96,35 %**. `re_deep` usa su propia tabla medida (`dalvik_width`) | ⛔ pendiente del dueño de `dex_decompile` |
+| N2 | `dex_decompile::render_operands` (formato `10t`) | lee el delta del `goto` en `unit1`; con el ancho medido (1 unidad) el delta está en el byte 1 de `unit0` | ver N1 | ⛔ pendiente |
+| N3 | `apk_deobfuscator::decode_insn` (formato `22c`) | `new-array`/`instance-of` leen el índice de **tipo** de `unit2`; el índice está en **`unit1`** | medido por el subagente de RE | ⛔ pendiente |
+| N4 | `apk_deobfuscator::decode_insn` (formato `22c`) | `iget`/`iput` leen el índice de **campo** de `unit2`; está en **`unit1`** | medido por el subagente de RE | ⛔ pendiente |
+| N5 | `apk_deobfuscator::decode_insn` (formato `35c`) | intercambia el nº de argumentos y el registro `G`: lo correcto es `argc = unit0>>12` y `G = unit0>>8` | con el índice de método en `unit1` la firma del callee coincide en el **100 %** de las 88.600 invocaciones con argumentos; con `unit2`, en el 39,3 % | ⛔ pendiente |
+
+## M. RE profunda de APK (2026-11-26) — la parte que faltaba de la RE de Jazztel
+
+> `dex_decompile` + `apk_deobfuscator` + `apk_inventory` cubren el
+> desensamblado, el manifiesto, la firma y el fingerprint de ofuscación. Faltaban
+> las cinco cosas que hacen falta para reconstruir el subsistema de datos de un
+> operador real. Eso es el módulo `re_deep`.
+
+| # | idea | estado | detalle |
+|---|---|---|---|
+| M1 | **Xrefs**: qué clase y qué método usan cada string (para ligar una ruta a la interfaz que la sirve) | ✅ | `re_deep::string_xrefs()` + `string_index()` |
+| M2 | **Rutas REST relativas** con su familia de API (`consumption-api/…`), no URLs absolutas | ✅ | `re_deep::rest_paths()`, `classify_rest_path()` |
+| M3 | **Entropía de los assets**: un payload cifrado en `assets/` es una señal de empaquetado que el inventario no ve | ✅ | `re_deep::entropy()`, `detect_magic()`, `asset_reports()` |
+| M4 | **Pin de certificado** vs certificados de firma: si el pin no es de firma, es **del servidor** (una CA de usuario no valdría) | ✅ | `re_deep::pin_report()`, `signing_certs()` |
+| M5 | **Descifrador de strings discriminado**: un candidato con `javax/crypto/*` es un SDK de pago 3DS2, no un ofuscador | ✅ | `re_deep::decryptor_candidates()` (200 falsos positivos evitados) |
+| M6 | **Ejecución simbólica** acotada de un método del DEX para recuperar en claro lo que la app descifra en runtime | ✅ | `re_deep::interpret_method()` (nunca inventa: si toca una API que no se sabe emular, se detiene y lo dice) |
+| M7 | **Cableado**: registro en `lib.rs`, subcomando de CLI y tool MCP | ✅ | `megadaemon-core redeep <apk> [analizar\|rutas\|pins\|descifradores\|xrefs]` y tool `re_profunda` |
+| M8 | **Tests** | ✅ | **24 tests puros** (sin APK, sin red, sin móvil), incluidos los vectores SHA-256 de NIST y la regresión de los payloads de Dalvik |
+| M9 | **Cinco bugs reales** encontrados al integrar el módulo (no los había detectado quien lo escribió) | ✅ | (1) `substring` no compilaba: `s.get(rango)` devuelve `Option<&[char]>`; (2) los **payloads de Dalvik nunca se saltaban** en tres barreadores: el ident se leía como `unidad >> 8` (0x01/0x02/0x03) en vez de `unidad & 0xff00` (0x0100/0x0200/0x0300) ⇒ el barrido continuaba dentro de los datos e inventaba xrefs fantasma; ahora los cuatro barreadores comparten un único helper (`siguiente_insn`); (3) **el barrido se desalineaba tras cada `goto`**: la tabla local de anchos (por rangos) no tenía el `0x28` (`goto`, `10t`, **dos** unidades) ⇒ el offset del salto se leía como código; ahora `insn_width` delega en la tabla canónica por formato; (4) **el detector de descifradores estaba muerto**: buscaba el XOR dentro de la lista de *invocaciones* (un XOR no invoca a nadie ⇒ la condición nunca era cierta ⇒ **no encontraba ningún descifrador nunca**) y con una lista de opcodes equivocada (`0x98` = `shl-int`, `0xe0` = `shl-int/lit8`; faltaban `xor-long`, `xor-long/2addr`, `xor-int/lit16`); ahora se busca por **nombre** de opcode. Impacto en esta app: **ninguno** (esta app no cifra strings: el resultado correcto es cero); (5) **el inventario de rutas salía VACÍO en la app real**: `classify_rest_path` rechazaba las mayúsculas en cualquier segmento, y todas las rutas medidas de esta app llevan parámetros camelCase (`{subscriptionId}`, `{accountId}`, `{productId}`) ⇒ no encontraba ninguna ruta y no daba error. **MEDIDO sobre el APK real** (pool de strings de los 5 DEX, 169.488 strings únicos): el clasificador viejo encuentra **16** rutas y el nuevo **133** (superconjunto estricto: 0 perdidas, 117 ganadas), y las ganadas son las del control de gasto (`user-tariffs`, `recharges`, `recurring`, `balances`, `events`, `penalties`) |
+
+## O. Núcleo forense y recuperación (`mddoctor`) (2026-11-27)
+
+> Hay **7 scripts de recuperación/diagnóstico** dispersos
+> (`recuperar-en-movil.sh` 25 KB, `md-repair-entorno.sh` 20 KB,
+> `recuperar-movil-v2.sh` 11 KB, `recuperar-movil.sh` 12 KB,
+> `megadaemon_local_doctor.sh` 9 KB, `diagnostico-movil.sh`,
+> `estado-movil.sh`): cada uno con su formato, su salida y su forma de
+> fallar. Faltaba un **núcleo** único, diminuto y utilizable **cuando todo
+> lo demás está roto**.
+
+| # | idea | estado | detalle |
+|---|---|---|---|
+| O1 | **Núcleo forense en C** (`tools/mddoctor.c`, **26 KB**, sin dependencias: solo libc) | ✅ | `gcc -O2` en **<1 s** y ~10 MB de RAM: compila donde el enlazado de Rust **mata el proceso por OOM** (SIGKILL medido). No depende de la librería de MegaDaemon ⇒ funciona cuando el daemon está roto |
+| O2 | Recogida: batería, térmica, memoria, **swap**, **PSI** (`/proc/pressure`), carga, disco, red por interfaz, procesos (zombies y estado **D**), estado de MegaDaemon (`instance.json`, `channel.json`, `tunnel.url`) | ✅ |lee `/proc` y `/sys`; sin `curl`, sin `python`, sin `jq` |
+| O3 | Clasificación `OK` / `AVISO` / `CRÍTICO` **con el motivo** en cada hallazgo | ✅ | salida en tabla o `--json`; **código de salida 0/1/2** para scripts y para el CLI |
+| O4 | Recuperación: temporales viejos, **locks rancios** (>1 h), URL de túnel ausente | ✅ | `recover` **solo propone**; `recover --apply --yes` ejecuta |
+| O5 | **Integración en el CLI de MegaDaemon**: `megadaemon-core doctor [scan\|doctor\|recover]` | ✅ | usa el binario C si está al lado; si no, cae al `diagnostico::recoger()` nativo |
+| O6 | Build y publicación: `tools/build-mddoctor.sh` (host y aarch64 con NDK) + paso en el **CI** + entrada en el **bundle del móvil** | ✅ | el móvil recibe `mddoctor` con su `.sha256` |
+| O7 | **Tool MCP `doctor`** (acciones `scan`/`doctor`/`recover`) | ⛔ | pendiente: el CLI ya está; falta el brazo MCP |

@@ -108,6 +108,28 @@ pub struct Entrada {
     /// ¿La sirvió el shim como proxy real (no sólo interceptada)?
     #[serde(default)]
     pub proxy: bool,
+    /// La ruta **REAL** que se pidió al backend (tras normalizar).
+    ///
+    /// MEDIDO (2026-11-25, movil): el NDJSON guardaba la ruta TAL COMO la
+    /// pidió el cliente y no la que acabó en Google => con un 404 no se
+    /// podía saber qué se pidió de verdad.  Con este campo se ve la ruta
+    /// que funcionó (o las que se probaron).
+    #[serde(default)]
+    pub ruta_real: Option<String>,
+    /// Cuántas variantes de ruta se probaron (1 = a la primera).
+    #[serde(default)]
+    pub variantes: u32,
+    /// La **query string** que pidió el cliente (sin el `?`).
+    ///
+    /// MEDIDO (2026-11-26, móvil, captura cruda): el NDJSON guardaba la ruta
+    /// pero NO la query, y sin ella no se puede saber qué pide el LS.  En el
+    /// caso que motivó esto (`GET /v1internal/`) la query venía **vacía**:
+    /// el nombre de la operación faltaba en la URL porque la respuesta de
+    /// `POST /v1internal:onboardUser` nunca llegó (el router POST del
+    /// cockpit no tenía brazo de shim).  Con el query registrado, cualquier
+    /// atypicala se ve sin tener que instrumentar el móvil.
+    #[serde(default)]
+    pub query: Option<String>,
 }
 
 /// Estadísticas en memoria.
@@ -541,6 +563,59 @@ pub fn normalizar_ruta_proxy(path: &str) -> String {
     p.to_string()
 }
 
+/// Rutas de la API interna que **NO existen en Google** y que el shim tiene
+/// que resolver él mismo.
+///
+/// MEDIDO (2026-11-25, contra el backend real de Google, sin credenciales):
+/// ```text
+/// GET  /v1internal/                     -> 404 (HTML de Google)
+/// GET  /v1internal                      -> 404
+/// GET  /v1internal/buildWithGooglePlugins -> 401 (¡EXISTE! con BARRA)
+/// GET  /v1internal:buildWithGooglePlugins -> 404 (no existe con dos puntos)
+/// POST /v1internal:loadCodeAssist      -> 401 (existe con dos puntos)
+/// POST /v1internal/loadCodeAssist      -> 404 (no existe con barra)
+/// ```
+///
+/// ⇒ **El dialecto MIXTO depende del metodo**: `loadCodeAssist`,
+/// `fetchAvailableModels` y `onboardUser` existen con DOS PUNTOS;
+/// `buildWithGooglePlugins` existe con BARRA.  Por eso el shim prueba las
+/// variantes (ver [`variantes_de_ruta`]).
+///
+/// Y `/v1internal/` pelada NO existe en ninguna forma ⇒ passthrough al
+/// backend SIEMPRE da 404.  El shim es **transparente**: devuelve ese mismo
+/// 404 (lo que vería la app si hablara con Google directamente).
+///
+/// MEDIDO (2026-11-26, móvil): las rutas de MODELO (`:fetchAvailableModels`
+/// y las de generación) sí las sirve MegaDaemon, pero eso se decide en
+/// [`dialecto_de`], no aquí.
+pub fn es_ruta_resoluble_local(ruta: &str) -> bool {
+    let r = normalizar_ruta_proxy(ruta);
+    // MEDIDO (2026-11-26, movil, A/B con el `.so` ORIGINAL): la pelada
+    // `/v1internal/` **NO se resuelve en local**: tiene que ir al PASSTHROUGH
+    // (que la devuelve a Google tal cual, 404 incluido) para que el shim sea
+    // **transparente**.
+    //
+    // MEDIDO: con la pelada resuelta en local (catalogo de MegaDaemon) el LS
+    // la pedia **78 veces seguidas** (1/s) y NUNCA llegaba a "core ready"
+    // (log: "core did not become ready within 60000ms") => la app se quedaba
+    // sin core.  Con el 404 de Google (lo que responde el backend real) el LS
+    // **si** llega a "core ready" y sigue => el 404 es el comportamiento de
+    // referencia, no un fallo del shim.
+    //
+    // MEDIDO (2026-11-26): el problema REAL del login era otro: los **POST**
+    // del LS (`/v1internal:loadCodeAssist`, `:onboardUser`, `:listExperiments`,
+    // `:fetchUserInfo`) NO llegaban al shim (el router POST del cockpit no
+    // tenia brazo de shim) y caian en un catch-all que devolvia una
+    // respuesta INVENTADA sin nombre de operacion => el LS consultaba el
+    // estado de una operacion VACIA (`GET /v1internal/`) => 404 => "failed to
+    // get operation status" => la app volvia a pedir el login de Google.
+    // Arreglado en `cockpit_server.rs` (brazo POST del shim => passthrough a
+    // Google con el `Authorization` que ya envia la app).
+    let pelada = r.trim_end_matches('/');
+    let _ = pelada;
+    false
+}
+
 /// El dialecto que habla una ruta.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dialecto {
@@ -557,6 +632,40 @@ pub fn dialecto_de(ruta: &str) -> Option<Dialecto> {
     let r = normalizar_ruta_proxy(ruta);
     // MEDIDO 2026-11-24 (movil): el LS pide el catalogo como
     // `/v1internal/listModels` (con barra) y antes nos devolvia 404.
+    //
+    // MEDIDO 2026-11-26 (movil, 03:0x): **`:fetchAvailableModels` NO es un
+    // catálogo Gemini**: es una ruta de **CUENTA** y su respuesta es un
+    // **protojson** (`FetchAvailableModelsResponse`), NO el `ListModelsResponse`
+    // del SDK de Gemini.  El esquema está EMBEBIDO en el binario del
+    // language server y se ha extraído del `.so` (ver
+    // `agy-re/tools/proto-schema/extraer_esquema.py`):
+    //
+    //   message FetchAvailableModelsResponse {
+    //     map FetchAvailableModelsResponse.ModelsEntry models = 1;   // MAP
+    //     optional string default_agent_model_id = 2;
+    //     repeated ModelSort agent_model_sorts = 3;
+    //     repeated string command_model_ids = 4;
+    //     ...
+    //   }
+    //
+    // `models` es un **MAP** (objeto JSON), no una lista.  El shim servía
+    // AHÍ el catálogo de MegaDaemon, que es una **lista** (`{"models":[...]}`),
+    // y el LS lo parsea con protojson ⇒ petaba **exactamente** en la llave:
+    //
+    //   E1126 01:52:15 cache.go:135] Cache(availableModels): Singleflight
+    //   refresh failed: proto: syntax error (line 1:11): unexpected token [
+    //   E1126 01:52:15 errorreport.go:224] proto: syntax error (line 1:11):
+    //   unexpected token [
+    //
+    // ⇒ cada 60 s el LS reportaba un error de sesión y la app volvía a pedir
+    // el login de Google (el bucle).
+    //
+    // Por eso la decisión es **sensible al método** (ver
+    // [`dialecto_de_segun_metodo`]): el **POST** (el que consume el LS) va
+    // por passthrough a Google —es una ruta de cuenta: la petición lleva
+    // `project` y `entitlement`—, y el **GET** (que lo consume la UI y
+    // tolera la lista) sigue con el catálogo local.  El MODELO lo sigue
+    // sirviendo el gateway canónico.
     if r.ends_with(":fetchAvailableModels")
         || r.ends_with("/models")
         || r == "/models"
@@ -572,6 +681,26 @@ pub fn dialecto_de(ruta: &str) -> Option<Dialecto> {
         return Some(Dialecto::Gemini);
     }
     None
+}
+
+/// Dialecto **sensible al método**.
+///
+/// MEDIDO 2026-11-26 (móvil): `:fetchAvailableModels` llega por **POST** (la
+/// que consume el LS para su caché de modelos) y por **GET** (la que consume
+/// la UI).  El POST espera el **protojson de Google** (`models` = MAP) y el
+/// GET tolera la lista local estilo Gemini.
+///
+/// Con el catálogo local en el POST, el LS fallaba **cada 60 s** con
+/// `proto: syntax error (line 1:11): unexpected token [` y la app pedía el
+/// login de Google en bucle.
+pub fn dialecto_de_segun_metodo(metodo: &str, ruta: &str) -> Option<Dialecto> {
+    let m = metodo.trim().to_ascii_uppercase();
+    let r = normalizar_ruta_proxy(ruta);
+    if m == "POST" && r.ends_with(":fetchAvailableModels") {
+        // Ruta de CUENTA: la respuesta es un proto de Google (map).
+        return None;
+    }
+    dialecto_de(ruta)
 }
 
 /// Una petición que entra al shim.
@@ -603,6 +732,53 @@ pub struct Respuesta {
     pub substituted: bool,
     /// La regla que se aplicó (si alguna).
     pub regla: Option<String>,
+    /// La ruta REAL que se pidió al backend (tras probar las variantes).
+    ///
+    /// MEDIDO (2026-11-25, CI): `Respuesta` NO deriva serde, así que aquí no
+    /// puede haber `#[serde(default)]` (error: "cannot find attribute
+    /// `serde` in this scope").
+    pub ruta_real: String,
+    /// Cuántas variantes se probaron.
+    pub variantes: u32,
+}
+
+/// Las formas en que se puede pedir una ruta de la API interna de Google.
+///
+/// MEDIDO (2026-11-25, movil): el LS pide `/v1internal/` (barra, sin
+/// metodo) y `/v1internal/buildWithGooglePlugins` (barra), y el backend de
+/// Google (`daily-cloudcode-pa`) usa el dialecto de DOS PUNTOS
+/// (`/v1internal:metodo`).  Con la conversion a dos puntos, `/v1internal/`
+/// se queda como esta (no hay metodo que traducir) y Google responde 404.
+///
+/// En vez de adivinar, el shim PRUEBA las variantes en orden y se queda con
+/// la primera que no devuelva 404.  Asi da igual que el LS use barra,
+/// dos puntos o la ruta pelada: siempre hay una que funciona.
+pub fn variantes_de_ruta(ruta: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut anadir = |s: String| {
+        if !s.is_empty() && !out.contains(&s) {
+            out.push(s);
+        }
+    };
+    let ruta = normalizar_ruta_proxy(ruta);
+    // 1) La forma canonica del gateway (dos puntos), si se puede.
+    let dos_puntos = crate::llm_gateway::normalizar_ruta_gemini(&ruta);
+    anadir(dos_puntos.clone());
+    // 2) La forma tal cual la pidio el cliente.
+    anadir(ruta.clone());
+    // 3) Sin barra final (el LS a veces pide `/v1internal/`).
+    if let Some(sin) = ruta.strip_suffix('/') {
+        if !sin.is_empty() {
+            anadir(sin.to_string());
+        }
+    }
+    // 4) Con dos puntos y sin barra final.
+    if let Some(sin) = dos_puntos.strip_suffix('/') {
+        if !sin.is_empty() {
+            anadir(sin.to_string());
+        }
+    }
+    out
 }
 
 /// Reenvía la petición al backend real de Antigravity y devuelve la
@@ -612,13 +788,25 @@ pub struct Respuesta {
 /// daemon no guarda ni ve credenciales de Google, sólo las reenvía.
 pub fn passthrough(req: &Peticion) -> Result<Respuesta, String> {
     let ruta = normalizar_ruta_proxy(&req.ruta);
-    // MEDIDO (2026-11-24): la query string es parte de la petición (Google
-    /// la necesita: sin ella devolvía 404).
-    let url = if req.query.trim().is_empty() {
-        format!("{}{}", BACKEND_REAL, ruta)
-    } else {
-        format!("{}{}?{}", BACKEND_REAL, ruta, req.query.trim())
-    };
+    // MEDIDO (2026-11-25, movil): el backend real de Google (cloudcode-pa)
+    // NO entiende la forma con BARRA (`/v1internal/loadCodeAssist`): su
+    // dialecto interno usa DOS PUNTOS (`/v1internal:loadCodeAssist`).  Al
+    // reenviar la ruta tal cual, Google respondia 404 y Antigravity moria
+    // con "There was an unexpected issue setting up your account".
+    //
+    // `normalizar_ruta_gemini` ya sabe traducir barra -> dos puntos (y lo
+    // hace de forma conservadora: sólo si el resto no lleva ya ':' ni '/').
+    // Aquí se aplica al PASSTHROUGH, que es donde la ruta se usa tal cual.
+    // MEDIDO (2026-11-25, movil): el LS pide `/v1internal/` (barra) y
+    // `/v1internal/buildWithGooglePlugins`, y el backend usa dos puntos
+    // (`/v1internal:metodo`).  Antes se traducía a dos puntos y a
+    // `/v1internal/` se quedaba igual (no hay metodo que traducir) =>
+    // Google respondia 404 y Antigravity no arrancaba.
+    //
+    // Ahora se PRUEBAN las variantes en orden y se gana la primera que no
+    // devuelva 404.  Con una ruta de metodo las dos formas se prueban; con
+    // `/v1internal/` se prueban las cuatro.
+    let variantes = variantes_de_ruta(&ruta);
     let agente = agente_passthrough();
     let metodo = req.metodo.trim().to_ascii_uppercase();
     // Cabeceras que se reenvían (las de salto las pone ureq).
@@ -646,30 +834,75 @@ pub fn passthrough(req: &Peticion) -> Result<Respuesta, String> {
             p
         }};
     }
-    let resp = match metodo.as_str() {
-        "GET" => con_cabeceras!(agente.get(&url)).call(),
-        "DELETE" => con_cabeceras!(agente.delete(&url)).call(),
-        "PUT" => con_cabeceras!(agente.put(&url)).send(req.cuerpo.as_bytes()),
-        "PATCH" => con_cabeceras!(agente.patch(&url)).send(req.cuerpo.as_bytes()),
-        // MEDIDO (2026-11-24, error E0599): en ureq 3 el builder de POST es
-        // `WithBody` y NO tiene `.call()`: siempre se envía (el cuerpo vacío
-        // es un POST sin cuerpo ✔).
-        _ => con_cabeceras!(agente.post(&url)).send(req.cuerpo.as_bytes()),
+    // Pide cada variante hasta que una NO devuelva 404.
+    let mut probadas: u32 = 0;
+    let mut ultima: Option<(u16, String, String, Vec<(String, String)>)> = None;
+    let mut primera: Option<(u16, String, String, Vec<(String, String)>)> = None;
+    let mut ganador: Option<(u16, String, String, Vec<(String, String)>)> = None;
+    for variante in &variantes {
+        probadas += 1;
+        // MEDIDO (2026-11-24): la query string es parte de la petición
+        // (Google la necesita: sin ella devolvía 404).
+        let url = if req.query.trim().is_empty() {
+            format!("{}{}", BACKEND_REAL, variante)
+        } else {
+            format!("{}{}?{}", BACKEND_REAL, variante, req.query.trim())
+        };
+        let resp = match metodo.as_str() {
+            "GET" => con_cabeceras!(agente.get(&url)).call(),
+            "DELETE" => con_cabeceras!(agente.delete(&url)).call(),
+            "PUT" => con_cabeceras!(agente.put(&url)).send(req.cuerpo.as_bytes()),
+            "PATCH" => con_cabeceras!(agente.patch(&url)).send(req.cuerpo.as_bytes()),
+            // MEDIDO (2026-11-24, error E0599): en ureq 3 el builder de POST
+            // es `WithBody` y NO tiene `.call()`: siempre se envía (el cuerpo
+            // vacío es un POST sin cuerpo ✔).
+            _ => con_cabeceras!(agente.post(&url)).send(req.cuerpo.as_bytes()),
+        };
+        let resp = match resp {
+            Ok(r) => r,
+            Err(e) => {
+                // Si no hay red, no hay variantes que probar.
+                return Err(format!("passthrough a {}: {}", BACKEND_REAL, e));
+            }
+        };
+        let status = resp.status().as_u16();
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/json")
+            .to_string();
+        let cuerpo = resp
+            .into_body()
+            .read_to_string()
+            .map_err(|e| format!("passthrough: lectura del cuerpo: {e}"))?;
+        let cabs: Vec<(String, String)> = cabeceras
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        let info = (status, content_type, cuerpo, cabs);
+        if primera.is_none() {
+            primera = Some(info.clone());
+        }
+        if status != 404 {
+            ganador = Some(info);
+            break;
+        }
+        ultima = Some(info);
     }
-    .map_err(|e| format!("passthrough a {}: {}", BACKEND_REAL, e))?;
-    let status = resp.status().as_u16();
-    // MEDIDO (2026-11-24, error E0599): en ureq 3 no hay `resp.content_type()`;
-    // la cabecera se lee de `headers()`.
-    let content_type = resp
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("application/json")
-        .to_string();
-    let cuerpo = resp
-        .into_body()
-        .read_to_string()
-        .map_err(|e| format!("passthrough: lectura del cuerpo: {e}"))?;
+    // MEDIDO (2026-11-25): si NINGUNA variante existe en Google, se
+    // devuelve la respuesta de la PRIMERA (la que se pidió tal cual): es lo
+    // que vería la app si hablara con Google directamente, que es el
+    // comportamiento de referencia.
+    let (status, content_type, cuerpo, _cabs) = match ganador.or(primera).or(ultima) {
+        Some(v) => v,
+        // No se pudo probar ninguna variante (no deberia pasar).
+        None => return Err(format!("passthrough a {}: sin variantes", BACKEND_REAL)),
+    };
+    let ruta_real = variantes
+        .get(probadas as usize - 1)
+        .cloned()
+        .unwrap_or_else(|| ruta.clone());
     Ok(Respuesta {
         status,
         content_type,
@@ -678,6 +911,8 @@ pub fn passthrough(req: &Peticion) -> Result<Respuesta, String> {
         real_model: String::new(),
         substituted: false,
         regla: Some("passthrough".to_string()),
+        ruta_real,
+        variantes: probadas,
     })
 }
 
@@ -707,13 +942,85 @@ fn agente_passthrough() -> ureq::Agent {
 /// `megadaemon` (`requested_model`, `real_model`, `substituted`).
 pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
     let ruta = normalizar_ruta_proxy(&req.ruta);
-    let dialecto = match dialecto_de(&req.ruta) {
+    // MEDIDO (2026-11-25): `/v1internal/` pelada NO existe en el backend de
+    // Google (404 con cualquier forma) ⇒ el passthrough era un 404
+    // garantizado.  Se resuelve AQUI con el catalogo de MegaDaemon.
+    if es_ruta_resoluble_local(&ruta) {
+        let v = crate::antigravity_endpoint::catalogo_gemini();
+        let cuerpo = v.to_string();
+        registrar(&Entrada {
+            ts: ahora(),
+            metodo: req.metodo.clone(),
+            ruta: req.ruta.clone(),
+            modelo: Some(MODELO_CANONICO.to_string()),
+            bytes_cuerpo: req.cuerpo.len(),
+            status: 200,
+            regla: None,
+            cuerpo: Some(req.cuerpo.chars().take(400).collect()),
+            respuesta: Some(cuerpo.chars().take(400).collect()),
+            ms: 0,
+            requested_model: Some(MODELO_CANONICO.to_string()),
+            real_model: None,
+            substituted: false,
+            proxy: true,
+            ruta_real: Some(ruta.clone()),
+            variantes: 1,
+            query: Some(req.query.clone()),
+        });
+        return Ok(Respuesta {
+            status: 200,
+            content_type: "application/json".to_string(),
+            cuerpo,
+            requested_model: MODELO_CANONICO.to_string(),
+            real_model: String::new(),
+            substituted: false,
+            regla: Some("catalogo-local".to_string()),
+            ruta_real: ruta,
+            variantes: 1,
+        });
+    }
+    let dialecto = match dialecto_de_segun_metodo(&req.metodo, &req.ruta) {
         Some(d) => d,
         None => {
             // Ruta de cuenta/sesión (no de modelo): passthrough al backend
             // real con las credenciales que ya envía la app.
             if es_ruta_passthrough(&req.ruta) {
-                return passthrough(req);
+                // MEDIDO (2026-11-25): las rutas de PASSTHROUGH no se
+                // registraban en el NDJSON => cuando Google devolvia un 404
+                // (o lo que fuera) no habia ni una linea que dijera QUE
+                // ruta se habia pedido.  Ahora se registra con la ruta
+                // TAL CUAL la pedia el cliente y con la ruta ya
+                // NORMALIZADA (la que se envie a Google).
+                let r = passthrough(req);
+                let (status, cuerpo, ruta_real, variantes) = match &r {
+                    Ok(resp) => (
+                        resp.status,
+                        resp.cuerpo.clone(),
+                        Some(resp.ruta_real.clone()),
+                        resp.variantes,
+                    ),
+                    Err(e) => (0u16, format!("{{\"error\":\"{e}\"}}"), None, 0),
+                };
+                registrar(&Entrada {
+                    ts: ahora(),
+                    metodo: req.metodo.clone(),
+                    ruta: req.ruta.clone(),
+                    modelo: None,
+                    bytes_cuerpo: req.cuerpo.len(),
+                    status,
+                    regla: None,
+                    cuerpo: Some(req.cuerpo.chars().take(400).collect()),
+                    respuesta: Some(cuerpo.chars().take(400).collect()),
+                    ms: 0,
+                    requested_model: None,
+                    real_model: None,
+                    substituted: false,
+                    proxy: true,
+                    ruta_real,
+                    variantes,
+                    query: Some(req.query.clone()),
+                });
+                return r;
             }
             return Err(format!("el shim no sirve la ruta {}", req.ruta));
         }
@@ -725,7 +1032,16 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
     let mut real = String::new();
     let mut sustituido = false;
     let mut content_type = "application/json".to_string();
-    let mut salida;
+    // `salida` se inicializa vacía: si el gateway falla, no hay respuesta que
+    // aplicar (el error se responde aparte), pero el compilador no puede
+    // saber que `error` y `salida` van juntos.
+    let mut salida = String::new();
+    // MEDIDO (2026-11-26, móvil): el error del gateway (p. ej. 502 por un
+    // cuerpo que no se entiende) se guarda para responder 502 CON EL
+    // DETALLE, pero la petición **se registra igual** en el NDJSON: antes un
+    // fallo del gateway no dejaba NINGUNA traza y el diagnóstico era una
+    // caja negra ("0 llamadas de modelo, pero el chat dice que falla").
+    let mut error: Option<String> = None;
 
     match dialecto {
         Dialecto::Catalogo => {
@@ -733,37 +1049,47 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
             salida = v.to_string();
         }
         Dialecto::OpenAi => {
-            let mut v = crate::llm_gateway::chat_completions_con_traza(&cuerpo)
-                .map_err(|e| format!("gateway OpenAI: {}", e.message))?;
-            requested = cuerpo
-                .get("model")
-                .and_then(|m| m.as_str())
-                .unwrap_or(MODELO_CANONICO)
-                .trim()
-                .to_string();
-            if requested.is_empty() {
-                requested = MODELO_CANONICO.to_string();
+            match crate::llm_gateway::chat_completions_con_traza(&cuerpo) {
+                Ok(mut v) => {
+                    requested = cuerpo
+                        .get("model")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or(MODELO_CANONICO)
+                        .trim()
+                        .to_string();
+                    if requested.is_empty() {
+                        requested = MODELO_CANONICO.to_string();
+                    }
+                    real = v
+                        .pointer("/megadaemon/provider_id")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    sustituido = v
+                        .pointer("/megadaemon/substituted")
+                        .and_then(|x| x.as_bool())
+                        .unwrap_or(false);
+                    salida = v.to_string();
+                }
+                Err(e) => {
+                    error = Some(format!("gateway OpenAI: {}", e.message));
+                }
             }
-            real = v
-                .pointer("/megadaemon/provider_id")
-                .and_then(|x| x.as_str())
-                .unwrap_or("")
-                .to_string();
-            sustituido = v
-                .pointer("/megadaemon/substituted")
-                .and_then(|x| x.as_bool())
-                .unwrap_or(false);
-            salida = v.to_string();
         }
         Dialecto::Gemini => {
             let r = crate::llm_gateway::gemini_route(&ruta);
             let stream = r.as_ref().map(|x| x.stream).unwrap_or(false);
             let modelo_ruta = r.as_ref().map(|x| x.model.clone()).unwrap_or_default();
-            requested = if modelo_ruta.trim().is_empty() {
-                MODELO_CANONICO.to_string()
-            } else {
-                modelo_ruta.trim().to_string()
-            };
+            // MEDIDO (2026-11-26, móvil): el modelo NO viene en la ruta
+            // (`/v1internal:streamGenerateContent`) sino en el CUERPO: en el
+            // campo `model` del envoltorio v1internal o en `request.model`.
+            requested = crate::llm_gateway::modelo_del_cuerpo(&cuerpo).unwrap_or_else(|| {
+                if modelo_ruta.trim().is_empty() {
+                    MODELO_CANONICO.to_string()
+                } else {
+                    modelo_ruta.trim().to_string()
+                }
+            });
             // Si el cliente pide un modelo CONCRETO, ese va primero en la
             // cascada; si pide el canónico, decide el router.
             let solicitado: Option<&str> = if crate::llm_gateway::es_alias_megadaemon(&requested) {
@@ -771,45 +1097,85 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
             } else {
                 Some(requested.as_str())
             };
+            // MEDIDO (2026-11-26, móvil): la petición va ENVUELTA (v1internal)
+            // ⇒ la respuesta tiene que ir envuelta igual, y el cuerpo real
+            // está en `request` (lo deserialize el gateway).
+            let envuelto = crate::llm_gateway::es_envoltorio_v1internal(&cuerpo);
             if stream {
-                let mut v = crate::llm_gateway::gemini_generate_content_con_modelo_for(
+                match crate::llm_gateway::gemini_generate_content_con_modelo_for(
                     &ruta, &cuerpo, solicitado,
-                )
-                .map_err(|e| format!("gateway Gemini: {}", e.message))?;
-                real = v
-                    .pointer("/megadaemon/provider_id")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                sustituido = v
-                    .pointer("/megadaemon/substituted")
-                    .and_then(|x| x.as_bool())
-                    .unwrap_or(false);
-                let sse = crate::llm_gateway::gemini_a_sse(&v);
-                content_type = "text/event-stream; charset=utf-8".to_string();
-                salida = sse;
+                ) {
+                    Ok(v) => {
+                        real = v
+                            .pointer("/megadaemon/provider_id")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        sustituido = v
+                            .pointer("/megadaemon/substituted")
+                            .and_then(|x| x.as_bool())
+                            .unwrap_or(false);
+                        let sse = if envuelto {
+                            crate::llm_gateway::gemini_a_sse_v1internal(&v)
+                        } else {
+                            crate::llm_gateway::gemini_a_sse(&v)
+                        };
+                        content_type = "text/event-stream; charset=utf-8".to_string();
+                        salida = sse;
+                    }
+                    Err(e) => {
+                        error = Some(format!("gateway Gemini: {}", e.message));
+                    }
+                }
             } else {
-                let mut v = crate::llm_gateway::gemini_generate_content_con_modelo_for(
+                match crate::llm_gateway::gemini_generate_content_con_modelo_for(
                     &ruta, &cuerpo, solicitado,
-                )
-                .map_err(|e| format!("gateway Gemini: {}", e.message))?;
-                real = v
-                    .pointer("/megadaemon/provider_id")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                sustituido = v
-                    .pointer("/megadaemon/substituted")
-                    .and_then(|x| x.as_bool())
-                    .unwrap_or(false);
-                salida = v.to_string();
+                ) {
+                    Ok(v) => {
+                        real = v
+                            .pointer("/megadaemon/provider_id")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        sustituido = v
+                            .pointer("/megadaemon/substituted")
+                            .and_then(|x| x.as_bool())
+                            .unwrap_or(false);
+                        salida = if envuelto {
+                            crate::llm_gateway::envolver_v1internal(&v, "").to_string()
+                        } else {
+                            v.to_string()
+                        };
+                    }
+                    Err(e) => {
+                        error = Some(format!("gateway Gemini: {}", e.message));
+                    }
+                }
             }
         }
     }
 
     // Las reglas del shim se aplican ENCIMA de la respuesta del gateway:
     // es el punto donde se puede mentir a la GUI.
-    let (status, cuerpo_final, regla) = decidir(&req.metodo, &req.ruta, &req.cuerpo, &salida);
+    //
+    // MEDIDO (2026-11-26, móvil): si el gateway falló, la respuesta es el
+    // error 502 con su detalle, pero la petición SE REGISTRA igual (antes un
+    // fallo del gateway no dejaba traza ninguna).
+    let (status, cuerpo_final, regla) = match &error {
+        Some(e) => (
+            502u16,
+            json!({
+                "error": {
+                    "code": 502,
+                    "status": "SHIM_PROXY_ERROR",
+                    "message": e,
+                }
+            })
+            .to_string(),
+            None,
+        ),
+        None => decidir(&req.metodo, &req.ruta, &req.cuerpo, &salida),
+    };
 
     let redacta = redacta();
     registrar(&Entrada {
@@ -832,10 +1198,23 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
         },
         ms: t0.elapsed().as_millis() as u64,
         requested_model: Some(requested.clone()),
-        real_model: if real.is_empty() { None } else { Some(real.clone()) },
+        real_model: if real.is_empty() {
+            None
+        } else {
+            Some(real.clone())
+        },
         substituted: sustituido,
         proxy: true,
+        ruta_real: Some(ruta.clone()),
+        variantes: 1,
+        query: Some(req.query.clone()),
     });
+
+    // El error se devuelve AL COCKPIT (que lo responde como 502 con el
+    // detalle), pero la traza ya está en el NDJSON.
+    if let Some(e) = error {
+        return Err(e);
+    }
 
     Ok(Respuesta {
         status,
@@ -845,6 +1224,10 @@ pub fn proxy(req: &Peticion) -> Result<Respuesta, String> {
         real_model: real,
         substituted: sustituido,
         regla,
+        // Las rutas de MODELO las sirve el gateway, no el backend de Google:
+        // no hay passthrough y por tanto no hay variantes que probar.
+        ruta_real: ruta.clone(),
+        variantes: 1,
     })
 }
 
@@ -906,6 +1289,11 @@ pub fn procesar(metodo: &str, ruta: &str, cuerpo: &str) -> (u16, String) {
         real_model: None,
         substituted: false,
         proxy: false,
+        ruta_real: None,
+        variantes: 0,
+        // `procesar()` no recibe la query (la firma es historica): se deja
+        // vacia en vez de inventarla.
+        query: None,
         // MEDIDO (2026-11-23, auditoría de calidad): la RUTA se guardaba en
         // claro mientras que el cuerpo y la respuesta pasaban por el
         // redactor.  La ruta de una llamada a la API puede llevar la
@@ -942,6 +1330,37 @@ pub fn procesar(metodo: &str, ruta: &str, cuerpo: &str) -> (u16, String) {
 }
 
 #[cfg(test)]
+
+/// MEDIDO 2026-11-25 (movil): el backend de Google usa el dialecto de
+/// DOS PUNTOS (`/v1internal:loadCodeAssist`).  Si el passthrough
+/// reenvia la ruta con BARRA, Google responde 404 y Antigravity muere
+/// con "unexpected issue setting up your account".
+#[test]
+fn el_passthrough_traduce_la_ruta_al_dialecto_de_google() {
+    // La forma que llega al backend (lo que se ve en la URL real).
+    assert_eq!(
+        crate::llm_gateway::normalizar_ruta_gemini("/v1internal/loadCodeAssist"),
+        "/v1internal:loadCodeAssist"
+    );
+    assert_eq!(
+        crate::llm_gateway::normalizar_ruta_gemini("/v1internal/userInfo"),
+        "/v1internal:userInfo"
+    );
+    assert_eq!(
+        crate::llm_gateway::normalizar_ruta_gemini("/v1internal/buildWithGooglePlugins"),
+        "/v1internal:buildWithGooglePlugins"
+    );
+    // La forma con dos puntos NO se toca (ya es la buena).
+    assert_eq!(
+        crate::llm_gateway::normalizar_ruta_gemini("/v1internal:loadCodeAssist"),
+        "/v1internal:loadCodeAssist"
+    );
+    // Y una ruta de modelo tampoco se rompe.
+    assert_eq!(
+        crate::llm_gateway::normalizar_ruta_gemini("/v1internal/generateContent"),
+        "/v1internal:generateContent"
+    );
+}
 mod tests {
     use super::*;
 
@@ -1082,12 +1501,92 @@ mod tests {
         assert!(es_ruta_proxy("/v1internal:streamGenerateContent"));
         assert!(es_ruta_proxy("/v1internal/fetchAvailableModels"));
         assert!(es_ruta_proxy("/proxy/v1/chat/completions"));
-        assert!(es_ruta_proxy("/v1beta/models/gemini-2.5-pro:generateContent"));
+        assert!(es_ruta_proxy(
+            "/v1beta/models/gemini-2.5-pro:generateContent"
+        ));
         // Y NO las que no son suyas.
         assert!(!es_ruta_proxy("/v1/chat/completions"));
         assert!(!es_ruta_proxy("/health"));
         assert!(!es_ruta_proxy("/api/antigravity/sessions"));
         assert!(!es_ruta_proxy("/proxyxyz"));
+    }
+
+    #[test]
+    fn la_ruta_pelada_no_se_resuelve_en_local() {
+        // MEDIDO (2026-11-26, móvil): el shim tiene que ser TRANSPARENTE.
+        // Resolver `/v1internal/` en local con el catálogo hacía que el LS la
+        // pidiera 78 veces seguidas y nunca llegara a "core ready".
+        assert!(!es_ruta_resoluble_local("/v1internal/"));
+        assert!(!es_ruta_resoluble_local("/v1internal"));
+        assert!(!es_ruta_resoluble_local("/proxy/v1internal/"));
+        // Y la pelada SI es passthrough (la devuelve a Google tal cual).
+        assert!(es_ruta_passthrough("/v1internal/"));
+        assert!(es_ruta_passthrough("/v1internal"));
+    }
+
+    #[test]
+    fn las_rutas_de_cuenta_del_ls_se_pasan_a_google() {
+        // MEDIDO (2026-11-26, móvil, captura cruda de las peticiones del LS):
+        // estos POST son los que traen la cuenta y, sobre todo, el NOMBRE de
+        // la operación de `onboardUser`.  Si no entran por el shim, el
+        // catch-all del router POST inventa la respuesta y el LS consulta el
+        // estado de una operación VACÍA (`GET /v1internal/`) ⇒ 404 ⇒ "failed
+        // to get operation status" ⇒ la app vuelve a pedir el login.
+        for r in [
+            "/v1internal:loadCodeAssist",
+            "/v1internal:onboardUser",
+            "/v1internal:listExperiments",
+            "/v1internal:fetchUserInfo",
+        ] {
+            assert!(es_ruta_proxy(r), "{r} debe entrar por el shim");
+            assert!(es_ruta_passthrough(r), "{r} debe ir a Google tal cual");
+            assert_eq!(dialecto_de(r), None, "{r} no es una ruta de modelo");
+        }
+        // El MODELO sí es del gateway canónico (dialecto Gemini).
+        assert_eq!(
+            dialecto_de("/v1internal:generateContent"),
+            Some(Dialecto::Gemini)
+        );
+    }
+
+    /// MEDIDO 2026-11-26 (móvil, log del LS): `Cache(availableModels)` fallaba
+    /// con `proto: syntax error (line 1:11): unexpected token [` cada 60 s
+    /// ⇒ la app pedía el login en bucle.
+    ///
+    /// La causa: el **POST** de `:fetchAvailableModels` devuelve un
+    /// **protojson** (`FetchAvailableModelsResponse.models` es un **MAP**), y
+    /// el shim le servía el catálogo de MegaDaemon, que es una **lista**.
+    #[test]
+    fn el_catalogo_de_cuenta_va_a_google_y_el_de_gemini_sigue_siendo_local() {
+        let r = "/v1internal:fetchAvailableModels";
+        assert!(es_ruta_proxy(r), "{r} debe entrar por el shim");
+        assert!(es_ruta_passthrough(r), "{r} debe ir a Google tal cual");
+        // El POST (el que consume el LS) va a Google: su respuesta es un
+        // proto con `models` como MAP y nuestro catálogo es una lista.
+        assert_eq!(
+            dialecto_de_segun_metodo("POST", r),
+            None,
+            "el POST de {r} NO es un catálogo local: su `models` es un map de protojson"
+        );
+        // El GET (el que consume la UI) sí tolera la lista local.
+        assert_eq!(
+            dialecto_de_segun_metodo("GET", r),
+            Some(Dialecto::Catalogo)
+        );
+        // Las rutas **Gemini** (lista) siguen siendo locales, para que el LS
+        // pueda usar los modelos de MegaDaemon.
+        for r in [
+            "/v1beta/models",
+            "/models",
+            "/v1internal/listModels",
+            "/v1internal:listModels",
+        ] {
+            assert_eq!(
+                dialecto_de(r),
+                Some(Dialecto::Catalogo),
+                "{r} debe seguir siendo el catálogo local"
+            );
+        }
     }
 
     #[test]
@@ -1150,6 +1649,37 @@ mod tests {
         // rutas de CUENTA, no de modelo ⇒ pasan tal cual a Google.
         assert!(dialecto_de("/v1internal/buildWithGooglePlugins").is_none());
         assert!(es_ruta_passthrough("/v1internal/buildWithGooglePlugins"));
+    }
+
+    /// MEDIDO (2026-11-25, movil): el LS pide `/v1internal/` (barra, sin
+    /// metodo) y `/v1internal/buildWithGooglePlugins`, y Google usa el
+    /// dialecto de DOS PUNTOS.  Con una sola forma, el 404 era inevitable.
+    #[test]
+    fn las_variantes_cubren_barra_dos_puntos_y_la_ruta_pelada() {
+        let v = variantes_de_ruta("/v1internal/loadCodeAssist");
+        assert!(
+            v.contains(&"/v1internal:loadCodeAssist".to_string()),
+            "{v:?}"
+        );
+        assert!(
+            v.contains(&"/v1internal/loadCodeAssist".to_string()),
+            "{v:?}"
+        );
+        // La primera es la canonica (dos puntos).
+        assert_eq!(v[0], "/v1internal:loadCodeAssist");
+
+        // La ruta pelada: el LS la pide tal cual y Google no la tiene.
+        let v2 = variantes_de_ruta("/v1internal/");
+        assert!(v2.contains(&"/v1internal".to_string()), "{v2:?}");
+        assert!(v2.contains(&"/v1internal/".to_string()), "{v2:?}");
+        assert!(v2.len() >= 2, "{v2:?}");
+
+        // Un 404 real (ruta que no existe) se queda con UNA variante.
+        assert_eq!(variantes_de_ruta("/otra/ruta").len(), 1);
+    }
+
+    #[test]
+    fn las_rutas_de_cuenta_pasan_al_backend() {
         assert!(es_ruta_passthrough("/v1internal/loadCodeAssist"));
         // Las de MODELO las intercepta el gateway (nunca pasan a Google).
         assert!(dialecto_de("/v1internal:generateContent").is_some());
@@ -1166,7 +1696,10 @@ mod tests {
         assert!(t.contains("REDACTADO"));
         // Y no toca el texto normal.
         let t2 = redactar("esto es sk-3 corto y AIza algo");
-        assert!(t2.contains("sk-3"), "no debe redaccionar texto normal: {t2}");
+        assert!(
+            t2.contains("sk-3"),
+            "no debe redaccionar texto normal: {t2}"
+        );
     }
 
     #[test]
@@ -1204,8 +1737,55 @@ mod tests {
         assert!(crate::llm_gateway::es_alias_megadaemon("megadaemon"));
         assert!(crate::llm_gateway::es_alias_megadaemon("MEGADAEMON"));
         assert!(crate::llm_gateway::es_alias_megadaemon("auto"));
-        assert!(!crate::llm_gateway::es_alias_megadaemon("minimax-m3.1-flash"));
+        assert!(!crate::llm_gateway::es_alias_megadaemon(
+            "minimax-m3.1-flash"
+        ));
         assert!(!crate::llm_gateway::es_alias_megadaemon(""));
+    }
+
+    #[test]
+    fn un_fallo_del_gateway_deja_traza_en_el_ndjson() {
+        // MEDIDO (2026-11-26, móvil): el gateway devolvía 502 y NO dejaba
+        // NINGUNA línea en el NDJSON ⇒ el diagnóstico era una caja negra
+        // ("0 llamadas de modelo, pero el chat dice que falla").
+        let ruta = "/v1internal:streamGenerateContent";
+        // Cuerpo ENVUELTO (v1internal) sin texto: falla ANTES de la red.
+        let cuerpo = json!({"project": "x", "request": {"contents": []}}).to_string();
+        let req = Peticion {
+            metodo: "POST".to_string(),
+            ruta: ruta.to_string(),
+            cabeceras: Vec::new(),
+            query: "alt=sse".to_string(),
+            cuerpo,
+        };
+        let r = proxy(&req);
+        assert!(r.is_err(), "un cuerpo sin texto no puede generar");
+        let err = r.unwrap_err();
+        assert!(
+            err.contains("gateway Gemini"),
+            "el detalle del gateway debe viajar al cliente: {err}"
+        );
+        // Y la traza queda en el NDJSON con el 502.
+        let hay = ultimas(200).iter().any(|e| {
+            e.get("ruta").and_then(|x| x.as_str()) == Some(ruta)
+                && e.get("status").and_then(|x| x.as_u64()) == Some(502)
+        });
+        assert!(hay, "el fallo del gateway debe quedar registrado en el NDJSON");
+    }
+
+    #[test]
+    fn la_ruta_de_stream_del_ls_es_dialecto_gemini() {
+        // MEDIDO (2026-11-26, móvil, captura): el LS pide
+        // `/v1internal:streamGenerateContent?alt=sse`.
+        assert_eq!(
+            dialecto_de_segun_metodo("POST", "/v1internal:streamGenerateContent"),
+            Some(Dialecto::Gemini)
+        );
+        assert_eq!(
+            dialecto_de_segun_metodo("POST", "/v1internal:generateContent"),
+            Some(Dialecto::Gemini)
+        );
+        assert!(es_ruta_proxy("/v1internal:streamGenerateContent"));
     }
 
     #[test]

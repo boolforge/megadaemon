@@ -537,6 +537,245 @@ mod tests {
         );
         assert_eq!(tabla_de("SELECT 1").as_deref(), None);
     }
+
+    // ---------------------------------------------------------------------
+    // ¿DISPARA GUM `on_leave`?
+    //
+    // MEDIDO (2026-11-26, móvil, LS de Antigravity): el NDJSON de hooks
+    // tenía 473 líneas y **CERO** con el campo `ret` (el que escribe
+    // `PlanListener::on_leave`) ⇒ sólo se registraba la ENTRADA de cada
+    // llamada y nunca el retorno.  Sin el retorno no se puede leer el
+    // valor que devuelve la función (p. ej. la URL del endpoint).
+    //
+    // Este test mide el comportamiento de gum en el host: si `on_leave` no
+    // se dispara, el problema NO es del payload sino del enganche.
+    // ---------------------------------------------------------------------
+
+    use std::ffi::c_void;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // MEDIDO (2026-11-26, CI): con contadores GLOBALES los tests se
+    // contaminaban (uno reseteaba el contador mientras otro lo leía) ⇒
+    // fallo en el CI y no en local.  Cada test tiene los suyos.
+    static ENTER_A: AtomicU64 = AtomicU64::new(0);
+    static LEAVE_A: AtomicU64 = AtomicU64::new(0);
+    static ENTER_B: AtomicU64 = AtomicU64::new(0);
+    static LEAVE_B: AtomicU64 = AtomicU64::new(0);
+
+    /// Función a hookear: `#[inline(never)]` para que gum la pueda enganchar.
+    ///
+    /// `black_box`: MEDIDO (2026-11-26, host) — sin él, LLVM **elimina la
+    /// llamada** (la función es interna, sin efectos y su resultado es
+    /// constante) ⇒ el hook no se disparaba nunca y el test era falso.
+    #[inline(never)]
+    extern "C" fn objetivo(x: u64) -> u64 {
+        std::hint::black_box(x) + 7
+    }
+
+    /// SEGUNDA función a hookear: cada test usa una distinta porque enganchar
+    /// dos veces la MISMA en el mismo proceso rompe el trampolín de gum
+    /// (medido: SIGABRT con una reserva gigante).
+    #[inline(never)]
+    extern "C" fn objetivo2(x: u64) -> u64 {
+        std::hint::black_box(x) + 9
+    }
+
+    /// TERCERA función: devuelve una `&str` (en Rust el ABI devuelve
+    /// (puntero, longitud) IGUAL que una `string` de Go ⇒ sirve para probar
+    /// la lectura del retorno).
+    ///
+    /// `black_box` en el argumento: sin él, LLVM **elimina la llamada**
+    /// (función interna, sin efectos, resultado constante) ⇒ el hook no se
+    /// disparaba nunca y el test era falso (medido: ENTER=0).
+    #[inline(never)]
+    #[no_mangle]
+    pub extern "C" fn objetivo3(x: u64) -> &'static str {
+        if std::hint::black_box(x) == 7 {
+            "https://endpoint.de.prueba/v1/x"
+        } else {
+            "https://otro.de.prueba/"
+        }
+    }
+
+    /// CUARTA función (otra `&str`): cada test hookea una DISTINTA porque
+    /// enganchar dos veces la misma en el mismo proceso rompe el trampolín
+    /// de gum (medido: SIGABRT con una reserva gigante) y los tests del CI
+    /// se ejecutan en PARALELO.
+    #[inline(never)]
+    #[no_mangle]
+    pub extern "C" fn objetivo4(x: u64) -> &'static str {
+        if std::hint::black_box(x) == 7 {
+            "https://otro.de.prueba/v1/x"
+        } else {
+            "https://cuarto.de.prueba/"
+        }
+    }
+
+    /// Contador de entradas/salidas, con sus PROPIOS contadores.
+    struct Contador {
+        enter: &'static AtomicU64,
+        leave: &'static AtomicU64,
+    }
+
+    impl Contador {
+        fn nuevo(enter: &'static AtomicU64, leave: &'static AtomicU64) -> Self {
+            Self { enter, leave }
+        }
+    }
+
+    impl InvocationListener for Contador {
+        fn on_enter(&mut self, _ctx: InvocationContext) {
+            self.enter.fetch_add(1, Ordering::SeqCst);
+        }
+        fn on_leave(&mut self, _ctx: InvocationContext) {
+            self.leave.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// El escritor NDJSON es un SINGLTON global ⇒ dos tests que lo abran
+    /// con rutas distintas se pisan (el último `abrir` cambia el `fd`).
+    /// MEDIDO (2026-11-26, CI): por eso los tests que lo usan se serializan
+    /// con este cerrojo.
+    static CERROJO_SINK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn cerrojo_sink() -> std::sync::MutexGuard<'static, ()> {
+        match CERROJO_SINK.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        }
+    }
+
+    #[test]
+    fn gum_llama_a_on_leave_al_salir_de_la_funcion() {
+        let mut inter = crate::interceptor_bloqueado();
+        let addr = objetivo as extern "C" fn(u64) -> u64;
+        let ptr = frida_gum::NativePointer(addr as *mut c_void);
+        let mut l = Contador::nuevo(&ENTER_A, &LEAVE_A);
+        let handle = inter
+            .0
+            .attach(ptr, &mut l)
+            .expect("gum no pudo enganchar la función de prueba");
+        let r = objetivo(35);
+        assert_eq!(r, 42, "la función hookeada no se puede llamar");
+        assert_eq!(ENTER_A.load(Ordering::SeqCst), 1, "on_enter no se disparó");
+        assert_eq!(
+            LEAVE_A.load(Ordering::SeqCst),
+            1,
+            "on_leave NO se disparó (gum no llama al callback de salida)"
+        );
+        drop(handle);
+    }
+
+    /// El MISMO `PlanListener` del payload, contra un NDJSON temporal: tiene
+    /// que escribir una línea de ENTRADA (`args`) y otra de SALIDA (`ret`).
+    ///
+    /// MEDIDO (2026-11-26, móvil, LS de Antigravity): en el LS sólo se
+    /// escribía la de entrada ⇒ el retorno de la función (p. ej. la URL del
+    /// endpoint) nunca se veía.
+    #[test]
+    fn el_plan_listener_escribe_el_retorno_de_la_llamada() {
+        let _cerrojo = cerrojo_sink();
+        let mut inter = crate::interceptor_bloqueado();
+        let dir = std::env::temp_dir().join(format!("md_plan_listener_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ruta = dir.join("eventos.ndjson");
+        let _ = std::fs::remove_file(&ruta);
+        let cand = vec![ruta.to_string_lossy().to_string()];
+        let abierta = sink::Sink::global().abrir(&cand).expect("no se pudo abrir el NDJSON");
+        assert_eq!(abierta, cand[0]);
+
+        let addr = objetivo2 as extern "C" fn(u64) -> u64;
+        let ptr = frida_gum::NativePointer(addr as *mut c_void);
+        let mut l = PlanListener {
+            id: "objetivo".to_string(),
+            tarea: "observar".to_string(),
+            valor: None,
+        };
+        let handle = inter
+            .0
+            .attach(ptr, &mut l)
+            .expect("gum no pudo enganchar la función de prueba");
+        let r = objetivo2(33);
+        assert_eq!(r, 42);
+        drop(handle);
+
+        let txt = std::fs::read_to_string(&ruta).unwrap_or_default();
+        let lineas: Vec<&str> = txt.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert!(
+            lineas.iter().any(|l| l.contains("\"args\"")),
+            "no se escribió la línea de ENTRADA: {txt}"
+        );
+        assert!(
+            lineas.iter().any(|l| l.contains("\"ret\"")),
+            "no se escribió la línea de SALIDA (ret): {txt}"
+        );
+        let _ = std::fs::remove_file(&ruta);
+    }
+
+    /// Una función que devuelve una `string` (ptr+len) también dispara el
+    /// `on_leave` (medido: el `ret` depende de él).
+    #[test]
+    fn una_funcion_que_devuelve_una_string_tambien_dispara_on_leave() {
+        let mut inter = crate::interceptor_bloqueado();
+        let addr = objetivo3 as extern "C" fn(u64) -> &'static str;
+        let ptr = frida_gum::NativePointer(addr as *mut c_void);
+        let mut l = Contador::nuevo(&ENTER_B, &LEAVE_B);
+        let h = inter.0.attach(ptr, &mut l).expect("attach");
+        let r = objetivo3(7);
+        assert_eq!(r, "https://endpoint.de.prueba/v1/x");
+        assert_eq!(ENTER_B.load(Ordering::SeqCst), 1, "on_enter no se disparó");
+        assert_eq!(LEAVE_B.load(Ordering::SeqCst), 1, "on_leave no se dispara");
+        drop(h);
+    }
+
+    /// La `string` que devuelve la función (ptr+len, como en Go) tiene que
+    /// leerse y escribirse en el NDJSON.
+    ///
+    /// MEDIDO (2026-11-26, móvil): `GetEndpointURL` devuelve la URL del
+    /// endpoint; sin esto no se ve QUÉ URL usa el LS.
+    #[test]
+    fn el_plan_listener_lee_la_string_que_devuelve_la_funcion() {
+        // El escritor NDJSON es global: este cerrojo serializa los tests que
+        // lo usan (MEDIDO 2026-11-26 en CI: sin él, los dos tests se pisan
+        // el `fd` y el que pierde falla).
+        let _cerrojo = cerrojo_sink();
+        // El interceptor también es global: se toma ANTES de abrir el NDJSON
+        // para que el `fd` no lo cambie otro test mientras éste corre.
+        let mut inter = crate::interceptor_bloqueado();
+        let dir = std::env::temp_dir().join(format!("md_plan_str_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ruta = dir.join("eventos.ndjson");
+        let _ = std::fs::remove_file(&ruta);
+        let cand = vec![ruta.to_string_lossy().to_string()];
+        sink::Sink::global()
+            .abrir(&cand)
+            .expect("no se pudo abrir el NDJSON");
+
+        let addr = objetivo4 as extern "C" fn(u64) -> &'static str;
+        let ptr = frida_gum::NativePointer(addr as *mut c_void);
+        let mut l = PlanListener {
+            id: "endpoint".to_string(),
+            tarea: "observar".to_string(),
+            valor: None,
+        };
+        let handle = inter
+            .0
+            .attach(ptr, &mut l)
+            .expect("gum no pudo enganchar la función de prueba");
+        let r = objetivo4(7);
+        assert_eq!(r, "https://otro.de.prueba/v1/x");
+        drop(handle);
+        let txt = std::fs::read_to_string(&ruta).unwrap_or_default();
+        assert!(
+            txt.contains("\"ret_str\""),
+            "no se escribió el retorno como texto: {txt}"
+        );
+        assert!(
+            txt.contains("otro.de.prueba"),
+            "el texto del retorno no es el esperado: {txt}"
+        );
+        let _ = std::fs::remove_file(&ruta);
+    }
 }
 
 
@@ -584,23 +823,54 @@ impl InvocationListener for PlanListener {
         let tarea = self.tarea.clone();
         let valor = self.valor.clone();
         protegido(|| {
+            // MEDIDO (2026-11-26, móvil, LS de Antigravity): el NDJSON tenía
+            // 473 líneas y NINGUNA con `ret` ⇒ no se veía el retorno de
+            // ninguna función.  Aquí se escribe PRIMERO una línea mínima
+            // (marcador `leave`) para poder distinguir "on_leave no se
+            // dispara" de "el retorno no se pudo leer".
+            let marca = vec![
+                json::campo("id", &id),
+                json::campo("tarea", &tarea),
+                json::campo("leave", "1"),
+            ];
+            evento(tid, "plan_leave", &id, &marca);
+
+            let rv = ctx.return_value();
+            // MEDIDO (2026-11-26, host): `ctx.arg(n)` devuelve los registros
+            // de ENTRADA incluso en el punto de SALIDA ⇒ el retorno de una
+            // `string` (puntero + longitud) NO se podía leer con él.  Hay que
+            // leer el CONTEXTO DE CPU: x0/x1 en AArch64, rax/rdx en x86_64.
+            let (ptr, len) = registros_retorno(&ctx);
             let mut extra = vec![
                 json::campo("id", &id),
                 json::campo("tarea", &tarea),
-                json::campo("ret", &format!("0x{:x}", ctx.return_value())),
+                json::campo("ret", &format!("0x{:x}", rv)),
+                json::campo("ret_len", &format!("{len}")),
             ];
+            // El retorno de una `string` de Go son DOS registros: el puntero
+            // (x0) y la longitud (x1).  El payload vive DENTRO del proceso
+            // instrumentado ⇒ puede leer esos bytes directamente.
+            // MEDIDO (2026-11-26): es lo que devuelve la URL del endpoint.
+            if let Some(s) = lee_string_go(ptr, len) {
+                extra.push(json::campo("ret_str", &redact::redacta_corto(&s)));
+            }
             if let Some(v) = valor {
                 // El retorno de una `string` de Go son DOS registros:
                 // el puntero (x0) y la longitud (x1).  Escribimos los bytes
                 // nuevos en memoria del proceso y cambiamos los dos.
-                let largo_viejo = ctx.arg(1);
+                let largo_viejo = len;
                 match escribir_en_el_proceso(&v) {
                     Some(p) => {
                         ctx.set_return_value(p);
                         // El segundo registro (longitud) sólo existe en el
                         // ABI de Go (AArch64).  En x86_64 el C ABI no lo usa.
+                        // MEDIDO (2026-11-26): hay que tocar el REGISTRO (x1),
+                        // no `arg(1)` (que es el registro de ENTRADA).
                         #[cfg(target_arch = "aarch64")]
-                        ctx.set_arg(1, v.len());
+                        {
+                            let mut cc = ctx.cpu_context();
+                            let _ = cc.set_reg(1, v.len() as u64);
+                        }
                         extra.push(json::campo("sustituto", &format!("0x{:x}", p)));
                         extra.push(json::campo("len_viejo", &format!("{largo_viejo}")));
                         extra.push(json::campo("len_nuevo", &format!("{}", v.len())));
@@ -612,6 +882,77 @@ impl InvocationListener for PlanListener {
             }
             evento(tid, "plan", &id, &extra);
         });
+    }
+}
+
+/// Los DOS registros del RETORNO: (puntero, longitud) en el ABI de Go.
+///
+/// MEDIDO (2026-11-26, host): `ctx.arg(n)` lee los registros de ENTRADA
+/// incluso en el punto de SALIDA ⇒ con `arg(0)/arg(1)` se leía el
+/// ARGUMENTO y no el retorno (y por eso no aparecía ningún `ret_str`).
+/// El contexto de CPU sí tiene el valor de retorno: x0/x1 en AArch64 y
+/// rax/rdx en x86_64.
+fn registros_retorno(ctx: &InvocationContext) -> (usize, usize) {
+    let cc = ctx.cpu_context();
+    #[cfg(target_arch = "aarch64")]
+    {
+        (cc.reg(0) as usize, cc.reg(1) as usize)
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        (cc.rax() as usize, cc.rdx() as usize)
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+    {
+        let _ = cc;
+        (ctx.return_value(), 0)
+    }
+}
+
+/// Lee una `string` de Go (puntero + longitud) de la memoria del proceso.
+///
+/// MEDIDO (2026-11-26, móvil): `GetEndpointURL` devuelve la URL del endpoint
+/// como `string` (x0=puntero, x1=longitud).  El payload se ejecuta DENTRO del
+/// proceso instrumentado, así que puede leer los bytes sin ptrace.
+///
+/// **Seguridad**: los registros de retorno de una función que NO devuelve una
+/// string son basura (en el test de host, `rdx` valía cualquier cosa) ⇒
+/// leerlos a pelo provoca un SIGSEGV (medido).  Por eso se lee de
+/// `/proc/self/mem` con `pread`: si la dirección no está mapeada, `pread`
+/// devuelve -1 (EIO) y no hay señal.
+fn lee_string_go(ptr: usize, len: usize) -> Option<String> {
+    if ptr == 0 || len == 0 || len > 8192 {
+        return None;
+    }
+    let fd = fd_memoria()?;
+    let mut buf = vec![0u8; len];
+    let n = unsafe {
+        libc::pread(
+            fd,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            len,
+            ptr as libc::off_t,
+        )
+    };
+    if n != len as isize {
+        return None;
+    }
+    std::str::from_utf8(&buf).ok().map(|s| s.to_string())
+}
+
+/// El descriptor de `/proc/self/mem` (se abre una vez y se reutiliza).
+fn fd_memoria() -> Option<i32> {
+    static FD: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
+    let fd = *FD.get_or_init(|| unsafe {
+        libc::open(
+            b"/proc/self/mem\0".as_ptr() as *const libc::c_char,
+            libc::O_RDONLY | libc::O_CLOEXEC,
+        )
+    });
+    if fd < 0 {
+        None
+    } else {
+        Some(fd)
     }
 }
 

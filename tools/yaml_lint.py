@@ -84,6 +84,14 @@ def lint(text: str) -> List[Tuple[int, str]]:
         # 2) dentro de un bloque literal (`|`/`>`): sólo manda la indentación
         if in_block is not None:
             if stripped and indent < in_block:
+                # Un comentario NO es contenido del bloque: los parsers de
+                # YAML lo ignoran, así que un comentario dedentado CIERRA el
+                # bloque pero NO rompe el workflow (GitHub lo acepta).  Antes
+                # esto era un falso positivo que impedía comentar entre dos
+                # pasos del mismo job.
+                if stripped.startswith("#"):
+                    in_block = None
+                    continue
                 # El bloque acaba aquí: la línea que lo cierra debe ser una
                 # clave o un elemento de lista en un nivel VÁLIDO.  Si no lo
                 # es (p.ej. `echo fuera de sangria`), el YAML se rompe a

@@ -57,3 +57,14 @@ rust-core/src/drive_native.rs:deleting
 rust-core/src/backup_apps.rs:decoupled
 docs/GO_REVERSE_ENGINEERING.md:debugger
 docs/RECONSTRUCCION_MULTI_METODO.md:desincroniza
+docs/BACKUP_PERFIL_Y_RAW.md:nocache
+docs/CERTIFICADOS_Y_SEDES_ELECTRONICAS.md:sincfiles
+docs/COORDINATION.md:deobfuscated
+docs/FORENSE_ONLINE.md:noseparate
+# MEDIDO el 2026-11-27 (informe de la RE de Jazztel):
+# - "sepolicy" = "se" + "policy": es el nombre de un archivo de Android
+#   ("/system/etc/selinux/*/sepolicy"), no una fusión.
+# - "deofuscador" = "de" + "ofuscador": "deofuscador" es una palabra (la
+#   herramienta que deofusca), no dos palabras pegadas.
+docs/RE_GASTO_DATOS_JAZZTEL.md:sepolicy
+docs/RE_GASTO_DATOS_JAZZTEL.md:deofuscador

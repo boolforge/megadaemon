@@ -2308,4 +2308,9 @@ mod tests {
         assert_eq!(r["enabled"], false);
         assert!(r["error"].as_str().unwrap().contains("confirm"));
     }
+
+    // ── Despliegue y ADB remoto ───────────────────────────────────────
+
+
+
 }

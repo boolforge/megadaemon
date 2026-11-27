@@ -3756,12 +3756,13 @@ mod tests {
 
     #[test]
     fn el_token_de_discord_se_guarda_en_un_fichero_0600() {
-        // El `state_dir` se puede forzar por entorno: se usa uno temporal.
-        let mut dir = std::env::temp_dir();
-        dir.push(format!("md_sync_chats_token_{}", std::process::id()));
+        // MEDIDO 2026-11-25 (CI rojo, 2ª vez): este test FIJABA
+        // `MEGADAEMON_STATE_DIR`, que es GLOBAL al proceso ⇒ en paralelo
+        // otro test leía o borraba este mismo directorio.  Ahora no se toca
+        // ninguna variable de entorno: el estado del test es su temporal
+        // por hilo (`state_dir::state_dir_de_test()`).
+        let dir = std::path::PathBuf::from(crate::cockpit_server::state_dir());
         let _ = fs::remove_dir_all(&dir);
-        let prev = std::env::var("MEGADAEMON_STATE_DIR").ok();
-        std::env::set_var("MEGADAEMON_STATE_DIR", dir.to_string_lossy().to_string());
 
         let res = write_discord_token("token-de-prueba");
         let path = dir.join("sync_chats").join("discord_token");
@@ -3772,11 +3773,6 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             fs::metadata(&path).map(|m| m.permissions().mode() & 0o777).unwrap_or(0)
         };
-
-        std::env::remove_var("MEGADAEMON_STATE_DIR");
-        if let Some(p) = prev {
-            std::env::set_var("MEGADAEMON_STATE_DIR", p);
-        }
 
         assert!(res.is_ok(), "no se pudo guardar el token: {:?}", res);
         assert!(existe, "no se creó el fichero del token");

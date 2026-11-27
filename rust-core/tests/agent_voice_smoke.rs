@@ -193,3 +193,10 @@ fn la_voz_respeta_el_cooldown_y_el_tope_por_tick() {
     assert!(exec.calls.borrow().is_empty(), "en cooldown no se ejecuta nada");
     assert!(out.broadcast.is_empty(), "un idle no se difunde");
 }
+
+// MEDIDO (2026-11-25): este arnés ya usa `megadaemon_core::` para el
+// módulo bajo prueba, así que el `#[path = "../src/util_text.rs"]` era un
+// residuo (y `tests/declared_modules.rs` prohíbe copiar módulos de la
+// librería).  `util_text` es `pub mod` de la librería: se usa desde allí.
+#[allow(unused_imports)]
+use megadaemon_core::util_text;

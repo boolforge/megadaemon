@@ -1,0 +1,1115 @@
+{
+ "name": "google/ai/generativelanguage/v1main/tool_annotations.proto",
+ "package": "google.ai.generativelanguage.v1main",
+ "messages": [
+  {
+   "name": "FetchAvailableModelsRequest",
+   "fields": [
+    {
+     "name": "project",
+     "number": 1,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "project"
+    },
+    {
+     "name": "request_id",
+     "number": 2,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "requestId"
+    },
+    {
+     "name": "entitlement",
+     "number": 9,
+     "label": 1,
+     "type": 11,
+     "type_name": ".google.internal.cloud.code.v1internal.Entitlement",
+     "json_name": "entitlement"
+    },
+    {
+     "name": "location",
+     "number": 3,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "location"
+    }
+   ],
+   "nested": [],
+   "map_entry": false
+  },
+  {
+   "name": "QuotaInfo",
+   "fields": [
+    {
+     "name": "remaining_fraction",
+     "number": 1,
+     "label": 1,
+     "type": 2,
+     "type_name": null,
+     "json_name": "remainingFraction"
+    },
+    {
+     "name": "reset_time",
+     "number": 2,
+     "label": 1,
+     "type": 11,
+     "type_name": ".google.protobuf.Timestamp",
+     "json_name": "resetTime"
+    }
+   ],
+   "nested": [],
+   "map_entry": false
+  },
+  {
+   "name": "BeyondModelInfo",
+   "fields": [
+    {
+     "name": "model_id",
+     "number": 1,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "modelId"
+    },
+    {
+     "name": "quota_bucket_team",
+     "number": 2,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "quotaBucketTeam"
+    },
+    {
+     "name": "quota_bucket_name",
+     "number": 3,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "quotaBucketName"
+    }
+   ],
+   "nested": [],
+   "map_entry": false
+  },
+  {
+   "name": "ModelDetails",
+   "fields": [
+    {
+     "name": "display_name",
+     "number": 1,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "displayName"
+    },
+    {
+     "name": "supports_images",
+     "number": 2,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "supportsImages"
+    },
+    {
+     "name": "supports_thinking",
+     "number": 3,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "supportsThinking"
+    },
+    {
+     "name": "thinking_budget",
+     "number": 4,
+     "label": 1,
+     "type": 5,
+     "type_name": null,
+     "json_name": "thinkingBudget"
+    },
+    {
+     "name": "min_thinking_budget",
+     "number": 5,
+     "label": 1,
+     "type": 5,
+     "type_name": null,
+     "json_name": "minThinkingBudget"
+    },
+    {
+     "name": "recommended",
+     "number": 6,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "recommended"
+    },
+    {
+     "name": "max_tokens",
+     "number": 7,
+     "label": 1,
+     "type": 5,
+     "type_name": null,
+     "json_name": "maxTokens"
+    },
+    {
+     "name": "max_output_tokens",
+     "number": 8,
+     "label": 1,
+     "type": 5,
+     "type_name": null,
+     "json_name": "maxOutputTokens"
+    },
+    {
+     "name": "tokenizer_type",
+     "number": 9,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "tokenizerType"
+    },
+    {
+     "name": "quota_info",
+     "number": 10,
+     "label": 1,
+     "type": 11,
+     "type_name": ".google.internal.cloud.code.v1internal.QuotaInfo",
+     "json_name": "quotaInfo"
+    },
+    {
+     "name": "beta_warning_message",
+     "number": 11,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "betaWarningMessage"
+    },
+    {
+     "name": "beta",
+     "number": 12,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "beta"
+    },
+    {
+     "name": "disabled",
+     "number": 13,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "disabled"
+    },
+    {
+     "name": "description",
+     "number": 14,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "description"
+    },
+    {
+     "name": "model",
+     "number": 15,
+     "label": 1,
+     "type": 14,
+     "type_name": ".exa.codeium_common_pb.Model",
+     "json_name": "model"
+    },
+    {
+     "name": "api_provider",
+     "number": 16,
+     "label": 1,
+     "type": 14,
+     "type_name": ".exa.codeium_common_pb.APIProvider",
+     "json_name": "apiProvider"
+    },
+    {
+     "name": "model_provider",
+     "number": 17,
+     "label": 1,
+     "type": 14,
+     "type_name": ".exa.codeium_common_pb.ModelProvider",
+     "json_name": "modelProvider"
+    },
+    {
+     "name": "supports_cumulative_context",
+     "number": 18,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "supportsCumulativeContext"
+    },
+    {
+     "name": "tab_jump_print_line_range",
+     "number": 19,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "tabJumpPrintLineRange"
+    },
+    {
+     "name": "supports_estimate_token_counter",
+     "number": 20,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "supportsEstimateTokenCounter"
+    },
+    {
+     "name": "is_internal",
+     "number": 21,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "isInternal"
+    },
+    {
+     "name": "add_cursor_to_find_replace_target",
+     "number": 22,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "addCursorToFindReplaceTarget"
+    },
+    {
+     "name": "prompt_templater_type",
+     "number": 23,
+     "label": 1,
+     "type": 14,
+     "type_name": ".exa.codeium_common_pb.PromptTemplaterType",
+     "json_name": "promptTemplaterType"
+    },
+    {
+     "name": "tool_formatter_type",
+     "number": 24,
+     "label": 1,
+     "type": 14,
+     "type_name": ".exa.codeium_common_pb.ToolFormatterType",
+     "json_name": "toolFormatterType"
+    },
+    {
+     "name": "supports_raw_thinking",
+     "number": 25,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "supportsRawThinking"
+    },
+    {
+     "name": "supports_video",
+     "number": 26,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "supportsVideo"
+    },
+    {
+     "name": "supports_pdf",
+     "number": 27,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "supportsPdf"
+    },
+    {
+     "name": "requires_lead_in_generation",
+     "number": 28,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "requiresLeadInGeneration"
+    },
+    {
+     "name": "tag_title",
+     "number": 29,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "tagTitle"
+    },
+    {
+     "name": "tag_description",
+     "number": 30,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "tagDescription"
+    },
+    {
+     "name": "requires_no_xml_tool_examples",
+     "number": 31,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "requiresNoXmlToolExamples"
+    },
+    {
+     "name": "supported_mime_types",
+     "number": 32,
+     "label": 3,
+     "type": 11,
+     "type_name": ".google.internal.cloud.code.v1internal.ModelDetails.SupportedMimeTypesEntry",
+     "json_name": "supportedMimeTypes"
+    },
+    {
+     "name": "requires_image_output_outside_function_responses",
+     "number": 33,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "requiresImageOutputOutsideFunctionResponses"
+    },
+    {
+     "name": "preview",
+     "number": 34,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "preview"
+    },
+    {
+     "name": "thinking_level",
+     "number": 35,
+     "label": 1,
+     "type": 5,
+     "type_name": null,
+     "json_name": "thinkingLevel"
+    },
+    {
+     "name": "tool_response_key",
+     "number": 36,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "toolResponseKey"
+    },
+    {
+     "name": "model_experiments",
+     "number": 37,
+     "label": 1,
+     "type": 11,
+     "type_name": ".google.internal.cloud.code.v1internal.ModelExperiments",
+     "json_name": "modelExperiments"
+    },
+    {
+     "name": "supports_thought_circulation",
+     "number": 38,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "supportsThoughtCirculation"
+    },
+    {
+     "name": "vertex_model_id",
+     "number": 39,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "vertexModelId"
+    },
+    {
+     "name": "supports_deferred_tool_loading",
+     "number": 40,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "supportsDeferredToolLoading"
+    },
+    {
+     "name": "model_url",
+     "number": 41,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "modelUrl"
+    },
+    {
+     "name": "supports_adaptive_thinking",
+     "number": 42,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "supportsAdaptiveThinking"
+    },
+    {
+     "name": "ignore_experiment_names",
+     "number": 43,
+     "label": 3,
+     "type": 9,
+     "type_name": null,
+     "json_name": "ignoreExperimentNames"
+    },
+    {
+     "name": "beyond_model_info",
+     "number": 44,
+     "label": 1,
+     "type": 11,
+     "type_name": ".google.internal.cloud.code.v1internal.BeyondModelInfo",
+     "json_name": "beyondModelInfo"
+    },
+    {
+     "name": "supports_model_info_override",
+     "number": 45,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "supportsModelInfoOverride"
+    }
+   ],
+   "nested": [
+    {
+     "name": "SupportedMimeTypesEntry",
+     "fields": [
+      {
+       "name": "key",
+       "number": 1,
+       "label": 1,
+       "type": 9,
+       "type_name": null,
+       "json_name": "key"
+      },
+      {
+       "name": "value",
+       "number": 2,
+       "label": 1,
+       "type": 8,
+       "type_name": null,
+       "json_name": "value"
+      }
+     ],
+     "nested": [],
+     "map_entry": true
+    }
+   ],
+   "map_entry": false
+  },
+  {
+   "name": "ModelSort",
+   "fields": [
+    {
+     "name": "display_name",
+     "number": 1,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "displayName"
+    },
+    {
+     "name": "groups",
+     "number": 2,
+     "label": 3,
+     "type": 11,
+     "type_name": ".google.internal.cloud.code.v1internal.ModelGroup",
+     "json_name": "groups"
+    }
+   ],
+   "nested": [],
+   "map_entry": false
+  },
+  {
+   "name": "ModelGroup",
+   "fields": [
+    {
+     "name": "display_name",
+     "number": 1,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "displayName"
+    },
+    {
+     "name": "model_ids",
+     "number": 2,
+     "label": 3,
+     "type": 9,
+     "type_name": null,
+     "json_name": "modelIds"
+    }
+   ],
+   "nested": [],
+   "map_entry": false
+  },
+  {
+   "name": "DeprecatedModelReroutingInfo",
+   "fields": [
+    {
+     "name": "new_model_id",
+     "number": 1,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "newModelId"
+    },
+    {
+     "name": "old_model_enum",
+     "number": 2,
+     "label": 1,
+     "type": 14,
+     "type_name": ".exa.codeium_common_pb.Model",
+     "json_name": "oldModelEnum"
+    },
+    {
+     "name": "new_model_enum",
+     "number": 3,
+     "label": 1,
+     "type": 14,
+     "type_name": ".exa.codeium_common_pb.Model",
+     "json_name": "newModelEnum"
+    }
+   ],
+   "nested": [],
+   "map_entry": false
+  },
+  {
+   "name": "ExperimentValue",
+   "fields": [
+    {
+     "name": "bool_value",
+     "number": 1,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "boolValue"
+    },
+    {
+     "name": "float_value",
+     "number": 2,
+     "label": 1,
+     "type": 1,
+     "type_name": null,
+     "json_name": "floatValue"
+    },
+    {
+     "name": "int_value",
+     "number": 3,
+     "label": 1,
+     "type": 3,
+     "type_name": null,
+     "json_name": "intValue"
+    },
+    {
+     "name": "string_value",
+     "number": 4,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "stringValue"
+    }
+   ],
+   "nested": [],
+   "map_entry": false
+  },
+  {
+   "name": "ModelExperiments",
+   "fields": [
+    {
+     "name": "experiments",
+     "number": 1,
+     "label": 3,
+     "type": 11,
+     "type_name": ".google.internal.cloud.code.v1internal.ModelExperiments.ExperimentsEntry",
+     "json_name": "experiments"
+    }
+   ],
+   "nested": [
+    {
+     "name": "ExperimentsEntry",
+     "fields": [
+      {
+       "name": "key",
+       "number": 1,
+       "label": 1,
+       "type": 9,
+       "type_name": null,
+       "json_name": "key"
+      },
+      {
+       "name": "value",
+       "number": 2,
+       "label": 1,
+       "type": 11,
+       "type_name": ".google.internal.cloud.code.v1internal.ExperimentValue",
+       "json_name": "value"
+      }
+     ],
+     "nested": [],
+     "map_entry": true
+    }
+   ],
+   "map_entry": false
+  },
+  {
+   "name": "TieredModelConfig",
+   "fields": [
+    {
+     "name": "flash_lite",
+     "number": 1,
+     "label": 3,
+     "type": 9,
+     "type_name": null,
+     "json_name": "flashLite"
+    },
+    {
+     "name": "flash",
+     "number": 2,
+     "label": 3,
+     "type": 9,
+     "type_name": null,
+     "json_name": "flash"
+    },
+    {
+     "name": "pro",
+     "number": 3,
+     "label": 3,
+     "type": 9,
+     "type_name": null,
+     "json_name": "pro"
+    }
+   ],
+   "nested": [],
+   "map_entry": false
+  },
+  {
+   "name": "FetchAvailableModelsResponse",
+   "fields": [
+    {
+     "name": "models",
+     "number": 1,
+     "label": 3,
+     "type": 11,
+     "type_name": ".google.internal.cloud.code.v1internal.FetchAvailableModelsResponse.ModelsEntry",
+     "json_name": "models"
+    },
+    {
+     "name": "default_agent_model_id",
+     "number": 2,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "defaultAgentModelId"
+    },
+    {
+     "name": "agent_model_sorts",
+     "number": 3,
+     "label": 3,
+     "type": 11,
+     "type_name": ".google.internal.cloud.code.v1internal.ModelSort",
+     "json_name": "agentModelSorts"
+    },
+    {
+     "name": "command_model_ids",
+     "number": 4,
+     "label": 3,
+     "type": 9,
+     "type_name": null,
+     "json_name": "commandModelIds"
+    },
+    {
+     "name": "tab_model_ids",
+     "number": 5,
+     "label": 3,
+     "type": 9,
+     "type_name": null,
+     "json_name": "tabModelIds"
+    },
+    {
+     "name": "image_generation_model_ids",
+     "number": 6,
+     "label": 3,
+     "type": 9,
+     "type_name": null,
+     "json_name": "imageGenerationModelIds"
+    },
+    {
+     "name": "mquery_model_ids",
+     "number": 7,
+     "label": 3,
+     "type": 9,
+     "type_name": null,
+     "json_name": "mqueryModelIds"
+    },
+    {
+     "name": "web_search_model_ids",
+     "number": 8,
+     "label": 3,
+     "type": 9,
+     "type_name": null,
+     "json_name": "webSearchModelIds"
+    },
+    {
+     "name": "commit_message_model_ids",
+     "number": 10,
+     "label": 3,
+     "type": 9,
+     "type_name": null,
+     "json_name": "commitMessageModelIds"
+    },
+    {
+     "name": "deprecated_model_ids",
+     "number": 9,
+     "label": 3,
+     "type": 11,
+     "type_name": ".google.internal.cloud.code.v1internal.FetchAvailableModelsResponse.DeprecatedModelIdsEntry",
+     "json_name": "deprecatedModelIds"
+    },
+    {
+     "name": "audio_transcription_model_ids",
+     "number": 11,
+     "label": 3,
+     "type": 9,
+     "type_name": null,
+     "json_name": "audioTranscriptionModelIds"
+    },
+    {
+     "name": "battle_mode_model_sorts",
+     "number": 12,
+     "label": 3,
+     "type": 11,
+     "type_name": ".google.internal.cloud.code.v1internal.ModelSort",
+     "json_name": "battleModeModelSorts"
+    },
+    {
+     "name": "tiered_model_ids",
+     "number": 14,
+     "label": 1,
+     "type": 11,
+     "type_name": ".google.internal.cloud.code.v1internal.TieredModelConfig",
+     "json_name": "tieredModelIds"
+    },
+    {
+     "name": "experiment_ids",
+     "number": 13,
+     "label": 3,
+     "type": 5,
+     "type_name": null,
+     "json_name": "experimentIds"
+    }
+   ],
+   "nested": [
+    {
+     "name": "ModelsEntry",
+     "fields": [
+      {
+       "name": "key",
+       "number": 1,
+       "label": 1,
+       "type": 9,
+       "type_name": null,
+       "json_name": "key"
+      },
+      {
+       "name": "value",
+       "number": 2,
+       "label": 1,
+       "type": 11,
+       "type_name": ".google.internal.cloud.code.v1internal.ModelDetails",
+       "json_name": "value"
+      }
+     ],
+     "nested": [],
+     "map_entry": true
+    },
+    {
+     "name": "DeprecatedModelIdsEntry",
+     "fields": [
+      {
+       "name": "key",
+       "number": 1,
+       "label": 1,
+       "type": 9,
+       "type_name": null,
+       "json_name": "key"
+      },
+      {
+       "name": "value",
+       "number": 2,
+       "label": 1,
+       "type": 11,
+       "type_name": ".google.internal.cloud.code.v1internal.DeprecatedModelReroutingInfo",
+       "json_name": "value"
+      }
+     ],
+     "nested": [],
+     "map_entry": true
+    }
+   ],
+   "map_entry": false
+  },
+  {
+   "name": "ToolAnnotations",
+   "fields": [
+    {
+     "name": "title",
+     "number": 1,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "title"
+    },
+    {
+     "name": "read_only_hint",
+     "number": 2,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "readOnlyHint"
+    },
+    {
+     "name": "destructive_hint",
+     "number": 3,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "destructiveHint"
+    },
+    {
+     "name": "idempotent_hint",
+     "number": 4,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "idempotentHint"
+    },
+    {
+     "name": "open_world_hint",
+     "number": 5,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "openWorldHint"
+    },
+    {
+     "name": "security_annotations",
+     "number": 6,
+     "label": 1,
+     "type": 11,
+     "type_name": ".google.ai.generativelanguage.v1main.SecurityAnnotations",
+     "json_name": "securityAnnotations"
+    }
+   ],
+   "nested": [],
+   "map_entry": false
+  },
+  {
+   "name": "SecurityAnnotations",
+   "fields": [
+    {
+     "name": "external_communication",
+     "number": 1,
+     "label": 1,
+     "type": 11,
+     "type_name": ".google.ai.generativelanguage.v1main.ExternalCommunication",
+     "json_name": "externalCommunication"
+    },
+    {
+     "name": "undo_difficulty_windows",
+     "number": 2,
+     "label": 3,
+     "type": 11,
+     "type_name": ".google.ai.generativelanguage.v1main.UndoWindow",
+     "json_name": "undoDifficultyWindows"
+    },
+    {
+     "name": "scope_of_change",
+     "number": 3,
+     "label": 1,
+     "type": 11,
+     "type_name": ".google.ai.generativelanguage.v1main.ChangeScope",
+     "json_name": "scopeOfChange"
+    },
+    {
+     "name": "expected_input_sensitivity",
+     "number": 4,
+     "label": 1,
+     "type": 11,
+     "type_name": ".google.ai.generativelanguage.v1main.DataSensitivity",
+     "json_name": "expectedInputSensitivity"
+    },
+    {
+     "name": "expected_output_sensitivity",
+     "number": 5,
+     "label": 1,
+     "type": 11,
+     "type_name": ".google.ai.generativelanguage.v1main.DataSensitivity",
+     "json_name": "expectedOutputSensitivity"
+    },
+    {
+     "name": "introduces_untrusted_data",
+     "number": 6,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "introducesUntrustedData"
+    },
+    {
+     "name": "generative",
+     "number": 7,
+     "label": 1,
+     "type": 8,
+     "type_name": null,
+     "json_name": "generative"
+    },
+    {
+     "name": "data_access_scopes",
+     "number": 8,
+     "label": 3,
+     "type": 14,
+     "type_name": ".identity_accesscontrol.DataAccessScope",
+     "json_name": "dataAccessScopes"
+    },
+    {
+     "name": "party_boundary",
+     "number": 9,
+     "label": 1,
+     "type": 14,
+     "type_name": ".google.ai.generativelanguage.v1main.SecurityAnnotations.PartyBoundary",
+     "json_name": "partyBoundary"
+    }
+   ],
+   "nested": [],
+   "map_entry": false
+  },
+  {
+   "name": "ExternalCommunication",
+   "fields": [
+    {
+     "name": "capability",
+     "number": 1,
+     "label": 1,
+     "type": 14,
+     "type_name": ".google.ai.generativelanguage.v1main.ExternalCommunication.EgressCapability",
+     "json_name": "capability"
+    }
+   ],
+   "nested": [],
+   "map_entry": false
+  },
+  {
+   "name": "DataSensitivity",
+   "fields": [
+    {
+     "name": "confidentiality",
+     "number": 1,
+     "label": 1,
+     "type": 14,
+     "type_name": ".google.ai.generativelanguage.v1main.DataSensitivity.Confidentiality",
+     "json_name": "confidentiality"
+    },
+    {
+     "name": "category",
+     "number": 2,
+     "label": 1,
+     "type": 9,
+     "type_name": null,
+     "json_name": "category"
+    }
+   ],
+   "nested": [],
+   "map_entry": false
+  },
+  {
+   "name": "UndoWindow",
+   "fields": [
+    {
+     "name": "undo_difficulty",
+     "number": 1,
+     "label": 1,
+     "type": 14,
+     "type_name": ".google.ai.generativelanguage.v1main.UndoWindow.UndoDifficulty",
+     "json_name": "undoDifficulty"
+    },
+    {
+     "name": "duration",
+     "number": 2,
+     "label": 1,
+     "type": 11,
+     "type_name": ".google.protobuf.Duration",
+     "json_name": "duration"
+    }
+   ],
+   "nested": [],
+   "map_entry": false
+  },
+  {
+   "name": "ChangeScope",
+   "fields": [
+    {
+     "name": "sensitivity_tier",
+     "number": 1,
+     "label": 1,
+     "type": 14,
+     "type_name": ".google.ai.generativelanguage.v1main.ChangeScope.Tier",
+     "json_name": "sensitivityTier"
+    },
+    {
+     "name": "product_domain",
+     "number": 3,
+     "label": 1,
+     "type": 11,
+     "type_name": ".google.ai.generativelanguage.v1main.ChangeScope.ProductDomainScope",
+     "json_name": "productDomain"
+    },
+    {
+     "name": "host_environment",
+     "number": 4,
+     "label": 1,
+     "type": 11,
+     "type_name": ".google.ai.generativelanguage.v1main.ChangeScope.HostEnvironmentScope",
+     "json_name": "hostEnvironment"
+    },
+    {
+     "name": "conversation_window",
+     "number": 5,
+     "label": 1,
+     "type": 11,
+     "type_name": ".google.ai.generativelanguage.v1main.ChangeScope.ConversationWindowScope",
+     "json_name": "conversationWindow"
+    }
+   ],
+   "nested": [
+    {
+     "name": "ConversationWindowScope",
+     "fields": [],
+     "nested": [],
+     "map_entry": false
+    },
+    {
+     "name": "ProductDomainScope",
+     "fields": [
+      {
+       "name": "url",
+       "number": 1,
+       "label": 1,
+       "type": 9,
+       "type_name": null,
+       "json_name": "url"
+      }
+     ],
+     "nested": [],
+     "map_entry": false
+    },
+    {
+     "name": "HostEnvironmentScope",
+     "fields": [
+      {
+       "name": "access_level",
+       "number": 1,
+       "label": 1,
+       "type": 14,
+       "type_name": ".google.ai.generativelanguage.v1main.ChangeScope.HostEnvironmentScope.AccessLevel",
+       "json_name": "accessLevel"
+      }
+     ],
+     "nested": [],
+     "map_entry": false
+    }
+   ],
+   "map_entry": false
+  }
+ ],
+ "enums": [],
+ "services": []
+}

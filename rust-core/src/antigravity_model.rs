@@ -6,7 +6,7 @@
 //! La GUI de Antigravity (`com.agy`) tiene un catálogo de modelos **cerrado**:
 //! sus ids son ofuscados (`MODEL_PLACEHOLDER_M526`, `MODEL_PLACEHOLDER_M402`,
 //! ...) y no se pueden apuntar a un proveedor externo.  La vía limpia es el
-//! **BYOM** ("Bring Your Own Model"), que la GUI ofrece en el selector de
+//! **BYOM** ("Bring Your Own Model"), que la GUI ofrecee en el selector de
 //! modelo ("Add Custom Model").
 //!
 //! MEDIDO 2026-11-22 (S21 Ultra del usuario, `liblanguage_server.so` de
@@ -299,7 +299,7 @@ pub fn select_as_default(bridge: &AntigravityBridge, model: &str) -> BridgeResul
 //
 // * El modelo `megadaemon` **ya estaba registrado** en el estado de la IDE
 //   (`JetboxWriteState` ⇒ `customModelsConfig.customModels`), MEDIDO.
-// * PERO la GUI no lo ofrecía: el bundle web tiene el gate
+// * PERO la GUI no lo mostraba: el bundle web tiene el gate
 //   `osName==="linux"&&k.isGoogleInternal` (MEDIDO en `main.js`) ⇒ en
 //   Android **todos** los modelos personalizados salen `disabled`.
 //   El parche de ese gate ya existe (`antigravity_endpoint::aplicar_gate`).

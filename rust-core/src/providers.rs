@@ -111,6 +111,15 @@ pub struct ChatResult {
     /// Vacío = el proveedor no lo dijo (no se inventa).
     #[serde(default)]
     pub finish_reason: String,
+    /// Tool calls ESTRUCTURADAS que pidió el proveedor.
+    ///
+    /// MEDIDO (2026-11-26, móvil): antes sólo se conservaba
+    /// `tools_used: Vec<String>` (los NOMBRES) ⇒ la tool call se perdía y el
+    /// agente de Antigravity la mostraba como texto en vez de ejecutarla.
+    /// Aquí viaja la llamada completa (id + nombre + argumentos) para poder
+    /// emitirla como `functionCall` de Gemini.
+    #[serde(default)]
+    pub tool_calls: Vec<ParsedToolCall>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -320,7 +329,7 @@ pub fn truncar(s: &str, n: usize) -> String {
 }
 
 /// Tool call nativa del proveedor (OpenAI `tool_calls`).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ParsedToolCall {
     pub id: String,
     pub name: String,
@@ -494,6 +503,229 @@ fn parse_tool_calls(node: Option<&Value>) -> Vec<ParsedToolCall> {
         });
     }
     out
+}
+
+/// Recupera del TEXTO las tool calls que el proveedor dejó ahí.
+///
+/// MEDIDO (2026-11-26, móvil): MiniMax, cuando la petición **no** lleva
+/// `tools`, no devuelve `tool_calls` estructuradas: deja la llamada dentro
+/// del texto con su propio protocolo.  Se han medido **dos** formas:
+///
+/// ```text
+/// # A) <]minimax[>[<tool_call>
+///    <invoke name="view_file">
+///    {"AbsolutePath":"..."}
+///    </invoke>
+///
+/// # B) <]minimax[>[<tool_call>
+///    =functions.run_command  code
+///    {"command":"...","timeout_ms":60000}
+/// ```
+///
+/// Se recuperan ambas, se limpian los marcadores del texto y la llamada
+/// queda disponible como `functionCall` para el agente.
+///
+/// Función **PURO**: no toca red ni estado global.
+pub fn tool_calls_en_texto(texto: &str) -> (Vec<ParsedToolCall>, String) {
+    let mut calls: Vec<ParsedToolCall> = Vec::new();
+    let mut limpio = String::with_capacity(texto.len());
+    let mut resto = texto;
+    loop {
+        // El siguiente inicio de llamada: `<invoke` (forma A) o
+        // `=functions.` (forma B).
+        let i_a = resto.find("<invoke");
+        let i_b = resto.find("=functions.");
+        let (i, forma_a) = match (i_a, i_b) {
+            (Some(a), Some(b)) => {
+                if a <= b {
+                    (a, true)
+                } else {
+                    (b, false)
+                }
+            }
+            (Some(a), None) => (a, true),
+            (None, Some(b)) => (b, false),
+            (None, None) => {
+                limpio.push_str(resto);
+                break;
+            }
+        };
+        limpio.push_str(&resto[..i]);
+        let after = &resto[i..];
+        let parsed = if forma_a {
+            parse_llamada_invoke(after)
+        } else {
+            parse_llamada_functions(after)
+        };
+        let Some((call, consumido)) = parsed else {
+            limpio.push_str(after);
+            break;
+        };
+        calls.push(ParsedToolCall {
+            id: format!("call_texto_{}", calls.len() + 1),
+            ..call
+        });
+        resto = &after[consumido..];
+    }
+    if !calls.is_empty() {
+        limpio = limpiar_marcadores_de_tool_call(&limpio);
+    }
+    (calls, limpio)
+}
+
+/// Forma A: `<invoke name="X">{json}</invoke>`.
+///
+/// Devuelve la llamada y **cuántos bytes** se han consumido.
+fn parse_llamada_invoke(after: &str) -> Option<(ParsedToolCall, usize)> {
+    // `name="X"` (con o sin espacios alrededor del `=`).
+    //  Todos los índices son ABSOLUTOS dentro de `after`.
+    let ni = after.find("name")?;
+    let mut p = ni + "name".len();
+    while p < after.len() && after.as_bytes()[p].is_ascii_whitespace() {
+        p += 1;
+    }
+    if p >= after.len() || after.as_bytes()[p] != b'=' {
+        return None;
+    }
+    p += 1;
+    while p < after.len() && after.as_bytes()[p].is_ascii_whitespace() {
+        p += 1;
+    }
+    let comilla = after[p..].chars().next()?;
+    if comilla != '"' && comilla != '\'' {
+        return None;
+    }
+    let ini_cuerpo = p + comilla.len_utf8();
+    let cierre = after[ini_cuerpo..].find(comilla)?;
+    let name = after[ini_cuerpo..ini_cuerpo + cierre].to_string();
+    if name.is_empty() {
+        return None;
+    }
+    // Los argumentos: el primer `{` DESPUÉS del cierre de la comilla.
+    let fin_nombre = ini_cuerpo + cierre;
+    let bo = fin_nombre + after[fin_nombre..].find('{')?;
+    let (json_args, consumido) = objeto_json_en_texto(&after[bo..])?;
+    let arguments = serde_json::from_str(json_args).unwrap_or(Value::Object(serde_json::Map::new()));
+    // Saltar el `</invoke>` si está.
+    let mut fin = bo + consumido;
+    if let Some(p) = after[fin..].find("</invoke>") {
+        fin += p + "</invoke>".len();
+    }
+    Some((
+        ParsedToolCall {
+            id: String::new(),
+            name,
+            arguments,
+        },
+        fin,
+    ))
+}
+
+/// Forma B: `=functions.X  code\n{json}` (protocolo propio de MiniMax).
+fn parse_llamada_functions(after: &str) -> Option<(ParsedToolCall, usize)> {
+    let ini_nombre = after.find("=functions.")? + "=functions.".len();
+    // El nombre va hasta el primer espacio (o hasta la `{` de los args).
+    let resto_nombre = &after[ini_nombre..];
+    let fin_nombre = ini_nombre
+        + resto_nombre
+            .find(|c: char| c.is_whitespace() || c == '{')
+            .unwrap_or(resto_nombre.len());
+    let name = after[ini_nombre..fin_nombre].to_string();
+    if name.is_empty() {
+        return None;
+    }
+    // Detrás del nombre puede venir una palabra de tipo (`code`, `result`…).
+    let mut p = fin_nombre;
+    if p < after.len() && after.as_bytes()[p] != b'{' {
+        while p < after.len() && after.as_bytes()[p].is_ascii_whitespace() {
+            p += 1;
+        }
+        while p < after.len()
+            && !after.as_bytes()[p].is_ascii_whitespace()
+            && after.as_bytes()[p] != b'{'
+        {
+            p += 1;
+        }
+    }
+    // Los argumentos: el primer `{` DESPUÉS.
+    let bo = p + after[p..].find('{')?;
+    let (json_args, consumido) = objeto_json_en_texto(&after[bo..])?;
+    let arguments =
+        serde_json::from_str(json_args).unwrap_or(Value::Object(serde_json::Map::new()));
+    Some((
+        ParsedToolCall {
+            id: String::new(),
+            name,
+            arguments,
+        },
+        bo + consumido,
+    ))
+}
+
+/// Localiza un objeto JSON `{…}` completo (con llaves y comillas).
+///
+/// Devuelve el trozo y su longitud en bytes.
+fn objeto_json_en_texto(s: &str) -> Option<(&str, usize)> {
+    let b = s.as_bytes();
+    if b.is_empty() || b[0] != b'{' {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut en_cadena = false;
+    let mut escapado = false;
+    for (i, &c) in b.iter().enumerate() {
+        if en_cadena {
+            if escapado {
+                escapado = false;
+            } else if c == b'\\' {
+                escapado = true;
+            } else if c == b'"' {
+                en_cadena = false;
+            }
+            continue;
+        }
+        match c {
+            b'"' => en_cadena = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((&s[..=i], i + 1));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Quita los marcadores de tool call que el proveedor mete en el texto.
+///
+/// MEDIDO (2026-11-26, móvil): MiniMax envuelve sus llamadas en tokens
+/// propios que llegan como `<]minimax[>[<tool_call>` con un U+200B
+/// (zero-width space) intercalado.  Se quitan primero todos los U+200B y
+/// después los marcadores planos.  Sólo se limpia cuando se ha detectado
+/// una llamada (si no, el texto del usuario queda intacto).
+fn limpiar_marcadores_de_tool_call(texto: &str) -> String {
+    const ZWSP: char = '\u{200b}';
+    let mut t: String = texto.chars().filter(|c| *c != ZWSP).collect();
+    // El token completo va ANTES que sus trozos: si se quitan primero los
+    // trozos, el corchete final se queda solo.
+    for m in [
+        "]<]minimax[>[",
+        "]<]minimax[>",
+        "</]minimax[>[",
+        "<]minimax[>[",
+        "<]minimax[>",
+        "</]minimax[>",
+        "<]minimax[",
+        "]minimax[>",
+        "<tool_call>",
+        "</tool_call>",
+    ] {
+        t = t.replace(m, "");
+    }
+    t
 }
 
 /// Saca el mensaje de error del cuerpo de una respuesta (JSON o texto).
@@ -1442,6 +1674,85 @@ pub fn prompt_max_chars() -> usize {
 /// un marcador con **cuántos** caracteres se quitaron (para que el agente y
 /// la UI lo vean: no es un misterio).
 ///
+/// Aplica el presupuesto de prompt al **conjunto** de mensajes.
+///
+/// MEDIDO (2026-11-27): el proveedor `pollinations-free` cuenta "mensajes y
+/// tools" ⇒ el presupuesto se aplica a la SUMA de todos los mensajes, no
+/// sólo al último.  Con el bucle de herramientas (varios turnos
+/// `assistant`/`tool`) el último mensaje es una respuesta corta y el peso
+/// está en el historial: recortar sólo el último no arreglaba nada.
+///
+/// La cabeza (el mensaje de sistema) y la cola (el último mensaje, que es lo
+/// que el usuario acaba de escribir) se conservan; lo que se recorta es el
+/// texto del último mensaje y, si aún sobra, se recortan los mensajes
+/// intermedios más viejos.
+///
+/// Devuelve `(mensajes, caracteres_quitados)`.
+pub fn recortar_mensajes(
+    msgs: Vec<Value>,
+    tools_chars: usize,
+    max_chars: usize,
+) -> (Vec<Value>, usize) {
+    if max_chars == 0 || msgs.is_empty() {
+        return (msgs, 0);
+    }
+    // Las tools también las cuenta el proveedor: salen del presupuesto.
+    let presupuesto_msgs = max_chars.saturating_sub(tools_chars).max(1_024);
+    let chars_de = |m: &Value| -> usize {
+        m.get("content")
+            .and_then(|c| c.as_str())
+            .map(|s| s.chars().count())
+            .unwrap_or(0)
+    };
+    let total: usize = msgs.iter().map(chars_de).sum();
+    if total <= presupuesto_msgs {
+        return (msgs, 0);
+    }
+    let mut out = msgs;
+    let n = out.len();
+    // Lo que ocupan los mensajes que NO son el último.
+    let otros: usize = out[..n - 1].iter().map(chars_de).sum();
+    // El último (el del usuario) se recorta con el presupuesto que queda.
+    let para_ultimo = presupuesto_msgs.saturating_sub(otros).max(512);
+    let mut quitados = 0usize;
+    if let Some(texto) = out[n - 1]
+        .get("content")
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string())
+    {
+        let (recortado, quitados_ultimo) = recortar_prompt(&texto, para_ultimo);
+        quitados += quitados_ultimo;
+        if let Some(obj) = out[n - 1].as_object_mut() {
+            obj.insert("content".to_string(), Value::String(recortado));
+        }
+    }
+    // Todavía sobra: se recortan los mensajes intermedios MÁS VIEJOS (el
+    // historial es lo que menos aporta; el último turno y el sistema, no).
+    if otros > para_ultimo && n > 2 {
+        let sobra = otros - para_ultimo;
+        let mut por_recortar = sobra;
+        for m in out.iter_mut().take(n - 1).rev() {
+            if por_recortar == 0 {
+                break;
+            }
+            let largo = chars_de(m);
+            if largo == 0 {
+                continue;
+            }
+            if let Some(texto) = m.get("content").and_then(|c| c.as_str()).map(|s| s.to_string()) {
+                let nuevo_max = largo.saturating_sub(por_recortar).max(64);
+                let (recortado, quitados_msg) = recortar_prompt(&texto, nuevo_max);
+                por_recortar = por_recortar.saturating_sub(quitados_msg);
+                quitados += quitados_msg;
+                if let Some(obj) = m.as_object_mut() {
+                    obj.insert("content".to_string(), Value::String(recortado));
+                }
+            }
+        }
+    }
+    (out, quitados)
+}
+
 /// Devuelve `(texto_recortado, caracteres_quitados)`.
 pub fn recortar_prompt(texto: &str, max_chars: usize) -> (String, usize) {
     let n = texto.chars().count();
@@ -1646,6 +1957,41 @@ pub fn execute_chat_with(
     max_tokens: u32,
     deps: &ChatDeps<'_>,
 ) -> ChatResult {
+    execute_chat_con_tools_with(
+        prompt,
+        requested_model,
+        attachment_path,
+        system_override,
+        max_tokens,
+        &[],
+        None,
+        deps,
+    )
+}
+
+/// Núcleo de la cascada CON **herramientas** y CON **conversación ya montada**.
+///
+/// MEDIDO (2026-11-26, móvil): el language server de Antigravity manda sus
+/// `functionDeclarations` (18 herramientas) y espera recibir `functionCall`.
+/// El proveedor, en cambio, sólo devuelve tool calls si la petición lleva
+/// `tools`: sin ese campo el modelo responde con su protocolo de TEXTO
+/// (`<invoke name="...">{...}</invoke>`) y el agente enseña la llamada en vez
+/// de ejecutarla.
+///
+/// - `tools`: herramientas en formato OpenAI (`{type,function:{name,…}}`).
+/// - `mensajes`: conversación completa en formato OpenAI.  Si viene `Some`,
+///   se usa tal cual (⇒ el bucle de herramientas conserva el
+///   `assistant.tool_calls` y el `role:"tool"` con el resultado).
+pub fn execute_chat_con_tools_with(
+    prompt: &str,
+    requested_model: Option<&str>,
+    attachment_path: Option<&str>,
+    system_override: Option<&str>,
+    max_tokens: u32,
+    tools: &[Value],
+    mensajes: Option<&[Value]>,
+    deps: &ChatDeps<'_>,
+) -> ChatResult {
     let t0 = Instant::now();
     let vault = deps.vault;
     let target_id: &str = match requested_model.map(|s| s.trim()).filter(|s| !s.is_empty()) {
@@ -1673,6 +2019,7 @@ pub fn execute_chat_with(
             quota: None,
             provider_trace: vec![format!("{} => SALTADO (modelo retirado)", rid)],
             finish_reason: String::new(),
+            tool_calls: Vec::new(),
         };
     }
 
@@ -1709,6 +2056,7 @@ pub fn execute_chat_with(
             quota: None,
             provider_trace: vec!["local-seere => OK (offline)".to_string()],
             finish_reason: String::new(),
+            tool_calls: Vec::new(),
         };
     }
 
@@ -1745,7 +2093,15 @@ pub fn execute_chat_with(
 
     // Build ordered candidate cascade: requested model first -> other enabled cloud models -> local SEERE v12
     let mut candidates: Vec<ProviderEntry> = Vec::new();
-    if let Some(p) = vault.providers.iter().find(|p| p.id == actual_cloud_id) {
+    // MEDIDO (2026-11-26, móvil): el LS pide el modelo por NOMBRE
+    // ("gemini-3.8-flash"), no por id de proveedor ("google-ai-studio") ⇒
+    // el matching tiene que mirar el `model` también, o el modelo pedido
+    // no iría primero en la cascada.
+    if let Some(p) = vault
+        .providers
+        .iter()
+        .find(|p| p.id == actual_cloud_id || p.model == actual_cloud_id)
+    {
         candidates.push(p.clone());
     }
     for p in &vault.providers {
@@ -1817,36 +2173,49 @@ pub fn execute_chat_with(
             }
         };
 
+        // MEDIDO (2026-11-26, móvil): la conversación puede venir YA montada
+        // (bucle de herramientas: `assistant.tool_calls` + `role:"tool"` con
+        // el resultado).  Si no, se usa la pareja sistema/usuario de siempre.
+        let msgs: Vec<Value> = match mensajes {
+            Some(m) if !m.is_empty() => m.to_vec(),
+            _ => vec![
+                json!({"role": "system", "content": sys_prompt}),
+                json!({"role": "user", "content": enriched_prompt}),
+            ],
+        };
         // MEDIDO 2026-11-27 (captura del móvil): el proveedor `pollinations-free`
         // (API clásica, sin key) acepta **16.000 caracteres** contando
         // mensajes y tools; a partir de ahí responde HTTP 413 "Prompt too
         // long".  El prompt que sale hacia el proveedor es la conversación de
-        // Antigravity **APLANADA** (todo el historial + el system), así que
-        // una sesión larga lo revienta SIEMPRE.
-        //
-        // El presupuesto deja sitio para las tools (que el proveedor cuenta
-        // aparte) y conserva la CABEZA (instrucciones) y la COLA (lo último
-        // que se dijo, que es lo que el modelo necesita de verdad).
+        // Antigravity (historial entero + system), así que una sesión larga
+        // lo revienta SIEMPRE.  El presupuesto se aplica al CONJUNTO de los
+        // mensajes (el proveedor los cuenta TODOS) y deja sitio para las
+        // tools, que también cuenta.
         let presupuesto = prompt_max_chars();
-        let sys_len = sys_prompt.chars().count();
-        let para_prompt = presupuesto.saturating_sub(sys_len).max(1_024);
-        let (enriched_prompt, recortados) = recortar_prompt(&enriched_prompt, para_prompt);
+        let tools_chars: usize = tools
+            .iter()
+            .map(|t| serde_json::to_string(t).map(|s| s.chars().count()).unwrap_or(0))
+            .sum();
+        let (msgs, recortados) = recortar_mensajes(msgs, tools_chars, presupuesto);
         if recortados > 0 {
             trace.push(format!(
                 "prompt recortado: {} caracteres fuera (presupuesto {})",
                 recortados, presupuesto
             ));
         }
-
-        let payload = json!({
+        let mut payload = json!({
             "model": p.model,
-            "messages": [
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": enriched_prompt}
-            ],
+            "messages": msgs,
             "max_tokens": capped_max_tokens,
             "temperature": 0.3
         });
+        // Las herramientas SÓLO se mandan si las pidió el cliente: sin
+        // `tools` el proveedor responde con su protocolo de TEXTO en vez de
+        // con `tool_calls` (MEDIDO 2026-11-26, móvil, contra MiniMax).
+        if !tools.is_empty() {
+            payload["tools"] = json!(tools);
+            payload["tool_choice"] = json!("auto");
+        }
         let req = LlmRequest {
             endpoint: p.endpoint.clone(),
             model: p.model.clone(),
@@ -1896,6 +2265,25 @@ pub fn execute_chat_with(
                             for tc in &parsed.tool_calls {
                                 tools_used.push(format!("provider_tool:{}", tc.name));
                             }
+                            // MEDIDO (2026-11-26, móvil): hay proveedores
+                            // (MiniMax) que, cuando NO reciben `tools`,
+                            // dejan la llamada DENTRO del texto con su
+                            // propio protocolo (`<invoke name="…">`).
+                            // Se recupera para que el agente pueda
+                            // ejecutarla igual, y se limpia el texto.
+                            let (tool_calls, reply) = if parsed.tool_calls.is_empty() {
+                                let (cs, limpio) = tool_calls_en_texto(&parsed.content);
+                                if cs.is_empty() {
+                                    (Vec::new(), parsed.content)
+                                } else {
+                                    for tc in &cs {
+                                        tools_used.push(format!("provider_tool:{}", tc.name));
+                                    }
+                                    (cs, limpio)
+                                }
+                            } else {
+                                (parsed.tool_calls.clone(), parsed.content)
+                            };
                             let tokens_in = parsed.prompt_tokens;
                             let tokens_out = parsed.completion_tokens;
                             let total_tokens = parsed
@@ -1914,7 +2302,7 @@ pub fn execute_chat_with(
                             // es VISIBLE (tier "paid"/"free"), no silencioso.
                             trace.push(format!("{} => OK (tier {})", p.id, p.tier));
                             return ChatResult {
-                                reply: parsed.content,
+                                reply,
                                 reasoning: parsed.reasoning,
                                 model_id: p.id.clone(),
                                 model_name: p.name.clone(),
@@ -1926,6 +2314,7 @@ pub fn execute_chat_with(
                                 quota: Some(crate::quota_guard::snapshot_compacto_de(Some(&p.id))),
                                 provider_trace: trace,
                                 finish_reason: parsed.finish_reason.clone(),
+                                tool_calls,
                             };
                         }
                         Err(e) => {
@@ -1996,6 +2385,7 @@ pub fn execute_chat_with(
         quota: Some(crate::quota_guard::snapshot_compacto()),
         provider_trace: trace,
         finish_reason: String::new(),
+        tool_calls: Vec::new(),
     }
 }
 

@@ -1,0 +1,599 @@
+#!/system/bin/sh
+# recuperar-en-movil.sh — RECUPERACIÓN DEL MÓVIL, EJECUTADA EN EL MÓVIL.
+#
+# POR QUÉ EXISTE (medido el 2026-11-25):
+#   El móvil estaba encendido (Antigravity abría, con un 404 del backend) pero
+#   el daemon NO corría: el tablón de Drive tenía UNA carta, del 2026-11-23
+#   10:22 (latido del nodo `samsung`), y el túnel de Cloudflare había
+#   caducado (NXDOMAIN).  Es decir: el móvil no se autorrepara.
+#
+#   Desde el sandbox no hay ADB ni túnel, así que la recuperación tiene que
+#   poder hacerse **desde el propio móvil**, sin PC.
+#
+# QUÉ HACE (todo idempotente, nada destructivo fuera del prefijo):
+#   1. Diagnóstico: ¿daemon? ¿túnel? ¿binario? ¿estado?
+#   2. Relanza el daemon (cockpit 3000, gateway 9090).
+#   3. Relanza el túnel de Cloudflare y ESPERA a que la URL responda.
+#   4. Publica/verifica la URL y muestra el NDJSON del shim (para ver qué
+#      rutas pide Antigravity).
+#   5. Deja el estado en `$PREFIX/state/` para que la Web UI lo vea.
+#
+# USO (desde Termux o cualquier shell con root):
+#   su -mm -c 'sh /data/local/tmp/recuperar-en-movil.sh'
+#   su -mm -c 'sh /data/local/tmp/recuperar-en-movil.sh --diagnostico'
+#
+# MEDIDO 2026-11-25: `sudo` en Android NO es root; para root puntual, `su -mm -c`.
+
+PREFIX=/data/adb/megadaemon
+STATE="$PREFIX/state"
+BIN="$PREFIX/megadaemon-core"
+ENV_FILE="$PREFIX/megadaemon.env"
+LOG=/sdcard/megadaemon.log
+
+# MEDIDO (2026-11-25, movil): el daemon NO sirve en el 3000.  El supervisor
+# (deploy/99-megadaemon.sh) lo arranca con "cockpit $PORT", y su PORT por
+# defecto es **9090** (configurable con MEGADAEMON_COCKPIT_PORT en
+# megadaemon.env).  Con 3000 el script arrancaba un daemon que nadie
+# escuchaba y daba por muerto un cockpit que estaba vivo => falso negativo.
+PORT=9090
+if [ -f "$ENV_FILE" ]; then
+    p=$(sed -n 's/^MEGADAEMON_COCKPIT_PORT=//p' "$ENV_FILE" 2>/dev/null | head -1 | tr -d '\r"')
+    case "$p" in
+        ''|*[!0-9]*) ;;
+        *) PORT="$p";;
+    esac
+fi
+GW="$PORT"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] recuperar: $*" >> "$LOG" 2>/dev/null; echo "$*"; }
+
+daemon_vivo() {
+    for p in /proc/[0-9]*; do
+        [ -r "$p/cmdline" ] || continue
+        c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+        case "$c" in *megadaemon-core*) echo "$p"; return 0;; esac
+    done
+    return 1
+}
+
+health() {
+    # MEDIDO: /health responde sin credencial; 401/403 también significa vivo.
+    #
+    # MEDIDO (2026-11-25, 23:25, movil): esta comprobación usaba
+    # `toybox wget`, que **NO EXISTE** en este movil ("toybox: Unknown
+    # command wget").  Como `toybox` devolvía un error, `health()` SIEMPRE
+    # fallaba ⇒ el script anunciaba "el daemon vivo no responde" y "AVISO:
+    # el cockpit no respondio tras 50 s" con el daemon SANO (medido:
+    # uptime 25439 s y /health status ok).  Por eso no se fiaba de nada.
+    # Ahora usa `descargar()`, que prueba curl y wget de verdad.
+    descargar "http://127.0.0.1:$PORT/health" "$STATE/health-probe.bin" 6 >/dev/null 2>&1
+}
+
+diagnostico() {
+    echo "== daemon"
+    if d=$(daemon_vivo); then echo "  vivo: $d ($(tr '\0' ' ' < "$d/cmdline"))"; else echo "  NO CORRE"; fi
+    echo "== binario"
+    if [ -x "$BIN" ]; then echo "  $BIN ($(stat -c %s "$BIN") B, sha16 $(sha256sum "$BIN" 2>/dev/null | cut -c1-16))"; else echo "  FALTA $BIN"; fi
+    echo "== previous"
+    if [ -f "$BIN.prev" ]; then
+        echo "  hay .prev (sha16 $(sha256sum "$BIN.prev" 2>/dev/null | cut -c1-16))"
+    else
+        echo "  no hay .prev"
+    fi
+    echo "== tunel"
+    [ -f "$PREFIX/tunnel.url" ] && echo "  url: $(cat "$PREFIX/tunnel.url")" || echo "  sin tunnel.url"
+    echo "== estado"
+    [ -f /sdcard/megadaemon.state ] && cat /sdcard/megadaemon.state
+    echo "== ultimas lineas del log"
+    [ -f "$LOG" ] && tail -n 15 "$LOG"
+    echo "== shim (ultimas rutas pedidas)"
+    if [ -f "$STATE/agyshim.ndjson" ]; then
+        tail -n 12 "$STATE/agyshim.ndjson" | cut -c1-300
+    else
+        echo "  no hay $STATE/agyshim.ndjson"
+    fi
+}
+
+if [ "$1" = "--diagnostico" ]; then
+    diagnostico
+    exit 0
+fi
+
+mkdir -p "$STATE" 2>/dev/null
+log "=== recuperacion manual"
+
+# 0) BINARIO: si falta, o si su SHA-256 no es el de la release, se
+#    descarga, se VERIFICA y se instala (con copia del anterior a .prev).
+#
+#    MEDIDO 2026-11-25: el binario del movil era del 2026-11-23 (d7d72f1)
+#    y su `update`_buscaba el binario en la ruta VOLATIL antigua => no se
+#    actualizaba nunca.  Por eso aqui se hace a mano, con verificacion.
+#
+#    Descarga con las herramientas que haya: `curl` (Termux) o `wget`
+#    (toybox).  Con `toybox wget` el codigo de salida es 0.
+REPO_RELEASE=https://github.com/boolforge/megadaemon/releases/latest/download
+ASSET=megadaemon-core-android-arm64
+
+descargar() {
+    # $1 = url, $2 = destino, $3 = timeout en segundos (defecto 600)
+    tmo="${3:-600}"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --max-time "$tmo" -o "$2" "$1" && return 0
+    fi
+    if command -v wget >/dev/null 2>&1; then
+        wget -q -T "$tmo" -O "$2" "$1" && return 0
+    fi
+    toybox wget -q -O "$2" "$1" 2>/dev/null && return 0
+    return 1
+}
+
+sha256_de() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
+
+instalar_nuevo() {
+    echo "== binario: comprobando release"
+    if ! descargar "$REPO_RELEASE/$ASSET.sha256" "$STATE/asset.sha256"; then
+        log "AVISO: no se pudo descargar el .sha256 (sin red?): se usa el binario actual"
+        return 1
+    fi
+    esperado=$(cut -d' ' -f1 < "$STATE/asset.sha256" 2>/dev/null | tr -d '\r\n')
+    case "$esperado" in
+        [0-9a-f][0-9a-f]*) ;;
+        *) log "AVISO: el .sha256 no es valido ('$esperado'): no se toca el binario"; return 1;;
+    esac
+    actual=""
+    [ -f "$BIN" ] && actual=$(sha256_de "$BIN")
+    if [ "$actual" = "$esperado" ]; then
+        echo "  el binario ya es el de la release ($esperado)"
+        return 0
+    fi
+    echo "  descargando el binario de la release (sha256 $esperado)..."
+    if ! descargar "$REPO_RELEASE/$ASSET" "$STATE/megadaemon-core.new"; then
+        log "ERROR: no se pudo descargar el binario: no se toca el actual"
+        return 1
+    fi
+    got=$(sha256_de "$STATE/megadaemon-core.new")
+    if [ "$got" != "$esperado" ]; then
+        log "ERROR: SHA-256 no coincide (esperado $esperado, obtenido $got): no se instala"
+        rm -f "$STATE/megadaemon-core.new"
+        return 1
+    fi
+    [ -f "$BIN" ] && cp -f "$BIN" "$BIN.prev"
+    chmod 755 "$STATE/megadaemon-core.new"
+    mv -f "$STATE/megadaemon-core.new" "$BIN"
+    echo "  instalado (sha256 verificado)"
+    return 0
+}
+
+instalar_nuevo
+
+# 0) SUPERVISOR: actualizarlo es parte de la recuperacion.
+#
+#    MEDIDO (2026-11-25, movil, log del supervisor):
+#      "ERROR: no existe /data/local/tmp/megadaemon/megadaemon-core (y no hay
+#       despliegue en curso)"
+#    El supervisor INSTALADO en el movil es una version ANTIGUA cuyo PREFIX
+#    era la ruta VOLATIL (/data/local/tmp/megadaemon); el binario canonico
+#    vive en /data/adb/megadaemon => el supervisor no lo encontraba y NO
+#    PODIA relanzar el daemon => el movil se quedaba sin daemon (UI y
+#    gateway caidos) y en bucle de reinicios.
+#    Ademas el supervisor arrancaba el daemon en el 9090 mientras este
+#    script lo arrancaba en el 3000 => dos daemons compitiendo por puertos
+#    distintos y el supervisor matando al que estaba en el 3000 por "no
+#    responder /health".
+#
+#    Solucion: este script instala el supervisor ACTUAL (y el keeper) desde
+#    el repo, reinicia el stack y deja que el supervisor sea el UNICO que
+#    levanta el daemon, en el puerto real.
+SERVICED=/data/adb/service.d
+SUPERVISOR_NUEVO="$STATE/99-megadaemon.sh"
+KEEPER_NUEVO="$STATE/97-megadaemon-keeper.sh"
+REPO_RAW=https://raw.githubusercontent.com/boolforge/megadaemon
+REF="${MEGADAEMON_REF:-main}"
+
+actualizar_supervisor() {
+    echo "== supervisor: comprobando version"
+    mkdir -p "$STATE" 2>/dev/null
+    if ! descargar "$REPO_RAW/$REF/deploy/99-megadaemon.sh" "$SUPERVISOR_NUEVO"; then
+        log "AVISO: no se pudo descargar el supervisor (sin red?): se deja el que hay"
+        return 1
+    fi
+    # El supervisor nuevo DEBE apuntar al prefijo persistente.
+    if ! grep -q '^PREFIX=/data/adb/megadaemon' "$SUPERVISOR_NUEVO"; then
+        log "AVISO: el supervisor descargado no usa el prefijo persistente: no se instala"
+        return 1
+    fi
+    if [ -f "$SERVICED/99-megadaemon.sh" ] && cmp -s "$SUPERVISOR_NUEVO" "$SERVICED/99-megadaemon.sh"; then
+        echo "  el supervisor ya es el actual"
+    else
+        mkdir -p "$SERVICED" 2>/dev/null
+        [ -f "$SERVICED/99-megadaemon.sh" ] && cp -f "$SERVICED/99-megadaemon.sh" "$SERVICED/99-megadaemon.sh.bak"
+        cp -f "$SUPERVISOR_NUEVO" "$SERVICED/99-megadaemon.sh" && chmod 755 "$SERVICED/99-megadaemon.sh"
+        log "supervisor actualizado en $SERVICED/99-megadaemon.sh (copia .bak)"
+        echo "  supervisor actualizado"
+    fi
+    # El keeper tambien (vigila al supervisor: sin el, el movil se queda sin
+    # supervisor tras un reinicio).
+    if descargar "$REPO_RAW/$REF/deploy/97-megadaemon-keeper.sh" "$KEEPER_NUEVO"; then
+        mkdir -p "$SERVICED" 2>/dev/null
+        cp -f "$KEEPER_NUEVO" "$SERVICED/97-megadaemon-keeper.sh" 2>/dev/null && \
+            chmod 755 "$SERVICED/97-megadaemon-keeper.sh" 2>/dev/null
+        echo "  keeper actualizado"
+    fi
+    return 0
+}
+actualizar_supervisor
+
+# 0.b) Reiniciar el stack: al supervisor viejo hay que matarlo para que
+#     cargue el nuevo (Magisk solo los lanza al arrancar el movil).
+supervisor_vivo() {
+    for p in /proc/[0-9]*; do
+        [ -r "$p/cmdline" ] || continue
+        c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+        case "$c" in *99-megadaemon.sh*) echo "$p"; return 0;; esac
+    done
+    return 1
+}
+# MEDIDO (2026-11-25, movil): HABIA DOS SUPERVISORES vivos
+#   4808 sh /data/adb/service.d/99-megadaemon.sh
+#   4823 sh /data/adb/service.d/99-megadaemon.sh.bak-50k
+# Con dos, uno reinicia el daemon mientras el otro lo mata => bucle de
+# reinicios ("el daemon no responde /health ni /api/power (fallo 3/3)").
+# Se matan TODOS (el patron pkill -f es substring: tambien se lleva el
+# .bak-50k) y el keeper relanza el canonico.
+pkill -9 -f 'service.d/99-megadaemo[n].sh' 2>/dev/null
+sleep 2
+supervisores_vivos() {
+    n=0
+    for p in /proc/[0-9]*; do
+        [ -r "$p/cmdline" ] || continue
+        c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+        case "$c" in *99-megadaemon.sh*) n=$((n + 1));; esac
+    done
+    echo "$n"
+}
+log "supervisores tras la limpieza: $(supervisores_vivos) (0 = el keeper lo relanza)"
+
+# 1) Daemon: hay que matarlo DE VERD y esperar a que quede libre el puerto.
+#
+#    MEDIDO (2026-11-25, movil): con un simple "kill + 2 s" el daemon NUEVO
+#    arranco y fallo con "Failed to bind Rust Cockpit on 0.0.0.0:3000:
+#    Address already in use" => el daemon VIEJO seguia sirviendo la UI (la
+#    V1, sin la vista Antigravity) y el usuario creia que la UI habia
+#    "perdido cosas".  El supervisor ya lo hacia bien (SIGKILL + esperar a
+#    que /proc/net/tcp deje de mostrar el puerto en LISTEN); aqui se copia
+#    esa tecnica.
+# MEDIDO (2026-11-25, movil): el script MATABA el daemon sano y luego
+# arrancaba otro a mano => el nuevo fallaba con "Failed to bind Rust
+# Cockpit on 0.0.0.0:9090: Address already in use" (el supervisor habia
+# relanzado el suyo) y el movil se quedaba sin daemon en el 9090.
+#
+# Ahora: si el daemon que corre YA USA el binario nuevo, no se toca.  Se
+# comprueba con /proc/<pid>/exe (si el fichero se sustituyo, el symlink
+# queda como "(deleted)" => ese proceso corre el binario VIEJO => hay que
+# reiniciarlo).
+daemon_usa_binario_nuevo() {
+    d=$1
+    exe=$(readlink "/proc/$(basename "$d")/exe" 2>/dev/null)
+    case "$exe" in
+        *"(deleted)") return 1;;   # corre el binario viejo
+        "$BIN") return 0;;          # corre el binario de disco (el nuevo)
+        "") return 0;;              # no se puede saber: no se toca
+        *) return 0;;
+    esac
+}
+# Epoch (segundos) en que arranco el proceso `pid`.
+#
+# `starttime` de /proc/<pid>/stat (campo 22) son jiffies desde el boot;
+# con `btime` de /proc/stat y HZ=100 sale el epoch.  Es el MISMO criterio
+# que usa el daemon para saber si el language server tiene el binario
+# viejo.
+arranque_epoch() {
+    pid="$1"
+    st=$(cat "/proc/$pid/stat" 2>/dev/null) || return 1
+    # El nombre del proceso va entre parentesis y puede contener espacios:
+    # se parte por el ULTIMO ") ".
+    rest=${st##*) }
+    # shellcheck disable=SC2086
+    set -- $rest
+    starttime=${20}
+    btime=$(awk '/^btime /{print $2; exit}' /proc/stat 2>/dev/null)
+    [ -n "$starttime" ] && [ -n "$btime" ] || return 1
+    echo $(( btime + starttime / 100 ))
+}
+
+# ¿El daemon corre el binario que hay en disco?
+#
+# MEDIDO (2026-11-25, 23:19, movil): `readlink /proc/<pid>/exe` NO marca
+# "(deleted)" cuando el binario se SUSTITUYE sobrescribiendo el fichero
+# en el sitio (mismo inode): el proceso sigue ejecutando el codigo VIEJO
+# en memoria mientras el symlink apunta al binario nuevo.  El script
+# creia que el daemon estaba al dia y NO lo reinicio => el movil se quedo
+# 7 HORAS con el binario viejo (medido: uptime 25439 s, y el shim seguia
+# resolviendo en local `/v1internal/`, que es justo lo que rompia el
+# arranque del language server y el login).
+#
+# EL CRITERIO FIABLE: si el binario en disco es MAS NUEVO que el proceso,
+# el proceso corre el codigo viejo => hay que reiniciarlo.
+daemon_usa_binario_nuevo() {
+    d="$1"
+    pid=$(basename "$d")
+    exe=$(readlink "/proc/$pid/exe" 2>/dev/null)
+    case "$exe" in
+        *"(deleted)") return 1;;   # corre el binario viejo
+        "$BIN") ;;
+        "") return 0;;             # no se puede saber: no se toca
+        *) return 0;;
+    esac
+    mtime=$(stat -c %Y "$BIN" 2>/dev/null)
+    arr=$(arranque_epoch "$pid")
+    [ -n "$mtime" ] && [ -n "$arr" ] || return 0
+    if [ "$mtime" -gt "$arr" ]; then
+        log "el binario en disco (mtime $mtime) es mas nuevo que el arranque del daemon ($arr): corre el codigo VIEJO"
+        return 1
+    fi
+    return 0
+}
+
+REINICIAR_DAEMON=1
+if d=$(daemon_vivo); then
+    if daemon_usa_binario_nuevo "$d"; then
+        REINICIAR_DAEMON=0
+        log "el daemon ($d) ya usa el binario actual: NO lo toco"
+    else
+        log "el daemon ($d) corre el binario VIEJO: lo reinicio"
+        kill -9 $(echo "$d" | tr '\n' ' ') 2>/dev/null
+    fi
+fi
+puerto_libre() {
+    hp=$(printf '%04X' "$PORT")
+    ! grep -qiE ":$hp [0-9a-f]{8}:[0-9a-f]{4} 0A" /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
+i=0
+while [ $i -lt 30 ]; do
+    puerto_libre && break
+    i=$((i + 1)); sleep 1
+done
+if ! puerto_libre; then
+    log "el puerto $PORT sigue ocupado: mato por nombre"
+    pkill -9 -x megadaemon-core 2>/dev/null
+    sleep 3
+fi
+log "puerto $PORT libre"
+if [ ! -x "$BIN" ]; then
+    log "ERROR: no hay binario en $BIN"
+    exit 1
+fi
+
+# MEDIDO (2026-11-25): el daemon lo debe levantar EL SUPERVISOR (es el que
+# gestiona energia, tunel, auto-update y watchdog).  Este script solo lo
+# levanta si el supervisor no lo hace.
+arrancar_daemon_a_mano() {
+    export MEGADAEMON_BIN="$BIN"
+    export MEGADAEMON_STATE_DIR="$STATE"
+    export MEGADAEMON_INSTANCE_NAME=samsung
+    export MEGADAEMON_INSTANCE_ROLE=primary
+    export MEGADAEMON_COCKPIT_PORT="$PORT"
+    cd "$PREFIX" || return 1
+    setsid nohup "$BIN" cockpit "$PORT" >> "$LOG" 2>&1 < /dev/null &
+    log "daemon arrancado a mano (pid $!)"
+}
+i=0
+while [ $i -lt 45 ]; do
+    if health; then log "el supervisor levanto el daemon (cockpit responde)"; break; fi
+    i=$((i + 1)); sleep 2
+done
+if [ $i -ge 45 ]; then
+    if [ "$REINICIAR_DAEMON" = "1" ]; then
+        # Solo si de verdad no hay nadie escuchando: si el puerto esta
+        # ocupado, hay un daemon vivo y arrancar otro es un error.
+        if ! puerto_libre; then
+            log "el puerto $PORT esta ocupado pero el cockpit no responde: hay un daemon atascado"
+            log "lo mato por nombre y espero a que suelte el puerto"
+            pkill -9 -x megadaemon-core 2>/dev/null
+            i=0
+            while [ $i -lt 30 ]; do
+                puerto_libre && break
+                i=$((i + 1)); sleep 1
+            done
+        fi
+        log "el supervisor no levanto el daemon en 90 s: lo arranco yo"
+        arrancar_daemon_a_mano
+        i=0
+        while [ $i -lt 25 ]; do
+            if health; then break; fi
+            i=$((i + 1)); sleep 2
+        done
+        health || log "AVISO: el cockpit sigue sin responder"
+    else
+        log "el daemon vivo no responde: el supervisor lo reiniciara"
+    fi
+fi
+
+# 2) Espera a que responda y COMPRUEBA que es el daemon NUEVO.
+# MEDIDO (2026-11-25, 23:25): con el movil a 66 C y clase "thermal" el
+# arranque del daemon tarda mas de 50 s => el aviso era un falso positivo
+# (ademas de que `health` usaba toybox wget, que no existe).  Ahora se
+# esperan 90 s.
+i=0
+while [ $i -lt 45 ]; do
+    if health; then log "cockpit responde en $PORT"; break; fi
+    i=$((i+1)); sleep 2
+done
+if [ $i -ge 45 ]; then
+    log "AVISO: el cockpit no respondio tras 90 s"
+else
+    # MEDIDO (2026-11-25): hay que comprobar que el que responde es el NUEVO:
+    # si el viejo sobrevive, la UI que se ve es la VIEJA (y parece que "la UI
+    # ha perdido la vista Antigravity").
+    d2=$(daemon_vivo)
+    log "daemon en marcha: ${d2:-desconocido}"
+    h=$(tr ',' '\n' < "$STATE/health-probe.bin" 2>/dev/null | head -c 500)
+    log "health: $h"
+    # El build que DECLARA el daemon: si no es el binario de disco, el
+    # proceso sigue con otro codigo en memoria.
+    log "build declarado por el daemon: $(tr ',' '\n' < "$STATE/health-probe.bin" 2>/dev/null \
+        | sed -n 's/.*"short":"\([0-9a-f]*\)".*/\1/p' | head -1)"
+fi
+
+# 2.b) El LS instrumentado, DESPUES del parche.
+#
+#      MEDIDO (2026-11-25, movil): la app RE-EXTRAE files/runtime/ en CADA
+#      arranque => el .so parcheado se pierde.  Lo que funciona es MATAR el
+#      LS (libloader.so) DESPUES de que el daemon haya re-aplicado el
+#      parche: la app lo relanza en ~1 s y el LS nuevo carga el .so ya
+#      parcheado => el fix del passthrough (la ruta con dos puntos) llega al
+#      LS.  Si se mata ANTES, el LS se relanza con el .so sin parchear y el
+#      parche posterior no surte efecto.
+#
+#      El daemon aplica la instrumentacion en su ciclo automatico (60 s por
+#      defecto), asi que aqui se espera a que pase.
+ESPERA_INSTRUMENTACION="${ESPERA_INSTRUMENTACION:-75}"
+ls_vivo() {
+    for p in /proc/[0-9]*; do
+        [ -r "$p/cmdline" ] || continue
+        c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+        case "$c" in *libloader.so*) echo "$p"; return 0;; esac
+    done
+    return 1
+}
+log "esperando $ESPERA_INSTRUMENTACION s a que el daemon re-aplique el parche del .so"
+sleep "$ESPERA_INSTRUMENTACION"
+if l=$(ls_vivo); then
+    log "el LS instrumentado esta vivo ($l): lo mato para que recargue el .so parcheado"
+    kill -9 $(echo "$l" | tr '\n' ' ') 2>/dev/null
+    i=0
+    while [ $i -lt 10 ]; do
+        if ls_vivo >/dev/null 2>&1; then i=$((i + 1)); sleep 1; else break; fi
+    done
+    if ls_vivo >/dev/null 2>&1; then
+        log "el LS se ha relanzado (eso es lo normal: la app lo vuelve a levantar)"
+    else
+        log "el LS esta muerto: la app lo relanzara con el .so parcheado"
+    fi
+else
+    log "no hay ningun LS vivo (la app lo relanzara al abrirla)"
+fi
+
+# 3) Tunel: lo relanza el watchdog (98) o el propio daemon; aqui se espera
+#    a que exista una URL valida.
+i=0
+while [ $i -lt 30 ]; do
+    if [ -s "$PREFIX/tunnel.url" ]; then
+        u=$(cat "$PREFIX/tunnel.url" 2>/dev/null)
+        case "$u" in https://*) log "tunel: $u"; break;; esac
+    fi
+    i=$((i+1)); sleep 2
+done
+[ $i -ge 30 ] && log "AVISO: no hay URL de tunel (el watchdog deberia levantarlo)"
+
+# 3) Tunel: lo relanza el watchdog (98) o el propio daemon; aqui se espera
+#    a que exista una URL valida Y a que responda de verdad.
+#
+#    MEDIDO (2026-11-25): el tunel estaba MUERTO (DNS caido => 000) y el
+#    supervisor NO lo relanzaba (solo contaba 530/521/522).  El supervisor
+#    nuevo ya trata 000 como muerto; aqui, para no depender de el, se
+#    relanza el cloudflared si la URL guardada no responde.
+tunel_responde() {
+    u=$(cat "$PREFIX/tunnel.url" 2>/dev/null)
+    case "$u" in https://*) ;; *) return 1;; esac
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 12 "$u/health" 2>/dev/null)
+    if [ -z "$code" ] || [ "$code" = "000" ]; then
+        code=$(wget -q -S -O /dev/null --timeout=12 "$u/health" 2>&1 | grep -m1 -o 'HTTP/[0-9.]* [0-9]*' | awk '{print $2}')
+    fi
+    case "$code" in 200|401|403|502|503) return 0;; esac
+    return 1
+}
+i=0
+while [ $i -lt 30 ]; do
+    if [ -s "$PREFIX/tunnel.url" ]; then
+        u=$(cat "$PREFIX/tunnel.url" 2>/dev/null)
+        case "$u" in https://*) log "tunel: $u"; break;; esac
+    fi
+    i=$((i+1)); sleep 2
+done
+[ $i -ge 30 ] && log "AVISO: no hay URL de tunel (el watchdog deberio levantarlo)"
+if ! tunel_responde; then
+    log "el tunel NO responde: relanzo cloudflared"
+    pkill -f 'cloudflared tunnel .*9090' 2>/dev/null
+    sleep 2
+    # MEDIDO (2026-11-25, movil): el cloudflared NO esta en el prefijo
+    # persistente sino en la ruta legacy (/data/local/tmp/megadaemon) y el
+    # script solo miraba en el prefijo => "no hay cloudflared" y el movil
+    # se quedaba sin tunel.  Se buscan en las dos rutas y se copia al
+    # prefijo (que es donde el supervisor lo deja).
+    CF=""
+    for c in "$PREFIX/cloudflared" /data/local/tmp/megadaemon/cloudflared \
+             /data/data/com.termux/files/usr/bin/cloudflared \
+             /data/data/com.agy/files/usr/bin/cloudflared; do
+        if [ -x "$c" ]; then CF="$c"; break; fi
+    done
+    if [ -n "$CF" ]; then
+        if [ "$CF" != "$PREFIX/cloudflared" ]; then
+            mkdir -p "$PREFIX" 2>/dev/null
+            cp -f "$CF" "$PREFIX/cloudflared.new" 2>/dev/null && \
+                chmod 755 "$PREFIX/cloudflared.new" 2>/dev/null && \
+                mv -f "$PREFIX/cloudflared.new" "$PREFIX/cloudflared" 2>/dev/null
+            log "cloudflared migrado al prefijo persistente (estaba en $CF)"
+            CF="$PREFIX/cloudflared"
+        fi
+        setsid nohup "$CF" tunnel --no-autoupdate \
+            --url "http://127.0.0.1:$PORT" >> "$PREFIX/tunnel.log" 2>&1 < /dev/null &
+        sleep 14
+        u=$(cat "$PREFIX/tunnel.url" 2>/dev/null)
+        log "tunel relanzado: ${u:-sin-url}"
+    else
+        log "AVISO: no hay cloudflared en ninguna ruta"
+    fi
+fi
+
+diagnostico
+
+# 4) Publicar el DIAGNOSTICO en Drive: el root lo lee desde el sandbox con
+#    tools/leer-diagnostico.py (sin ADB y sin pegar texto en el chat).
+if [ -x "$BIN" ]; then
+    echo "== publicando el diagnostico en Drive"
+    if "$BIN" diagnostico --publicar >/dev/null 2>&1; then
+        log "diagnostico publicado en Drive (MegaDaemon/diagnostico/<nodo>/)"
+        echo "  OK: el root lo lee con tools/leer-diagnostico.py"
+    else
+        log "AVISO: no se pudo publicar el diagnostico en Drive"
+    fi
+    # 4.b) Los logs de la PROPIA app de Antigravity: es donde esta el error
+    #      del login ("Continue with Google"), que no sale ni del log del
+    #      supervisor ni del NDJSON del shim.
+    echo "== publicando los logs de la app de Antigravity"
+    if "$BIN" agy-logs --publicar >/dev/null 2>&1; then
+        log "logs de la app publicados en Drive"
+        echo "  OK: el root los lee con tools/leer-diagnostico.py"
+    else
+        log "AVISO: no se pudieron publicar los logs de la app"
+    fi
+
+    # 4.c) REACTIVAR la instrumentacion de Antigravity.
+    #
+    # MEDIDO (2026-11-25, movil): hubo que DESACTIVARLA a mano (por HTTP)
+    # para que el language server llegara a "core ready": con el shim, el
+    # LS pedia `/v1internal/` 32 veces y la app se quedaba sin core
+    # ("core did not become ready within 60000ms").  La causa era que el
+    # shim resolvia en local una ruta que NO existe en Google; ya está
+    # corregido (el shim es transparente).  Aqui se reactiva sola, para
+    # que el usuario no tenga que tocar nada.
+    #
+    # MEDIDO (2026-11-26, 01:45): sin exportar MEGADAEMON_STATE_DIR, el
+    # binario escribe la config en `/data/user/0/com.agy/files/megadaemon/
+    # state` (su STATE_DIR por defecto) y NO en `/data/adb/megadaemon/state`
+    # (donde la lee el daemon) => el `config-set` decia "reactivada" y la
+    # instrumentacion seguia DESACTIVADA (medido: `activa: false`,
+    # `modo_so: "ninguno"`).  Ahora se exporta el state_dir y se comprueba
+    # el valor efectivo.
+    export MEGADAEMON_STATE_DIR="$STATE"
+    if "$BIN" config-set instrumentacion_agy.activa true >/dev/null 2>&1; then
+        log "instrumentacion de Antigravity reactivada (en $STATE/config.json)"
+    else
+        log "AVISO: no se pudo reactivar la instrumentacion (config-set)"
+    fi
+    "$BIN" config-set instrumentacion_agy.modo_so '"falso"' >/dev/null 2>&1
+    "$BIN" config-set instrumentacion_agy.relanzar_ls true >/dev/null 2>&1
+    "$BIN" config-set instrumentacion_agy.payload_frida false >/dev/null 2>&1
+    log "instrumentacion ahora: $("$BIN" config-get instrumentacion_agy 2>/dev/null | tr -d '\n ' | head -c 200)"
+fi

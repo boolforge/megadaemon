@@ -40,6 +40,37 @@ jobs:
       - uses: actions/checkout@v4
       - name: parsear cada .rs
         run: bash tools/check-sintaxis.sh
+      # El nucleo forense en C se prueba aqui (no en 'calidad'): compila en
+      # un segundo y su banco contrasta el SHA-256 contra `sha256sum`, el
+      # cliente HTTP contra un servidor local y el parser del tunel contra un
+      # log con trampas.  Sin esto, un hash mal calculado haria que el
+      # verificador de "la build en servicio es la nueva" mintiera.
+      - name: banco de pruebas del nucleo forense (C)
+        run: |
+          bash tools/test-mddoctor.sh
+          gcc -O2 -Wall -Werror -o /tmp/mddoctor tools/mddoctor.c
+          echo "mddoctor: $(wc -c < /tmp/mddoctor) B, compila con -Werror"
+      # El instalador del movil es la PUERTA DE ENTRADA del usuario (un
+      # one-liner).  Antes solo se probaba en el movil real: un fallo de
+      # root, de permisos o de idempotencia sólo aparecia alli.  Aqui se
+      # comprueban sus 8 escenarios en un laboratorio falso (instalacion,
+      # entorno del daemon, watchdog, health-check, idempotencia, bundle
+      # corrupto, sha256 erroneo, modo PC) y la politica de energia (que no
+      # puede parpadear: MEDIDO 2026-11-27, el brillo iba 247 -> 60 -> 247).
+      - name: banco del instalador (one-liner) y politica de energia
+        run: |
+          bash tools/test-oneliner.sh
+          bash tools/test-energia.sh
+      # El "tubo" de Drive: el workspace tiene 5 GB de cuota y los artifacts
+      # de RE son GB, asi que Drive (privado) es el almacen externo.  Se
+      # prueba SIN RED, con un servidor de Drive falso: token (que nunca se
+      # imprime), credenciales 0600, listar, subir/bajar byte a byte.
+      - name: banco del tubo de Drive (servidor falso, sin red)
+        run: |
+          python3 tools/test_drive_api.py
+          python3 tools/drive_tube.py --help > /dev/null
+          python3 tools/agentes_fuentes.py --help > /dev/null
+          echo "tubo de Drive: OK"
 
   quality:
     name: calidad (fmt + clippy + tests)
@@ -161,7 +192,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android
+          targets: aarch64-linux-android, aarch64-unknown-linux-gnu
       - uses: nttld/setup-ndk@v1
         id: ndk
         with:
@@ -172,28 +203,129 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            rust-core/target
+            crates/hooks-payload/target
           key: cargo-android-${{ hashFiles('rust-core/Cargo.lock') }}
+      # MEDIDO (2026-11-24): el payload de frida-gum se compila AQUI, con el
+      # MISMO NDK y el MISMO target que el daemon, y se EMBARDA en el binario
+      # (una sola build, un solo artefacto: el movil no tiene que bajarlo de
+      # un Release aparte).  Sigue siendo un `cdylib` (tiene que ser un .so
+      # aparte para dlopen en otro proceso), pero el ARTEFACTO que baja el
+      # movil es UNO.
+      - name: "Dependencias de gum (bindgen necesita libclang; los shims en C, el clang del NDK)"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev clang
+          clang --version | head -1
+      - name: "Compilar el payload (gum) para incrustarlo"
+        working-directory: crates/hooks-payload
+        env:
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          RANLIB_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
+          # El payload es un cdylib PEQUEÑO que va embebido en el daemon:
+          # se deja con LTO desactivado (es el camino ya verificado) porque
+          # su tamaño es irrelevante frente al binario principal.
+          #
+          # MEDIDO 2026-11-25: el comentario va ANTES del bloque plegado
+          # (`>-`) a propósito: tras un bloque literal tiene que venir una
+          # CLAVE, y `tools/yaml_lint.py` (el gate del CI) rechaza un
+          # comentario ahí ("línea fuera del bloque literal con sangría
+          # incorrecta") ⇒ el workflow entero se rechazaba.
+          BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android: >-
+            --sysroot=${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot
+            -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
+            -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/aarch64-linux-android
+            -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/aarch64-linux-android/api-level-26
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
+          # MEDIDO (2026-11-26): el path del payload era `../rust-core/dist`
+          # DESDE `crates/hooks-payload` ⇒ apuntaba a `crates/rust-core/dist`
+          # (que no existe) ⇒ el payload NUNCA llegaba al `dist/` real y el
+          # release no lo publicaba.  Ahora es una ruta ABSOLUTA.
+          DIST: ${{ github.workspace }}/rust-core/dist
+        run: |
+          cargo build --release --target aarch64-linux-android
+          mkdir -p "$DIST"
+          cp target/aarch64-linux-android/release/libhooks_payload.so "$DIST/hooks-payload-arm64"
+          # MEDIDO (2026-11-26, CI): el `.sha256` se generaba con la ruta
+          # ABSOLUTA (`/home/runner/work/.../rust-core/dist/hooks-payload-arm64`)
+          # ⇒ en el job `release` `sha256sum -c` buscaba ESA ruta (que allí no
+          # existe) y fallaba => NO se publicaba ninguna release.  Se genera
+          # con el NOMBRE (no con la ruta absoluta) ⇒ portable entre jobs.
+          ( cd "$DIST" && sha256sum hooks-payload-arm64 > hooks-payload-arm64.sha256 )
+          file "$DIST/hooks-payload-arm64" | tee /tmp/fichero-payload.txt
+          grep -q "ELF 64-bit LSB shared object" /tmp/fichero-payload.txt || {
+            echo "::error::el payload no es una shared object ELF 64-bit"; exit 1; }
+          grep -q "ARM aarch64" /tmp/fichero-payload.txt || {
+            echo "::error::el payload no es ARM aarch64"; exit 1; }
       - name: Compilar
         working-directory: rust-core
         env:
           # El commit se EMBEBE en el binario: /health publica build.short y
           # asi se puede comprobar desde fuera qué build sirve el movil.
           MEGADAEMON_BUILD_SHA: ${{ github.sha }}
+          # El payload de frida-gum EMBEBIDO (una sola build).
+          MEGADAEMON_PAYLOAD_PATH: ${{ github.workspace }}/crates/hooks-payload/target/aarch64-linux-android/release/libhooks_payload.so
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
           CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
           # El NDK r26c NO trae 'aarch64-linux-android-ar' ni su ranlib =>
           # cc-rs aborta si no se le pasan llvm-ar/llvm-ranlib.
           RANLIB_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
-          # El perfil release por defecto (lto=true, codegen-units=1) MATA al
-          # rustc por OOM (SIGKILL) en el runner: el crate es grande.  Con
-          # estos overrides entra (mismo perfil que usan los agentes en local).
-          CARGO_PROFILE_RELEASE_LTO: "false"
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          # El perfil release por defecto (lto=true "fat", codegen-units=1)
+          # MATA al rustc por OOM (SIGKILL) en el runner: el crate es grande.
+          # MEDIDO 2026-11-25 (tamaño): con `LTO=false` el asset ARM64 pesaba
+          # 47.191.040 B (45,0 MB).  LTO "thin" da casi todo el ahorro del
+          # "fat" con una fracción de la RAM ⇒ el binario baja de tamaño sin
+          # volver a morir.  `codegen-units=16` es para las DEPENDENCIAS; el
+          # crate principal baja a 4 por el override de `package` en
+          # Cargo.toml (1 lo mata, 16 infla el binario).
+          CARGO_PROFILE_RELEASE_LTO: "thin"
+          # MEDIDO 2026-11-25: CU=16 para las DEPENDENCIAS infla el binario
+          # (con CU=4 el enlazador elimina el codigo muerto de verdad).
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "4"
           CARGO_PROFILE_RELEASE_DEBUG: "0"
         run: |
           cargo build --release --target aarch64-linux-android
           mkdir -p dist
+          # El nucleo forense en C (26 KB, sin dependencias): se compila con el
+          # clang del NDK que ya esta aqui, y se publica CON sha256 para que
+          # el movil lo verifique.  Es lo que puede diagnosticar al daemon
+          # CUANDO el daemon esta roto (no depende de la libreria de Rust).
+          # Los MISMOS flags que tools/build-mddoctor.sh (MEDIDO 2026-11-27):
+          # sin ellos el binario pesa 57.536 B y con ellos 43.384 B, con las
+          # mismas capacidades.  El tope de 100 KB es un REQUISITO del
+          # usuario: si esto crece, el gate lo dice.
+          MDD_OPT="-O2 -s -ffunction-sections -fdata-sections -Wl,--gc-sections"
+          MDD_OPT="$MDD_OPT -fmerge-all-constants -fno-ident -fno-plt -Wl,--as-needed"
+          MDD_OPT="$MDD_OPT -fno-unwind-tables -fno-asynchronous-unwind-tables"
+          # Sin relleno entre segmentos: 51.576 B -> 43.384 B (MEDIDO).
+          MDD_OPT="$MDD_OPT -Wl,-z,noseparate-code"
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" \
+            $MDD_OPT -Wall -o dist/mddoctor-android-arm64 "$GITHUB_WORKSPACE/tools/mddoctor.c"
+          chmod 755 dist/mddoctor-android-arm64
+          # GATE DE TAMAÑO: el binario forense no puede pasar de 100 KB.
+          TAM=$(wc -c < dist/mddoctor-android-arm64)
+          echo "mddoctor-android-arm64: $TAM B"
+          if [ "$TAM" -gt 102400 ]; then
+            echo "::error::mddoctor pesa $TAM B y el tope es 102400 B (100 KB)"
+            exit 1
+          fi
+          sha256sum dist/mddoctor-android-arm64 > dist/mddoctor-android-arm64.sha256
+          cp dist/mddoctor-android-arm64 dist/mddoctor-android-arm64-${GITHUB_SHA::7}
+          sha256sum dist/mddoctor-android-arm64-${GITHUB_SHA::7} > dist/mddoctor-android-arm64-${GITHUB_SHA::7}.sha256
+          # El binario COMPRIMIDO va aparte: el artefacto que baja el movil
+          # ocupa menos de 20 KB (MEDIDO: 43 KB -> ~14 KB con xz) y el
+          # instalador lo descomprime antes de ejecutarlo.  El binario que
+          # corre sigue siendo el MISMO, con todas sus capacidades.
+          if command -v xz >/dev/null 2>&1; then
+            xz -9 -k -f dist/mddoctor-android-arm64
+            sha256sum dist/mddoctor-android-arm64.xz > dist/mddoctor-android-arm64.xz.sha256
+            echo "mddoctor comprimido: $(wc -c < dist/mddoctor-android-arm64.xz) B"
+          fi
           cp target/aarch64-linux-android/release/megadaemon-core dist/megadaemon-core-android-arm64
           sha256sum dist/megadaemon-core-android-arm64 > dist/megadaemon-core-android-arm64.sha256
           # Copia VERSIONADA (mismo motivo que en el build de Linux): en el
@@ -209,12 +341,35 @@ jobs:
           # `md-clipboard` (portapapeles) y `md-dict` (diccionarios) son
           # CLIs que se ejecutan en el movil: sin publicarlos no llegan al
           # dispositivo.
-          for aux in channel-publish duckdns-updater md-lan-listen npu-probe md-clipboard md-dict; do
+          #
+          # `md-inject` es el INYECTOR ptrace: sin el no hay forma de cargar
+          # el payload de hooks (frida-gum) en el proceso de Antigravity
+          # (MEDIDO 2026-11-26, movil: el movil NO tiene frida-server
+          # arrancado ni cliente `frida`, y el payload va incrustado en el
+          # daemon ⇒ el inyector es el UNICO cargador posible).
+          for aux in channel-publish duckdns-updater md-lan-listen npu-probe md-clipboard md-dict md-inject; do
             if [ -f "target/aarch64-linux-android/release/$aux" ]; then
               cp "target/aarch64-linux-android/release/$aux" "dist/$aux-arm64"
               sha256sum "dist/$aux-arm64" > "dist/$aux-arm64.sha256"
               echo "  dist/$aux-arm64"
             fi
+          done
+      - name: "Tamano del binario (medido, para comparar builds)"
+        # MEDIDO 2026-11-25: el usuario pidio Explicitamente "optimizar mucho
+        # el tamano final del binario sin perder capacidades".  Sin medicion
+        # no hay forma de saber si un cambio ayuda.  Se publica el tamano de
+        # CADA asset en el resumen del job (legible sin permisos de admin) y
+        # como aviso en el log.
+        run: |
+          set -u
+          { echo ""; echo "| asset | bytes | MiB |"; echo "|---|---|---|"; } >> "${GITHUB_STEP_SUMMARY:-/dev/null}" 2>/dev/null || true
+          for f in dist/*; do
+            [ -f "$f" ] || continue
+            case "$f" in *.sha256|*.json) continue;; esac
+            b=$(stat -c %s "$f")
+            m=$(awk -v b="$b" 'BEGIN{printf "%.2f", b/1048576}')
+            echo "::notice::$(basename "$f") = $b bytes ($m MiB)"
+            { echo "| $(basename "$f") | $b | $m |"; } >> "${GITHUB_STEP_SUMMARY:-/dev/null}" 2>/dev/null || true
           done
       - name: Subir artefacto
         uses: actions/upload-artifact@v4
@@ -263,8 +418,14 @@ jobs:
           RANLIB_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ranlib
           # Perfil release sin LTO: con lto=true, codegen-units=1 el rustc
           # muere por OOM en el runner (SIGKILL) y el build aarch64 cae.
-          CARGO_PROFILE_RELEASE_LTO: "false"
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          # MEDIDO 2026-11-25: LTO "thin" (mismo criterio que el ARM64):
+          # el asset publicado tiene que llevar la misma politica que el
+          # de Android, y "thin" da casi todo el ahorro del "fat" sin
+          # matar al rustc por OOM.
+          CARGO_PROFILE_RELEASE_LTO: "thin"
+          # MEDIDO 2026-11-25: CU=16 para las DEPENDENCIAS infla el binario
+          # (con CU=4 el enlazador elimina el codigo muerto de verdad).
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "4"
           CARGO_PROFILE_RELEASE_DEBUG: "0"
         run: |
           cargo build --release --target ${{ matrix.target }}
@@ -277,6 +438,23 @@ jobs:
           # build está en el dispositivo.
           cp dist/${{ matrix.asset }} dist/${{ matrix.asset }}-${GITHUB_SHA::7}
           sha256sum dist/${{ matrix.asset }}-${GITHUB_SHA::7} > dist/${{ matrix.asset }}-${GITHUB_SHA::7}.sha256
+      - name: "Tamano del binario (medido, para comparar builds)"
+        # MEDIDO 2026-11-25: el usuario pidio Explicitamente "optimizar mucho
+        # el tamano final del binario sin perder capacidades".  Sin medicion
+        # no hay forma de saber si un cambio ayuda.  Se publica el tamano de
+        # CADA asset en el resumen del job (legible sin permisos de admin) y
+        # como aviso en el log.
+        run: |
+          set -u
+          { echo ""; echo "| asset | bytes | MiB |"; echo "|---|---|---|"; } >> "${GITHUB_STEP_SUMMARY:-/dev/null}" 2>/dev/null || true
+          for f in dist/*; do
+            [ -f "$f" ] || continue
+            case "$f" in *.sha256|*.json) continue;; esac
+            b=$(stat -c %s "$f")
+            m=$(awk -v b="$b" 'BEGIN{printf "%.2f", b/1048576}')
+            echo "::notice::$(basename "$f") = $b bytes ($m MiB)"
+            { echo "| $(basename "$f") | $b | $m |"; } >> "${GITHUB_STEP_SUMMARY:-/dev/null}" 2>/dev/null || true
+          done
       - name: Subir artefacto
         uses: actions/upload-artifact@v4
         with:
@@ -287,7 +465,9 @@ jobs:
   # ---------------------------------------------------------------------------
   # PAYLOAD DE HOOKS (frida-gum) — ARM64 Android
   # ---------------------------------------------------------------------------
-  # El payload es un crate AISLADO (crates/hooks-payload) que usa los
+  # (El payload de frida-gum ya NO tiene build propio: se compila en el job
+  # de Android y va EMBEBIDO en el daemon.  Ver "build-android".)
+  #
   # bindings OFICIALES de Frida en Rust (frida-gum).  Vive FUERA del crate
   # del daemon a propósito: el binario principal no puede depender de gum,
   # de bindgen (libclang) ni del devkit de Frida => el build por defecto
@@ -304,72 +484,6 @@ jobs:
   #     => NO hacen falta meson ni ninja (gum no se compila: se enlaza el
   #     `libfrida-gum.a` del devkit).
   #   * el linker del NDK: aarch64-linux-android26-clang.
-  build-hooks-payload:
-    name: build payload de hooks (frida-gum / ARM64 Android)
-    runs-on: ubuntu-latest
-    # NO depende de `quality`: el payload es accesorio; el binario del daemon
-    # no puede depender de él (si el payload no compila, el móvil sigue
-    # teniendo daemon).
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-      - uses: nttld/setup-ndk@v1
-        id: ndk
-        with:
-          ndk-version: r26c
-      - name: "Dependencias de gum (bindgen necesita libclang; los shims en C, el clang del NDK)"
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libclang-dev clang
-          clang --version | head -1
-      - name: Cache de cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-hooks-payload-${{ hashFiles('crates/hooks-payload/Cargo.lock') }}
-      - name: Compilar el payload (gum)
-        working-directory: crates/hooks-payload
-        env:
-          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
-          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
-          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
-          RANLIB_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
-          # MEDIDO (2026-11-23): bindgen (frida-gum-sys) usaba el include del
-          # HOST (/usr/include/limits.h) y reventaba con
-          # "bits/libc-header-start.h file not found": el sysroot del NDK y
-          # los includes del TARGET tienen que estar en la ruta de clang.
-          BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android: >-
-            --sysroot=${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot
-            -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
-            -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/aarch64-linux-android
-            -I${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/aarch64-linux-android/api-level-26
-          CARGO_PROFILE_RELEASE_LTO: "false"
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
-          CARGO_PROFILE_RELEASE_DEBUG: "0"
-        run: |
-          cargo build --release --target aarch64-linux-android
-          mkdir -p dist
-          cp target/aarch64-linux-android/release/libhooks_payload.so dist/hooks-payload-arm64
-          sha256sum dist/hooks-payload-arm64 > dist/hooks-payload-arm64.sha256
-          # La .so tiene que ser una shared object ARM64 (si no, el móvil la
-          # rechaza al dlopen).
-          file dist/hooks-payload-arm64 | tee /tmp/fichero-payload.txt
-          grep -q "ELF 64-bit LSB shared object" /tmp/fichero-payload.txt || {
-            echo "::error::el payload no es una shared object ELF 64-bit"; exit 1; }
-          grep -q "ARM aarch64" /tmp/fichero-payload.txt || {
-            echo "::error::el payload no es ARM aarch64"; exit 1; }
-          ls -l dist/
-      - name: Subir artefacto
-        uses: actions/upload-artifact@v4
-        with:
-          name: megadaemon-hooks-payload-arm64
-          path: crates/hooks-payload/dist/
-          retention-days: 30
-
   # Tests del payload en el HOST (x86_64): validan la redacción de
   # credenciales y el escritor NDJSON SIN tocar el móvil.  Es un job aparte
   # (no bloquea la release) porque el payload es accesorio.
@@ -390,14 +504,110 @@ jobs:
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
         run: cargo test --release
 
+  # MEDIDO (2026-11-26, movil): el LS de Antigravity NO usa la libc de
+  # Bionic: corre con un runtime de GLIBC propio
+  # (/data/user/0/com.agy/files/runtime/lib/libc.so.6).  Un payload enlazado
+  # contra Bionic (NEEDED libc.so / libdl.so / liblog.so) NO se puede cargar
+  # ahi: el enlazador de glibc no encuentra esas librerias y la carga aborta
+  # con "cannot locate symbol g_get_tmp_dir" (el crate frida-gum usa la API
+  # de glib en Android y la de gum en Linux).  Por eso hace falta una SEGUNDA
+  # variante del payload, enlazada contra glibc.
+  #
+  # Es un job APARTE: si gum no llegara a compilarse para glibc, el movil
+  # sigue teniendo daemon y el payload de Bionic (el release sale igual).
+  build-hooks-payload-glibc:
+    name: payload de hooks para GLIBC (aarch64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - name: Dependencias (cross-gcc para glibc; libclang para bindgen)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu libclang-dev clang
+          aarch64-linux-gnu-gcc --version | head -1
+      - name: Cache de cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/hooks-payload/target
+          key: cargo-payload-glibc-${{ hashFiles('crates/hooks-payload/Cargo.lock') }}
+      - name: "Compilar el payload (gum) para GLIBC (aarch64-unknown-linux-gnu)"
+        working-directory: crates/hooks-payload
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+          RANLIB_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ranlib
+          # El devkit de gum (17.9.5) lo baja el propio build.rs: para este
+          # target pide `frida-gum-devkit-17.9.5-linux-arm64.tar.xz` (existe
+          # en el release de Frida).  El sysroot es el del cross-gcc, para
+          # que bindgen encuentre los headers de glibc.
+          BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_gnu: >-
+            --sysroot=/usr/aarch64-linux-gnu
+            -I/usr/aarch64-linux-gnu/include
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
+          # MEDIDO (2026-11-26): `../dist` desde `crates/hooks-payload` es
+          # `crates/dist` y el `upload-artifact` subia el `dist/` del REPO
+          # (que esta versionado en git) => el artefacto no llevaba el
+          # payload y el release no lo publicaba.  Ahora: ruta ABSOLUTA y
+          # directorio PROPIO.
+          DIST: ${{ github.workspace }}/dist-glibc
+          # `$ORIGIN`: el payload busca sus propias dependencias en el
+          # directorio donde vive (el daemon copia ahi la `libgcc_s.so.1`
+          # del runtime del LS).  MEDIDO (2026-11-26, movil): el proceso del
+          # LS NO tiene DT_RPATH ni DT_RUNPATH (su `--library-path` es de
+          # glibc y no se traduce a un RPATH del ELF).
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: >-
+            -C link-arg=-Wl,-rpath,$ORIGIN
+        run: |
+          cargo build --release --target aarch64-unknown-linux-gnu
+          mkdir -p "$DIST"
+          cp target/aarch64-unknown-linux-gnu/release/libhooks_payload.so "$DIST/hooks-payload-linux-arm64"
+          # MEDIDO (2026-11-26, CI): `.sha256` con el NOMBRE (no con la ruta
+          # absoluta) ⇒ portable entre jobs.  Ver el mismo comentario en el
+          # job de Android.
+          ( cd "$DIST" && sha256sum hooks-payload-linux-arm64 > hooks-payload-linux-arm64.sha256 )
+          file "$DIST/hooks-payload-linux-arm64" | tee /tmp/fichero-payload-glibc.txt
+          grep -q "ELF 64-bit LSB shared object" /tmp/fichero-payload-glibc.txt || {
+            echo "::error::el payload glibc no es una shared object ELF 64-bit"; exit 1; }
+          readelf -d "$DIST/hooks-payload-linux-arm64" | tee /tmp/necesarias-glibc.txt
+          grep -q "libc.so.6" /tmp/necesarias-glibc.txt || {
+            echo "::error::el payload glibc no depende de libc.so.6"; exit 1; }
+          # MEDIDO (2026-11-26, movil): el runtime del LS tiene mapeadas
+          # libc.so.6, libm.so.6, libdl.so.2, libpthread.so.0, libresolv.so.2
+          # y librt.so.1.  El payload NO puede depender de nada mas.
+          # `libgcc_s.so.1` SI puede: esta en el runtime del LS
+          # (/data/user/0/com.agy/files/runtime/lib) y el daemon la copia
+          # junto al payload, que la busca con $ORIGIN.
+          for lib in liblog.so libstdc++.so libelf.so.1; do
+            if grep -q "$lib" /tmp/necesarias-glibc.txt; then
+              echo "::error::el payload glibc depende de $lib (no lo tiene el runtime del LS)"; exit 1
+            fi
+          done
+          grep -q "RPATH\|RUNPATH" /tmp/necesarias-glibc.txt || {
+            echo "::error::el payload glibc no tiene RUNPATH (\$ORIGIN)"; exit 1; }
+          echo "payload de glibc compilado y verificado"
+      - name: Subir artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: hooks-payload-glibc
+          path: ${{ github.workspace }}/dist-glibc/
+
+
   release:
     name: release (auto-actualización de las instancias)
     runs-on: ubuntu-latest
-    # `build-hooks-payload` entra en `needs` para que la release ESPERE a él
     # (si no, el asset del payload a veces no llega a tiempo al release), pero
     # el `if: always()` de abajo hace que su fallo NO tumbe la release: el
     # móvil no puede quedarse sin daemon porque el payload no compile.
-    needs: [build-android, build-linux, build-hooks-payload]
+    needs: [build-android, build-linux, build-hooks-payload-glibc]
     # Publica en CUALQUIER rama (main y v14-coordination): el tag es v<sha>, así
     # que no chocan entre ramas y el binario ARM64 sale siempre con nombre
     # versionado.
@@ -446,6 +656,23 @@ jobs:
           sha256sum -c dist/megadaemon-core-android-arm64.sha256 || exit 1
           sha256sum -c "dist/megadaemon-core-android-arm64-${GITHUB_SHA::7}.sha256" || exit 1
           echo "assets ARM64 verificados ✓"
+          # Verificar el VALOR del sha256, NO la ruta.
+          #
+          # MEDIDO (2026-11-26, CI): el `.sha256` del payload lo genera el job
+          # que lo compila, en SU directorio ⇒ la ruta que contiene no existe
+          # en este job (`/home/runner/work/.../rust-core/dist/…`) y
+          # `sha256sum -c` fallaba con "No such file or directory" => el job
+          # `release` caía => NO se publicaba NINGUNA release (el móvil se
+          # quedaba sin binario).  Aquí se compara el VALOR del hash.
+          verificar_sha() {
+            local f="$1" esperado real
+            esperado=$(cut -d' ' -f1 < "$f.sha256")
+            real=$(sha256sum "$f" | cut -d' ' -f1)
+            if [ "$esperado" != "$real" ]; then
+              echo "::error::sha256 incorrecto en $f (esperado $esperado, real $real)"
+              exit 1
+            fi
+          }
           # El PAYLOAD DE HOOKS es opcional: si su job falló, la release sale
           # igual (el móvil no se queda sin daemon por culpa del payload) pero
           # sin el asset del payload.  Si está, se verifica su sha256.
@@ -453,11 +680,56 @@ jobs:
             if [ ! -f dist/hooks-payload-arm64.sha256 ]; then
               echo "::error::falta dist/hooks-payload-arm64.sha256"; exit 1
             fi
-            sha256sum -c dist/hooks-payload-arm64.sha256 || exit 1
+            verificar_sha dist/hooks-payload-arm64
             echo "payload de hooks verificado ✓"
           else
             echo "::notice::el payload de hooks NO se publica en este run (job 'build-hooks-payload' falló o no se ejecutó)"
           fi
+          # El payload de GLIBC (para el LS de Antigravity, que corre con un
+          # runtime de glibc) es opcional por el mismo motivo.
+          if [ -f dist/hooks-payload-linux-arm64 ]; then
+            if [ ! -f dist/hooks-payload-linux-arm64.sha256 ]; then
+              echo "::error::falta dist/hooks-payload-linux-arm64.sha256"; exit 1
+            fi
+            verificar_sha dist/hooks-payload-linux-arm64
+            echo "payload de hooks (glibc) verificado ✓"
+          else
+            echo "::notice::el payload de hooks para glibc NO se publica en este run"
+          fi
+      - name: "Build META: bundle con TODO dentro (binario + stack + manifiesto)"
+        # El bundle meta es la via de instalacion/actualizacion COMPLETA: un
+        # unico .tar.gz con el binario, el supervisor, el keeper, los scripts
+        # de Antigravity y la Web UI, y un manifest.json con el SHA-256 de
+        # CADA fichero.  El daemon lo descarga, lo verifica fichero a
+        # fichero y lo instala (`megadaemon-core bundle --instalar`).
+        # La autorreparacion offline la hace el modulo `stack` (el binario
+        # lleva el stack dentro).
+        run: |
+          set -u
+          chmod +x tools/construir-bundle.sh
+          # El 4o argumento es el mddoctor YA COMPILADO para ARM64: sin el,
+          # el bundle se llevaba el binario del host (x86-64) y el movil
+          # descargaba un ejecutable que no puede correr.
+          tools/construir-bundle.sh dist/megadaemon-core-android-arm64 dist/megadaemon-movil.tar.gz "" dist/mddoctor-android-arm64
+          echo "--- contenido del bundle:"
+          tar -tzf dist/megadaemon-movil.tar.gz | sort
+          # El manifiesto debe estar dentro y listar los 10 ficheros.
+          python3 - <<'PY2'
+          import json, tarfile, sys
+          with tarfile.open("dist/megadaemon-movil.tar.gz", "r:gz") as t:
+              man = json.load(t.extractfile("manifest.json"))
+          n = len(man["ficheros"])
+          print(f"   manifiesto: {n} ficheros, build {man['build']}")
+          if n < 10:
+              print("::error::el bundle no trae todos los ficheros del stack")
+              sys.exit(1)
+          for f in man["ficheros"]:
+              if len(f["sha256"]) != 64:
+                  print(f"::error::sha invalido para {f['origen']}")
+                  sys.exit(1)
+          PY2
+          sha256sum dist/megadaemon-movil.tar.gz > dist/megadaemon-movil.tar.gz.sha256
+          echo "bundle verificado ✓"
       - name: Publicar el estado del release (manifiesto con SÓLO los assets que existen)
         # El manifiesto se genera DINÁMICO: si una pata de Linux falló, su
         # asset NO aparece en `latest.json` (antes siempre aparecía => la

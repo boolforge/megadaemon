@@ -423,6 +423,23 @@ for cand in "$PREFIX/cloudflared" \
             /data/local/tmp/megadaemon/cloudflared; do
     [ -x "$cand" ] && { CLOUDFLARED="$cand"; break; }
 done
+# MEDIDO (2026-11-25, movil): si el cloudflared estaba en la ruta LEGACY
+# (/data/local/tmp/megadaemon, VOLATIL) se usaba desde ahi y NO se migraba
+# => al reiniciar el movil, /data/local/tmp se limpiava y el movil se
+# quedaba SIN TUNEL (medido: el proceso corria desde
+# /data/local/tmp/megadaemon/cloudflared).  Ahora se MIGRABA al prefijo
+# persistente nada mas encontrarlo.
+if [ -n "$CLOUDFLARED" ] && [ "$CLOUDFLARED" != "$PREFIX/cloudflared" ]; then
+    if cp -f "$CLOUDFLARED" "$PREFIX/cloudflared.new" 2>/dev/null; then
+        chmod 755 "$PREFIX/cloudflared.new" 2>/dev/null
+        if mv -f "$PREFIX/cloudflared.new" "$PREFIX/cloudflared" 2>/dev/null; then
+            log "cloudflared MIGRADO al prefijo persistente (estaba en $CLOUDFLARED)"
+            CLOUDFLARED="$PREFIX/cloudflared"
+        else
+            rm -f "$PREFIX/cloudflared.new" 2>/dev/null
+        fi
+    fi
+fi
 if [ -z "$CLOUDFLARED" ]; then
     for cand in /data/data/com.termux/files/usr/bin/cloudflared \
                 /data/data/com.agy/files/usr/bin/cloudflared; do
@@ -491,9 +508,19 @@ tunnel_status() {
 # tunel esta bien pero el ORIGEN (el daemon) no responde -> no hay que
 # tocar el tunel (el supervisor ya relanza el daemon).  Reiniciar el tunel
 # por eso cambia la URL publica y deja a toda la flota con un 530.
+#
+# MEDIDO (2026-11-25, movil): el tunel estaba MUERTO y nadie lo relanzaba.
+# El proceso de cloudflared seguia vivo (pid 28610) pero su host ya no
+# resolvia (NXDOMAIN) => `curl` devolvia 000 => la funcion decia "esta
+# vivo" => el tunel NUNCA se reiniciaba => el movil era inalcanzable desde
+# fuera hasta que alguien lo relanzase a mano.
+#
+# 000 = no hay ni edge ni origen (DNS/TCP caidos) => el tunel esta MUERTO.
+# El reinicio sigue exigiendo DOS comprobaciones seguidas (tunnel_strikes),
+# asi que un fallo puntual de red no cambia la URL publica.
 tunnel_is_dead() {
     case "$1" in
-        530|521|522) return 0 ;;
+        000|530|521|522) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -530,7 +557,21 @@ tunnel_strikes=0
 # apuntando a 8765).
 # ─────────────────────────────────────────────────────────────────────────────
 mcp_legacy_enabled() {
-    [ "${MD_MCP_LEGACY_TUNNEL:-0}" = "1" ]
+    [ "${MD_MCP_LEGACY_TUNNEL:-0}" = "1" ] || return 1
+    # MEDIDO (2026-11-25, movil): aunque MD_MCP_LEGACY_TUNNEL estuviera a 1,
+    # el tunel para el 8765 NO puede funcionar (el daemon sirve el MCP en el
+    # MISMO puerto que el cockpit, $PORT) y el supervisor lo relanzaba cada
+    # ~30 s: cloudflared escribiendo logs, quic, temperatura y bateria.
+    # El movil estaba al 30 % de bateria descargando por esto.
+    #
+    # Aqui se COMPRUEBA que el 8765 lo sirva de verdad alguien (esta en
+    # LISTEN).  Si no hay nadie escuchando, el tunel se apaga solo, aunque la
+    # variable diga 1.
+    hp=$(printf '%04X' 8765)
+    if grep -qiE ":$hp [0-9a-f]{8}:[0-9a-f]{4} 0A" /proc/net/tcp /proc/net/tcp6 2>/dev/null; then
+        return 0
+    fi
+    return 1
 }
 
 mcp_legacy_stop() {
@@ -993,6 +1034,14 @@ start_daemon() {
     setsid nohup "$BIN" cockpit "$PORT" >> "$LOG" 2>&1 < /dev/null &
     pid=$!
     log "megadaemon-core arrancado PID $pid (cockpit en 127.0.0.1:$PORT, instancia=$MEGADAEMON_INSTANCE_NAME/$MEGADAEMON_INSTANCE_ROLE)"
+    # MEDIDO (2026-11-25): el log de texto se trunca a 46 lineas en el
+    # diagnostico y no se veía si el daemon se reiniciaba en bucle.  Este
+    # registro es dedicado y lo lee el diagnostico.
+    # MEDIDO (2026-11-25): con el sha16 del binario se sabe de un vistazo
+    # que CODIGO esta en servicio (el build puede estar en disco y el
+    # proceso con otro: asi se detecto el desfase de 7 horas).
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] arrancado PID $pid puerto=$PORT sha16=$(sha256sum "$BIN" 2>/dev/null | cut -c1-16)" \
+        >> "$PREFIX/reinicios.log" 2>/dev/null
 
     # --- lmkd / OOM killer: el daemon NO debe ser la primera victima -----
     # MEDIDO (2026-11-23): el movil se caia de forma DETERMINISTA porque
@@ -1028,6 +1077,17 @@ start_daemon() {
         if [ "$fast_fails" -ge "$MAX_FAST_FAILS" ] && [ -f "$PREV_BIN" ]; then
             log "AUTO-ROLLBACK: restaurando el binario anterior ($PREV_BIN)"
             cp -a "$BIN" "$BIN.bad-$(date +%s)" 2>/dev/null || true
+            # MEDIDO 2026-11-25 (auto-actualizacion SIN bucles): al restaurar
+            # el binario anterior, el auto-actualizador volveria a instalar el
+            # MISMO asset (que es el que acaba de morir al arrancar) => bucle
+            # infinito de installs y reinicios.  Se apunta el SHA-256 del
+            # binario que ha fallado y el auto-actualizador lo salta.
+            _malo=$(sha256sum "$BIN" 2>/dev/null | cut -d' ' -f1)
+            if [ -n "$_malo" ]; then
+                mkdir -p "$MEGADAEMON_STATE_DIR" 2>/dev/null
+                echo "$_malo" > "$MEGADAEMON_STATE_DIR/binario_malo.sha256" 2>/dev/null && \
+                    log "binario marcado como malo (sha16 ${_malo:0:16}): el auto-actualizador lo saltara"
+            fi
             # MEDIDO el 2026-11-21: estos `.bad-*` se acumulaban SIN
             # limite (12 ficheros, 104 MB en el movil).  El rollback solo
             # necesita el ULTIMO: se podan todos menos el mas reciente.
@@ -1082,6 +1142,23 @@ ENERGY_SEAL_BELOW=${MEGADAEMON_SEAL_BELOW_PCT:-20}
 ENERGY_BRIGHTNESS_MAX=${MEGADAEMON_BRIGHTNESS_MAX:-60}
 ENERGY_RAM_FLOOR_KB=${MEGADAEMON_RAM_FLOOR_KB:-524288}
 ENERGY_DISK_FLOOR_KB=${MEGADAEMON_DISK_FLOOR_KB:-1048576}
+#
+# HISTÉRESIS de la clase de energía.
+#
+# MEDIDO (2026-11-27, SM-G998B, Android 14): el brillo del móvil iba
+# 247 -> 60 -> 247 cada ~75 s.  NO era el sensor de luz ambiente (el modo
+# estaba en MANUAL todo el tiempo): era ESTE script.  La clase de energía
+# parpadeaba entre "normal" y una restrictiva (la RAM libre cruzaba el
+# suelo de 512 MB un momento, o la temperatura cruzaba los 45 °C) => el
+# daemon se ponía el tope de 60, guardaba 247, y un minuto después lo
+# restauraba.  Ese锯齿 ES el "se me cambia el brillo a random".
+#
+# Con histéresis, para RELAJAR la clase hace falta un margen: 3 °C, 64 MB
+# de RAM y 5 % de batería.  ESCALAR sigue siendo inmediato (una temperatura
+# crítica entra en vigor al instante): el margen sólo va en la relajación.
+ENERGY_HYST_C=${MEGADAEMON_ENERGY_HYST_C:-3}
+ENERGY_HYST_RAM_KB=${MEGADAEMON_ENERGY_HYST_RAM_KB:-65536}
+ENERGY_HYST_PCT=${MEGADAEMON_ENERGY_HYST_PCT:-5}
 # Tope de RSS del daemon.
 #
 # MEDIDO (2026-11-23): el tope FIJO de 200 MB era la CAUSA de la muerte del
@@ -1110,7 +1187,9 @@ else
 fi
 ENERGY_STATE_KEEP=${MEGADAEMON_STATE_KEEP:-2}
 ENERGY_STATE_FILE="$PREFIX/energy_state"
-ENERGY_BRIGHT_SAVED="$PREFIX/brightness_saved"
+# MEDIDO (2026-11-27): el recorte de brillo lo lleva el modulo de brillo
+# (100% manual, sin cambios); aqui solo se informa del techo.
+ENERGY_BRIGHT_CAP="$PREFIX/brightness_cap"
 
 # Interface de sondeo: 127.0.0.3 para que el watchdog tenga SU PROPIO cubo
 # del rate limit (el del túnel es 127.0.0.1 y el del navegador 127.0.0.2).
@@ -1153,14 +1232,31 @@ energy_daemon_rss_kb() {
 }
 
 # Clasifica el estado: normal | conserve | thermal | seal
-energy_classify() {   # $1=pct $2=temp_c $3=ram_kb $4=charging
+energy_classify() {   # $1=pct $2=temp_c $3=ram_kb $4=charging [$5=clase_anterior]
     [ -n "$1" ] || return 0
+    prev=${5:-normal}
+    # --- umbrales de ENTRADA (los de siempre, sin margen) -------------------
+    # Escalar es inmediato: una temperatura crítica o una batería en las
+    # últimas se aplican al instante, sin esperar a ningún margen.
     if [ "$1" -lt "$ENERGY_SEAL_BELOW" ]; then echo seal; return 0; fi
     if [ -n "$2" ] && [ "$2" -ge "$ENERGY_THERMAL_HARD" ]; then echo seal; return 0; fi
     if [ -n "$2" ] && [ "$2" -ge "$ENERGY_THERMAL_CRIT" ]; then echo thermal; return 0; fi
-    if [ -n "$2" ] && [ "$2" -ge "$ENERGY_THERMAL_WARN" ]; then echo thermal; return 0; fi
-    if [ -n "$3" ] && [ "$3" -gt 0 ] && [ "$3" -lt "$ENERGY_RAM_FLOOR_KB" ]; then echo conserve; return 0; fi
-    if [ "$4" != "Charging" ] && [ "$1" -lt 35 ]; then echo conserve; return 0; fi
+    # --- umbrales de RELAJACIÓN (con margen si veníamos de restrictiva) ----
+    # MEDIDO (2026-11-27): sin este margen la clase parpadeaba y el brillo
+    # iba 247 -> 60 -> 247 cada ~75 s.  Con margen, sólo se vuelve a
+    # "normal" cuando el valor está CLARAMENTE bien.
+    if [ "$prev" != "normal" ]; then
+        t_low=$((ENERGY_THERMAL_WARN - ENERGY_HYST_C))
+        ram_low=$((ENERGY_RAM_FLOOR_KB + ENERGY_HYST_RAM_KB))
+        p_low=$((35 + ENERGY_HYST_PCT))
+    else
+        t_low=$ENERGY_THERMAL_WARN
+        ram_low=$ENERGY_RAM_FLOOR_KB
+        p_low=35
+    fi
+    if [ -n "$2" ] && [ "$2" -ge "$t_low" ]; then echo thermal; return 0; fi
+    if [ -n "$3" ] && [ "$3" -gt 0 ] && [ "$3" -lt "$ram_low" ]; then echo conserve; return 0; fi
+    if [ "$4" != "Charging" ] && [ "$1" -lt "$p_low" ]; then echo conserve; return 0; fi
     echo normal
 }
 
@@ -1173,9 +1269,12 @@ apply_energy_policy() {
     btemp=$(energy_battery_temp_c)
     ram=$(energy_ram_available_kb)
     disk=$(energy_disk_free_kb)
-    cls=$(energy_classify "$pct" "$temp" "$ram" "$status")
     prev=""
     [ -f "$ENERGY_STATE_FILE" ] && prev=$(cat "$ENERGY_STATE_FILE" 2>/dev/null)
+    # MEDIDO (2026-11-27): la clase ANTERIOR se le pasa al clasificador para
+    # que la relajación exija un margen (histéresis).  Sin esto el brillo
+    # parpadeaba 247 -> 60 -> 247 cada ~75 s en el SM-G998B.
+    cls=$(energy_classify "$pct" "$temp" "$ram" "$status" "$prev")
 
     # --- acciones (sólo si la clase ha cambiado: no se martillea el sistema) ---
     if [ "$cls" != "$prev" ]; then
@@ -1193,25 +1292,30 @@ apply_energy_policy() {
                 ;;
             normal)
                 settings put global low_power 0 >/dev/null 2>&1
-                # restaurar el brillo que tenía el usuario, si lo guardamos
-                if [ -f "$ENERGY_BRIGHT_SAVED" ]; then
-                    settings put system screen_brightness "$(cat "$ENERGY_BRIGHT_SAVED" 2>/dev/null)" >/dev/null 2>&1
-                    rm -f "$ENERGY_BRIGHT_SAVED"
-                fi
+                # MEDIDO (2026-11-27, SM-G998B): antes se restauraba aqui el
+                # brillo guardado.  Eso, junto al recorte de mas abajo, producia
+                # el serrucho 247 -> 60 -> 247 cada ~75 s (el "brillo se me
+                # cambia a random").  El brillo ya NO lo toca la politica de
+                # energia: lo gobierna el modulo de brillo
+                # (rust-core/src/brightness.rs), 100% manual y sin cambios.
                 ;;
         esac
         echo "$cls" > "$ENERGY_STATE_FILE" 2>/dev/null
     fi
 
-    # --- brillo (sólo si el de ahora supera el techo) ---
+    # --- brillo: la politica de energia NO lo escribe ---
+    # MEDIDO (2026-11-27, SM-G998B): el recorte a 60 y su restauracion
+    # posterior producian el serrucho 247 -> 60 -> 247 cada ~75 s: eso era,
+    # exactamente, el "el brillo se me cambia a random" que reporto el
+    # usuario.  El brillo es una decision de USABILIDAD, no de energia.
+    #
+    # Ahora: 100% manual (screen_brightness_mode=0, lo gobierna el modulo de
+    # brillo) y SIN cambios por parte del sistema.  Aqui solo se INFORMA del
+    # techo que la politica tendria, para que el diagnostico lo diga.
     if [ "$cls" != "normal" ]; then
         cap=$ENERGY_BRIGHTNESS_MAX
         [ "$cls" = "seal" ] && cap=$((ENERGY_BRIGHTNESS_MAX - 20))
-        cur=$(settings get system screen_brightness 2>/dev/null | tr -dc '0-9')
-        if [ -n "$cur" ] && [ "$cur" -gt "$cap" ]; then
-            [ -f "$ENERGY_BRIGHT_SAVED" ] || echo "$cur" > "$ENERGY_BRIGHT_SAVED" 2>/dev/null
-            settings put system screen_brightness "$cap" >/dev/null 2>&1
-        fi
+        echo "$cap" > "$ENERGY_BRIGHT_CAP" 2>/dev/null
     fi
 
     # --- disco: si estamos por debajo del suelo, podamos nuestro estado ---
@@ -1359,19 +1463,45 @@ while true; do
         # colgado seguia dando 502 desde el tunel mientras el watchdog, que
         # solo miraba pgrep, lo daba por bueno. Ahora se le pregunta de
         # verdad: si /health no responde, se reinicia.
-        py2="$PY_BIN"
-        if [ -z "$py2" ]; then
-            for cand in /data/data/com.termux/files/usr/bin/python3 \
-                        /data/data/com.agy/files/usr/bin/python3 \
-                        /system/bin/python3; do
-                [ -x "$cand" ] && { py2="$cand"; break; }
+        # MEDIDO (2026-11-25, movil): el probe usaba PY_BIN (el python3 de
+        # TERMUX).  Si Termux esta frio, apagado o su python3 falla, el probe
+        # daba "sin responder" y el supervisor MATABA un daemon SANO
+        # (medido: "daemon VIVO pero NO RESPONDE: se reinicia" y el daemon
+        # se relanzaba, pero /health respondia bien).  Ademas, si Termux no
+        # esta instalado, el probe NUNCA podia pasar y el supervisor
+        # reiniciaba el daemon sin parar.
+        #
+        # Ahora el probe usa HERRAMIENTAS NATIVAS del sistema (toybox wget /
+        # busybox wget / curl), sin depender de ninguna app.  Si no hay
+        # ninguna, se usa el /proc/net/tcp (el daemon escucha aunque /health
+        # tarde): es unindicador de "hay alguien escuchando en el puerto".
+        probe_health() {
+            local u="http://127.0.0.1:$PORT/health"
+            for cand in /system/bin/toybox /data/adb/megadaemon/busybox \
+                        /data/adb/magisk/busybox /data/local/tmp/megadaemon/busybox \
+                        /data/data/com.termux/files/usr/bin/curl \
+                        /data/data/com.termux/files/usr/bin/wget; do
+                [ -x "$cand" ] || continue
+                case "$cand" in
+                    */toybox) "$cand" wget -O /dev/null -T 4 "$u" >/dev/null 2>&1 && return 0 ;;
+                    */busybox) "$cand" wget -q -O /dev/null -T 4 "$u" >/dev/null 2>&1 && return 0 ;;
+                    */curl)   "$cand" -fsS -m 4 -o /dev/null "$u" >/dev/null 2>&1 && return 0 ;;
+                    */wget)   "$cand" -q -T 4 -O /dev/null "$u" >/dev/null 2>&1 && return 0 ;;
+                esac
             done
-        fi
+            # Sin herramientas: se mira /proc/net/tcp (puerto en LISTEN = 0A).
+            local hexport
+            hexport=$(printf '%04X' "$PORT")
+            if [ -r /proc/net/tcp ] && grep -qi ":$hexport .*0A" /proc/net/tcp 2>/dev/null; then
+                return 0
+            fi
+            return 1
+        }
         miss=0
         i=0
         while [ $i -lt 3 ]; do
             i=$((i + 1))
-            if [ -n "$py2" ] && "$py2" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:$PORT/health',timeout=4)" >/dev/null 2>&1; then
+            if probe_health; then
                 miss=0
                 break
             fi
@@ -1379,7 +1509,7 @@ while true; do
             log "daemon sin responder en /health (intento $miss/3)"
             sleep 2
         done
-        if [ "$miss" -ge 3 ] && [ -n "$py2" ]; then
+        if [ "$miss" -ge 3 ]; then
             log "daemon VIVO pero NO RESPONDE: se reinicia (antes se quedaba en 502 para siempre)"
             for p in $(pgrep -f "megadaemon-core cockpit" 2>/dev/null); do
                 kill "$p" 2>/dev/null

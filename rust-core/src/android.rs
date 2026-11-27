@@ -919,6 +919,27 @@ pub fn fs_read(path: &str, base64: bool, max_bytes: usize) -> Value {
             "content": r.stdout, "stderr": r.stderr })
 }
 
+/// Trocea el base64 para que **ningún argv** pase del límite del kernel.
+///
+/// MEDIDO (2026-11-26, móvil): un argumento de Linux no puede pasar de
+/// 128 KiB (`MAX_ARG_STRLEN`) y el comando entero viaja como un único
+/// argumento de `su -c` ⇒ escribir un binario de 133 KB (180 KB de base64)
+/// moría con `Argument list too long (os error 7)`.
+///
+/// Función **PURO** (⇒ testeable sin root): concatenar los trozos devuelve
+/// el payload ORIGINAL.
+pub fn trocear_para_escritura(payload: &str, trozo: usize) -> Vec<String> {
+    let trozo = trozo.max(1);
+    if payload.len() <= trozo {
+        return vec![payload.to_string()];
+    }
+    payload
+        .as_bytes()
+        .chunks(trozo)
+        .map(|c| String::from_utf8_lossy(c).to_string())
+        .collect()
+}
+
 pub fn fs_write(path: &str, content: &str, base64: bool, chmod: &str, confirm: bool) -> Value {
     if path.is_empty() || !path.starts_with('/') {
         return err("bad_path", "path debe ser absoluta");
@@ -968,6 +989,66 @@ pub fn fs_write(path: &str, content: &str, base64: bool, chmod: &str, confirm: b
         use base64ct::Encoding;
         base64ct::Base64::encode_string(content.as_bytes())
     };
+    // MEDIDO (2026-11-26, móvil): con TODO el base64 en el argv, escribir
+    // el inyector (133 KB → 180 KB de base64) moría con
+    //     "no se pudo ejecutar 'su': Argument list too long (os error 7)"
+    // porque el límite de UN argumento en Linux son 128 KiB (`MAX_ARG_STRLEN`)
+    // y el comando entero travels como un único argumento de `su -c`.
+    //
+    // Arreglo: si el base64 no cabe, se escribe TROCEADO (cada trozo en su
+    // propia invocación) ⇒ ningún argv se pasa de tamaño.  El resultado es
+    // EXACTAMENTE el mismo fichero.
+    const TROCEADO: usize = 48 * 1024;
+    if payload.len() > TROCEADO {
+        let trozos = trocear_para_escritura(&payload, TROCEADO);
+        // 1) Crear el temporal vacío.
+        let r0 = root_exec(
+            &format!(
+                "mkdir -p $(dirname {p}) && : > {t}",
+                p = sh_quote(path),
+                t = sh_quote(&tmp)
+            ),
+            60_000,
+            2_048,
+        );
+        if r0.code != Some(0) {
+            audit("fs.write", &json!({"path": path, "bytes": content.len()}));
+            return json!({ "ok": false, "path": path, "output": r0.combined() });
+        }
+        // 2) Añadir el base64 a trozos.
+        for trozo in &trozos {
+            let c = sh_quote(trozo);
+            let r = root_exec(
+                &format!("printf %s {c} >> {t}", c = c, t = sh_quote(&tmp)),
+                60_000,
+                2_048,
+            );
+            if r.code != Some(0) {
+                let _ = std::fs::remove_file(&tmp);
+                audit("fs.write", &json!({"path": path, "bytes": content.len()}));
+                return json!({ "ok": false, "path": path, "output": r.combined() });
+            }
+        }
+        // 3) Decodificar y colocar en su sitio.
+        let r = root_exec(
+            &format!(
+                "base64 -d {t} > {p} && rm -f {t}{ch}",
+                p = sh_quote(path),
+                t = sh_quote(&tmp),
+                ch = ch
+            ),
+            60_000,
+            8_192,
+        );
+        audit("fs.write", &json!({"path": path, "bytes": content.len()}));
+        return json!({
+            "ok": r.code == Some(0),
+            "path": path,
+            "output": r.combined(),
+            "troceado": true,
+            "trozos": trozos.len(),
+        });
+    }
     let cmd = format!(
         "mkdir -p $(dirname {p}) && printf %s {c} | base64 -d > {t} && cp {t} {p} && rm -f {t}{ch}",
         p = sh_quote(path),
@@ -1316,6 +1397,27 @@ mod tests {
         assert!(is_destructive("mkfs.ext4 /dev/block/sdb"));
         assert!(!is_destructive("ls -la /data"));
         assert!(!is_destructive("cat /proc/cpuinfo"));
+    }
+
+    #[test]
+    fn el_troceado_no_pierde_un_solo_byte() {
+        // MEDIDO (2026-11-26, movil): con el base64 entero en el argv la
+        // escritura del inyector (180 KB) moria con E2BIG.
+        let payload = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo="; // 36 B
+        let trozos = trocear_para_escritura(payload, 10);
+        assert_eq!(trozos.len(), 4);
+        assert!(trozos.iter().all(|t| t.len() <= 10));
+        assert_eq!(trozos.concat(), payload, "el contenido debe ser idéntico");
+        // Un payload corto NO se trocea (una sola invocación).
+        let uno = trocear_para_escritura(payload, 1000);
+        assert_eq!(uno.len(), 1);
+        assert_eq!(uno[0], payload);
+        // Y el troceado tiene que aguantar un payload grande (el inyector).
+        let grande = "A".repeat(200_000);
+        let t = trocear_para_escritura(&grande, 48 * 1024);
+        assert!(t.len() >= 5);
+        assert!(t.iter().all(|x| x.len() <= 48 * 1024));
+        assert_eq!(t.concat(), grande);
     }
 
     #[test]

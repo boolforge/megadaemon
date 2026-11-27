@@ -18,900 +18,1054 @@ pub fn tool_definitions() -> Value {
     // (otro dueho de fichero): aqui solo se **extiende** el array (un hunk)
     // para que la CLI, el MCP y el agente hablen del mismo codigo.
     let base = json!([
-        {
-            "name": "instrumentacion_agy",
-            "description": "Instrumentación de Antigravity (com.agy) en el móvil: el .so del language server apuntando al gateway local de MegaDaemon (modo 'falso': el daemon posee el original; o 'in situ': parcheado), MegaDaemon registrado como modelo, el puente MCP dentro de Antigravity y el MITM (bind-mount) de la DB de conversaciones. Es idempotente y se aplica SOLO cada 60 s si falta algo. Acciones: estado (qué hay aplicado ahora), plan (qué se haría), aplicar (aplica lo que diga la configuración), restore (deja el .so original y desmonta el MITM).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "accion": { "type": "string", "enum": ["estado", "plan", "aplicar", "restore"], "default": "estado" },
-                    "confirmar": { "type": "boolean", "default": false, "description": "Confirmación explícita para tocar el .so de la app (destructivo, pero reversible)" },
-                    "puerto": { "type": "integer", "description": "Puerto local del gateway de MegaDaemon (defecto 9090)" }
+            {
+                "name": "instrumentacion_agy",
+                "description": "Instrumentación de Antigravity (com.agy) en el móvil: el .so del language server apuntando al gateway local de MegaDaemon (modo 'falso': el daemon posee el original; o 'in situ': parcheado), MegaDaemon registrado como modelo, el puente MCP dentro de Antigravity y el MITM (bind-mount) de la DB de conversaciones. Es idempotente y se aplica SOLO cada 60 s si falta algo. Acciones: estado (qué hay aplicado ahora), plan (qué se haría), aplicar (aplica lo que diga la configuración), restore (deja el .so original y desmonta el MITM).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": { "type": "string", "enum": ["estado", "plan", "aplicar", "restore"], "default": "estado" },
+                        "confirmar": { "type": "boolean", "default": false, "description": "Confirmación explícita para tocar el .so de la app (destructivo, pero reversible)" },
+                        "puerto": { "type": "integer", "description": "Puerto local del gateway de MegaDaemon (defecto 9090)" }
+                    }
                 }
-            }
-        },
-        {
-            "name": "antigravity",
-            "description": "Puente contra la IDE agéntica Antigravity (com.agy) que corre en el móvil: su language server local (127.0.0.1:45157, HTTPS autofirmado) habla Connect RPC y se abre con el token CSRF que el SPA publica en window.__APP_CONFIG__.csrfToken (cabecera x-codeium-csrf-token). Acciones: status | catalog | models | conversations | search | conversation | tasks | enqueue. catalog/models devuelven el catalogo REAL de modelos con su id real y su id ofuscado (MODEL_PLACEHOLDER_*). enqueue mete trabajo en el agente de Antigravity: consume cuota y crea una conversacion, por eso exige confirm=true.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["status", "catalog", "models", "conversations", "search", "conversation", "tasks", "enqueue"], "default": "status" },
-                    "query": { "type": "string", "description": "Texto a buscar en las conversaciones (action=search)" },
-                    "cascade_id": { "type": "string", "description": "Id de la conversacion (action=conversation)" },
-                    "prompt": { "type": "string", "description": "Texto a encolar en el agente (action=enqueue)" },
-                    "workspaces": { "type": "array", "items": { "type": "string" }, "description": "URIs de workspace para el agente (opcional)" },
-                    "limit": { "type": "integer", "description": "Maximo de resultados (search, por defecto 20)" },
-                    "confirm": { "type": "boolean", "default": false }
-                },
-                "required": ["action"]
-            }
-        },
-        {
-            "name": "drive_backup",
-            "description": "Google Drive desde el propio MegaDaemon: sube un fichero o un directorio ENTERO (se comprime en ZIP) con subida resumible en trozos de 256 KiB, SHA-256 verificado en local y credenciales OAuth leidas del fichero 0600. Sin curl, sin dd, sin scripts: todo en Rust. Acciones: upload | download | status. Subir publica el contenido en un remoto: exige confirm=true.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["upload", "sync", "download", "status"], "default": "upload" },
-                    "path": { "type": "string", "description": "Ruta local a subir (fichero o directorio)" },
-                    "name": { "type": "string", "description": "Nombre en Drive (opcional; por defecto, el del fichero)" },
-                    "folder_id": { "type": "string", "description": "Carpeta destino en Drive (vacio = Mi Drive)" },
-                    "workers": { "type": "integer", "default": 8, "description": "Hilos paralelos para sync (por defecto 8)" },
-                    "verify_delete": { "type": "boolean", "default": false, "description": "Borrar local tras verificar tamano remoto (sync)" },
-                    "file_id": { "type": "string", "description": "Id de Drive a descargar (action=download)" },
-                    "dest": { "type": "string", "description": "Ruta destino de la descarga (action=download)" },
-                    "confirm": { "type": "boolean", "default": false }
-                },
-                "required": ["confirm"]
-            }
-        },
-        {
-            "name": "channel_publish",
-            "description": "Publica el estado del canal del movil (URL del quick tunnel y la del canal estable DuckDNS) FUERA del movil: escribe state/channel.json y lo publica en un paste publico, para que el sandbox redescubra la URL aunque el tunel este caido. Publicar expone una URL del dispositivo en un sitio publico: por eso exige confirm=true.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "quick": { "type": "string", "description": "URL del quick tunnel vigente (opcional)" },
-                    "duckdns": { "type": "string", "description": "URL estable de DuckDNS (opcional)" },
-                    "ip_publica": { "type": "string", "description": "IP publica que ve el host (opcional)" },
-                    "cloudflared_pids": { "type": "string", "description": "pids de cloudflared (opcional)" },
-                    "confirm": { "type": "boolean", "default": false }
-                },
-                "required": ["confirm"]
-            }
-        },
-        {
-            "name": "daad_harvester",
-            "description": "Evidence-led DAAD database recognizer, full DDB IR extractor, interpreter fingerprinter, load-model verifier (10 retro targets), recursive media unpacker (ZIP, GZ, +3DOS, P00, TAP, TZX, D64, CPC DSK, ADF, DMS, FAT12), CondAct disassembler, and SQLite preservation catalog interface.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Ruta al fichero, imagen de disco, o base de datos state.db" },
-                    "action": { "type": "string", "enum": ["scan", "embedded", "media", "disasm", "catalog", "ir", "fingerprint", "load_model", "unpack"], "default": "scan" },
-                    "platform": { "type": "string", "description": "Filtro de plataforma para catalog, dialecto (v1/v2) para disasm, o target para load_model (amiga_hunk, atari_st_prg, c64_prg, c64_entry_state, cpc_amsdos, dos_mz, plus4_prg, zx_plus3dos, msx_z80, pcw_z80)" },
-                    "query": { "type": "string", "description": "Filtro de busqueda para catalog (titulo o id)" }
+            },
+            {
+                "name": "antigravity",
+                "description": "Puente contra la IDE agéntica Antigravity (com.agy) que corre en el móvil: su language server local (127.0.0.1:45157, HTTPS autofirmado) habla Connect RPC y se abre con el token CSRF que el SPA publica en window.__APP_CONFIG__.csrfToken (cabecera x-codeium-csrf-token). Acciones: status | catalog | models | conversations | search | conversation | tasks | enqueue. catalog/models devuelven el catalogo REAL de modelos con su id real y su id ofuscado (MODEL_PLACEHOLDER_*). enqueue mete trabajo en el agente de Antigravity: consume cuota y crea una conversacion, por eso exige confirm=true.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["status", "catalog", "models", "conversations", "search", "conversation", "tasks", "enqueue"], "default": "status" },
+                        "query": { "type": "string", "description": "Texto a buscar en las conversaciones (action=search)" },
+                        "cascade_id": { "type": "string", "description": "Id de la conversacion (action=conversation)" },
+                        "prompt": { "type": "string", "description": "Texto a encolar en el agente (action=enqueue)" },
+                        "workspaces": { "type": "array", "items": { "type": "string" }, "description": "URIs de workspace para el agente (opcional)" },
+                        "limit": { "type": "integer", "description": "Maximo de resultados (search, por defecto 20)" },
+                        "confirm": { "type": "boolean", "default": false }
+                    },
+                    "required": ["action"]
                 }
-            }
-        },
-        {
-            "name": "coding_agent",
-            "description": "Autonomous multi-turn ReAct software engineering agent in pure Rust. Reads, edits, searches, and runs commands inside a sandboxed workspace using MegaDaemon's live provider vault with automatic SEERE fallback and JSONL session persistence.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "goal": { "type": "string", "description": "Objetivo de ingenieria de software a resolver en la sesion" },
-                    "workspace_root": { "type": "string", "description": "Directorio raiz del workspace (opcional; por defecto '.')" },
-                    "model": { "type": "string", "description": "Modelo LLM preferido (opcional)" },
-                    "session_id": { "type": "string", "description": "ID de sesion JSONL para reanudar o etiquetar (opcional)" },
-                    "max_turns": { "type": "integer", "default": 15, "description": "Numero maximo de turnos ReAct (por defecto 15)" },
-                    "allow_outside_workspace": { "type": "boolean", "default": false, "description": "Permitir acceso fuera de workspace_root (por defecto false)" }
-                },
-                "required": ["goal"]
-            }
-        },
-        {
-            "name": "go_retool",
-            "description": "Pure-Rust Go binary reverse engineering toolset (ELF/PE/Mach-O container scan, Go 1.18+ pclntab function & package recovery, Ghidra JSON export, and stackmap inspection).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Ruta al binario Go (ELF, PE o Mach-O)" },
-                    "action": { "type": "string", "enum": ["analyze", "container", "functions", "ghidra_json"], "default": "analyze" },
-                    "query": { "type": "string", "description": "Filtro opcional de nombre de funcion (accion functions)" },
-                    "limit": { "type": "integer", "default": 200, "description": "Maximo de funciones a devolver" }
-                },
-                "required": ["path"]
-            }
-        },
-        {
-            "name": "es_eid",
-            "description": "Spanish eID engine (FNMT Certificado Electrónico .p12/.pfx via p12-keystore + x509-cert + rustls mTLS, and DNI Electrónico 3.0/4.0 via rdnie ATR/APDU).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["inspect_p12", "dnie_atr", "dnie_apdu"], "default": "inspect_p12" },
-                    "path": { "type": "string", "description": "Path to .p12/.pfx file (inspect_p12)" },
-                    "password": { "type": "string", "description": "PKCS#12 password (inspect_p12)" },
-                    "atr_hex": { "type": "string", "description": "Hex ATR bytes (dnie_atr)" },
-                    "pin": { "type": "string", "description": "DNIe PIN (dnie_apdu)" },
-                    "digest_hex": { "type": "string", "description": "32-byte SHA-256 hex digest (dnie_apdu)" },
-                    "key_ref": { "type": "integer", "default": 1 }
-                },
-                "required": ["action"]
-            }
-        },
-        {
-            "name": "ast_analyze",
-            "description": "Tree-sitter Rust AST symbol extraction and syntax-error verification.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Path to .rs file" }
-                },
-                "required": ["path"]
-            }
-        },
-        {
-            "name": "re_disasm",
-            "description": "Multi-ISA disassembler & provenance inspector (iced-x86, Capstone ARM64/ARM/x64, goblin + gimli DWARF).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["disasm", "provenance"], "default": "disasm" },
-                    "arch": { "type": "string", "enum": ["arm64", "arm", "x86_64", "x86_32"], "default": "arm64" },
-                    "hex": { "type": "string", "description": "Hex machine code bytes (disasm)" },
-                    "base_addr": { "type": "string", "description": "Hex base address e.g. 0x400000" },
-                    "max_insns": { "type": "integer", "default": 64 },
-                    "path": { "type": "string", "description": "Binary path (provenance)" }
+            },
+            {
+                "name": "drive_backup",
+                "description": "Google Drive desde el propio MegaDaemon: sube un fichero o un directorio ENTERO (se comprime en ZIP) con subida resumible en trozos de 256 KiB, SHA-256 verificado en local y credenciales OAuth leidas del fichero 0600. Sin curl, sin dd, sin scripts: todo en Rust. Acciones: upload | download | status. Subir publica el contenido en un remoto: exige confirm=true.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["upload", "sync", "download", "status"], "default": "upload" },
+                        "path": { "type": "string", "description": "Ruta local a subir (fichero o directorio)" },
+                        "name": { "type": "string", "description": "Nombre en Drive (opcional; por defecto, el del fichero)" },
+                        "folder_id": { "type": "string", "description": "Carpeta destino en Drive (vacio = Mi Drive)" },
+                        "workers": { "type": "integer", "default": 8, "description": "Hilos paralelos para sync (por defecto 8)" },
+                        "verify_delete": { "type": "boolean", "default": false, "description": "Borrar local tras verificar tamano remoto (sync)" },
+                        "file_id": { "type": "string", "description": "Id de Drive a descargar (action=download)" },
+                        "dest": { "type": "string", "description": "Ruta destino de la descarga (action=download)" },
+                        "confirm": { "type": "boolean", "default": false }
+                    },
+                    "required": ["confirm"]
                 }
-            }
-        },
-        {
-            "name": "job_queue",
-            "description": "Durable SQLite job queue with leases, idempotency keys, retries, and crash recovery.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["enqueue", "claim", "complete", "fail", "cancel", "list"], "default": "list" },
-                    "kind": { "type": "string" },
-                    "payload": { "type": "object" },
-                    "idempotency_key": { "type": "string" },
-                    "id": { "type": "integer" },
-                    "error": { "type": "string" },
-                    "limit": { "type": "integer", "default": 50 }
+            },
+            {
+                "name": "channel_publish",
+                "description": "Publica el estado del canal del movil (URL del quick tunnel y la del canal estable DuckDNS) FUERA del movil: escribe state/channel.json y lo publica en un paste publico, para que el sandbox redescubra la URL aunque el tunel este caido. Publicar expone una URL del dispositivo en un sitio publico: por eso exige confirm=true.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "quick": { "type": "string", "description": "URL del quick tunnel vigente (opcional)" },
+                        "duckdns": { "type": "string", "description": "URL estable de DuckDNS (opcional)" },
+                        "ip_publica": { "type": "string", "description": "IP publica que ve el host (opcional)" },
+                        "cloudflared_pids": { "type": "string", "description": "pids de cloudflared (opcional)" },
+                        "confirm": { "type": "boolean", "default": false }
+                    },
+                    "required": ["confirm"]
                 }
-            }
-        },
-        {
-            "name": "rhai_eval",
-            "description": "Resource-bounded sandboxed Rhai scripting engine.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "script": { "type": "string" },
-                    "max_ops": { "type": "integer", "default": 50000 }
-                },
-                "required": ["script"]
-            }
-        },
-        {
-            "name": "term_snapshot",
-            "description": "Parse raw ANSI/VT terminal output into a rendered vt100 screen snapshot.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "raw": { "type": "string" },
-                    "rows": { "type": "integer", "default": 24 },
-                    "cols": { "type": "integer", "default": 80 }
-                },
-                "required": ["raw"]
-            }
-        },
-        {
-            "name": "tool_audit",
-            "description": "Query recent tool invocations and policy decisions from the SQLite audit journal.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "limit": { "type": "integer", "default": 30 }
+            },
+            {
+                "name": "daad_harvester",
+                "description": "Evidence-led DAAD database recognizer, full DDB IR extractor, interpreter fingerprinter, load-model verifier (10 retro targets), recursive media unpacker (ZIP, GZ, +3DOS, P00, TAP, TZX, D64, CPC DSK, ADF, DMS, FAT12), CondAct disassembler, and SQLite preservation catalog interface.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Ruta al fichero, imagen de disco, o base de datos state.db" },
+                        "action": { "type": "string", "enum": ["scan", "embedded", "media", "disasm", "catalog", "ir", "fingerprint", "load_model", "unpack"], "default": "scan" },
+                        "platform": { "type": "string", "description": "Filtro de plataforma para catalog, dialecto (v1/v2) para disasm, o target para load_model (amiga_hunk, atari_st_prg, c64_prg, c64_entry_state, cpc_amsdos, dos_mz, plus4_prg, zx_plus3dos, msx_z80, pcw_z80)" },
+                        "query": { "type": "string", "description": "Filtro de busqueda para catalog (titulo o id)" }
+                    }
                 }
-            }
-        },
-        {
-            "name": "drive_vfs",
-            "description": "Google Drive Virtual Filesystem (ls, stat, read, find, mkdir, write, move) with SQLite metadata cache for browsing MakeMKV-RE-v6-backup, playground-sdk-research/output, etc. 'move' es el motor REAL para organizar el Drive (mover un elemento a otra carpeta).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["ls", "stat", "read", "find", "mkdir", "write", "move"], "default": "ls" },
-                    "to": { "type": "string", "description": "Carpeta destino (para move), p.ej. drive:/MegaDaemon/Projects" },
-                    "path": { "type": "string", "description": "VFS path e.g. drive:/MakeMKV-RE-v6-backup" },
-                    "query": { "type": "string", "description": "Search substring (find)" },
-                    "local_path": { "type": "string", "description": "Local source path (write)" },
-                    "remote_name": { "type": "string", "description": "Target filename (write)" },
-                    "max_bytes": { "type": "integer", "default": 65536 },
-                    "limit": { "type": "integer", "default": 100 }
+            },
+            {
+                "name": "coding_agent",
+                "description": "Autonomous multi-turn ReAct software engineering agent in pure Rust. Reads, edits, searches, and runs commands inside a sandboxed workspace using MegaDaemon's live provider vault with automatic SEERE fallback and JSONL session persistence.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "goal": { "type": "string", "description": "Objetivo de ingenieria de software a resolver en la sesion" },
+                        "workspace_root": { "type": "string", "description": "Directorio raiz del workspace (opcional; por defecto '.')" },
+                        "model": { "type": "string", "description": "Modelo LLM preferido (opcional)" },
+                        "session_id": { "type": "string", "description": "ID de sesion JSONL para reanudar o etiquetar (opcional)" },
+                        "max_turns": { "type": "integer", "default": 15, "description": "Numero maximo de turnos ReAct (por defecto 15)" },
+                        "allow_outside_workspace": { "type": "boolean", "default": false, "description": "Permitir acceso fuera de workspace_root (por defecto false)" }
+                    },
+                    "required": ["goal"]
                 }
-            }
-        },
-        {
-            "name": "retro_apk_tools",
-            "description": "Pure-Rust Retro & Android binary tools (AXML AndroidManifest decoder, 1bpp 8x8 font extractor, Saturn VDP2 CRAM palette inspector, ScummVM savegame parser).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["axml", "font_1bpp", "saturn_palette", "scummvm_save"], "default": "axml" },
-                    "path": { "type": "string", "description": "Path to binary file" },
-                    "max_chars": { "type": "integer", "default": 64 },
-                    "endian": { "type": "string", "enum": ["be", "le"], "default": "be" }
-                },
-                "required": ["path"]
-            }
-        },
+            },
+            {
+                "name": "go_retool",
+                "description": "Pure-Rust Go binary reverse engineering toolset (ELF/PE/Mach-O container scan, Go 1.18+ pclntab function & package recovery, Ghidra JSON export, and stackmap inspection).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Ruta al binario Go (ELF, PE o Mach-O)" },
+                        "action": { "type": "string", "enum": ["analyze", "container", "functions", "ghidra_json"], "default": "analyze" },
+                        "query": { "type": "string", "description": "Filtro opcional de nombre de funcion (accion functions)" },
+                        "limit": { "type": "integer", "default": 200, "description": "Maximo de funciones a devolver" }
+                    },
+                    "required": ["path"]
+                }
+            },
+            {
+                "name": "es_eid",
+                "description": "Spanish eID engine (FNMT Certificado Electrónico .p12/.pfx via p12-keystore + x509-cert + rustls mTLS, and DNI Electrónico 3.0/4.0 via rdnie ATR/APDU).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["inspect_p12", "dnie_atr", "dnie_apdu"], "default": "inspect_p12" },
+                        "path": { "type": "string", "description": "Path to .p12/.pfx file (inspect_p12)" },
+                        "password": { "type": "string", "description": "PKCS#12 password (inspect_p12)" },
+                        "atr_hex": { "type": "string", "description": "Hex ATR bytes (dnie_atr)" },
+                        "pin": { "type": "string", "description": "DNIe PIN (dnie_apdu)" },
+                        "digest_hex": { "type": "string", "description": "32-byte SHA-256 hex digest (dnie_apdu)" },
+                        "key_ref": { "type": "integer", "default": 1 }
+                    },
+                    "required": ["action"]
+                }
+            },
+            {
+                "name": "ast_analyze",
+                "description": "Tree-sitter Rust AST symbol extraction and syntax-error verification.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Path to .rs file" }
+                    },
+                    "required": ["path"]
+                }
+            },
+            {
+                "name": "re_disasm",
+                "description": "Multi-ISA disassembler & provenance inspector (iced-x86, Capstone ARM64/ARM/x64, goblin + gimli DWARF).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["disasm", "provenance"], "default": "disasm" },
+                        "arch": { "type": "string", "enum": ["arm64", "arm", "x86_64", "x86_32"], "default": "arm64" },
+                        "hex": { "type": "string", "description": "Hex machine code bytes (disasm)" },
+                        "base_addr": { "type": "string", "description": "Hex base address e.g. 0x400000" },
+                        "max_insns": { "type": "integer", "default": 64 },
+                        "path": { "type": "string", "description": "Binary path (provenance)" }
+                    }
+                }
+            },
+            {
+                "name": "job_queue",
+                "description": "Durable SQLite job queue with leases, idempotency keys, retries, and crash recovery.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["enqueue", "claim", "complete", "fail", "cancel", "list"], "default": "list" },
+                        "kind": { "type": "string" },
+                        "payload": { "type": "object" },
+                        "idempotency_key": { "type": "string" },
+                        "id": { "type": "integer" },
+                        "error": { "type": "string" },
+                        "limit": { "type": "integer", "default": 50 }
+                    }
+                }
+            },
+            {
+                "name": "rhai_eval",
+                "description": "Resource-bounded sandboxed Rhai scripting engine.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string" },
+                        "max_ops": { "type": "integer", "default": 50000 }
+                    },
+                    "required": ["script"]
+                }
+            },
+            {
+                "name": "term_snapshot",
+                "description": "Parse raw ANSI/VT terminal output into a rendered vt100 screen snapshot.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "raw": { "type": "string" },
+                        "rows": { "type": "integer", "default": 24 },
+                        "cols": { "type": "integer", "default": 80 }
+                    },
+                    "required": ["raw"]
+                }
+            },
+            {
+                "name": "tool_audit",
+                "description": "Query recent tool invocations and policy decisions from the SQLite audit journal.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "limit": { "type": "integer", "default": 30 }
+                    }
+                }
+            },
+            {
+                "name": "drive_vfs",
+                "description": "Google Drive Virtual Filesystem (ls, stat, read, find, mkdir, write, move) with SQLite metadata cache for browsing MakeMKV-RE-v6-backup, playground-sdk-research/output, etc. 'move' es el motor REAL para organizar el Drive (mover un elemento a otra carpeta).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["ls", "stat", "read", "find", "mkdir", "write", "move"], "default": "ls" },
+                        "to": { "type": "string", "description": "Carpeta destino (para move), p.ej. drive:/MegaDaemon/Projects" },
+                        "path": { "type": "string", "description": "VFS path e.g. drive:/MakeMKV-RE-v6-backup" },
+                        "query": { "type": "string", "description": "Search substring (find)" },
+                        "local_path": { "type": "string", "description": "Local source path (write)" },
+                        "remote_name": { "type": "string", "description": "Target filename (write)" },
+                        "max_bytes": { "type": "integer", "default": 65536 },
+                        "limit": { "type": "integer", "default": 100 }
+                    }
+                }
+            },
+            {
+                "name": "drive_tubo",
+                "description": "EL TUBO: Google Drive como almacen EXTERNO (nativo en Rust, sin scripts). 'listar'/'inventario' que hay en la carpeta; 'subir' sube un fichero o una CARPETA (empaquetada en .tar.gz); 'bajar' descarga y verifica el sha256; 'tubo' = subir + VERIFICAR + borrar la copia local (solo borra si el sha256 cuadra). Pensado para cuando la cuota de disco es el cuello de botella.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["listar", "inventario", "subir", "bajar", "tubo"], "default": "listar" },
+                        "path": { "type": "string", "description": "Ruta local a subir (subir/tubo) o destino local (bajar)" },
+                        "file_id": { "type": "string", "description": "Id del fichero en Drive (bajar)" },
+                        "folder_id": { "type": "string", "description": "Carpeta de Drive destino (si no, se busca por nombre)" },
+                        "carpeta": { "type": "string", "description": "Nombre de la carpeta de Drive (por defecto 'megadaemon-backup')" },
+                        "nombre": { "type": "string", "description": "Nombre remoto (si no, el del fichero; las carpetas se llaman <nombre>.tar.gz)" },
+                        "borrar_local": { "type": "boolean", "default": false, "description": "En 'tubo': borrar la copia local tras verificar (solo si el sha256 cuadra)" },
+                        "limit": { "type": "integer", "default": 200 }
+                    }
+                }
+            },
+            {
+                "name": "retro_apk_tools",
+                "description": "Pure-Rust Retro & Android binary tools (AXML AndroidManifest decoder, 1bpp 8x8 font extractor, Saturn VDP2 CRAM palette inspector, ScummVM savegame parser).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["axml", "font_1bpp", "saturn_palette", "scummvm_save"], "default": "axml" },
+                        "path": { "type": "string", "description": "Path to binary file" },
+                        "max_chars": { "type": "integer", "default": 64 },
+                        "endian": { "type": "string", "enum": ["be", "le"], "default": "be" }
+                    },
+                    "required": ["path"]
+                }
+            },
 
-        {
-            "name": "clipboard",
-            "description": "Portapapeles distribuido: historial con deduplicacion y caducidad, busqueda, clasificacion (url/telefono/codigo) y sincronizacion entre nodos. Lo que parece un secreto (clave, token, OTP) se marca como SENSIBLE y NO se persiste en el historial ni se propaga por la malla. Acciones: list, put, get, copy, clear, search, status.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["list", "put", "get", "copy", "clear", "search", "status"], "default": "list" },
-                    "text": { "type": "string", "description": "texto a guardar (accion put)" },
-                    "query": { "type": "string", "description": "texto a buscar (accion search)" },
-                    "id": { "type": "string", "description": "id de un item concreto (acciones get/copy)" },
-                    "origin": { "type": "string", "description": "origen del item (paquete de la app)" },
-                    "limit": { "type": "number", "description": "maximo de resultados" }
+            {
+                "name": "clipboard",
+                "description": "Portapapeles distribuido: historial con deduplicacion y caducidad, busqueda, clasificacion (url/telefono/codigo) y sincronizacion entre nodos. Lo que parece un secreto (clave, token, OTP) se marca como SENSIBLE y NO se persiste en el historial ni se propaga por la malla. Acciones: list, put, get, copy, clear, search, status.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["list", "put", "get", "copy", "clear", "search", "status"], "default": "list" },
+                        "text": { "type": "string", "description": "texto a guardar (accion put)" },
+                        "query": { "type": "string", "description": "texto a buscar (accion search)" },
+                        "id": { "type": "string", "description": "id de un item concreto (acciones get/copy)" },
+                        "origin": { "type": "string", "description": "origen del item (paquete de la app)" },
+                        "limit": { "type": "number", "description": "maximo de resultados" }
+                    }
                 }
-            }
-        },
+            },
 
-        {
-            "name": "capabilities",
-            "description": "Catálogo de capacidades de MegaDaemon con verificación REAL de dependencias en el dispositivo (binarios, rutas, módulos). Devuelve también la huella del catálogo para detectar deriva entre versiones.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["verify", "manifest", "summary"], "default": "verify" }
-                }
-            }
-        },
-        {
-            "name": "env_introspect",
-            "description": "Pregunta al ENTORNO REAL del dispositivo (particiones, /dev, binarios, apps, RAM, rutas, props, procesos) y responde con la verdad: source + ts + device. Si algo no existe devuelve available:false + reason. Nunca inventa.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "question": { "type": "string", "description": "pregunta en lenguaje natural (\"¿existe NPU.bin?\")" },
-                    "action": { "type": "string", "enum": ["partitions", "dev", "binaries", "app", "ram", "path", "prop", "processes", "help"] },
-                    "filter": { "type": "string", "description": "filtro para action=binaries (nombre del binario)" },
-                    "package": { "type": "string", "description": "paquete para action=app" }
-                },
-                "required": ["question"]
-            }
-        },
-        {
-            "name": "alerts",
-            "description": "Sistema de alertas: evalúa las reglas reales (batería, thermal, disco, cola, citas) o lista/acuza las alertas emitidas.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["check", "list", "ack", "status", "prune"] },
-                    "id": { "type": "string" },
-                    "severity": { "type": "string", "enum": ["info", "warn", "crit"] },
-                    "limit": { "type": "integer", "default": 50 }
-                }
-            }
-        },
-        {
-            "name": "agent",
-            "description": "Núcleo agéntico: convierte un objetivo en un plan de tareas y lo ejecuta. Usa el LLM local si está disponible (0 tokens) y un planificador heurístico determinista si no.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["plan", "run", "status"] },
-                    "goal": { "type": "string" },
-                    "prefer_llm": { "type": "boolean", "default": true },
-                    "max_tasks": { "type": "integer", "default": 5 }
-                },
-                "required": ["goal"]
-            }
-        },
-        {
-            "name": "apk_inventory",
-            "description": "Inventario y análisis de APKs instaladas: manifiesto binario (AXML) con permisos y componentes, DEX, librerías nativas, SHA-256, huella de manifiesto y detección de cambios entre versiones.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["inventory", "analyze", "dump", "drift"], "default": "inventory" },
-                    "path": { "type": "string" },
-                    "limit": { "type": "integer", "default": 50 },
-                    "dest_dir": { "type": "string" },
-                    "known": { "type": "object", "description": "manifiesto previo para comparar" }
-                }
-            }
-        },
-        {
-            "name": "dex_decompile",
-            "description": "Decompilador DEX en Rust puro (sin Java, dex2jar ni Ghidra): pseudo-Java por clase, desensamblado Dalvik, mapa de desofuscación (nombres ofuscados, strings cifrados, flujo de control) y strings del DEX. Acepta un .dex suelto o un APK (extrae classes*.dex).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["decompile", "strings", "obfuscation"], "default": "decompile" },
-                    "path": { "type": "string", "description": "ruta ABSOLUTA de un .dex o de un APK" }
-                },
-                "required": ["path"]
-            }
-        },
-        {
-            "name": "app_intel",
-            "description": "Inteligencia de apps de IA (Claude, ChatGPT/Codex, Gemini, DeepSeek, Kimi, MiniMax, Grok, Manus, Cursor, Windsurf, Antigravity): rutas de datos locales, formatos de sesión, endpoints, plan de exportación/importación idempotente y notas de interoperabilidad sin API key. Los secretos se redactan siempre.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["profiles", "profile", "scan", "exchange", "notes"], "default": "profiles" },
-                    "id": { "type": "string" },
-                    "root": { "type": "string", "description": "directorio raíz de datos de la app" }
-                }
-            }
-        },
-        {
-            "name": "root_hide",
-            "description": "Auditoría de ocultación de root: matriz de señales de fuga por app (su, Magisk, Zygisk, Xposed, props, Play Integrity), plan de remediación con acciones reversibles y layout del módulo Magisk propio.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["audit", "plan", "magisk_layout"], "default": "audit" },
-                    "packages": { "type": "array", "items": { "type": "string" } }
-                }
-            }
-        },
-        {
-            "name": "store_manager",
-            "description": "Gestor de tiendas/repos universal: registra tiendas (repo, modulo Magisk, APK, payload, herramienta), descarga y cachea su indice, lo verifica (sha256 por entrada y firma RSA opcional del indice), busca entradas y las instala con verificacion de hash. Sin SDK de terceros ni binarios externos. Acciones: list, add, remove, refresh, search, plan, install, stats.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["list", "add", "remove", "refresh", "search", "plan", "install", "stats"], "default": "list" },
-                    "id": { "type": "string", "description": "Identificador de la tienda" },
-                    "name": { "type": "string" },
-                    "kind": { "type": "string", "enum": ["repo", "magisk", "apk", "payload", "tool"], "default": "repo" },
-                    "base_url": { "type": "string" },
-                    "index_path": { "type": "string" },
-                    "public_key": { "type": "string", "description": "Clave publica RSA en base64 con el formato n:e" },
-                    "trust": { "type": "string", "enum": ["sha256", "signed"], "default": "sha256" },
-                    "query": { "type": "string" },
-                    "entry": { "type": "string", "description": "id de la entrada a instalar" },
-                    "confirm": { "type": "boolean", "default": false }
-                }
-            }
-        },
-        {
-            "name": "root_detectors",
-            "description": "Apps que DETECTAN root, medido en el dispositivo: extrae la tabla de cadenas real del DEX de cada APK, busca firmas de deteccion (rutas de su, Magisk, props, Xposed/Frida, Play Integrity, emulador, Knox) y anade la evidencia dinamica vista en logcat. Cada hallazgo lleva la cadena exacta y el fichero de la que salio.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["scan", "summary"], "default": "scan" },
-                    "limit": { "type": "integer", "default": 40 },
-                    "scope": { "type": "string", "enum": ["third_party", "all"], "default": "third_party" }
-                }
-            }
-        },
-        {
-            "name": "root_consumers",
-            "description": "Apps que USAN root, medido en el dispositivo: politicas reales de Magisk (deny list y allow list leidas de la base de datos de la app Magisk o de `magisk --sqlite`), gestores de root instalados y eventos de `su` observados en logcat con la app que los pidio.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["scan", "summary"], "default": "scan" }
-                }
-            }
-        },
-        {
-            "name": "repo_updates",
-            "description": "Actualización automática de apps desde repositorios (F-Droid, Obtainium). Calcula el plan de actualización comparando versiones; descargar e instalar exige confirmación explícita.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["repos", "status", "plan", "watch", "download", "install"] },
-                    "repo_id": { "type": "string" },
-                    "package": { "type": "string" },
-                    "dest_dir": { "type": "string" },
-                    "apk_path": { "type": "string" },
-                    "confirm": { "type": "boolean", "default": false }
-                }
-            }
-        },
-        {
-            "name": "profile",
-            "description": "Perfil del usuario a partir de TODO el historial sincronizado: intereses, fortalezas, debilidades, pendientes, temas en evolución, digest diario y un informe para profesionales.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["analyze", "briefing", "drift", "digest"] },
-                    "markdown": { "type": "boolean", "default": true },
-                    "window_days": { "type": "integer", "default": 30 },
-                    "days": { "type": "integer", "default": 14 }
-                }
-            }
-        },
-        {
-            "name": "messaging",
-            "description": "Mensajería y citas: Telegram (base SQLite del propio dispositivo), SMS/MMS (content provider) y metadatos de WhatsApp. Los mensajes de WhatsApp están cifrados por el keystore y se reportan como no legibles, nunca inventados.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["inventory", "telegram", "sms", "whatsapp", "medical", "ingest", "candidates"] },
-                    "limit": { "type": "integer", "default": 500 }
-                }
-            }
-        },
-        {
-            "name": "bookmarks",
-            "description": "Marcadores, sesiones guardadas y passkeys de todos los navegadores del dispositivo, con exportación a HTML de Netscape (importable por cualquier navegador o sistema).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["inventory", "export", "passkeys", "manager_export"] },
-                    "dest_path": { "type": "string" },
-                    "package": { "type": "string" }
-                }
-            }
-        },
-        {
-            "name": "battery_saver",
-            "description": "Ahorro de energía avanzado: integra la configuración real de Xtreme Battery Saver si está instalada y mata sólo procesos en segundo plano cacheables, respetando primer plano, notificaciones y la política de energía.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["status", "apply", "protect", "xbs"] },
-                    "aggressive": { "type": "boolean", "default": false },
-                    "confirm": { "type": "boolean", "default": false },
-                    "protected": { "type": "array", "items": { "type": "string" } }
-                }
-            }
-        },
-        {
-            "name": "automation",
-            "description": "Motor de disparadores y reglas de MegaDaemon (si X entonces Y): eventos del sistema (SMS, llamada, batería, temperatura, red, WiFi, app abierta, fichero, planificador) -> acciones (notificación, script, HTTP, fichero, ajuste, comando root, broadcast). Reglas persistentes + journal + cooldown.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["list", "add", "remove", "enable", "disable", "poll", "events", "fire", "journal"] },
-                    "rule": { "type": "object", "description": "regla completa en JSON (trigger, conditions, actions)" },
-                    "rule_id": { "type": "string" },
-                    "event": { "type": "string", "enum": ["sms_received", "call_missed", "call_ended", "call_incoming", "battery_changed", "charger_changed", "app_opened", "app_closed", "file_created", "temperature_changed", "network_changed", "wifi_changed", "schedule", "screen_on", "screen_off", "boot_completed"] },
-                    "key": { "type": "string" },
-                    "value": { "type": "number" },
-                    "text": { "type": "string" },
-                    "limit": { "type": "integer", "default": 50 },
-                    "dry_run": { "type": "boolean", "default": false },
-                    "confirm": { "type": "boolean", "default": false }
-                }
-            }
-        },
-        {
-            "name": "cron",
-            "description": "Planificador cron persistente en Rust: tareas de 5 campos con estado en disco, reintentos, catch-up de ejecuciones perdidas, reanudación de tareas interrumpidas y límites de recursos. Sin crond en el móvil: esto lo sustituye.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["list", "add", "remove", "tick", "plan", "resume"] },
-                    "job": { "type": "object", "description": "tarea cron en JSON (cron, action, catch_up, heavy...)" },
-                    "job_id": { "type": "string" },
-                    "limit": { "type": "integer", "default": 50 },
-                    "dry_run": { "type": "boolean", "default": false },
-                    "confirm": { "type": "boolean", "default": false }
-                }
-            }
-        },
-        {
-            "name": "energy",
-            "description": "Automatización de energía y térmica: perfiles (límite de carga, umbrales térmicos, veto de trabajo pesado), integración con el módulo Magisk XtremeBS y con la protección de batería de Samsung. Decide y aplica sobre el estado real medido.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["status", "snapshot", "profiles", "apply", "set_profile"] },
-                    "profile": { "type": "string" },
-                    "confirm": { "type": "boolean", "default": false }
-                }
-            }
-        },
-        {
-            "name": "comms",
-            "description": "Automatización de comunicaciones: auto-respuestas, reenvío, grabación de llamadas y bitácora, regidas por el consentimiento del usuario (comms_consent.json). Todo lo decidido queda registrado.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["status", "consent", "decide", "handle", "journal"] },
-                    "event": { "type": "string", "enum": ["sms_received", "sms_sent", "call_incoming", "call_missed", "call_ended"] },
-                    "peer": { "type": "string" },
-                    "body": { "type": "string" },
-                    "consent": { "type": "object" },
-                    "limit": { "type": "integer", "default": 50 }
-                }
-            }
-        },
-        {
-            "name": "bridge",
-            "description": "Puente con los automatizadores instalados (AutoTasker, Termux:Boot, Tasker, MacroDroid): detecta cuál está, qué superficie de disparo expone de verdad y construye el comando am para lanzarlo. También expone la bandeja de entrada de eventos.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["detect", "report", "fire", "inbox"] },
-                    "package": { "type": "string" },
-                    "action_name": { "type": "string" },
-                    "extras": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } },
-                    "confirm": { "type": "boolean", "default": false }
-                }
-            }
-        },
-        {
-            "name": "git_ops",
-            "description": "Operaciones git autónomas de megadaemon: estado del repo del dispositivo, diff, commit y push con la identidad del demonio. Push exige confirmación explícita y nunca usa --force.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["status", "identity", "diff", "commit_push", "log"] },
-                    "message": { "type": "string" },
-                    "paths": { "type": "array", "items": { "type": "string" } },
-                    "push": { "type": "boolean", "default": false },
-                    "confirm": { "type": "boolean", "default": false }
-                }
-            }
-        },
-        {
-            "name": "identity_and_web",
-            "description": "Perfiles de identidad por servicio (UA y cabeceras de la app real) y cliente HTTP discreto con scraping avanzado, extracción de enlaces, texto plano y respeto de robots.txt.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["list", "scrape"] },
-                    "url": { "type": "string" },
-                    "identity": { "type": "string", "default": "browser.mobile" },
-                    "respect_robots": { "type": "boolean", "default": true },
-                    "max_bytes": { "type": "integer", "default": 524288 }
-                }
-            }
-        },
-        {
-            "name": "root_stealth",
-            "description": "Perfil de ocultación de root para que las apps que rechazan entornos rooteados (banca, AEAT) vuelvan a funcionar. No falsifica attestation de hardware; todo es reversible y auditable.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["status", "preview", "apply"] },
-                    "scope": { "type": "string", "enum": ["all", "targeted"], "default": "all" },
-                    "confirm": { "type": "boolean", "default": false }
-                }
-            }
-        },
-        {
-            "name": "ssh_remote",
-            "description": "Servidor SSH nativo: estado, preparación de host key y ejecución de la gramática de comandos de megadaemon por SSH.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["status", "install_host_key", "authorized_keys", "dispatch"] },
-                    "command": { "type": "string" }
-                }
-            }
-        },
-        {
-            "name": "meta_route",
-            "description": "Meta-agente: convierte una petición en lenguaje natural en un plan ejecutable (tipo de tarea, servicio del bus con su salud REAL, tool MCP a la que llamar y tarea del tablón). No ejecuta salvo que se pida execute=true. Sin secretos.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "request": { "type": "string", "description": "la petición del usuario en texto libre" },
-                    "execute": { "type": "boolean", "default": false, "description": "si es true, ejecuta el primer paso del plan y devuelve la respuesta real" }
-                },
-                "required": ["request"]
-            }
-        },
-        {
-            "name": "service_bus",
-            "description": "Bus de servicios: catálogo unificado de MODELOS (los proveedores de providers.rs) y AGENTES/SERVICIOS (otros nodos MegaDaemon, clientes MCP como Antigravity, servidores MCP de terceros, herramientas locales). Selección automática por tipo de tarea (inference/build/analysis/writing) con fallback real y presupuesto por tick/día. La salud NUNCA se inventa: si no se puede comprobar, available=false con el motivo. Sin secretos: sólo auth_kind y la ruta del fichero de credenciales.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["catalog", "select", "probe", "bridge"], "default": "catalog" },
-                    "task": { "type": "string", "enum": ["inference", "build", "analysis", "writing"] },
-                    "id": { "type": "string", "description": "servicio concreto (para probe)" },
-                    "path": { "type": "string", "description": "fichero de config MCP de Antigravity (para bridge)" },
-                    "enabled_tools": { "type": "array", "items": { "type": "string" }, "description": "subconjunto de tools a exponer (bridge); vacío = todas" },
-                    "confirm": { "type": "boolean", "default": false }
-                }
-            }
-        },
-        {
-            "name": "github",
-            "description": "Conector de GitHub: lista los repos del usuario, lee issues y PRs, y publica el estado del enjambre como issue o PR. Publicar exige confirm=true. El token se lee de un fichero local en el momento de enviar: nunca viaja en las peticiones, en el catálogo ni en el estado compartido.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["repos", "issues", "prs", "publish", "bridge"] },
-                    "repo": { "type": "string", "description": "owner/name" },
-                    "state": { "type": "string", "default": "open", "enum": ["open", "closed", "all"] },
-                    "title": { "type": "string" },
-                    "head": { "type": "string", "description": "rama con el commit (para publicar como PR)" },
-                    "base": { "type": "string", "default": "main" },
-                    "confirm": { "type": "boolean", "default": false }
-                }
-            }
-        },
-        {
-            "name": "delegate",
-            "description": "Delegación parasitaria a cuentas gratuitas cloud: breaker de 3 estados POR CUENTA, presupuesto por hora (global y por modelo), coste MEDIDO (tokens y latencia reales de providers::execute_chat) con la fuente del precio (NO VERIFICADO si no hay fuente) y anuncio al bus SIN credenciales (sólo modo de auth y ruta del fichero). Con el circuito abierto, la voz local (SEERE) sigue disponible: el enjambre nunca se queda mudo.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["accounts", "status", "announce", "execute"], "default": "status" },
-                    "prompt": { "type": "string", "description": "encargo a delegar (para execute)" },
-                    "account": { "type": "string", "description": "cuenta concreta (para execute); vacío = la que elija el enrutado" },
-                    "kind": { "type": "string", "default": "research", "description": "tipo de tarea (plantilla de prompt)" }
-                }
-            }
-        },
-        {
-            "name": "api_keys",
-            "description": "Gestiona el registro de API keys por agente: acuña una clave nueva y revocable sin tocar la clave principal, revoca una existente o lista el registro. La revocacion es destructiva y exige confirm=true.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["mint", "revoke", "list"] },
-                    "label": { "type": "string", "description": "etiqueta del agente (cloud-sandbox, agente-externo, ...)" },
-                    "target": { "type": "string", "description": "clave completa, prefijo de 8+ caracteres o etiqueta a revocar" },
-                    "reveal": { "type": "boolean", "default": false, "description": "listar las claves en claro (queda auditado)" },
-                    "confirm": { "type": "boolean", "default": false }
-                }
-            }
-        },
-        {
-            "name": "npu_vs4l_probe",
-            "description": "Sondea el driver VS4L/NPU del Exynos 2100 (/dev/vertex10) con el metodo correcto: ioctl SIN argumento => el driver devuelve el TAMANO de datos que espera. Distingue EINVAL (reconocido, argumento invalido) de ENOTTY (no existe). No escribe nada y no necesita root (nodo 0644).",
-            "inputSchema": { "type": "object", "properties": {} }
-        },
-        {
-            "name": "resonance",
-            "description": "TABLON p2p del enjambre respaldado por Drive (el bus de resiliencia): boletin de anuncios firmado, convergente y con historia. Acciones: estado (que hay en el tablon), publicar (dejar una carta: latido|peticion|aviso|cambio|cierre), sincronizar (traer las cartas de los demas nodos y fusionarlas), plegar (convertir el journal en la instantanea comun). Util cuando el movil o un agente estan caidos: el tablon conserva la informacion y la historia aunque el nodo muera.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "accion": {
-                        "type": "string",
-                        "description": "estado | publicar | sincronizar | plegar"
-                    },
-                    "tipo": {
-                        "type": "string",
-                        "description": "latido | peticion | aviso | cambio | cierre (para publicar)."
-                    },
-                    "cuerpo": {
-                        "type": "string",
-                        "description": "JSON del cuerpo de la carta (para publicar)."
+            {
+                "name": "doctor",
+                "description": "Diagnóstico y recuperación del móvil en UN comando, con el binario forense en C (mddoctor, 43 KB, <1 MB de RAM): funciona CUANDO el daemon está roto. Acciones: doctor (hechos + veredicto), salud (URL real del túnel, DNS y TCP del túnel, /health por sockets sin curl ni wget, procesos, SHA-256 y ELF del binario en servicio), entorno (los permisos REALES del proceso: capacidades, seccomp, montajes, límites, SELinux), repair (repara lo que se puede sin el daemon; aplicar=true lo ejecuta y exige confirmar=true), scan (hechos crudos), recover (plan de recuperación; aplicar=true lo ejecuta y exige confirmar=true), reconectar (relanza el tunel y/o el daemon, espera a /health y DICE la URL nueva: la via para recuperar el control de un movil que se ha ido; aplicar=true lo hace y exige confirmar=true), todo (doctor+salud en un informe), selftest (prueba sus propias sondas). Si el binario no está, devuelve el diagnóstico nativo.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": { "type": "string", "enum": ["doctor", "salud", "entorno", "repair", "reconectar", "scan", "recover", "todo", "selftest"], "default": "doctor" },
+                        "aplicar": { "type": "boolean", "description": "En accion=recover o repair: ejecutar en vez de solo mostrar el plan." },
+                        "confirmar": { "type": "boolean", "description": "Obligatorio si aplicar=true (acciones destructivas)." },
+                        "espera": { "type": "integer", "description": "En accion=salud o todo: segundos de espera por /health antes de rendirse." }
                     }
                 }
-            }
-        },
-        {
-            "name": "reparar_entorno",
-            "description": "MegaDaemon se REPARA SOLO: diagnostica y arregla su propio entorno (prefijo persistente /data/adb/megadaemon, binario en servicio, watchdog de Magisk, guardian, API key, credenciales de Drive y plantilla web). Acciones: diagnostico (solo mira, no toca nada) | reparar (mira y arregla; es idempotente). Cada eslabon devuelve que/toque/bloquea. Util cuando el movil queda sin daemon, sin key (todo 403) o sin tunel: no hace falta PC ni ADB.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "accion": {
-                        "type": "string",
-                        "description": "diagnostico | reparar",
-                        "default": "diagnostico"
+            },
+            {
+                "name": "capabilities",
+                "description": "Catálogo de capacidades de MegaDaemon con verificación REAL de dependencias en el dispositivo (binarios, rutas, módulos). Devuelve también la huella del catálogo para detectar deriva entre versiones.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["verify", "manifest", "summary"], "default": "verify" }
                     }
                 }
-            }
-        },
-        {
-            "name": "task_queue",
-            "description": "Cola de tareas COMPARTIDA de MegaDaemon (movil + PC + agentes). Acciones: list (ver cola), submit (encolar), claim (TOMAR tareas con lease para este nodo), lease (renovar), migrate (pasar el trabajo de un nodo a otro cuando uno falla o se queda sin cuota), pause (pausar por cuota/red), merge (fusionar con lo que hay en Drive). IMPORTANTE: si la cuota esta en 'pausa', claim NO devuelve tareas: termina tu paso actual, guarda tu checkpoint y espera al reset.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "accion": {
-                        "type": "string",
-                        "description": "list | submit | claim | lease | migrate | pause | merge | sync"
+            },
+            {
+                "name": "env_introspect",
+                "description": "Pregunta al ENTORNO REAL del dispositivo (particiones, /dev, binarios, apps, RAM, rutas, props, procesos) y responde con la verdad: source + ts + device. Si algo no existe devuelve available:false + reason. Nunca inventa.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "question": { "type": "string", "description": "pregunta en lenguaje natural (\"¿existe NPU.bin?\")" },
+                        "action": { "type": "string", "enum": ["partitions", "dev", "binaries", "app", "ram", "path", "prop", "processes", "help"] },
+                        "filter": { "type": "string", "description": "filtro para action=binaries (nombre del binario)" },
+                        "package": { "type": "string", "description": "paquete para action=app" }
                     },
-                    "nodo": { "type": "string", "description": "Nombre de este nodo (pc, movil, agente-...)." },
-                    "kind": { "type": "string", "description": "Tipo de tarea (para submit)." },
-                    "payload": { "type": "string", "description": "JSON del payload (para submit)." },
-                    "prioridad": { "type": "integer", "description": "Prioridad (0-9, 9 = maxima)." },
-                    "max": { "type": "integer", "description": "Máximo de tareas a tomar (claim)." },
-                    "lease_s": { "type": "integer", "description": "Duración del lease en segundos (defecto 900)." },
-                    "desde": { "type": "string", "description": "Nodo origen (migrate)." },
-                    "hacia": { "type": "string", "description": "Nodo destino (migrate)." },
-                    "until": { "type": "integer", "description": "Epoch hasta el que se pausa (pause)." },
-                    "motivo": { "type": "string", "description": "Motivo de la pausa (cuota, red...)." }
+                    "required": ["question"]
                 }
-            }
-        },
-        {
-            "name": "http_fetch",
-            "description": "Transferencias HTTP nativas (el 'curl' de MegaDaemon, en Rust puro: el movil NO tiene curl/wget). Descarga una URL a fichero (con resume por Range, reintentos y verificacion SHA-256), consulta cabeceras (HEAD), hace GET de texto o POST de un fichero. Tambien acepta una lista de URLs para descargarlas EN PARALELO. Devuelve bytes, sha256, segundos y MB/s reales.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "url": { "type": "string", "description": "URL a descargar/consultar (para paralelo, la lista va en 'urls')." },
-                    "urls": { "type": "array", "items": { "type": "string" }, "description": "Varias URLs para descargar en paralelo." },
-                    "destino": { "type": "string", "description": "Ruta del fichero de destino (si se omite, se devuelve el cuerpo en memoria)." },
-                    "method": { "type": "string", "description": "GET (defecto), HEAD o POST/PUT." },
-                    "sha256": { "type": "string", "description": "SHA-256 esperado: si no coincide, NO se da por buena la descarga." },
-                    "workers": { "type": "integer", "description": "Hilos en paralelo (defecto 4)." },
-                    "timeout_s": { "type": "integer", "description": "Timeout global en segundos (defecto 120)." },
-                    "retries": { "type": "integer", "description": "Reintentos (defecto 3)." }
-                }
-            }
-        },
-        {
-            "name": "sqlite_mitm",
-            "description": "MITM REAL de la base de datos de Antigravity. 'estado' dice que esta montado y que se ha capturado; 'activar' genera la DB servida (WAL) y MONTA el bind-mount (la app escribe en la copia, la original queda intacta); 'desactivar' desmonta y RE-MERGEA (no se pierde ninguna conversacion); 'capturar' replica ahora mismo lo que la app ha escrito en la DB canonica; 'servida' genera la copia sin montarla; 'montaje' devuelve el comando exacto. La replica es de SOLO LECTURA con busy_timeout 2000 ms: nunca bloquea a la app.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "accion": { "type": "string", "description": "estado (defecto) | activar | desactivar | capturar | replicar | servida | montaje" },
-                    "ocultar": { "type": "array", "items": { "type": "string" }, "description": "IDs de conversaciones que NO deben verse en la DB servida (se ocultan del todo)." },
-                    "reescribir": { "type": "array", "items": { "type": "string" }, "description": "Sustituciones 'DE=A' en la columna state (para mentir sobre el estado de una sesion)." },
-                    "destino": { "type": "string", "description": "Ruta de la DB servida (por defecto <state_dir>/mitm/antigravity_servida.db)." },
-                    "limite": { "type": "integer", "description": "Maximo de filas a replicar (defecto 5000)." }
-                }
-            }
-        },
-        {
-            "name": "agyshim",
-            "description": "SHIM/PROXY de Antigravity. 'estado' dice que rutas sirve y que ha visto (modelos pedidos y reales, sustituciones); 'reglas' lista las reglas de intercepcion/mentira (add/remove/activate); 'log' devuelve las ultimas entradas del NDJSON (CREDENCIALES REDACTADAS); 'proxy' hace una llamada de prueba por el shim y devuelve la respuesta del gateway con la traza del modelo (megadaemon.requested_model / real_model / substituted).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "accion": { "type": "string", "description": "estado (defecto) | reglas | log | proxy" },
-                    "id": { "type": "string", "description": "ID de la regla (para add/remove/activate)." },
-                    "regla": { "type": "object", "description": "Regla a anadir: {id, cuando:{tipo,texto|nombre}, hacer:{accion,...}, activa}." },
-                    "tail": { "type": "integer", "description": "Numero de entradas del NDJSON a devolver (defecto 20)." },
-                    "ruta": { "type": "string", "description": "Ruta de prueba (defecto /v1internal:generateContent)." },
-                    "cuerpo": { "type": "string", "description": "Cuerpo JSON de la peticion de prueba." }
-                }
-            }
-        },
-        {
-            "name": "antigravity_sessions",
-            "description": "Instrumentacion completa (SOLO LECTURA, busy_timeout 2000 ms: nunca bloquea a Antigravity) de las sesiones: estado agregado, lista, sub-agentes muertos/colgados, arbol padre->hijos, detalle con transcript y tasks/log del daemon, TOKENS y MODELO en uso (lectura defensiva: el esquema de conversations/<id>.db no esta medido y se reporta el que se encuentra) y CORRELACION con el NDJSON del shim (que modelo pidio la GUI y que modelo contesto de verdad).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "accion": { "type": "string", "description": "estado (defecto) | list | dead | stalled | tree | detail | log | tasks | tokens | correlacion" },
-                    "conversation_id": { "type": "string", "description": "ID de conversacion para detail o raiz opcional para tree." },
-                    "tail": { "type": "integer", "description": "Numero de lineas/pasos finales para detail o log (defecto 20)." },
-                    "app_dir": { "type": "string", "description": "Directorio alternativo de datos de Antigravity (opcional)." }
-                }
-            }
-        },
-{
-            "name": "re_analyze",
-            "description": "MOTOR DE RE/DEOFUSCACION de MegaDaemon (punto de entrada UNICO): identifica el binario (ELF/PE/MachO/DEX/APK/Go/UPX) CON evidencia, extrae cadenas interesting, y deofusca de verdad: MBA con PRUEBA de equivalencia (BDD), control-flow flattening con prueba diferencial, strings cifrados, constantes ofuscadas y predicados opacos (accion 'motor'); la accion 'mba' simplifica una expresion y devuelve su demostracion. Accion catalogo lista TODAS las capacidades con el modulo que las implementa. NUNCA ejecuta el binario analizado: es analisis estatico.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "accion": { "type": "string", "description": "catalogo | identify | analyze | strings | deobfuscate | motor | mba" },
-                    "ruta": { "type": "string", "description": "Ruta del binario (obligatoria salvo en catalogo y mba)." },
-                    "max_cadenas": { "type": "integer", "description": "Maximo de cadenas interesting (defecto 60)." },
-                    "plat_key": { "type": "string", "description": "Clave de plataforma para descifrar strings." },
-                    "expr": { "type": "string", "description": "Expresion MBA a simplificar (accion mba), p.ej. '(x ^ y) + 2*(x & y)'." },
-                    "ventana_disasm": { "type": "integer", "description": "Bytes de codigo a desensamblar para el motor (defecto 262144)." }
-                }
-            }
-},
-{
-            "name": "re_fusion",
-            "description": "RECONSTRUCCION MULTI-MOTOR: ejecuta los motores que ya tiene MegaDaemon (Ghidra headless para el pseudocodigo, Rizin para funciones/imports/strings, DiE+Binwalk para el formato, el motor propio para MBA/CFF/crypto y el pclntab para los simbolos Go con fichero:linea), COMPARA lo que da cada uno y FUSIONA lo mejor: pseudocodigo + nombre Go original + fichero:linea + strings. Acciones: compare (rapido, sin Ghidra) | fusion (todo) | informe (solo la tabla comparativa). El parametro binario es obligatorio; simbolos/anclas son los TSV; ghidra_dir y java_home se autodetectan (Ghidra 11.2+ exige JDK 21).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "accion": { "type": "string", "description": "compare | fusion | informe" },
-                    "binario": { "type": "string", "description": "Ruta del binario a reconstruir (obligatoria)." },
-                    "simbolos": { "type": "string", "description": "TSV de simbolos (0xADDR <TAB> nombre <TAB> comentario)." },
-                    "anclas": { "type": "string", "description": "TSV de anclas a decompilar (0xADDR <TAB> nombre <TAB> simbolo <TAB> loc <TAB> tag)." },
-                    "out": { "type": "string", "description": "Directorio de salida (por defecto /workspace/agy-re/tools-out/fusion)." },
-                    "project_dir": { "type": "string", "description": "Proyecto Ghidra." },
-                    "project": { "type": "string", "description": "Nombre del proyecto Ghidra (Go)." },
-                    "ghidra_dir": { "type": "string", "description": "Instalacion de Ghidra (autodetectada si se omite)." },
-                    "java_home": { "type": "string", "description": "JAVA_HOME (autodetectado si se omite)." },
-                    "max_memoria": { "type": "string", "description": "Heap de la JVM (defecto 1400M; con menos de 3 GB de RAM usar 1200M)." },
-                    "timeout_s": { "type": "integer", "description": "Timeout por fase de Ghidra en segundos (defecto 1800)." },
-                    "sin_ghidra": { "type": "string", "description": "Poner cualquier valor para NO usar Ghidra (evita la JVM)." },
-                    "sin_rizin": { "type": "string", "description": "Poner cualquier valor para NO usar Rizin." },
-                    "sin_die": { "type": "string", "description": "Poner cualquier valor para NO usar DiE/Binwalk." }
-                }
-            }
-        },
-{
-            "name": "supervisor",
-            "description": "WATCHDOG de Android: instala (o consulta) el supervisor en /data/adb/service.d/99-megadaemon.sh, que Magisk ejecuta en cada boot. Garantiza que el daemon siga vivo, que la auto-actualizacion entre en servicio (el daemon sale con codigo 10 y el watchdog lo relanza) y que el parche del endpoint y los montajes se mantengan. Acciones: estado | instalar | desinstalar | watchdog (el texto del script).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "accion": { "type": "string", "description": "estado | instalar | desinstalar | watchdog" }
-                }
-            }
-        },
-{
-            "name": "frida_hooks",
-            "description": "Hooks de Frida para OBSERVAR Antigravity sin tocar sus datos: sqlite (que tablas/consultas toca la app, con credenciales redactadas), red (a que hosts conecta: sirve para verificar el parche del endpoint) y ficheros (que ficheros abre o borra). Acciones: listar | obtener.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "accion": { "type": "string", "description": "listar | obtener" },
-                    "nombre": { "type": "string", "description": "sqlite | red | ficheros" }
-                }
-            }
-        },
-{
-            "name": "hooks_payload",
-            "description": "PAYLOAD DE INSTRUMENTACION en Rust con frida-gum (los bindings OFICIALES de Frida, no un inyector artesanal): una .so que se carga en el proceso objetivo (Antigravity) y registra SQLITE (fichero/tabla/consulta), RED (host:puerto, para verificar el parche del endpoint) y FICHEROS (ruta y accion) en un NDJSON, con las credenciales redactadas. Acciones: estado (existe el payload? sha256? proceso objetivo vivo? cargadores disponibles?) | instalar (descarga el asset del release, verifica el sha256 y lo deja en /data/local/tmp/megadaemon/hooks-payload.so con modo 0700) | activar (carga el payload en el proceso objetivo por root_exec: cliente frida con Module.load, o modulo Magisk/Zygisk) | leer (las ultimas lineas del NDJSON).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "accion": { "type": "string", "enum": ["estado", "instalar", "activar", "leer"], "default": "estado", "description": "estado | instalar | activar | leer" },
-                    "paquete": { "type": "string", "description": "Paquete del proceso objetivo (por defecto com.agy)." },
-                    "cargador": { "type": "string", "enum": ["auto", "frida", "zygisk", "manual"], "default": "auto", "description": "auto | frida | zygisk | manual (manual solo devuelve los comandos)." },
-                    "n": { "type": "integer", "description": "Numero de lineas del NDJSON a leer (por defecto 50)." },
-                    "ruta": { "type": "string", "description": "Ruta concreta del NDJSON (opcional; por defecto se prueban las candidatas)." }
-                }
-            }
-        },
-{
-            "name": "phone_backup",
-            "description": "Motor de backup nativo de apps (Rust puro, sin curl ni shell): inventario de apps del movil, contenedor cifrado AEGIS-256 por segmentos con manifiesto sha256 por fichero, verificacion del AEAD, restauracion (simulacro por defecto, exige confirm=true) y SUBIDA PIPELINING a Drive (sube cada segmento ya cerrado mientras se recoge el siguiente; mide MiB/s y ETA). Anti-congelacion: nice/ionice de la clase mas baja, sleep entre lotes y descanso si la carga del sistema se dispara. Acciones: inventory | create | list | verify | restore | upload. create/restore/upload escriben o publican en Drive: exigen confirm=true.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["inventory", "create", "list", "verify", "restore", "upload"], "default": "inventory", "description": "inventory | create | list | verify | restore | upload" },
-                    "out": { "type": "string", "description": "Directorio/ruta del contenedor." },
-                    "folder_id": { "type": "string", "description": "ID de carpeta en Drive (para upload)." },
-                    "packages": { "type": "array", "items": { "type": "string" } },
-                    "confirm": { "type": "boolean" }
-                }
-            }
-        },
-        {
-            "name": "quota_status",
-            "description": "Estado de la CUOTA de los proveedores/modelos y presupuesto diario USD: cuanto queda (%), cuando resetea y en que modo esta (normal/aviso/ahorro/pausa). Respuesta MUY compacta (~70 tokens) para no gastar. En 'pausa' significa que la cuota se agota: termina el paso actual, guarda tu checkpoint y espera al reset; no sigas abriendo tareas nuevas.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "provider": {
-                        "type": "string",
-                        "description": "Id del proveedor (opcional; sin el, el peor de todos)."
-                    },
-                    "full": {
-                        "type": "boolean",
-                        "description": "true = detalle completo + daily_budget (gasta mas tokens); por defecto, snapshot compacto."
-                    },
-                    "set_daily_budget_usd": {
-                        "type": ["number", "null"],
-                        "description": "Opcional: fija el limite diario de gasto en USD (null = sin limite)."
+            },
+            {
+                "name": "alerts",
+                "description": "Sistema de alertas: evalúa las reglas reales (batería, thermal, disco, cola, citas) o lista/acuza las alertas emitidas.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["check", "list", "ack", "status", "prune"] },
+                        "id": { "type": "string" },
+                        "severity": { "type": "string", "enum": ["info", "warn", "crit"] },
+                        "limit": { "type": "integer", "default": 50 }
                     }
                 }
-            }
-        },
-        {
-            "name": "csc_verify",
-            "description": "Verificador post-parche del CSC: lee el CSC activo (mps_code.dat), descifra el cscfeature.xml OMC del movil, comprueba el valor de CscFeature_VoiceCall_ConfigRecording, lo contrasta con el fileSize de contents.db, busca copias en claro del framework y devuelve el mapa vivo de los CSC con la feature. Con expect_value exige un valor EXACTO (p.ej. 'RecordingAllowed' o 'RecordingAllowedByMenu,disclaimer_latin'): si el valor presente difiere devuelve verdict MISMATCH, y siempre indica la variante (sin-disclaimer / con-disclaimer / apagado).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "expect_value": {
-                        "type": "string",
-                        "description": "Valor exacto que se espera para CscFeature_VoiceCall_ConfigRecording (opcional)."
+            },
+            {
+                "name": "agent",
+                "description": "Núcleo agéntico: convierte un objetivo en un plan de tareas y lo ejecuta. Usa el LLM local si está disponible (0 tokens) y un planificador heurístico determinista si no.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["plan", "run", "status"] },
+                        "goal": { "type": "string" },
+                        "prefer_llm": { "type": "boolean", "default": true },
+                        "max_tasks": { "type": "integer", "default": 5 }
+                    },
+                    "required": ["goal"]
+                }
+            },
+            {
+                "name": "apk_inventory",
+                "description": "Inventario y análisis de APKs instaladas: manifiesto binario (AXML) con permisos y componentes, DEX, librerías nativas, SHA-256, huella de manifiesto y detección de cambios entre versiones.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["inventory", "analyze", "dump", "drift"], "default": "inventory" },
+                        "path": { "type": "string" },
+                        "limit": { "type": "integer", "default": 50 },
+                        "dest_dir": { "type": "string" },
+                        "known": { "type": "object", "description": "manifiesto previo para comparar" }
                     }
                 }
-            }
-        },
-    ]);
+            },
+            {
+                "name": "dex_decompile",
+                "description": "Decompilador DEX en Rust puro (sin Java, dex2jar ni Ghidra): pseudo-Java por clase, desensamblado Dalvik, mapa de desofuscación (nombres ofuscados, strings cifrados, flujo de control) y strings del DEX. Acepta un .dex suelto o un APK (extrae classes*.dex).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["decompile", "strings", "obfuscation"], "default": "decompile" },
+                        "path": { "type": "string", "description": "ruta ABSOLUTA de un .dex o de un APK" }
+                    },
+                    "required": ["path"]
+                }
+            },
+            {
+                "name": "app_intel",
+                "description": "Inteligencia de apps de IA (Claude, ChatGPT/Codex, Gemini, DeepSeek, Kimi, MiniMax, Grok, Manus, Cursor, Windsurf, Antigravity): rutas de datos locales, formatos de sesión, endpoints, plan de exportación/importación idempotente y notas de interoperabilidad sin API key. Los secretos se redactan siempre.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["profiles", "profile", "scan", "exchange", "notes"], "default": "profiles" },
+                        "id": { "type": "string" },
+                        "root": { "type": "string", "description": "directorio raíz de datos de la app" }
+                    }
+                }
+            },
+            {
+                "name": "root_hide",
+                "description": "Auditoría de ocultación de root: matriz de señales de fuga por app (su, Magisk, Zygisk, Xposed, props, Play Integrity), plan de remediación con acciones reversibles y layout del módulo Magisk propio.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["audit", "plan", "magisk_layout"], "default": "audit" },
+                        "packages": { "type": "array", "items": { "type": "string" } }
+                    }
+                }
+            },
+            {
+                "name": "store_manager",
+                "description": "Gestor de tiendas/repos universal: registra tiendas (repo, modulo Magisk, APK, payload, herramienta), descarga y cachea su indice, lo verifica (sha256 por entrada y firma RSA opcional del indice), busca entradas y las instala con verificacion de hash. Sin SDK de terceros ni binarios externos. Acciones: list, add, remove, refresh, search, plan, install, stats.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["list", "add", "remove", "refresh", "search", "plan", "install", "stats"], "default": "list" },
+                        "id": { "type": "string", "description": "Identificador de la tienda" },
+                        "name": { "type": "string" },
+                        "kind": { "type": "string", "enum": ["repo", "magisk", "apk", "payload", "tool"], "default": "repo" },
+                        "base_url": { "type": "string" },
+                        "index_path": { "type": "string" },
+                        "public_key": { "type": "string", "description": "Clave publica RSA en base64 con el formato n:e" },
+                        "trust": { "type": "string", "enum": ["sha256", "signed"], "default": "sha256" },
+                        "query": { "type": "string" },
+                        "entry": { "type": "string", "description": "id de la entrada a instalar" },
+                        "confirm": { "type": "boolean", "default": false }
+                    }
+                }
+            },
+            {
+                "name": "root_detectors",
+                "description": "Apps que DETECTAN root, medido en el dispositivo: extrae la tabla de cadenas real del DEX de cada APK, busca firmas de deteccion (rutas de su, Magisk, props, Xposed/Frida, Play Integrity, emulador, Knox) y anade la evidencia dinamica vista en logcat. Cada hallazgo lleva la cadena exacta y el fichero de la que salio.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["scan", "summary"], "default": "scan" },
+                        "limit": { "type": "integer", "default": 40 },
+                        "scope": { "type": "string", "enum": ["third_party", "all"], "default": "third_party" }
+                    }
+                }
+            },
+            {
+                "name": "root_consumers",
+                "description": "Apps que USAN root, medido en el dispositivo: politicas reales de Magisk (deny list y allow list leidas de la base de datos de la app Magisk o de `magisk --sqlite`), gestores de root instalados y eventos de `su` observados en logcat con la app que los pidio.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["scan", "summary"], "default": "scan" }
+                    }
+                }
+            },
+            {
+                "name": "repo_updates",
+                "description": "Actualización automática de apps desde repositorios (F-Droid, Obtainium). Calcula el plan de actualización comparando versiones; descargar e instalar exige confirmación explícita.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["repos", "status", "plan", "watch", "download", "install"] },
+                        "repo_id": { "type": "string" },
+                        "package": { "type": "string" },
+                        "dest_dir": { "type": "string" },
+                        "apk_path": { "type": "string" },
+                        "confirm": { "type": "boolean", "default": false }
+                    }
+                }
+            },
+            {
+                "name": "profile",
+                "description": "Perfil del usuario a partir de TODO el historial sincronizado: intereses, fortalezas, debilidades, pendientes, temas en evolución, digest diario y un informe para profesionales.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["analyze", "briefing", "drift", "digest"] },
+                        "markdown": { "type": "boolean", "default": true },
+                        "window_days": { "type": "integer", "default": 30 },
+                        "days": { "type": "integer", "default": 14 }
+                    }
+                }
+            },
+            {
+                "name": "messaging",
+                "description": "Mensajería y citas: Telegram (base SQLite del propio dispositivo), SMS/MMS (content provider) y metadatos de WhatsApp. Los mensajes de WhatsApp están cifrados por el keystore y se reportan como no legibles, nunca inventados.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["inventory", "telegram", "sms", "whatsapp", "medical", "ingest", "candidates"] },
+                        "limit": { "type": "integer", "default": 500 }
+                    }
+                }
+            },
+            {
+                "name": "bookmarks",
+                "description": "Marcadores, sesiones guardadas y passkeys de todos los navegadores del dispositivo, con exportación a HTML de Netscape (importable por cualquier navegador o sistema).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["inventory", "export", "passkeys", "manager_export"] },
+                        "dest_path": { "type": "string" },
+                        "package": { "type": "string" }
+                    }
+                }
+            },
+            {
+                "name": "battery_saver",
+                "description": "Ahorro de energía avanzado: integra la configuración real de Xtreme Battery Saver si está instalada y mata sólo procesos en segundo plano cacheables, respetando primer plano, notificaciones y la política de energía.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["status", "apply", "protect", "xbs"] },
+                        "aggressive": { "type": "boolean", "default": false },
+                        "confirm": { "type": "boolean", "default": false },
+                        "protected": { "type": "array", "items": { "type": "string" } }
+                    }
+                }
+            },
+            {
+                "name": "automation",
+                "description": "Motor de disparadores y reglas de MegaDaemon (si X entonces Y): eventos del sistema (SMS, llamada, batería, temperatura, red, WiFi, app abierta, fichero, planificador) -> acciones (notificación, script, HTTP, fichero, ajuste, comando root, broadcast). Reglas persistentes + journal + cooldown.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["list", "add", "remove", "enable", "disable", "poll", "events", "fire", "journal"] },
+                        "rule": { "type": "object", "description": "regla completa en JSON (trigger, conditions, actions)" },
+                        "rule_id": { "type": "string" },
+                        "event": { "type": "string", "enum": ["sms_received", "call_missed", "call_ended", "call_incoming", "battery_changed", "charger_changed", "app_opened", "app_closed", "file_created", "temperature_changed", "network_changed", "wifi_changed", "schedule", "screen_on", "screen_off", "boot_completed"] },
+                        "key": { "type": "string" },
+                        "value": { "type": "number" },
+                        "text": { "type": "string" },
+                        "limit": { "type": "integer", "default": 50 },
+                        "dry_run": { "type": "boolean", "default": false },
+                        "confirm": { "type": "boolean", "default": false }
+                    }
+                }
+            },
+            {
+                "name": "cron",
+                "description": "Planificador cron persistente en Rust: tareas de 5 campos con estado en disco, reintentos, catch-up de ejecuciones perdidas, reanudación de tareas interrumpidas y límites de recursos. Sin crond en el móvil: esto lo sustituye.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["list", "add", "remove", "tick", "plan", "resume"] },
+                        "job": { "type": "object", "description": "tarea cron en JSON (cron, action, catch_up, heavy...)" },
+                        "job_id": { "type": "string" },
+                        "limit": { "type": "integer", "default": 50 },
+                        "dry_run": { "type": "boolean", "default": false },
+                        "confirm": { "type": "boolean", "default": false }
+                    }
+                }
+            },
+            {
+                "name": "energy",
+                "description": "Automatización de energía y térmica: perfiles (límite de carga, umbrales térmicos, veto de trabajo pesado), integración con el módulo Magisk XtremeBS y con la protección de batería de Samsung. Decide y aplica sobre el estado real medido.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["status", "snapshot", "profiles", "apply", "set_profile"] },
+                        "profile": { "type": "string" },
+                        "confirm": { "type": "boolean", "default": false }
+                    }
+                }
+            },
+            {
+                "name": "brillo",
+                "description": "BRILLO del móvil (Samsung SM-G998B, Android 14). Deja el brillo en MANUAL (el sensor de luz ambiente deja de mandar: es la clave screen_brightness_mode=0, la que el propio sistema observa) y lo vigila sin estorbar: por defecto al MÁXIMO, y si el usuario mueve el deslizador se respeta su valor. Cada escritura se VERIFICA contra el brillo aplicado (dumpsys power), nunca a ciegas. Acciones: estado | fijar (0-255) | maximo | config | config_actualizar | reafirmar | shim (qué shim hay activo y qué se ha podido verificar) | vigilante (arrancar|parar|tick) | costo (MIDE en el móvil las interacciones por ciclo: evento vs sondeo) | shim_probar (escribe en el FIFO del shim y comprueba que el daemon lo consume) | sensor | diagnostico (para el test en el móvil: ajustes, brillo aplicado, ALS, ficheros y prueba A/B de las vías de escritura con aplicar=true) | observar (serie temporal: quién cambia el brillo y cada cuánto) | adaptativo (las claves del brillo adaptativo de OneUI; aplicar=true lo neutraliza).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": { "type": "string", "enum": ["estado", "fijar", "maximo", "config", "config_actualizar", "reafirmar", "shim", "vigilante", "sensor", "diagnostico", "observar", "adaptativo"], "default": "estado" },
+                        "aplicar": { "type": "boolean", "description": "En accion=diagnostico: prueba A/B de las vias de escritura (cambia el brillo un momento y lo restaura). En accion=adaptativo: poner a 0 el brillo adaptativo de OneUI.", "default": false },
+                        "muestras": { "type": "integer", "description": "En accion=observar: numero de muestras (2-120).", "default": 12 },
+                        "intervalo_s": { "type": "integer", "description": "En accion=observar: segundos entre muestras (1-60).", "default": 5 },
+                        "neutralizar_adaptativo": { "type": "boolean", "description": "Poner a 0 'content_adaptive_brightness' (brillo adaptativo de OneUI) cuando la clave exista. NO VERIFICADO en este firmware: opt-in.", "default": false },
+                        "valor": { "type": "integer", "minimum": 0, "maximum": 255, "description": "Brillo 0-255 (accion fijar)." },
+                        "brillo_por_defecto": { "type": "integer", "minimum": 0, "maximum": 255, "description": "Brillo por defecto (accion config_actualizar). Defecto 255 (máximo)." },
+                        "politica": { "type": "string", "enum": ["respetar_usuario", "firme", "pasivo"], "description": "respetar_usuario: si el usuario mueve el deslizador, se respeta. firme: se reimpone siempre. pasivo: no se toca nada.", "default": "respetar_usuario" },
+                        "intervalo_vigilancia_s": { "type": "integer", "description": "Periodo del vigilante en segundos (2-3600).", "default": 15 },
+                        "permitir_automatico": { "type": "boolean", "description": "Si es true, el módulo NO toca el modo y el brillo automático puede vivir.", "default": false },
+                        "escribir_ajuste_legacy": { "type": "boolean", "description": "Escribir también el ajuste entero 'screen_brightness' (0-255). MEDIDO en el SM-G998B: ése es el que existe (247); el float no.", "default": true },
+                        "solo_float_si_existe": { "type": "boolean", "description": "Escribir 'screen_brightness_float' sólo si la clave YA existe en el firmware (MEDIDO: en One UI 6 no existe ⇒ no se crea).", "default": true },
+                        "usar_cmd_display": { "type": "boolean", "description": "Usar además 'cmd display set-brightness' (float 0-1) si la vía del proveedor no surte efecto.", "default": true },
+                        "verificar_aplicado": { "type": "boolean", "description": "Verificar el brillo aplicado con 'dumpsys power' (1 JVM más).", "default": true },
+                        "vigilante_accion": { "type": "string", "enum": ["arrancar", "parar", "tick"], "default": "tick", "description": "Qué hacer con el vigilante (accion vigilante)." }
+                    }
+                }
+            },
+            {
+                "name": "comms",
+                "description": "Automatización de comunicaciones: auto-respuestas, reenvío, grabación de llamadas y bitácora, regidas por el consentimiento del usuario (comms_consent.json). Todo lo decidido queda registrado.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["status", "consent", "decide", "handle", "journal"] },
+                        "event": { "type": "string", "enum": ["sms_received", "sms_sent", "call_incoming", "call_missed", "call_ended"] },
+                        "peer": { "type": "string" },
+                        "body": { "type": "string" },
+                        "consent": { "type": "object" },
+                        "limit": { "type": "integer", "default": 50 }
+                    }
+                }
+            },
+            {
+                "name": "bridge",
+                "description": "Puente con los automatizadores instalados (AutoTasker, Termux:Boot, Tasker, MacroDroid): detecta cuál está, qué superficie de disparo expone de verdad y construye el comando am para lanzarlo. También expone la bandeja de entrada de eventos.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["detect", "report", "fire", "inbox"] },
+                        "package": { "type": "string" },
+                        "action_name": { "type": "string" },
+                        "extras": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } },
+                        "confirm": { "type": "boolean", "default": false }
+                    }
+                }
+            },
+            {
+                "name": "git_ops",
+                "description": "Operaciones git autónomas de megadaemon: estado del repo del dispositivo, diff, commit y push con la identidad del demonio. Push exige confirmación explícita y nunca usa --force.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["status", "identity", "diff", "commit_push", "log"] },
+                        "message": { "type": "string" },
+                        "paths": { "type": "array", "items": { "type": "string" } },
+                        "push": { "type": "boolean", "default": false },
+                        "confirm": { "type": "boolean", "default": false }
+                    }
+                }
+            },
+            {
+                "name": "identity_and_web",
+                "description": "Perfiles de identidad por servicio (UA y cabeceras de la app real) y cliente HTTP discreto con scraping avanzado, extracción de enlaces, texto plano y respeto de robots.txt.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["list", "scrape"] },
+                        "url": { "type": "string" },
+                        "identity": { "type": "string", "default": "browser.mobile" },
+                        "respect_robots": { "type": "boolean", "default": true },
+                        "max_bytes": { "type": "integer", "default": 524288 }
+                    }
+                }
+            },
+            {
+                "name": "root_stealth",
+                "description": "Perfil de ocultación de root para que las apps que rechazan entornos rooteados (banca, AEAT) vuelvan a funcionar. No falsifica attestation de hardware; todo es reversible y auditable.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["status", "preview", "apply"] },
+                        "scope": { "type": "string", "enum": ["all", "targeted"], "default": "all" },
+                        "confirm": { "type": "boolean", "default": false }
+                    }
+                }
+            },
+            {
+                "name": "ssh_remote",
+                "description": "Servidor SSH nativo: estado, preparación de host key y ejecución de la gramática de comandos de megadaemon por SSH.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["status", "install_host_key", "authorized_keys", "dispatch"] },
+                        "command": { "type": "string" }
+                    }
+                }
+            },
+            {
+                "name": "meta_route",
+                "description": "Meta-agente: convierte una petición en lenguaje natural en un plan ejecutable (tipo de tarea, servicio del bus con su salud REAL, tool MCP a la que llamar y tarea del tablón). No ejecuta salvo que se pida execute=true. Sin secretos.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "request": { "type": "string", "description": "la petición del usuario en texto libre" },
+                        "execute": { "type": "boolean", "default": false, "description": "si es true, ejecuta el primer paso del plan y devuelve la respuesta real" }
+                    },
+                    "required": ["request"]
+                }
+            },
+            {
+                "name": "service_bus",
+                "description": "Bus de servicios: catálogo unificado de MODELOS (los proveedores de providers.rs) y AGENTES/SERVICIOS (otros nodos MegaDaemon, clientes MCP como Antigravity, servidores MCP de terceros, herramientas locales). Selección automática por tipo de tarea (inference/build/analysis/writing) con fallback real y presupuesto por tick/día. La salud NUNCA se inventa: si no se puede comprobar, available=false con el motivo. Sin secretos: sólo auth_kind y la ruta del fichero de credenciales.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["catalog", "select", "probe", "bridge"], "default": "catalog" },
+                        "task": { "type": "string", "enum": ["inference", "build", "analysis", "writing"] },
+                        "id": { "type": "string", "description": "servicio concreto (para probe)" },
+                        "path": { "type": "string", "description": "fichero de config MCP de Antigravity (para bridge)" },
+                        "enabled_tools": { "type": "array", "items": { "type": "string" }, "description": "subconjunto de tools a exponer (bridge); vacío = todas" },
+                        "confirm": { "type": "boolean", "default": false }
+                    }
+                }
+            },
+            {
+                "name": "github",
+                "description": "Conector de GitHub: lista los repos del usuario, lee issues y PRs, y publica el estado del enjambre como issue o PR. Publicar exige confirm=true. El token se lee de un fichero local en el momento de enviar: nunca viaja en las peticiones, en el catálogo ni en el estado compartido.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["repos", "issues", "prs", "publish", "bridge"] },
+                        "repo": { "type": "string", "description": "owner/name" },
+                        "state": { "type": "string", "default": "open", "enum": ["open", "closed", "all"] },
+                        "title": { "type": "string" },
+                        "head": { "type": "string", "description": "rama con el commit (para publicar como PR)" },
+                        "base": { "type": "string", "default": "main" },
+                        "confirm": { "type": "boolean", "default": false }
+                    }
+                }
+            },
+            {
+                "name": "delegate",
+                "description": "Delegación parasitaria a cuentas gratuitas cloud: breaker de 3 estados POR CUENTA, presupuesto por hora (global y por modelo), coste MEDIDO (tokens y latencia reales de providers::execute_chat) con la fuente del precio (NO VERIFICADO si no hay fuente) y anuncio al bus SIN credenciales (sólo modo de auth y ruta del fichero). Con el circuito abierto, la voz local (SEERE) sigue disponible: el enjambre nunca se queda mudo.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["accounts", "status", "announce", "execute"], "default": "status" },
+                        "prompt": { "type": "string", "description": "encargo a delegar (para execute)" },
+                        "account": { "type": "string", "description": "cuenta concreta (para execute); vacío = la que elija el enrutado" },
+                        "kind": { "type": "string", "default": "research", "description": "tipo de tarea (plantilla de prompt)" }
+                    }
+                }
+            },
+            {
+                "name": "api_keys",
+                "description": "Gestiona el registro de API keys por agente: acuña una clave nueva y revocable sin tocar la clave principal, revoca una existente o lista el registro. La revocacion es destructiva y exige confirm=true.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["mint", "revoke", "list"] },
+                        "label": { "type": "string", "description": "etiqueta del agente (cloud-sandbox, agente-externo, ...)" },
+                        "target": { "type": "string", "description": "clave completa, prefijo de 8+ caracteres o etiqueta a revocar" },
+                        "reveal": { "type": "boolean", "default": false, "description": "listar las claves en claro (queda auditado)" },
+                        "confirm": { "type": "boolean", "default": false }
+                    }
+                }
+            },
+            {
+                "name": "npu_vs4l_probe",
+                "description": "Sondea el driver VS4L/NPU del Exynos 2100 (/dev/vertex10) con el metodo correcto: ioctl SIN argumento => el driver devuelve el TAMANO de datos que espera. Distingue EINVAL (reconocido, argumento invalido) de ENOTTY (no existe). No escribe nada y no necesita root (nodo 0644).",
+                "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
+                "name": "resonance",
+                "description": "TABLON p2p del enjambre respaldado por Drive (el bus de resiliencia): boletin de anuncios firmado, convergente y con historia. Acciones: estado (que hay en el tablon), publicar (dejar una carta: latido|peticion|aviso|cambio|cierre), sincronizar (traer las cartas de los demas nodos y fusionarlas), plegar (convertir el journal en la instantanea comun). Util cuando el movil o un agente estan caidos: el tablon conserva la informacion y la historia aunque el nodo muera.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": {
+                            "type": "string",
+                            "description": "estado | publicar | sincronizar | plegar"
+                        },
+                        "tipo": {
+                            "type": "string",
+                            "description": "latido | peticion | aviso | cambio | cierre (para publicar)."
+                        },
+                        "cuerpo": {
+                            "type": "string",
+                            "description": "JSON del cuerpo de la carta (para publicar)."
+                        }
+                    }
+                }
+            },
+            {
+                "name": "reparar_entorno",
+                "description": "MegaDaemon se REPARA SOLO: diagnostica y arregla su propio entorno (prefijo persistente /data/adb/megadaemon, binario en servicio, watchdog de Magisk, guardian, API key, credenciales de Drive y plantilla web). Acciones: diagnostico (solo mira, no toca nada) | reparar (mira y arregla; es idempotente). Cada eslabon devuelve que/toque/bloquea. Util cuando el movil queda sin daemon, sin key (todo 403) o sin tunel: no hace falta PC ni ADB.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": {
+                            "type": "string",
+                            "description": "diagnostico | reparar",
+                            "default": "diagnostico"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "diagnostico",
+                "description": "DIAGNOSTICO AUTOMATICO: el nodo recoge su estado completo (procesos, puertos, /health, stack autocontenido, binario y su SHA-256, energia, red, log del supervisor y NDJSON del shim) y lo publica en Drive (MegaDaemon/diagnostico/<nodo>/). El root lo lee desde el sandbox, sin ADB y sin que nadie tenga que pegar texto. Acciones: recoger (solo lee) | publicar (sube el informe a Drive).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": {
+                            "type": "string",
+                            "description": "recoger | publicar",
+                            "default": "recoger"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "gasto_datos",
+                "description": "GASTO DE DATOS de Jazztel (MNO 21403): mide el tráfico del sistema DESGLOSADO POR TRANSPORTE (WiFi frente a datos moviles, clasificando la interfaz) y lo compara con el estado del operador (la cifra que factura), avisando de umbrales, renovacion y DISCREPANCIA entre ambas (que es lo que explica por qué no coincide con Android). Acciones: estado | movil | wifi | avisos | desglose | guardar (escribe el estado del operador, 0600, fuera del repo).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": {
+                            "type": "string",
+                            "enum": ["estado", "movil", "wifi", "avisos", "desglose", "guardar"],
+                            "default": "estado"
+                        },
+                        "estado_operador": {
+                            "type": "object",
+                            "description": "Estado del operador (accion guardar): consumed_bytes, included_bytes, remaining_bytes, expiration_date, consumption_type, source."
+                        },
+                        "umbral_mb": {
+                            "type": "integer",
+                            "description": "Umbral de aviso en MiB (accion avisos; defecto 500).",
+                            "default": 500
+                        }
+                    }
+                }
+            },
+            {
+                "name": "bus_ordenes",
+                "description": "BUS DE ORDENES PULL: el nodo SACA las ordenes del bus (Drive, via el tablon de resonance) y las ejecuta con su propio registro de tools — sin que nadie tenga que estar conectado. Acciones: ciclo (sincroniza, selecciona y ejecuta) | estado (solo informa). Las ordenes destructivas exigen 'confirm: true' en el cuerpo; la idempotencia la garantiza el 'idem_key' (una orden repetida NO se re-ejecuta).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "nodo": { "type": "string", "description": "Nodo destinatario (vacio = el actual)." },
+                        "maximo": { "type": "integer", "description": "Presupuesto de ordenes en este ciclo.", "default": 8 },
+                        "forzar": { "type": "boolean", "description": "Ejecutar aunque la bateria este baja.", "default": false },
+                        "simulacion": { "type": "boolean", "description": "No ejecutar: solo decir que se haria.", "default": false },
+                        "sin_verificar_firmas": { "type": "boolean", "description": "No comprobar la firma Ed25519 del emisor (inseguro).", "default": false }
+                    }
+                }
+            },
+            {
+                "name": "telemetria",
+                "description": "TELEMETRIA A DRIVE: el nodo empuja su estado (bateria, carga, red DESGLOSADA POR TRANSPORTE — wifi frente a datos moviles —, instrumentacion viva del NDJSON de hooks) y los DATOS DE CONEXION (URL del tunel, puerto, build, sha16 de las claves). Con eso el root sabe donde conectarse sin depender de que el tunel este vivo, y el nodo se autodetecta 'listo'. Acciones: estado | publicar | conexion | listo | sonda | artefacto (sube un binario/NDJSON a Drive, no a GitHub).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": {
+                            "type": "string",
+                            "description": "estado | publicar | conexion | listo | sonda | artefacto",
+                            "default": "estado"
+                        },
+                        "url": { "type": "string", "description": "URL a sondear (accion sonda)." },
+                        "ruta": { "type": "string", "description": "Ruta local del artefacto (accion artefacto)." },
+                        "nombre": { "type": "string", "description": "Nombre en Drive del artefacto." },
+                        "carpeta": { "type": "string", "description": "Carpeta VFS de destino del artefacto." }
+                    }
+                }
+            },
+            {
+                "name": "re_profunda",
+                "description": "RE PROFUNDA DE APK: lo que 'dex_decompile' y 'apk_inventory' NO cubren. (1) XREFS: que clase y que metodo usan cada string. (2) RUTAS REST relativas con su familia de API (consumption-api, balances-api...). (3) ENTROPIA de los assets: un payload de alta entropia sin magic es un modulo protegido. (4) PINS de certificado: si el pin declarado NO es un certificado de firma, es del SERVIDOR (una CA de usuario no valeria). (5) DESCIFRADORES de strings, con la distincion entre un ofuscador y un SDK de pago 3DS2. Acciones: analizar (informe completo) | rutas | pins | descifradores | xrefs (filtro con buscar).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": {
+                            "type": "string",
+                            "enum": ["analizar", "rutas", "pins", "descifradores", "xrefs"],
+                            "default": "analizar"
+                        },
+                        "ruta": { "type": "string", "description": "Ruta local del APK a analizar." },
+                        "buscar": { "type": "string", "description": "Texto a filtrar (accion xrefs; vacio = todos)." }
+                    },
+                    "required": ["ruta"]
+                }
+            },
+            {
+                "name": "stack",
+                "description": "STACK AUTOCONTENIDO: el daemon lleva DENTRO el supervisor, el keeper, cloudflared, los scripts de Antigravity y la Web UI, y los reconcilia solo (SHA-256 embebido vs el de disco). Es lo que evita que el movil se rompa al actualizar (medido el 2026-11-25: el supervisor viejo no encontraba el binario nuevo y no podia relanzar el daemon). Acciones: estado (solo mira) | reconciliar (reescribe lo que difiere y reinicia el supervisor si cambio; es idempotente).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": {
+                            "type": "string",
+                            "description": "estado | reconciliar",
+                            "default": "estado"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "task_queue",
+                "description": "Cola de tareas COMPARTIDA de MegaDaemon (movil + PC + agentes). Acciones: list (ver cola), submit (encolar), claim (TOMAR tareas con lease para este nodo), lease (renovar), migrate (pasar el trabajo de un nodo a otro cuando uno falla o se queda sin cuota), pause (pausar por cuota/red), merge (fusionar con lo que hay en Drive). IMPORTANTE: si la cuota esta en 'pausa', claim NO devuelve tareas: termina tu paso actual, guarda tu checkpoint y espera al reset.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": {
+                            "type": "string",
+                            "description": "list | submit | claim | lease | migrate | pause | merge | sync"
+                        },
+                        "nodo": { "type": "string", "description": "Nombre de este nodo (pc, movil, agente-...)." },
+                        "kind": { "type": "string", "description": "Tipo de tarea (para submit)." },
+                        "payload": { "type": "string", "description": "JSON del payload (para submit)." },
+                        "prioridad": { "type": "integer", "description": "Prioridad (0-9, 9 = maxima)." },
+                        "max": { "type": "integer", "description": "Máximo de tareas a tomar (claim)." },
+                        "lease_s": { "type": "integer", "description": "Duración del lease en segundos (defecto 900)." },
+                        "desde": { "type": "string", "description": "Nodo origen (migrate)." },
+                        "hacia": { "type": "string", "description": "Nodo destino (migrate)." },
+                        "until": { "type": "integer", "description": "Epoch hasta el que se pausa (pause)." },
+                        "motivo": { "type": "string", "description": "Motivo de la pausa (cuota, red...)." }
+                    }
+                }
+            },
+            {
+                "name": "http_fetch",
+                "description": "Transferencias HTTP nativas (el 'curl' de MegaDaemon, en Rust puro: el movil NO tiene curl/wget). Descarga una URL a fichero (con resume por Range, reintentos y verificacion SHA-256), consulta cabeceras (HEAD), hace GET de texto o POST de un fichero. Tambien acepta una lista de URLs para descargarlas EN PARALELO. Devuelve bytes, sha256, segundos y MB/s reales.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "url": { "type": "string", "description": "URL a descargar/consultar (para paralelo, la lista va en 'urls')." },
+                        "urls": { "type": "array", "items": { "type": "string" }, "description": "Varias URLs para descargar en paralelo." },
+                        "destino": { "type": "string", "description": "Ruta del fichero de destino (si se omite, se devuelve el cuerpo en memoria)." },
+                        "method": { "type": "string", "description": "GET (defecto), HEAD o POST/PUT." },
+                        "sha256": { "type": "string", "description": "SHA-256 esperado: si no coincide, NO se da por buena la descarga." },
+                        "workers": { "type": "integer", "description": "Hilos en paralelo (defecto 4)." },
+                        "timeout_s": { "type": "integer", "description": "Timeout global en segundos (defecto 120)." },
+                        "retries": { "type": "integer", "description": "Reintentos (defecto 3)." }
+                    }
+                }
+            },
+            {
+                "name": "sqlite_mitm",
+                "description": "MITM REAL de la base de datos de Antigravity. 'estado' dice que esta montado y que se ha capturado; 'activar' genera la DB servida (WAL) y MONTA el bind-mount (la app escribe en la copia, la original queda intacta); 'desactivar' desmonta y RE-MERGEA (no se pierde ninguna conversacion); 'capturar' replica ahora mismo lo que la app ha escrito en la DB canonica; 'servida' genera la copia sin montarla; 'montaje' devuelve el comando exacto. La replica es de SOLO LECTURA con busy_timeout 2000 ms: nunca bloquea a la app.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": { "type": "string", "description": "estado (defecto) | activar | desactivar | capturar | replicar | servida | montaje" },
+                        "ocultar": { "type": "array", "items": { "type": "string" }, "description": "IDs de conversaciones que NO deben verse en la DB servida (se ocultan del todo)." },
+                        "reescribir": { "type": "array", "items": { "type": "string" }, "description": "Sustituciones 'DE=A' en la columna state (para mentir sobre el estado de una sesion)." },
+                        "destino": { "type": "string", "description": "Ruta de la DB servida (por defecto <state_dir>/mitm/antigravity_servida.db)." },
+                        "limite": { "type": "integer", "description": "Maximo de filas a replicar (defecto 5000)." }
+                    }
+                }
+            },
+            {
+                "name": "agyshim",
+                "description": "SHIM/PROXY de Antigravity. 'estado' dice que rutas sirve y que ha visto (modelos pedidos y reales, sustituciones); 'reglas' lista las reglas de intercepcion/mentira (add/remove/activate); 'log' devuelve las ultimas entradas del NDJSON (CREDENCIALES REDACTADAS); 'proxy' hace una llamada de prueba por el shim y devuelve la respuesta del gateway con la traza del modelo (megadaemon.requested_model / real_model / substituted).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": { "type": "string", "description": "estado (defecto) | reglas | log | proxy" },
+                        "id": { "type": "string", "description": "ID de la regla (para add/remove/activate)." },
+                        "regla": { "type": "object", "description": "Regla a anadir: {id, cuando:{tipo,texto|nombre}, hacer:{accion,...}, activa}." },
+                        "tail": { "type": "integer", "description": "Numero de entradas del NDJSON a devolver (defecto 20)." },
+                        "ruta": { "type": "string", "description": "Ruta de prueba (defecto /v1internal:generateContent)." },
+                        "cuerpo": { "type": "string", "description": "Cuerpo JSON de la peticion de prueba." }
+                    }
+                }
+            },
+            {
+                "name": "antigravity_sessions",
+                "description": "Instrumentacion completa (SOLO LECTURA, busy_timeout 2000 ms: nunca bloquea a Antigravity) de las sesiones: estado agregado, lista, sub-agentes muertos/colgados, arbol padre->hijos, detalle con transcript y tasks/log del daemon, TOKENS y MODELO en uso (lectura defensiva: el esquema de conversations/<id>.db no esta medido y se reporta el que se encuentra) y CORRELACION con el NDJSON del shim (que modelo pidio la GUI y que modelo contesto de verdad).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": { "type": "string", "description": "estado (defecto) | list | dead | stalled | tree | detail | log | tasks | tokens | correlacion" },
+                        "conversation_id": { "type": "string", "description": "ID de conversacion para detail o raiz opcional para tree." },
+                        "tail": { "type": "integer", "description": "Numero de lineas/pasos finales para detail o log (defecto 20)." },
+                        "app_dir": { "type": "string", "description": "Directorio alternativo de datos de Antigravity (opcional)." }
+                    }
+                }
+            },
+    {
+                "name": "re_analyze",
+                "description": "MOTOR DE RE/DEOFUSCACION de MegaDaemon (punto de entrada UNICO): identifica el binario (ELF/PE/MachO/DEX/APK/Go/UPX) CON evidencia, extrae cadenas interesting, y deofusca de verdad: MBA con PRUEBA de equivalencia (BDD), control-flow flattening con prueba diferencial, strings cifrados, constantes ofuscadas y predicados opacos (accion 'motor'); la accion 'mba' simplifica una expresion y devuelve su demostracion. Accion catalogo lista TODAS las capacidades con el modulo que las implementa. NUNCA ejecuta el binario analizado: es analisis estatico.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": { "type": "string", "description": "catalogo | identify | analyze | strings | deobfuscate | motor | mba" },
+                        "ruta": { "type": "string", "description": "Ruta del binario (obligatoria salvo en catalogo y mba)." },
+                        "max_cadenas": { "type": "integer", "description": "Maximo de cadenas interesting (defecto 60)." },
+                        "plat_key": { "type": "string", "description": "Clave de plataforma para descifrar strings." },
+                        "expr": { "type": "string", "description": "Expresion MBA a simplificar (accion mba), p.ej. '(x ^ y) + 2*(x & y)'." },
+                        "ventana_disasm": { "type": "integer", "description": "Bytes de codigo a desensamblar para el motor (defecto 262144)." }
+                    }
+                }
+    },
+    {
+                "name": "re_fusion",
+                "description": "RECONSTRUCCION MULTI-MOTOR: ejecuta los motores que ya tiene MegaDaemon (Ghidra headless para el pseudocodigo, Rizin para funciones/imports/strings, DiE+Binwalk para el formato, el motor propio para MBA/CFF/crypto y el pclntab para los simbolos Go con fichero:linea), COMPARA lo que da cada uno y FUSIONA lo mejor: pseudocodigo + nombre Go original + fichero:linea + strings. Acciones: compare (rapido, sin Ghidra) | fusion (todo) | informe (solo la tabla comparativa). El parametro binario es obligatorio; simbolos/anclas son los TSV; ghidra_dir y java_home se autodetectan (Ghidra 11.2+ exige JDK 21).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": { "type": "string", "description": "compare | fusion | informe" },
+                        "binario": { "type": "string", "description": "Ruta del binario a reconstruir (obligatoria)." },
+                        "simbolos": { "type": "string", "description": "TSV de simbolos (0xADDR <TAB> nombre <TAB> comentario)." },
+                        "anclas": { "type": "string", "description": "TSV de anclas a decompilar (0xADDR <TAB> nombre <TAB> simbolo <TAB> loc <TAB> tag)." },
+                        "out": { "type": "string", "description": "Directorio de salida (por defecto /workspace/agy-re/tools-out/fusion)." },
+                        "project_dir": { "type": "string", "description": "Proyecto Ghidra." },
+                        "project": { "type": "string", "description": "Nombre del proyecto Ghidra (Go)." },
+                        "ghidra_dir": { "type": "string", "description": "Instalacion de Ghidra (autodetectada si se omite)." },
+                        "java_home": { "type": "string", "description": "JAVA_HOME (autodetectado si se omite)." },
+                        "max_memoria": { "type": "string", "description": "Heap de la JVM (defecto 1400M; con menos de 3 GB de RAM usar 1200M)." },
+                        "timeout_s": { "type": "integer", "description": "Timeout por fase de Ghidra en segundos (defecto 1800)." },
+                        "sin_ghidra": { "type": "string", "description": "Poner cualquier valor para NO usar Ghidra (evita la JVM)." },
+                        "sin_rizin": { "type": "string", "description": "Poner cualquier valor para NO usar Rizin." },
+                        "sin_die": { "type": "string", "description": "Poner cualquier valor para NO usar DiE/Binwalk." }
+                    }
+                }
+            },
+    {
+                "name": "supervisor",
+                "description": "WATCHDOG de Android: instala (o consulta) el supervisor en /data/adb/service.d/99-megadaemon.sh, que Magisk ejecuta en cada boot. Garantiza que el daemon siga vivo, que la auto-actualizacion entre en servicio (el daemon sale con codigo 10 y el watchdog lo relanza) y que el parche del endpoint y los montajes se mantengan. Acciones: estado | instalar | desinstalar | watchdog (el texto del script).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": { "type": "string", "description": "estado | instalar | desinstalar | watchdog" }
+                    }
+                }
+            },
+    {
+                "name": "frida_hooks",
+                "description": "Hooks de Frida para OBSERVAR Antigravity sin tocar sus datos: sqlite (que tablas/consultas toca la app, con credenciales redactadas), red (a que hosts conecta: sirve para verificar el parche del endpoint) y ficheros (que ficheros abre o borra). Acciones: listar | obtener.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": { "type": "string", "description": "listar | obtener" },
+                        "nombre": { "type": "string", "description": "sqlite | red | ficheros" }
+                    }
+                }
+            },
+    {
+                "name": "hooks_payload",
+                "description": "PAYLOAD DE INSTRUMENTACION en Rust con frida-gum (los bindings OFICIALES de Frida, no un inyector artesanal): una .so que se carga en el proceso objetivo (Antigravity) y registra SQLITE (fichero/tabla/consulta), RED (host:puerto, para verificar el parche del endpoint) y FICHEROS (ruta y accion) en un NDJSON, con las credenciales redactadas. Acciones: estado (existe el payload? sha256? proceso objetivo vivo? cargadores disponibles?) | instalar (descarga el asset del release, verifica el sha256 y lo deja en /data/local/tmp/megadaemon/hooks-payload.so con modo 0700) | activar (carga el payload en el proceso objetivo por root_exec: cliente frida con Module.load, o modulo Magisk/Zygisk) | leer (las ultimas lineas del NDJSON).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": { "type": "string", "enum": ["estado", "instalar", "activar", "leer"], "default": "estado", "description": "estado | instalar | activar | leer" },
+                        "paquete": { "type": "string", "description": "Paquete del proceso objetivo (por defecto com.agy)." },
+                        "cargador": { "type": "string", "enum": ["auto", "frida", "zygisk", "manual"], "default": "auto", "description": "auto | frida | zygisk | manual (manual solo devuelve los comandos)." },
+                        "n": { "type": "integer", "description": "Numero de lineas del NDJSON a leer (por defecto 50)." },
+                        "ruta": { "type": "string", "description": "Ruta concreta del NDJSON (opcional; por defecto se prueban las candidatas)." }
+                    }
+                }
+            },
+    {
+                "name": "phone_backup",
+                "description": "Motor de backup nativo de apps (Rust puro, sin curl ni shell): inventario de apps del movil, contenedor cifrado AEGIS-256 por segmentos con manifiesto sha256 por fichero, verificacion del AEAD, restauracion (simulacro por defecto, exige confirm=true) y SUBIDA PIPELINING a Drive (sube cada segmento ya cerrado mientras se recoge el siguiente; mide MiB/s y ETA). Anti-congelacion: nice/ionice de la clase mas baja, sleep entre lotes y descanso si la carga del sistema se dispara. Acciones: inventory | create | list | verify | restore | upload. create/restore/upload escriben o publican en Drive: exigen confirm=true.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["inventory", "create", "list", "verify", "restore", "upload"], "default": "inventory", "description": "inventory | create | list | verify | restore | upload" },
+                        "out": { "type": "string", "description": "Directorio/ruta del contenedor." },
+                        "folder_id": { "type": "string", "description": "ID de carpeta en Drive (para upload)." },
+                        "packages": { "type": "array", "items": { "type": "string" } },
+                        "confirm": { "type": "boolean" }
+                    }
+                }
+            },
+            {
+                "name": "quota_status",
+                "description": "Estado de la CUOTA de los proveedores/modelos y presupuesto diario USD: cuanto queda (%), cuando resetea y en que modo esta (normal/aviso/ahorro/pausa). Respuesta MUY compacta (~70 tokens) para no gastar. En 'pausa' significa que la cuota se agota: termina el paso actual, guarda tu checkpoint y espera al reset; no sigas abriendo tareas nuevas.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "provider": {
+                            "type": "string",
+                            "description": "Id del proveedor (opcional; sin el, el peor de todos)."
+                        },
+                        "full": {
+                            "type": "boolean",
+                            "description": "true = detalle completo + daily_budget (gasta mas tokens); por defecto, snapshot compacto."
+                        },
+                        "set_daily_budget_usd": {
+                            "type": ["number", "null"],
+                            "description": "Opcional: fija el limite diario de gasto en USD (null = sin limite)."
+                        }
+                    }
+                }
+            },
+            {
+                "name": "csc_verify",
+                "description": "Verificador post-parche del CSC: lee el CSC activo (mps_code.dat), descifra el cscfeature.xml OMC del movil, comprueba el valor de CscFeature_VoiceCall_ConfigRecording, lo contrasta con el fileSize de contents.db, busca copias en claro del framework y devuelve el mapa vivo de los CSC con la feature. Con expect_value exige un valor EXACTO (p.ej. 'RecordingAllowed' o 'RecordingAllowedByMenu,disclaimer_latin'): si el valor presente difiere devuelve verdict MISMATCH, y siempre indica la variante (sin-disclaimer / con-disclaimer / apagado).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "expect_value": {
+                            "type": "string",
+                            "description": "Valor exacto que se espera para CscFeature_VoiceCall_ConfigRecording (opcional)."
+                        }
+                    }
+                }
+            },
+        ]);
     let mut out = base.as_array().cloned().unwrap_or_default();
     if let Some(extra) = crate::titanium_backup::tool_definitions_mcp().as_array() {
         out.extend(extra.clone());
@@ -924,14 +1078,23 @@ pub fn tool_definitions() -> Value {
 
 /// Despacha las herramientas nuevas. `None` = no es de este grupo.
 pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
-    let s = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let s = |k: &str| {
+        args.get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
     let n = |k: &str| args.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
     let i = |k: &str| args.get(k).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
     let b = |k: &str| args.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
     let sa = |k: &str| {
         args.get(k)
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect::<Vec<String>>())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<String>>()
+            })
             .unwrap_or_default()
     };
 
@@ -955,28 +1118,36 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 "puerto": args.get("puerto").and_then(|v| v.as_u64()).unwrap_or(9090),
             });
             let r = crate::instrumentacion_agy::dispatch(&args);
-            return Some(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&r).unwrap_or_default() }] }));
+            return Some(
+                json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&r).unwrap_or_default() }] }),
+            );
         }
         "antigravity" => {
             let cfg = crate::antigravity_bridge::BridgeConfig::default();
             let br = match crate::antigravity_bridge::AntigravityBridge::new(&cfg) {
                 Ok(b) => b,
                 Err(e) => {
-                    return Some(json!({ "content": [{ "type": "text", "text": format!("antigravity: no se pudo abrir el puente: {e}") }], "isError": true }))
+                    return Some(
+                        json!({ "content": [{ "type": "text", "text": format!("antigravity: no se pudo abrir el puente: {e}") }], "isError": true }),
+                    )
                 }
             };
             let action = {
                 let a = s("action");
-                if a.trim().is_empty() { "status".to_string() } else { a }
+                if a.trim().is_empty() {
+                    "status".to_string()
+                } else {
+                    a
+                }
             };
-            let out: Result<Value, String> = (|| {
-                match action.as_str() {
-                    "status" => br.agent_status().map_err(|e| e.to_string()),
-                    "catalog" | "models" => {
-                        let raw = br.model_catalog().map_err(|e| e.to_string())?;
-                        let models: Vec<Value> = crate::antigravity_bridge::model_catalog_from(&raw)
-                            .iter()
-                            .map(|m| json!({
+            let out: Result<Value, String> = (|| match action.as_str() {
+                "status" => br.agent_status().map_err(|e| e.to_string()),
+                "catalog" | "models" => {
+                    let raw = br.model_catalog().map_err(|e| e.to_string())?;
+                    let models: Vec<Value> = crate::antigravity_bridge::model_catalog_from(&raw)
+                        .iter()
+                        .map(|m| {
+                            json!({
                                 "id": m.id,
                                 "display_name": m.display_name,
                                 "placeholder": m.placeholder,
@@ -990,95 +1161,103 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                                 "max_output_tokens": m.max_output_tokens,
                                 "quota_remaining_fraction": m.quota_remaining_fraction,
                                 "quota_reset_time": m.quota_reset_time,
-                            }))
-                            .collect();
-                        let mut v = json!({
-                            "models": models,
-                            "model_count": crate::antigravity_bridge::model_catalog_from(&raw).len(),
-                            "default_model": crate::antigravity_bridge::default_model_from(&raw),
-                        });
-                        if action == "catalog" {
-                            v["mcp"] = br.tool_catalog().unwrap_or(json!({"servers": [], "tools": []}));
-                        }
-                        Ok(v)
+                            })
+                        })
+                        .collect();
+                    let mut v = json!({
+                        "models": models,
+                        "model_count": crate::antigravity_bridge::model_catalog_from(&raw).len(),
+                        "default_model": crate::antigravity_bridge::default_model_from(&raw),
+                    });
+                    if action == "catalog" {
+                        v["mcp"] = br
+                            .tool_catalog()
+                            .unwrap_or(json!({"servers": [], "tools": []}));
                     }
-                    "conversations" => {
-                        let convs = br.conversations().map_err(|e| e.to_string())?;
-                        Ok(json!({
-                            "conversations": convs.iter().map(|c| json!({
-                                "cascade_id": c.cascade_id,
-                                "title": c.title,
-                                "trajectory_id": c.trajectory_id,
-                                "status": c.status,
-                                "step_count": c.step_count,
-                                "last_modified": c.last_modified,
-                                "workspaces": c.workspaces,
-                            })).collect::<Vec<Value>>(),
-                            "count": convs.len(),
-                        }))
+                    Ok(v)
+                }
+                "conversations" => {
+                    let convs = br.conversations().map_err(|e| e.to_string())?;
+                    Ok(json!({
+                        "conversations": convs.iter().map(|c| json!({
+                            "cascade_id": c.cascade_id,
+                            "title": c.title,
+                            "trajectory_id": c.trajectory_id,
+                            "status": c.status,
+                            "step_count": c.step_count,
+                            "last_modified": c.last_modified,
+                            "workspaces": c.workspaces,
+                        })).collect::<Vec<Value>>(),
+                        "count": convs.len(),
+                    }))
+                }
+                "search" => {
+                    let q = s("query");
+                    if q.trim().is_empty() {
+                        return Ok(json!({ "ok": false, "error": "falta query" }));
                     }
-                    "search" => {
-                        let q = s("query");
-                        if q.trim().is_empty() {
-                            return Ok(json!({ "ok": false, "error": "falta query" }));
-                        }
-                        let limit = if n("limit") > 0 { n("limit") } else { 20 };
-                        br.search(&q, limit as u32).map_err(|e| e.to_string())
+                    let limit = if n("limit") > 0 { n("limit") } else { 20 };
+                    br.search(&q, limit as u32).map_err(|e| e.to_string())
+                }
+                "conversation" => {
+                    let id = s("cascade_id");
+                    if id.trim().is_empty() {
+                        return Ok(json!({ "ok": false, "error": "falta cascade_id" }));
                     }
-                    "conversation" => {
-                        let id = s("cascade_id");
-                        if id.trim().is_empty() {
-                            return Ok(json!({ "ok": false, "error": "falta cascade_id" }));
-                        }
-                        let t = br.conversation(&id).map_err(|e| e.to_string())?;
-                        let steps = crate::antigravity_bridge::step_summaries_from(&t);
-                        Ok(json!({
-                            "cascade_id": t.pointer("/trajectory/cascadeId").and_then(|x| x.as_str()).unwrap_or(&id),
-                            "status": t.get("status").and_then(|x| x.as_str()).unwrap_or(""),
-                            "num_total_steps": t.get("numTotalSteps").and_then(|x| x.as_u64()).unwrap_or(0),
-                            "steps": steps.iter().map(|s| json!({
-                                "kind": s.kind, "status": s.status, "text": s.text, "error": s.error
-                            })).collect::<Vec<Value>>(),
-                        }))
+                    let t = br.conversation(&id).map_err(|e| e.to_string())?;
+                    let steps = crate::antigravity_bridge::step_summaries_from(&t);
+                    Ok(json!({
+                        "cascade_id": t.pointer("/trajectory/cascadeId").and_then(|x| x.as_str()).unwrap_or(&id),
+                        "status": t.get("status").and_then(|x| x.as_str()).unwrap_or(""),
+                        "num_total_steps": t.get("numTotalSteps").and_then(|x| x.as_u64()).unwrap_or(0),
+                        "steps": steps.iter().map(|s| json!({
+                            "kind": s.kind, "status": s.status, "text": s.text, "error": s.error
+                        })).collect::<Vec<Value>>(),
+                    }))
+                }
+                "tasks" => {
+                    let hooks = br.tasks().map_err(|e| e.to_string())?;
+                    Ok(json!({
+                        "tasks": hooks.iter().map(|h| json!({
+                            "id": h.id,
+                            "name": h.name,
+                            "trigger": h.trigger_type,
+                            "interval_sec": h.interval_sec,
+                            "enabled": h.enabled,
+                            "command_preview": h.command_preview,
+                            "last_run_status": h.last_run_status,
+                            "last_run_duration": h.last_run_duration,
+                        })).collect::<Vec<Value>>(),
+                        "count": hooks.len(),
+                    }))
+                }
+                "enqueue" => {
+                    let prompt = s("prompt");
+                    if prompt.trim().is_empty() {
+                        return Ok(json!({ "ok": false, "error": "falta prompt" }));
                     }
-                    "tasks" => {
-                        let hooks = br.tasks().map_err(|e| e.to_string())?;
-                        Ok(json!({
-                            "tasks": hooks.iter().map(|h| json!({
-                                "id": h.id,
-                                "name": h.name,
-                                "trigger": h.trigger_type,
-                                "interval_sec": h.interval_sec,
-                                "enabled": h.enabled,
-                                "command_preview": h.command_preview,
-                                "last_run_status": h.last_run_status,
-                                "last_run_duration": h.last_run_duration,
-                            })).collect::<Vec<Value>>(),
-                            "count": hooks.len(),
-                        }))
+                    if !b("confirm") {
+                        return Ok(json!({
+                            "ok": false,
+                            "error": "antigravity enqueue exige confirm=true",
+                            "hint": "encola trabajo real en el agente de Antigravity del móvil (consume cuota y crea una conversacion)",
+                        }));
                     }
-                    "enqueue" => {
-                        let prompt = s("prompt");
-                        if prompt.trim().is_empty() {
-                            return Ok(json!({ "ok": false, "error": "falta prompt" }));
-                        }
-                        if !b("confirm") {
-                            return Ok(json!({
-                                "ok": false,
-                                "error": "antigravity enqueue exige confirm=true",
-                                "hint": "encola trabajo real en el agente de Antigravity del móvil (consume cuota y crea una conversacion)",
-                            }));
-                        }
-                        let ws = sa("workspaces");
-                        let cid = br.enqueue(&prompt, &ws).map_err(|e| e.to_string())?;
-                        Ok(json!({ "ok": true, "cascade_id": cid, "model": br.model() }))
-                    }
-                    other => Ok(json!({ "ok": false, "error": format!("accion desconocida: {other}") })),
+                    let ws = sa("workspaces");
+                    let cid = br.enqueue(&prompt, &ws).map_err(|e| e.to_string())?;
+                    Ok(json!({ "ok": true, "cascade_id": cid, "model": br.model() }))
+                }
+                other => {
+                    Ok(json!({ "ok": false, "error": format!("accion desconocida: {other}") }))
                 }
             })();
             match out {
-                Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
-                Err(e) => json!({ "content": [{ "type": "text", "text": format!("antigravity: {e}") }], "isError": true }),
+                Ok(v) => {
+                    json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] })
+                }
+                Err(e) => {
+                    json!({ "content": [{ "type": "text", "text": format!("antigravity: {e}") }], "isError": true })
+                }
             }
         }
         "drive_backup" => {
@@ -1086,7 +1265,11 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             // vive en Rust: aqui no se shella a curl ni se invoca Python.
             let action = {
                 let a = s("action");
-                if a.trim().is_empty() { "upload".to_string() } else { a }
+                if a.trim().is_empty() {
+                    "upload".to_string()
+                } else {
+                    a
+                }
             };
             let st = crate::cockpit_server::state_dir();
             match action.as_str() {
@@ -1102,12 +1285,24 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         let dest = {
                             let d = s("dest");
                             if d.trim().is_empty() {
-                                crate::drive_native::default_download_path(&file_id).display().to_string()
-                            } else { d }
+                                crate::drive_native::default_download_path(&file_id)
+                                    .display()
+                                    .to_string()
+                            } else {
+                                d
+                            }
                         };
-                        match crate::drive_native::download_file(&file_id, std::path::Path::new(&dest), Some(&st)) {
-                            Ok(n) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({ "ok": true, "bytes": n, "dest": dest })).unwrap_or_default() }] }),
-                            Err(e) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({ "ok": false, "error": e })).unwrap_or_default() }], "isError": true }),
+                        match crate::drive_native::download_file(
+                            &file_id,
+                            std::path::Path::new(&dest),
+                            Some(&st),
+                        ) {
+                            Ok(n) => {
+                                json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({ "ok": true, "bytes": n, "dest": dest })).unwrap_or_default() }] })
+                            }
+                            Err(e) => {
+                                json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({ "ok": false, "error": e })).unwrap_or_default() }], "isError": true })
+                            }
                         }
                     }
                 }
@@ -1123,7 +1318,9 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                                     .file_name()
                                     .map(|x| x.to_string_lossy().to_string())
                                     .unwrap_or_else(|| "MegaDaemon_Sync".to_string())
-                            } else { nm }
+                            } else {
+                                nm
+                            }
                         };
                         let folder = s("folder_id");
                         let raw_w = n("workers") as usize;
@@ -1136,8 +1333,12 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                             b("verify_delete"),
                             Some(&st),
                         ) {
-                            Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
-                            Err(e) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({ "ok": false, "error": e })).unwrap_or_default() }], "isError": true }),
+                            Ok(v) => {
+                                json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] })
+                            }
+                            Err(e) => {
+                                json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({ "ok": false, "error": e })).unwrap_or_default() }], "isError": true })
+                            }
                         }
                     }
                 }
@@ -1156,16 +1357,27 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                                         .file_name()
                                         .map(|x| x.to_string_lossy().to_string())
                                         .unwrap_or_else(|| "backup.bin".to_string())
-                                } else { n }
+                                } else {
+                                    n
+                                }
                             };
                             let folder = s("folder_id");
-                            match crate::drive_native::upload_path(std::path::Path::new(&path), &name, &folder, Some(&st)) {
-                                Ok(u) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({
+                            match crate::drive_native::upload_path(
+                                std::path::Path::new(&path),
+                                &name,
+                                &folder,
+                                Some(&st),
+                            ) {
+                                Ok(u) => {
+                                    json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({
                                     "ok": true, "file_id": u.file_id, "name": u.name,
                                     "bytes": u.bytes, "sha256": u.sha256,
                                     "transport": "nativo (ureq, Rust puro)"
-                                })).unwrap_or_default() }] }),
-                                Err(e) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({ "ok": false, "error": e })).unwrap_or_default() }], "isError": true }),
+                                })).unwrap_or_default() }] })
+                                }
+                                Err(e) => {
+                                    json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&json!({ "ok": false, "error": e })).unwrap_or_default() }], "isError": true })
+                                }
                             }
                         }
                     }
@@ -1184,7 +1396,9 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     Some(s("quick")).filter(|x| !x.is_empty()).as_deref(),
                     Some(s("duckdns")).filter(|x| !x.is_empty()).as_deref(),
                     Some(s("ip_publica")).filter(|x| !x.is_empty()).as_deref(),
-                    Some(s("cloudflared_pids")).filter(|x| !x.is_empty()).as_deref(),
+                    Some(s("cloudflared_pids"))
+                        .filter(|x| !x.is_empty())
+                        .as_deref(),
                 );
                 let txt = serde_json::to_string_pretty(&out).unwrap_or_default();
                 json!({ "content": [{ "type": "text", "text": txt }] })
@@ -1196,7 +1410,10 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             json!({ "content": [{ "type": "text", "text": txt }] })
         }
         "task_queue" => {
-            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("list");
+            let accion = args
+                .get("accion")
+                .and_then(|v| v.as_str())
+                .unwrap_or("list");
             let nodo = args.get("nodo").and_then(|v| v.as_str()).unwrap_or("pc");
             let v = match accion {
                 "list" => {
@@ -1208,13 +1425,23 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     })).collect::<Vec<_>>() })
                 }
                 "submit" => {
-                    let kind = args.get("kind").and_then(|v| v.as_str()).unwrap_or("generica");
-                    let payload = args.get("payload")
+                    let kind = args
+                        .get("kind")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("generica");
+                    let payload = args
+                        .get("payload")
                         .and_then(|v| v.as_str())
                         .and_then(|s| serde_json::from_str(s).ok())
                         .unwrap_or(Value::Null);
                     let prio = args.get("prioridad").and_then(|v| v.as_u64()).unwrap_or(5) as u8;
-                    let id = crate::task_scheduler::submit(&kind, payload, prio, vec![], Default::default());
+                    let id = crate::task_scheduler::submit(
+                        &kind,
+                        payload,
+                        prio,
+                        vec![],
+                        Default::default(),
+                    );
                     json!({ "ok": true, "id": id })
                 }
                 "claim" => {
@@ -1242,7 +1469,10 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 }
                 "pause" => {
                     let until = args.get("until").and_then(|v| v.as_u64());
-                    let motivo = args.get("motivo").and_then(|v| v.as_str()).unwrap_or("cuota");
+                    let motivo = args
+                        .get("motivo")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("cuota");
                     json!({ "ok": true, "pausadas": crate::task_scheduler::pausar_por_cuota(nodo, until, motivo) })
                 }
                 "sync" => match crate::task_sync::sincronizar_drive() {
@@ -1259,7 +1489,10 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             json!({ "content": [{ "type": "text", "text": txt }] })
         }
         "resonance" => {
-            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("estado");
+            let accion = args
+                .get("accion")
+                .and_then(|v| v.as_str())
+                .unwrap_or("estado");
             let state = crate::cockpit_server::state_dir();
             let r = match accion {
                 "estado" => match crate::resonance::Tablon::abrir(&state) {
@@ -1267,7 +1500,10 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     Err(e) => json!({"ok": false, "error": e.to_string()}),
                 },
                 "publicar" => {
-                    let tipo = args.get("tipo").and_then(|v| v.as_str()).unwrap_or("cambio");
+                    let tipo = args
+                        .get("tipo")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("cambio");
                     let cuerpo = args
                         .get("cuerpo")
                         .and_then(|v| v.as_str())
@@ -1295,17 +1531,125 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     },
                     Err(e) => json!({"ok": false, "error": e.to_string()}),
                 },
-                _ => json!({"ok": false, "error": "accion desconocida (estado|publicar|sincronizar|plegar)"}),
+                _ => {
+                    json!({"ok": false, "error": "accion desconocida (estado|publicar|sincronizar|plegar)"})
+                }
             };
             json!({ "content": [{ "type": "text", "text": r.to_string() }] })
         }
         "reparar_entorno" => {
-            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("diagnostico");
+            let accion = args
+                .get("accion")
+                .and_then(|v| v.as_str())
+                .unwrap_or("diagnostico");
             let v = match accion {
                 "reparar" | "repair" => crate::reparar_entorno::reparar_ahora(),
                 _ => crate::reparar_entorno::diagnosticar(),
             };
             json!({ "content": [{ "type": "text", "text": v.a_json().to_string() }] })
+        }
+        // Stack autocontenido: el daemon lleva dentro el supervisor, el
+        // keeper, los scripts de Antigravity y la Web UI, y los reconcilia.
+        // MEDIDO (2026-11-25): sin esto, el movil se rompia al actualizar
+        // (el supervisor viejo no encontraba el binario nuevo).
+        // Diagnostico automatico: el nodo publica su estado en Drive y el
+        // root lo lee desde el sandbox (sin ADB, sin pegar texto).
+        "diagnostico" => {
+            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("recoger");
+            let v = match accion {
+                "publicar" | "publish" => match crate::diagnostico::publicar() {
+                    Ok(v) => v,
+                    Err(e) => json!({"ok": false, "error": e}),
+                },
+                _ => crate::diagnostico::recoger(),
+            };
+            json!({ "content": [{ "type": "text", "text": v.to_string() }] })
+        }
+        // v17 — RE profunda de APK: xrefs, rutas REST, pins de certificado y
+        // descifradores de strings.  Es el módulo que sostiene la lectura del
+        // subsistema de datos de la app del operador.
+        "re_profunda" => {
+            let v = crate::re_deep::dispatch(args);
+            json!({ "content": [{ "type": "text", "text": v.to_string() }] })
+        }
+        // v17 — Doctor: el diagnóstico forense en C (mddoctor) a través de
+        // la API de MegaDaemon.  Funciona CUANDO el daemon está roto, que
+        // es cuando hace falta.  Sin binario, degrada al diagnóstico nativo.
+        "doctor" => {
+            let v = crate::doctor::dispatch(args);
+            json!({ "content": [{ "type": "text", "text": v.to_string() }] })
+        }
+        // v17 — Telemetría a Drive: el móvil **empuja** su estado (red
+        // desglosada wifi/móvil, batería, instrumentación viva) y los datos
+        // de conexión.  Así el root no depende de que el túnel esté vivo:
+        // lee el estado de Drive y sabe a dónde conectarse.
+        "telemetria" => {
+            let v = crate::telemetria::dispatch(args);
+            json!({ "content": [{ "type": "text", "text": v.to_string() }] })
+        }
+        // v17 — Gasto de datos de Jazztel: el desglose WiFi vs datos
+        // móviles y la comparación con la cifra que factura el operador.
+        "gasto_datos" => {
+            let v = crate::gasto_datos::dispatch(args);
+            json!({ "content": [{ "type": "text", "text": v.to_string() }] })
+        }
+        // v19 — Brillo del móvil: shim de política sobre
+        // `screen_brightness_mode` (manual ⇒ el sensor de luz ambiente deja de
+        // mandar), brillo al máximo por defecto y respeto por los botones
+        // del sistema.  Cada escritura se verifica contra el brillo aplicado.
+        "brillo" => {
+            let v = crate::brightness::dispatch(args);
+            json!({ "content": [{ "type": "text", "text": v.to_string() }] })
+        }
+        // v17 — Bus de órdenes PULL: el móvil TIRA del bus y ejecuta.  Es lo
+        // que permite controlar el móvil y sus apps (incluso en primer
+        // plano) SIN que nadie tenga que estar conectado.
+        "bus_ordenes" => {
+            let o = crate::bus_ejecutor::Opciones {
+                nodo: s("nodo"),
+                maximo: n("maximo") as usize,
+                forzar: b("forzar"),
+                simulacion: b("simulacion"),
+                verificar_firmas: !b("sin_verificar_firmas"),
+            };
+            let inf = crate::bus_ejecutor::ciclo(&o, None);
+            let v = json!({
+                "ok": true,
+                "ejecutadas": inf.ejecutadas,
+                "saltadas": inf.saltadas,
+                "sin_confirmar": inf.sin_confirmar,
+                "ajenas": inf.ajenas,
+                "sin_verificar": inf.sin_verificar,
+                "bus_ok": inf.bus_ok,
+                "motivo": inf.motivo,
+                "detalle": inf.detalle,
+            });
+            json!({ "content": [{ "type": "text", "text": v.to_string() }] })
+        }
+        "stack" => {
+            let accion = args
+                .get("accion")
+                .and_then(|v| v.as_str())
+                .unwrap_or("estado");
+            let cfg = crate::stack::Config::del_entorno();
+            let v = match accion {
+                "reconciliar" | "repair" | "reparar" => {
+                    let informe = crate::stack::reconciliar(&cfg);
+                    let reiniciado = if informe.supervisor_cambiado {
+                        crate::stack::reiniciar_supervisor()
+                    } else {
+                        false
+                    };
+                    json!({
+                        "ok": informe.ok(),
+                        "informe": informe.a_json(),
+                        "supervisor_reiniciado": reiniciado,
+                        "estado": crate::stack::estado_json(&cfg),
+                    })
+                }
+                _ => crate::stack::estado_json(&cfg),
+            };
+            json!({ "content": [{ "type": "text", "text": v.to_string() }] })
         }
         "http_fetch" => {
             let mut o = crate::http_transfer::Opciones::default();
@@ -1336,10 +1680,9 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             let v = if !urls.is_empty() {
                 // Paralelo.
                 let workers = args.get("workers").and_then(|x| x.as_u64()).unwrap_or(4) as usize;
-                let dir = o
-                    .destino
-                    .clone()
-                    .unwrap_or_else(|| std::path::PathBuf::from("/data/local/tmp/megadaemon/downloads"));
+                let dir = o.destino.clone().unwrap_or_else(|| {
+                    std::path::PathBuf::from("/data/local/tmp/megadaemon/downloads")
+                });
                 let _ = std::fs::create_dir_all(&dir);
                 crate::http_transfer::descargar_paralelo(&urls, &dir, workers, &o)
             } else {
@@ -1353,10 +1696,13 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     }
                 } else if method.eq_ignore_ascii_case("GET") && o.destino.is_none() {
                     match crate::http_transfer::get_texto(url, &o) {
-                        Ok((st, t)) => json!({ "status": st, "body": t.chars().take(4000).collect::<String>() }),
+                        Ok((st, t)) => {
+                            json!({ "status": st, "body": t.chars().take(4000).collect::<String>() })
+                        }
                         Err(e) => json!({ "error": e }),
                     }
-                } else if method.eq_ignore_ascii_case("POST") || method.eq_ignore_ascii_case("PUT") {
+                } else if method.eq_ignore_ascii_case("POST") || method.eq_ignore_ascii_case("PUT")
+                {
                     let f = o.destino.clone().unwrap_or_default();
                     match crate::http_transfer::subir(url, &f, &o, method) {
                         Ok(r) => serde_json::to_value(r).unwrap_or(Value::Null),
@@ -1372,197 +1718,262 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             let txt = serde_json::to_string(&v).unwrap_or_default();
             json!({ "content": [{ "type": "text", "text": txt }] })
         }
-                "phone_backup" => {
-                    // Motor de backup nativo de apps: la MISMA libreria que el
-                    // binario `md-backup` (paridad CLI <-> MCP <-> agent_coding).
-                    let action = {
-                        let a = s("action");
-                        if a.trim().is_empty() { "inventory".to_string() } else { a }
-                    };
-                    let st = crate::cockpit_server::state_dir();
-                    let root = std::path::PathBuf::from({
-                        let r = s("root");
-                        if r.is_empty() { "/".to_string() } else { r }
-                    });
-                    let packages = sa("packages");
-                    // `create`, `restore` y `upload` escriben o publican: exigen
-                    // `confirm: true` (misma politica que el resto de tools).
-                    let needs_confirm = matches!(action.as_str(), "create" | "restore" | "upload");
-                    if needs_confirm && !b("confirm") {
-                        json!({ "content": [{ "type": "text", "text": format!("phone_backup {action} exige confirm=true") }], "isError": true })
-                    } else {
-                        let res: Result<Value, String> = match action.as_str() {
-                            "inventory" => {
-                                let opts = crate::backup_apps::InventoryOptions {
-                                    root: root.clone(),
-                                    packages: packages.clone(),
-                                    measure: b("measure"),
-                                    ..Default::default()
-                                };
-                                crate::backup_apps::inventory(&opts).map(|apps| {
-                                    json!({
-                                        "ok": true,
-                                        "packages": apps.len(),
-                                        "apps": apps,
-                                    })
-                                })
-                            }
-                            "list" => {
-                                let out = s("out");
-                                if out.is_empty() {
-                                    Err("phone_backup list necesita 'out'".to_string())
-                                } else {
-                                    crate::backup_apps::list(std::path::Path::new(&out)).map(|v| {
-                                        json!({ "ok": true, "containers": v })
-                                    })
-                                }
-                            }
-                            "verify" => {
-                                let out = s("out");
-                                if out.is_empty() {
-                                    Err("phone_backup verify necesita 'out'".to_string())
-                                } else {
-                                    let key = match s("key") {
-                                        p if p.trim().is_empty() => Ok(None),
-                                        p => crate::backup_apps::read_key_file(std::path::Path::new(&p)).map(Some),
-                                    };
-                                    match key {
-                                        Err(e) => Err(e),
-                                        Ok(key) => crate::backup_apps::verify(std::path::Path::new(&out), key.as_deref()).map(|r| {
-                                            json!({ "ok": r.ok, "report": r })
-                                        }),
-                                    }
-                                }
-                            }
-                            "create" => {
-                                let out = s("out");
-                                if out.is_empty() {
-                                    Err("phone_backup create necesita 'out'".to_string())
-                                } else {
-                                    let opts = crate::backup_apps::CreateOptions {
-                                        root: root.clone(),
-                                        out: std::path::PathBuf::from(&out),
-                                        packages: packages.clone(),
-                                        segment_bytes: if n("segment_bytes") > 0 { n("segment_bytes") } else { crate::backup_apps::DEFAULT_SEGMENT_BYTES },
-                                        passphrase: s("password").into(),
-                                        key_out: {
-                                            let k = s("key_out");
-                                            if k.is_empty() { None } else { Some(std::path::PathBuf::from(k)) }
-                                        },
-                                        ..Default::default()
-                                    };
-                                    let mut sink = crate::backup_apps::NullSink;
-                                    crate::backup_apps::create(&opts, &mut sink).map(|r| json!({ "ok": true, "report": r }))
-                                }
-                            }
-                            "restore" => {
-                                let out = s("out");
-                                if out.is_empty() {
-                                    Err("phone_backup restore necesita 'out'".to_string())
-                                } else {
-                                    let key = match s("key") {
-                                        p if p.trim().is_empty() => Ok(None),
-                                        p => crate::backup_apps::read_key_file(std::path::Path::new(&p)).map(Some),
-                                    };
-                                    let key = match key {
-                                        Err(e) => return Some(json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true })),
-                                        Ok(k) => k,
-                                    };
-                                    let dest = {
-                                        let d = s("dest");
-                                        if d.is_empty() { "/".to_string() } else { d }
-                                    };
-                                    let opts = crate::backup_apps::RestoreOptions {
-                                        dir: std::path::PathBuf::from(&out),
-                                        dest: std::path::PathBuf::from(&dest),
-                                        packages: packages.clone(),
-                                        confirm: b("confirm"),
-                                        overwrite: b("overwrite"),
-                                        key,
-                                    };
-                                    crate::backup_apps::restore(&opts).map(|r| json!({ "ok": r.mismatches.is_empty(), "report": r }))
-                                }
-                            }
-                            "upload" => {
-                                let out = s("out");
-                                let folder = s("folder_id");
-                                if out.is_empty() {
-                                    Err("phone_backup upload necesita 'out'".to_string())
-                                } else if folder.is_empty() {
-                                    Err("phone_backup upload necesita 'folder_id'".to_string())
-                                } else {
-                                    let workers = if n("workers") == 0 { 3usize } else { (n("workers") as usize).clamp(1, 16) };
-                                    let state_dir = {
-                                        let sd = s("state_dir");
-                                        if sd.is_empty() { st.clone() } else { sd }
-                                    };
-                                    // El `?` no vale aquí (esta función devuelve
-                                    // `Option`): la subida va en una clausura que
-                                    // sí devuelve `Result`.
-                                    (|| -> Result<Value, String> {
-                                    // Subcarpeta (p.ej. `P0-apps`): se busca o se crea
-                                    // con el VFS nativo.
-                                    let folder = match s("subfolder") {
-                                        sub if sub.trim().is_empty() => folder.clone(),
-                                        sub => crate::drive_native::ensure_folder(&sub, &folder, Some(&state_dir))?,
-                                    };
-                                    let name = {
-                                        let nm = s("name");
-                                        if nm.is_empty() {
-                                            std::path::Path::new(&out)
-                                                .file_name()
-                                                .map(|x| x.to_string_lossy().to_string())
-                                                .unwrap_or_else(|| "backup".to_string())
-                                        } else { nm }
-                                    };
-                                    let mut up = crate::backup_apps::DriveUploader::new(&folder, &name, workers);
-                                    up.chunk_bytes = if n("chunk_bytes") > 0 { n("chunk_bytes") } else { crate::backup_apps::DRIVE_CHUNK_MIN };
-                                    up.state_dir = Some(state_dir.clone());
-                                    up.delete_after_upload = b("delete_after_upload");
-                                    up.container_dir = Some(std::path::PathBuf::from(&out));
-                                    up.start()?;
-                                    let header = crate::backup_apps::read_header(std::path::Path::new(&out))?;
-                                    for sg in &header.segments {
-                                        let p = std::path::Path::new(&out).join("segments").join(&sg.name);
-                                        if !p.exists() { continue; }
-                                        // `submit` es un método del trait `SegmentSink`:
-                                        // se llama con la ruta completa para no
-                                        // depender del `use`.
-                                        crate::backup_apps::SegmentSink::submit(
-                                            &mut up,
-                                            &crate::backup_apps::SealedSegment {
-                                                index: sg.index,
-                                                path: p,
-                                                info: sg.clone(),
-                                            },
-                                        )?;
-                                    }
-                                    let manifest = crate::backup_apps::read_manifest(std::path::Path::new(&out))?;
-                                    crate::backup_apps::SegmentSink::finish(&mut up, &header, &manifest)?;
-                                    let stats = up.stats();
-                                    let up_ms = stats.ended_ms.saturating_sub(stats.started_ms).max(1);
-                                    Ok(json!({
-                                        "ok": up.errors().is_empty(),
-                                        "segments": stats.segments,
-                                        "bytes": stats.bytes,
-                                        "mib_per_s": (crate::backup_apps::mib_per_s(stats.bytes, up_ms) * 1000.0).round() / 1000.0,
-                                        "eta_s": crate::backup_apps::eta_s(stats.bytes, stats.total_bytes.max(stats.bytes), up_ms).round() as u64,
-                                        "errors": up.errors(),
-                                    }))
-                                    })()
-                                }
-                            }
-                            other => Err(format!("unknown phone_backup action '{}'", other)),
+        "phone_backup" => {
+            // Motor de backup nativo de apps: la MISMA libreria que el
+            // binario `md-backup` (paridad CLI <-> MCP <-> agent_coding).
+            let action = {
+                let a = s("action");
+                if a.trim().is_empty() {
+                    "inventory".to_string()
+                } else {
+                    a
+                }
+            };
+            let st = crate::cockpit_server::state_dir();
+            let root = std::path::PathBuf::from({
+                let r = s("root");
+                if r.is_empty() {
+                    "/".to_string()
+                } else {
+                    r
+                }
+            });
+            let packages = sa("packages");
+            // `create`, `restore` y `upload` escriben o publican: exigen
+            // `confirm: true` (misma politica que el resto de tools).
+            let needs_confirm = matches!(action.as_str(), "create" | "restore" | "upload");
+            if needs_confirm && !b("confirm") {
+                json!({ "content": [{ "type": "text", "text": format!("phone_backup {action} exige confirm=true") }], "isError": true })
+            } else {
+                let res: Result<Value, String> = match action.as_str() {
+                    "inventory" => {
+                        let opts = crate::backup_apps::InventoryOptions {
+                            root: root.clone(),
+                            packages: packages.clone(),
+                            measure: b("measure"),
+                            ..Default::default()
                         };
-                        match res {
-                            Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
-                            Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+                        crate::backup_apps::inventory(&opts).map(|apps| {
+                            json!({
+                                "ok": true,
+                                "packages": apps.len(),
+                                "apps": apps,
+                            })
+                        })
+                    }
+                    "list" => {
+                        let out = s("out");
+                        if out.is_empty() {
+                            Err("phone_backup list necesita 'out'".to_string())
+                        } else {
+                            crate::backup_apps::list(std::path::Path::new(&out))
+                                .map(|v| json!({ "ok": true, "containers": v }))
                         }
                     }
+                    "verify" => {
+                        let out = s("out");
+                        if out.is_empty() {
+                            Err("phone_backup verify necesita 'out'".to_string())
+                        } else {
+                            let key = match s("key") {
+                                p if p.trim().is_empty() => Ok(None),
+                                p => crate::backup_apps::read_key_file(std::path::Path::new(&p))
+                                    .map(Some),
+                            };
+                            match key {
+                                Err(e) => Err(e),
+                                Ok(key) => crate::backup_apps::verify(
+                                    std::path::Path::new(&out),
+                                    key.as_deref(),
+                                )
+                                .map(|r| json!({ "ok": r.ok, "report": r })),
+                            }
+                        }
+                    }
+                    "create" => {
+                        let out = s("out");
+                        if out.is_empty() {
+                            Err("phone_backup create necesita 'out'".to_string())
+                        } else {
+                            let opts = crate::backup_apps::CreateOptions {
+                                root: root.clone(),
+                                out: std::path::PathBuf::from(&out),
+                                packages: packages.clone(),
+                                segment_bytes: if n("segment_bytes") > 0 {
+                                    n("segment_bytes")
+                                } else {
+                                    crate::backup_apps::DEFAULT_SEGMENT_BYTES
+                                },
+                                passphrase: s("password").into(),
+                                key_out: {
+                                    let k = s("key_out");
+                                    if k.is_empty() {
+                                        None
+                                    } else {
+                                        Some(std::path::PathBuf::from(k))
+                                    }
+                                },
+                                ..Default::default()
+                            };
+                            let mut sink = crate::backup_apps::NullSink;
+                            crate::backup_apps::create(&opts, &mut sink)
+                                .map(|r| json!({ "ok": true, "report": r }))
+                        }
+                    }
+                    "restore" => {
+                        let out = s("out");
+                        if out.is_empty() {
+                            Err("phone_backup restore necesita 'out'".to_string())
+                        } else {
+                            let key = match s("key") {
+                                p if p.trim().is_empty() => Ok(None),
+                                p => crate::backup_apps::read_key_file(std::path::Path::new(&p))
+                                    .map(Some),
+                            };
+                            let key = match key {
+                                Err(e) => {
+                                    return Some(
+                                        json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+                                    )
+                                }
+                                Ok(k) => k,
+                            };
+                            let dest = {
+                                let d = s("dest");
+                                if d.is_empty() {
+                                    "/".to_string()
+                                } else {
+                                    d
+                                }
+                            };
+                            let opts = crate::backup_apps::RestoreOptions {
+                                dir: std::path::PathBuf::from(&out),
+                                dest: std::path::PathBuf::from(&dest),
+                                packages: packages.clone(),
+                                confirm: b("confirm"),
+                                overwrite: b("overwrite"),
+                                key,
+                            };
+                            crate::backup_apps::restore(&opts)
+                                .map(|r| json!({ "ok": r.mismatches.is_empty(), "report": r }))
+                        }
+                    }
+                    "upload" => {
+                        let out = s("out");
+                        let folder = s("folder_id");
+                        if out.is_empty() {
+                            Err("phone_backup upload necesita 'out'".to_string())
+                        } else if folder.is_empty() {
+                            Err("phone_backup upload necesita 'folder_id'".to_string())
+                        } else {
+                            let workers = if n("workers") == 0 {
+                                3usize
+                            } else {
+                                (n("workers") as usize).clamp(1, 16)
+                            };
+                            let state_dir = {
+                                let sd = s("state_dir");
+                                if sd.is_empty() {
+                                    st.clone()
+                                } else {
+                                    sd
+                                }
+                            };
+                            // El `?` no vale aquí (esta función devuelve
+                            // `Option`): la subida va en una clausura que
+                            // sí devuelve `Result`.
+                            (|| -> Result<Value, String> {
+                                // Subcarpeta (p.ej. `P0-apps`): se busca o se crea
+                                // con el VFS nativo.
+                                let folder = match s("subfolder") {
+                                    sub if sub.trim().is_empty() => folder.clone(),
+                                    sub => crate::drive_native::ensure_folder(
+                                        &sub,
+                                        &folder,
+                                        Some(&state_dir),
+                                    )?,
+                                };
+                                let name = {
+                                    let nm = s("name");
+                                    if nm.is_empty() {
+                                        std::path::Path::new(&out)
+                                            .file_name()
+                                            .map(|x| x.to_string_lossy().to_string())
+                                            .unwrap_or_else(|| "backup".to_string())
+                                    } else {
+                                        nm
+                                    }
+                                };
+                                let mut up =
+                                    crate::backup_apps::DriveUploader::new(&folder, &name, workers);
+                                up.chunk_bytes = if n("chunk_bytes") > 0 {
+                                    n("chunk_bytes")
+                                } else {
+                                    crate::backup_apps::DRIVE_CHUNK_MIN
+                                };
+                                up.state_dir = Some(state_dir.clone());
+                                up.delete_after_upload = b("delete_after_upload");
+                                up.container_dir = Some(std::path::PathBuf::from(&out));
+                                up.start()?;
+                                let header =
+                                    crate::backup_apps::read_header(std::path::Path::new(&out))?;
+                                for sg in &header.segments {
+                                    let p =
+                                        std::path::Path::new(&out).join("segments").join(&sg.name);
+                                    if !p.exists() {
+                                        continue;
+                                    }
+                                    // `submit` es un método del trait `SegmentSink`:
+                                    // se llama con la ruta completa para no
+                                    // depender del `use`.
+                                    crate::backup_apps::SegmentSink::submit(
+                                        &mut up,
+                                        &crate::backup_apps::SealedSegment {
+                                            index: sg.index,
+                                            path: p,
+                                            info: sg.clone(),
+                                        },
+                                    )?;
+                                }
+                                let manifest =
+                                    crate::backup_apps::read_manifest(std::path::Path::new(&out))?;
+                                crate::backup_apps::SegmentSink::finish(
+                                    &mut up, &header, &manifest,
+                                )?;
+                                let stats = up.stats();
+                                let up_ms = stats.ended_ms.saturating_sub(stats.started_ms).max(1);
+                                Ok(json!({
+                                    "ok": up.errors().is_empty(),
+                                    "segments": stats.segments,
+                                    "bytes": stats.bytes,
+                                    "mib_per_s": (crate::backup_apps::mib_per_s(stats.bytes, up_ms) * 1000.0).round() / 1000.0,
+                                    "eta_s": crate::backup_apps::eta_s(stats.bytes, stats.total_bytes.max(stats.bytes), up_ms).round() as u64,
+                                    "errors": up.errors(),
+                                }))
+                            })()
+                        }
+                    }
+                    other => Err(format!("unknown phone_backup action '{}'", other)),
+                };
+                match res {
+                    Ok(v) => {
+                        json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] })
+                    }
+                    Err(e) => {
+                        json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true })
+                    }
                 }
+            }
+        }
         "antigravity_sessions" => {
-            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("estado");
-            let conv_id = args.get("conversation_id").and_then(|v| v.as_str()).unwrap_or("");
+            let accion = args
+                .get("accion")
+                .and_then(|v| v.as_str())
+                .unwrap_or("estado");
+            let conv_id = args
+                .get("conversation_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let tail = args.get("tail").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
             let dir_buf = match args.get("app_dir").and_then(|v| v.as_str()) {
                 Some(d) if !d.trim().is_empty() => std::path::PathBuf::from(d.trim()),
@@ -1578,7 +1989,11 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
                 "tree" => crate::antigravity_sessions::arbol_en(
                     dir,
-                    if conv_id.is_empty() { None } else { Some(conv_id) },
+                    if conv_id.is_empty() {
+                        None
+                    } else {
+                        Some(conv_id)
+                    },
                 ),
                 "detail" => crate::antigravity_sessions::detalle_sesion_en(dir, conv_id, tail),
                 "log" => crate::antigravity_sessions::daemon_log_en(dir, tail)
@@ -1586,7 +2001,9 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 "tasks" => crate::antigravity_sessions::tareas_daemon_en(dir),
                 // v16 (2026-11-23): tokens, modelo en uso y correlacion con
                 // el NDJSON del shim.
-                "tokens" => Ok(crate::antigravity_sessions::tokens_y_modelo_en(dir, conv_id)),
+                "tokens" => Ok(crate::antigravity_sessions::tokens_y_modelo_en(
+                    dir, conv_id,
+                )),
                 "correlacion" => crate::antigravity_sessions::correlacion_shim_en(dir, tail),
                 _ => crate::antigravity_sessions::estado_en(dir)
                     .map(|x| serde_json::to_value(x).unwrap_or(Value::Null)),
@@ -1598,29 +2015,47 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             json!({ "content": [{ "type": "text", "text": txt }] })
         }
         "agyshim" => {
-            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("estado");
+            let accion = args
+                .get("accion")
+                .and_then(|v| v.as_str())
+                .unwrap_or("estado");
             let tail = args.get("tail").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
             match accion {
                 "reglas" => {
-                    let sub = args.get("subaccion").and_then(|v| v.as_str()).unwrap_or("list");
-                    let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let sub = args
+                        .get("subaccion")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("list");
+                    let id = args
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     match sub {
                         "add" => match args.get("regla") {
                             None => json!({ "ok": false, "error": "falta 'regla'" }),
-                            Some(r) => match serde_json::from_value::<crate::agyshim::Regla>(r.clone()) {
-                                Ok(regla) => match crate::agyshim::poner_regla(regla) {
-                                    Ok(()) => json!({ "ok": true, "accion": "regla anadida", "reglas": crate::agyshim::reglas().len() }),
-                                    Err(e) => json!({ "ok": false, "error": e }),
-                                },
-                                Err(e) => json!({ "ok": false, "error": format!("regla invalida: {e}") }),
-                            },
+                            Some(r) => {
+                                match serde_json::from_value::<crate::agyshim::Regla>(r.clone()) {
+                                    Ok(regla) => match crate::agyshim::poner_regla(regla) {
+                                        Ok(()) => {
+                                            json!({ "ok": true, "accion": "regla anadida", "reglas": crate::agyshim::reglas().len() })
+                                        }
+                                        Err(e) => json!({ "ok": false, "error": e }),
+                                    },
+                                    Err(e) => {
+                                        json!({ "ok": false, "error": format!("regla invalida: {e}") })
+                                    }
+                                }
+                            }
                         },
                         "remove" => json!({ "ok": crate::agyshim::borrar_regla(&id), "id": id }),
                         "activate" | "deactivate" => {
                             let activa = sub == "activate";
                             match crate::agyshim::activar_regla(&id, activa) {
                                 Ok(true) => json!({ "ok": true, "id": id, "activa": activa }),
-                                Ok(false) => json!({ "ok": false, "error": "no existe esa regla", "id": id }),
+                                Ok(false) => {
+                                    json!({ "ok": false, "error": "no existe esa regla", "id": id })
+                                }
                                 Err(e) => json!({ "ok": false, "error": e }),
                             }
                         }
@@ -1636,10 +2071,14 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     "nota": "los cuerpos van REDACTADOS: ninguna credencial sale del NDJSON.",
                 }),
                 "proxy" => {
-                    let ruta = args.get("ruta").and_then(|v| v.as_str()).unwrap_or("/v1internal:generateContent");
-                    let cuerpo = args.get("cuerpo").and_then(|v| v.as_str()).unwrap_or(
-                        r#"{"contents":[{"role":"user","parts":[{"text":"ping"}]}]}"#,
-                    );
+                    let ruta = args
+                        .get("ruta")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("/v1internal:generateContent");
+                    let cuerpo = args
+                        .get("cuerpo")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(r#"{"contents":[{"role":"user","parts":[{"text":"ping"}]}]}"#);
                     let peticion = crate::agyshim::Peticion {
                         metodo: "POST".to_string(),
                         ruta: ruta.to_string(),
@@ -1664,8 +2103,16 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             }
         }
         "sqlite_mitm" => {
-            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("estado");
-            let s = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let accion = args
+                .get("accion")
+                .and_then(|v| v.as_str())
+                .unwrap_or("estado");
+            let s = |k: &str| {
+                args.get(k)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string()
+            };
             match accion {
                 // ---- MITM REAL (2026-11-23) -------------------------------
                 // `activar`   : genera la DB servida y MONTA el bind-mount
@@ -1679,7 +2126,11 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     let ocultar: Vec<String> = args
                         .get("ocultar")
                         .and_then(|v| v.as_array())
-                        .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                                .collect()
+                        })
                         .unwrap_or_default();
                     let reescribir: Vec<(String, String)> = args
                         .get("reescribir")
@@ -1687,7 +2138,10 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         .map(|a| {
                             a.iter()
                                 .filter_map(|x| x.as_str())
-                                .filter_map(|t| t.split_once('=').map(|(a, b)| (a.to_string(), b.to_string())))
+                                .filter_map(|t| {
+                                    t.split_once('=')
+                                        .map(|(a, b)| (a.to_string(), b.to_string()))
+                                })
                                 .collect()
                         })
                         .unwrap_or_default();
@@ -1701,7 +2155,8 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     Err(e) => json!({"ok": false, "error": e}),
                 },
                 "capturar" => {
-                    let limite = args.get("limite").and_then(|v| v.as_u64()).unwrap_or(5000) as usize;
+                    let limite =
+                        args.get("limite").and_then(|v| v.as_u64()).unwrap_or(5000) as usize;
                     match crate::sqlite_mitm::capturar(limite) {
                         Ok(v) => v,
                         Err(e) => json!({"ok": false, "error": e}),
@@ -1720,7 +2175,8 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     crate::sqlite_mitm::plan_montaje(&dest)
                 }
                 "replicar" => {
-                    let limite = args.get("limite").and_then(|v| v.as_u64()).unwrap_or(5000) as usize;
+                    let limite =
+                        args.get("limite").and_then(|v| v.as_u64()).unwrap_or(5000) as usize;
                     match crate::sqlite_mitm::replicar(limite) {
                         Ok(v) => v,
                         Err(e) => json!({"ok": false, "error": e}),
@@ -1730,7 +2186,11 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     let ocultar: Vec<String> = args
                         .get("ocultar")
                         .and_then(|v| v.as_array())
-                        .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                                .collect()
+                        })
                         .unwrap_or_default();
                     let reescribir: Vec<(String, String)> = args
                         .get("reescribir")
@@ -1738,12 +2198,18 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         .map(|a| {
                             a.iter()
                                 .filter_map(|x| x.as_str())
-                                .filter_map(|t| t.split_once('=').map(|(a, b)| (a.to_string(), b.to_string())))
+                                .filter_map(|t| {
+                                    t.split_once('=')
+                                        .map(|(a, b)| (a.to_string(), b.to_string()))
+                                })
                                 .collect()
                         })
                         .unwrap_or_default();
                     let dest = std::path::PathBuf::from(if s("destino").is_empty() {
-                        format!("{}/antigravity_servida.db", crate::cockpit_server::state_dir())
+                        format!(
+                            "{}/antigravity_servida.db",
+                            crate::cockpit_server::state_dir()
+                        )
                     } else {
                         s("destino")
                     });
@@ -1753,11 +2219,16 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         Err(e) => json!({"ok": false, "error": e}),
                     }
                 }
-                _ => json!({"ok": false, "error": "accion desconocida: usa estado|activar|desactivar|capturar|replicar|servida|montaje"}),
+                _ => {
+                    json!({"ok": false, "error": "accion desconocida: usa estado|activar|desactivar|capturar|replicar|servida|montaje"})
+                }
             }
         }
         "re_analyze" => {
-            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("catalogo");
+            let accion = args
+                .get("accion")
+                .and_then(|v| v.as_str())
+                .unwrap_or("catalogo");
             let ruta = args.get("ruta").and_then(|v| v.as_str()).unwrap_or("");
             let v = match accion {
                 "catalogo" => crate::re_engine::catalogo(),
@@ -1803,7 +2274,10 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 }
                 _ => {
                     let mut o = crate::re_engine::OpcionesAnalisis::default();
-                    o.max_cadenas = args.get("max_cadenas").and_then(|v| v.as_u64()).unwrap_or(60) as usize;
+                    o.max_cadenas = args
+                        .get("max_cadenas")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(60) as usize;
                     match crate::re_engine::analizar(std::path::Path::new(ruta), &o) {
                         Ok(v) => v,
                         Err(e) => json!({ "ok": false, "error": e }),
@@ -1830,7 +2304,11 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     "daily_budget": crate::providers::daily_budget_snapshot(),
                 })
             } else {
-                crate::quota_guard::snapshot_compacto_de(if provider.is_empty() { None } else { Some(provider) })
+                crate::quota_guard::snapshot_compacto_de(if provider.is_empty() {
+                    None
+                } else {
+                    Some(provider)
+                })
             };
             let txt = serde_json::to_string(&v).unwrap_or_default();
             json!({ "content": [{ "type": "text", "text": txt }] })
@@ -1851,7 +2329,11 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             let path = s("path");
             let action = {
                 let a = s("action");
-                if a.is_empty() { "scan".to_string() } else { a }
+                if a.is_empty() {
+                    "scan".to_string()
+                } else {
+                    a
+                }
             };
             if action == "catalog" {
                 let cat = if path.is_empty() {
@@ -1861,10 +2343,20 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 };
                 match cat {
                     Ok(catalog) => {
-                        let platform = if s("platform").is_empty() { None } else { Some(s("platform")) };
-                        let query = if s("query").is_empty() { None } else { Some(s("query")) };
+                        let platform = if s("platform").is_empty() {
+                            None
+                        } else {
+                            Some(s("platform"))
+                        };
+                        let query = if s("query").is_empty() {
+                            None
+                        } else {
+                            Some(s("query"))
+                        };
                         let stats = catalog.get_stats().ok();
-                        let games = catalog.query_games(platform.as_deref(), query.as_deref()).unwrap_or_default();
+                        let games = catalog
+                            .query_games(platform.as_deref(), query.as_deref())
+                            .unwrap_or_default();
                         let res = json!({
                             "ok": true,
                             "stats": stats,
@@ -1875,7 +2367,8 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         json!({ "content": [{ "type": "text", "text": txt }] })
                     }
                     Err(e) => {
-                        let txt = serde_json::to_string_pretty(&json!({ "ok": false, "error": e })).unwrap_or_default();
+                        let txt = serde_json::to_string_pretty(&json!({ "ok": false, "error": e }))
+                            .unwrap_or_default();
                         json!({ "content": [{ "type": "text", "text": txt }], "isError": true })
                     }
                 }
@@ -1886,34 +2379,39 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     Ok(data) => {
                         let res = match action.as_str() {
                             "embedded" => {
-                                if let Some((offset, size, analysis)) = crate::daad::DAADBytecodeParser::find_embedded_ddb(&data) {
+                                if let Some((offset, size, analysis)) =
+                                    crate::daad::DAADBytecodeParser::find_embedded_ddb(&data)
+                                {
                                     json!({ "ok": true, "embedded": true, "offset": offset, "size": size, "analysis": analysis })
                                 } else {
                                     json!({ "ok": true, "embedded": false, "message": "no embedded DDB found" })
                                 }
                             }
                             "media" => {
-                                let media = crate::daad::MediaInspector::inspect_media(&data, &path);
+                                let media =
+                                    crate::daad::MediaInspector::inspect_media(&data, &path);
                                 json!({ "ok": true, "media": media })
                             }
                             "disasm" => {
                                 let dialect = if s("platform") == "v1" { "v1" } else { "v2" };
-                                let (condacts, next_offset) = crate::daad::CondActDisassembler::disassemble_stream(&data, 0, dialect);
+                                let (condacts, next_offset) =
+                                    crate::daad::CondActDisassembler::disassemble_stream(
+                                        &data, 0, dialect,
+                                    );
                                 json!({ "ok": true, "count": condacts.len(), "next_offset": next_offset, "condacts": condacts })
                             }
-                            "ir" => {
-                                match crate::daad_ir::parse_ddb_ir_auto(&data, &path) {
-                                    Ok(doc) => json!({ "ok": true, "ir": doc }),
-                                    Err(e) => json!({ "ok": false, "error": e }),
-                                }
-                            }
+                            "ir" => match crate::daad_ir::parse_ddb_ir_auto(&data, &path) {
+                                Ok(doc) => json!({ "ok": true, "ir": doc }),
+                                Err(e) => json!({ "ok": false, "error": e }),
+                            },
                             "fingerprint" => {
                                 let fp = crate::daad_ir::fingerprint_binary(&data, &path);
                                 json!({ "ok": true, "fingerprint": fp })
                             }
                             "load_model" => {
                                 let platform = s("platform");
-                                let admission = crate::daad_load_models::verify_load_model(&platform, &data);
+                                let admission =
+                                    crate::daad_load_models::verify_load_model(&platform, &data);
                                 json!({ "ok": true, "admission": admission })
                             }
                             "unpack" => {
@@ -1921,7 +2419,8 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                                 json!({ "ok": true, "count": members.len(), "members": members })
                             }
                             _ => {
-                                let analysis = crate::daad::DAADBytecodeParser::parse_ddb(&data, &path);
+                                let analysis =
+                                    crate::daad::DAADBytecodeParser::parse_ddb(&data, &path);
                                 json!({ "ok": true, "analysis": analysis })
                             }
                         };
@@ -1929,7 +2428,10 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         json!({ "content": [{ "type": "text", "text": txt }] })
                     }
                     Err(e) => {
-                        let txt = serde_json::to_string_pretty(&json!({ "ok": false, "error": e.to_string() })).unwrap_or_default();
+                        let txt = serde_json::to_string_pretty(
+                            &json!({ "ok": false, "error": e.to_string() }),
+                        )
+                        .unwrap_or_default();
                         json!({ "content": [{ "type": "text", "text": txt }], "isError": true })
                     }
                 }
@@ -1948,11 +2450,19 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 };
                 let model = {
                     let m = s("model");
-                    if m.trim().is_empty() { None } else { Some(m) }
+                    if m.trim().is_empty() {
+                        None
+                    } else {
+                        Some(m)
+                    }
                 };
                 let session_id = {
                     let sid = s("session_id");
-                    if sid.trim().is_empty() { None } else { Some(sid) }
+                    if sid.trim().is_empty() {
+                        None
+                    } else {
+                        Some(sid)
+                    }
                 };
                 let max_turns = args
                     .get("max_turns")
@@ -1979,11 +2489,19 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             } else {
                 let action = {
                     let a = s("action");
-                    if a.is_empty() { "analyze".to_string() } else { a }
+                    if a.is_empty() {
+                        "analyze".to_string()
+                    } else {
+                        a
+                    }
                 };
                 let query = {
                     let q = s("query");
-                    if q.trim().is_empty() { None } else { Some(q) }
+                    if q.trim().is_empty() {
+                        None
+                    } else {
+                        Some(q)
+                    }
                 };
                 let limit = args
                     .get("limit")
@@ -2003,7 +2521,11 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         "es_eid" => {
             let action = {
                 let a = s("action");
-                if a.is_empty() { "inspect_p12".to_string() } else { a }
+                if a.is_empty() {
+                    "inspect_p12".to_string()
+                } else {
+                    a
+                }
             };
             let decode_hex = |h: &str| -> Vec<u8> {
                 (0..h.len())
@@ -2017,10 +2539,13 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     let pass = s("password");
                     match crate::es_eid::load_pkcs12(std::path::Path::new(&path), &pass) {
                         Ok(id) => {
-                            let txt = serde_json::to_string_pretty(&id.inspection).unwrap_or_default();
+                            let txt =
+                                serde_json::to_string_pretty(&id.inspection).unwrap_or_default();
                             json!({ "content": [{ "type": "text", "text": txt }] })
                         }
-                        Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+                        Err(e) => {
+                            json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true })
+                        }
                     }
                 }
                 "dnie_atr" => {
@@ -2037,13 +2562,16 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     } else {
                         let mut arr = [0u8; 32];
                         arr.copy_from_slice(&digest_bytes);
-                        let key_ref = args.get("key_ref").and_then(|v| v.as_u64()).unwrap_or(1) as u8;
+                        let key_ref =
+                            args.get("key_ref").and_then(|v| v.as_u64()).unwrap_or(1) as u8;
                         let frames = crate::es_eid::dnie_sign_apdu_sequence(&pin, key_ref, &arr);
                         let txt = serde_json::to_string_pretty(&frames).unwrap_or_default();
                         json!({ "content": [{ "type": "text", "text": txt }] })
                     }
                 }
-                other => json!({ "content": [{ "type": "text", "text": format!("{{\"ok\":false,\"error\":\"unknown action {}\"}}", other) }], "isError": true }),
+                other => {
+                    json!({ "content": [{ "type": "text", "text": format!("{{\"ok\":false,\"error\":\"unknown action {}\"}}", other) }], "isError": true })
+                }
             }
         }
         "ast_analyze" => {
@@ -2053,52 +2581,83 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     let txt = serde_json::to_string_pretty(&rep).unwrap_or_default();
                     json!({ "content": [{ "type": "text", "text": txt }] })
                 }
-                Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+                Err(e) => {
+                    json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true })
+                }
             }
         }
         "re_disasm" => {
             let action = {
                 let a = s("action");
-                if a.is_empty() { "disasm".to_string() } else { a }
+                if a.is_empty() {
+                    "disasm".to_string()
+                } else {
+                    a
+                }
             };
             if action == "provenance" {
                 let path = s("path");
                 match crate::re_disasm::inspect_binary_provenance(std::path::Path::new(&path)) {
-                    Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
-                    Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+                    Ok(v) => {
+                        json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] })
+                    }
+                    Err(e) => {
+                        json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true })
+                    }
                 }
             } else {
                 let arch = {
                     let a = s("arch");
-                    if a.is_empty() { "arm64".to_string() } else { a }
+                    if a.is_empty() {
+                        "arm64".to_string()
+                    } else {
+                        a
+                    }
                 };
                 let hex_str = s("hex").replace(' ', "");
                 let bytes: Vec<u8> = (0..hex_str.len())
                     .step_by(2)
-                    .filter_map(|i| hex_str.get(i..i + 2).and_then(|b| u8::from_str_radix(b, 16).ok()))
+                    .filter_map(|i| {
+                        hex_str
+                            .get(i..i + 2)
+                            .and_then(|b| u8::from_str_radix(b, 16).ok())
+                    })
                     .collect();
                 let base_str = s("base_addr");
-                let base = u64::from_str_radix(base_str.trim_start_matches("0x"), 16).unwrap_or(0x400000);
-                let max_insns = args.get("max_insns").and_then(|v| v.as_u64()).unwrap_or(64) as usize;
+                let base =
+                    u64::from_str_radix(base_str.trim_start_matches("0x"), 16).unwrap_or(0x400000);
+                let max_insns =
+                    args.get("max_insns").and_then(|v| v.as_u64()).unwrap_or(64) as usize;
                 let res = if arch == "x86_32" || arch == "x86_64" {
                     let bits = if arch == "x86_32" { 32 } else { 64 };
-                    Ok(crate::re_disasm::disasm_x86_iced(&bytes, bits, base, max_insns))
+                    Ok(crate::re_disasm::disasm_x86_iced(
+                        &bytes, bits, base, max_insns,
+                    ))
                 } else {
                     crate::re_disasm::disasm_capstone(&bytes, &arch, base, max_insns)
                 };
                 match res {
-                    Ok(rep) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&rep).unwrap_or_default() }] }),
-                    Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+                    Ok(rep) => {
+                        json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&rep).unwrap_or_default() }] })
+                    }
+                    Err(e) => {
+                        json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true })
+                    }
                 }
             }
         }
         "job_queue" => {
-            let db = std::path::Path::new(&crate::cockpit_server::state_dir()).join("megadaemon_jobs.db");
+            let db = std::path::Path::new(&crate::cockpit_server::state_dir())
+                .join("megadaemon_jobs.db");
             match crate::job_queue::JobQueue::open(&db) {
                 Ok(q) => {
                     let action = {
                         let a = s("action");
-                        if a.is_empty() { "list".to_string() } else { a }
+                        if a.is_empty() {
+                            "list".to_string()
+                        } else {
+                            a
+                        }
                     };
                     let out: Result<Value, String> = match action.as_str() {
                         "enqueue" => {
@@ -2106,42 +2665,61 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                             let payload = args.get("payload").cloned().unwrap_or_else(|| json!({}));
                             let key = {
                                 let k = s("idempotency_key");
-                                if k.is_empty() { None } else { Some(k) }
+                                if k.is_empty() {
+                                    None
+                                } else {
+                                    Some(k)
+                                }
                             };
                             q.enqueue(&kind, &payload, key.as_deref(), 3)
                                 .map(|r| serde_json::to_value(r).unwrap_or(Value::Null))
                         }
-                        "claim" => q.claim_next(60).map(|r| serde_json::to_value(r).unwrap_or(Value::Null)),
+                        "claim" => q
+                            .claim_next(60)
+                            .map(|r| serde_json::to_value(r).unwrap_or(Value::Null)),
                         "complete" => {
                             let id = args.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
                             let res_v = args.get("payload").cloned().unwrap_or_else(|| json!({}));
-                            q.complete(id, &res_v).map(|_| json!({"ok": true, "id": id}))
+                            q.complete(id, &res_v)
+                                .map(|_| json!({"ok": true, "id": id}))
                         }
                         "fail" => {
                             let id = args.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
                             let err = s("error");
-                            q.fail_or_retry(id, &err).map(|st| json!({"ok": true, "id": id, "status": st}))
+                            q.fail_or_retry(id, &err)
+                                .map(|st| json!({"ok": true, "id": id, "status": st}))
                         }
                         "cancel" => {
                             let id = args.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
                             q.cancel(id).map(|c| json!({"ok": true, "cancelled": c}))
                         }
                         _ => {
-                            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
-                            q.list(limit).map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
+                            let limit =
+                                args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+                            q.list(limit)
+                                .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
                         }
                     };
                     match out {
-                        Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
-                        Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+                        Ok(v) => {
+                            json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] })
+                        }
+                        Err(e) => {
+                            json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true })
+                        }
                     }
                 }
-                Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+                Err(e) => {
+                    json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true })
+                }
             }
         }
         "rhai_eval" => {
             let script = s("script");
-            let max_ops = args.get("max_ops").and_then(|v| v.as_u64()).unwrap_or(50_000);
+            let max_ops = args
+                .get("max_ops")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(50_000);
             let rep = crate::script_sandbox::eval_sandboxed(&script, max_ops);
             json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&rep).unwrap_or_default() }] })
         }
@@ -2153,10 +2731,93 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&snap).unwrap_or_default() }] })
         }
         "tool_audit" => {
-            let db = std::path::Path::new(&crate::cockpit_server::state_dir()).join("megadaemon_audit.db");
+            let db = std::path::Path::new(&crate::cockpit_server::state_dir())
+                .join("megadaemon_audit.db");
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(30) as usize;
             match crate::tool_policy::AuditJournal::open(&db).and_then(|j| j.recent(limit)) {
-                Ok(rows) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&rows).unwrap_or_default() }] }),
+                Ok(rows) => {
+                    json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&rows).unwrap_or_default() }] })
+                }
+                Err(e) => {
+                    json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true })
+                }
+            }
+        }
+        "drive_tubo" => {
+            // EL TUBO (nativo en Rust): Drive como almacen externo.
+            let st = crate::cockpit_server::state_dir();
+            let action = {
+                let a = s("action");
+                if a.is_empty() { "listar".to_string() } else { a }
+            };
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(200) as usize;
+            let carpeta = s("carpeta");
+            let folder_id = s("folder_id");
+            let nombre = s("nombre");
+            let ruta = s("path");
+            let file_id = s("file_id");
+            let borrar = args
+                .get("borrar_local")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            // MEDIDO 2026-11-27: los brazos del `match` devolvian `Value`
+            // (no `Result`), asi que el `?` no aplicaba => E0277.  Ahora cada
+            // brazo es una closure que SI devuelve `Result<Value, String>`.
+            let cid_de = || -> Result<String, String> {
+                crate::drive_tube::resolver_carpeta(
+                    if carpeta.is_empty() { crate::drive_tube::CARPETA_POR_DEFECTO } else { &carpeta },
+                    if folder_id.is_empty() { None } else { Some(&folder_id) },
+                    Some(&st),
+                )
+            };
+            let res: Result<Value, String> = match action.as_str() {
+                "listar" | "ls" => (|| -> Result<Value, String> {
+                    let cid = cid_de()?;
+                    crate::drive_tube::listar(&cid, limit, Some(&st))
+                })(),
+                "inventario" | "inv" => (|| -> Result<Value, String> {
+                    let cid = cid_de()?;
+                    crate::drive_tube::inventario(&cid, limit, Some(&st))
+                })(),
+                "subir" | "upload" => (|| -> Result<Value, String> {
+                    if ruta.is_empty() {
+                        return Err("falta 'path' (la ruta local a subir)".to_string());
+                    }
+                    let cid = cid_de()?;
+                    crate::drive_tube::subir(
+                        &ruta,
+                        if nombre.is_empty() { None } else { Some(&nombre) },
+                        &cid,
+                        Some(&st),
+                    )
+                })(),
+                "bajar" | "download" => {
+                    if file_id.is_empty() {
+                        Err("falta 'file_id'".to_string())
+                    } else if ruta.is_empty() {
+                        Err("falta 'path' (el destino local)".to_string())
+                    } else {
+                        crate::drive_tube::bajar(&file_id, &ruta, Some(&st))
+                    }
+                }
+                "tubo" => {
+                    if ruta.is_empty() {
+                        Err("falta 'path' (la ruta local)".to_string())
+                    } else {
+                        crate::drive_tube::tubo(
+                            &ruta,
+                            if nombre.is_empty() { None } else { Some(&nombre) },
+                            if carpeta.is_empty() { None } else { Some(&carpeta) },
+                            if folder_id.is_empty() { None } else { Some(&folder_id) },
+                            borrar,
+                            Some(&st),
+                        )
+                    }
+                }
+                _ => Err(format!("accion '{}' desconocida", action)),
+            };
+            match res {
+                Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
                 Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
             }
         }
@@ -2164,11 +2825,19 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             let st = crate::cockpit_server::state_dir();
             let action = {
                 let a = s("action");
-                if a.is_empty() { "ls".to_string() } else { a }
+                if a.is_empty() {
+                    "ls".to_string()
+                } else {
+                    a
+                }
             };
             let vpath = {
                 let p = s("path");
-                if p.is_empty() { "drive:/".to_string() } else { p }
+                if p.is_empty() {
+                    "drive:/".to_string()
+                } else {
+                    p
+                }
             };
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
             let res: Result<Value, String> = match action.as_str() {
@@ -2181,14 +2850,22 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 "mkdir" => crate::drive_vfs::mkdir_p(&vpath, Some(&st))
                     .map(|id| json!({"ok": true, "folder_id": id})),
                 "read" => {
-                    let max_b = args.get("max_bytes").and_then(|v| v.as_u64()).unwrap_or(65536) as usize;
+                    let max_b = args
+                        .get("max_bytes")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(65536) as usize;
                     crate::drive_vfs::read_file_bytes(&vpath, max_b, Some(&st))
                         .map(|b| json!({"ok": true, "bytes": b.len(), "text": String::from_utf8_lossy(&b)}))
                 }
                 "write" => {
                     let lp = s("local_path");
                     let rn = s("remote_name");
-                    crate::drive_vfs::write_local_file(std::path::Path::new(&lp), &vpath, &rn, Some(&st))
+                    crate::drive_vfs::write_local_file(
+                        std::path::Path::new(&lp),
+                        &vpath,
+                        &rn,
+                        Some(&st),
+                    )
                 }
                 "move" => {
                     // El motor REAL de la organizacion de Drive (antes lo
@@ -2221,14 +2898,22 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 other => Err(format!("unknown drive_vfs action '{}'", other)),
             };
             match res {
-                Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
-                Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+                Ok(v) => {
+                    json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] })
+                }
+                Err(e) => {
+                    json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true })
+                }
             }
         }
         "retro_apk_tools" => {
             let action = {
                 let a = s("action");
-                if a.is_empty() { "axml".to_string() } else { a }
+                if a.is_empty() {
+                    "axml".to_string()
+                } else {
+                    a
+                }
             };
             let path = s("path");
             match std::fs::read(&path) {
@@ -2237,7 +2922,8 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         "axml" => crate::axml_parser::parse_axml(&bytes)
                             .map(|r| serde_json::to_value(r).unwrap_or(Value::Null)),
                         "font_1bpp" => {
-                            let max_c = args.get("max_chars").and_then(|v| v.as_u64()).unwrap_or(64) as usize;
+                            let max_c = args.get("max_chars").and_then(|v| v.as_u64()).unwrap_or(64)
+                                as usize;
                             Ok(crate::retro_gfx::extract_1bpp_glyphs(&bytes, max_c))
                         }
                         "saturn_palette" => {
@@ -2249,18 +2935,28 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         other => Err(format!("unknown retro_apk_tools action '{}'", other)),
                     };
                     match out {
-                        Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
-                        Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+                        Ok(v) => {
+                            json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] })
+                        }
+                        Err(e) => {
+                            json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true })
+                        }
                     }
                 }
-                Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e.to_string()}).to_string() }], "isError": true }),
+                Err(e) => {
+                    json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e.to_string()}).to_string() }], "isError": true })
+                }
             }
         }
         "clipboard" => {
             let dir = crate::cockpit_server::state_dir();
             let accion = {
                 let a = s("action");
-                if a.is_empty() { "list".to_string() } else { a }
+                if a.is_empty() {
+                    "list".to_string()
+                } else {
+                    a
+                }
             };
             let cuerpo = json!({
                 "action": accion,
@@ -2306,7 +3002,11 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             "cancel" => json!({ "ok": crate::task_scheduler::cancel(&s("task_id")) }),
             "retry" => json!({ "ok": crate::task_scheduler::retry(&s("task_id")) }),
             "export" => crate::task_scheduler::export_tasks(&s("node")),
-            "journal" => crate::task_scheduler::journal_json(if n("limit") == 0 { 50 } else { n("limit") as usize }),
+            "journal" => crate::task_scheduler::journal_json(if n("limit") == 0 {
+                50
+            } else {
+                n("limit") as usize
+            }),
             _ => crate::task_scheduler::list_json(),
         },
         "alerts" => match s("action").as_str() {
@@ -2316,8 +3016,20 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             "prune" => json!({ "ok": true, "removed": crate::alerts::prune() }),
             _ => {
                 let sev = s("severity");
-                let min = if sev.is_empty() { None } else { Some(crate::alerts::Severity::parse(&sev)) };
-                crate::alerts::list(min, b("include_ack"), if n("limit") == 0 { 50 } else { n("limit") as usize })
+                let min = if sev.is_empty() {
+                    None
+                } else {
+                    Some(crate::alerts::Severity::parse(&sev))
+                };
+                crate::alerts::list(
+                    min,
+                    b("include_ack"),
+                    if n("limit") == 0 {
+                        50
+                    } else {
+                        n("limit") as usize
+                    },
+                )
             }
         },
         "agent" => match s("action").as_str() {
@@ -2333,7 +3045,11 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             "run" => crate::agent_core::run(
                 &s("goal"),
                 b("prefer_llm"),
-                if n("max_tasks") == 0 { 5 } else { n("max_tasks") as usize },
+                if n("max_tasks") == 0 {
+                    5
+                } else {
+                    n("max_tasks") as usize
+                },
             ),
             _ => crate::agent_core::status(),
         },
@@ -2341,7 +3057,11 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             "analyze" => crate::apk_inventory::analyze_apk(&s("path")),
             "dump" => crate::apk_inventory::dump_all(&s("dest_dir")),
             "drift" => crate::apk_inventory::drift(args.get("known").unwrap_or(&Value::Null)),
-            _ => crate::apk_inventory::inventory(if n("limit") == 0 { 50 } else { n("limit") as usize }),
+            _ => crate::apk_inventory::inventory(if n("limit") == 0 {
+                50
+            } else {
+                n("limit") as usize
+            }),
         },
         // v14: decompilador DEX.  El agente externo de Android lo usa para
         // analizar APKs crudas sin invertir en Ghidra-DEX ni en smali.
@@ -2483,7 +3203,9 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             "status" => crate::repo_updates::status(),
             "plan" => crate::repo_updates::plan(None),
             "watch" => crate::repo_updates::watch_once(),
-            "download" => crate::repo_updates::download(&s("package"), &s("repo_id"), &s("dest_dir")),
+            "download" => {
+                crate::repo_updates::download(&s("package"), &s("repo_id"), &s("dest_dir"))
+            }
             "install" => {
                 if !b("confirm") {
                     json!({ "ok": false, "error": "needs_confirm", "hint": "instalar una app exige confirm=true" })
@@ -2495,15 +3217,39 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         },
         "profile" => match s("action").as_str() {
             "briefing" => crate::profile_analysis::briefing(b("markdown")),
-            "drift" => crate::profile_analysis::topic_drift(if n("window_days") == 0 { 30 } else { n("window_days") as u32 }),
-            "digest" => crate::profile_analysis::daily_digest(if n("days") == 0 { 14 } else { n("days") as u32 }),
+            "drift" => crate::profile_analysis::topic_drift(if n("window_days") == 0 {
+                30
+            } else {
+                n("window_days") as u32
+            }),
+            "digest" => crate::profile_analysis::daily_digest(if n("days") == 0 {
+                14
+            } else {
+                n("days") as u32
+            }),
             _ => crate::profile_analysis::analyze(),
         },
         "messaging" => match s("action").as_str() {
-            "telegram" => crate::messaging::telegram(if n("limit") == 0 { 500 } else { n("limit") as usize }),
-            "sms" => crate::messaging::sms(if n("limit") == 0 { 500 } else { n("limit") as usize }),
-            "whatsapp" => crate::messaging::whatsapp(if n("limit") == 0 { 500 } else { n("limit") as usize }),
-            "medical" => crate::messaging::medical(if n("limit") == 0 { 200 } else { n("limit") as usize }),
+            "telegram" => crate::messaging::telegram(if n("limit") == 0 {
+                500
+            } else {
+                n("limit") as usize
+            }),
+            "sms" => crate::messaging::sms(if n("limit") == 0 {
+                500
+            } else {
+                n("limit") as usize
+            }),
+            "whatsapp" => crate::messaging::whatsapp(if n("limit") == 0 {
+                500
+            } else {
+                n("limit") as usize
+            }),
+            "medical" => crate::messaging::medical(if n("limit") == 0 {
+                200
+            } else {
+                n("limit") as usize
+            }),
             "ingest" => crate::messaging::ingest_all(),
             "candidates" => crate::messaging::alert_candidates(),
             _ => crate::messaging::inventory(),
@@ -2511,11 +3257,15 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         "bookmarks" => match s("action").as_str() {
             "export" => crate::bookmarks::export_all(&s("dest_path")),
             "passkeys" => crate::bookmarks::passkey_inventory(),
-            "manager_export" => crate::bookmarks::password_manager_export(&s("package"), &s("dest_path")),
+            "manager_export" => {
+                crate::bookmarks::password_manager_export(&s("package"), &s("dest_path"))
+            }
             _ => crate::bookmarks::inventory(),
         },
         "battery_saver" => match s("action").as_str() {
-            "apply" => crate::battery_saver::apply(b("confirm"), b("aggressive"), Some(sa("protected"))),
+            "apply" => {
+                crate::battery_saver::apply(b("confirm"), b("aggressive"), Some(sa("protected")))
+            }
             "protect" => crate::battery_saver::set_protected(sa("protected")),
             "xbs" => crate::battery_saver::xbs_config(),
             _ => crate::battery_saver::status(),
@@ -2553,15 +3303,21 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             "fire" => {
                 let val = args.get("value").and_then(|x| x.as_f64());
                 match crate::automation_runtime::automation_fire(
-                    &s("event"), &s("key"), val, &s("text"), b("dry_run"),
+                    &s("event"),
+                    &s("key"),
+                    val,
+                    &s("text"),
+                    b("dry_run"),
                 ) {
                     Ok(v) => v,
                     Err(e) => json!({"ok": false, "error": e}),
                 }
             }
-            "journal" => crate::automation_runtime::automation_journal(
-                if n("limit") == 0 { 50 } else { n("limit") as usize },
-            ),
+            "journal" => crate::automation_runtime::automation_journal(if n("limit") == 0 {
+                50
+            } else {
+                n("limit") as usize
+            }),
             _ => crate::automation_runtime::automation_list(),
         },
         "cron" => match s("action").as_str() {
@@ -2608,21 +3364,23 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 },
                 None => crate::automation_runtime::comms_status(),
             },
-            "decide" => match crate::automation_runtime::comms_decide(
-                &s("event"), &s("peer"), &s("body"),
-            ) {
-                Ok(v) => v,
-                Err(e) => json!({"ok": false, "error": e}),
-            },
-            "handle" => match crate::automation_runtime::comms_handle(
-                &s("event"), &s("peer"), &s("body"),
-            ) {
-                Ok(v) => v,
-                Err(e) => json!({"ok": false, "error": e}),
-            },
-            "journal" => crate::automation_runtime::comms_journal(
-                if n("limit") == 0 { 50 } else { n("limit") as usize },
-            ),
+            "decide" => {
+                match crate::automation_runtime::comms_decide(&s("event"), &s("peer"), &s("body")) {
+                    Ok(v) => v,
+                    Err(e) => json!({"ok": false, "error": e}),
+                }
+            }
+            "handle" => {
+                match crate::automation_runtime::comms_handle(&s("event"), &s("peer"), &s("body")) {
+                    Ok(v) => v,
+                    Err(e) => json!({"ok": false, "error": e}),
+                }
+            }
+            "journal" => crate::automation_runtime::comms_journal(if n("limit") == 0 {
+                50
+            } else {
+                n("limit") as usize
+            }),
             _ => crate::automation_runtime::comms_status(),
         },
         "bridge" => match s("action").as_str() {
@@ -2644,7 +3402,9 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     })
                     .unwrap_or_default();
                 match crate::automation_runtime::bridge_fire(
-                    &s("package"), &s("action_name"), &extras,
+                    &s("package"),
+                    &s("action_name"),
+                    &extras,
                 ) {
                     Ok(v) => v,
                     Err(e) => json!({"ok": false, "error": e}),
@@ -2655,22 +3415,41 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         },
         "git_ops" => match s("action").as_str() {
             "identity" => crate::git_ops::identity(),
-            "diff" => crate::git_ops::diff(if n("limit") == 0 { 65536 } else { n("limit") as usize }),
-            "commit_push" => {
-                crate::git_ops::commit_push(&s("message"), Some(sa("paths")), b("confirm"), b("push"))
-            }
-            "log" => crate::git_ops::log(if n("limit") == 0 { 10 } else { n("limit") as usize }),
+            "diff" => crate::git_ops::diff(if n("limit") == 0 {
+                65536
+            } else {
+                n("limit") as usize
+            }),
+            "commit_push" => crate::git_ops::commit_push(
+                &s("message"),
+                Some(sa("paths")),
+                b("confirm"),
+                b("push"),
+            ),
+            "log" => crate::git_ops::log(if n("limit") == 0 {
+                10
+            } else {
+                n("limit") as usize
+            }),
             _ => crate::git_ops::status(),
         },
         "identity_and_web" => match s("action").as_str() {
             "scrape" => {
                 let ident = s("identity");
-                let ident = if ident.is_empty() { "browser.mobile".to_string() } else { ident };
+                let ident = if ident.is_empty() {
+                    "browser.mobile".to_string()
+                } else {
+                    ident
+                };
                 crate::service_identity::scrape(
                     &s("url"),
                     &ident,
                     b("respect_robots"),
-                    if n("max_bytes") == 0 { 512 * 1024 } else { n("max_bytes") as usize },
+                    if n("max_bytes") == 0 {
+                        512 * 1024
+                    } else {
+                        n("max_bytes") as usize
+                    },
                 )
             }
             _ => crate::service_identity::list(),
@@ -2772,7 +3551,9 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         json!({ "ok": true, "probed": res.len(), "health": res.into_iter().map(|(id, h)| json!({"id": id, "available": h.available, "reason": h.reason})).collect::<Vec<_>>() })
                     } else {
                         match bus.probe_one(&id, &prober) {
-                            Ok(h) => json!({ "ok": true, "id": id, "available": h.available, "reason": h.reason, "detail": h.detail, "checked_at": h.checked_at }),
+                            Ok(h) => {
+                                json!({ "ok": true, "id": id, "available": h.available, "reason": h.reason, "detail": h.detail, "checked_at": h.checked_at })
+                            }
                             Err(e) => json!({ "ok": false, "error": e }),
                         }
                     }
@@ -2802,8 +3583,7 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         s("path")
                     };
                     let et_owned = sa("enabled_tools");
-                    let enabled_tools: Vec<&str> =
-                        et_owned.iter().map(|s| s.as_str()).collect();
+                    let enabled_tools: Vec<&str> = et_owned.iter().map(|s| s.as_str()).collect();
                     let bridge = crate::service_bus::antigravity_bridge_config(
                         "http://127.0.0.1:9090/mcp",
                         "md-secrets/instance.env",
@@ -2905,7 +3685,12 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                         if cuenta.is_empty() {
                             json!({ "ok": false, "error": "no hay cuenta que pueda atender la tarea" })
                         } else {
-                            match engine.execute_measured_with(&task_id, &cuenta, &prompt, &mut runner) {
+                            match engine.execute_measured_with(
+                                &task_id,
+                                &cuenta,
+                                &prompt,
+                                &mut runner,
+                            ) {
                                 Ok(m) => json!({
                                     "ok": true,
                                     "account": m.account_id,
@@ -2948,8 +3733,16 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 },
                 "issues" | "prs" => {
                     let only_prs = s("action") == "prs";
-                    match crate::github_connector::list_issues(&cfg, &repo, &s("state"), only_prs, &client) {
-                        Ok(items) => json!({ "ok": true, "repo": repo, "count": items.len(), "items": items }),
+                    match crate::github_connector::list_issues(
+                        &cfg,
+                        &repo,
+                        &s("state"),
+                        only_prs,
+                        &client,
+                    ) {
+                        Ok(items) => {
+                            json!({ "ok": true, "repo": repo, "count": items.len(), "items": items })
+                        }
                         Err(e) => json!({ "ok": false, "error": e }),
                     }
                 }
@@ -2969,7 +3762,11 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     } else {
                         crate::github_connector::PublishKind::PullRequest {
                             head: s("head"),
-                            base: if s("base").is_empty() { "main".into() } else { s("base") },
+                            base: if s("base").is_empty() {
+                                "main".into()
+                            } else {
+                                s("base")
+                            },
                         }
                     };
                     match crate::github_connector::publish_swarm_state(
@@ -2994,7 +3791,9 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     ),
                     "note": "la clave se inyecta al escribir la config; no se publica en el estado compartido",
                 }),
-                _ => json!({ "ok": false, "error": "unknown_action", "hint": "repos|issues|prs|publish|bridge" }),
+                _ => {
+                    json!({ "ok": false, "error": "unknown_action", "hint": "repos|issues|prs|publish|bridge" })
+                }
             }
         }
         // v15: gestor de tiendas/repos universal ("mega store manager").
@@ -3024,7 +3823,10 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         // en /data/adb/service.d para Magisk, de modo que la
         // auto-actualizacion (el daemon sale con codigo 10) entra en servicio.
         "supervisor" => {
-            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("estado");
+            let accion = args
+                .get("accion")
+                .and_then(|v| v.as_str())
+                .unwrap_or("estado");
             match accion {
                 "instalar" => crate::supervisor::instalar(),
                 "desinstalar" => crate::supervisor::desinstalar(),
@@ -3034,12 +3836,17 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     "script": crate::supervisor::WATCHDOG_SH,
                     "ruta_destino": crate::supervisor::RUTA_SERVICE_D,
                 }),
-                _ => json!({"ok": false, "error": "accion desconocida: usa estado|instalar|desinstalar|watchdog"}),
+                _ => {
+                    json!({"ok": false, "error": "accion desconocida: usa estado|instalar|desinstalar|watchdog"})
+                }
             }
         }
         // Hooks de Frida para observar Antigravity (SQLite, red, ficheros).
         "frida_hooks" => {
-            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("listar");
+            let accion = args
+                .get("accion")
+                .and_then(|v| v.as_str())
+                .unwrap_or("listar");
             match accion {
                 "listar" => {
                     let hooks: Vec<Value> = crate::frida_hooks::hooks_disponibles()
@@ -3070,8 +3877,16 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             crate::hooks_payload::dispatch(&accion, args)
         }
         "re_fusion" => {
-            let accion = args.get("accion").and_then(|v| v.as_str()).unwrap_or("compare");
-            let s = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let accion = args
+                .get("accion")
+                .and_then(|v| v.as_str())
+                .unwrap_or("compare");
+            let s = |k: &str| {
+                args.get(k)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string()
+            };
             let ruta = s("binario");
             if ruta.is_empty() {
                 return Some(json!({"ok": false, "error": "falta 'binario'"}));
@@ -3090,12 +3905,22 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 anchors_tsv: opt("anclas"),
                 ghidra_dir: opt("ghidra_dir"),
                 java_home: opt("java_home"),
-                project_dir: opt("project_dir")
-                    .unwrap_or_else(|| std::path::PathBuf::from("/workspace/agy-re/tools-out/proj")),
-                project_name: if s("project").is_empty() { "Go".to_string() } else { s("project") },
-                out_dir: opt("out")
-                    .unwrap_or_else(|| std::path::PathBuf::from("/workspace/agy-re/tools-out/fusion")),
-                max_memory: if s("max_memoria").is_empty() { "1400M".to_string() } else { s("max_memoria") },
+                project_dir: opt("project_dir").unwrap_or_else(|| {
+                    std::path::PathBuf::from("/workspace/agy-re/tools-out/proj")
+                }),
+                project_name: if s("project").is_empty() {
+                    "Go".to_string()
+                } else {
+                    s("project")
+                },
+                out_dir: opt("out").unwrap_or_else(|| {
+                    std::path::PathBuf::from("/workspace/agy-re/tools-out/fusion")
+                }),
+                max_memory: if s("max_memoria").is_empty() {
+                    "1400M".to_string()
+                } else {
+                    s("max_memoria")
+                },
                 timeout: std::time::Duration::from_secs(s("timeout_s").parse().unwrap_or(1800)),
                 hacer_motor: true,
                 hacer_die: s("sin_die").is_empty(),
@@ -3154,13 +3979,21 @@ mod tests {
     #[test]
     fn las_acciones_destructivas_exigen_confirmacion() {
         // root_stealth.apply sin confirm debe fallar.
-        let r = dispatch("root_stealth", &json!({ "action": "apply", "scope": "all" })).unwrap();
+        let r = dispatch(
+            "root_stealth",
+            &json!({ "action": "apply", "scope": "all" }),
+        )
+        .unwrap();
         assert_eq!(r["ok"], json!(false));
         // battery_saver.apply igual.
         let r2 = dispatch("battery_saver", &json!({ "action": "apply" })).unwrap();
         assert_eq!(r2["ok"], json!(false));
         // git commit_push igual.
-        let r3 = dispatch("git_ops", &json!({ "action": "commit_push", "message": "x" })).unwrap();
+        let r3 = dispatch(
+            "git_ops",
+            &json!({ "action": "commit_push", "message": "x" }),
+        )
+        .unwrap();
         assert_eq!(r3["ok"], json!(false));
     }
 }

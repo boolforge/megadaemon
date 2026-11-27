@@ -305,7 +305,13 @@ pub fn scan_certificates(sources: &[AndroidCertSource]) -> Result<AndroidScan, S
         }
     }
     out.certs.sort_by(|a, b| a.id.cmp(&b.id));
-    out.certs.dedup_by(|a, b| a.id == b.id);
+    // MEDIDO (2026-11-25): el dedup era por `id`, que lleva la ETIQUETA de
+    // la fuente ("android-keychain-…", "android-keystore-…") ⇒ el MISMO
+    // certificado presente en tres fuentes contaba como tres.  El vault
+    // guarda CERTIFICADOS, no ficheros: se deduplica por el SHA-256 del
+    // DER (el contenido manda), y el `id` del superviviente es el menor
+    // ⇒ determinista.
+    out.certs.dedup_by(|a, b| a.sha256 == b.sha256);
     Ok(out)
 }
 

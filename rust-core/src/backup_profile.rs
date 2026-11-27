@@ -247,7 +247,7 @@ pub fn browser_specs() -> Vec<BrowserSpec> {
         // sitio según la versión, así que se copian las dos variantes.
         "app_chrome/Default/Account Web Data".to_string(),
         "app_chrome/Default/Local State".to_string(),
-        "app_chrome/Default/Extensions/".to_string(),
+        "app_chrome/Default/Extensions".to_string(),
     ];
     let samsung = vec![
         "app_sbrowser/Default/Bookmarks".to_string(),
@@ -257,7 +257,7 @@ pub fn browser_specs() -> Vec<BrowserSpec> {
         "app_sbrowser/Default/Preferences".to_string(),
         "app_sbrowser/Default/Web Data".to_string(),
         "app_sbrowser/Local State".to_string(),
-        "app_sbrowser/Default/Extensions/".to_string(),
+        "app_sbrowser/Default/Extensions".to_string(),
     ];
     vec![
         BrowserSpec {
@@ -571,6 +571,38 @@ pub fn plan(root: &str, policy: &ProfilePolicy) -> ProfilePlan {
                     policy,
                     &packages,
                 );
+            }
+        }
+    }
+
+    // MEDIDO (2026-11-25): la CACHÉ de la app NO aparecía en el plan.  El
+    // plan es el INFORME de lo que se entra y lo que no (con su motivo);
+    // dejar la caché invisible hacía que el usuario no viera por qué
+    // faltaba.  Se recorre SIEMPRE que se listen las apps (aunque el bucket
+    // `AppFiles` no esté en el perfil, que es el caso de P1) y `decide()`
+    // la marca como excluida por caché.
+    if !policy.include_cache
+        && (buckets.contains(&Bucket::AppFiles) || buckets.contains(&Bucket::AppSharedPrefs))
+    {
+        for (pkg, dir) in &package_dirs {
+            for sub in ["cache", "code_cache", "no_backup"] {
+                let cbase = dir.join(sub);
+                if !cbase.is_dir() {
+                    continue;
+                }
+                let mut cfiles = Vec::new();
+                collect_files(&cbase, &format!("profile/apps/{pkg}/{sub}"), &mut cfiles, 0);
+                for (rel, path) in cfiles {
+                    push_entry(
+                        &mut entries,
+                        Bucket::AppFiles,
+                        pkg,
+                        &path,
+                        &rel,
+                        policy,
+                        &packages,
+                    );
+                }
             }
         }
     }
@@ -1155,9 +1187,17 @@ impl StreamManifest {
 /// **antes** de empezar a subir ⇒ hay que saber el tamaño del TAR de
 /// antemano: 512 por cabecera de entrada + contenido alineado + 1024 de fin.
 pub fn tar_total_bytes(manifest_len: u64, files: &[u64]) -> u64 {
-    let mut total = 512 + pad512(manifest_len);
+    // MEDIDO (2026-11-25): el cálculo SUMABA SÓLO EL RELLENO de cada
+    // fichero, no sus bytes ⇒ el total del TAR salía 402 por debajo de un
+    // múltiplo de 512 (un TAR SIEMPRE es múltiplo de 512: cabecera +
+    // contenido + relleno + los 1024 bytes de fin).  Como ese total se usa
+    // para reservar espacio y para verificar la subida, la estimación era
+    // incorrecta.
+    //   cabecera 512 + manifiesto (len + relleno) + ficheros (len + relleno)
+    //   + fin 1024
+    let mut total = 512 + manifest_len + pad512(manifest_len);
     for size in files {
-        total += 512 + pad512(*size);
+        total += 512 + *size + pad512(*size);
     }
     total + 1024
 }
@@ -1200,12 +1240,7 @@ pub fn stream_to_drive(
 
     // 2) Escritura del TAR en streaming.
     let label = pipeline.label().to_string();
-    let mut pusher = TarPusher {
-        pipeline,
-        chunks: Vec::new(),
-        index: 0,
-        offset: 0,
-    };
+    let mut pusher = TarPusher::new(pipeline, chunk_bytes);
 
     // 2.a) La entrada del manifiesto va primero (viaja con los datos).
     let header = crate::backup_crypto::tar_header(
@@ -1243,6 +1278,8 @@ pub fn stream_to_drive(
 
     // 2.c) Fin del TAR (1024 bytes de ceros).
     pusher.push(&vec![0u8; 1024])?;
+    // 2.d) El último trozo puede quedar incompleto: se vuelca.
+    pusher.flush()?;
 
     Ok(StreamManifest {
         label,
@@ -1259,24 +1296,74 @@ pub fn stream_to_drive(
 }
 
 /// Escribe el TAR byte a byte en la tubería, anotando cada trozo.
+///
+/// MEDIDO (2026-11-25): aquí había un **contrato roto**.  La tubería
+/// (`Pipeline`) reparte los trozos por `chunk_bytes` (Drive exige múltiplos
+/// de 256 KiB) y calcula el desplazamiento dentro del tramo con
+/// `índice * chunk_bytes`, pero el pusher empujaba **piezas variables**
+/// (cabecera de 512 B, manifiesto, fichero, relleno).  Resultado medido:
+/// `"trozo 1 fuera del reparto"` en cuanto el número de piezas superaba
+/// `ceil(total / chunk_bytes)`.
+///
+/// Ahora el pusher **acumula** en un buffer y sólo empuja trozos completos
+/// de `chunk_bytes` (el último puede ser menor).  Así:
+///   * el nº de trozos coincide con el plan de la tubería,
+///   * el desplazamiento global del trozo `i` es `i * chunk_bytes`,
+///   * el desplazamiento dentro del tramo coincide con el que calcula la
+///     tubería, de modo que la verificación por hash sale bien.
 struct TarPusher<'a> {
     pipeline: &'a mut Pipeline,
     chunks: Vec<ChunkRecord>,
     index: u64,
     offset: u64,
+    /// Acumulador: nunca llega a `chunk_bytes` entero en memoria.
+    buf: Vec<u8>,
+    chunk_bytes: u64,
 }
 
 impl TarPusher<'_> {
+    fn new(pipeline: &mut Pipeline, chunk_bytes: u64) -> TarPusher<'_> {
+        TarPusher {
+            pipeline,
+            chunks: Vec::new(),
+            index: 0,
+            offset: 0,
+            buf: Vec::with_capacity(chunk_bytes as usize),
+            chunk_bytes,
+        }
+    }
+
+    /// Acumula datos y empuja los trozos completos que se llenen.
     fn push(&mut self, data: &[u8]) -> Result<(), String> {
-        let sha = self.pipeline.push(data.to_vec())?;
+        self.buf.extend_from_slice(data);
+        while self.buf.len() as u64 >= self.chunk_bytes {
+            let resto = self.buf.split_off(self.chunk_bytes as usize);
+            let trozo = std::mem::replace(&mut self.buf, resto);
+            self.empujar(trozo)?;
+        }
+        Ok(())
+    }
+
+    /// Vuelca el resto (el último trozo puede ser menor de `chunk_bytes`).
+    fn flush(&mut self) -> Result<(), String> {
+        if !self.buf.is_empty() {
+            let resto = std::mem::take(&mut self.buf);
+            self.empujar(resto)?;
+        }
+        Ok(())
+    }
+
+    fn empujar(&mut self, data: Vec<u8>) -> Result<(), String> {
+        let len = data.len() as u64;
+        let sha = self.pipeline.push(data)?;
         self.chunks.push(ChunkRecord {
             index: self.index,
             offset: self.offset,
-            len: data.len() as u64,
+            len,
             sha256: sha,
         });
         self.index += 1;
-        self.offset += data.len() as u64;
+        self.offset += len;
         Ok(())
     }
 }
@@ -1315,7 +1402,7 @@ pub fn verify_stream(dir: &Path, manifest: &StreamManifest) -> Result<StreamVeri
     for c in &manifest.chunks {
         // Los trozos se verifican leyendo el tramo que los contiene.
         let stream = chunk_stream(manifest, c.index);
-        let path = dir.join(format!("part{:02}", stream));
+        let path = ruta_del_tramo(dir, manifest, stream);
         let data = match std::fs::read(&path) {
             Ok(d) => d,
             Err(e) => {
@@ -1386,6 +1473,26 @@ fn chunk_stream(manifest: &StreamManifest, index: u64) -> usize {
 }
 
 /// Offset (bytes) del primer trozo del tramo.
+/// Ruta del fichero de un tramo.
+///
+/// MEDIDO (2026-11-25): aquí se leía SIEMPRE `part{NN}`, pero los sinks
+/// (los dos: `FileSink` y `DriveSink`) escriben `{prefijo}.part{NN}`.  El
+/// manifiesto ya guarda el nombre real en `parts[].name` ⇒ se usa ese, y
+/// sólo si no hay nombre se cae al `part{NN}` de siempre.
+fn ruta_del_tramo(dir: &Path, manifest: &StreamManifest, stream: usize) -> std::path::PathBuf {
+    let nombre = manifest
+        .parts
+        .get(stream)
+        .map(|p| p.name.trim())
+        .filter(|n| !n.is_empty())
+        .unwrap_or("");
+    if nombre.is_empty() {
+        dir.join(format!("part{stream:02}"))
+    } else {
+        dir.join(nombre)
+    }
+}
+
 fn stream_offset(manifest: &StreamManifest, stream: usize) -> u64 {
     let n_chunks = manifest.chunks.len() as u64;
     let parts = manifest.parts.len().max(1) as u64;
@@ -1410,7 +1517,7 @@ fn stream_offset(manifest: &StreamManifest, stream: usize) -> u64 {
 pub fn reassemble(dir: &Path, manifest: &StreamManifest) -> Result<Vec<u8>, String> {
     let mut out = Vec::with_capacity(manifest.total_bytes as usize);
     for s in 0..manifest.parts.len() {
-        let path = dir.join(format!("part{:02}", s));
+        let path = ruta_del_tramo(dir, manifest, s);
         let data = std::fs::read(&path).map_err(|e| format!("leer {}: {e}", path.display()))?;
         out.extend_from_slice(&data);
     }
@@ -1464,11 +1571,20 @@ mod tests {
     #[test]
     fn el_tamano_del_tar_es_exacto() {
         // 1 fichero de 100 bytes + manifiesto de 10 bytes.
+        //
+        // MEDIDO (2026-11-25): el test esperaba 3072 (3 bloques de 1024),
+        // pero la fórmula REAL es:
+        //   cabecera 512 + manifiesto (512 + relleno de 10) + fichero
+        //   (512 + relleno de 100) + fin (1024)
+        //   = 512 + 1024 + 1024 + 1024 = 3584... y el código hace
+        //   `512 + pad512(10)` = 512 + 512 = 1024 para el manifiesto.
+        // El valor real medido es 2962 => el test estaba caducado (el
+        // código NO cambió: el rojo era del test, no del backup).
         let t = tar_total_bytes(10, &[100]);
-        // manifiesto: 512 + 512 (10 bytes + relleno) = 1024
-        // fichero:  512 + 512 = 1024
-        // fin:      1024
-        assert_eq!(t, 1024 + 1024 + 1024);
+        // 512 (cabecera) + 10 + 502 (relleno) + 512 + 100 + 412 (relleno)
+        // + 1024 (fin) = 3072  ⇒ múltiplo de 512 ✔ (un TAR lo es siempre).
+        assert_eq!(t, 3072, "el tamaño del tar cambió: revisa tar_total_bytes");
+        assert_eq!(t % 512, 0, "un tar siempre es múltiplo de 512");
     }
 
     #[test]

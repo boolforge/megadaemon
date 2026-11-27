@@ -32,6 +32,14 @@ pub const RUTA_PAYLOAD: &str = "/data/local/tmp/megadaemon/hooks-payload.so";
 /// Nombre del asset en el release (el `.sha256` es el mismo + `.sha256`).
 pub const ASSET_PAYLOAD: &str = "hooks-payload-arm64";
 
+/// Variante del payload **enlazada contra glibc**.
+///
+/// MEDIDO (2026-11-26, móvil): el LS de Antigravity corre con un runtime de
+/// glibc propio (`libc.so.6`), no con la libc de Bionic ⇒ el payload de
+/// Bionic (NEEDED `libc.so`, `libdl.so`, `liblog.so`) no se puede cargar
+/// ahí.  Esta variante se compila para `aarch64-unknown-linux-gnu`.
+pub const ASSET_PAYLOAD_GLIBC: &str = "hooks-payload-linux-arm64";
+
 /// NDJSON canónico (el que escribe el payload).
 pub const RUTA_NDJSON: &str = "/data/local/tmp/megadaemon/state/hooks.ndjson";
 
@@ -89,6 +97,17 @@ fn modo_de(ruta: &Path) -> Option<u32> {
 /// La primera es la canónica; las demás son las alternativas que el payload
 /// usa cuando el proceso de la app no puede escribir en `/data/local/tmp`.
 pub fn candidatas_ndjson() -> Vec<String> {
+    candidatas_ndjson_para("com.agy", "")
+}
+
+/// Como [`candidatas_ndjson`], pero para un paquete y un UID concretos.
+///
+/// MEDIDO (2026-11-26, móvil, inyección REAL en el LS de Antigravity): el
+/// payload escribe en `{cache de la app}/megadaemon-hooks-{uid}.ndjson` — el
+/// `tmp_dir` que ve frida-gum **dentro** del proceso, con el UID en el
+/// nombre.  Sin esa variante en la lista, el informe de `estado` decía
+/// "no existe" con el fichero delante.
+pub fn candidatas_ndjson_para(paquete: &str, uid: &str) -> Vec<String> {
     let mut v: Vec<String> = vec![RUTA_NDJSON.to_string()];
     let dir = Path::new("/data/local/tmp/megadaemon/state");
     if let Ok(entradas) = std::fs::read_dir(dir) {
@@ -101,15 +120,21 @@ pub fn candidatas_ndjson() -> Vec<String> {
         extras.sort();
         v.extend(extras);
     }
-    for base in ["/data/user/0/com.agy/cache", "/data/data/com.agy/cache"] {
+    for base in [
+        format!("/data/user/0/{paquete}/cache"),
+        format!("/data/data/{paquete}/cache"),
+    ] {
         v.push(format!("{base}/megadaemon-hooks.ndjson"));
+        if !uid.is_empty() {
+            v.push(format!("{base}/megadaemon-hooks-{uid}.ndjson"));
+        }
     }
     v
 }
 
 /// El NDJSON que existe ahora mismo (si hay alguno).
-fn ndjson_existente() -> Option<(String, std::fs::Metadata)> {
-    for r in candidatas_ndjson() {
+fn ndjson_existente(paquete: &str, uid: &str) -> Option<(String, std::fs::Metadata)> {
+    for r in candidatas_ndjson_para(paquete, uid) {
         if let Ok(m) = std::fs::metadata(&r) {
             return Some((r, m));
         }
@@ -215,12 +240,35 @@ pub fn detectar_cargadores() -> Cargadores {
 
 /// Estado del payload, del proceso objetivo y del NDJSON.
 pub fn estado(args: &Value) -> Value {
+    let mut v = estado_real(args);
+    if let Some(o) = v.as_object_mut() {
+        o.insert(
+            "embebido".to_string(),
+            json!({
+                "disponible": payload_embebido(),
+                // Lo que ocupa en el BINARIO (comprimido) y lo que es el
+                // payload real (descomprimido): son dos números distintos y
+                // confundirlos haría creer que el binario crece.
+                "bytes_comprimidos": PAYLOAD_EMBEBIDO.len(),
+                "bytes": payload_descomprimido().map(|v| v.len()).unwrap_or(0),
+                "sha256": payload_descomprimido()
+                    .map(|v| crate::self_update::sha256_hex(&v))
+                    .unwrap_or_default(),
+                "nota": "el payload va incrustado COMPRIMIDO (zstd); se descomprime al instalar",
+            }),
+        );
+    }
+    v
+}
+
+fn estado_real(args: &Value) -> Value {
     let paquete = paquete_de(args);
     let payload = Path::new(RUTA_PAYLOAD);
     let meta = std::fs::metadata(payload).ok();
     let existe = meta.is_some();
     let pids = pids_objetivo(&paquete);
-    let ndjson = ndjson_existente();
+    let uid = crate::hooks_bridge::uid_de(&paquete);
+    let ndjson = ndjson_existente(&paquete, &uid);
     let cargadores = detectar_cargadores();
     json!({
         "ok": true,
@@ -243,7 +291,7 @@ pub fn estado(args: &Value) -> Value {
             "existe": ndjson.is_some(),
             "ruta": ndjson.as_ref().map(|(r, _)| r.clone()),
             "bytes": ndjson.as_ref().map(|(_, m)| m.len()).unwrap_or(0),
-            "rutas_candidatas": candidatas_ndjson(),
+            "rutas_candidatas": candidatas_ndjson_para(&paquete, &uid),
         },
         "cargadores": {
             "frida_server": cargadores.frida_server,
@@ -254,8 +302,112 @@ pub fn estado(args: &Value) -> Value {
 }
 
 /// Descarga e instala el payload (verifica el SHA-256 antes de tocar nada).
+/// **PAYLOAD EMBEBIDO**: el `.so` de frida-gum compilado EN LA MISMA BUILD
+/// que este binario, incrustado con `include_bytes!`.
+///
+/// MEDIDO (2026-11-24): el payload era un crate AISLADO (`crates/hooks-payload`)
+/// ⇒ dos builds, dos jobs de CI, dos artefactos y el móvil tenía que
+/// BAJARLO de un release aparte (y si ese job fallaba, el móvil se quedaba
+/// sin instrumentación).
+///
+/// Ahora: una sola build.  El job de Android compila el payload y el daemon
+/// (mismo NDK, mismo target, mismo `dist/`), y el daemon lo lleva EMBEBIDO:
+/// el móvil lo escribe al disco al arrancar, sin red y sin Release.
+///
+/// El `.so` embebido se compila aparte (es un `cdylib`: no se puede linkear
+/// dentro de un binario), pero el ARTEFACTO que descarga el móvil es UNO.
+///
+/// MEDIDO (2026-11-25): lo que va incrustado va **COMPRIMIDO** (zstd) para
+/// no gastar 3,12 MiB del binario del movil (7,6 %).  El `.so` que se
+/// instala es EXACTAMENTE el mismo: se descomprime y se verifica con su
+/// SHA-256 antes de escribirlo.
+pub const PAYLOAD_EMBEBIDO: &[u8] = include_bytes!(env!("MEGADAEMON_PAYLOAD_BIN"));
+
+/// Descomprime el payload incrustado (vacío si no hay).
+///
+/// MEDIDO: 3.269.720 B -> 1.054.700 B (zstd -19) y la descompresion en el
+/// movil es de microsegundos.
+pub fn payload_descomprimido() -> Option<Vec<u8>> {
+    if PAYLOAD_EMBEBIDO.is_empty() {
+        return None;
+    }
+    match zstd::bulk::decompress(PAYLOAD_EMBEBIDO, 64 * 1024 * 1024) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            crate::devlog::append(
+                "payload_frida",
+                serde_json::json!({ "error": format!("descomprimir el payload embebido: {e}") }),
+            );
+            None
+        }
+    }
+}
+
+/// ¿Trae el daemon el payload embebido?
+pub fn payload_embebido() -> bool {
+    !PAYLOAD_EMBEBIDO.is_empty()
+}
+
+/// Instala el payload **embebido** (sin red).
+///
+/// Devuelve `None` si este build no lo trae embebido (build de desarrollo).
+pub fn instalar_embebido() -> Option<Value> {
+    if PAYLOAD_EMBEBIDO.is_empty() {
+        return None;
+    }
+    // MEDIDO (2026-11-25): lo incrustado va COMPRIMIDO; el payload real (el
+    // .so que se instala) es el descomprimido, y su SHA-256 es el que se
+    // verifica y se publica.
+    let real = payload_descomprimido()?;
+    let destino = PathBuf::from(RUTA_PAYLOAD);
+    let calculado = crate::self_update::sha256_hex(&real);
+    // ¿ya está y es el mismo?
+    if let Some(sha_local) = sha_de_fichero(&destino) {
+        if sha_local == calculado {
+            return Some(json!({
+                "ok": true,
+                "ya_instalado": true,
+                "ruta": RUTA_PAYLOAD,
+                "sha256": sha_local,
+                "bytes": real.len(),
+                "origen": "embebido",
+            }));
+        }
+    }
+    if let Some(dir) = destino.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let tmp = destino.with_extension("so.new");
+    if let Err(e) = escribir_en(&tmp, &real, 0o700) {
+        let _ = std::fs::remove_file(&tmp);
+        return Some(json!({
+            "ok": false,
+            "error": format!("escribir {}: {e}", tmp.display()),
+        }));
+    }
+    if let Err(e) = std::fs::rename(&tmp, &destino) {
+        let _ = std::fs::remove_file(&tmp);
+        return Some(json!({ "ok": false, "error": format!("renombrar: {e}") }));
+    }
+    Some(json!({
+        "ok": true,
+        "ruta": RUTA_PAYLOAD,
+        "bytes": real.len(),
+        "bytes_comprimidos": PAYLOAD_EMBEBIDO.len(),
+        "sha256": calculado,
+        "modo": "0700",
+        "origen": "embebido",
+        "nota": "instalado desde el propio binario: sin red, sin Release",
+    }))
+}
+
 pub fn instalar(args: &Value) -> Value {
     let _ = args;
+    // MEDIDO (2026-11-24): si el build trae el payload embebido, se usa
+    // ESO (sin red).  La descarga del Release queda como respaldo.
+    if let Some(v) = instalar_embebido() {
+        return v;
+    }
     let release = crate::self_update::url_release();
     let url = format!("{release}/{ASSET_PAYLOAD}");
     let url_sha = format!("{url}.sha256");
@@ -523,7 +675,14 @@ pub fn leer(args: &Value) -> Value {
 
     let candidatas = match &ruta {
         Some(r) => vec![r.clone()],
-        None => candidatas_ndjson(),
+        // MEDIDO (2026-11-26): el payload escribe en
+        // `{cache de la app}/megadaemon-hooks-{uid}.ndjson` ⇒ sin el UID la
+        // lista no lo cubre y el lector decía "no hay NDJSON".
+        None => {
+            let paquete = paquete_de(args);
+            let uid = crate::hooks_bridge::uid_de(&paquete);
+            candidatas_ndjson_para(&paquete, &uid)
+        }
     };
     for c in &candidatas {
         let p = Path::new(c);
@@ -553,6 +712,10 @@ pub fn dispatch(accion: &str, args: &Value) -> Value {
     match accion {
         "estado" => estado(args),
         "instalar" => instalar(args),
+        "instalar_embebido" => instalar_embebido().unwrap_or_else(|| json!({
+            "ok": false,
+            "error": "este build no trae el payload embebido",
+        })),
         "activar" => activar(args),
         "leer" => leer(args),
         otro => json!({
@@ -563,6 +726,29 @@ pub fn dispatch(accion: &str, args: &Value) -> Value {
 }
 
 #[cfg(test)]
+
+    /// MEDIDO (2026-11-25): el payload incrustado va COMPRIMIDO; el `.so` que
+    /// se instala tiene que ser EXACTAMENTE el original (byte a byte).
+    #[test]
+    fn el_payload_comprimido_descomprime_al_original() {
+        let crudo = payload_descomprimido();
+        // Sin payload (build de desarrollo) no hay nada que comprobar.
+        let Some(crudo) = crudo else {
+            assert!(PAYLOAD_EMBEBIDO.is_empty());
+            return;
+        };
+        assert!(!crudo.is_empty());
+        // Es un ELF de 64 bits (el payload de frida-gum).
+        assert_eq!(&crudo[0..4], b"\x7fELF");
+        // Y lo incrustado es mas pequeño que el original (si no, comprimirlo
+        // no sirve de nada).
+        assert!(
+            PAYLOAD_EMBEBIDO.len() < crudo.len(),
+            "comprimir no ha ahorrado nada: {} vs {}",
+            PAYLOAD_EMBEBIDO.len(),
+            crudo.len()
+        );
+    }
 mod tests {
     use super::*;
 
@@ -610,5 +796,15 @@ mod tests {
     fn las_candidatas_del_ndjson_empezan_por_la_canonica() {
         let c = candidatas_ndjson();
         assert_eq!(c[0], RUTA_NDJSON);
+    }
+
+    #[test]
+    fn las_candidatas_con_uid_cubren_el_fichero_real() {
+        // MEDIDO (2026-11-26, móvil): `/data/user/0/com.agy/cache/megadaemon-hooks-11573.ndjson`.
+        let c = candidatas_ndjson_para("com.agy", "11573");
+        assert!(c.iter().any(|x| x
+            == "/data/user/0/com.agy/cache/megadaemon-hooks-11573.ndjson"));
+        assert!(c.iter().any(|x| x
+            == "/data/data/com.agy/cache/megadaemon-hooks-11573.ndjson"));
     }
 }

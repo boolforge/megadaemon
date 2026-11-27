@@ -91,7 +91,11 @@ pub fn identificar(path: &Path) -> Result<Identificacion, String> {
 
     if datos.starts_with(b"\x7fELF") {
         formato = Formato::Elf;
-        bits = if datos.len() > 4 && datos[4] == 2 { 64 } else { 32 };
+        bits = if datos.len() > 4 && datos[4] == 2 {
+            64
+        } else {
+            32
+        };
         // EI_DATA: 1 = LSB (little), 2 = MSB (big).
         endian = if datos.len() > 5 && datos[5] == 1 {
             "little".to_string()
@@ -100,7 +104,11 @@ pub fn identificar(path: &Path) -> Result<Identificacion, String> {
         };
         ev.push(format!(
             "ELF magic @0 (EI_CLASS={} EI_DATA={})",
-            if bits == 64 { "ELF64".to_string() } else { "ELF32".to_string() },
+            if bits == 64 {
+                "ELF64".to_string()
+            } else {
+                "ELF32".to_string()
+            },
             endian
         ));
         // UPX: la firma aparece en el nombre de las secciones.
@@ -209,6 +217,30 @@ pub fn modulos_para(f: Formato) -> Vec<String> {
 /// MEDIDO 2026-11-22 en el `liblanguage_server.so` de Antigravity: magic en
 /// `.lrodata` @ `0x1449ff0`, **161.682 funciones**.
 pub fn detectar_go_pclntab(datos: &[u8]) -> Option<(u64, Option<String>)> {
+    let (_offset, n, ver) = detectar_go_pclntab_offset(datos)?;
+    Some((n, ver))
+}
+
+/// Igual que [`detectar_go_pclntab`] pero devuelve **también el OFFSET**.
+///
+/// MEDIDO (2026-11-25, movil): `detectar_go_pclntab` devuelve el NÚMERO de
+/// funciones, y `antigravity_intercept::resolver` lo usaba como si fuera el
+/// offset de la pclntab => el parser de go-retool leia bytes arbitrarios y
+/// fallaba con "unsupported pclntab magic 0x00000424" => **el plan de hooks
+/// NUNCA se escribia** => el payload de Frida no tenia plan => los hooks no
+/// se aplicaban => el language server no se redirigia al gateway (el NDJSON
+/// del shim no tenia ni una linea nueva desde el 2026-11-23).
+///
+/// Ahora el offset se devuelve explícitamente y `resolver` lo usa.
+pub fn detectar_go_pclntab_offset(datos: &[u8]) -> Option<(u64, u64, Option<String>)> {
+    let (offset, n, etiqueta) = mejor_cabecera_pclntab(datos)?;
+    Some((offset, n, Some(etiqueta)))
+}
+
+/// Busca la cabecera de Go 1.18+ válida con MAYOR número de funciones.
+///
+/// Devuelve `(offset, nfunc, etiqueta)`.
+fn mejor_cabecera_pclntab(datos: &[u8]) -> Option<(u64, u64, String)> {
     // El magic 0xFFFFFFF1 se guarda en el fichero en ORDEN LITTLE-ENDIAN:
     // los bytes en el disco son F1 FF FF FF.  Con los bytes invertidos
     // (FF FF FF F1) la comparacion NUNCA se cumplia y el motor no detectaba
@@ -224,7 +256,7 @@ pub fn detectar_go_pclntab(datos: &[u8]) -> Option<(u64, Option<String>)> {
     // y se valida igual que lo hace `go-retool`: pad1==pad2==0, minLC!=0 y
     // ptrSize en {4,8}.  Entre las cabeceras validas se queda la de MAYOR
     // nfunc (la pclntab real tiene 161.682; las demas son copias parciales).
-    let mut mejor: Option<(u64, String)> = None;
+    let mut mejor: Option<(u64, u64, String)> = None;
     let mut i = 0usize;
     while i + 16 <= datos.len() {
         if datos[i..i + 4] == MAGIC
@@ -240,14 +272,14 @@ pub fn detectar_go_pclntab(datos: &[u8]) -> Option<(u64, Option<String>)> {
             }
             if n > 0 && n < 5_000_000 {
                 let etiqueta = format!("go1.18+ (minLC={})", datos[i + 6]);
-                if mejor.as_ref().map(|(m, _)| n > *m).unwrap_or(true) {
-                    mejor = Some((n, etiqueta));
+                if mejor.as_ref().map(|(_, m, _)| n > *m).unwrap_or(true) {
+                    mejor = Some((i as u64, n, etiqueta));
                 }
             }
         }
         i += 4;
     }
-    mejor.map(|(n, t)| (n, Some(t)))
+    mejor
 }
 
 /// Extrae cadenas imprimibles con su desplazamiento.
@@ -492,12 +524,7 @@ pub fn seccion_de_codigo(datos: &[u8]) -> Option<(String, usize, usize, u64)> {
     };
     for sh in &elf.section_headers {
         if elf.shdr_strtab.get_at(sh.sh_name) == Some(".text") {
-            return Some((
-                arch,
-                sh.sh_offset as usize,
-                sh.sh_size as usize,
-                sh.sh_addr,
-            ));
+            return Some((arch, sh.sh_offset as usize, sh.sh_size as usize, sh.sh_addr));
         }
     }
     None
@@ -579,11 +606,7 @@ pub fn programa_desde_cfg(
             crate::re_ir::Flow::Ret => Terminator::Halt,
             _ => Terminator::Halt,
         };
-        bloques.push(Block {
-            id: i,
-            stmts,
-            term,
-        });
+        bloques.push(Block { id: i, stmts, term });
     }
     Some(FlatProgram {
         entry: 0,
@@ -787,6 +810,55 @@ mod tests {
         d[24..32].copy_from_slice(&1234u64.to_le_bytes());
         let (n, _) = detectar_go_pclntab(&d).expect("debe detectar");
         assert_eq!(n, 1234);
+    }
+
+    /// MEDIDO (2026-11-25, movil): el bug de leer el OFFSET.
+    ///
+    /// El detector devolvia el numero de funciones y `resolver` lo usaba
+    /// como offset => go-retool leia bytes arbitrarios ("unsupported pclntab
+    /// magic 0x00000424") y el plan de hooks NUNCA se escribia.
+    #[test]
+    fn el_offset_detectado_apunta_al_magic_y_go_retool_lo_parsea() {
+        let mut d = vec![0u8; 4096];
+        let off = 1024usize;
+        d[off..off + 4].copy_from_slice(&[0xf1, 0xff, 0xff, 0xff]);
+        d[off + 4] = 0; // pad1
+        d[off + 5] = 0; // pad2
+        d[off + 6] = 1; // minLC
+        d[off + 7] = 8; // ptrSize
+        d[off + 8..off + 16].copy_from_slice(&4321u64.to_le_bytes()); // nfunc
+        d[off + 16..off + 24].copy_from_slice(&7u64.to_le_bytes()); // nfiles
+
+        let (offset, n, _ver) = detectar_go_pclntab_offset(&d).expect("debe detectar");
+        assert_eq!(offset, off as u64, "el offset debe ser donde esta el magic");
+        assert_eq!(n, 4321, "y el numero de funciones, el de siempre");
+        // El offset TIENE que apuntar al magic (el bug era usar nfunc).
+        assert_eq!(
+            &d[offset as usize..offset as usize + 4],
+            &[0xf1, 0xff, 0xff, 0xff],
+            "el offset detectado no apunta al magic"
+        );
+        // Y go-retool NO puede quejarse del magic en ese offset.
+        //
+        // MEDIDO (2026-11-25, CI): este fixture no es una pclntab completa
+        // (el parser real quiere functab, _func, etc.), asi que puede fallar
+        // por otra cosa; lo que NO puede es quejarse del MAGIC, que es
+        // exactamente lo que pasaba cuando se le pasaba nfunc como offset
+        // ("unsupported pclntab magic 0x00000424" en el movil).
+        let analisis = go_retool::pclntab::parse_go118_plus(
+            &d,
+            go_retool::pclntab::ParseOptions {
+                file_offset: offset,
+                ..Default::default()
+            },
+        );
+        if let Err(e) = &analisis {
+            let msg = e.to_string();
+            assert!(
+                !msg.contains("pclntab magic"),
+                "go-retool se quejo del magic en el offset detectado: {msg}"
+            );
+        }
     }
 
     #[test]

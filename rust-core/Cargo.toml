@@ -5,7 +5,28 @@ edition = "2021"
 authors = ["MegaDaemon Engineering Team <megadaemon@agy.internal>"]
 description = "MegaDaemon v13.0 Zenith — Pure Rust Multi-OS RE Workbench (DiE, Binwalk, Tile Molester, ImHex/Kaitai, CIRX v3.4 SSA, MBA, Rizin/Frida, Exynos NPU/CV, Parasitic LLM Swarm & Antigravity MCP Server)"
 
+# El build script COMPRIME el payload de frida-gum antes de incrustarlo.
+# MEDIDO (2026-11-25): el payload son 3.269.720 B (3,12 MiB = 7,6 % del
+# binario del daemon) y comprime a 1.054.700 B con xz -9 (zstd -19 da algo
+# mas, ~1,2 MiB, y descomprime en microsegundos).  Al incrustar el
+# COMPRIMIDO y descomprimir al instalar, el binario del movil pierde ~2 MiB
+# sin perder ninguna capacidad.
+[build-dependencies]
+zstd = { version = "0.13", default-features = false, features = ["arrays"] }
+
 [dependencies]
+# **ACP (Agent Client Protocol)**: esquema canónico de la industria para
+# que un editor hable con un agente. MEDIDO (2026-11-27):
+#   * el crate oficial `agent-client-protocol-schema` v1.22.0 es **Apache-2.0**
+#     pero trae **54.732 lineas** y **8 dependencias** (anyhow, derive_more,
+#     indexmap, serde_with, strum, uuid, schemars) y exige **edition 2024**;
+#   * por eso el esquema esta **VENDORIZADO** en `rust-core/src/acp_schema.rs`
+#     (subconjunto estable de v1, fiel al upstream, solo `serde`):
+#     **cero dependencias nuevas** y el repo publico se puede auditar.
+#   * el registro oficial prueba **42 agentes**: 41 inicializan y **los 41 son
+#     `protocolVersion: 1`** => v2 (el de Devin) todavia no es widespread;
+#   * `sessionStop` no lo implementa **nadie** (0/41).
+# Ver `docs/ACP_VENDOR.md` y `docs/ACP_VENDOR_LICENSE.md` (atribucion).
 # Política de redacción de credenciales: **fuente única** compartida con el
 # payload de hooks que se inyecta en el móvil (`crates/injector-payload`).
 # Sin dependencias externas (ver `crates/redact/Cargo.toml`).
@@ -135,6 +156,22 @@ strip = true
 # y red (no CPU) ⇒ se pierde un % imperceptible y el build entra en un
 # contenedor de 3 GB. Los overrides de `package` **no** tocan el perfil de las
 # dependencias (siguen compilándose con el perfil base ⇒ no se recalcula nada).
+#
+# MEDIDO 2026-11-25 (tamaño del binario): `opt-level = 1` era la mayor parte
+# del problema.  El asset ARM64 medido pesaba 47.191.040 B (45,0 MB) porque
+# el job de Android además DESACTIVABA el LTO (`LTO=false`, CU=16) "por
+# OOM".  Con `opt-level = 3` el código se optimiza de verdad y el binario
+# baja; `codegen-units = 4` se mantiene (1 lo que mata al rustc, 16 infla el
+# binario).  El LTO pasa a "thin" en el workflow: da casi todo el ahorro del
+# LTO "fat" con una fracción de la RAM.
 [profile.release.package.megadaemon-core]
-opt-level = 1
+opt-level = 3
 codegen-units = 4
+# MEDIDO (2026-11-25, binario publicado): el override de PAQUETE **anula**
+# el `strip = true` del perfil base (Cargo no lo hereda aqui).  Sin esta
+# linea el binarioPublished llevaba `.symtab` (2.661.408 B) + `.strtab`
+# (4.166.193 B) = 6.827.601 B = 6,52 MiB (15,9 % del binario) de tabla de
+# simbolos en el movil, que no sirve para nada.
+# REPRODUCIDO con un paquete minimo: con el override el binario conserva
+# .symtab/.strtab; sin el override desaparecen (362.808 -> 290.944 B).
+strip = true
