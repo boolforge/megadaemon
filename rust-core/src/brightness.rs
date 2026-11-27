@@ -477,7 +477,7 @@ fn sh_plano(cmd: &str, timeout_ms: u64) -> Salida {
 //
 // (No se reintroduce el global: el arreglo de root se conserva.)
 thread_local! {
-    static CONTADOR_SH: std::cell::Cell<usize> = std::cell::Cell::new(0);
+    static CONTADOR_SH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Interacciones con el móvil desde el último reset (de ESTE hilo).
@@ -1029,7 +1029,7 @@ pub fn brillo_guardado_por_politica() -> Option<u8> {
     let cmd = "cat /data/adb/megadaemon/brightness_saved 2>/dev/null";
     let r = sh(cmd, true, 6000);
     let t = r.texto();
-    t.trim().parse::<u8>().ok().filter(|v| *v <= BRILLO_MAXIMO)
+    t.trim().parse::<u8>().ok()
 }
 
 /// Techo de brillo impuesto por la política de energía del propio daemon.
@@ -1585,6 +1585,7 @@ pub enum Decision {
 ///     deslizador; el sistema manda, `BrightnessController.java:342`).
 ///   - `pasivo` ⇒ no hacer nada.
 /// * Si el modo es manual y el valor coincide ⇒ nada.
+#[allow(clippy::too_many_arguments)]
 pub fn decidir(
     politica: &str,
     objetivo: Option<f64>,
@@ -1760,7 +1761,7 @@ fn seccion(crudo: &str, marcador: &str) -> Option<String> {
 pub fn leer_todo(con_power: bool, con_als: bool) -> LecturaCompleta {
     // 1) Los ajustes: el XML del proveedor leído como fichero (0 procesos).
     let ajustes = leer_ajustes_xml_fichero()
-        .or_else(|| leer_ajustes_xml())
+        .or_else(leer_ajustes_xml)
         .unwrap_or_else(leer_ajustes);
 
     // 2) Todo lo demás en UNA llamada.
@@ -1774,17 +1775,11 @@ pub fn leer_todo(con_power: bool, con_als: bool) -> LecturaCompleta {
     let lux = seccion(&crudo, "==ALS==").and_then(|t| parse_als(&t));
     let cap = seccion(&crudo, "==CAP==").and_then(|t| {
         let v = t.split('=').nth(1).unwrap_or("").trim();
-        v.parse::<f64>().ok().and_then(|n| {
-            if n > 0.0 {
-                Some((n.round() as u8).min(BRILLO_MAXIMO))
-            } else {
-                None
-            }
-        })
+        v.parse::<f64>()
+            .ok()
+            .and_then(|n| if n > 0.0 { Some(n.round() as u8) } else { None })
     });
-    let guardado = seccion(&crudo, "==SAVED==")
-        .and_then(|t| t.trim().parse::<u8>().ok())
-        .filter(|v| *v <= BRILLO_MAXIMO);
+    let guardado = seccion(&crudo, "==SAVED==").and_then(|t| t.trim().parse::<u8>().ok());
     let float_existe = seccion(&crudo, "==FLOAT==")
         .map(|t| {
             let t = t.trim();

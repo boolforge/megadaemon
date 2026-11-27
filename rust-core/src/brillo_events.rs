@@ -449,7 +449,7 @@ where
                     .trim_end_matches('\0')
                     .trim()
                     .to_string();
-                if !nombre.is_empty() && dirs.iter().any(|(_, n)| n.iter().any(|x| *x == nombre)) {
+                if !nombre.is_empty() && dirs.iter().any(|(_, n)| n.contains(&nombre)) {
                     let clave = FICHEROS_VIGILADOS
                         .iter()
                         .find(|f| f.ends_with(&nombre))
