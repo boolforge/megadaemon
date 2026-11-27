@@ -1,0 +1,66 @@
+session_id	agente	paginas	mensajes	cursor_before	titulo
+9132b984-434d-5170-abd4-02a3b67b9cfb	General	1	30	1795689343099	Trazar decisión de l
+464802478674020	Mavis 	1	100	1795306833627	Full file
+7ee40e68-2773-484b-8323-eef801aadebf	General	1	100	1795484050847	Auditar ramas y rota
+58caace9-010e-4bf9-8db7-a3df7083d1f8	General	1	100	1795425073810	MITM SQLite y proxy 
+093a48ff-2402-4e48-b5b4-984bbcded89f	General	1	100	1795487955530	Rescate regenerador 
+0737c26c-342a-4099-88c2-e91eb78ab7c6	General	1	100	1795486259939	Rescate payload frid
+c075e921-5ac5-4e65-b896-5f14937fda90	General	1	100	1795486449895	Rescate generador Go
+eba88e7a-2611-4c2e-bad7-e21a95db966d	General	1	100	1795424968252	Agente dedicado CI r
+96fcd216-883d-4559-a78c-9862d98bf23b	General	1	100	1795420241325	Payload Frida con fr
+058e2183-5958-4f46-9195-f07d18b2cddc	General	1	100	1795417144121	Inyección Frida nati
+90e7913a-71b4-4de3-bd34-1d32da1287b7	General	1	100	1795404019756	Regenerar protobuf d
+34f74ed7-634a-47eb-a78e-89c46e7816ee	General	1	100	1795404104305	Cazador de bugs y ca
+3dd807e4-c0dc-4147-b44c-548e36d33100	General	1	100	1795404082606	Generador de código 
+f6790cf7-b9de-4b98-9f49-6bd4a7994058	General	1	100	1795403837474	Fix s14 y bins rojos
+c43310af-af89-45ae-b5b7-035f54cc288d	General	1	100	1795404412357	RE agresivo sin comp
+60c4eee7-2b22-46b6-8628-d53b08c2e75c	General	1	100	1795404466770	Testing profundo LLM
+db28f9cf-4717-431c-9fa3-a90765c7b6d2	General	1	100	1795406402224	Backup nativo v2 rec
+aac50031-5418-452f-8ae2-3a83dc0f646e	General	1	100	1795404357767	Asimilar Antigravity
+a183be48-d56f-4848-9906-b95270449ca3	General	1	100	1795404027065	RE agresivo unificad
+1f302ff8-aede-4125-9e73-dc52b38259bb	General	1	100	1795403852711	Continuar Titanium y
+951f01dd-c1f6-4883-bee1-6a43f0ece2ff	General	1	100	1795403883175	Continuar backup nat
+6d0c5d7f-715f-4029-9076-5cee7ab8f059	General	1	100	1795403840161	Continuar Antigravit
+3bf90992-faa5-4c6a-9b7a-dc8fb6a4f1e7	General	1	100	1795407061156	Kernel y NetHunter
+4508dd68-4f27-41f0-ae47-9463facda264	General	1	100	1795404171610	Ocultacion root y Ma
+7d361b44-67fb-40f0-baaa-c649a7cfeb11	General	1	100	1795360192719	Titanium Backup y mi
+805fb487-2fc6-4036-bfa8-c159264cfa43	General	1	100	1795354158630	Backup nativoApps y 
+320fe958-c435-48d9-91cf-439c5bed85dc	General	1	100	1795354168819	RE Go deofuscacion c
+f9b2d59e-c30c-4ecb-bf89-2e41ebbd08e3	General	1	100	1795310425120	Instrumentar Antigra
+74c9d0a0-16de-4d7f-b9e0-35e510390c60	General	1	100	1795310257490	Ghidra headless sobr
+ec355f10-f8a1-4565-9bf8-4c0c4f740123	General	1	100	1795310254244	RE tools Go sobre el
+93e011f6-fdc3-41c8-8eeb-27ead7e7de1d	General	1	100	1795310422753	Backup configs certs
+14f5b117-cd65-47b2-872e-87e4b38ec33d	General	1	100	1795310271117	Inventario masivo de
+7e718073-214d-47ee-92a3-1f87d52b5c7a	General	1	100	1795310629893	Recuperar flujo y ba
+80f1e15d-f6a7-4387-b47a-558e441eeb9b	General	1	100	1795310259373	Motor backup nativo 
+2c1ce376-5f77-4888-aa98-721abc42f77d	General	1	100	1795310376662	Go decompiler + Anti
+5e7637a4-26fc-4b0e-812f-01536a10aba2	General	1	100	1795407059613	Gestor de paquetes y
+c4418b5a-ac9e-4968-a275-3fc1d4896f57	General	1	100	1795310300752	Sync chats WhatsApp 
+b5801407-14e5-4db1-babe-eed6eb53fb8e	General	1	100	1795310396992	Grabaciones: backup 
+c5a5d49e-dfb1-4c2c-aeff-8a35c2e13ad4	General	1	100	1795310258773	Telefonía SMS OTP an
+371c8b0a-086a-4ae1-9493-9e11ec104613	General	1	100	1795423476089	Certificados y sedes
+da352c1f-9195-4415-a396-bbe0abb0d022	General	1	100	1795306887594	KDE Connect y arquit
+def6d115-a3f7-4356-90a3-8790a92efd4a	General	1	100	1795274982466	Triaje manual QA y r
+465623763452134	MegaDaemon-NPU	1	100	1795310301702	Fix ioctl portable Linux/Android (P0 CI)
+465620166066280	General	1	100	1795274949886	Motor de backup Android nativo + criptografía de formatos
+465619940401337	MegaDaemon-APK	1	100	1795274933017	Escáner de APK + veredicto de software instalado
+465619940401335	MegaDaemon-RE	1	100	1795274996040	RE profunda Swift Backup + Lucky Patcher + otros
+7593c4fd-e6b7-4c80-bde8-3dca43eb21f8	General	1	100	1795310370031	Auditoría adversaria
+45e035b9-a63b-49e5-9cde-31df08f4ece4	General	1	100	1795310317512	Planificación conjun
+e81fade1-5fd3-49a2-b0f4-e0fc80c6cb48	General	1	100	1795274985483	Rediseño web y API d
+79abadea-4f74-4211-b805-9c9a5e976dd3	General	1	100	1795275284131	Grabador llamadas y 
+7ac6d702-647f-42fb-ac24-ebd3c83dc326	General	1	100	1795274964912	Batería avanzada y m
+9cb64913-f5e8-4678-b648-645b09c47161	General	1	100	1795274948638	Bus de coordinación 
+275a2232-15fd-4ee8-8306-560d2d2a1cec	General	1	100	1795284245389	Intel de apps y ocul
+8b154d6a-99e2-47f0-99c8-552e1b7652b4	General	1	100	1795275119186	Delegación parasitar
+141d9576-290c-43b8-9466-20e8a08a6c6f	General	1	100	1795275102923	Firma Rust sin Java
+659db26c-5bda-47ea-9783-8e04f988faeb	General	1	100	1795275005245	Decompilador DEX en 
+6cb64e00-3f40-4d6d-9776-78eec6d712eb	General	1	100	1795275049092	Implementar extracto
+23c1e5eb-8f68-48b8-8d46-6ef2b2d1f54b	General	1	100	1795275184693	Implementar servidor
+27a19f3a-5bfb-4677-94f5-e49f2649312e	General	1	100	1795275629153	Implementar analizad
+acaf89cb-9012-42f0-b413-11de2cce0679	General	1	100	1795275005313	Implementar actualiz
+6d7ffc8f-6d78-4cc8-81ca-ae6e5e714b85	General	1	100	1795275182924	Implementar inventar
+d41a8f14-4621-4d98-bb04-a3a5512938ff	General	1	100	1795275005302	Auditoría adversaria
+46e23911-da1e-491e-9973-0abe36da5c1d	General	1	100	1795117519784	Auditar hardware y s
+cc01d5d7-d43f-4a65-9f5e-357c770e6cf9	General	1	100	1795306607242	Auditar harness SEER
+458507570102555	Mavis 	1	100	1795116461826	Reescritura crítica de carta

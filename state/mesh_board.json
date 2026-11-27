@@ -457,6 +457,15 @@
       "total_mb": 34065.2,
       "updated_at": "2026-11-19T23:13:31Z",
       "access": "solo la cuenta con la que se creo la carpeta; no lleva tokens en el estado"
+    },
+    "drive_antigravity_full_2026_11_26": {
+      "url": "https://drive.google.com/drive/folders/114GocicoCJBmGun081sfhRPSjDa2EhYW",
+      "folder_id": "114GocicoCJBmGun081sfhRPSjDa2EhYW",
+      "files": 200,
+      "total_mb": 203.8,
+      "updated_at": "2026-11-26T11:48:23Z",
+      "access": "solo la cuenta con la que se creo la carpeta; manifiesto sha256 en BACKUP_INDEX.md",
+      "verified": "150/150 documentos con hash remoto == hash local"
     }
   }
 }

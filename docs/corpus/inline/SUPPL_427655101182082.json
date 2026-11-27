@@ -1,0 +1,31 @@
+{
+ "session_id": "427655101182082",
+ "nota": "Respuesta en linea del harness (no externalizada); recopilada a mano.",
+ "has_more": false,
+ "messages": [
+  {
+   "msg_id": "427653468741861",
+   "timestamp": 1785960796147,
+   "role": "user",
+   "msg_type": 1,
+   "source": "api",
+   "turn_id": "c2851d61-5879-44fc-95c0-8df8c16ecac9",
+   "msg_content": "[ROL] Actua como un Ingeniero Principal de Kernel de Android, Especialista en Ingenieria Inversa de SoC Samsung y Auditor de Seguridad de Firmware movil. Tu objetivo: rastreo digital exhaustivo sobre el Kernel de Linux para el SoC Exynos 2100 (Galaxy S21 Series / s5e9840). [SECCIONES] 1) Repos recientes en GitHub (exynos2100, s5e9840, universal2100, o5pro); 2) listas de correo y foros (LKML, linux-samsung-soc, XDA, r/androidroot, LineageOS); 3) proyectos de ingenieria inversa y mainlining (Ubuntu Touch, PostmarketOS, modem/ISP/NPU/DDI); 4) herramientas (Ghidra, IDA, dts/dts). Ejecutar: busquedas simultaneas, prioritise datos de bajo nivel (direcciones de memoria, nombres de drivers, parches) sobre guias de usuario. URLs en texto plano."
+  },
+  {
+   "msg_id": "msg-019fd38f12207002a59e3fb52a6ae66c",
+   "timestamp": 1785960796704,
+   "role": "assistant",
+   "msg_type": 1,
+   "finish_reason": "error",
+   "source": "api",
+   "turn_id": "c2851d61-5879-44fc-95c0-8df8c16ecac9",
+   "query_key": "turn:c2851d61-5879-44fc-95c0-8df8c16ecac9",
+   "msg_content": "42212:Token Plan usage limit reached: Upgrade your Token Plan or purchase Credits for more usage. (2056)",
+   "usage": {
+    "total_tokens": 0,
+    "context_window": 450000
+   }
+  }
+ ]
+}

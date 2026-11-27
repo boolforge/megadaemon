@@ -1,0 +1,22 @@
+{
+  "id": "antigravity-general",
+  "name": "antigravity-general (RE del Language Server + corpus + captura local)",
+  "role": "worker",
+  "status": "ACTIVE",
+  "device": "cloud-sandbox",
+  "repo": "https://github.com/boolforge/megadaemon",
+  "branch": "agent/automacion-software",
+  "worktree": "/workspace/megadaemon",
+  "workspace": "/workspace/antigravity",
+  "capabilities": ["language-server-re", "corpus-indexation", "local-capture-harness",
+                   "release-channel-sweep", "drive-verified-backup", "rust-reimplementation"],
+  "limits": {"vcpu": 2, "ram_mb": 3072},
+  "task_id": "AGY-W00-001",
+  "workstream": "W00/W01/W03/W12/W21",
+  "precondition": null,
+  "resume_when": null,
+  "last_checkpoint": "aeb7200",
+  "last_seen": "2026-11-26T11:48:23Z",
+  "blocked_by": [],
+  "notes": "Unico bloqueo: token OAuth real de Google para AGY-W12-002 (captura del trafico gRPC). Todo lo demas esta cerrado y verificado."
+}
