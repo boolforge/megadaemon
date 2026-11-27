@@ -86,9 +86,11 @@ MDDOCTOR_TEST_FIX="$TMP" MDDOCTOR_TEST_PORT="$PUERTO" "$TMP/test"
 # El usuario fijó un tope ESTRICTO de 100 KB para el binario forense (va al
 # movil con un `cat`, y el movil es el que tiene la RAM justa).
 # MEDIDO 2026-11-27: 43.576 B con los flags optimizados.
-"$CC" -Os -s -ffunction-sections -fdata-sections -Wl,--gc-sections \
+# Los MISMOS flags que tools/build-mddoctor.sh: si el gate midiera con otros,
+# mediria un binario que no existe.
+"$CC" -O2 -s -flto -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -fmerge-all-constants -fno-ident -fno-plt -Wl,--as-needed \
-    -fno-unwind-tables -fno-asynchronous-unwind-tables \
+    -fno-unwind-tables -fno-asynchronous-unwind-tables -Wl,-z,noseparate-code \
     -o "$TMP/md" "$RAIZ/tools/mddoctor.c"
 TAM=$(wc -c < "$TMP/md")
 echo "mddoctor: $TAM B (tope: 102400 B)"

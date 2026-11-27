@@ -98,6 +98,8 @@ TIMEOUT_S=120
 for a in "$@"; do
   case "$a" in
     --diagnostico|--verificar) MODO="diagnostico" ;;
+    --doctor)                  MODO="doctor" ;;
+    --reconectar)              MODO="reconectar" ;;
     --instalar|--arreglar)     MODO="instalar" ;;
     --pc)                      MODO="pc" ;;
     --solo-telemetria)         MODO="solo-telemetria" ;;
@@ -130,6 +132,36 @@ say() {
 }
 warn() { printf '[%s] AVISO: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 die()  { printf '[%s] ERROR: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; exit 1; }
+
+# ===========================================================================
+# MODO DOCTOR / RECONECTAR: el nucleo forense (mddoctor, en C) como ROOT.
+# No instala nada: diagnostica (y opcionalmente reconecta) el movil tal y
+# como esta.  Es lo que se usa cuando el daemon esta MUERTO, que es
+# exactamente cuando el bundle no se puede instalar.
+# ===========================================================================
+DOC="$PREFIX/mddoctor"
+
+modo_doctor() {
+  say "=== doctor: diagnostico forense del movil (como root) ==="
+  if ! r "test -x '$DOC'" >/dev/null 2>&1; then
+    warn "no hay mddoctor en $DOC"
+    warn "para instalarlo: ejecuta el one-liner SIN --doctor"
+    warn "mientras tanto, el diagnostico nativo del daemon:"
+    r "'$DAEMON' doctor" 2>/dev/null || true
+    return 1
+  fi
+  say "nucleo forense: $(r "wc -c < '$DOC'" | tr -d ' \r\n') B"
+  if [ "$MODO" = "reconectar" ]; then
+    say "--- reconexion (relanza tunel/daemon si hacen falta) ---"
+    r "'$DOC' reconectar --apply --espera 30" 2>&1
+    return $?
+  fi
+  say "--- estado (salud) ---"
+  r "'$DOC' salud" 2>&1
+  say "--- entorno y permisos reales ---"
+  r "'$DOC' entorno" 2>&1
+  return 0
+}
 
 # ===========================================================================
 # 0) AUTODETECCIÓN
@@ -883,6 +915,26 @@ instalar() {
   done
   say "stack instalado"
 
+  # El NUCLEO FORENSE (mddoctor, en C): se instala como root desde el bundle
+  # y se comprueba que arranca.  MEDIDO 2026-11-27: el bundle se llevaba el
+  # binario compilado en el HOST (x86-64) y el movil descargaba algo que no
+  # puede ejecutar; ahora el CI mete el ARM64 y se verifica la arquitectura.
+  for cand in "$STAGE/bin/mddoctor" "$STAGE/megadaemon-movil/bin/mddoctor" "$STAGE/mddoctor"; do
+    if [ -f "$cand" ]; then
+      r "cp -f '$cand' '$DOC.new' && chmod 755 '$DOC.new' && mv -f '$DOC.new' '$DOC'" >/dev/null
+      break
+    fi
+  done
+  if r "test -x '$DOC'" >/dev/null 2>&1; then
+    say "nucleo forense instalado: $(r "wc -c < '$DOC'" | tr -d ' \r\n') B"
+    # Se EJECUTA como root ahora mismo: el instalador demuestra que el
+    # enlace "online -> root" funciona, no lo promete.
+    say "--- comprobacion del nucleo forense (root) ---"
+    r "'$DOC' entorno" 2>&1 | head -6
+  else
+    warn "el bundle no traia mddoctor utilizable (arquitectura o empaquetado)"
+  fi
+
   say "=== 4/8 arrancando el stack ==="
   r "mkdir -p '$STATE' '$LOGDIR'" >/dev/null
   # El daemon, CON SU ENTORNO (sin esto escribe el estado en el sitio
@@ -1014,6 +1066,10 @@ instalar() {
 
   say "=== 8/8 comprobación final ==="
   diagnostico
+  if r "test -x '$DOC'" >/dev/null 2>&1; then
+    say "--- veredicto del nucleo forense (root) ---"
+    r "'$DOC' todo" 2>&1 | tail -n 14
+  fi
   r "rm -rf '$STAGE' '$WORK'" >/dev/null 2>&1
   T1=$(date +%s 2>/dev/null || echo 0)
   say ""
@@ -1072,6 +1128,9 @@ case "$MODO" in
     informe_add "diagnostico" "{ $DIAG_JSON }"
     informe_cierra
     publicar_telemetria
+    ;;
+  doctor|reconectar)
+    modo_doctor
     ;;
   instalar)         instalar ;;
   pc)               instalar_pc ;;

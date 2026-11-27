@@ -44,6 +44,12 @@ RAIZ="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 OPT="-O2 -s -flto -ffunction-sections -fdata-sections -Wl,--gc-sections"
 OPT="$OPT -fmerge-all-constants -fno-ident -fno-plt -Wl,--as-needed"
 OPT="$OPT -fno-unwind-tables -fno-asynchronous-unwind-tables"
+# -z noseparate-code: el enlazador pone .text y .rodata en segmentos de
+# pagina distintos y deja ~8 KB de RELLENO entre medias (MEDIDO: 51.576 B
+# con, 43.384 B sin).  Se cede aqui y NO en el daemon principal, que si es
+# un daemon de red: W^X protege frente a inyeccion de codigo, y este
+# binario es una herramienta local que ya corre como root.
+OPT="$OPT -Wl,-z,noseparate-code"
 
 recortar() {
     # Quita .comment y .note.gnu.build-id: son ruido para el telefono.

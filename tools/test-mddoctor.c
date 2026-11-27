@@ -151,6 +151,9 @@ int main(void) {
     ok(strstr(cola, "linea20") != NULL, "la cola incluye la linea 20");
     ok(strstr(cola, "linea17") == NULL, "la cola NO incluye la linea 17");
 
+    printf("== reconectar (modo plan: NO toca nada) ==\n");
+    ok(reconectar(0, 0) == 0, "reconectar en modo plan sale bien y no toca nada");
+
     printf("== procesos (sin pgrep) ==\n");
     char procs[1024];
     procesos_megadaemon(procs, sizeof(procs));

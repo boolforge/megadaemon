@@ -81,6 +81,15 @@ fn ejecutar(accion: &str, aplicar: bool, espera: u64) -> Option<String> {
                 cmd.arg("--apply");
             }
         }
+        "reconectar" => {
+            cmd.arg("reconectar");
+            if aplicar {
+                cmd.arg("--apply");
+            }
+            if espera > 0 {
+                cmd.arg("--espera").arg(espera.to_string());
+            }
+        }
         "todo" => {
             cmd.arg("todo");
             if espera > 0 {
@@ -128,7 +137,7 @@ pub fn dispatch(args: &Value) -> Value {
     // que `root_stealth.apply` y `battery_saver.apply`).
     // `repair --apply` también toca el sistema (mkdir, chmod, mata procesos
     // y relanza el supervisor): misma exigencia.
-    if (accion == "recover" || accion == "repair") && aplicar {
+    if (accion == "recover" || accion == "repair" || accion == "reconectar") && aplicar {
         let confirmar = args
             .get("confirmar")
             .or_else(|| args.get("confirm"))
@@ -138,7 +147,7 @@ pub fn dispatch(args: &Value) -> Value {
             return json!({
                 "ok": false,
                 "accion": accion,
-                "error": "recover con aplicar=true BORRA ficheros: hace falta confirmar=true",
+                "error": "esta accion con aplicar=true toca el sistema: hace falta confirmar=true",
                 "pista": "primero pide el plan con accion=recover y sin aplicar"
             });
         }

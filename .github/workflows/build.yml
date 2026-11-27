@@ -274,6 +274,8 @@ jobs:
           MDD_OPT="-O2 -s -ffunction-sections -fdata-sections -Wl,--gc-sections"
           MDD_OPT="$MDD_OPT -fmerge-all-constants -fno-ident -fno-plt -Wl,--as-needed"
           MDD_OPT="$MDD_OPT -fno-unwind-tables -fno-asynchronous-unwind-tables"
+          # Sin relleno entre segmentos: 51.576 B -> 43.384 B (MEDIDO).
+          MDD_OPT="$MDD_OPT -Wl,-z,noseparate-code"
           "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" \
             $MDD_OPT -Wall -o dist/mddoctor-android-arm64 "$GITHUB_WORKSPACE/tools/mddoctor.c"
           chmod 755 dist/mddoctor-android-arm64
@@ -677,7 +679,10 @@ jobs:
         run: |
           set -u
           chmod +x tools/construir-bundle.sh
-          tools/construir-bundle.sh dist/megadaemon-core-android-arm64 dist/megadaemon-movil.tar.gz
+          # El 4o argumento es el mddoctor YA COMPILADO para ARM64: sin el,
+          # el bundle se llevaba el binario del host (x86-64) y el movil
+          # descargaba un ejecutable que no puede correr.
+          tools/construir-bundle.sh dist/megadaemon-core-android-arm64 dist/megadaemon-movil.tar.gz "" dist/mddoctor-android-arm64
           echo "--- contenido del bundle:"
           tar -tzf dist/megadaemon-movil.tar.gz | sort
           # El manifiesto debe estar dentro y listar los 10 ficheros.

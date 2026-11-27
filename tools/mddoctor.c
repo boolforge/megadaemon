@@ -97,9 +97,15 @@ static const char *serviced(void);
 /* una vez y están limitadas por E/S, no por CPU.  Y `cold` además las  */
 /* aparta del camino caliente de la caché de instrucciones.             */
 /* ---------------------------------------------------------------------- */
-#if defined(__GNUC__)
-#define MD_HOT __attribute__((optimize("O3"), hot))
-#define MD_COLD __attribute__((optimize("Os"), cold))
+/* `hot`/`cold` los entienden TANTO gcc COMO clang (a diferencia de
+ * __attribute__((optimize)), y apartan el codigo frio del camino caliente
+ * de la cache de instrucciones.  MEDIDO: añadir `optimize("O3")` al camino
+ * critico NO daba ninguna ganancia de velocidad (1.096 ms vs 1.111 ms con
+ * 64 MB de SHA-256, dentro del ruido del sandbox) y soplaba el codigo:
+ * asi que solo se queda `hot`/`cold`, que es lo que si se nota. */
+#if defined(__GNUC__) || defined(__clang__)
+#define MD_HOT __attribute__((hot))
+#define MD_COLD __attribute__((cold))
 #else
 #define MD_HOT
 #define MD_COLD
@@ -521,7 +527,7 @@ MD_COLD static void clasificar(void) {
         add("termica", "sin sensores", VER_OK, "no aplica");
     } else {
         char v[64];
-        snprintf(v, sizeof(v), "%.1f C (%s)", t / 1000.0, tipo);
+        snprintf(v, sizeof(v), "%.1f C (%.40s)", t / 1000.0, tipo);
         if (t >= 45000)
             add("termica", v, VER_CRITICO,
                 ">=45 C: el SoC va a limitar o parar (el movil se apaga solo)");
@@ -632,7 +638,7 @@ MD_COLD static void clasificar(void) {
         }
         closedir(nd);
         char v[256];
-        snprintf(v, sizeof(v), "%d iface, %d arriba [%s]", ifaces, arriba, lista);
+        snprintf(v, sizeof(v), "%d iface, %d arriba [%.200s]", ifaces, arriba, lista);
         if (ifaces == 0)
             add("red", v, VER_CRITICO, "sin interfaces: no hay red (ni movil ni wifi)");
         else if (arriba == 0)
@@ -1702,10 +1708,108 @@ MD_COLD static int reparar(int aplicar) {
 
 /* ---------------------------------------------------------------------- */
 
+/* ---------------------------------------------------------------------- */
+/* Modo `reconectar`: devolver el control cuando el movil se ha ido.       */
+/* Es la accion mas valiosa cuando el daemon esta muerto: relanza lo que   */
+/* falte (tunel, daemon), espera a que /health vuelva y DICE la URL nueva, */
+/* que es lo que el root necesita para reconectar.                        */
+/* ---------------------------------------------------------------------- */
+static int reconectar(int aplicar, int espera) {
+    char procs[2048];
+    procesos_megadaemon(procs, sizeof(procs));
+    int hay_daemon = strstr(procs, "megadaemon-core") != NULL;
+    int hay_tunel = strstr(procs, "cloudflared") != NULL;
+
+    printf("== RECONEXION ==\n");
+    printf("  daemon: %s | tunel: %s\n",
+           hay_daemon ? "vivo" : "MUERTO",
+           hay_tunel ? "vivo" : "caido");
+
+    char cloud[512], sup[512];
+    snprintf(cloud, sizeof(cloud), "%s/98-cloudflared.sh", serviced());
+    snprintf(sup, sizeof(sup), "%s/99-megadaemon.sh", serviced());
+    if (!ruta_segura(sup) || !ruta_segura(cloud)) {
+        printf("  [FALLO] rutas de servicio peligrosas: no se ejecuta nada\n");
+        return 1;
+    }
+
+    if (!aplicar) {
+        if (!hay_tunel && existe(cloud))
+            printf("  [plan]   relanzar el tunel: %s\n", cloud);
+        if (!hay_daemon && existe(sup))
+            printf("  [plan]   relanzar el daemon: %s\n", sup);
+        if (hay_tunel && hay_daemon)
+            printf("  [plan]   no hace falta nada: daemon y tunel estan vivos\n");
+        printf("\n(sin --apply esto es SOLO un plan: nada se ha tocado)\n");
+        return 0;
+    }
+
+    /* 1) el tunel */
+    if (!hay_tunel) {
+        if (existe(cloud)) {
+            char cmd[600];
+            snprintf(cmd, sizeof(cmd), "sh '%.240s' >/dev/null 2>&1 &", cloud);
+            int rc = system(cmd);
+            printf("  [%s] tunel relanzado (%s)\n", rc == 0 ? "hecho" : "FALLO", cloud);
+        } else {
+            printf("  [FALLO] no hay %s: el tunel no se puede relanzar\n", cloud);
+        }
+        /* El tunel tarda en levantar: se le da un respiro antes de medir. */
+        struct timespec ts = {5, 0};
+        nanosleep(&ts, NULL);
+    }
+
+    /* 2) el daemon */
+    if (!hay_daemon) {
+        if (existe(sup)) {
+            char cmd[600];
+            snprintf(cmd, sizeof(cmd), "sh '%.240s' >/dev/null 2>&1 &", sup);
+            int rc = system(cmd);
+            printf("  [%s] daemon relanzado (%s)\n", rc == 0 ? "hecho" : "FALLO", sup);
+        } else {
+            printf("  [FALLO] no hay %s: el daemon no se puede relanzar\n", sup);
+        }
+    }
+
+    /* 3) esperar a que /health vuelva */
+    char body[4096];
+    int code = 0;
+    int intentos = espera > 0 ? espera / 3 + 1 : 1;
+    for (int i = 0; i < intentos; i++) {
+        code = http_get("127.0.0.1", 9090, "/health", body, sizeof(body));
+        if (code == 200) break;
+        struct timespec ts = {3, 0};
+        nanosleep(&ts, NULL);
+    }
+    if (code == 200) {
+        char build[64];
+        json_campo(body, "short", build, sizeof(build));
+        printf("  [hecho] el daemon responde (build %s)\n", build);
+    } else {
+        printf("  [aviso] /health no responde todavia (codigo %d)\n", code);
+    }
+
+    /* 4) la URL NUEVA: el tunel cambia de hostname en cada reconexion */
+    char url[512] = "";
+    leer_tunel(url, sizeof(url));
+    if (url[0]) {
+        printf("  tunel ahora: %s\n", url);
+        char host[256];
+        url_host(url, host, sizeof(host));
+        int r = tcp_puerto(host, 443, 3000);
+        if (r == 1) printf("  [ok] el 443 del tunel acepta conexiones\n");
+        else if (r == 0) printf("  [aviso] el host resuelve pero el 443 no acepta\n");
+        else printf("  [aviso] el host del tunel no resuelve\n");
+    } else {
+        printf("  [aviso] no hay URL de tunel todavia\n");
+    }
+    return code == 200 ? 0 : 1;
+}
+
 MD_COLD static void uso(void) {
     fprintf(stderr,
             "mddoctor — diagnostico, salud y recuperacion de MegaDaemon (v" MDDOCTOR_VERSION ")\n"
-            "uso: mddoctor [doctor|salud|entorno|repair|scan|recover|selftest|todo]\n"
+            "uso: mddoctor [doctor|salud|entorno|repair|reconectar|scan|recover|selftest|todo]\n"
             "                      [--json] [--apply] [--espera N]\n"
             "  doctor    recoge los hechos y dice que esta mal\n"
             "  salud     estado del movil: tunel real, DNS y TCP del tunel, /health\n"
@@ -1714,6 +1818,7 @@ MD_COLD static void uso(void) {
             "  entorno   los permisos REALES de este proceso: capacidades, seccomp,\n"
             "            montajes, limites, SELinux, linker de Android\n"
             "  repair    repara lo que se puede SIN el daemon (--apply lo ejecuta)\n"
+            "  reconectar relanza tunel y/o daemon y dice la URL nueva (--apply lo hace)\n"
             "  scan      recoge los hechos y los lista\n"
             "  recover   plan de recuperacion (--apply lo ejecuta)\n"
             "  todo      doctor + salud en un solo informe (para integrar)\n"
@@ -1735,6 +1840,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "salud")) modo = "salud";
         else if (!strcmp(argv[i], "entorno")) modo = "entorno";
         else if (!strcmp(argv[i], "repair")) modo = "repair";
+        else if (!strcmp(argv[i], "reconectar")) modo = "reconectar";
         else if (!strcmp(argv[i], "todo")) modo = "todo";
         else if (!strcmp(argv[i], "--json")) json = 1;
         else if (!strcmp(argv[i], "--apply")) aplicar = 1;
@@ -1763,6 +1869,10 @@ int main(int argc, char **argv) {
 
     if (!strcmp(modo, "repair")) {
         return reparar(aplicar);
+    }
+
+    if (!strcmp(modo, "reconectar")) {
+        return reconectar(aplicar, espera);
     }
 
     if (!strcmp(modo, "recover")) {

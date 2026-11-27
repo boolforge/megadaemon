@@ -268,11 +268,11 @@ pub fn tool_definitions() -> Value {
 
             {
                 "name": "doctor",
-                "description": "Diagnóstico y recuperación del móvil en UN comando, con el binario forense en C (mddoctor, 43 KB, <1 MB de RAM): funciona CUANDO el daemon está roto. Acciones: doctor (hechos + veredicto), salud (URL real del túnel, DNS y TCP del túnel, /health por sockets sin curl ni wget, procesos, SHA-256 y ELF del binario en servicio), entorno (los permisos REALES del proceso: capacidades, seccomp, montajes, límites, SELinux), repair (repara lo que se puede sin el daemon; aplicar=true lo ejecuta y exige confirmar=true), scan (hechos crudos), recover (plan de recuperación; aplicar=true lo ejecuta y exige confirmar=true), todo (doctor+salud en un informe), selftest (prueba sus propias sondas). Si el binario no está, devuelve el diagnóstico nativo.",
+                "description": "Diagnóstico y recuperación del móvil en UN comando, con el binario forense en C (mddoctor, 43 KB, <1 MB de RAM): funciona CUANDO el daemon está roto. Acciones: doctor (hechos + veredicto), salud (URL real del túnel, DNS y TCP del túnel, /health por sockets sin curl ni wget, procesos, SHA-256 y ELF del binario en servicio), entorno (los permisos REALES del proceso: capacidades, seccomp, montajes, límites, SELinux), repair (repara lo que se puede sin el daemon; aplicar=true lo ejecuta y exige confirmar=true), scan (hechos crudos), recover (plan de recuperación; aplicar=true lo ejecuta y exige confirmar=true), reconectar (relanza el tunel y/o el daemon, espera a /health y DICE la URL nueva: la via para recuperar el control de un movil que se ha ido; aplicar=true lo hace y exige confirmar=true), todo (doctor+salud en un informe), selftest (prueba sus propias sondas). Si el binario no está, devuelve el diagnóstico nativo.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "accion": { "type": "string", "enum": ["doctor", "salud", "entorno", "repair", "scan", "recover", "todo", "selftest"], "default": "doctor" },
+                        "accion": { "type": "string", "enum": ["doctor", "salud", "entorno", "repair", "reconectar", "scan", "recover", "todo", "selftest"], "default": "doctor" },
                         "aplicar": { "type": "boolean", "description": "En accion=recover o repair: ejecutar en vez de solo mostrar el plan." },
                         "confirmar": { "type": "boolean", "description": "Obligatorio si aplicar=true (acciones destructivas)." },
                         "espera": { "type": "integer", "description": "En accion=salud o todo: segundos de espera por /health antes de rendirse." }

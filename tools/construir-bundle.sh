@@ -15,7 +15,12 @@
 #     actualización COMPLETA de una vez, verificable (módulo `bundle`).
 #
 # USO:
-#   tools/construir-bundle.sh <binario> <salida.tar.gz> [prefijo]
+#   tools/construir-bundle.sh <binario> <salida.tar.gz> [prefijo] [mddoctor]
+#
+#   <mddoctor> es el binario forense YA COMPILADO para la arquitectura del
+#   daemon (el CI le pasa dist/mddoctor-android-arm64).  Si no se pasa, se
+#   compila el del host, que NO sirve para un movil: por eso se COMPRUEBA
+#   que el binario embebido tenga la misma arquitectura que el daemon.
 #
 # El manifiesto usa destinos RELATIVOS al prefijo de instalación:
 #   prefijo/<fichero>   -> <prefijo>/<fichero>
@@ -25,6 +30,7 @@ set -euo pipefail
 BINARIO="${1:?falta el binario}"
 SALIDA="${2:?falta la salida}"
 PREFIJO="${3:-/data/adb/megadaemon}"
+MDDOCTOR="${4:-}"
 
 RAIZ="$(cd "$(dirname "$0")/.." && pwd)"
 STAGE="$(mktemp -d)"
@@ -36,13 +42,34 @@ mkdir -p "$STAGE/deploy" "$STAGE/web" "$STAGE/bin"
 # 1) El binario.
 cp -f "$BINARIO" "$STAGE/bin/megadaemon-core"
 chmod 755 "$STAGE/bin/megadaemon-core"
-# El mddoctor se compila aqui si no esta: en el movil no hay compilador, y en
-# el PC el gcc siempre esta.  Si falla, el bundle sigue igual (es accesorio).
-if [ ! -f "$STAGE/bin/mddoctor" ]; then
+# El nucleo forense (`mddoctor`).  MEDIDO 2026-11-27: sin esto el bundle
+# llevaba el binario COMPILADO EN EL HOST (x86-64) y el movil se descargaba
+# un ejecutable que no puede correr: el enlace "online -> root" estaba roto.
+# Ahora se usa el binario ya compilado para la arquitectura del daemon (el
+# CI lo pasa como 4o argumento) y, si no hay, se compila el del host PERO
+# solo se embebe si su arquitectura coincide con la del daemon.
+arquitectura() {
+    # e_machine del ELF (offset 18, 2 bytes little endian): 183 = aarch64,
+    # 62 = x86-64.  0 si el fichero no es un ELF.
+    od -An -tu1 -j18 -N2 "$1" 2>/dev/null | awk '{print $1+0}'
+}
+if [ -n "$MDDOCTOR" ] && [ -f "$MDDOCTOR" ]; then
+    cp -f "$MDDOCTOR" "$STAGE/bin/mddoctor"
+elif [ ! -f "$STAGE/bin/mddoctor" ]; then
     sh "$RAIZ/tools/build-mddoctor.sh" >/dev/null 2>&1 || true
     [ -f "$RAIZ/tools/mddoctor" ] && cp -f "$RAIZ/tools/mddoctor" "$STAGE/bin/mddoctor"
 fi
-[ -f "$STAGE/bin/mddoctor" ] && chmod 755 "$STAGE/bin/mddoctor"
+if [ -f "$STAGE/bin/mddoctor" ]; then
+    a_bin="$(arquitectura "$BINARIO")"
+    a_doc="$(arquitectura "$STAGE/bin/mddoctor")"
+    if [ -n "$a_doc" ] && [ "$a_doc" != "$a_bin" ]; then
+        echo "bundle: AVISO - el mddoctor ($a_doc) NO es de la arquitectura del daemon ($a_bin): no se embebe"
+        rm -f "$STAGE/bin/mddoctor"
+    else
+        chmod 755 "$STAGE/bin/mddoctor"
+        echo "bundle: mddoctor embebido (arquitectura $a_doc)"
+    fi
+fi
 
 # 2) El stack (los mismos ficheros que el daemon lleva embebidos).
 for f in 99-megadaemon.sh 97-megadaemon-keeper.sh 98-cloudflared.sh 91-adb-tcp.sh \
