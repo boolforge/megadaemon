@@ -206,11 +206,18 @@ Plataformas disponibles: **darwin-arm64, darwin-x64, win32-arm64, win32-x64**
 
 ## 9. Lo que NO se midió
 
-* Los **32 MB de chunks JS** no se han analizado en detalle (sólo los ficheros
-  citados: `chunk-JNRKF55Q.js` y el `acp.js`). El resto de la lógica del
-  agente queda **NO MEDIDO**.
-* Los módulos **WASM** (`emscripten-module.wasm`, `photon_rs_bg.wasm`) no se
-  han descompilado.
-* El **computer-use nativo** (darwin/win32) no se ha reversingueado: no hay
-  binario de linux y aquí no aplica el motor sancionado.
-* El comportamiento en ejecución (no sólo estático) de la cola y la delegación.
+* El **comportamiento en ejecución** (no sólo estático) de la cola, la delegación
+  y el goal: requiere ejecutar el agente.
+* La **implementación** de `delegation/message` y `delegation/transcript`: el
+  registro del TUI (`extensions.ts`) declara 17 métodos pero **sólo implementa
+  14**; esos dos están declarados en el launcher (`acp.js`) y no en el TUI ⇒ su
+  implementación está en el runtime. **NO MEDIDO**.
+* Los **módulos WASM** (`emscripten-module.wasm`, `photon_rs_bg.wasm`).
+* El **computer-use nativo** (darwin/win32): no hay binario de linux ⇒ no
+  aplica el motor sancionado aquí. **NO MEDIDO**.
+
+> **Nota (2026-11-27, posterior a la medición):** el repo
+> `MiniMax-AI/minimax-code` es **público y MIT** (2.297★, push 2026-11-27), así
+> que los 32 MB de chunks **sí** se han podido leer en el fuente. De ahí sale
+> la **sección normativa** de los tres conceptos:
+> `docs/RE_MINIMAX_SPEC_NORMATIVO.md`.
