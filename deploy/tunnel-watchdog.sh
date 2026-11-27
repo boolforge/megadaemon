@@ -22,7 +22,19 @@
 # ---------------------------------------------------------------------------
 INTERVAL="${INTERVAL:-60}"
 MAX_LOAD="${MAX_LOAD:-8}"
-LOG_DIR="${LOG_DIR:-/data/local/tmp/megadaemon}"
+# MEDIDO (2026-11-27, movil SM-G998B): el watchdog leia `tunnel.url`/
+# `tunnel.log` de `/data/local/tmp/megadaemon` (VOLATIL) mientras el
+# one-liner los escribe en `/data/adb/megadaemon/state` (PERSISTENTE) =>
+# el watchdog creia que el tunel estaba muerto y lo relanzaba cada 60 s.
+# Ahora el prefijo por defecto es el PERSISTENTE, con el volatil de plan B.
+if [ -z "${LOG_DIR:-}" ]; then
+    if [ -d /data/adb/megadaemon ] || [ -d /data/adb ]; then
+        LOG_DIR=/data/adb/megadaemon
+    else
+        LOG_DIR=/data/local/tmp/megadaemon
+    fi
+fi
+LOG_DIR="$LOG_DIR"
 URL_FILE="$LOG_DIR/tunnel.url"
 TUNNEL_LOG="$LOG_DIR/tunnel.log"
 LOG="$LOG_DIR/tunnel-watchdog.log"
@@ -40,7 +52,7 @@ DAEMON_BIN="${DAEMON_BIN:-$LOG_DIR/megadaemon-core}"
 PUBLISH="${PUBLISH:-$LOG_DIR/channel-publish}"
 # ⚠️ Lo lanza Magisk (hermano del supervisor) => hay que leer el env aquí.
 # Sin `set -a`: la API key no se exporta a ningún hijo.
-ENV_FILE="${MEGADAEMON_ENV:-/data/local/tmp/megadaemon/megadaemon.env}"
+ENV_FILE="${MEGADAEMON_ENV:-$LOG_DIR/megadaemon.env}"
 if [ -f "$ENV_FILE" ]; then
     . "$ENV_FILE" 2>/dev/null
 fi
@@ -49,7 +61,7 @@ fi
 # entorno mantiene su atributo de exportación al reasignarla).
 unset MEGADAEMON_API_KEY MEGADAEMON_COCKPIT_TOKEN 2>/dev/null
 # El estado del daemon (tunnel.url, channel.json, key) vive AQUÍ.
-STATE_DIR="${MEGADAEMON_STATE_DIR:-/data/local/tmp/megadaemon/state}"
+STATE_DIR="${MEGADAEMON_STATE_DIR:-$LOG_DIR/state}"
 CF="${CF:-/data/data/com.termux/files/usr/bin/cloudflared}"
 TARGET="${CFT_TARGET:-http://127.0.0.1:9090}"
 

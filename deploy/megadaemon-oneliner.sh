@@ -323,7 +323,7 @@ instalar_stack() {
 # se repone lo que falte y, si el tunel no responde, se relanza el stack
 # con el nucleo forense (que sabe relanzar el tunel y el daemon).
 autorreparar() {
-  say "--- autoreparacion (lo que falte, se repone) ---"
+  say "--- autorreparacion (lo que falte, se repone) ---"
   faltan=0
   for f in 99-megadaemon.sh 97-megadaemon-keeper.sh 98-cloudflared.sh 91-adb-tcp.sh; do
     ejecutable "/data/adb/service.d/$f" || { warn "falta /data/adb/service.d/$f"; faltan=1; }
@@ -346,10 +346,10 @@ autorreparar() {
     if [ -n "$U2" ] && r "'$DAEMON' telemetria sonda '$U2'" >/dev/null 2>&1; then
       listo=1
       URL="$U2"
-      say "el tunel responde TRAS la autoreparacion: $URL"
+      say "el tunel responde TRAS la autorreparacion: $URL"
       informe_paso "autorreparacion" true "el tunel responde: $URL"
     else
-      warn "tras la autoreparacion el tunel sigue sin responder"
+      warn "tras la autorreparacion el tunel sigue sin responder"
       informe_paso "autorreparacion" false "el tunel sigue caido"
     fi
   fi
@@ -532,12 +532,19 @@ sha16_de() {
 # ===========================================================================
 # ¿Hay un proceso megadaemon-core?  Devuelve el PID.
 daemon_vivo() {
-  for p in /proc/[0-9]*; do
-    [ -r "$p/cmdline" ] || continue
-    d_c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
-    case "$d_c" in *megadaemon-core*) printf '%s' "${p#/proc/}"; return 0 ;; esac
-  done
-  return 1
+  # MEDIDO (2026-11-27, movil): como usuario normal, `/proc/<pid>/cmdline` de
+  # un proceso de ROOT no se puede leer => el daemon NUNCA aparecia como
+  # vivo.  Se busca en el ambito de ROOT.
+  #
+  # ⚠️ MEDIDO (2026-11-27) por el banco del instalador: `grep -l` devuelve la
+  # RUTA del fichero que casa ("/proc/1234/cmdline").  Con `sed 's#.*/##'`
+  # salia "cmdline" (no el PID) => el diagnostico decia
+  #   "cannot open /proc/cmdline/cmdline"
+  # y la comprobacion de "el binario en servicio es el nuevo" NUNCA podia
+  # hacerse (miraba /proc/cmdline/stat).  Ahora se quita "/cmdline" y LUEGO
+  # el directorio, que es el PID.
+  r "grep -lsa megadaemon-core /proc/[0-9]*/cmdline 2>/dev/null | head -1" \
+    | tr -d ' \r\n' | sed 's#/cmdline$##; s#.*/##'
 }
 
 # Cuántos daemons hay (2 o más = fought: matan al otro).
@@ -568,22 +575,22 @@ CONTAR_SUP=0
 CONTAR_WD=0
 CONTAR_CF=0
 contar_procesos() {
-  CONTAR_DAEMONS=0
-  CONTAR_SUP=0
-  CONTAR_WD=0
-  CONTAR_CF=0
-  for p in /proc/[0-9]*; do
-    [ -r "$p/cmdline" ] || continue
-    c_c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
-    case "$c_c" in *megadaemon-core*) CONTAR_DAEMONS=$((CONTAR_DAEMONS + 1)) ;; esac
-    case "$c_c" in *99-megadaemon.sh*) CONTAR_SUP=$((CONTAR_SUP + 1)) ;; esac
-    case "$c_c" in *tunnel-watchdog.sh*) CONTAR_WD=$((CONTAR_WD + 1)) ;; esac
-    # El envoltorio `sh -c "… cloudflared …"` no es un cloudflared: no cuenta.
-    case "$c_c" in
-      "sh -c"*) ;;
-      *cloudflared*) CONTAR_CF=$((CONTAR_CF + 1)) ;;
-    esac
-  done
+  # MEDIDO (2026-11-27, movil SM-G998B): esto leia `/proc/*/cmdline` como
+  # USUARIO NORMAL.  Los daemons corren como ROOT => su `cmdline` da
+  # "Permission denied" => se contaban 0 => el diagnostico decia "NO
+  # CORRE" y "vivos: supervisor=0 watchdog=0 cloudflared=0" CON EL DAEMON
+  # SANO (el `/health` respondia 200 y el watchdog logueaba "tunel vivo").
+  # Ahora se cuenta COMO ROOT (los helpers `daemon_vivo` y los contadores
+  # ya usaban `r`; aqui faltaba el counting).
+  CONTAR_DAEMONS=$(r "grep -lsa megadaemon-core /proc/[0-9]*/cmdline 2>/dev/null | wc -l" | tr -d ' \r\n')
+  CONTAR_SUP=$(r "grep -lsa 99-megadaemon.sh /proc/[0-9]*/cmdline 2>/dev/null | wc -l" | tr -d ' \r\n')
+  CONTAR_WD=$(r "grep -lsa tunnel-watchdog.sh /proc/[0-9]*/cmdline 2>/dev/null | wc -l" | tr -d ' \r\n')
+  # El envoltorio `sh -c "… cloudflared …"` NO es un cloudflared: no cuenta.
+  CONTAR_CF=$(r "grep -lsa cloudflared /proc/[0-9]*/cmdline 2>/dev/null | grep -v 'sh -c' | wc -l" | tr -d ' \r\n')
+  [ -n "$CONTAR_DAEMONS" ] || CONTAR_DAEMONS=0
+  [ -n "$CONTAR_SUP" ] || CONTAR_SUP=0
+  [ -n "$CONTAR_WD" ] || CONTAR_WD=0
+  [ -n "$CONTAR_CF" ] || CONTAR_CF=0
 }
 
 # ¿El cockpit local responde?  (/health va sin credencial; 401/403 = vivo).
@@ -713,9 +720,17 @@ informe_paso() {
 informe_cierra() {
   {
     printf '{\n'
-    sed '$ s/,$//' "$INFORME_TMP" 2>/dev/null
-    printf ',\n  "pasos": [\n'
-    sed '$ s/,$//' "$INFORME_PASOS_TMP" 2>/dev/null
+    # Los campos de nivel superior: si NO hay ninguno (instalación que ha
+    # muerto antes de cerrar el informe) NO se pone la coma, o el JSON sale
+    # INVÁLIDO ("{,").  MEDIDO (2026-11-27) por el banco del instalador.
+    if [ -s "$INFORME_TMP" ]; then
+      sed '$ s/,$//' "$INFORME_TMP" 2>/dev/null
+      printf ',\n'
+    fi
+    printf '  "pasos": [\n'
+    if [ -s "$INFORME_PASOS_TMP" ]; then
+      sed '$ s/,$//' "$INFORME_PASOS_TMP" 2>/dev/null
+    fi
     printf '\n  ]\n}\n'
   } > "$WORKDIR/instalacion.json.final" 2>/dev/null
   # El informe final vive en $STATE (lo lee el root desde Drive): se escribe
@@ -850,7 +865,12 @@ diagnostico() {
   DIAG_DRIVE=false
   if existe "$STATE/gdrive_credentials.json"; then
     DIAG_DRIVE=true
-    say "  Drive: credenciales presentes ($(wc -c < "$STATE/gdrive_credentials.json" | tr -d ' ') B)"
+    # MEDIDO (2026-11-27, movil): el `wc -c < fichero` se ejecutaba como
+    # USUARIO NORMAL y el fichero de credenciales es de ROOT con 0600 =>
+    # "Permission denied" (y el tamaño salia vacio).  El tamano se pide en
+    # el ambito de ROOT (`r`), que si puede leerlo.
+    BYTES=$(r "wc -c < '$STATE/gdrive_credentials.json' 2>/dev/null" | tr -d ' \r\n')
+    say "  Drive: credenciales presentes (${BYTES:-?} B)"
   else
     warn "  Drive: NO HAY credenciales (no podrá subir telemetría)"
   fi
@@ -1112,7 +1132,17 @@ instalar() {
   fi
 
   # El watchdog, con SU entorno (tunnel-watchdog.sh:25,39,40,43,52,53).
-  r "LOG_DIR='$PREFIX' DAEMON_BIN='$DAEMON' PUBLISH='$PREFIX/channel-publish' MEGADAEMON_STATE_DIR='$STATE' MEGADAEMON_ENV='$PREFIX/megadaemon.env' CF='$CF_BIN' CFT_TARGET='http://127.0.0.1:$PORT' setsid nohup sh '$PREFIX/tunnel-watchdog.sh' >> '$LOGDIR/tunnel-watchdog.log' 2>&1 < /dev/null &" >/dev/null
+  # ⚠️ MEDIDO (2026-11-27) por el banco del instalador: relanzar el watchdog
+  # a ciegas deja DOS watchdogs vivos (este + el que arranca 98-cloudflared.sh
+  # en el boot) y se pelean por el túnel: cada uno relanza cloudflared y el
+  # hostname cambia cada 60 s => la flota se queda ciega.  Igual que con
+  # cloudflared, si ya hay uno vivo, NO se relanza.
+  contar_procesos
+  if [ "${CONTAR_WD:-0}" -gt 0 ]; then
+    say "hay $CONTAR_WD watchdogs vivos: no relanzo (se pelean por el túnel)"
+  else
+    r "LOG_DIR='$PREFIX' DAEMON_BIN='$DAEMON' PUBLISH='$PREFIX/channel-publish' MEGADAEMON_STATE_DIR='$STATE' MEGADAEMON_ENV='$PREFIX/megadaemon.env' CF='$CF_BIN' CFT_TARGET='http://127.0.0.1:$PORT' setsid nohup sh '$PREFIX/tunnel-watchdog.sh' >> '$LOGDIR/tunnel-watchdog.log' 2>&1 < /dev/null &" >/dev/null
+  fi
   say "servicios lanzados"
 
   # El daemon tiene que ARRANCAR: si no, se restaura el anterior.
@@ -1223,7 +1253,14 @@ instalar() {
 
   say "=== 8/8 comprobación final ==="
   # Si el movil no ha quedado alcanzable, se ARREGLA antes de rendirse.
-  [ "$listo" = "1" ] || autoreparar
+  # ⚠️ MEDIDO (2026-11-27) por el banco del instalador: la llamada estaba
+  # escrita "autoreparar" (una sola r) y la función se llama
+  # "autorreparar" (dos r) => en el móvil salía
+  #   "sh: 1226: autoreparar: not found"
+  # y el móvil quedaba MUERTO sin que nadie lo arreglara.  El atajo de
+  # idempotencia (que sí funciona) lo camufla: el 2º arranque dice "no toco
+  # nada" y no repara nada.
+  [ "$listo" = "1" ] || autorreparar
   diagnostico
   if r "test -x '$DOC'" >/dev/null 2>&1; then
     say "--- veredicto del nucleo forense (root) ---"

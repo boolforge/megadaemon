@@ -22,7 +22,20 @@
 # Variables:    CFT_TARGET (por defecto http://127.0.0.1:9090)
 #               MAX_LOAD  (por defecto 8: con el móvil saturado NO relanza)
 # ---------------------------------------------------------------------------
-PREFIX="${MEGADAEMON_PREFIX:-/data/local/tmp/megadaemon}"
+# MEDIDO (2026-11-27, movil SM-G998B): el tunel escribia su `tunnel.log` y su
+# `tunnel.url` en `/data/local/tmp/megadaemon` (VOLATIL: se borra al
+# reiniciar) mientras el one-liner los busca en `/data/adb/megadaemon/state`
+# (PERSISTENTE) => el movil quedaba "sin URL de tunel" y el watchdog
+# reiniciaba el tunel cada 60 s sin motivo.  Ahora el prefijo por defecto es
+# el PERSISTENTE, con el volátil como plan B.
+if [ -z "${MEGADAEMON_PREFIX:-}" ]; then
+    if [ -d /data/adb/megadaemon ] || [ -d /data/adb ]; then
+        MEGADAEMON_PREFIX=/data/adb/megadaemon
+    else
+        MEGADAEMON_PREFIX=/data/local/tmp/megadaemon
+    fi
+fi
+PREFIX="$MEGADAEMON_PREFIX"
 LOG_DIR="$PREFIX"
 # El tunel NO puede depender de Termux (es una app: si el usuario la cierra
 # o la reinstala, el tunel se cae y el movil se queda sin canal publico).
@@ -30,19 +43,21 @@ LOG_DIR="$PREFIX"
 # Termux -> Termux como ultimo recurso.
 CF="${CF:-}"
 if [ -z "$CF" ]; then
-    for cand in /data/local/tmp/megadaemon/cloudflared \
+    for cand in "$PREFIX/cloudflared" \
+                /data/local/tmp/megadaemon/cloudflared \
                 /data/data/com.termux/files/usr/bin/cloudflared \
                 /data/data/com.agy/files/usr/bin/cloudflared; do
         [ -x "$cand" ] && { CF="$cand"; break; }
     done
 fi
 # Si solo esta en Termux, se copia al prefijo (root puede leerlo).
-if [ -n "$CF" ] && [ "$CF" != "/data/local/tmp/megadaemon/cloudflared" ] \
-   && [ -x "$CF" ] && [ ! -x /data/local/tmp/megadaemon/cloudflared ]; then
-    cp -f "$CF" /data/local/tmp/megadaemon/cloudflared.new 2>/dev/null \
-        && chmod 755 /data/local/tmp/megadaemon/cloudflared.new 2>/dev/null \
-        && mv -f /data/local/tmp/megadaemon/cloudflared.new /data/local/tmp/megadaemon/cloudflared 2>/dev/null \
-        && CF=/data/local/tmp/megadaemon/cloudflared
+if [ -n "$CF" ] && [ "$CF" != "$PREFIX/cloudflared" ] \
+   && [ -x "$CF" ] && [ ! -x "$PREFIX/cloudflared" ]; then
+    mkdir -p "$PREFIX" 2>/dev/null
+    cp -f "$CF" "$PREFIX/cloudflared.new" 2>/dev/null \
+        && chmod 755 "$PREFIX/cloudflared.new" 2>/dev/null \
+        && mv -f "$PREFIX/cloudflared.new" "$PREFIX/cloudflared" 2>/dev/null \
+        && CF="$PREFIX/cloudflared"
 fi
 [ -n "$CF" ] || CF=/data/data/com.termux/files/usr/bin/cloudflared
 TARGET="${CFT_TARGET:-http://127.0.0.1:9090}"
@@ -64,11 +79,11 @@ fi
 unset MEGADAEMON_API_KEY MEGADAEMON_COCKPIT_TOKEN 2>/dev/null
 # El valor por defecto es el del despliegue (`install-phone.sh`): en el móvil
 # el estado vive en /data/local/tmp/megadaemon/state.
-STATE_DIR="${MEGADAEMON_STATE_DIR:-/data/local/tmp/megadaemon/state}"
+STATE_DIR="${MEGADAEMON_STATE_DIR:-$PREFIX/state}"
 STATE_URL_FILE="$STATE_DIR/tunnel.url"
 # Publicador del canal (opcional): al subir el túnel, se publica el estado
 # para que el enjambre conozca la URL nueva sin intervención manual.
-PUBLISH="${MEGADAEMON_PUBLISH:-/data/local/tmp/megadaemon/channel-publish}"
+PUBLISH="${MEGADAEMON_PUBLISH:-$PREFIX/channel-publish}"
 TUNNEL_LOG="$LOG_DIR/tunnel.log"
 WATCHDOG="$LOG_DIR/tunnel-watchdog.sh"
 MAX_LOAD="${MAX_LOAD:-8}"
