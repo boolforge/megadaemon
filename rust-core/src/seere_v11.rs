@@ -1734,11 +1734,32 @@ fn strip_html_tags(s: &str) -> String {
 }
 
 // =========================================================================== #
-// RAW TCP HTTP CLIENT TO LLAMA-SERVER (127.0.0.1:8080/v1/chat/completions)
+// RAW TCP HTTP CLIENT TO LLAMA-SERVER (127.0.0.1:8081/v1/chat/completions)
 // =========================================================================== #
+/// Host del LLM local (llama-server).
+pub const LLM_LOCAL_HOST: &str = "127.0.0.1";
+/// Puerto del LLM local (llama-server).
+///
+/// MEDIDO (2026-11-27, captura del móvil): el LLM local estaba en **8080**,
+/// que es el MISMO puerto que el daemon usa como **alias del cockpit**
+/// (`deploy/99-megadaemon.sh`: `BRIDGE_CANDIDATES="80 3000 3030 8090 8080"`
+/// y el binario nuevo sirve 3000/3030/8090/8080).  Dos procesos peleando
+/// por el mismo puerto ⇒ EADDRINUSE ⇒ el daemon se cae al arrancar, y si
+/// ganaba el llama-server, el cockpit desaparecía del 8080.
+///
+/// Por eso el LLM local tiene **su propio puerto (8081)** y 8080 queda
+/// libre para la UI.  El supervisor lo arranca (`ensure_llama_server`) y
+/// exporta `SEERE_LLM`; el valor por defecto de aquí es el mismo para que
+/// el daemon funciona también si se arranca a mano.
+pub const LLM_LOCAL_PORT: u16 = 8081;
+
 /// Endpoint del LLM local.  Antes estaba HARDCODEADO a 127.0.0.1:8080:
 /// si el usuario levanta el servidor en otro puerto (o usa un socket), el
 /// agente moría con "LLM_UNREACHABLE" sin explicación.
+///
+/// MEDIDO (2026-11-27): el defecto era 8080, que **choca con el alias del
+/// cockpit**.  Ahora el defecto es [`LLM_LOCAL_PORT`] (8081) y la variable
+/// `SEERE_LLM` lo puede cambiar.
 #[derive(Debug, Clone)]
 pub struct LlmEndpoint {
     pub host: String,
@@ -1748,7 +1769,9 @@ pub struct LlmEndpoint {
 }
 
 pub fn llm_endpoint() -> LlmEndpoint {
-    let base = std::env::var("SEERE_LLM").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+    let base = std::env::var("SEERE_LLM").unwrap_or_else(|_| {
+        format!("http://{}:{}", LLM_LOCAL_HOST, LLM_LOCAL_PORT)
+    });
     parse_endpoint(&base)
 }
 
@@ -1769,9 +1792,9 @@ pub fn parse_endpoint(base: &str) -> LlmEndpoint {
     let (host, port) = match hostport.rfind(':') {
         Some(i) if hostport[i + 1..].chars().all(|c| c.is_ascii_digit()) && !hostport[i + 1..].is_empty() => (
             hostport[..i].to_string(),
-            hostport[i + 1..].parse().unwrap_or(8080),
+            hostport[i + 1..].parse().unwrap_or(LLM_LOCAL_PORT),
         ),
-        _ => (hostport.to_string(), if tls { 443 } else { 8080 }),
+        _ => (hostport.to_string(), if tls { 443 } else { LLM_LOCAL_PORT }),
     };
     LlmEndpoint { host, port, path, tls }
 }

@@ -55,6 +55,15 @@ export MEGADAEMON_STATE_DIR="${MEGADAEMON_STATE_DIR:-$PREFIX/state}"
 export MEGADAEMON_PREFIX="$PREFIX"
 export MEGADAEMON_BIN="$PREFIX/megadaemon-core"
 export MEGADAEMON_LISTEN="${MEGADAEMON_LISTEN:-127.0.0.1:9090}"
+# MEDIDO (2026-11-27, captura del movil): el LLM local (llama-server) vivia
+# en el puerto 8080, que es el MISMO que el daemon usa como ALIAS del cockpit
+# (el binario nuevo sirve 3000/3030/8090/8080 y el puente web toma 80/8080).
+# Dos procesos peleando por el mismo puerto => EADDRINUSE => el daemon se
+# caia al arrancar; y si ganaba el llama-server, el cockpit desaparecia del
+# 8080 (la UI daba ERR_CONNECTION_REFUSED).
+# El LLM local tiene ahora SU PROPIO puerto (8081) y este export dice cual
+# es.  Sin el, el daemon usa su defecto, que es el mismo 8081.
+export SEERE_LLM="${SEERE_LLM:-http://127.0.0.1:8081}"
 LOG=/sdcard/megadaemon.log
 LOG_DIR=/sdcard/megadaemon-logs
 MAX_BYTES=$((10 * 1024 * 1024))
@@ -319,6 +328,72 @@ ensure_web_bridge() {
     # usuario veia ERR_CONNECTION_REFUSED en el navegador.
     setsid nohup sh -c "while true; do '$py' '$BRIDGE' >>'$PREFIX/bridge.log' 2>&1; sleep 5; done" >/dev/null 2>&1 </dev/null &
     log "puente web arrancado (con keeper): 3000/3030/8090/8080/80 -> 127.0.0.1:$PORT (python3: $py)"
+    return 0
+}
+
+# --- LLM local (llama-server) ----------------------------------------------
+#
+# MEDIDO (2026-11-27, captura del movil): el chat moria con
+#   ERR_LLM_UNREACHABLE:
+#   LLM_UNREACHABLE:127.0.0.1:8080:Connection refused (os error 111)
+# porque el llama-server **NO ESTABA ARRANCADO**: nadie lo levantaba.  El
+# supervisor mantiene vivo el daemon, el puente web y los tuneles, pero del
+# llama-server no habia ni rastro (grep "llama" en este script: 0 resultados
+# reales; los 4 hits eran la palabra "llamada" en comentarios).
+#
+# Con el LLM local caido, la cascada se queda SIN NUBE (todos los
+# proveedores gratuitos en pausa por cuota) y el chat se queda muerto.
+#
+# El LLM local usa el puerto 8081 (NO 8080: ese es el alias del cockpit).
+ensure_llama_server() {
+    LLM_PORT=8081
+    # Si ya hay ALGO escuchando en el puerto, no se toca (otro lo tiene).
+    hp=$(printf '%04X' "$LLM_PORT")
+    if grep -qiE ":$hp [0-9a-f]{8}:[0-9a-f]{4} 0A" /proc/net/tcp /proc/net/tcp6 2>/dev/null; then
+        return 0
+    fi
+    if pgrep -f "llama-server" > /dev/null 2>&1; then
+        return 0
+    fi
+    # El binario vive en el sandbox de Antigravity (stub -> binario real).
+    LLAMA=""
+    for cand in /data/data/com.agy/files/runtime/bin/llama-server \
+                /data/data/com.agy/files/usr/bin/llama-server \
+                "$PREFIX/runtime/bin/llama-server"; do
+        [ -x "$cand" ] && { LLAMA="$cand"; break; }
+    done
+    if [ -z "$LLAMA" ]; then
+        # No hay llama-server en este movil: NO es un fallo del supervisor
+        # (la cascada de nube sigue siendo el camino normal).  Se avisa UNA
+        # vez (el marcador evita el spam del bucle de 5 s).
+        if [ ! -f "$PREFIX/state/.llama-aviso" ]; then
+            mkdir -p "$PREFIX/state" 2>/dev/null
+            echo "sin llama-server" > "$PREFIX/state/.llama-aviso" 2>/dev/null
+            log "AVISO: no hay llama-server (LLM local off): el chat usara solo los proveedores de nube"
+        fi
+        return 0
+    fi
+    # Modelo local (el de 0.5B que ya habia en el movil).  Si no esta, el
+    # llama-server arrancaria y petaria al cargar: mejor no arrancarlo.
+    MODEL=""
+    for cand in /data/data/com.agy/files/models/Qwen2.5-Coder-0.5B-Q4_K_M.gguf \
+                /data/data/com.agy/files/models/*.gguf \
+                "$PREFIX/models/"*.gguf; do
+        [ -f "$cand" ] && { MODEL="$cand"; break; }
+    done
+    if [ -z "$MODEL" ]; then
+        if [ ! -f "$PREFIX/state/.llama-aviso" ]; then
+            mkdir -p "$PREFIX/state" 2>/dev/null
+            echo "sin modelo" > "$PREFIX/state/.llama-aviso" 2>/dev/null
+            log "AVISO: hay llama-server pero NO hay modelo .gguf: el LLM local no arranca"
+        fi
+        return 0
+    fi
+    rm -f "$PREFIX/state/.llama-aviso" 2>/dev/null
+    # Keeper: si el llama-server muere (OOM, reinicio), vuelve a levantarse.
+    # El movil va justo de RAM: 4 hilos, contexto 4096, sin GPU (ngl 0).
+    setsid nohup sh -c "while true; do '$LLAMA' -m '$MODEL' --host 127.0.0.1 --port $LLM_PORT -c 4096 -t 4 -ngl 0 >>'$PREFIX/llama.log' 2>&1; sleep 5; done" >/dev/null 2>&1 </dev/null &
+    log "LLM local arrancado (con keeper): 127.0.0.1:$LLM_PORT (modelo: $MODEL)"
     return 0
 }
 
@@ -979,6 +1054,7 @@ start_daemon() {
     fi
     fast_fails=0
     ensure_web_bridge
+    ensure_llama_server
     sync_antigravity_bridge
     write_state "OK: cockpit vivo en http://localhost:$PORT/"
     write_url
@@ -1259,6 +1335,7 @@ while true; do
         check_daemon_responsive "$PORT" || true
         apply_energy_policy
         ensure_web_bridge
+        ensure_llama_server
         sync_antigravity_bridge
         ensure_tunnel "$PORT" "$WEB_TUNNEL_LOG" "$WEB_TUNNEL_URL_FILE" "web" 1
         ensure_mcp_legacy_tunnel
@@ -1272,6 +1349,7 @@ while true; do
             sleep 5
             k=$((k + 1))
             ensure_web_bridge
+            ensure_llama_server
             if ! pgrep -f "megadaemon-core cockpit" > /dev/null 2>&1; then
                 break
             fi
