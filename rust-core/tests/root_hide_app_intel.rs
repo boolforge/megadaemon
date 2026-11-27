@@ -1,28 +1,21 @@
-//! Cableado de los módulos nuevos para que la suite se pueda ejecutar sin
-//! tocar `src/lib.rs`.
+//! Comprobación de humo de los módulos `root_hide` y `app_intel`.
 //!
-//! `src/lib.rs` está **fuera de los ficheros que se pueden tocar** en este
-//! encargo, así que los módulos `root_hide` y `app_intel` no quedan
-//! registrados como `pub mod` de la biblioteca y `cargo test` no los
-//! compilaría. Este fichero de test los incluye con `#[path]`, de forma que
-//! los tests que viven dentro de ellos se ejecutan de verdad.
-//!
-//! Cuando se pueda editar `src/lib.rs`, la alternativa (y la recomendada) es
-//! añadir estas dos líneas y borrar este fichero:
+//! MEDIDO (2026-11-27, CI): este fichero inclusionaba los módulos con
+//! `#[path = "../src/root_hide.rs"]`, pero `src/lib.rs` **ya los declara**
+//! (`pub mod app_intel;` y `pub mod root_hide;`).  Al re-incluirlos aquí, el
+//! módulo se compilaba **dentro del binario de test**, donde `crate::` es el
+//! crate del test y NO la biblioteca ⇒ `src/app_intel.rs` rompia con
 //!
 //! ```text
-//! pub mod app_intel;
-//! pub mod root_hide;
+//! error[E0433]: cannot find `apk_inventory` in the crate root
+//!     --> src/app_intel.rs:2738
 //! ```
 //!
-//! Nota: los tests de esta crate son los de `src/root_hide.rs` y
-//! `src/app_intel.rs`; aquí sólo se cablea el acceso.
+//! y el target de test `root_hide_app_intel` no compilaba (el job de calidad
+//! caia).  Ahora se usan los módulos **de la biblioteca**, que es lo que
+//! recomienda el propio comentario original de este fichero.
 
-#[path = "../src/root_hide.rs"]
-mod root_hide;
-
-#[path = "../src/app_intel.rs"]
-mod app_intel;
+use megadaemon_core::{app_intel, root_hide};
 
 /// Comprobación de humo: los dos módulos deben exponer su API principal.
 #[test]
