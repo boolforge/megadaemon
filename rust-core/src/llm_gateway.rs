@@ -1646,13 +1646,16 @@ mod tests {
             vendor: "MiniMax".to_string(),
             latency_ms: 12.0,
             tokens_used: 7,
+            // MEDIDO (2026-11-27, CI 46074791216): faltaban los dos campos
+            // que el proveedor parsea (E0063) => el build de TEST no
+            // compilaba (la lib si).  Coherentes con 'tokens_used'.
+            prompt_tokens: 0,
+            completion_tokens: 7,
             tools_used: Vec::new(),
             fallback_used: false,
             quota: None,
             provider_trace: Vec::new(),
             finish_reason: String::new(),
-            prompt_tokens: 0,
-            completion_tokens: 0,
             tool_calls: Vec::new(),
         };
         let v = gemini_response(&res, 3);
@@ -1725,13 +1728,16 @@ mod tests {
             vendor: "MiniMax".to_string(),
             latency_ms: 12.0,
             tokens_used: 7,
+            // MEDIDO (2026-11-27, CI 46074791216): faltaban los dos campos
+            // que el proveedor parsea (E0063) => el build de TEST no
+            // compilaba (la lib si).  Coherentes con 'tokens_used'.
+            prompt_tokens: 0,
+            completion_tokens: 7,
             tools_used: Vec::new(),
             fallback_used: false,
             quota: None,
             provider_trace: Vec::new(),
             finish_reason: String::new(),
-            prompt_tokens: 0,
-            completion_tokens: 0,
             tool_calls: Vec::new(),
         };
         let v = gemini_response(&res, 3);
@@ -1755,13 +1761,16 @@ mod tests {
             vendor: "MiniMax".to_string(),
             latency_ms: 12.0,
             tokens_used: 7,
+            // MEDIDO (2026-11-27, CI 46074791216): faltaban los dos campos
+            // que el proveedor parsea (E0063) => el build de TEST no
+            // compilaba (la lib si).  Coherentes con 'tokens_used'.
+            prompt_tokens: 0,
+            completion_tokens: 7,
             tools_used: Vec::new(),
             fallback_used: false,
             quota: None,
             provider_trace: Vec::new(),
             finish_reason: String::new(),
-            prompt_tokens: 0,
-            completion_tokens: 0,
             tool_calls: Vec::new(),
         };
         let v = gemini_response(&res, 0);
@@ -2009,13 +2018,16 @@ mod tests {
             vendor: "MiniMax".to_string(),
             latency_ms: 12.0,
             tokens_used: 7,
+            // MEDIDO (2026-11-27, CI 46074791216): faltaban los dos campos
+            // que el proveedor parsea (E0063) => el build de TEST no
+            // compilaba (la lib si).  Coherentes con 'tokens_used'.
+            prompt_tokens: 0,
+            completion_tokens: 7,
             tools_used: vec!["provider_tool:view_file".to_string()],
             fallback_used: false,
             quota: None,
             provider_trace: Vec::new(),
             finish_reason: String::new(),
-            prompt_tokens: 0,
-            completion_tokens: 0,
             tool_calls: vec![crate::providers::ParsedToolCall {
                 id: "call_1".to_string(),
                 name: "view_file".to_string(),
