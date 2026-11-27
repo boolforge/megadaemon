@@ -1511,6 +1511,25 @@ fn main() {
             std::process::exit(rc);
         }
 
+        //   megadaemon-core acp-transport <parsear|enmarcar|ids>
+        //   megadaemon-core acp-sesion <nueva|listar|cancelar|reanudar|fork|bosque>
+        //   megadaemon-core acp-permisos <evaluar|describir>
+        //     La capa de protocolo ACP v1 (docs/DECISION_ACP.md §3):
+        //     JSON-RPC 2.0, ciclo de vida de sesión y permisos
+        //     (deny > ask > allow, con el aislamiento real al lado).
+        "acp-transport" | "acp_transport" => {
+            let rc = megadaemon_core::protocol_acp::transport::run_cli(&args[2..]);
+            std::process::exit(rc);
+        }
+        "acp-sesion" | "acp_sesion" => {
+            let rc = megadaemon_core::protocol_acp::sesion::run_cli(&args[2..]);
+            std::process::exit(rc);
+        }
+        "acp-permisos" | "acp_permisos" => {
+            let rc = megadaemon_core::protocol_acp::permisos::run_cli(&args[2..]);
+            std::process::exit(rc);
+        }
+
         //   megadaemon-core reparar [--diagnostico] [--json]
         //     Diagnostica y REPARA el entorno del propio nodo (prefijo
         //     persistente, binario, watchdog, keeper, API key, credenciales

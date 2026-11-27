@@ -39,7 +39,7 @@ escritorio** sin Electron ni navegador. Es el mismo camino que llevó a
 | 5 | **`inference/`**: **17 errores de proveedor** con `retry_after` estructurado, `compaction_thresholds` **por modelo** y `tool_formatter_type` por modelo | `providers.rs` / `llm_gateway.rs` | taxonomía de errores + reintentos por modelo | M |
 | 6 | **`fx/context.rs` + `fx/driver.rs`**: separar **construcción de contexto** y **conducción del agente** | `agent_core.rs` / `agent_loop.rs` | dos módulos separados en vez de uno gigante | S |
 | 7 | **daemon**: socket Unix + lock + **handshake que verifica que quien conecta es su daemon** + RPC de cola (`list claimed sessions`, `list queued sessions`, `list outposts`) | `cockpit_server.rs` / `service_bus.rs` | handshake + cola de sesiones | M |
-| 8 | **sandbox medido**: *"macOS seatbelt / Linux bwrap+seccomp"*; en Linux exige `bwrap` **y** `socat`; el permiso lógico **se compila a regla de sandbox** | `tool_policy.rs` + **nuevo `sandbox_linux.rs`** | ya hecho: `rust-core/src/sandbox_linux.rs` (bwrap + seatbelt, deny>allow, 9 tests) | **hecho** |
+| 8 | **sandbox medido**: *"macOS seatbelt / Linux bwrap+seccomp"*; en Linux exige `bwrap` **y** `socat`; el permiso lógico **se compila a regla de sandbox** | `tool_policy.rs` + **nuevo `sandbox_linux.rs`** | ya hecho: `rust-core/src/sandbox_linux.rs` (bwrap + seatbelt, deny>allow, 10 tests) | **hecho** |
 | 9 | **plugins**: `PLUGIN_DATA` persistente **por identidad, no por versión**; globs prohibidos **sin `..`, `#` ni `@`** | **nuevo `plugin_data.rs`** | ya hecho: persistencia por identidad + validación de globs (anti path-traversal) | **hecho** |
 | 10 | **esquema SQLite de sesiones (10 tablas)** medido literal | `board.rs` (rusqlite) | migración con el esquema | M |
 

@@ -38,6 +38,19 @@
 /// El esquema canónico de ACP, **vendorizado** (núcleo estable de ACP v1).
 pub use crate::acp_schema as acp;
 
+// ---------------------------------------------------------------------------
+// La capa de protocolo (plan de `docs/DECISION_ACP.md` §3)
+// ---------------------------------------------------------------------------
+
+/// Transporte JSON-RPC 2.0 (stdio y HTTP).
+pub mod transport;
+
+/// Ciclo de vida de sesión (new/load/resume/cancel/list/fork).
+pub mod sesion;
+
+/// Permisos: `mdaemon/policy/evaluate` y `mdaemon/sandbox/describe`.
+pub mod permisos;
+
 /// Versión del crate del esquema canónico que usamos.
 ///
 /// MEDIDO (2026-11-27): el `pub use` de arriba renombra el modulo a `acp`,
