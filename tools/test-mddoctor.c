@@ -128,7 +128,7 @@ int main(void) {
 
     printf("== cabecera ELF ==\n");
     char elf[64];
-    elf_info("/tmp/md_t_grande", elf, sizeof(elf));
+    elf_info(fx("grande"), elf, sizeof(elf));
     ok(strncmp(elf, "NO es un ELF", 10) == 0, "un fichero cualquiera NO es un ELF");
     elf_info(fx("elf_real"), elf, sizeof(elf));
     ok(strncmp(elf, "ELF", 3) == 0, "un ELF de verdad se identifica");
