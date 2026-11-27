@@ -88,14 +88,22 @@ def listar(carpeta: str) -> list[dict]:
     return out
 
 
-def hashes_locales() -> dict[str, dict]:
-    """sha256+md5 de los ficheros locales, indexados por nombre."""
+def hashes_locales(interes: set[str]) -> dict[str, dict]:
+    """sha256+md5 de los ficheros locales, indexados por nombre.
+
+    MEDIDO 2026-11-27: hashear TODO lo local (2,5 GB de material de terceros en
+    el NFS) tarda 40+ min y llena el page cache, que cuenta contra el limite
+    de RAM del cgroup. Se hashea SOLO lo que coincide con un nombre que esta
+    en Drive: el resto no aporta nada al inventario.
+    """
     res: dict[str, dict] = {}
     for raiz in RAICES:
         if not os.path.isdir(raiz):
             continue
         for dirpath, _dirs, files in os.walk(raiz):
             for f in files:
+                if f not in interes:
+                    continue
                 ruta = os.path.join(dirpath, f)
                 try:
                     tam = os.path.getsize(ruta)
@@ -138,8 +146,9 @@ def main() -> int:
         for f in files:
             drive.setdefault(f["name"], []).append((nombre, f))
 
-    print("[drive] hasheando copias locales...", flush=True)
-    loc = hashes_locales()
+    print("[drive] hasheando copias locales de los ficheros que estan en Drive...",
+          flush=True)
+    loc = hashes_locales(set(drive.keys()))
 
     filas = []
     for nombre, (carpeta, f) in sorted(drive.items()):
