@@ -260,10 +260,12 @@ pub fn build_r2_script(anchors: &[Anchor], sizes: &std::collections::BTreeMap<u6
         if !usados.insert(nombre.clone()) {
             nombre = format!("{}_{:x}", nombre, a.addr);
         }
-        let destino = out_dir.join(format!("{}___{}.c", a.tag, nombre));
-        // `_` en vez de `__` para no chocar con la convención de Ghidra:
-        // el nombre de fichero lleva el prefijo de etiqueta igual que él.
-        let destino = out_dir.join(format!("{}__{}.c", a.tag, nombre));
+        // MEDIDO 2026-11-27: el `tag` es la ruta del paquete Go y lleva "/" (p.ej.
+        // "third_party/go"); el script de Ghidra lo usaba tal cual en el nombre
+        // de fichero y fallaba con FileNotFoundException en 351 de 400
+        // funciones. Aqui se sanea igual que en el motor propio.
+        let safe_tag = sanitize_symbol(&a.tag);
+        let destino = out_dir.join(format!("{}__{}.c", safe_tag, nombre));
         script.push_str(&format!(
             "af+ {:#x} {}; afb+ {:#x} {:#x} {:#x}; pdg @ {:#x} > {}\n",
             a.addr,
@@ -432,7 +434,7 @@ fn decompile_lote(
     let mut ficheros = Vec::new();
     for a in lote {
         let nombre = sanitize_symbol(&a.name);
-        let base = format!("{}__{}.c", a.tag, nombre);
+        let base = format!("{}__{}.c", sanitize_symbol(&a.tag), nombre);
         let ruta = out_dir.join(&base);
         let (dec_ok, dec_err, cuerpo) = match fs::read_to_string(&ruta) {
             Ok(c) if c.trim().len() > 20 => ("true".to_string(), String::new(), Some(c)),
