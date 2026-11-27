@@ -86,7 +86,9 @@ pub fn inventario(folder_id: &str, limit: usize, state_dir: Option<&str>) -> Res
             } else {
                 "fichero"
             };
-            *tipos.entry(t.to_string()).or_insert(0) += 1;
+            let e = tipos.entry(t.to_string()).or_insert(json!(0));
+            let n = e.as_u64().unwrap_or(0) + 1;
+            *e = json!(n);
         }
     }
     Ok(json!({
@@ -249,7 +251,7 @@ pub fn tubo(
     let sub = subir(ruta, nombre, &cid, state_dir)?;
     let verificado = sub["verificado"].as_bool().unwrap_or(false);
     let mut out = sub.clone();
-    out["carpeta"] = carpeta.unwrap_or(CARPETA_POR_DEFECTO).to_string();
+    out["carpeta"] = json!(carpeta.unwrap_or(CARPETA_POR_DEFECTO));
 
     if borrar_local {
         if verificado {
@@ -259,14 +261,15 @@ pub fn tubo(
             } else {
                 std::fs::remove_file(&p).map_err(|e| format!("borrar: {}", e))
             };
-            out["copia_local_borrada"] = borrado.is_ok();
+            out["copia_local_borrada"] = json!(borrado.is_ok());
             if let Err(e) = borrado {
-                out["aviso"] = format!("subida verificada pero no se pudo borrar: {}", e);
+                out["aviso"] = json!(format!("subida verificada pero no se pudo borrar: {}", e));
             }
         } else {
-            out["copia_local_borrada"] = false;
-            out["aviso"] =
-                "la subida NO verifico el sha256: no se borra nada (el local es el original)".to_string();
+            out["copia_local_borrada"] = json!(false);
+            out["aviso"] = json!(
+                "la subida NO verifico el sha256: no se borra nada (el local es el original)"
+            );
         }
     }
     Ok(out)
@@ -306,6 +309,23 @@ pub fn sha256_bytes(datos: &[u8]) -> String {
 ///   * `bajar <file_id> <destino>`
 ///   * `tubo <ruta> [--carpeta C] [--folder-id ID] [--nombre N] [--borrar]`
 pub fn run_cli(args: &[String]) -> i32 {
+    // MEDIDO 2026-11-27: `run_cli` devuelve `i32`, asi que no admitia el `?`
+    // (E0277).  El trabajo real va en `run_cli_res` (que SI devuelve Result)
+    // y aqui solo se traduce el resultado al codigo de salida.
+    match run_cli_res(args) {
+        Ok(v) => {
+            println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+            0
+        }
+        Err(e) => {
+            eprintln!("drive-tubo error: {}", e);
+            1
+        }
+    }
+}
+
+/// El trabajo del CLI: devuelve el JSON o el error.
+fn run_cli_res(args: &[String]) -> Result<Value, String> {
     let st = crate::cockpit_server::state_dir();
     let sub = args.first().map(|s| s.as_str()).unwrap_or("");
     let mut carpeta: Option<String> = None;
@@ -378,16 +398,7 @@ pub fn run_cli(args: &[String]) -> i32 {
         _ => Err("Uso: megadaemon-core drive-tubo <listar|inventario|subir|bajar|tubo> [args]"
             .to_string()),
     };
-    match res {
-        Ok(v) => {
-            println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
-            0
-        }
-        Err(e) => {
-            eprintln!("drive-tubo error: {}", e);
-            1
-        }
-    }
+    res
 }
 
 #[cfg(test)]

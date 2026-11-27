@@ -2760,40 +2760,37 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 .get("borrar_local")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+            // MEDIDO 2026-11-27: los brazos del `match` devolvian `Value`
+            // (no `Result`), asi que el `?` no aplicaba => E0277.  Ahora cada
+            // brazo es una closure que SI devuelve `Result<Value, String>`.
+            let cid_de = || -> Result<String, String> {
+                crate::drive_tube::resolver_carpeta(
+                    if carpeta.is_empty() { crate::drive_tube::CARPETA_POR_DEFECTO } else { &carpeta },
+                    if folder_id.is_empty() { None } else { Some(&folder_id) },
+                    Some(&st),
+                )
+            };
             let res: Result<Value, String> = match action.as_str() {
-                "listar" | "ls" => {
-                    let cid = crate::drive_tube::resolver_carpeta(
-                        if carpeta.is_empty() { crate::drive_tube::CARPETA_POR_DEFECTO } else { &carpeta },
-                        if folder_id.is_empty() { None } else { Some(&folder_id) },
-                        Some(&st),
-                    )?;
+                "listar" | "ls" => (|| -> Result<Value, String> {
+                    let cid = cid_de()?;
                     crate::drive_tube::listar(&cid, limit, Some(&st))
-                }
-                "inventario" | "inv" => {
-                    let cid = crate::drive_tube::resolver_carpeta(
-                        if carpeta.is_empty() { crate::drive_tube::CARPETA_POR_DEFECTO } else { &carpeta },
-                        if folder_id.is_empty() { None } else { Some(&folder_id) },
-                        Some(&st),
-                    )?;
+                })(),
+                "inventario" | "inv" => (|| -> Result<Value, String> {
+                    let cid = cid_de()?;
                     crate::drive_tube::inventario(&cid, limit, Some(&st))
-                }
-                "subir" | "upload" => {
+                })(),
+                "subir" | "upload" => (|| -> Result<Value, String> {
                     if ruta.is_empty() {
-                        Err("falta 'path' (la ruta local a subir)".to_string())
-                    } else {
-                        let cid = crate::drive_tube::resolver_carpeta(
-                            if carpeta.is_empty() { crate::drive_tube::CARPETA_POR_DEFECTO } else { &carpeta },
-                            if folder_id.is_empty() { None } else { Some(&folder_id) },
-                            Some(&st),
-                        )?;
-                        crate::drive_tube::subir(
-                            &ruta,
-                            if nombre.is_empty() { None } else { Some(&nombre) },
-                            &cid,
-                            Some(&st),
-                        )
+                        return Err("falta 'path' (la ruta local a subir)".to_string());
                     }
-                }
+                    let cid = cid_de()?;
+                    crate::drive_tube::subir(
+                        &ruta,
+                        if nombre.is_empty() { None } else { Some(&nombre) },
+                        &cid,
+                        Some(&st),
+                    )
+                })(),
                 "bajar" | "download" => {
                     if file_id.is_empty() {
                         Err("falta 'file_id'".to_string())
