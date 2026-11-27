@@ -105,6 +105,9 @@ siguiente.
 | Núcleo forense propio en C (48 KB, sin deps) | `tools/mddoctor.c` | diagnostica en **<1 s** donde el build de Rust se muere por RAM |
 | Diagnóstico del móvil en C (sin `curl` ni `wget`) | `mddoctor salud` | el shell de Android no trae esas herramientas |
 | Tool MCP `doctor` (diagnóstico + recuperación) | `mcp_ext.rs` → `doctor.rs` | diagnosticar por la API, sin ssh ni ADB |
+| Diagnóstico forense COMO ROOT, sin instalar nada | `deploy/megadaemon-oneliner.sh --doctor` | el móvil responde aunque el daemon esté muerto |
+| Recuperar el control de un móvil que se ha ido | `mddoctor reconectar --apply` | relanza túnel/daemon y **dice la URL nueva** |
+| Núcleo forense en C instalado por el bundle | `tools/construir-bundle.sh` (4º arg) | el binario del móvil es ARM64, no el del host |
 | Tablón del enjambre en un comando | `tools/estado.sh` | no releer el repo para saber dónde está el trabajo |
 | Ejecutar un binario ARM64 de verdad | `tools/verificar-arm64.sh` (+ `qemu-aarch64-static`) | "compila" ⇒ "funciona", sin esperar al CI |
 
