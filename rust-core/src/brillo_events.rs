@@ -148,6 +148,11 @@ pub struct Contadores {
     pub ultimo_ts: AtomicU64,
     /// Epoch del arranque del vigilante.
     pub arranque_ts: AtomicU64,
+    /// ¿Está el hilo de eventos VIVO ahora mismo?
+    ///
+    /// El supervisor del daemon lo mira: si el hilo se muere (el inotify se
+    /// cae), se vuelve a arrancar ⇒ el brillo no se queda sin vigilar.
+    pub vivo: AtomicBool,
 }
 
 impl Contadores {
@@ -160,7 +165,7 @@ impl Contadores {
             "errores": self.errores.load(Ordering::Relaxed),
             "ultimo_evento_ts": self.ultimo_ts.load(Ordering::Relaxed),
             "arranque_ts": self.arranque_ts.load(Ordering::Relaxed),
-            "vivo": self.arranque_ts.load(Ordering::Relaxed) > 0,
+            "vivo": self.vivo.load(Ordering::Relaxed),
         })
     }
 }
@@ -173,6 +178,7 @@ pub static CONTADORES: Contadores = Contadores {
     errores: AtomicU64::new(0),
     ultimo_ts: AtomicU64::new(0),
     arranque_ts: AtomicU64::new(0),
+    vivo: AtomicBool::new(false),
 };
 
 /// Bandera para parar el vigilante.
@@ -396,6 +402,7 @@ fn registrar_watches(fd: i32) -> bool {
 /// Pide al vigilante que pare.
 pub fn parar() {
     PARAR.store(true, Ordering::Relaxed);
+    CONTADORES.vivo.store(false, Ordering::Relaxed);
     escribir_latido("parado");
 }
 
@@ -423,6 +430,7 @@ where
             e.1.push(nombre_s);
         }
     }
+    CONTADORES.vivo.store(true, Ordering::Relaxed);
     let mut buf = vec![0u8; 8192];
     let tam_evento = std::mem::size_of::<libc::inotify_event>();
     loop {
@@ -471,6 +479,8 @@ where
     unsafe {
         libc::close(fd);
     }
+    // Si el hilo muere, `vivo` queda a false y el supervisor lo rearranca.
+    CONTADORES.vivo.store(false, Ordering::Relaxed);
 }
 
 /// Bucle del FIFO del shim: lee líneas en bloque.

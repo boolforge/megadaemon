@@ -1799,6 +1799,27 @@ pub fn leer_todo(con_power: bool, con_als: bool) -> LecturaCompleta {
     }
 }
 
+/// El estado **sin tocar el móvil**: sólo el XML del proveedor (0 procesos).
+///
+/// Para las rutas calientes (el watchdog, los paneles que se refrescan solos):
+/// da el brillo y el modo sin lanzar ni un `settings` ni un `dumpsys`.
+pub fn estado_rapido(state_dir: Option<&str>) -> Value {
+    let ctx = Ctx::cargar(state_dir);
+    let lectura = leer_ajustes_xml_fichero().unwrap_or_default();
+    json!({
+        "ok": true,
+        "brillo_ajuste": lectura.int,
+        "brillo_actual": lectura.int,
+        "float": lectura.float,
+        "modo": lectura.modo,
+        "auto_activo": lectura.auto_activo(),
+        "objetivo": ctx.objetivo(),
+        "politica": ctx.cfg.politica,
+        "interacciones": 0,
+        "nota": "lectura del XML del proveedor como fichero: 0 procesos del móvil",
+    })
+}
+
 /// Estado completo del brillo del móvil.
 ///
 /// Contrato: `{ brillo_actual, brillo_max, modo, float_actual, auto_activo,
@@ -2597,12 +2618,71 @@ pub fn costo(state_dir: Option<&str>) -> Value {
     })
 }
 
+/// Informe **completo** del encargo de brillo, en UN comando.
+///
+/// Es el comando que cierra el encargo en el móvil de una vez: mide el
+/// coste real de cada vía, comprueba que el puente del FIFO funciona, dice
+/// si el vigilante está vivo y **muestra si el brillo se mueve solo**.
+///
+/// MEDIDO (SM-G998B, 2026-11-27): el brillo se movía solo porque la política
+/// de energía recortaba a 60 y lo restauraba (247 -> 60 -> 247).  La
+/// política ya no toca el brillo ⇒ este informe es el que lo demuestra.
+///
+/// **Tarda ~1 minuto** (la serie son 12 muestras de 5 s): es un comando de
+/// diagnóstico, no algo para el bucle.
+pub fn informe(state_dir: Option<&str>, muestras: u32, intervalo_s: u64) -> Value {
+    // 1) El coste real de las tres vías (medido aquí, en el aparato).
+    let c = costo(state_dir);
+
+    // 2) El estado del shim y del vigilante.
+    let v = shim_estado(state_dir);
+
+    // 3) El PUENTE del FIFO: se escribe un evento y se mira si el daemon lo
+    //    cuenta (si el contador sube, el puente funciona).
+    let antes = crate::brillo_events::CONTADORES
+        .fifo
+        .load(Ordering::Relaxed);
+    let salida = crate::brillo_events::escribir_evento_shell("screen_brightness", "probe");
+    std::thread::sleep(Duration::from_millis(400));
+    let despues = crate::brillo_events::CONTADORES
+        .fifo
+        .load(Ordering::Relaxed);
+
+    // 4) La serie: ¿se mueve solo?
+    let serie = observar(muestras, intervalo_s);
+
+    let moved = serie
+        .get("cambios_totales")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    json!({
+        "ok": true,
+        "costo": c,
+        "estado_shim": v,
+        "puente_fifo": {
+            "escrito": salida.trim(),
+            "eventos_antes": antes,
+            "eventos_despues": despues,
+            "consumido": despues > antes,
+            "nota": "si 'consumido' es false, el daemon no está leyendo el FIFO: el vigilante no está vivo",
+        },
+        "serie": serie,
+        "veredicto": if moved == 0 {
+            "el brillo NO se movió durante la observación: 100% manual y sin cambios"
+        } else {
+            format!("el brillo se movió {moved} veces: hay que ver 'serie.cambios' (quien lo movió)")
+        },
+        "nota": "este comando es el que cierra el encargo: mide en el móvil lo que en el CI no se puede medir",
+    })
+}
+
 /// Qué shim está activo y qué se ha podido verificar.
 pub fn shim_estado(state_dir: Option<&str>) -> Value {
     let ctx = Ctx::cargar(state_dir);
     let cfg = &ctx.cfg;
     let e = &ctx.estado;
-    let lectura = leer_ajustes();
+    // El XML del proveedor se lee como fichero (0 procesos) cuando se puede.
+    let lectura = leer_ajustes_xml_fichero().unwrap_or_else(leer_ajustes);
     let aplicado = if cfg.verificar_aplicado {
         Some(leer_aplicado())
     } else {
@@ -2763,11 +2843,37 @@ pub fn arrancar_vigilante(state_dir: Option<&str>) -> Value {
         });
     }
 
+    // --- 3) El SUPERVISOR: si el hilo de eventos se muere, se rearrange ----
+    // Coste: **0 interacciones con el móvil** (dormir 30 s y mirar un
+    // contador en memoria).  Sin esto, un inotify que se cae dejaría el
+    // brillo sin vigilar (el fallo más caro y más silencioso).
+    if usar_eventos {
+        let sd_sup = sd.clone();
+        std::thread::spawn(move || {
+            while !PARAR_VIGILANTE.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_secs(30));
+                if PARAR_VIGILANTE.load(Ordering::Relaxed) {
+                    break;
+                }
+                if !crate::brillo_events::CONTADORES
+                    .vivo
+                    .load(Ordering::Relaxed)
+                {
+                    let sd_ev = sd_sup.clone();
+                    crate::brillo_events::arrancar(move |ev| {
+                        let _ = reafirmar_por_evento(&ev, sd_ev.as_deref());
+                    });
+                }
+            }
+        });
+    }
+
     json!({
         "ok": true,
         "accion": "vigilante_arrancado",
         "eventos": arranque_eventos.a_json(),
         "sondeo_respaldo": hace_sondeo,
+        "supervisor": usar_eventos,
         "intervalo_s": if hace_sondeo { if intervalo > 0 { intervalo } else { 30 } } else { 0 },
         "coste_por_ciclo": if hace_sondeo { "1 sondeo (5 interacciones)" } else { "0 sondeos (0 interacciones)" },
         "hilo": "en segundo plano; se para con parar_vigilante()",
@@ -2819,11 +2925,17 @@ pub fn arrancar_si_movil(state_dir: Option<&str>) -> Value {
         _ => {}
     }
     if !es_movil() {
-        return json!({
-            "ok": true,
-            "accion": "vigilante_no_arrancado",
-            "motivo": "no es un móvil Android (no se toca el brillo de otra máquina)",
-        });
+        // Pero si el XML del proveedor del móvil está ahí, **es un móvil**
+        // aunque la detección haya fallado (p. ej. `/system/build.prop` no
+        // legible por el contexto del proceso): mejor arrancar de más que
+        // dejar el brillo sin vigilar.
+        if leer_ajustes_xml_fichero().is_none() {
+            return json!({
+                "ok": true,
+                "accion": "vigilante_no_arrancado",
+                "motivo": "no es un móvil Android (no se toca el brillo de otra máquina)",
+            });
+        }
     }
     arrancar_vigilante(state_dir)
 }
@@ -2846,7 +2958,7 @@ pub fn tool_definitions() -> Value {
                         "enum": [
                             "estado", "fijar", "maximo", "config", "config_actualizar",
                             "reafirmar", "shim", "vigilante", "sensor", "diagnostico", "costo",
-                            "shim_probar",
+                            "shim_probar", "rapido", "informe",
                             "observar", "adaptativo"
                         ],
                         "default": "estado"
@@ -2963,6 +3075,15 @@ pub fn dispatch(args: &Value) -> Value {
             diagnostico(None, aplicar)
         }
         "costo" => costo(None),
+        "rapido" => estado_rapido(None),
+        "informe" => {
+            let n = args.get("muestras").and_then(|v| v.as_u64()).unwrap_or(12) as u32;
+            let paso = args
+                .get("intervalo_s")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(5);
+            informe(None, n, paso)
+        }
         "shim_probar" => {
             // Prueba del PUENTE: escribe un evento en el FIFO del shim (como
             // haria el hook) y comprueba que el daemon lo consume.
@@ -3412,6 +3533,98 @@ mod tests {
         let n = llamadas_sh();
         println!("MEDIDO vigilante: {} interacciones con el móvil", n);
         assert!(n <= 4, "el vigilante hizo {} interacciones con el móvil", n);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn el_ciclo_completo_del_veto() {
+        // MEDIDO (SM-G998B, 2026-11-27): la politica de energia recortaba a 60
+        // (MEGADAEMON_BRIGHTNESS_MAX) y luego RESTAURABA su copia => el
+        // serrucho 247 -> 60 -> 247.  El modulo (que ya no compite con la
+        // politica) tiene que:
+        //
+        //  1) aceptar el recorte SIN perder el objetivo del usuario;
+        //  2) al relajar la politica, restaurar el valor del USUARIO, no el
+        //     247 que la politica tenia guardado.
+        let f = |v: u8| Some(v as f64 / 255.0);
+        let objetivo = f(247);
+
+        // 1) La politica recorta a 60: se acepta, pero el objetivo sigue 247.
+        assert_eq!(
+            decidir(
+                "respetar_usuario",
+                objetivo,
+                f(60),
+                Some(0),
+                false,
+                Some(60),
+                false,
+                None
+            ),
+            Decision::CambioDePolitica
+        );
+
+        // 2) La politica relaja y restaura SU copia (247): el valor vuelve a
+        //    ser el objetivo => no hay nada que hacer.
+        assert_eq!(
+            decidir(
+                "respetar_usuario",
+                objetivo,
+                f(247),
+                Some(0),
+                false,
+                Some(60),
+                true,
+                Some(247)
+            ),
+            Decision::Nada
+        );
+
+        // 3) El usuario movio el deslizador a 128 MIENTRAS estaba recortado:
+        //    el objetivo pasa a ser 128.  Cuando la politica relaja y restaura
+        //    su copia (247), el modulo debe devolver 128 (Reafirmar), NO el
+        //    247 clavado.
+        let objetivo_usuario = f(128);
+        assert_eq!(
+            decidir(
+                "respetar_usuario",
+                objetivo_usuario,
+                f(128),
+                Some(0),
+                false,
+                Some(60),
+                true,
+                None
+            ),
+            Decision::AdoptarCambio
+        );
+        assert_eq!(
+            decidir(
+                "respetar_usuario",
+                objetivo_usuario,
+                f(247),
+                Some(0),
+                false,
+                Some(60),
+                true,
+                Some(247)
+            ),
+            Decision::Reafirmar
+        );
+    }
+
+    #[test]
+    fn el_estado_rapido_no_toca_el_movil() {
+        // La ruta caliente (el watchdog, los paneles) no puede lanzar ni un
+        // `settings` ni un `dumpsys`: sólo leer el XML del proveedor.
+        let dir = std::env::temp_dir().join(format!("md_brillo_rap_{}", ahora()));
+        let _ = std::fs::create_dir_all(&dir);
+        let sd = dir.to_string_lossy().to_string();
+        reset_llamadas_sh();
+        let v = estado_rapido(Some(&sd));
+        let n = llamadas_sh();
+        assert_eq!(v["ok"], true);
+        assert_eq!(n, 0, "estado_rapido lanzo {} procesos; debe ser 0", n);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

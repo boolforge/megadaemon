@@ -36,7 +36,7 @@ fn print_usage() {
     eprintln!("  seere-prompt [es|en]                         Dump the static SEERE system prompt (for token accounting)");
     eprintln!("  seere-grammar                                Dump the active GBNF grammar");
     eprintln!("  power                                        Show battery/charging/thermal state and the active policy");
-    eprintln!("  brillo <sub> [n] [aplicar]                    Brillo del movil: estado | fijar N | maximo | config | reafirmar | shim | sensor | diagnostico [aplicar] | observar [muestras] [s] | adaptativo [aplicar] | vigilante (arrancar|parar|tick)");
+    eprintln!("  brillo <sub> [n] [aplicar]                    Brillo del movil: estado | rapido | informe [muestras] [s] | fijar N | maximo | config | reafirmar | shim | sensor | diagnostico [aplicar] | observar [muestras] [s] | adaptativo [aplicar] | costo | vigilante (arrancar|parar|tick)");
     eprintln!("  seere-selftest                              Run SEERE v12 Assertion Suites & Export Shared GBNF/Prompts");
     eprintln!("  npu-probe                                   Probe Exynos 2100 NPU (/dev/vertex10, EDEN, KleidiAI) & Pin Cores 4-7");
     eprintln!("  npu-probe --vs4l                            Sondea el driver VS4L/NPU (ioctl SIN argumento => devuelve el tamano que espera)");
@@ -665,6 +665,12 @@ fn main() {
                     "aplicar": args.get(3).map(|s| s.as_str()) == Some("aplicar"),
                 })),
                 "costo" => megadaemon_core::brightness::costo(sd.as_deref()),
+                "rapido" => megadaemon_core::brightness::estado_rapido(sd.as_deref()),
+                "informe" => megadaemon_core::brightness::informe(
+                    sd.as_deref(),
+                    args.get(3).and_then(|v| v.parse::<u32>().ok()).unwrap_or(12),
+                    args.get(4).and_then(|v| v.parse::<u64>().ok()).unwrap_or(5),
+                ),
                 "shim_probar" => megadaemon_core::brightness::dispatch(&serde_json::json!({
                     "accion": "shim_probar",
                     "clave": args.get(3).cloned().unwrap_or_else(|| "screen_brightness".to_string()),
