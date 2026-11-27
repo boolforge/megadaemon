@@ -272,10 +272,15 @@ Medido:
 
 | | |
 |---|---:|
-| rendimiento de r2dec (muestra de 400 funciones sintéticas) | **4,2 fn/s**, 400/400 no vacías, ~8 KB por función |
-| pendientes tras lo ya hecho por Ghidra + r2ghidra | **91.474** |
-| tiempo estimado del barrido completo | ~6 h (1 worker) |
+| rendimiento de r2dec (primer lote real del barrido) | **9,3 fn/s** (1.500 funciones en 161 s) |
+| yield del barrido (funciones con salida no vacía) | **1.489/1.500 = 99,3 %** |
+| rendimiento en la muestra de 400 funciones sintéticas (con la NAS saturada en paralelo) | 4,2 fn/s, 400/400 no vacías, ~8 KB por función |
+| pendientes tras lo ya hecho por Ghidra + r2ghidra | **91.372** |
+| tiempo estimado del barrido completo | **~2,7 h** (1 worker) |
 | salidas por función | `todo/rzD/<ruta_go>/<simbolo>.c` — **el mismo layout que las shards de r2ghidra**, así que `regenerar.py` las recoge sin cambios |
+
+Verificado de punta a punta: el regenerador indexa 8 shards (incluido `rzD`) y
+vuelca el cuerpo de r2dec en `codigo/<paquete>/<fichero>.c`.
 
 Dos detalles que hay que respetar (los dos dan errores silenciosos):
 
