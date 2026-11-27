@@ -107,6 +107,7 @@ pub mod dict_sync;
 pub mod disasm;
 pub mod drive_client;
 pub mod drive_native;
+pub mod drive_tube;
 pub mod drive_vfs;
 pub mod duckdns;
 pub mod entropy;

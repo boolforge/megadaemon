@@ -236,6 +236,23 @@ pub fn tool_definitions() -> Value {
                 }
             },
             {
+                "name": "drive_tubo",
+                "description": "EL TUBO: Google Drive como almacen EXTERNO (nativo en Rust, sin scripts). 'listar'/'inventario' que hay en la carpeta; 'subir' sube un fichero o una CARPETA (empaquetada en .tar.gz); 'bajar' descarga y verifica el sha256; 'tubo' = subir + VERIFICAR + borrar la copia local (solo borra si el sha256 cuadra). Pensado para cuando la cuota de disco es el cuello de botella.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["listar", "inventario", "subir", "bajar", "tubo"], "default": "listar" },
+                        "path": { "type": "string", "description": "Ruta local a subir (subir/tubo) o destino local (bajar)" },
+                        "file_id": { "type": "string", "description": "Id del fichero en Drive (bajar)" },
+                        "folder_id": { "type": "string", "description": "Carpeta de Drive destino (si no, se busca por nombre)" },
+                        "carpeta": { "type": "string", "description": "Nombre de la carpeta de Drive (por defecto 'megadaemon-backup')" },
+                        "nombre": { "type": "string", "description": "Nombre remoto (si no, el del fichero; las carpetas se llaman <nombre>.tar.gz)" },
+                        "borrar_local": { "type": "boolean", "default": false, "description": "En 'tubo': borrar la copia local tras verificar (solo si el sha256 cuadra)" },
+                        "limit": { "type": "integer", "default": 200 }
+                    }
+                }
+            },
+            {
                 "name": "retro_apk_tools",
                 "description": "Pure-Rust Retro & Android binary tools (AXML AndroidManifest decoder, 1bpp 8x8 font extractor, Saturn VDP2 CRAM palette inspector, ScummVM savegame parser).",
                 "inputSchema": {
@@ -2724,6 +2741,87 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 Err(e) => {
                     json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true })
                 }
+            }
+        }
+        "drive_tubo" => {
+            // EL TUBO (nativo en Rust): Drive como almacen externo.
+            let st = crate::cockpit_server::state_dir();
+            let action = {
+                let a = s("action");
+                if a.is_empty() { "listar".to_string() } else { a }
+            };
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(200) as usize;
+            let carpeta = s("carpeta");
+            let folder_id = s("folder_id");
+            let nombre = s("nombre");
+            let ruta = s("path");
+            let file_id = s("file_id");
+            let borrar = args
+                .get("borrar_local")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let res: Result<Value, String> = match action.as_str() {
+                "listar" | "ls" => {
+                    let cid = crate::drive_tube::resolver_carpeta(
+                        if carpeta.is_empty() { crate::drive_tube::CARPETA_POR_DEFECTO } else { &carpeta },
+                        if folder_id.is_empty() { None } else { Some(&folder_id) },
+                        Some(&st),
+                    )?;
+                    crate::drive_tube::listar(&cid, limit, Some(&st))
+                }
+                "inventario" | "inv" => {
+                    let cid = crate::drive_tube::resolver_carpeta(
+                        if carpeta.is_empty() { crate::drive_tube::CARPETA_POR_DEFECTO } else { &carpeta },
+                        if folder_id.is_empty() { None } else { Some(&folder_id) },
+                        Some(&st),
+                    )?;
+                    crate::drive_tube::inventario(&cid, limit, Some(&st))
+                }
+                "subir" | "upload" => {
+                    if ruta.is_empty() {
+                        Err("falta 'path' (la ruta local a subir)".to_string())
+                    } else {
+                        let cid = crate::drive_tube::resolver_carpeta(
+                            if carpeta.is_empty() { crate::drive_tube::CARPETA_POR_DEFECTO } else { &carpeta },
+                            if folder_id.is_empty() { None } else { Some(&folder_id) },
+                            Some(&st),
+                        )?;
+                        crate::drive_tube::subir(
+                            &ruta,
+                            if nombre.is_empty() { None } else { Some(&nombre) },
+                            &cid,
+                            Some(&st),
+                        )
+                    }
+                }
+                "bajar" | "download" => {
+                    if file_id.is_empty() {
+                        Err("falta 'file_id'".to_string())
+                    } else if ruta.is_empty() {
+                        Err("falta 'path' (el destino local)".to_string())
+                    } else {
+                        crate::drive_tube::bajar(&file_id, &ruta, Some(&st))
+                    }
+                }
+                "tubo" => {
+                    if ruta.is_empty() {
+                        Err("falta 'path' (la ruta local)".to_string())
+                    } else {
+                        crate::drive_tube::tubo(
+                            &ruta,
+                            if nombre.is_empty() { None } else { Some(&nombre) },
+                            if carpeta.is_empty() { None } else { Some(&carpeta) },
+                            if folder_id.is_empty() { None } else { Some(&folder_id) },
+                            borrar,
+                            Some(&st),
+                        )
+                    }
+                }
+                _ => Err(format!("accion '{}' desconocida", action)),
+            };
+            match res {
+                Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
+                Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
             }
         }
         "drive_vfs" => {

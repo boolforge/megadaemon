@@ -1363,6 +1363,15 @@ fn main() {
             }
         }
 
+        //   megadaemon-core drive-tubo <listar|inventario|subir|bajar|tubo> [args]
+        //     EL TUBO: Google Drive como almacen EXTERNO.  `tubo` sube un
+        //     fichero o una carpeta, VERIFICA el sha256 y (si todo cuadra)
+        //     borra la copia local; en local queda solo el inventario.
+        "drive-tubo" | "drive-tube" => {
+            let rc = megadaemon_core::drive_tube::run_cli(&args[2..]);
+            std::process::exit(rc);
+        }
+
         //   megadaemon-core reparar [--diagnostico] [--json]
         //     Diagnostica y REPARA el entorno del propio nodo (prefijo
         //     persistente, binario, watchdog, keeper, API key, credenciales
