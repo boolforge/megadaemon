@@ -3819,53 +3819,6 @@ pub fn run_server(port: u16) -> Result<(), String> {
         );
     }
 
-    // Canal LAN: beacon UDP de descubrimiento (mismo modo de fallo que el
-    // móvil, sin internet y sin terceros).  Best-effort: si no hay red, el
-    // daemon sigue igual.
-    //
-    // BUG LAN-01 (medido el 2026-11-21 en el S21): el beacon publicaba el
-    // puerto PRIMARIO, que en el móvil es efímero (lo elige el SO) y CAMBIA
-    // en cada arranque.  El descubrimiento por LAN se quedaba con URLs
-    // muertas: se vio el beacon anunciando 42127, 42671, 34331 y 46043 en
-    // cuatro reinicios seguidos.  Ahora publica el puerto CANÓNICO (el
-    // primero de los alias que de verdad ha quedado abierto), que es fijo
-    // entre arranques; el efímero se publica aparte como `primary_port`.
-    {
-        let inst = std::env::var("MEGADAEMON_INSTANCE_ID").unwrap_or_else(|_| "megadaemon".into());
-        let sd = state_dir();
-        let abiertos: Vec<u16> = listeners.iter().map(|(p, _)| *p).collect();
-        let canonico = ALIAS_PORTS
-            .iter()
-            .copied()
-            .find(|p| abiertos.contains(p))
-            .unwrap_or(port);
-        crate::lan::spawn_beacon(inst, canonico, Some(sd));
-    }
-
-    // v17 — Watchdog BIDIRECCIONAL: el daemon vigila al supervisor.
-    //
-    // MEDIDO el 2026-11-21: el supervisor se lanzaba desde Termux (hijo de
-    // la app).  Al cerrar Termux, Android mato el grupo de procesos: el
-    // supervisor murio, luego el daemon, luego el tunel => el movil quedo
-    // inalcanzable (0 puertos abiertos) sin que nadie se enterase.
-    //
-    // Con esto, si el daemon vive pero el supervisor no, el daemon lo
-    // relanza.  Y si el supervisor vive pero el daemon no, el supervisor lo
-    // relanza (ya lo hacia).  Los dos se curan solos.
-    spawn_supervisor_keeper(state_dir());
-
-    // v17 — Publicacion AUTOMATICA del canal, DENTRO del daemon.
-    //
-    // MEDIDO el 2026-11-21: el canal lo publicaba el binario externo
-    // `channel-publish`, que en el movil no se podia instalar (el movil no
-    // tiene curl ni wget) => la URL del quick tunnel nunca se publicaba y
-    // el movil era inalcanzable desde fuera sin intervencion manual.
-    //
-    // Ahora el propio daemon publica.  Es IDEMPOTENTE y BARATO: solo
-    // publica cuando la URL del tunel ha CAMBIADO o el paste vigente ha
-    // caducado (6 h).  En reposo: 0 peticiones de red.
-    spawn_channel_publisher(state_dir());
-
     // Publica el estado real del listener para /health.
     let open: Vec<u16> = listeners.iter().map(|(p, _)| *p).collect();
     let _ = PRIMARY_PORT.set(port);

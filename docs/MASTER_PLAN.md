@@ -101,7 +101,7 @@
 | P2.3 | Adjuntos binarios de las apps (WhatsApp media, imágenes de Claude) | `src/attachments.rs` | |
 | P2.4 | Actualizaciones de Play Store | — | **limitado**: no hay API pública |
 | P2.5 | Plan de migración a ROM nueva + parches Magisk/KernelSU | `docs/` + `deploy/` | |
-| P2.6 | Rendimiento: profiling del cockpit, backend de SQLite, caché | por módulo | "si le falta algo, se mejora" |
+| P2.6 | Rendimiento: profiling del cockpit,后的 de SQLite, caché | por módulo | "si le falta algo, se mejora" |
 
 ### P3 — Bloqueos honestos (del sistema, no del código)
 

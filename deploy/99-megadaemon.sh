@@ -1359,45 +1359,21 @@ last_update=0
 # crítico: si falla, el daemon sigue sirviendo la versión anterior.
 UPDATE_EVERY=${MEGADAEMON_UPDATE_EVERY:-21600}
 
-# AUTO-ACTUALIZACION (v17).
-#
-# MEDIDO el 2026-11-21: esta funcion pedia `$PREFIX/auto-update.sh`, que NO
-# EXISTE en el repo => el auto-update no habia hecho NUNDA nada.  Y aunque
-# existiera, no podria descargar nada: el movil no tiene curl ni wget.
-#
-# Ahora el propio binario del daemon se actualiza (`megadaemon-core update`):
-#   * `--check` -> 1 peticion pequena; codigo 10 = "hay version nueva";
-#   * sin `--check` -> descarga, VERIFICA el SHA-256 e instala de forma
-#     atomica (el anterior queda en .prev).
-#
-# Coste en reposo: UNA peticion HTTP cada UPDATE_EVERY segundos.
 try_update() {
     now=$(date +%s)
     [ $((now - last_update)) -lt "$UPDATE_EVERY" ] && return 0
     last_update=$now
-    [ -x "$BIN" ] || return 0
-    out=$("$BIN" update --check 2>&1 | head -2)
-    case "$out" in
-        *actualizable*)
-            log "auto-update: version nueva disponible -> instalando"
-            "$BIN" update >>"$LOG" 2>&1
-            rc=$?
-            if [ "$rc" = "10" ]; then
-                log "auto-update: version nueva INSTALADA -> reiniciando el daemon"
-                # El binario nuevo se carga al reiniciar el proceso.
-                pkill -f "megadaemon-core cockpit" 2>/dev/null
-                sleep 3
-            else
-                log "auto-update: fallo (se mantiene la version actual)"
-            fi
-            ;;
-        *actual*)
-            : # ya al dia: no se hace nada (0 peticiones de peso)
-            ;;
-        *)
-            log "auto-update: no se pudo comprobar ($out)"
-            ;;
-    esac
+    upd="$PREFIX/auto-update.sh"
+    if [ ! -f "$upd" ]; then
+        # Se intenta traer el script desde el propio repo (el móvil tiene git).
+        if [ -d "$PREFIX/repo/.git" ]; then
+            (cd "$PREFIX/repo" && git pull --ff-only origin main >>"$LOG" 2>&1)
+            cp -f "$PREFIX/repo/deploy/auto-update.sh" "$upd" 2>/dev/null && chmod 755 "$upd"
+        fi
+    fi
+    [ -f "$upd" ] || { log "auto-update: script no disponible"; return 0; }
+    log "auto-update: comprobando releases..."
+    "$upd" >>"$LOG" 2>&1 || log "auto-update: fallo (se mantiene la version actual)"
 }
 
 i=0

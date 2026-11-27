@@ -109,7 +109,7 @@ iz80 = "0.5"
 default = []
 # Servidor SSH nativo (russh). Sólo Linux/Android-ARM64: el PC Linux es su
 # destino natural; en el móvil queda opcional por peso de compilación.
-ssh = ["dep:russh", "dep:tokio", "dep:tokio-rustls"]
+ssh = ["dep:russh", "dep:tokio", "dep:tokio-rustls", "dep:rustls"]
 
 [dependencies.russh]
 version = "0.49"

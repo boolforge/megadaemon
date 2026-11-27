@@ -1024,7 +1024,7 @@ fn ui11_el_freezer_no_puede_escribir_fuera_del_sandbox_con_un_symlink() {
 // El id del proveedor viene del servidor (bóveda) y se interpola en un
 // manejador inline.  Con un `'` en el id, el JS del atributo se escapa y se
 // ejecuta código arbitrario al pulsar el botón TEST (el token vive en la
-// misma página, así que el XSS puede usarlo para llamar a la API).
+// misma página, así que el XSS puede用它 para llamar a la API).
 //
 // El test usa el harness de Node (abajo) que ejecuta el JavaScript REAL que
 // sirve el cockpit, con un DOM mínimo, y evalúa el `onclick` resultante.

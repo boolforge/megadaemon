@@ -780,6 +780,21 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
           tag_name: v${{ github.sha }}
+      - name: Publicar el estado del release (para que la instancia lo detecte)
+        run: |
+          mkdir -p dist/state
+          cat > dist/state/latest.json <<EOF
+          {
+            "version": "${{ github.sha }}",
+            "ref": "main",
+            "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "assets": {
+              "android-arm64": "megadaemon-core-android-arm64",
+              "linux-x86_64": "megadaemon-core-linux-x86_64",
+              "linux-arm64": "megadaemon-core-linux-arm64"
+            }
+          }
+          EOF
       - name: Subir el manifiesto de actualización
         uses: actions/upload-artifact@v4
         with:
