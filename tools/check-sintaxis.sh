@@ -23,7 +23,16 @@ while IFS= read -r -d '' f; do
     printf '%s\n' "$out" | head -6
     MAL=$((MAL+1))
   fi
-done < <(find . -name '*.rs' -not -path './target/*' -not -path './*/target/*' -print0)
+# MEDIDO (2026-11-27): `artifacts/` contiene material de TERCEROS descargado
+# para analisis (ACPira, acpschema, mcode, goose, Codewhale) mas el codigo
+# descompilado de los productos. Son 6.206 ficheros .rs ajenos al crate y 169
+# de ellos no parsean (son Rust de otras versiones/ediciones): el gate senalaba
+# 169 errores que NO eran del repo. Solo se analiza el codigo del crate.
+done < <(find . -name '*.rs' \
+  -not -path './target/*' -not -path './*/target/*' \
+  -not -path './artifacts/*' \
+  -not -path './vendor/*' \
+  -print0)
 echo "::notice::ficheros rust analizados: $N · con error de sintaxis: $MAL"
 if [ "$MAL" -gt 0 ]; then
   echo "SINTASIS ROTA en $MAL fichero(s) - no compiles todavia"
