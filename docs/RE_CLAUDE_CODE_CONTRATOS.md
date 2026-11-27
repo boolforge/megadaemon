@@ -80,12 +80,13 @@ cada campo y su descripción) en `docs/medidas/claude_code_tools.json`.
 | ReportFindings | 10 | TodoWrite | 3 |
 | WebFetch | 3 | TaskCreate / TaskGet | 4 / 1 |
 | WebSearch | 3 | EnterPlanMode | 0 |
-| AskUserQuestion | 304 ⚠ | Projects | 7 |
+| AskUserQuestion | 4 | Projects | 7 |
 | SendFeedback | 6 | ClaudeDesign | 2 |
 
-⚠ `AskUserQuestion` con 304 campos y `ProposeSkills` con 61: es un **fallo de mi
-parser** (tipos en línea con `;` dentro), no del esquema. Los tipos de esas dos
-tools están **NO MEDIDOS** con detalle; el resto sí.
+`AskUserQuestion` y `ProposeSkills` tienen **tipos en línea** (un array de
+objetos anidados). La tabla cuenta los campos de **primer nivel**; los tipos
+en línea se marcan con `"compuesto": true` en el JSON de medidas, con su tipo
+completo en el campo `tipo`.
 
 Semántica medida en los esquemas (ejemplos literales del `.d.ts`):
 
@@ -190,7 +191,8 @@ Lista completa en el JSON de medidas.
   **NO MEDIDO**.
 * **Codex 0.172.0**: no descargado en esta sesión ⇒ **NO MEDIDO** (el paquete
   `openai/codex` es Rust: ahí sí aplicaría el motor sancionado).
-* Las **tools' tipos** de `AskUserQuestion` y `ProposeSkills` (fallo de parser).
+* El desglose **campo a campo** de los tipos en línea de `AskUserQuestion` y
+  `ProposeSkills`: el JSON lleva el tipo completo, pero no se ha aplanado.
 
 ## 11. Cómo reproducir
 

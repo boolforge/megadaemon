@@ -24,6 +24,83 @@ def limpiar(desc: str) -> str:
     return d[:220]
 
 
+def parse_campos(cuerpo: str) -> list[dict]:
+    """Campos de PRIMER nivel de una interface de TypeScript.
+
+    Los tipos pueden ser en linea (`questions: [ { a: string } ]`), asi que
+    no vale un regex plano: se recorre linea a linea y el tipo de un campo
+    se acumula hasta que se cierra el balance de llaves/corchetes.
+    """
+    lineas = cuerpo.split("\n")
+    campos = []
+    i = 0
+    while i < len(lineas):
+        linea = lineas[i]
+        m = re.match(r"^  ([A-Za-z_][A-Za-z0-9_]*)(\?)?\s*:\s*(.*)$", linea)
+        if not m:
+            i += 1
+            continue
+        nombre, opcional, resto = m.group(1), m.group(2), m.group(3)
+        # el tipo se acumula hasta cerrar el balance
+        prof = balance(resto)
+        tipo = resto
+        j = i
+        while (prof > 0 or not tipo.rstrip().endswith(";")) and j + 1 < len(lineas):
+            j += 1
+            tipo += "\n" + lineas[j]
+            prof += balance(lineas[j])
+        tipo = tipo.strip().rstrip(";").strip()
+        # el comentario va justo antes del campo
+        desc = ""
+        k = i - 1
+        if k >= 0 and lineas[k].strip() == "*/":
+            while k >= 0 and "/*" not in lineas[k]:
+                k -= 1
+            if k >= 0:
+                desc = " ".join(
+                    x.strip().lstrip("*").strip()
+                    for x in lineas[k + 1 : i - 1]
+                    if x.strip() and x.strip() != "*/"
+                )
+        campos.append(
+            {
+                "campo": nombre,
+                "tipo": " ".join(tipo.split())[:120],
+                "obligatorio": opcional is None,
+                "compuesto": balance(resto) > 0 or "{" in tipo,
+                "desc": limpiar(desc),
+            }
+        )
+        i = j + 1
+    return campos
+
+
+def balance(texto: str) -> int:
+    """Balance de llaves y corchetes (sin contar los de las cadenas)."""
+    n = 0
+    en_cadena = False
+    cita = ""
+    esc = False
+    for ch in texto:
+        if en_cadena:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == cita:
+                en_cadena = False
+            continue
+        if ch in "\"'`":
+            en_cadena = True
+            cita = ch
+        elif ch in "{[":
+            n += 1
+        elif ch in "}]":
+            n -= 1
+    return n
+
+
+
 def main() -> int:
     txt = open(SRC, encoding="utf-8", errors="replace").read()
 
@@ -39,23 +116,7 @@ def main() -> int:
         r"export interface (\w+) \{\n(.*?)\n\}\n", txt, re.S
     ):
         nombre, cuerpo = m.group(1), m.group(2)
-        campos = []
-        # comentario opcional + "campo?: tipo;"
-        for c in re.finditer(
-            r"(?:/\*\*\s*(.*?)\s*\*/\s*)?([A-Za-z_][A-Za-z0-9_]*)(\?)?\s*:\s*([^;]+);",
-            cuerpo,
-            re.S,
-        ):
-            doc, campo, opcional, tipo = c.groups()
-            campos.append(
-                {
-                    "campo": campo,
-                    "tipo": " ".join(tipo.split())[:120],
-                    "obligatorio": opcional is None,
-                    "desc": limpiar(doc or ""),
-                }
-            )
-        interfaces[nombre] = {"desc": "", "campos": campos}
+        interfaces[nombre] = {"desc": "", "campos": parse_campos(cuerpo)}
 
     catalogo = []
     for t in tools:
