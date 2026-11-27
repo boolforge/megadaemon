@@ -459,7 +459,7 @@ sha16_de() {
   # MEDIDO (2026-11-27, movil): sha256sum del usuario normal NO puede leer
   # un fichero de /data/adb (0700) => salia vacio.  Ahora, si falla, se
   # pregunta al daemon COMO ROOT.
-  if command -v sha256sum >/dev/null/2>&1 || command -v sha256sum >/dev/null 2>&1; then
+  if command -v sha256sum >/dev/null 2>&1; then
     h=$(sha256sum "$1" 2>/dev/null | cut -c1-16)
     [ -n "$h" ] && { printf '%s' "$h"; return 0; }
   fi
@@ -604,7 +604,7 @@ token_github_ruta() {
   for t in "$PREFIX/.gh_token" "$PREFIX/github.token" \
            "$STATE/.gh_token" "$STATE/github.token" \
            "$HOME/.mavis/github.token"; do
-    if [ -f "$t" ]; then printf '%s' "$t"; return 0; fi
+    if existe "$t"; then printf '%s' "$t"; return 0; fi
   done
   return 1
 }
@@ -804,9 +804,9 @@ diagnostico() {
 
   say "--- logs (últimas líneas) ---"
   for l in "$LOGDIR/daemon.log" "$LOGDIR/tunnel.log" "$LOGDIR/tunnel-watchdog.log"; do
-    if [ -f "$l" ]; then
+    if existe "$l"; then
       say "  $l:"
-      tail -n 4 "$l" 2>/dev/null | sed 's/^/    /'
+      r "tail -n 4 '$l' 2>/dev/null" | sed 's/^/    /'
     fi
   done
 
@@ -993,7 +993,7 @@ instalar() {
   # (`rust-core/src/stack.rs`: `Destino::Prefijo("tunnel-watchdog.sh")`).
   for f in 99-megadaemon.sh 97-megadaemon-keeper.sh 98-cloudflared.sh 91-adb-tcp.sh; do
     for cand in "$STAGE/deploy/$f" "$STAGE/megadaemon-movil/$f" "$STAGE/$f"; do
-      if [ -f "$cand" ]; then
+      if existe "$cand"; then
         r "mkdir -p /data/adb/service.d && cp -f '$cand' /data/adb/service.d/$f && chmod 755 /data/adb/service.d/$f" >/dev/null
         break
       fi
@@ -1001,7 +1001,7 @@ instalar() {
   done
   # El watchdog, al prefijo (lo lanza 98-cloudflared.sh con su entorno).
   for cand in "$STAGE/deploy/tunnel-watchdog.sh" "$STAGE/tunnel-watchdog.sh"; do
-    if [ -f "$cand" ]; then
+    if existe "$cand"; then
       r "cp -f '$cand' '$PREFIX/tunnel-watchdog.sh' && chmod 755 '$PREFIX/tunnel-watchdog.sh'" >/dev/null
       break
     fi
@@ -1013,7 +1013,7 @@ instalar() {
   # binario compilado en el HOST (x86-64) y el movil descargaba algo que no
   # puede ejecutar; ahora el CI mete el ARM64 y se verifica la arquitectura.
   for cand in "$STAGE/bin/mddoctor" "$STAGE/megadaemon-movil/bin/mddoctor" "$STAGE/mddoctor"; do
-    if [ -f "$cand" ]; then
+    if existe "$cand"; then
       r "cp -f '$cand' '$DOC.new' && chmod 755 '$DOC.new' && mv -f '$DOC.new' '$DOC'" >/dev/null
       break
     fi
@@ -1139,7 +1139,7 @@ instalar() {
   if ejecutable "$PREFIX/channel-publish"; then
     publico=0
     for t in "$PREFIX/.gh_token" "$PREFIX/github.token" "$STATE/.gh_token" "$STATE/github.token"; do
-      [ -f "$t" ] || continue
+      existe "$t" || continue
       r "'$PREFIX/channel-publish' --repo-publish --state-dir '$STATE' --token-file '$t'" >/dev/null 2>&1 && publico=1
       break
     done
