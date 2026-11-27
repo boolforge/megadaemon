@@ -2668,7 +2668,7 @@ pub fn informe(state_dir: Option<&str>, muestras: u32, intervalo_s: u64) -> Valu
         },
         "serie": serie,
         "veredicto": if moved == 0 {
-            "el brillo NO se movió durante la observación: 100% manual y sin cambios"
+            "el brillo NO se movió durante la observación: 100% manual y sin cambios".to_string()
         } else {
             format!("el brillo se movió {moved} veces: hay que ver 'serie.cambios' (quien lo movió)")
         },
