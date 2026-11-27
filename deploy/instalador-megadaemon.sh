@@ -393,7 +393,7 @@ if [ "$DESTINO" = movil ]; then
   [ -n "$CURL" ] || warn "no hay curl en Termux: instálalo con 'pkg install curl' (la descarga del release lo necesita)"
 fi
 say "state_dir que usa el daemon: $STATE_REAL"
-DAEMON="$(root 'pgrep -f megadaemon-core | head -1' | tr -d '\r\n')"
+DAEMON="$(root 'grep -lsa megadaemon-core /proc/[0-9]*/cmdline 2>/dev/null | head -1' | sed 's#.*/##; s#/cmdline##' | tr -d '\r\n')"
 say "daemon: ${DAEMON:-NO}"
 KEYS="$(root "ls -1 $MD_DIR/state/megadaemon_api.key $MD_DIR/state/megadaemon_api.keys 2>/dev/null | wc -l" | tr -d '\r\n ')"
 say "keys disponibles en $MD_DIR/state: ${KEYS:-0}"
@@ -590,7 +590,7 @@ say "binario instalado y ejecutable (+x)"
 say "=== 3) reinicio del daemon ==="
 root "pkill -x megadaemon-core 2>/dev/null; sleep 2"
 sleep 4
-NEWD="$(root 'pgrep -f megadaemon-core | head -1' | tr -d '\r\n')"
+NEWD="$(root 'grep -lsa megadaemon-core /proc/[0-9]*/cmdline 2>/dev/null | head -1' | sed 's#.*/##; s#/cmdline##' | tr -d '\r\n')"
 if [ -z "$NEWD" ]; then
   root "cp -f $MD_DIR/megadaemon-core.bak $MD_DIR/megadaemon-core; chmod 755 $MD_DIR/megadaemon-core; pkill -x megadaemon-core; sleep 3"
   die "el daemon no arrancó: binario anterior restaurado (no he dejado el móvil sin daemon)"

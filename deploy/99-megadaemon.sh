@@ -285,9 +285,38 @@ alias_ports_free() {
     echo "$out"
 }
 
+# --- ¿hay proceso vivo? (portable, sin `pgrep -f`) -------------------------
+# MEDIDO (2026-11-27, movil): `pgrep -f` NO es de fiar en toybox (el shell de
+# Android) y ademas cuenta como "vivo" a los ENVOLTORIOS `sh -c ...` (que no
+# son el proceso real) => el guardian creia que el supervisor estaba muerto y
+# lo relanzaba DETRAS de otro (6 supervisores, 6 daemons, 6 cloudflared y 5
+# watchdogs en el movil: load 58 => el tunel no podia arrancar).
+# Ahora: se listan los PIDs leyendo /proc, se descartan los envoltorios
+# `sh -c` y se pueden pedir VARIAS subcadenas (todas tienen que estar).
+# PROC_DIR se puede cambiar para poder PROBAR la funcion sin /proc real.
+PROC_DIR="${PROC_DIR:-/proc}"
+proc_pids() {
+    _pat=$1; shift
+    for _pp in "$PROC_DIR"/[0-9]*; do
+        [ -r "$_pp/cmdline" ] || continue
+        _pc=$(tr '\0' ' ' < "$_pp/cmdline" 2>/dev/null) || continue
+        case "$_pc" in
+            "sh -c "*|*/sh\ -c\ *) continue ;;
+        esac
+        _ok=1
+        case "$_pc" in *$_pat*) ;; *) _ok=0 ;; esac
+        for _x in "$@"; do
+            case "$_pc" in *"$_x"*) ;; *) _ok=0 ;; esac
+        done
+        [ "$_ok" = "1" ] && printf '%s\n' "${_pp##*/}"
+    done
+    return 0
+}
+proc_vivo() { [ -n "$(proc_pids "$@")" ]; }
+
 ensure_web_bridge() {
     [ -f "$BRIDGE" ] || return 0
-    if pgrep -f "web_bridge.py" > /dev/null 2>&1; then
+    if proc_vivo "web_bridge.py"; then
         return 0
     fi
     # Si el daemon YA escucha en los puertos alias (binario v13.4+: 3000/3030/
@@ -352,7 +381,7 @@ ensure_llama_server() {
     if grep -qiE ":$hp [0-9a-f]{8}:[0-9a-f]{4} 0A" /proc/net/tcp /proc/net/tcp6 2>/dev/null; then
         return 0
     fi
-    if pgrep -f "llama-server" > /dev/null 2>&1; then
+    if proc_vivo "llama-server"; then
         return 0
     fi
     # El binario vive en el sandbox de Antigravity (stub -> binario real).
@@ -575,7 +604,7 @@ mcp_legacy_enabled() {
 }
 
 mcp_legacy_stop() {
-    pids=$(pgrep -f "cloudflared tunnel .*127.0.0.1:8765" 2>/dev/null)
+    pids=$(proc_pids "cloudflared tunnel" "127.0.0.1:8765")
     for p in $pids; do
         kill "$p" 2>/dev/null && log "tunel mcp-legacy: instance obsoleta PID $p eliminada (8765 ya no lo sirve el daemon)"
     done
@@ -605,7 +634,7 @@ ensure_tunnel() {
     t_port=$1; t_log=$2; t_urlfile=$3; t_tag=$4; t_dedup=${5:-1}; t_fallback=${6:-}
     [ -x "$CLOUDFLARED" ] || return 0
     t_url=$(cat "$t_urlfile" 2>/dev/null)
-    t_pids=$(pgrep -f "cloudflared tunnel .*127.0.0.1:$t_port" 2>/dev/null)
+    t_pids=$(proc_pids "cloudflared tunnel" "127.0.0.1:$t_port")
     t_n=0
     for p in $t_pids; do t_n=$((t_n + 1)); done
 
@@ -961,7 +990,7 @@ check_daemon_responsive() {
 SHELL_SOCK="$PREFIX/state/shell.sock"
 ensure_shell_service() {
     [ -x "$PREFIX/md-shell-serve" ] || return 0
-    if pgrep -f "md-shell-serve" > /dev/null 2>&1; then
+    if proc_vivo "md-shell-serve"; then
         return 0
     fi
     mkdir -p "$PREFIX/state" 2>/dev/null
@@ -1226,7 +1255,7 @@ energy_disk_free_kb() {
     df -k /storage/emulated/0 2>/dev/null | awk 'NR==2 {print $4}'
 }
 energy_daemon_rss_kb() {
-    pid=$(pgrep -f "megadaemon-core cockpit" 2>/dev/null | head -1)
+    pid=$(proc_pids "megadaemon-core cockpit" | head -1)
     [ -n "$pid" ] || return 1
     awk '/^VmRSS:/ {print $2}' "/proc/$pid/status" 2>/dev/null
 }
@@ -1388,7 +1417,7 @@ ensure_mcp_legacy_tunnel
 while true; do
     rotate
     prune_caches
-    if ! pgrep -f "megadaemon-core cockpit" > /dev/null 2>&1; then
+    if ! proc_vivo "megadaemon-core cockpit"; then
         log "megadaemon no está corriendo: relanzando (intento $i)"
         start_daemon
         rc=$?
@@ -1430,7 +1459,7 @@ while true; do
             k=$((k + 1))
             ensure_web_bridge
             ensure_llama_server
-            if ! pgrep -f "megadaemon-core cockpit" > /dev/null 2>&1; then
+            if ! proc_vivo "megadaemon-core cockpit"; then
                 break
             fi
         done
@@ -1487,7 +1516,7 @@ while true; do
         done
         if [ "$miss" -ge 3 ]; then
             log "daemon VIVO pero NO RESPONDE: se reinicia (antes se quedaba en 502 para siempre)"
-            for p in $(pgrep -f "megadaemon-core cockpit" 2>/dev/null); do
+            for p in $(proc_pids "megadaemon-core cockpit"); do
                 kill "$p" 2>/dev/null
             done
             sleep 3

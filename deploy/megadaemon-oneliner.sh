@@ -758,7 +758,10 @@ publicar_telemetria() {
     say "  publicación omitida por --sin-publicar"
     return 0
   fi
-  if [ ! -x "$DAEMON" ]; then
+  # MEDIDO (2026-11-27, movil): `[ ! -x "$DAEMON" ]` como usuario NORMAL da
+  # FALSO siempre (/data/adb es 0700 de root) => decia "no hay daemon" con el
+  # daemon VIVO y la telemetría NUNCA se publicaba.  Se pregunta COMO ROOT.
+  if ! ejecutable "$DAEMON"; then
     warn "  no hay daemon: no hay nada que publicar"
     return 1
   fi
@@ -786,7 +789,10 @@ diagnostico() {
   DIAG_DAEMON=""
   if DIAG_PID=$(daemon_vivo); then
     DIAG_DAEMON="vivo"
-    say "  proceso: PID $DIAG_PID ($(tr '\0' ' ' < "/proc/$DIAG_PID/cmdline" 2>/dev/null | cut -c1-90))"
+    # MEDIDO (2026-11-27, movil): leer /proc/<pid>/cmdline como usuario NORMAL
+    # falla ("cannot open ...") porque el proceso es de ROOT => el PID salia
+    # sin linea de comandos.  Se lee COMO ROOT.
+    say "  proceso: PID $DIAG_PID ($(r "tr '\0' ' ' < '/proc/$DIAG_PID/cmdline' 2>/dev/null | cut -c1-90"))"
     if binario_al_dia "$DIAG_PID"; then
       DIAG_AL_DIA=true
       say "  binario en servicio = binario en disco ✓"
@@ -1220,7 +1226,20 @@ instalar() {
   if [ "$N_DAEMONS" -gt 1 ]; then
     warn "había $N_DAEMONS daemons: se deja uno"
     n=0
-    for p in $(r "pgrep -f 'megadaemon-core cockpit'" | tr ' ' '\n' | grep -E '^[0-9]+$'); do
+    # MEDIDO (2026-11-27, movil): `pgrep -f` NO EXISTE en toybox (el shell de
+    # Android) => la limpieza de daemons duplicados NO MATABA NADA y el movil
+    # se quedaba con 6 daemons, 6 cloudflared y 5 watchdogs (load 58 => el
+    # tunel no podia arrancar).  Ahora los PIDs se listan leyendo /proc
+    # COMO ROOT, y se deja UN solo daemon de verdad (los envoltorios `sh -c`
+    # no cuentan: si cuentan, se mata el daemon bueno y se queda el envoltorio).
+    for p in $(r "grep -lsa 'megadaemon-core cockpit' /proc/[0-9]*/cmdline 2>/dev/null" | sed 's#^.*/##; s#/cmdline$##'); do
+      # Si la linea de comandos es un envoltorio `sh -c ...`, NO es el daemon:
+      # matarlo no mata al daemon (y al revés: matar al hijo del daemon SI
+      # lo rompe).  MEDIDO (2026-11-27, movil).
+      CMDLINE=$(r "tr '\0' ' ' < '/proc/$p/cmdline' 2>/dev/null")
+      case "$CMDLINE" in
+        *"sh -c"*) continue ;;
+      esac
       n=$((n + 1))
       if [ "$n" -gt 1 ]; then
         r "kill -9 $p" >/dev/null 2>&1
@@ -1285,11 +1304,14 @@ instalar() {
   # flota se queda ciega.  Lo publica `channel-publish --repo-publish`.
   if ejecutable "$PREFIX/channel-publish"; then
     publico=0
-    for t in "$PREFIX/.gh_token" "$PREFIX/github.token" "$STATE/.gh_token" "$STATE/github.token"; do
-      existe "$t" || continue
-      r "'$PREFIX/channel-publish' --repo-publish --state-dir '$STATE' --token-file '$t'" >/dev/null 2>&1 && publico=1
-      break
-    done
+    # MEDIDO (2026-11-27, movil): el bucle buscaba el token en 4 rutas y
+    # `token_github_ruta` en 5 => con el token en $HOME/.mavis/github.token el
+    # diagnostico decia "hay token" pero el canal NO iba al repo.  Ahora se
+    # usa la MISMA funcion que el diagnostico.
+    T_TOKEN=$(token_github_ruta)
+    if [ -n "$T_TOKEN" ]; then
+      r "'$PREFIX/channel-publish' --repo-publish --state-dir '$STATE' --token-file '$T_TOKEN'" >/dev/null 2>&1 && publico=1
+    fi
     if [ "$publico" = "1" ]; then
       say "  canal publicado en el repo (state/channel.json)"
       informe_paso "canal_repo" true "state/channel.json"
