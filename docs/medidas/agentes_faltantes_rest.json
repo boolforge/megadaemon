@@ -1,0 +1,78 @@
+{
+  "AIDC-AI/AutoGPT": {
+    "repo": "AIDC-AI/AutoGPT",
+    "error": "HTTP 404"
+  },
+  "Aider-AI/aider-ui": {
+    "repo": "Aider-AI/aider-ui",
+    "error": "HTTP 404"
+  },
+  "Amazon-Science/auto-coder": {
+    "repo": "Amazon-Science/auto-coder",
+    "error": "HTTP 404"
+  },
+  "BeehiveInnovations/pal-bee": {
+    "repo": "BeehiveInnovations/pal-bee",
+    "error": "HTTP 404"
+  },
+  "MeltyAI/melty": {
+    "repo": "MeltyAI/melty",
+    "error": "HTTP 404"
+  },
+  "PuerNya/small-to-large": {
+    "repo": "PuerNya/small-to-large",
+    "error": "HTTP 404"
+  },
+  "codebuff-dev/codebuff": {
+    "repo": "codebuff-dev/codebuff",
+    "error": "HTTP 404"
+  },
+  "codota-io/ai-unit-test": {
+    "repo": "codota-io/ai-unit-test",
+    "error": "HTTP 404"
+  },
+  "dnephin/promptingguide": {
+    "repo": "dnephin/promptingguide",
+    "error": "HTTP 404"
+  },
+  "jlowin/fastapi-mcp": {
+    "repo": "jlowin/fastapi-mcp",
+    "error": "HTTP 404"
+  },
+  "keplergpt/kepler": {
+    "repo": "keplergpt/kepler",
+    "error": "HTTP 404"
+  },
+  "lovable-dev/lovable": {
+    "repo": "lovable-dev/lovable",
+    "error": "HTTP 404"
+  },
+  "microsoft/agent-framework": {
+    "repo": "microsoft/agent-framework",
+    "error": "HTTP 404"
+  },
+  "runkit/runkit": {
+    "repo": "runkit/runkit",
+    "error": "HTTP 404"
+  },
+  "slavakurilyak/AI-Performance": {
+    "repo": "slavakurilyak/AI-Performance",
+    "error": "HTTP 404"
+  },
+  "sourcegraph/cody": {
+    "repo": "sourcegraph/cody",
+    "error": "HTTP 404"
+  },
+  "vercel/v0": {
+    "repo": "vercel/v0",
+    "error": "HTTP 404"
+  },
+  "vinta/harbor": {
+    "repo": "vinta/harbor",
+    "error": "HTTP 404"
+  },
+  "wonderwhy-er/DesktopCommanderGPT": {
+    "repo": "wonderwhy-er/DesktopCommanderGPT",
+    "error": "HTTP 404"
+  }
+}

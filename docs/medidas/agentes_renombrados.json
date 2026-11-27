@@ -1,0 +1,122 @@
+{
+  "AIDC-AI/AutoGPT": {
+    "repo": "AIDC-AI/AutoGPT",
+    "estado": "no encontrado"
+  },
+  "Aider-AI/aider-ui": {
+    "repo": "Aider-AI/aider-ui",
+    "estado": "no encontrado"
+  },
+  "Amazon-Science/auto-coder": {
+    "repo": "Amazon-Science/auto-coder",
+    "estado": "no encontrado"
+  },
+  "BeehiveInnovations/pal-bee": {
+    "repo": "BeehiveInnovations/pal-bee",
+    "estado": "no encontrado"
+  },
+  "MeltyAI/melty": {
+    "repo": "MeltyAI/melty",
+    "estado": "no encontrado"
+  },
+  "PuerNya/small-to-large": {
+    "repo": "PuerNya/small-to-large",
+    "estado": "no encontrado"
+  },
+  "codebuff-dev/codebuff": {
+    "repo": "codebuff-dev/codebuff",
+    "estado": "no encontrado"
+  },
+  "codota-io/ai-unit-test": {
+    "repo": "codota-io/ai-unit-test",
+    "estado": "no encontrado"
+  },
+  "dnephin/promptingguide": {
+    "repo": "dnephin/promptingguide",
+    "estado": "no encontrado"
+  },
+  "jlowin/fastapi-mcp": {
+    "repo": "jlowin/fastapi-mcp",
+    "estado": "no encontrado"
+  },
+  "keplergpt/kepler": {
+    "repo": "keplergpt/kepler",
+    "estado": "no encontrado"
+  },
+  "lovable-dev/lovable": {
+    "repo": "lovable-dev/lovable",
+    "estado": "no encontrado"
+  },
+  "microsoft/agent-framework": {
+    "repo_original": "microsoft/agent-framework",
+    "repo_real": "microsoft/agent-framework-go",
+    "estado": "activo",
+    "stars": 707,
+    "forks": 76,
+    "lang": "Go",
+    "license": "MIT",
+    "kb": 27222016,
+    "pushed": "2026-11-27",
+    "created": "2025-10-24",
+    "archived": false,
+    "desc": "A framework for building, orchestrating and deploying AI agents and multi-agent workflows with support for Go.",
+    "url": "https://github.com/microsoft/agent-framework-go"
+  },
+  "runkit/runkit": {
+    "repo_original": "runkit/runkit",
+    "repo_real": "runkit/test",
+    "estado": "activo",
+    "stars": 0,
+    "forks": 0,
+    "lang": null,
+    "license": "NOASSERTION",
+    "kb": 0,
+    "pushed": "2014-10-13",
+    "created": "2014-10-13",
+    "archived": false,
+    "desc": "",
+    "url": "https://github.com/runkit/test"
+  },
+  "slavakurilyak/AI-Performance": {
+    "repo": "slavakurilyak/AI-Performance",
+    "estado": "no encontrado"
+  },
+  "sourcegraph/cody": {
+    "repo_original": "sourcegraph/cody",
+    "repo_real": "sourcegraph/cody-vs",
+    "estado": "activo",
+    "stars": 89,
+    "forks": 33,
+    "lang": "C#",
+    "license": "NOASSERTION",
+    "kb": 5392384,
+    "pushed": "2026-11-26",
+    "created": "2024-06-25",
+    "archived": false,
+    "desc": "Cody for Visual Studio - an AI code assistant that uses advanced search and codebase context to help you write and fix code.",
+    "url": "https://github.com/sourcegraph/cody-vs"
+  },
+  "vercel/v0": {
+    "repo_original": "vercel/v0",
+    "repo_real": "vercel/v0-sdk",
+    "estado": "activo",
+    "stars": 517,
+    "forks": 127,
+    "lang": "TypeScript",
+    "license": "NOASSERTION",
+    "kb": 2448384,
+    "pushed": "2026-11-24",
+    "created": "2025-07-16",
+    "archived": false,
+    "desc": "SDK for the v0 Platform API",
+    "url": "https://github.com/vercel/v0-sdk"
+  },
+  "vinta/harbor": {
+    "repo": "vinta/harbor",
+    "estado": "no encontrado"
+  },
+  "wonderwhy-er/DesktopCommanderGPT": {
+    "repo": "wonderwhy-er/DesktopCommanderGPT",
+    "estado": "no encontrado"
+  }
+}
