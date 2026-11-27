@@ -760,6 +760,8 @@ material de terceros queda fuera del repo.
 | Documento | Qué contiene |
 |---|---|
 | `docs/RE_ACP.md` | ACP v1/v2: métodos, esquema literal por mensaje, 37 capacidades `cognition.ai/*` |
+| `docs/RE_ACP_COMPARADO.md` | **Los 3 dialectos (Devin ∪ acpira ∪ MiniMax) + el canónico**: método a método, y el **crate Rust oficial `agent-client-protocol-schema` (Apache‑2.0)** que hace innecesario escribir los tipos a mano |
 | `docs/RE_DEVIN_CLI_RUST.md` | Arquitectura de la CLI Rust de 262 MB: 20 crates, esquema SQLite, daemon, sandbox, plugins |
+| `docs/RE_PATRONES_RUST.md` | Tres patrones concretados con API en Rust: bucle como reductor de efectos, `cache_keepalive`, sesión como bosque |
 | `docs/RE_CARGADOR_MULTIECOSISTEMA.md` | Formato de regla unificado (Cursor ∪ Claude ∪ Devin) y cargador de 17 fuentes |
 | `docs/medidas/cursor/**` | Los contratos de Cursor 3.32.4, para comparación |
