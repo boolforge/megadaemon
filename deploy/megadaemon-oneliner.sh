@@ -295,6 +295,67 @@ ejecutable() { r "test -x '$1'" >/dev/null 2>&1; }
 # Ejecuta el daemon COMO ROOT (vive en $PREFIX, que es de root).
 daemon()     { r "'$DAEMON' $*" 2>&1; }
 
+# Copia el stack del bundle a service.d y el watchdog al prefijo.
+# Se extrae a una funcion para que la AUTOREPARACION pueda reponerlo.
+instalar_stack() {
+  st="$1"
+  for f in 99-megadaemon.sh 97-megadaemon-keeper.sh 98-cloudflared.sh 91-adb-tcp.sh; do
+    for cand in "$st/deploy/$f" "$st/megadaemon-movil/$f" "$st/$f"; do
+      if existe "$cand"; then
+        r "mkdir -p /data/adb/service.d && cp -f '$cand' /data/adb/service.d/$f && chmod 755 /data/adb/service.d/$f" >/dev/null
+        break
+      fi
+    done
+  done
+  # El watchdog, al prefijo (lo lanza 98-cloudflared.sh con su entorno).
+  for cand in "$st/deploy/tunnel-watchdog.sh" "$st/tunnel-watchdog.sh"; do
+    if existe "$cand"; then
+      r "cp -f '$cand' '$PREFIX/tunnel-watchdog.sh' && chmod 755 '$PREFIX/tunnel-watchdog.sh'" >/dev/null
+      break
+    fi
+  done
+}
+
+# --- AUTOREPARACION -------------------------------------------------------
+# MEDIDO (2026-11-27, movil): la instalacion terminaba con 8/8 y el movil
+# MUERTO (vivos: supervisor=0 watchdog=0 cloudflared=0, sin mddoctor, sin
+# URL del tunel) y solo avisaba.  Aqui se comprueba y se ARREGLA SOLO:
+# se repone lo que falte y, si el tunel no responde, se relanza el stack
+# con el nucleo forense (que sabe relanzar el tunel y el daemon).
+autorreparar() {
+  say "--- autoreparacion (lo que falte, se repone) ---"
+  faltan=0
+  for f in 99-megadaemon.sh 97-megadaemon-keeper.sh 98-cloudflared.sh 91-adb-tcp.sh; do
+    ejecutable "/data/adb/service.d/$f" || { warn "falta /data/adb/service.d/$f"; faltan=1; }
+  done
+  ejecutable "$PREFIX/tunnel-watchdog.sh" || { warn "falta el watchdog en el prefijo"; faltan=1; }
+  ejecutable "$DOC" || { warn "falta el nucleo forense ($DOC)"; faltan=1; }
+  if [ "$faltan" = "1" ] && [ -n "$STAGE" ] && [ -d "$STAGE" ]; then
+    say "reponiendo el stack desde el bundle"
+    instalar_stack "$STAGE"
+  fi
+  # El tunel: si no responde, se relanza con el nucleo forense y se re-sonda.
+  if [ "$listo" != "1" ] && ejecutable "$DOC"; then
+    say "el tunel no responde: relanzando el stack con el nucleo forense"
+    r "'$DOC' reconectar --apply --espera 30" 2>&1 | tail -n 8 | sed 's/^/    /'
+    U2=$(r "cat '$STATE/tunnel.url' 2>/dev/null" | tr -d '\r\n ')
+    if [ -z "$U2" ]; then
+      U2=$(r "grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' '$LOGDIR/tunnel.log' 2>/dev/null | tail -1" | tr -d '\r\n ')
+      [ -n "$U2" ] && r "printf '%s' '$U2' > '$STATE/tunnel.url' && chmod 644 '$STATE/tunnel.url'" >/dev/null
+    fi
+    if [ -n "$U2" ] && r "'$DAEMON' telemetria sonda '$U2'" >/dev/null 2>&1; then
+      listo=1
+      URL="$U2"
+      say "el tunel responde TRAS la autoreparacion: $URL"
+      informe_paso "autorreparacion" true "el tunel responde: $URL"
+    else
+      warn "tras la autoreparacion el tunel sigue sin responder"
+      informe_paso "autorreparacion" false "el tunel sigue caido"
+    fi
+  fi
+  return 0
+}
+
 # ===========================================================================
 # 1) HTTP (tres capas: curl, wget, el daemon)
 # ===========================================================================
@@ -594,7 +655,10 @@ binario_al_dia() {
 
 # Espacio libre en el prefijo (MB).  Si no se puede saber => 0.
 espacio_libre_mb() {
-  e_kb=$(df -k "$PREFIX" 2>/dev/null | tail -1 | awk '{print $4}')
+  # MEDIDO (2026-11-27): `df` sobre /data/adb como usuario normal NO puede
+  # leerla => decia siempre "0 MB libres" y hacia creer que el movil estaba
+  # sin disco.  Ahora se pregunta COMO ROOT.
+  e_kb=$(r "df -k '$PREFIX' 2>/dev/null" | tail -1 | awk '{print $4}')
   case "$e_kb" in ''|*[!0-9]*) echo 0; return ;; esac
   echo $(( e_kb / 1024 ))
 }
@@ -867,6 +931,20 @@ instalar() {
   say "release: ${TAG:-(última)}"
   informe_paso "resolver_release" true "${TAG:-(última)}"
 
+  # --- espacio: sin sitio el movil instala y luego no arranca NADA --------
+  # MEDIDO (2026-11-27): el aviso de espacio era una lectura falsa (df como
+  # usuario normal sobre /data/adb).  Ahora se mide COMO ROOT y se avisa
+  # ANTES de descargar 13 MB.
+  ESPACIO=$(espacio_libre_mb)
+  if [ "$ESPACIO" -lt 50 ]; then
+    warn "quedan $ESPACIO MB libres en $PREFIX: el bundle son 13 MB y el daemon necesita mas"
+    warn "libera espacio (o borra releases viejos) y reintenta"
+    informe_paso "espacio" false "$ESPACIO MB libres"
+  else
+    say "espacio: $ESPACIO MB libres en $PREFIX"
+    informe_paso "espacio" true "$ESPACIO MB libres"
+  fi
+
   say "=== 2/8 descargando el bundle ==="
   # ⚠️ `/data/local/tmp` NO es escribible por el uid de Termux ⇒ el temporal
   # va a $TMPDIR (Termux lo define) o a /tmp.
@@ -991,21 +1069,7 @@ instalar() {
   # entraría en un ciclo de relanzamiento de cloudflared (cambia el hostname
   # cada 60 s y ciega a la flota).  Su sitio es el PREFIJO
   # (`rust-core/src/stack.rs`: `Destino::Prefijo("tunnel-watchdog.sh")`).
-  for f in 99-megadaemon.sh 97-megadaemon-keeper.sh 98-cloudflared.sh 91-adb-tcp.sh; do
-    for cand in "$STAGE/deploy/$f" "$STAGE/megadaemon-movil/$f" "$STAGE/$f"; do
-      if existe "$cand"; then
-        r "mkdir -p /data/adb/service.d && cp -f '$cand' /data/adb/service.d/$f && chmod 755 /data/adb/service.d/$f" >/dev/null
-        break
-      fi
-    done
-  done
-  # El watchdog, al prefijo (lo lanza 98-cloudflared.sh con su entorno).
-  for cand in "$STAGE/deploy/tunnel-watchdog.sh" "$STAGE/tunnel-watchdog.sh"; do
-    if existe "$cand"; then
-      r "cp -f '$cand' '$PREFIX/tunnel-watchdog.sh' && chmod 755 '$PREFIX/tunnel-watchdog.sh'" >/dev/null
-      break
-    fi
-  done
+  instalar_stack "$STAGE"
   say "stack instalado"
 
   # El NUCLEO FORENSE (mddoctor, en C): se instala como root desde el bundle
@@ -1158,6 +1222,8 @@ instalar() {
   publicar_telemetria
 
   say "=== 8/8 comprobación final ==="
+  # Si el movil no ha quedado alcanzable, se ARREGLA antes de rendirse.
+  [ "$listo" = "1" ] || autoreparar
   diagnostico
   if r "test -x '$DOC'" >/dev/null 2>&1; then
     say "--- veredicto del nucleo forense (root) ---"

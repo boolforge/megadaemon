@@ -197,6 +197,17 @@ else
 fi
 [ -f "$PREFIX_LAB/tunnel-watchdog.sh" ] && ok "tunnel-watchdog.sh está en el prefijo" || mal "tunnel-watchdog.sh no está en el prefijo"
 
+# MEDIDO (2026-11-27, movil): el stack NUNCA se copiaba a service.d (el
+# chequeo del bundle se hacia como usuario normal sobre /data/adb, 0700) =>
+# el movil quedaba sin supervisor ni keeper => no arrancaba nadie.
+for f in 99-megadaemon.sh 97-megadaemon-keeper.sh 98-cloudflared.sh 91-adb-tcp.sh; do
+  if [ -f "$LAB/service.d/$f" ]; then
+    ok "$f está en service.d (arranque en boot)"
+  else
+    mal "$f NO está en service.d: el móvil no arrancará nada"
+  fi
+done
+
 say "4) el health-check usó la sonda con la URL"
 grep -q 'telemetria sonda' "$MD_LOG" && ok "se sondó el túnel" || mal "no se sondeó el túnel"
 grep -q 'LISTO: el móvil es alcanzable' "$LAB/salida.log" && ok "anunció que está listo" || mal "no anunció que está listo"
