@@ -50,6 +50,17 @@ jobs:
           bash tools/test-mddoctor.sh
           gcc -O2 -Wall -Werror -o /tmp/mddoctor tools/mddoctor.c
           echo "mddoctor: $(wc -c < /tmp/mddoctor) B, compila con -Werror"
+      # El instalador del movil es la PUERTA DE ENTRADA del usuario (un
+      # one-liner).  Antes solo se probaba en el movil real: un fallo de
+      # root, de permisos o de idempotencia sólo aparecia alli.  Aqui se
+      # comprueban sus 8 escenarios en un laboratorio falso (instalacion,
+      # entorno del daemon, watchdog, health-check, idempotencia, bundle
+      # corrupto, sha256 erroneo, modo PC) y la politica de energia (que no
+      # puede parpadear: MEDIDO 2026-11-27, el brillo iba 247 -> 60 -> 247).
+      - name: banco del instalador (one-liner) y politica de energia
+        run: |
+          bash tools/test-oneliner.sh
+          bash tools/test-energia.sh
 
   quality:
     name: calidad (fmt + clippy + tests)

@@ -1066,6 +1066,23 @@ ENERGY_SEAL_BELOW=${MEGADAEMON_SEAL_BELOW_PCT:-20}
 ENERGY_BRIGHTNESS_MAX=${MEGADAEMON_BRIGHTNESS_MAX:-60}
 ENERGY_RAM_FLOOR_KB=${MEGADAEMON_RAM_FLOOR_KB:-524288}
 ENERGY_DISK_FLOOR_KB=${MEGADAEMON_DISK_FLOOR_KB:-1048576}
+#
+# HISTÉRESIS de la clase de energía.
+#
+# MEDIDO (2026-11-27, SM-G998B, Android 14): el brillo del móvil iba
+# 247 -> 60 -> 247 cada ~75 s.  NO era el sensor de luz ambiente (el modo
+# estaba en MANUAL todo el tiempo): era ESTE script.  La clase de energía
+# parpadeaba entre "normal" y una restrictiva (la RAM libre cruzaba el
+# suelo de 512 MB un momento, o la temperatura cruzaba los 45 °C) => el
+# daemon se ponía el tope de 60, guardaba 247, y un minuto después lo
+# restauraba.  Ese锯齿 ES el "se me cambia el brillo a random".
+#
+# Con histéresis, para RELAJAR la clase hace falta un margen: 3 °C, 64 MB
+# de RAM y 5 % de batería.  ESCALAR sigue siendo inmediato (una temperatura
+# crítica entra en vigor al instante): el margen sólo va en la relajación.
+ENERGY_HYST_C=${MEGADAEMON_ENERGY_HYST_C:-3}
+ENERGY_HYST_RAM_KB=${MEGADAEMON_ENERGY_HYST_RAM_KB:-65536}
+ENERGY_HYST_PCT=${MEGADAEMON_ENERGY_HYST_PCT:-5}
 # Tope de RSS del daemon.
 #
 # MEDIDO (2026-11-23): el tope FIJO de 200 MB era la CAUSA de la muerte del
@@ -1137,14 +1154,31 @@ energy_daemon_rss_kb() {
 }
 
 # Clasifica el estado: normal | conserve | thermal | seal
-energy_classify() {   # $1=pct $2=temp_c $3=ram_kb $4=charging
+energy_classify() {   # $1=pct $2=temp_c $3=ram_kb $4=charging [$5=clase_anterior]
     [ -n "$1" ] || return 0
+    prev=${5:-normal}
+    # --- umbrales de ENTRADA (los de siempre, sin margen) -------------------
+    # Escalar es inmediato: una temperatura crítica o una batería en las
+    # últimas se aplican al instante, sin esperar a ningún margen.
     if [ "$1" -lt "$ENERGY_SEAL_BELOW" ]; then echo seal; return 0; fi
     if [ -n "$2" ] && [ "$2" -ge "$ENERGY_THERMAL_HARD" ]; then echo seal; return 0; fi
     if [ -n "$2" ] && [ "$2" -ge "$ENERGY_THERMAL_CRIT" ]; then echo thermal; return 0; fi
-    if [ -n "$2" ] && [ "$2" -ge "$ENERGY_THERMAL_WARN" ]; then echo thermal; return 0; fi
-    if [ -n "$3" ] && [ "$3" -gt 0 ] && [ "$3" -lt "$ENERGY_RAM_FLOOR_KB" ]; then echo conserve; return 0; fi
-    if [ "$4" != "Charging" ] && [ "$1" -lt 35 ]; then echo conserve; return 0; fi
+    # --- umbrales de RELAJACIÓN (con margen si veníamos de restrictiva) ----
+    # MEDIDO (2026-11-27): sin este margen la clase parpadeaba y el brillo
+    # iba 247 -> 60 -> 247 cada ~75 s.  Con margen, sólo se vuelve a
+    # "normal" cuando el valor está CLARAMENTE bien.
+    if [ "$prev" != "normal" ]; then
+        t_low=$((ENERGY_THERMAL_WARN - ENERGY_HYST_C))
+        ram_low=$((ENERGY_RAM_FLOOR_KB + ENERGY_HYST_RAM_KB))
+        p_low=$((35 + ENERGY_HYST_PCT))
+    else
+        t_low=$ENERGY_THERMAL_WARN
+        ram_low=$ENERGY_RAM_FLOOR_KB
+        p_low=35
+    fi
+    if [ -n "$2" ] && [ "$2" -ge "$t_low" ]; then echo thermal; return 0; fi
+    if [ -n "$3" ] && [ "$3" -gt 0 ] && [ "$3" -lt "$ram_low" ]; then echo conserve; return 0; fi
+    if [ "$4" != "Charging" ] && [ "$1" -lt "$p_low" ]; then echo conserve; return 0; fi
     echo normal
 }
 
@@ -1157,9 +1191,12 @@ apply_energy_policy() {
     btemp=$(energy_battery_temp_c)
     ram=$(energy_ram_available_kb)
     disk=$(energy_disk_free_kb)
-    cls=$(energy_classify "$pct" "$temp" "$ram" "$status")
     prev=""
     [ -f "$ENERGY_STATE_FILE" ] && prev=$(cat "$ENERGY_STATE_FILE" 2>/dev/null)
+    # MEDIDO (2026-11-27): la clase ANTERIOR se le pasa al clasificador para
+    # que la relajación exija un margen (histéresis).  Sin esto el brillo
+    # parpadeaba 247 -> 60 -> 247 cada ~75 s en el SM-G998B.
+    cls=$(energy_classify "$pct" "$temp" "$ram" "$status" "$prev")
 
     # --- acciones (sólo si la clase ha cambiado: no se martillea el sistema) ---
     if [ "$cls" != "$prev" ]; then

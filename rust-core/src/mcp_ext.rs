@@ -532,6 +532,30 @@ pub fn tool_definitions() -> Value {
                 }
             },
             {
+                "name": "brillo",
+                "description": "BRILLO del móvil (Samsung SM-G998B, Android 14). Deja el brillo en MANUAL (el sensor de luz ambiente deja de mandar: es la clave screen_brightness_mode=0, la que el propio sistema observa) y lo vigila sin estorbar: por defecto al MÁXIMO, y si el usuario mueve el deslizador se respeta su valor. Cada escritura se VERIFICA contra el brillo aplicado (dumpsys power), nunca a ciegas. Acciones: estado | fijar (0-255) | maximo | config | config_actualizar | reafirmar | shim (qué shim hay activo y qué se ha podido verificar) | vigilante (arrancar|parar|tick) | sensor | diagnostico (para el test en el móvil: ajustes, brillo aplicado, ALS, ficheros y prueba A/B de las vías de escritura con aplicar=true) | observar (serie temporal: quién cambia el brillo y cada cuánto) | adaptativo (las claves del brillo adaptativo de OneUI; aplicar=true lo neutraliza).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": { "type": "string", "enum": ["estado", "fijar", "maximo", "config", "config_actualizar", "reafirmar", "shim", "vigilante", "sensor", "diagnostico", "observar", "adaptativo"], "default": "estado" },
+                        "aplicar": { "type": "boolean", "description": "En accion=diagnostico: prueba A/B de las vias de escritura (cambia el brillo un momento y lo restaura). En accion=adaptativo: poner a 0 el brillo adaptativo de OneUI.", "default": false },
+                        "muestras": { "type": "integer", "description": "En accion=observar: numero de muestras (2-120).", "default": 12 },
+                        "intervalo_s": { "type": "integer", "description": "En accion=observar: segundos entre muestras (1-60).", "default": 5 },
+                        "neutralizar_adaptativo": { "type": "boolean", "description": "Poner a 0 'content_adaptive_brightness' (brillo adaptativo de OneUI) cuando la clave exista. NO VERIFICADO en este firmware: opt-in.", "default": false },
+                        "valor": { "type": "integer", "minimum": 0, "maximum": 255, "description": "Brillo 0-255 (accion fijar)." },
+                        "brillo_por_defecto": { "type": "integer", "minimum": 0, "maximum": 255, "description": "Brillo por defecto (accion config_actualizar). Defecto 255 (máximo)." },
+                        "politica": { "type": "string", "enum": ["respetar_usuario", "firme", "pasivo"], "description": "respetar_usuario: si el usuario mueve el deslizador, se respeta. firme: se reimpone siempre. pasivo: no se toca nada.", "default": "respetar_usuario" },
+                        "intervalo_vigilancia_s": { "type": "integer", "description": "Periodo del vigilante en segundos (2-3600).", "default": 15 },
+                        "permitir_automatico": { "type": "boolean", "description": "Si es true, el módulo NO toca el modo y el brillo automático puede vivir.", "default": false },
+                        "escribir_ajuste_legacy": { "type": "boolean", "description": "Escribir también el ajuste entero 'screen_brightness' (0-255). MEDIDO en el SM-G998B: ése es el que existe (247); el float no.", "default": true },
+                        "solo_float_si_existe": { "type": "boolean", "description": "Escribir 'screen_brightness_float' sólo si la clave YA existe en el firmware (MEDIDO: en One UI 6 no existe ⇒ no se crea).", "default": true },
+                        "usar_cmd_display": { "type": "boolean", "description": "Usar además 'cmd display set-brightness' (float 0-1) si la vía del proveedor no surte efecto.", "default": true },
+                        "verificar_aplicado": { "type": "boolean", "description": "Verificar el brillo aplicado con 'dumpsys power' (1 JVM más).", "default": true },
+                        "vigilante_accion": { "type": "string", "enum": ["arrancar", "parar", "tick"], "default": "tick", "description": "Qué hacer con el vigilante (accion vigilante)." }
+                    }
+                }
+            },
+            {
                 "name": "comms",
                 "description": "Automatización de comunicaciones: auto-respuestas, reenvío, grabación de llamadas y bitácora, regidas por el consentimiento del usuario (comms_consent.json). Todo lo decidido queda registrado.",
                 "inputSchema": {
@@ -1550,6 +1574,14 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         // móviles y la comparación con la cifra que factura el operador.
         "gasto_datos" => {
             let v = crate::gasto_datos::dispatch(args);
+            json!({ "content": [{ "type": "text", "text": v.to_string() }] })
+        }
+        // v19 — Brillo del móvil: shim de política sobre
+        // `screen_brightness_mode` (manual ⇒ el sensor de luz ambiente deja de
+        // mandar), brillo al máximo por defecto y respeto por los botones
+        // del sistema.  Cada escritura se verifica contra el brillo aplicado.
+        "brillo" => {
+            let v = crate::brightness::dispatch(args);
             json!({ "content": [{ "type": "text", "text": v.to_string() }] })
         }
         // v17 — Bus de órdenes PULL: el móvil TIRA del bus y ejecuta.  Es lo

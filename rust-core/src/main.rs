@@ -34,6 +34,7 @@ fn print_usage() {
     eprintln!("  seere-prompt [es|en]                         Dump the static SEERE system prompt (for token accounting)");
     eprintln!("  seere-grammar                                Dump the active GBNF grammar");
     eprintln!("  power                                        Show battery/charging/thermal state and the active policy");
+    eprintln!("  brillo <sub> [n] [aplicar]                    Brillo del movil: estado | fijar N | maximo | config | reafirmar | shim | sensor | diagnostico [aplicar] | observar [muestras] [s] | adaptativo [aplicar] | vigilante (arrancar|parar|tick)");
     eprintln!("  seere-selftest                              Run SEERE v12 Assertion Suites & Export Shared GBNF/Prompts");
     eprintln!("  npu-probe                                   Probe Exynos 2100 NPU (/dev/vertex10, EDEN, KleidiAI) & Pin Cores 4-7");
     eprintln!("  npu-probe --vs4l                            Sondea el driver VS4L/NPU (ioctl SIN argumento => devuelve el tamano que espera)");
@@ -436,6 +437,21 @@ fn main() {
                     })
                     .map_err(|e| eprintln!("stack: no se pudo arrancar la reconciliacion: {e}"));
             }
+            // v19 — Brillo: el vigilante (shim de política) mantiene el
+            // brillo en MANUAL y al máximo, y respeta lo que haga el usuario
+            // con los botones del sistema.  Sólo arranca en un móvil Android
+            // (en la nube no hay pantalla) y se puede apagar con
+            // MEGADAEMON_BRILLO=0.
+            {
+                let sd = std::env::var("MEGADAEMON_STATE_DIR").ok();
+                let r = megadaemon_core::brightness::arrancar_si_movil(sd.as_deref());
+                if r.get("accion").and_then(|v| v.as_str()) == Some("vigilante_arrancado") {
+                    eprintln!(
+                        "brillo: vigilante arrancado (intervalo {} s)",
+                        r.get("intervalo_s").and_then(|v| v.as_u64()).unwrap_or(0)
+                    );
+                }
+            }
             if let Err(e) = cockpit_server::run_server(port) {
                 eprintln!("Cockpit server error: {}", e);
                 std::process::exit(1);
@@ -614,6 +630,48 @@ fn main() {
                 "avisos" => megadaemon_core::gasto_datos::avisos(sd.as_deref(), None),
                 "desglose" => megadaemon_core::gasto_datos::desglose(sd.as_deref()),
                 _ => megadaemon_core::gasto_datos::estado(sd.as_deref()),
+            };
+            println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+        }
+
+        // v19 — Brillo del móvil: shim de política sobre
+        // `screen_brightness_mode` (manual ⇒ el sensor de luz ambiente deja de
+        // mandar), brillo al máximo por defecto y respeto por los botones
+        // del sistema.  Cada escritura se verifica contra el brillo aplicado.
+        //   megadaemon-core brillo <estado|fijar N|maximo|config|reafirmar|shim|vigilante>
+        "brillo" => {
+            let sub = args.get(2).cloned().unwrap_or_else(|| "estado".to_string());
+            let sd = std::env::var("MEGADAEMON_STATE_DIR").ok();
+            let valor = args.get(3).and_then(|v| v.parse::<u64>().ok());
+            let out: serde_json::Value = match sub.as_str() {
+                "fijar" => megadaemon_core::brightness::fijar(
+                    valor.unwrap_or(255).min(255) as u8,
+                    sd.as_deref(),
+                ),
+                "maximo" => megadaemon_core::brightness::maximo(sd.as_deref()),
+                "config" => megadaemon_core::brightness::config(sd.as_deref()),
+                "reafirmar" => megadaemon_core::brightness::reafirmar(sd.as_deref()),
+                "shim" => megadaemon_core::brightness::shim_estado(sd.as_deref()),
+                "observar" => megadaemon_core::brightness::observar(
+                    args.get(3)
+                        .and_then(|v| v.parse::<u32>().ok())
+                        .unwrap_or(12),
+                    args.get(4).and_then(|v| v.parse::<u64>().ok()).unwrap_or(5),
+                ),
+                "adaptativo" => megadaemon_core::brightness::dispatch(&serde_json::json!({
+                    "accion": "adaptativo",
+                    "aplicar": args.get(3).map(|s| s.as_str()) == Some("aplicar"),
+                })),
+                "diagnostico" => megadaemon_core::brightness::diagnostico(
+                    sd.as_deref(),
+                    args.get(4).map(|s| s.as_str()) == Some("aplicar"),
+                ),
+                "vigilante" => match args.get(3).map(|s| s.as_str()).unwrap_or("tick") {
+                    "arrancar" => megadaemon_core::brightness::arrancar_vigilante(sd.as_deref()),
+                    "parar" => megadaemon_core::brightness::parar_vigilante(),
+                    _ => megadaemon_core::brightness::tick(sd.as_deref()),
+                },
+                _ => megadaemon_core::brightness::estado(sd.as_deref()),
             };
             println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
         }

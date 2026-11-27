@@ -52,6 +52,19 @@ BLOQUE_MAL_INDENTADO = """jobs:
        echo fuera de sangria
 """
 
+# Un comentario dedentado ENTRE dos pasos: los parsers de YAML lo ignoran,
+# así que cierra el bloque literal sin romper el workflow (GitHub lo acepta).
+COMENTARIO_ENTRE_PASOS = """jobs:
+  build:
+    steps:
+      - name: uno
+        run: |
+          echo hola
+      # comentario dedentado entre dos pasos
+      - name: dos
+        run: echo z
+"""
+
 
 class TestYamlLint(unittest.TestCase):
     def test_detecta_escalar_con_dos_puntos_sin_comillas(self):
@@ -69,6 +82,10 @@ class TestYamlLint(unittest.TestCase):
     def test_detecta_bloque_mal_indentado(self):
         errs = lint(BLOQUE_MAL_INDENTADO)
         self.assertTrue(errs, "el contenido de un bloque literal debe ir más indentado")
+
+    def test_un_comentario_no_rompe_el_bloque_literal(self):
+        self.assertEqual(lint(COMENTARIO_ENTRE_PASOS), [],
+                         "un comentario dedentado es legal: los parsers lo ignoran")
 
     def test_fichero_real_del_repo_pasa(self):
         ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)),
