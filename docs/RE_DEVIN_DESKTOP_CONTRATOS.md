@@ -571,25 +571,97 @@ Fuente: `resources/app/extensions/windsurf/dist/acp/AGENTS.md` (31.656 B), que e
 
 ## 5. Contrato → ¿copiable? → fichero destino en `rust-core/src/`
 
-| Contrato | ¿Copiable? | Destino | Nota |
-|---|---|---|---|
-| Nombres de rutas de rules + frontmatter `trigger` | **Sí** | `rust-core/src/skills.rs` | Normalizar `model_decision` **y** `agent_decided` |
-| `read_config_from` (10 proveedores) | **Sí** | `rust-core/src/skills.rs` | Tabla de importadores ya existente en Cursor |
-| Formato `SKILL.md` (8 campos de frontmatter) | **Sí** | `rust-core/src/skills.rs` | `allowed-tools` es auto‑aprobación, **no** restricción → copiar la semántica |
-| Permisos `allow/deny/ask` + 5 modos | **Sí** | `rust-core/src/tool_policy.rs` | Precedencia org > modo de usuario |
-| Nombres de las 25 herramientas | **Sí** | `rust-core/src/tool_policy.rs` | Contrato de API con el modelo |
-| Config MCP (3 ficheros, 3 scopes, 3 transports, OAuth) | **Sí** | `rust-core/src/protocol.rs` | Reutilizar el `mcpServers` de Cursor: **mismo formato de campo** |
-| Hooks (8 eventos + `hookSpecificOutput`) | **Sí** | `rust-core/src/protocol.rs` | Formato casi idéntico a Claude Code |
-| Árbol de comandos de la CLI | **Sí** (superficie) | `rust-core/src/protocol.rs` | No copiar roff |
-| **ACP v1/v2** | **Sí** (es estándar abierto) | `rust-core/src/protocol.rs` | **P0**: el plan ya lo contempla |
-| Capacidades `cognition.ai/*` | **No** (propietarias) | — | Sólo documentar |
-| Prompt de sistema (texto) | **No** | — | Propiedad de Cognition |
-| Descripciones de las skills de fábrica | **No** (texto) | `rust-core/src/skills.rs` (reescritura) | Copiar el *formato*, no el contenido |
-| Hosts/URLs de endpoints | **No** | `rust-core/src/protocol.rs` (como constantes internas) | No redistribuir hosts ajenos |
-| `product.json`, `LICENSE.txt`, `ThirdPartyNotices.txt` | **No** | — | Referencia |
+### 5.0 Tabla de trabajo: los 10 contratos
 
-**Módulos destino ya existentes**: `rust-core/src/protocol.rs` (12.316 B),
-`rust-core/src/skills.rs` (16.960 B), `rust-core/src/tool_policy.rs` (13.705 B).
+| # | Contrato | ¿Copiable? | Fichero destino | ¿Nuevo o extiende? | Qué hay que escribir | Tamaño est. | Quién |
+|---|---|---|---|---|---|---|---|
+| 1 | **Reglas** (rutas + `trigger`) | Sí | `skills.rs` | extiende | `Rule`/`Activation` + `normalize_devin()` | 180‑280 L | skills |
+| 2 | **Hooks** (8 eventos) | Sí | `protocol.rs` | **nuevo** `hooks.rs` | registro de eventos, `matcher` regex, `hookSpecificOutput` | 400‑600 L | protocol |
+| 3 | **MCP** (3 ficheros, 3 scopes, OAuth) | Sí | `mcp_ext.rs` | extiende | lector de `mcp_config*.json` + merge de 4 importaciones | 250‑400 L | mcp |
+| 4 | **Skills** (`SKILL.md`) | Sí | `skills.rs` | extiende | parser de frontmatter (8 campos) + descubrimiento de 15 rutas | 300‑450 L | skills |
+| 5 | **Herramientas + permisos** (25 tools, 6 modos) | Sí | `tool_policy.rs` | extiende | catálogo de tools + `permission_mode` (6 valores) + reglas de ámbito | 350‑500 L | policy |
+| 6 | **Prompts** (estructura del system prompt) | No (texto) | `agent_loop.rs` | — | sólo la **estructura** en el doc; el texto no | 0 L (doc) | — |
+| 7 | **ACP v1/v2** | Sí (estándar abierto) | `protocol.rs` | **nuevo** | ver `docs/RE_ACP.md` §8: tipos v1+v2, `SessionUpdate`, elicitation, `_meta` | 2.200‑3.150 L | protocol |
+| 8 | **CLI** (204 comandos) | Sí (superficie) | `protocol.rs` | nuevo (CLI propia) | parser de comandos + salida `--json` | 400‑700 L | cli |
+| 9 | **Endpoints** (red) | No (URLs) | `providers.rs` | extiende | cliente HTTP: auth, reintentos, taxonomía de 17 errores | 600‑900 L | providers |
+| 10 | **Licencias/precios** | No | `docs/` | nuevo | tabla de planes y condiciones enterprise | 1 página | docs |
+
+**Y de la RE de la CLI Rust** (`docs/RE_DEVIN_CLI_RUST.md` §9), que son 13 patrones
+más de `agent_loop.rs`, `providers.rs`, `automation_runtime.rs` y `board.rs`.
+
+**Módulos destino ya existentes** (medidos): `protocol.rs` 12.316 B ·
+`skills.rs` 16.960 B · `tool_policy.rs` 13.705 B · `agent_loop.rs` 50.848 B ·
+`providers.rs` 85.325 B · `board.rs` 70.620 B · `service_bus.rs` 82.739 B ·
+`automation.rs` 40.688 B · `automation_runtime.rs` 41.885 B ·
+`automation_bridge.rs` 20.686 B · `agent_core.rs` 25.337 B ·
+`mcp_ext.rs` · `mcp_server.rs`.
+
+### 5.1 Los modos: unión Devin ∪ Cursor
+
+| Modo | Devin (binario, línea 446.057) | Cursor | Nota |
+|---|---|---|---|
+| `normal` | ✔ | Ask (read‑only) | |
+| `accept-edits` | ✔ | Agent | semántica parecida |
+| `smart` | ✔ | — | **un modelo rápido juzga** la seguridad de la acción |
+| `ask` | ✔ | Ask | ⚠️ **en la doc de Devin no aparece como modo**: la doc tabla 5 y trata `ask` sólo como *ámbito* de permiso. El binario sí lo tiene como modo. |
+| `bypass` | ✔ | — | todo auto‑aprobado |
+| `autonomous` | ✔ | — | sólo con sandbox OS; `edit`/`write` siguen pidiendo |
+
+⇒ **6 modos** (no 5). Y el `ask` de Cursor es un modo **read‑only**, mientras que
+el `ask` de Devin es un ámbito de permiso ⇒ **no son el mismo concepto**: hay que
+soportar ambos sin colisionar.
+
+### 5.2 Los hooks: unión de 22 eventos
+
+| Evento Devin (8) | Evento Cursor equivalente (22) | Unificación |
+|---|---|---|
+| `PreToolUse` | `preToolUse` | 1:1 |
+| `PostToolUse` | `postToolUse` (+ `postToolUseFailure`) | 1:1 + caso de fallo aparte |
+| `PermissionRequest` | — (Cursor responde `permission` en `preToolUse`) | **Devin tiene evento propio** ⇒ adopting el de Devin |
+| `UserPromptSubmit` | `beforeSubmitPrompt` | 1:1 |
+| `Stop` | `stop` | 1:1 |
+| `PostCompaction` | `preCompact` | ⚠️ **mismo hook, distinto momento**: Devin dispara *después*, Cursor *antes* ⇒ hace falta un flag `phase: before\|after` |
+| `SessionStart` | `sessionStart` | 1:1 |
+| `SessionEnd` | `sessionEnd` | 1:1 |
+| — | `beforeShellExecution`, `beforeMCPExecution`, `afterShellExecution`, `afterMCPExecution`, `beforeReadFile`, `afterFileEdit`, `beforeTabFileRead`, `afterTabFileEdit`, `afterAgentResponse`, `afterAgentThought`, `subagentStart`, `subagentStop`, `workspaceOpen` | **14 sólo de Cursor** |
+
+⇒ **Conjunto unión = 22 eventos** (8 de Devin + 14 exclusive de Cursor).
+Lo más fino es el de Cursor (hook por *familia de tool*: shell, MCP, read, edit);
+Devin es más simple (hook por *evento de ciclo de vida*, con `matcher` regex sobre
+el nombre de la tool).
+
+**Semántica del `matcher`**: en ambos es **regex** sobre `tool_name`; vacío/`"*"`/
+ausente = todos; si el regex **no compila**, Cursor hace *fail-open* (dispara para
+todos). Mismo comportamiento ⇒ **copiar el fail‑open**.
+
+**Respuesta de los hooks**: Cursor devuelve campos **por evento** y los valida
+(`"continue must be a boolean if provided"`, `"permission must be one of
+allow|deny|ask"`); Devin usa un `hookSpecificOutput` **genérico** con
+`hookEventName` + `additionalContext`/`updatedInput`, o `{"decision":"approve"}` /
+`{"decision":"block","reason":…}`.
+
+⇒ **unificación**: aceptar las **dos** gramáticas. La de Devin (genérica, con
+`_meta`) es la más fácil de extender; la de Cursor es más fina. Empezar por la de
+Devin y añadir los campos de Cursor como alias.
+
+### 5.3 Tabla copiable / no copiable (resumen)
+
+| Contrato | ¿Copiable? | Nota |
+|---|---|---|
+| Nombres de rutas de rules + frontmatter `trigger` | **Sí** | Normalizar `model_decision` **y** `agent_decided` |
+| `read_config_from` (10 proveedores) | **Sí** | Ver `docs/RE_CARGADOR_MULTIECOSISTEMA.md` |
+| Formato `SKILL.md` (8 campos de frontmatter) | **Sí** | `allowed-tools` es auto‑aprobación, **no** restricción |
+| Permisos `allow/deny/ask` + 6 modos | **Sí** | Precedencia org > modo de usuario |
+| Nombres de las 25 herramientas | **Sí** | Contrato de API con el modelo |
+| Config MCP (3 ficheros, 3 scopes, 3 transports, OAuth) | **Sí** | Mismo formato de campo que el de Cursor |
+| Hooks (8 eventos Devin + 22 Cursor) | **Sí** | Gramáticas distintas → aceptar las dos |
+| Árbol de comandos de la CLI | **Sí** (superficie) | No copiar roff |
+| **ACP v1/v2** | **Sí** (estándar abierto) | **P0** — ver `docs/RE_ACP.md` |
+| Capacidades `cognition.ai/*` | **No** (propietarias) | Sólo documentar — ver `docs/RE_ACP.md` §6.1 |
+| Prompt de sistema (texto) | **No** | Propiedad de Cognition |
+| Descripciones de las skills de fábrica | **No** (texto) | Reescritura en `skills.rs` |
+| Hosts/URLs de endpoints | **No** | Como constantes internas, no hosts ajenos |
+| `product.json`, `LICENSE.txt`, `ThirdPartyNotices.txt` | **No** | Referencia |
 
 ---
 
@@ -675,9 +747,19 @@ Carpeta `15FRlRwDQdAicoZcfKFOTzeWqJQMjXIC0`:
 | `devin_contratos_2026-11-27.zip` (`contratos/` + `INVENTARIO.tsv` + `asar_manifest.tsv` + prompt del sistema) | `1KBCbucp6Af-2aPVxk4z99s6MwIZjYBpJ` | 11.869.751 |
 | `RE_DEVIN_DESKTOP_CONTRATOS_2026-11-27.md` | este mismo documento, subido a la misma carpeta | — |
 
-`asar_manifest.tsv` = 10.347 entradas (fichero ⇄ bytes del `.asar` desempaquetado,
-221 MB en `artifacts/devin/devin_asar_unpacked/`).
+`asar_manifest.tsv` = 10.347 entradas (fichero ⇄ bytes del `.asar` desempaquetado).
+El árbol desempaquetado (221 MB) y el material literal de `contratos/` **no están en
+el worktree**: están en el zip de la Drive. En el repo sólo queda este documento.
 
 En el repo: rama `re/productos-cierre-2026-11-27`, commits `dfb83e0` (el informe) y
 `ceaeb8a` (corrección del anexo). Sólo se versiona este documento; el resto del
 material de terceros queda fuera del repo.
+
+### Documentos relacionados
+
+| Documento | Qué contiene |
+|---|---|
+| `docs/RE_ACP.md` | ACP v1/v2: métodos, esquema literal por mensaje, 37 capacidades `cognition.ai/*` |
+| `docs/RE_DEVIN_CLI_RUST.md` | Arquitectura de la CLI Rust de 262 MB: 20 crates, esquema SQLite, daemon, sandbox, plugins |
+| `docs/RE_CARGADOR_MULTIECOSISTEMA.md` | Formato de regla unificado (Cursor ∪ Claude ∪ Devin) y cargador de 17 fuentes |
+| `docs/medidas/cursor/**` | Los contratos de Cursor 3.32.4, para comparación |
