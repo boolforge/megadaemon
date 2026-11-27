@@ -21,7 +21,7 @@ import urllib.parse
 import urllib.request
 
 CRED = "/workspace/md-secrets/gdrive_credentials.json"
-CARPETA = "15FRlRwDQdAicoZcfKFOTzeWqJQMjXIC0"
+CARPETA = os.environ.get("MD_DRIVE_CARPETA", "15FRlRwDQdAicoZcfKFOTzeWqJQMjXIC0")
 API = "https://www.googleapis.com/upload/drive/v3/files"
 
 
