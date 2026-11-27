@@ -124,11 +124,32 @@ case "$TIMEOUT_S" in ''|*[!0-9]*) TIMEOUT_S=120 ;; esac
 # --- log --------------------------------------------------------------------
 # `say` escribe SIEMPRE en el log de disco: es lo que el root lee desde Drive
 # cuando el móvil no responde.  Un log sólo en pantalla no sirve de nada.
-LOGFILE="$STATE/instalador.log"
-mkdir -p "$STATE" 2>/dev/null
+#
+# MEDIDO (2026-11-27) en Termux SIN root: el log estaba en
+# /data/adb/megadaemon/state/instalador.log, que sin root NO se puede
+# crear, y salia "Permission denied" en CADA línea del instalador (el
+# mensaje tapaba la instalación entera).  Ahora se busca un sitio
+# ESCRIBIBLE; si no hay ninguno, se sigue en silencio: la pantalla vale.
+LOGFILE=""
+WORKDIR=""
+for _cand in "$STATE/instalador.log" \
+            "$HOME/.megadaemon/instalador.log" \
+            "/data/data/com.termux/files/home/.megadaemon/instalador.log" \
+            "${TMPDIR:-/tmp}/megadaemon-instalador.log"; do
+  _d="${_cand%/*}"
+  [ "$_d" = "$_cand" ] && _d="."
+  if mkdir -p "$_d" 2>/dev/null && : >>"$_cand" 2>/dev/null; then
+    LOGFILE="$_cand"
+    WORKDIR="$_d"
+    break
+  fi
+done
+[ -z "$WORKDIR" ] && WORKDIR="${TMPDIR:-/tmp}"
 say() {
   printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"
-  printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOGFILE" 2>/dev/null
+  if [ -n "$LOGFILE" ]; then
+    { printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOGFILE"; } 2>/dev/null
+  fi
 }
 warn() { printf '[%s] AVISO: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 die()  { printf '[%s] ERROR: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; exit 1; }
@@ -144,8 +165,13 @@ DOC="$PREFIX/mddoctor"
 modo_doctor() {
   say "=== doctor: diagnostico forense del movil (como root) ==="
   if ! r "test -x '$DOC'" >/dev/null 2>&1; then
-    warn "no hay mddoctor en $DOC"
-    warn "para instalarlo: ejecuta el one-liner SIN --doctor"
+    warn "no hay mddoctor ejecutable en $DOC"
+    if [ "$SOBRA_ROOT" != "1" ] && [ -z "$AS_ROOT" ]; then
+      warn "y ademas no hay root: el prefijo $PREFIX es de root"
+      warn "concede root a Termux (Magisk) y reintenta"
+    else
+      warn "para instalarlo: ejecuta el one-liner SIN --doctor"
+    fi
     warn "mientras tanto, el diagnostico nativo del daemon:"
     r "'$DAEMON' doctor" 2>/dev/null || true
     return 1
@@ -168,7 +194,15 @@ modo_doctor() {
 # ===========================================================================
 ES_ANDROID=0
 ES_TERMUX=0
-[ -d "/data/adb" ] && ES_ANDROID=1
+# MEDIDO (2026-11-27): el detector miraba `/data/adb`, que Termux NO puede
+# leer sin root => decia "android: 0", se creia en un PC y NUNCA pedia
+# root => no instalaba nada.  Ahora se detecta por lo que SI se puede ver
+# sin root: /system (legible por todos), la propia ruta de Termux, getprop y
+# uname -o.
+if [ -d "/system/bin" ] || [ -f "/system/build.prop" ] || [ -x /system/bin/getprop ] \
+   || [ -d "/data/data/com.termux" ] || [ "$(uname -o 2>/dev/null)" = "Android" ]; then
+  ES_ANDROID=1
+fi
 [ -d "/data/data/com.termux/files/usr" ] && ES_TERMUX=1
 
 SOBRA_ROOT=0
@@ -210,11 +244,28 @@ fi
 AS_ROOT=""
 if [ "$SOBRA_ROOT" = "1" ]; then
   AS_ROOT=""
-elif [ "$ES_ANDROID" = "1" ]; then
-  if su -mm -c "id -u" 2>/dev/null | grep -q '^0$'; then
-    AS_ROOT="su -mm -c"
+elif [ "$ES_ANDROID" = "1" ] || command -v su >/dev/null 2>&1 \
+     || command -v sudo >/dev/null 2>&1; then
+  # Si YA hay root, se USA: no se le pide al usuario que lo conceda otra vez.
+  # Se prueban en orden y se queda con el primero que DE VERDAD da uid 0:
+  #   sudo -n              (sin password: -n, para no colgarse esperando una
+  #                         contrasena que en un terminal no hay)
+  #   su -c                (Magisk moderno)
+  #   su -mm -c            (Magisk legacy, "mount master")
+  #   /system/bin/su ...   (Magisk lo monta ahi, y no siempre esta en el PATH
+  #                         de Termux)
+  # Con `</dev/null` el `su` que pida contrasena falla en vez de COLGARSE.
+  # Magisk pide permiso en pantalla: es normal, hay que aceptarlo.
+  for _c in "sudo -n" "su -c" "su -mm -c" "/system/bin/su -c" "/system/bin/su -mm -c"; do
+    if $_c "id -u" </dev/null 2>/dev/null | grep -q '^0$'; then
+      AS_ROOT="$_c"
+      break
+    fi
+  done
+  if [ -z "$AS_ROOT" ]; then
+    warn "no se pudo obtener root: concede root a Termux en el panel de Magisk y reintenta"
   else
-    warn "no puedo obtener root (su -mm falla): lo que necesite root se queda sin hacer"
+    say "root obtenido con: $AS_ROOT"
   fi
 fi
 
@@ -547,8 +598,10 @@ INFORME_PASOS_TMP=""
 
 informe_reset() {
   INFORME="$STATE/instalacion.json"
-  INFORME_TMP="$STATE/instalacion.json.entradas"
-  INFORME_PASOS_TMP="$STATE/instalacion.json.pasos"
+  # Los temporales van al WORKDIR (escribible SIN root): antes iban a $STATE
+  # y sin root fallaba con "Permission denied" (MEDIDO 2026-11-27).
+  INFORME_TMP="$WORKDIR/instalacion.json.entradas"
+  INFORME_PASOS_TMP="$WORKDIR/instalacion.json.pasos"
   : > "$INFORME_TMP" 2>/dev/null
   : > "$INFORME_PASOS_TMP" 2>/dev/null
 }
@@ -580,8 +633,13 @@ informe_cierra() {
     printf ',\n  "pasos": [\n'
     sed '$ s/,$//' "$INFORME_PASOS_TMP" 2>/dev/null
     printf '\n  ]\n}\n'
-  } > "$INFORME" 2>/dev/null
-  rm -f "$INFORME_TMP" "$INFORME_PASOS_TMP" 2>/dev/null
+  } > "$WORKDIR/instalacion.json.final" 2>/dev/null
+  # El informe final vive en $STATE (lo lee el root desde Drive): se escribe
+  # COMO ROOT, que es lo que exige el prefijo.
+  if [ -s "$WORKDIR/instalacion.json.final" ]; then
+    r "mkdir -p '$STATE' && cat '$WORKDIR/instalacion.json.final' > '$INFORME'" >/dev/null 2>&1
+  fi
+  rm -f "$INFORME_TMP" "$INFORME_PASOS_TMP" "$WORKDIR/instalacion.json.final" 2>/dev/null
   [ -s "$INFORME" ] && return 0
   return 1
 }
@@ -749,6 +807,17 @@ instalar() {
   informe_reset
   INFORME_RESULTADO="ko"
   INFORME_ERRORES=""
+
+  # --- root: sin esto NO se puede instalar nada --------------------------------
+  # MEDIDO (2026-11-27): el instalador se quedaba mudo cuando no tenia root
+  # (fallaba al escribir en /data/adb y seguia como si nada).  Aqui se dice
+  # ANTES de tocar nada, que es lo unico que el usuario puede arreglar.
+  if [ "$SOBRA_ROOT" != "1" ] && [ -z "$AS_ROOT" ]; then
+    if [ "$ES_ANDROID" = "1" ]; then
+      die "necesito root para instalar en $PREFIX: concede root a Termux (Magisk) y reintenta"
+    fi
+    die "no hay root: en un PC, ejecuta esto con sudo"
+  fi
 
   # --- atajo de idempotencia -------------------------------------------------
   # Si ya está instalado Y el túnel responde, NO se toca nada: matar el
