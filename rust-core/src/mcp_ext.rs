@@ -250,6 +250,33 @@ pub fn tool_definitions() -> Value {
                 }
             },
             {
+                "name": "cache_keepalive",
+                "description": "KEEPALIVE del caché de prompt del proveedor (patrón 2 de docs/DISENO_PATRONES_CLI_RUST.md): decide qué entradas forman el PREFIJO CACHEABLE (la racha inicial de entradas estables; una herramienta o un contenido dinámico lo cortan), calcula su firma y dice si el caché sigue vivo (reutilizar), ha caducado (refrescar) o se ha perdido (invalidado). Ahorra dinero: un prefijo estable se cobra a precio de caché. Acciones: 'prefijo', 'evaluar', 'politica'.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["prefijo", "evaluar", "politica"], "default": "prefijo" },
+                        "entradas": { "type": "string", "description": "Entradas del prompt: 'sistema:texto|usuario:texto|herramienta:texto'" },
+                        "ahora_s": { "type": "integer", "description": "Reloj del turno en segundos (determinista)" }
+                    }
+                }
+            },
+            {
+                "name": "compaction_epoch",
+                "description": "COMPACTACIÓN POR ÉPOCA, sin borrar (patrón 4 de docs/DISENO_PATRONES_CLI_RUST.md): la compactación marca una época en vez de truncar; el historial anterior SIGUE consultable. Modela el historial de una sesión (lista de mensajes), devuelve las epochs, la VISTA VIVA (sólo la época actual) y el historial completo, y permite revertir a una epoch anterior sin tocar el historial. Acciones: 'epochs', 'vista', 'revertir'.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["epochs", "vista", "revertir"], "default": "epochs" },
+                        "session_id": { "type": "string", "description": "Id de la sesión" },
+                        "mensajes": { "type": "array", "description": "Historial: [{'rol':'user','contenido':'...'}]", "items": { "type": "object" } },
+                        "resumen": { "type": "string", "description": "Resumen con el que se abre la epoch nueva" },
+                        "presupuesto_chars": { "type": "integer", "description": "Presupuesto de la vista viva: si no se pasa, se compacta siempre" },
+                        "epoch": { "type": "integer", "description": "Epoch a la que revertir" }
+                    }
+                }
+            },
+            {
                 "name": "drive_tubo",
                 "description": "EL TUBO: Google Drive como almacen EXTERNO (nativo en Rust, sin scripts). 'listar'/'inventario' que hay en la carpeta; 'subir' sube un fichero o una CARPETA (empaquetada en .tar.gz); 'bajar' descarga y verifica el sha256; 'tubo' = subir + VERIFICAR + borrar la copia local (solo borra si el sha256 cuadra). Pensado para cuando la cuota de disco es el cuello de botella.",
                 "inputSchema": {
@@ -2839,6 +2866,119 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 })(),
                 otro => Err(format!("acción desconocida: {}", otro)),
             };
+            match res {
+                Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
+                Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+            }
+        }
+        "cache_keepalive" => {
+            // Keepalive del caché de prompt (patrón 2): qué entradas forman el
+            // prefijo cacheable y si el caché sigue vivo.
+            let action = {
+                let a = s("action");
+                if a.is_empty() { "prefijo".to_string() } else { a }
+            };
+            let spec = s("entradas");
+            let ahora_s = args.get("ahora_s").and_then(|v| v.as_u64()).unwrap_or(0);
+            let res: Result<Value, String> = match action.as_str() {
+                "prefijo" => (|| -> Result<Value, String> {
+                    let es = crate::cache_keepalive::leer_entradas(&spec)?;
+                    let p = crate::cache_keepalive::Prefijo::calcular(&es);
+                    Ok(json!({
+                        "chars": p.chars,
+                        "cortado_por_volatil": p.cortado_por_volatil,
+                        "entradas": p.entradas.len(),
+                        "firma": crate::cache_keepalive::firma(&p.entradas),
+                    }))
+                })(),
+                "evaluar" => (|| -> Result<Value, String> {
+                    let es = crate::cache_keepalive::leer_entradas(&spec)?;
+                    let pol = crate::cache_keepalive::Politica::default();
+                    let plan = crate::cache_keepalive::evaluar(None, &es, ahora_s, &pol);
+                    Ok(json!({
+                        "decision": format!("{:?}", plan.decision),
+                        "motivo": plan.motivo,
+                        "chars_completos": plan.chars_completos,
+                        "chars_cacheados": plan.chars_cacheados,
+                        "ahorro_chars": plan.ahorro_chars,
+                    }))
+                })(),
+                "politica" => (|| -> Result<Value, String> {
+                    let p = crate::cache_keepalive::Politica::default();
+                    Ok(json!({
+                        "ttl_s": p.ttl_s,
+                        "minimo_chars": p.minimo_chars,
+                        "presupuesto_chars": p.presupuesto_chars,
+                    }))
+                })(),
+                otro => Err(format!("acción desconocida: {}", otro)),
+            };
+            match res {
+                Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
+                Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+            }
+        }
+        "compaction_epoch" => {
+            // Compactación por época, sin borrar (patrón 4).
+            let action = {
+                let a = s("action");
+                if a.is_empty() { "epochs".to_string() } else { a }
+            };
+            let session_id = s("session_id");
+            let resumen = s("resumen");
+            let epoch = args.get("epoch").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            let res: Result<Value, String> = (|| -> Result<Value, String> {
+                let sid = if session_id.is_empty() { "sesion".to_string() } else { session_id.clone() };
+                let mut h = crate::compaction_epoch::Historial::nuevo(sid);
+                if let Some(ms) = args.get("mensajes").and_then(|v| v.as_array()) {
+                    for m in ms {
+                        let rol = m.get("rol").and_then(|v| v.as_str()).unwrap_or("user");
+                        let cont = m.get("contenido").and_then(|v| v.as_str()).unwrap_or("");
+                        h.anadir(rol, cont);
+                    }
+                }
+                // Si hay resumen y presupuesto, se compacta (o se compacta
+                // siempre si no hay presupuesto: 0 = sin limite).
+                let presupuesto = args
+                    .get("presupuesto_chars")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as usize;
+                let compactado = if resumen.is_empty() {
+                    None
+                } else {
+                    Some(h.compactar(resumen.clone(), presupuesto))
+                };
+                match action.as_str() {
+                    "epochs" => Ok(json!({
+                        "session_id": h.session_id,
+                        "current_epoch": h.current_epoch,
+                        "epochs": h.epochs(),
+                        "compactado": compactado.map(|c| json!({
+                            "epoch_nueva": c.epoch_nueva,
+                            "epoch_sellada": c.epoch_sellada,
+                            "mensajes_sellados": c.mensajes_sellados,
+                            "chars_ahorrados": c.chars_ahorrados,
+                        })),
+                        "ddl": crate::compaction_epoch::DDL_MEDIDO,
+                    })),
+                    "vista" => Ok(json!({
+                        "current_epoch": h.current_epoch,
+                        "vista_viva": h.vista_viva().len(),
+                        "chars_vivos": h.chars_vivos(),
+                        "historial_completo": h.mensajes.len(),
+                        "chars_totales": h.chars_totales(),
+                    })),
+                    "revertir" => (|| -> Result<Value, String> {
+                        h.revertir_a(epoch)?;
+                        Ok(json!({
+                            "ok": true,
+                            "current_epoch": h.current_epoch,
+                            "historial_completo": h.mensajes.len(),
+                        }))
+                    })(),
+                    otro => Err(format!("acción desconocida: {}", otro)),
+                }
+            })();
             match res {
                 Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
                 Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),

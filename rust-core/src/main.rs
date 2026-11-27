@@ -1493,6 +1493,24 @@ fn main() {
             std::process::exit(rc);
         }
 
+        //   megadaemon-core cache-keepalive <prefijo|evaluar|politica>
+        //     Keepalive del caché de prompt del proveedor (patrón 2 de
+        //     docs/DISENO_PATRONES_CLI_RUST.md): qué entradas forman el
+        //     prefijo cacheable y si hay que calentarlo.  Ahorra dinero:
+        //     un prefijo estable se cobra a precio de caché.
+        "cache-keepalive" | "cache_keepalive" => {
+            let rc = megadaemon_core::cache_keepalive::run_cli(&args[2..]);
+            std::process::exit(rc);
+        }
+
+        //   megadaemon-core compaction-epoch <epochs|vista|revertir> [epoch]
+        //     Compactación POR ÉPOCA (patrón 4): la compactación NO borra,
+        //     marca una época; el historial anterior sigue consultable.
+        "compaction-epoch" | "compaction_epoch" => {
+            let rc = megadaemon_core::compaction_epoch::run_cli(&args[2..]);
+            std::process::exit(rc);
+        }
+
         //   megadaemon-core reparar [--diagnostico] [--json]
         //     Diagnostica y REPARA el entorno del propio nodo (prefijo
         //     persistente, binario, watchdog, keeper, API key, credenciales
