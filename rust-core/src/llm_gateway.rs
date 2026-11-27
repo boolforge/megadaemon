@@ -326,10 +326,18 @@ pub fn chat_completions_with(
     }
     // MEDIDO (2026-11-26, móvil): las tool calls del proveedor se
     // devolvían como texto y el cliente las pintaba en vez de ejecutarlas.
-    let finish_reason = if res.tool_calls.is_empty() {
-        "stop"
+    //
+    // MEDIDO (2026-11-27): si el proveedor CORTÓ la respuesta (por
+    // `max_tokens` o por filtro), el motivo REAL seAnnuncia como "stop" =>
+    // el cliente (Antigravity) veía una respuesta terminada con normalidad
+    // cuando le faltaba el final de la frase.  Ahora manda el motivo del
+    // proveedor; si no lo dice, se cae al de las tool calls.
+    let finish_reason = if !res.finish_reason.trim().is_empty() {
+        res.finish_reason.clone()
+    } else if res.tool_calls.is_empty() {
+        "stop".to_string()
     } else {
-        "tool_calls"
+        "tool_calls".to_string()
     };
     if !res.tool_calls.is_empty() {
         message["tool_calls"] = json!(res
@@ -361,6 +369,9 @@ pub fn chat_completions_with(
         "choices": [{
             "index": 0,
             "message": message,
+            // MEDIDO (2026-11-27): el motivo REAL del final (no "stop" a
+            // pelo): si el proveedor cortó por `max_tokens`, el cliente lo
+            // ve en la respuesta en vez de creer que terminó bien.
             "finish_reason": finish_reason,
         }],
         "usage": {
@@ -702,7 +713,14 @@ pub fn gemini_prompt(body: &Value) -> Result<GeminiPrompt, GatewayError> {
         .pointer("/generationConfig/maxOutputTokens")
         .or_else(|| body.pointer("/generation_config/max_output_tokens"))
         .and_then(|v| v.as_u64())
-        .unwrap_or(2048)
+        // MEDIDO (2026-11-27): el defecto eran 2.048 tokens.  Con un modelo
+        // que "piensa" (thinking), el presupuesto se lo come el razonamiento
+        // y la respuesta se corta A MEDIA FRASE ("The model cut off early in
+        // its thinking — stopped mid-sentence").  Ahora el defecto es el
+        // mismo que usa el resto del daemon (4.096) y, si el cliente NO
+        // manda `maxOutputTokens`, se avisa en la traza (no se finge que el
+        // modelo terminó bien).
+        .unwrap_or(crate::providers::DEFAULT_MAX_TOKENS as u64)
         .clamp(1, 32_768) as u32;
     let tools_requested = body
         .get("tools")
@@ -1354,7 +1372,12 @@ fn gemini_response(res: &crate::providers::ChatResult, tools_requested: usize) -
                 "role": "model",
                 "parts": parts,
             },
-            "finishReason": "STOP",
+            // MEDIDO (2026-11-27): esto era "STOP" FIJO.  Cuando el
+            // proveedor cortaba la respuesta a media frase (por `max_tokens`,
+            // por filtro o por corte de stream) el cliente recibía "STOP" y
+            // no había forma de saber por qué faltaba el final.  Ahora sale
+            // el motivo REAL, traducido al vocabulario de Gemini.
+            "finishReason": gemini_finish_reason(&res.finish_reason),
             "index": 0,
         }],
         "usageMetadata": {
@@ -1383,6 +1406,25 @@ fn gemini_response(res: &crate::providers::ChatResult, tools_requested: usize) -
             "tool_calls": res.tool_calls.len(),
         }
     })
+}
+
+/// Traduce el `finish_reason` de OpenAI al vocabulario de Gemini.
+///
+/// MEDIDO (2026-11-27): el dialecto Gemini **fijaba `STOP` a pelo**, así que
+/// una respuesta cortada a media frase ("The model cut off early in its
+/// thinking — stopped mid-sentence") se anunciaba como terminada con
+/// normalidad y el cliente no tenía ni idea de la causa.
+///
+/// * `length` ⇒ `MAX_TOKENS` (se agotó `max_tokens`: el corte es del límite).
+/// * `content_filter` ⇒ `SAFETY` (lo cortó el filtro del proveedor).
+/// * `tool_calls` ⇒ `STOP` (terminó pidiendo herramientas, no es un corte).
+/// * vacío / desconocido ⇒ `STOP` (el proveedor no lo dijo: no se inventa).
+pub fn gemini_finish_reason(finish_reason: &str) -> &'static str {
+    match finish_reason.trim().to_ascii_lowercase().as_str() {
+        "length" | "max_tokens" => "MAX_TOKENS",
+        "content_filter" | "safety" | "recitation" => "SAFETY",
+        _ => "STOP",
+    }
 }
 
 /// Variante *streaming*: devuelve el cuerpo SSE completo (una sola_DATA_
@@ -1414,7 +1456,11 @@ fn gemini_chunk(v: &Value) -> Value {
     json!({
         "candidates": [{
             "content": { "role": "model", "parts": parts },
-            "finishReason": "STOP",
+            // El motivo REAL del final (no "STOP" a pelo): si el proveedor
+            // cortó por `max_tokens`, el cliente lo ve en el stream.
+            "finishReason": v["candidates"][0]["finishReason"]
+                .as_str()
+                .unwrap_or("STOP"),
             "index": 0,
         }],
         "modelVersion": MODELO_CANONICO,
@@ -1560,6 +1606,7 @@ mod tests {
             fallback_used: false,
             quota: None,
             provider_trace: Vec::new(),
+            finish_reason: String::new(),
             tool_calls: Vec::new(),
         };
         let v = gemini_response(&res, 3);
@@ -1636,6 +1683,7 @@ mod tests {
             fallback_used: false,
             quota: None,
             provider_trace: Vec::new(),
+            finish_reason: String::new(),
             tool_calls: Vec::new(),
         };
         let v = gemini_response(&res, 3);
@@ -1663,6 +1711,7 @@ mod tests {
             fallback_used: false,
             quota: None,
             provider_trace: Vec::new(),
+            finish_reason: String::new(),
             tool_calls: Vec::new(),
         };
         let v = gemini_response(&res, 0);
@@ -1914,6 +1963,7 @@ mod tests {
             fallback_used: false,
             quota: None,
             provider_trace: Vec::new(),
+            finish_reason: String::new(),
             tool_calls: vec![crate::providers::ParsedToolCall {
                 id: "call_1".to_string(),
                 name: "view_file".to_string(),

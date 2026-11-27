@@ -179,6 +179,13 @@ jobs:
           fi
           echo "--- 3) el workflow es YAML valido (si no, GitHub lo RECHAZA entero) ---"
           python3 tools/yaml_lint.py .github/workflows/*.yml || fail=1
+          echo "--- 4) la UI no tiene texto corrupto ni idiomas mezclados ---"
+          # MEDIDO 2026-11-27 (captura del movil): la UI de Antigravity
+          # mostraba texto con caracteres CJK colados en el espanol, y el
+          # agente contestaba con basura multilingue.  En nuestro repo habia
+          # un caso igual (una palabra en chino dentro de un comentario en
+          # espanol).  Este gate lo prohibe para siempre.
+          python3 tools/check_idioma.py || fail=1
           [ "$fail" = 0 ] || exit 1
           echo "higiene de modulos OK"
 

@@ -501,7 +501,12 @@ mod tests {
 
     #[test]
     fn argv_de_bwrap_lleva_los_montajes_y_el_guion() {
-        let p = Perfil::minimo(Path::new("/w")).con_escritura(Path::new("/w"));
+        // MEDIDO (2026-11-27): `con_escritura` SUSTITUYE el montaje de
+        // lectura del mismo path (no se puede montar dos veces el mismo
+        // sitio), asi que con "/w" no queda ningun `--ro-bind`.  El test
+        // quiere comprobar que el argv lleva LOS DOS montajes: se escribe
+        // en un path distinto.
+        let p = Perfil::minimo(Path::new("/w")).con_escritura(Path::new("/w/salida"));
         let argv = p.argv_bwrap(&["/bin/sh".to_string()], &["-c".to_string(), "ls".to_string()]);
         assert_eq!(argv[0], "bwrap");
         assert!(argv.contains(&"--die-with-parent".to_string()));

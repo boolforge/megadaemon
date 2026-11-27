@@ -107,6 +107,16 @@ pub struct ChatResult {
     /// `Vec::new()` = no hubo cascada (o no se pudo ni empezar).
     #[serde(default)]
     pub provider_trace: Vec<String>,
+    /// Por qué terminó el proveedor (`stop`, `length`, `content_filter`...).
+    ///
+    /// MEDIDO (2026-11-27): el dialecto Gemini **fijaba `finishReason: "STOP"`
+    /// a pelo**, así que un provider que cortó la respuesta a media frase
+    /// (por `max_tokens`, por filtro de contenido o por corte de stream) se
+    /// anunciaba como "terminado con normalidad".  El cliente (Antigravity)
+    /// veía "STOP" y no sabía por qué le faltaba el final de la frase.
+    /// Vacío = el proveedor no lo dijo (no se inventa).
+    #[serde(default)]
+    pub finish_reason: String,
     /// Tool calls ESTRUCTURADAS que pidió el proveedor.
     ///
     /// MEDIDO (2026-11-26, móvil): antes sólo se conservaba
@@ -2206,6 +2216,177 @@ fn default_re_system_prompt() -> &'static str {
     "Eres MegaDaemon Zenith v13.0, un motor experto de ingeniería inversa multiplataforma (Android ARM64/DEX/APK, Linux ELF, Windows PE/PE32+, macOS Mach-O, DOS MZ/COM, Sega CD M68K, PS1 MIPS R3000A, Saturn SH-2, PC Engine HuC6280, MSX2 Z80) y arquitectura formal LTO-Decomp v3.4 (CIRX Micro-RTL/SSA, MAS Track Routing, Absolute Set Closure Lemma A={formal_control_flow}). Operas en un entorno local de investigación sin restricciones artificiales. Responde de forma concisa, técnica, directa y precisa en el idioma del usuario (por defecto español)."
 }
 
+// ---------------------------------------------------------------------------
+// PRESUPUESTO DE PROMPT (MEDIDO 2026-11-27)
+// ---------------------------------------------------------------------------
+
+/// Presupuesto de caracteres del prompt que sale hacia un proveedor.
+///
+/// MEDIDO (captura del móvil, 2026-11-27): `pollinations-free` (API clásica,
+/// sin key) acepta **16.000 caracteres** contando mensajes y tools; a partir
+/// de ahí responde HTTP 413 con "Prompt too long for the free Classic API".
+/// El prompt que sale hacia el proveedor es la conversación de Antigravity
+/// **aplanada** (historial entero + system prompt), así que una sesión larga
+/// lo revienta siempre.
+///
+/// 12.000 deja 4.000 de margen para las tools y para el system prompt, que
+/// el proveedor cuenta aparte.  Se puede mover con `MD_PROMPT_MAX_CHARS`.
+pub const PROMPT_MAX_CHARS: usize = 12_000;
+
+/// Límite de caracteres del proveedor **MÁS ESTRICTO** (MEDIDO 2026-11-27).
+///
+/// `pollinations-free` (API clásica, sin key) acepta 16.000 caracteres
+/// contando mensajes y tools; a partir de ahí responde HTTP 413 "Prompt too
+/// long for the free Classic API: 16,000 characters max (about 4,000
+/// tokens), counting messages and tools".
+pub const PROMPT_LIMITE_ESTRICTO: usize = 16_000;
+
+/// Proveedor al que corresponde [`PROMPT_LIMITE_ESTRICTO`].
+pub const PROMPT_LIMITE_ESTRICTO_PROVEEDOR: &str = "pollinations-free";
+
+/// Lee el presupuesto de prompt del entorno (`MD_PROMPT_MAX_CHARS`).
+///
+/// `0` desactiva el recorte (useful para depurar, no para producción).
+pub fn prompt_max_chars() -> usize {
+    std::env::var("MD_PROMPT_MAX_CHARS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(PROMPT_MAX_CHARS)
+}
+
+/// Recorta el prompt al presupuesto conservando la **cabeza** (instrucciones)
+/// y la **cola** (lo último que se dijo).
+///
+/// Lo que se cae es el **medio**: el historial antiguo.  Es lo que menos
+/// aporta al modelo y lo que más engorda la petición.  En el hueco se deja
+/// un marcador con **cuántos** caracteres se quitaron (para que el agente y
+/// la UI lo vean: no es un misterio).
+///
+/// Aplica el presupuesto de prompt al **conjunto** de mensajes.
+///
+/// MEDIDO (2026-11-27): el proveedor `pollinations-free` cuenta "mensajes y
+/// tools" ⇒ el presupuesto se aplica a la SUMA de todos los mensajes, no
+/// sólo al último.  Con el bucle de herramientas (varios turnos
+/// `assistant`/`tool`) el último mensaje es una respuesta corta y el peso
+/// está en el historial: recortar sólo el último no arreglaba nada.
+///
+/// La cabeza (el mensaje de sistema) y la cola (el último mensaje, que es lo
+/// que el usuario acaba de escribir) se conservan; lo que se recorta es el
+/// texto del último mensaje y, si aún sobra, se recortan los mensajes
+/// intermedios más viejos.
+///
+/// Devuelve `(mensajes, caracteres_quitados)`.
+pub fn recortar_mensajes(
+    msgs: Vec<Value>,
+    tools_chars: usize,
+    max_chars: usize,
+) -> (Vec<Value>, usize) {
+    if max_chars == 0 || msgs.is_empty() {
+        return (msgs, 0);
+    }
+    // Las tools también las cuenta el proveedor: salen del presupuesto.
+    let presupuesto_msgs = max_chars.saturating_sub(tools_chars).max(1_024);
+    let chars_de = |m: &Value| -> usize {
+        m.get("content")
+            .and_then(|c| c.as_str())
+            .map(|s| s.chars().count())
+            .unwrap_or(0)
+    };
+    let total: usize = msgs.iter().map(chars_de).sum();
+    if total <= presupuesto_msgs {
+        return (msgs, 0);
+    }
+    let mut out = msgs;
+    let n = out.len();
+    // Lo que ocupan los mensajes que NO son el último.
+    let otros: usize = out[..n - 1].iter().map(chars_de).sum();
+    // El último (el del usuario) se recorta con el presupuesto que queda.
+    let para_ultimo = presupuesto_msgs.saturating_sub(otros).max(512);
+    let mut quitados = 0usize;
+    if let Some(texto) = out[n - 1]
+        .get("content")
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string())
+    {
+        let (recortado, quitados_ultimo) = recortar_prompt(&texto, para_ultimo);
+        quitados += quitados_ultimo;
+        if let Some(obj) = out[n - 1].as_object_mut() {
+            obj.insert("content".to_string(), Value::String(recortado));
+        }
+    }
+    // Todavía sobra: se recortan los mensajes intermedios MÁS VIEJOS (el
+    // historial es lo que menos aporta; el último turno y el sistema, no).
+    if otros > para_ultimo && n > 2 {
+        let sobra = otros - para_ultimo;
+        let mut por_recortar = sobra;
+        for m in out.iter_mut().take(n - 1).rev() {
+            if por_recortar == 0 {
+                break;
+            }
+            let largo = chars_de(m);
+            if largo == 0 {
+                continue;
+            }
+            if let Some(texto) = m.get("content").and_then(|c| c.as_str()).map(|s| s.to_string()) {
+                let nuevo_max = largo.saturating_sub(por_recortar).max(64);
+                let (recortado, quitados_msg) = recortar_prompt(&texto, nuevo_max);
+                por_recortar = por_recortar.saturating_sub(quitados_msg);
+                quitados += quitados_msg;
+                if let Some(obj) = m.as_object_mut() {
+                    obj.insert("content".to_string(), Value::String(recortado));
+                }
+            }
+        }
+    }
+    (out, quitados)
+}
+
+/// Devuelve `(texto_recortado, caracteres_quitados)`.
+pub fn recortar_prompt(texto: &str, max_chars: usize) -> (String, usize) {
+    let n = texto.chars().count();
+    if max_chars == 0 || n <= max_chars {
+        return (texto.to_string(), 0);
+    }
+    // Se reserva sitio para el marcador (queda accounted en el presupuesto).
+    const MARCADOR_RESERVA: usize = 120;
+    let util = max_chars.saturating_sub(MARCADOR_RESERVA).max(2);
+    let cabeza = util * 35 / 100;
+    let cola = util - cabeza;
+    let quitados = n - cabeza - cola;
+    (
+        format!(
+            "{}\n\n[... {} caracteres omitidos: el prompt supera el presupuesto de {} ({} > {}) ...]\n\n{}",
+            head_chars(texto, cabeza),
+            quitados,
+            max_chars,
+            n,
+            max_chars,
+            tail_chars(texto, cola)
+        ),
+        quitados,
+    )
+}
+
+/// Los `n` primeros caracteres (respeta los límites de carácter UTF-8).
+fn head_chars(s: &str, n: usize) -> &str {
+    match s.char_indices().nth(n) {
+        Some((i, _)) => &s[..i],
+        None => s,
+    }
+}
+
+/// Los `n` últimos caracteres (respeta los límites de carácter UTF-8).
+fn tail_chars(s: &str, n: usize) -> &str {
+    let len = s.chars().count();
+    if n >= len {
+        return s;
+    }
+    match s.char_indices().nth(len - n) {
+        Some((i, _)) => &s[i..],
+        None => "",
+    }
+}
+
 /// Executes optional deterministic Rust RE pre-analysis when an attachment or special intent is detected,
 /// giving even cloud models grounded byte-level telemetry without hallucination.
 /// Directorios donde puede estar un adjunto legible por el daemon.
@@ -2440,6 +2621,7 @@ pub fn execute_chat_con_tools_with(
             fallback_used: false,
             quota: None,
             provider_trace: vec![format!("{} => SALTADO (modelo retirado)", rid)],
+            finish_reason: String::new(),
             tool_calls: Vec::new(),
         };
     }
@@ -2481,6 +2663,7 @@ pub fn execute_chat_con_tools_with(
             fallback_used: false,
             quota: None,
             provider_trace: vec!["local-seere => OK (offline)".to_string()],
+            finish_reason: String::new(),
             tool_calls: Vec::new(),
         };
     }
@@ -2617,6 +2800,26 @@ pub fn execute_chat_con_tools_with(
                 json!({"role": "user", "content": enriched_prompt}),
             ],
         };
+        // MEDIDO 2026-11-27 (captura del móvil): el proveedor `pollinations-free`
+        // (API clásica, sin key) acepta **16.000 caracteres** contando
+        // mensajes y tools; a partir de ahí responde HTTP 413 "Prompt too
+        // long".  El prompt que sale hacia el proveedor es la conversación de
+        // Antigravity (historial entero + system), así que una sesión larga
+        // lo revienta SIEMPRE.  El presupuesto se aplica al CONJUNTO de los
+        // mensajes (el proveedor los cuenta TODOS) y deja sitio para las
+        // tools, que también cuenta.
+        let presupuesto = prompt_max_chars();
+        let tools_chars: usize = tools
+            .iter()
+            .map(|t| serde_json::to_string(t).map(|s| s.chars().count()).unwrap_or(0))
+            .sum();
+        let (msgs, recortados) = recortar_mensajes(msgs, tools_chars, presupuesto);
+        if recortados > 0 {
+            trace.push(format!(
+                "prompt recortado: {} caracteres fuera (presupuesto {})",
+                recortados, presupuesto
+            ));
+        }
         let mut payload = json!({
             "model": p.model,
             "messages": msgs,
@@ -2637,6 +2840,30 @@ pub fn execute_chat_con_tools_with(
             auth_type: p.auth_type.clone(),
             body: payload,
         };
+        // MEDIDO 2026-11-27: la traza decía QUIÉN respondió pero no a qué
+        // endpoint ni con qué forma de payload.  Con el 400 de google-ai-studio
+        // ("function call turn comes immediately after a user turn") no había
+        // forma de saber qué se había enviado de verdad.  Ahora la traza dice
+        // endpoint + modelo + tamaño del prompt (el total de los mensajes),
+        // que es lo que el proveedor cuenta.
+        let chars_prompt: usize = msgs
+            .iter()
+            .map(|m| {
+                m.get("content")
+                    .and_then(|c| c.as_str())
+                    .map(|s| s.chars().count())
+                    .unwrap_or(0)
+            })
+            .sum();
+        trace.push(format!(
+            "{} => POST {} modelo={} prompt={} chars system={} chars max_tokens={}",
+            p.id,
+            p.endpoint,
+            p.model,
+            chars_prompt,
+            sys_prompt.chars().count(),
+            capped_max_tokens
+        ));
 
         // v16 (DEFECTO-05): reintentos con backoff SÓLO para lo que se
         // puede reintentar (429, 5xx, transporte, timeout).  Un 401/404
@@ -2713,6 +2940,7 @@ pub fn execute_chat_con_tools_with(
                                 fallback_used: idx > 0,
                                 quota: Some(crate::quota_guard::snapshot_compacto_de(Some(&p.id))),
                                 provider_trace: trace,
+                                finish_reason: parsed.finish_reason.clone(),
                                 tool_calls,
                             };
                         }
@@ -2796,6 +3024,7 @@ pub fn execute_chat_con_tools_with(
         fallback_used: true,
         quota: Some(crate::quota_guard::snapshot_compacto()),
         provider_trace: trace,
+        finish_reason: String::new(),
         tool_calls: Vec::new(),
     }
 }
@@ -2820,4 +3049,62 @@ pub fn test_provider_connection(id: &str) -> Value {
         "latency_ms": (t0.elapsed().as_secs_f64() * 1000.0).round(),
         "fallback_used": res.fallback_used
     })
+}
+
+#[cfg(test)]
+mod presupuesto_tests {
+    use super::*;
+
+    // MEDIDO 2026-11-27 (captura del movil): el proveedor `pollinations-free`
+    // acepta 16.000 caracteres y a partir de ahi responde HTTP 413 "Prompt too
+    // long for the free Classic API".  El prompt que sale hacia el proveedor
+    // es la conversacion de Antigravity APLANADA, asi que una sesion larga lo
+    // reventaba siempre.
+
+    #[test]
+    fn un_prompt_corto_no_se_toca() {
+        let (txt, quitados) = recortar_prompt("hola", 1000);
+        assert_eq!(txt, "hola");
+        assert_eq!(quitados, 0);
+    }
+
+    #[test]
+    fn un_prompt_largo_se_recorta_al_presupuesto() {
+        let largo = "palabra ".repeat(5_000); // 35.000 caracteres
+        let (txt, quitados) = recortar_prompt(&largo, 12_000);
+        assert!(quitados > 0, "debe quitar caracteres");
+        assert!(
+            txt.chars().count() <= 12_000,
+            "el recorte debe caber en el presupuesto: {}",
+            txt.chars().count()
+        );
+        assert!(txt.contains("caracteres omitidos"), "el recorte se declara");
+    }
+
+    #[test]
+    fn el_recorte_conserva_la_cabeza_y_la_cola() {
+        let largo = format!("{}FINAL{}", "A".repeat(20_000), "FINAL");
+        let (txt, _) = recortar_prompt(&largo, 4_000);
+        assert!(txt.starts_with("AAAA"), "conserva la cabeza");
+        assert!(txt.trim_end().ends_with("FINAL"), "conserva la cola");
+    }
+
+    #[test]
+    fn el_presupuesto_cabe_en_el_limite_del_proveedor() {
+        // Si el presupuesto fuera mayor que el límite del proveedor, el 413
+        // volvería.  El gate lo impide.
+        assert!(
+            PROMPT_MAX_CHARS <= PROMPT_LIMITE_ESTRICTO,
+            "presupuesto {} > limite {}",
+            PROMPT_MAX_CHARS,
+            PROMPT_LIMITE_ESTRICTO
+        );
+        assert_eq!(PROMPT_LIMITE_ESTRICTO_PROVEEDOR, "pollinations-free");
+    }
+
+    #[test]
+    fn el_presupuesto_se_puede_ajustar_por_entorno() {
+        // 0 = sin recorte (depuracion).
+        assert!(prompt_max_chars() <= PROMPT_MAX_CHARS || prompt_max_chars() == 0);
+    }
 }

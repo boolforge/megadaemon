@@ -268,6 +268,7 @@ fn requires_auth(path: &str, _method: &str, local_browser: bool) -> bool {
     if path == "/" || path == "/index.html" || path == "/v2" || path == "/ui"
         || path == "/legacy" || path == "/v1"
         || path == "/webui_v2.css"
+        || path == "/agy" || path == "/antigravity"
         || path == "/channel.json"
     {
         return false;
@@ -382,6 +383,22 @@ pub const EMBEDDED_TEMPLATE: &str = include_str!("../../web/cockpit_template.htm
 
 /// Plantilla HTML embebida del cockpit **V2** (la que se sirve ahora).
 pub const EMBEDDED_V2_HTML: &str = include_str!("../../web/cockpit_v2.html");
+
+/// Plantilla HTML embebida del cockpit **de Antigravity** (`/agy`).
+///
+/// MEDIDO (2026-11-27): el fichero `web/cockpit_antigravity.html` EXISTÍA en
+/// el repo pero **no lo servía nadie** (`cockpit_server.rs` sólo embebía
+/// `cockpit_template.html`, `cockpit_v2.html` y `webui_v2.css`) ⇒ era una
+/// página muerta.  Ahora tiene ruta propia y es la UI de verdad para el
+/// agente de Antigravity: streaming, selector de modelo real, reconexión y
+/// los 3 niveles de error en una línea.
+pub const EMBEDDED_ANTIGRAVITY_HTML: &str = include_str!("../../web/cockpit_antigravity.html");
+
+/// Ruta del template de la UI de Antigravity en disco (para poder actualizarla
+/// sin recompilar, como se hace con la V2).
+pub fn antigravity_html_path(base: &str) -> PathBuf {
+    PathBuf::from(base).join("web").join("cockpit_antigravity.html")
+}
 
 /// Ruta del template de la UI LEGACY (v1), que se sirve en `/legacy`.
 ///
@@ -746,12 +763,130 @@ fn parse_query_params(query: &str) -> HashMap<String, String> {
     map
 }
 
+/// ¿Está vivo el LLM local (llama-server)?
+///
+/// MEDIDO (2026-11-27): miraba **8080**, que es el puerto del ALIAS del
+/// cockpit (no el del LLM local) ⇒ el indicador decía "caído" aunque el
+/// llama-server estuviese vivo en su puerto.  Ahora usa el endpoint real
+/// (`SEERE_LLM`, por defecto 127.0.0.1:8081).
 fn check_llama_online() -> bool {
-    if let Ok(addr) = "127.0.0.1:8080".parse::<SocketAddr>() {
-        TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok()
+    let ep = crate::seere_v11::llm_endpoint();
+    let addr = format!("{}:{}", ep.host, ep.port);
+    if let Ok(a) = addr.parse::<SocketAddr>() {
+        TcpStream::connect_timeout(&a, Duration::from_millis(250)).is_ok()
     } else {
         false
     }
+}
+
+/// Estado del LLM local para la UI: dirección y si responde.
+fn estado_llm_local() -> Value {
+    let ep = crate::seere_v11::llm_endpoint();
+    let addr = format!("{}:{}", ep.host, ep.port);
+    let vivo = addr
+        .parse::<SocketAddr>()
+        .ok()
+        .map(|a| TcpStream::connect_timeout(&a, Duration::from_millis(250)).is_ok())
+        .unwrap_or(false);
+    json!({
+        "direccion": addr,
+        "vivo": vivo,
+        "url": format!("http://{}:{}{}", ep.host, ep.port, ep.path),
+    })
+}
+
+/// Los 3 niveles de error del jefe, resumidos en **una línea legible**.
+///
+/// MEDIDO (2026-11-27, captura del móvil): el error llegaba como un bloque
+/// de texto de 15 líneas con TODO mezclado ("ERR_LLM_UNREACHABLE: ...
+/// [Fallback offline activo — errores cloud: minimax-m3.1-flash: cuota en
+/// pausa | minimax-m3: cuota en pausa | ... | pollinations-free: HTTP 413
+/// ... | google-ai-studio: HTTP 400 ...]").  Nadie podía saber si el
+/// problema era la nube, el prompt o el LLM local.
+///
+/// Aquí cada nivel va por separado Y hay una línea de resumen:
+///
+/// * `unreachable` → el LLM local (127.0.0.1:8081) no responde.
+/// * `cuota`       → proveedores en pausa por 429 (y cuánto falta).
+/// * `prompt`      → el presupuesto de prompt y el límite del proveedor.
+pub fn antigravity_linea_estado() -> (String, Value) {
+    let llm = estado_llm_local();
+
+    // --- nivel 1: unreachable (el LLM local) --------------------------
+    let unreachable = json!({
+        "ok": llm["vivo"].as_bool().unwrap_or(false),
+        "que": "LLM local (llama-server)",
+        "direccion": llm["direccion"],
+        "detalle": if llm["vivo"].as_bool().unwrap_or(false) {
+            "responde".to_string()
+        } else {
+            "no responde (el supervisor deberia levantarlo)".to_string()
+        },
+    });
+
+    // --- nivel 2: 429 / cuota ------------------------------------------
+    let estados = crate::quota_guard::estado(None);
+    let mut en_pausa: Vec<String> = Vec::new();
+    let mut vuelve_en: Option<i64> = None;
+    for e in &estados {
+        if e.nivel == crate::quota_guard::Nivel::Pausa {
+            en_pausa.push(e.provider.clone());
+            if let Some(s) = crate::quota_guard::segundos_hasta_reset(&e.provider) {
+                vuelve_en = Some(match vuelve_en {
+                    Some(v) => v.min(s),
+                    None => s,
+                });
+            }
+        }
+    }
+    let cuota = json!({
+        "ok": en_pausa.is_empty(),
+        "en_pausa": en_pausa,
+        "vuelve_en_s": vuelve_en,
+        "detalle": if en_pausa.is_empty() {
+            "sin proveedores quemados".to_string()
+        } else {
+            format!("{} proveedor(es) en pausa por cuota", en_pausa.len())
+        },
+    });
+
+    // --- nivel 3: prompt demasiado largo -------------------------------
+    let presupuesto = crate::providers::prompt_max_chars();
+    let limite = crate::providers::PROMPT_LIMITE_ESTRICTO;
+    let prompt = json!({
+        "ok": presupuesto <= limite,
+        "presupuesto": presupuesto,
+        "limite": limite,
+        "proveedor": crate::providers::PROMPT_LIMITE_ESTRICTO_PROVEEDOR,
+        "detalle": format!("{} de {} caracteres (limite del {})", presupuesto, limite,
+                           crate::providers::PROMPT_LIMITE_ESTRICTO_PROVEEDOR),
+    });
+
+    // --- la línea ------------------------------------------------------
+    let l1 = if llm["vivo"].as_bool().unwrap_or(false) {
+        "LLM local OK".to_string()
+    } else {
+        format!("LLM local CAIDO ({})", llm["direccion"].as_str().unwrap_or("?"))
+    };
+    let l2 = if en_pausa.is_empty() {
+        "cuota OK".to_string()
+    } else {
+        format!(
+            "cuota: {} en pausa{}",
+            en_pausa.len(),
+            match vuelve_en {
+                Some(s) if s > 0 => format!(" (vuelve en {} min)", s / 60),
+                _ => String::new(),
+            }
+        )
+    };
+    let l3 = format!("prompt {}/{} chars", presupuesto, limite);
+    let linea = format!("{} | {} | {}", l1, l2, l3);
+
+    (
+        linea,
+        json!({ "unreachable": unreachable, "cuota": cuota, "prompt": prompt }),
+    )
 }
 
 thread_local! {
@@ -874,6 +1009,87 @@ fn send_http_response_with(
 fn send_json(stream: &mut TcpStream, val: &Value) {
     let s = serde_json::to_string(val).unwrap_or_else(|_| "{}".to_string());
     send_http_response(stream, 200, "application/json; charset=utf-8", s.as_bytes());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SSE (Server-Sent Events) para el chat de Antigravity
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// MEDIDO (2026-11-27): la UI de Antigravity **no tenía streaming**: el
+// cliente esperaba a que acabara la llamada entera y, si el daemon tardaba
+// (o moría), se quedaba colgado sin decir nada.  El dialecto Gemini que ya
+// tenía el gateway (`gemini_a_sse`) emitía **un único chunk con TODO el
+// texto** ⇒ tampoco servía de nada.
+//
+// Aquí el stream es de verdad incremental: se manda un evento por trozo y
+// se hace `flush()` en cada uno, de modo que el texto aparece progresivo en
+// el móvil.  El proveedor NO hace streaming fino (la capa `providers` es
+// petición/respuesta), así que los trozos salen de la respuesta completa:
+// es streaming de PRESENTACIÓN, y se dice tal cual en la UI.
+
+/// Escribe la cabecera de una respuesta SSE (sin `Content-Length`: el cuerpo
+/// va por trozos).
+fn send_sse_headers(stream: &mut TcpStream) -> std::io::Result<()> {
+    let cors = CORS_ORIGIN.with(|c| c.borrow().clone());
+    let header = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: text/event-stream; charset=utf-8\r\n\
+         Cache-Control: no-cache, no-store\r\n\
+         Connection: close\r\n\
+         Access-Control-Allow-Origin: {cors}\r\n\
+         Vary: Origin\r\n\r\n"
+    );
+    stream.write_all(header.as_bytes())?;
+    stream.flush()
+}
+
+/// Escribe un evento SSE (`event: <nombre>` + `data: <json>`) y lo vacía.
+fn sse_event(stream: &mut TcpStream, evento: &str, data: &Value) -> std::io::Result<()> {
+    let payload = format!(
+        "event: {evento}\ndata: {}\n\n",
+        serde_json::to_string(data).unwrap_or_else(|_| "{}".to_string())
+    );
+    stream.write_all(payload.as_bytes())?;
+    stream.flush()
+}
+
+/// Parte un texto en trozos sin partir palabras a la mitad.
+///
+/// `n` = caracteres objetivo por trozo (no bytes: el texto puede llevar
+/// acentos y emoji).
+pub fn trocear_texto(texto: &str, n: usize) -> Vec<String> {
+    if texto.is_empty() {
+        return Vec::new();
+    }
+    let n = n.max(1);
+    let mut out = Vec::new();
+    let mut ini = 0usize;
+    let chars: Vec<char> = texto.chars().collect();
+    while ini < chars.len() {
+        let fin = (ini + n).min(chars.len());
+        // Si no estamos al final, no cortamos por la mitad de una palabra:
+        // retrocedemos hasta el último espacio si lo hay cerca.
+        let mut corte = fin;
+        if fin < chars.len() {
+            let mut i = fin;
+            let limite = ini.saturating_add(n / 2).max(ini + 1);
+            while i > limite && !chars[i - 1].is_whitespace() {
+                i -= 1;
+            }
+            // El blanco va al trozo SIGUIENTE: así el trozo actual no
+            // acaba en blanco (el texto se ve limpio en la UI) y, a la vez,
+            // la concatenación de los trozos reproduce el original exacto.
+            if chars.get(i - 1).map(|c| c.is_whitespace()).unwrap_or(false) {
+                corte = if i - 1 > ini { i - 1 } else { i };
+            }
+        }
+        let trozo: String = chars[ini..corte].iter().collect();
+        if !trozo.trim().is_empty() {
+            out.push(trozo);
+        }
+        ini = corte;
+    }
+    out
 }
 
 fn list_uploaded_files() -> Value {
@@ -1388,6 +1604,46 @@ fn handle_client(mut stream: TcpStream) {
                 );
                 return;
             }
+            // ── COCKPIT DE ANTIGRAVITY (`/agy`) ──
+            //
+            // MEDIDO (2026-11-27): la UI de Antigravity (la suya, la del VS
+            // Code fork) es "infumable": el selector de modelo no hace nada,
+            // el chat se cuelga y los errores salen en un bloque de texto
+            // ilegible.  Ésta es la NUESTRA: `/agy`.
+            //
+            // El fichero en disco manda sobre el embebido (igual que la V2):
+            // actualizar la UI no exige recompilar.
+            "/agy" | "/antigravity" => {
+                let (html, from_disk) =
+                    match fs::read_to_string(antigravity_html_path(&base_dir())) {
+                        Ok(h) => (h, true),
+                        Err(_) => (EMBEDDED_ANTIGRAVITY_HTML.to_string(), false),
+                    };
+                // Mismo tratamiento que "/v2": al navegador LOCAL del
+                // dispositivo se le incrusta el token de sesión; la página
+                // PÚBLICA (túnel, LAN) no lo lleva (si lo llevara, cualquiera
+                // que alcanzase el puerto obtendría el control del daemon).
+                let inject = if local_browser {
+                    format!(
+                        "<script>window.MEGADAEMON_TOKEN=\"{}\";window.MEGADAEMON_TOKEN_ISSUED=true;</script>",
+                        auth_token()
+                    )
+                } else {
+                    "<script>window.MEGADAEMON_TOKEN=\"\";window.MEGADAEMON_TOKEN_ISSUED=false;</script>".to_string()
+                };
+                let html = match html.find("<script>") {
+                    Some(i) => format!("{}{}{}", &html[..i], inject, &html[i..]),
+                    None => format!("{}{}", inject, html),
+                };
+                send_http_response_with(
+                    &mut stream,
+                    200,
+                    "text/html; charset=utf-8",
+                    html.as_bytes(),
+                    &format!("X-Megadaemon-UI-Source: {}\r\n", ui_source_tag(from_disk)),
+                );
+                return;
+            }
             "/webui_v2.css" => {
                 // v15 (W1): el CSS desplegado en disco manda sobre el embebido
                 // => actualizar la interfaz no exige recompilar.
@@ -1663,6 +1919,44 @@ fn handle_client(mut stream: TcpStream) {
                     Ok(v) => send_json(&mut stream, &json!({ "ok": true, "accion": accion, "data": v })),
                     Err(e) => send_json(&mut stream, &json!({ "ok": false, "accion": accion, "error": e })),
                 }
+            }
+            // ── COCKPIT DE ANTIGRAVITY: la UI NUESTRA (no la de ellos) ──
+            //
+            // MEDIDO (2026-11-27, captura del móvil): la UI de Antigravity es
+            // "infumable": el selector de modelo no hace nada, el chat se
+            // cuelga y los errores salen como un bloque de texto con tres
+            // niveles mezclados.  Ésta es laAlternativa: la NUESTRA.
+            "/api/antigravity/modelos" => {
+                // Los proveedores LISTOS del vault (con credencial y modelo).
+                // El selector de la UI se pinta con esto ⇒ lo que se elige es
+                // lo que el daemon usa de verdad (antes: un desplegable que
+                // no cambiaba el backend).
+                let mut items = vec![json!({
+                    "id": "local-seere",
+                    "model": "local-seere",
+                    "name": "SEERE local (offline, en el movil)",
+                    "vendor": "Local-Exynos",
+                    "endpoint": "",
+                    "tier": "local",
+                })];
+                for p in crate::antigravity_gateway::proveedores_gateway() {
+                    items.push(p);
+                }
+                send_json(
+                    &mut stream,
+                    &json!({ "ok": true, "modelos": items, "por_defecto": "local-seere" }),
+                );
+            }
+            "/api/antigravity/diagnostico" => {
+                // Los 3 niveles de error del jefe, EN UNA LÍNEA:
+                //   * unreachable  → el LLM local (127.0.0.1:8081) está caído
+                //   * 429 / cuota   → qué proveedores están quemados y cuándo vuelven
+                //   * prompt largo → el presupuesto y el límite del proveedor
+                let (linea, niveles) = antigravity_linea_estado();
+                send_json(
+                    &mut stream,
+                    &json!({ "ok": true, "linea": linea, "niveles": niveles }),
+                );
             }
             // ── DESCUBRIMIENTO DE MODELOS (gateway de Antigravity) ──
             //
@@ -2802,6 +3096,95 @@ fn handle_client(mut stream: TcpStream) {
             };
             send_json(&mut stream, &response);
         }
+        // ── CHAT DE ANTIGRAVITY CON STREAMING (SSE) ────────────────────────────
+//
+// MEDIDO (2026-11-27): el chat de la UI de Antigravity **no tenía
+// streaming**: la página se quedaba en "cargando" hasta que la llamada
+// terminaba, y si el daemon moría a mitad (el "cut off mid-sentence" que
+// veía el jefe) la UI no decía NADA.
+//
+// Aquí el texto llega por trozos (evento `token`) y el hilo se puede
+// reenviar: la UI guarda el prompt y lo reintenta si el stream se corta
+// (evento `fin` con `truncado: true`).
+        "/api/antigravity/stream" => {
+            let prompt = body_json["prompt"]
+                .as_str()
+                .or_else(|| body_json["message"].as_str())
+                .unwrap_or("")
+                .to_string();
+            let modelo = body_json["model"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            let sistema = body_json["system"].as_str().map(str::to_string);
+            let max_tokens = body_json["max_tokens"].as_u64().unwrap_or(0) as u32;
+            // El hilo: la UI lo reenvía para no perder la conversación.
+            let hilo = body_json["hilo"].as_array().cloned().unwrap_or_default();
+
+            if send_sse_headers(&mut stream).is_err() {
+                return;
+            }
+            // 1) Estado: el cliente sabe el modelo y el backend YA, antes de
+            //    que llegue una sola letra.
+            let _ = sse_event(
+                &mut stream,
+                "estado",
+                &json!({
+                    "modelo": modelo.clone().unwrap_or_else(|| "local-seere".to_string()),
+                    "hilo": hilo.len(),
+                }),
+            );
+            if prompt.trim().is_empty() {
+                let _ = sse_event(
+                    &mut stream,
+                    "fin",
+                    &json!({ "ok": false, "error": "prompt vacio", "reply": "" }),
+                );
+                return;
+            }
+
+            // 2) La llamada (bloqueante: la capa `providers` es
+            //    petición/respuesta, no hace streaming fino).
+            let res = providers::execute_chat(
+                &prompt,
+                modelo.as_deref(),
+                None,
+                sistema.as_deref(),
+                max_tokens,
+            );
+
+            // 3) El texto, por trozos, con flush en cada uno.
+            for trozo in trocear_texto(&res.reply, 48) {
+                if sse_event(&mut stream, "token", &json!({ "t": trozo })).is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(12));
+            }
+
+            // 4) El cierre: qué modelo contestó de verdad, por qué y qué
+            //    proveedores se saltaron (todo lo que la UI necesita para
+            //    explicar lo que pasó sin adivinar).
+            let (linea, niveles) = antigravity_linea_estado();
+            let _ = sse_event(
+                &mut stream,
+                "fin",
+                &json!({
+                    "ok": true,
+                    "reply": res.reply,
+                    "reasoning": res.reasoning,
+                    "provider_id": res.model_id,
+                    "provider_name": res.model_name,
+                    "finish_reason": res.finish_reason,
+                    "tokens": res.tokens_used,
+                    "latency_ms": res.latency_ms,
+                    "fallback_used": res.fallback_used,
+                    "provider_trace": res.provider_trace,
+                    "estado": linea,
+                    "niveles": niveles,
+                }),
+            );
+        }
         "/api/chat" => {
             let msg = body_json["message"].as_str().unwrap_or("");
             let model = body_json["model"].as_str();
@@ -3648,6 +4031,70 @@ mod v2_asset_tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 }
+
+#[cfg(test)]
+mod antigravity_cockpit_tests {
+    use super::*;
+
+    /// MEDIDO 2026-11-27: el troceado es lo que hace que el texto aparezca
+    /// progresivo en el móvil (que era justo lo que faltaba).
+    #[test]
+    fn trocear_texto_cubre_todo_el_texto() {
+        let txt = "la respuesta del agente, con acentos: ñandú, corazón y emoji 🛠.";
+        let trozos = trocear_texto(txt, 10);
+        assert!(trozos.len() > 1, "debe salir en varios trozos");
+        let unido: String = trozos.concat();
+        assert_eq!(unido, txt, "el troceado no puede perder ni un caracter");
+    }
+
+    #[test]
+    fn trocear_texto_no_parte_palabras() {
+        let txt = "el daemon arranca el servidor local";
+        let trozos = trocear_texto(txt, 12);
+        for t in &trozos {
+            assert!(!t.ends_with(" "), "el trozo no puede acabar en blanco: {:?}", t);
+        }
+        assert_eq!(trozos.concat(), txt);
+    }
+
+    #[test]
+    fn trocear_texto_aguanta_vacio_y_unicode() {
+        assert!(trocear_texto("", 10).is_empty());
+        let emoji = "🛠🛠🛠🛠🛠";
+        let trozos = trocear_texto(emoji, 2);
+        assert_eq!(trozos.concat(), emoji);
+    }
+
+    /// (d) La línea de estado: los 3 niveles, legibles, en una línea.
+    #[test]
+    fn la_linea_de_estado_tiene_los_tres_niveles() {
+        let (linea, niveles) = antigravity_linea_estado();
+        assert!(!linea.is_empty(), "la línea no puede estar vacía");
+        for clave in ["unreachable", "cuota", "prompt"] {
+            assert!(
+                niveles.get(clave).is_some(),
+                "falta el nivel {}",
+                clave
+            );
+        }
+        // El nivel del prompt dice el presupuesto y el límite del proveedor.
+        let p = niveles.get("prompt").expect("nivel prompt");
+        assert_eq!(
+            p.get("presupuesto").and_then(|v| v.as_u64()),
+            Some(crate::providers::PROMPT_MAX_CHARS as u64)
+        );
+        assert_eq!(
+            p.get("limite").and_then(|v| v.as_u64()),
+            Some(crate::providers::PROMPT_LIMITE_ESTRICTO as u64)
+        );
+        // El presupuesto tiene que caber en el límite del proveedor.
+        assert!(
+            crate::providers::PROMPT_MAX_CHARS <= crate::providers::PROMPT_LIMITE_ESTRICTO,
+            "el presupuesto no cabe en el límite del proveedor"
+        );
+}
+}
+
 
 #[cfg(test)]
 mod chunked_tests {

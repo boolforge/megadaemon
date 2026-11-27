@@ -46,7 +46,7 @@
 //!      gateway ⇒ **el LS habla con MegaDaemon**, y MegaDaemon decide qué
 //!      modelo real responde (MiniMax, por ejemplo).
 //!    * el **cuerpo** de la petición se reescribe en el gateway (nivel
-//!      HTTP), que es donde se pueden cambiar modelo,配额 y prompts.
+//!      HTTP), que es donde se pueden cambiar modelo, cuota y prompts.
 //!
 //! LO QUE SIGUE SIN VERIFICAR
 //! --------------------------

@@ -438,10 +438,91 @@ pub fn nivel_global() -> Nivel {
         .unwrap_or(Nivel::Normal)
 }
 
+/// Espera por defecto cuando el proveedor dice 429 pero **no** dice cuándo
+/// vuelve (típico en los proveedores gratis: la cuota diaria se agota y
+/// sólo se reinicia al día siguiente, pero la API no lo dice).
+pub const COOLDOWN_POR_DEFECTO_S: u64 = 900; // 15 minutos
+
 /// ¿Este proveedor está en pausa (cuota agotada)?
+///
+/// MEDIDO (2026-11-27, captura del móvil): la pausa era **ETERNA**.
+///
+/// * [`registrar_error_cuota`] guarda el `reset_at` que dice el proveedor.
+/// * [`en_pausa`] **nunca lo miraba**: un solo 429 (perfectamente normal en
+///   un proveedor gratis) dejaba al proveedor pausado **para siempre**.
+/// * La cascada de [`crate::providers`] se saltaba al proveedor con
+///   "cuota en pausa" ⇒ con TODOS los proveedores gratuitos quemados por un
+///   429, el chat se quedaba **sin nube ninguna** y moría con
+///   `ERR_LLM_UNREACHABLE`.
+///
+/// Ahora la pausa **expira** (media abierta): si la ventana de cuota ya pasó
+/// (o se pasó el [`COOLDOWN_POR_DEFECTO_S`] cuando el proveedor no dice
+/// cuándo), el proveedor **vuelve a la cascada**.  Si vuelve a fallar, se
+/// pausa otra vez.  Además se limpia el estado caducado para que la UI no
+/// siga enseñando "pausa" cuando ya no lo está.
 pub fn en_pausa(provider: &str) -> bool {
-    let m = mapa().lock().unwrap_or_else(|p| p.into_inner());
-    m.get(provider).map(|e| e.nivel == Nivel::Pausa).unwrap_or(false)
+    let (en_pausa, caducada) = {
+        let m = mapa().lock().unwrap_or_else(|p| p.into_inner());
+        match m.get(provider) {
+            None => (false, false),
+            Some(e) => evaluar_pausa(e, ahora(), COOLDOWN_POR_DEFECTO_S),
+        }
+    };
+    // Si la pausa caducó, el estado guardado dice "pausa" y la UI lo
+    // pintaría como si el proveedor siguiera quemado: se limpia.
+    if caducada {
+        limpiar_pausa(provider);
+    }
+    en_pausa
+}
+
+/// Decisión de pausa para un estado concreto. **Puro** (sin estado global):
+/// devuelve `(en_pausa, caducada)`.
+///
+/// * `en_pausa`: el proveedor está quemado y la pausa sigue viva.
+/// * `caducada`: la pausa ya no aplica (el reset pasó, o se agotó el
+///   cooldown) ⇒ el proveedor vuelve a la cascada y hay que limpiar el
+///   estado guardado.
+pub fn evaluar_pausa(e: &Estado, now: u64, cooldown_s: u64) -> (bool, bool) {
+    if e.nivel != Nivel::Pausa {
+        return (false, false);
+    }
+    // La ventana con `reset_at` ya pasó ⇒ la cuota volvió.
+    let expirada_por_reset = e
+        .ventanas
+        .iter()
+        .any(|v| v.nombre == "cupo" && v.reset_at.map(|r| r <= now).unwrap_or(false));
+    // El proveedor NO dijo cuándo ⇒ cooldown acotado desde el último error.
+    let con_reset = e
+        .ventanas
+        .iter()
+        .any(|v| v.nombre == "cupo" && v.reset_at.is_some());
+    let expirada_por_cooldown =
+        !con_reset && now >= e.actualizado_at.saturating_add(cooldown_s);
+    let caducada = expirada_por_reset || expirada_por_cooldown;
+    // Si caducó, el proveedor **vuelve a la cascada** (media abierta): la
+    // pausa ya no aplica, aunque el nivel guardado siga siendo "Pausa"
+    // (por eso hay que limpiar el estado).
+    (!caducada, caducada)
+}
+
+/// Quita la ventana de cuota caducada y baja el nivel a `Normal`.
+///
+/// Se llama cuando la pausa ya expiró: el estado guardado en disco decía
+/// "pausa" y la UI lo pintaba como si el proveedor siguiera quemado.
+fn limpiar_pausa(provider: &str) {
+    {
+        let mut m = mapa().lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(e) = m.get_mut(provider) {
+            e.ventanas.retain(|v| v.nombre != "cupo");
+            e.nivel = peor_nivel(&e.ventanas);
+            if e.nivel == Nivel::Normal {
+                e.detalle = None;
+            }
+            e.actualizado_at = ahora();
+        }
+    }
+    persistir();
 }
 
 /// ¿Estamos en modo ahorro (cuota casi agotada)?
@@ -621,5 +702,67 @@ mod tests {
         let e = estado(Some(p)).pop().unwrap();
         assert_eq!(e.nivel, Nivel::Pausa);
         assert!(e.detalle.is_some());
+    }
+
+    // --- MEDIDO 2026-11-27: la pausa era ETERNA -------------------------
+    // Un solo 429 dejaba al proveedor quemado para siempre y la cascada se
+    // quedaba sin nube.  Ahora la pausa EXPIRA.
+
+    fn estado_de_prueba(nivel: Nivel, reset_at: Option<u64>, t: u64) -> Estado {
+        Estado {
+            provider: "p".to_string(),
+            nivel,
+            ventanas: vec![Ventana {
+                nombre: "cupo".to_string(),
+                pct_usado: 100.0,
+                reset_at,
+                fuente: "error429".to_string(),
+            }],
+            detalle: None,
+            actualizado_at: t,
+        }
+    }
+
+    #[test]
+    fn la_pausa_viva_sigue_pausando() {
+        let e = estado_de_prueba(Nivel::Pausa, Some(2_000_000_000), 1_000);
+        let (en_pausa, caducada) = evaluar_pausa(&e, 1_000, 900);
+        assert!(en_pausa, "una pausa con reset futuro sigue vigente");
+        assert!(!caducada);
+    }
+
+    #[test]
+    fn la_pausa_expira_cuando_pasa_el_reset() {
+        // reset_at = 1.000, ahora = 2.000 ⇒ la cuota ya volvió.
+        let e = estado_de_prueba(Nivel::Pausa, Some(1_000), 500);
+        let (en_pausa, caducada) = evaluar_pausa(&e, 2_000, 900);
+        assert!(caducada, "el reset pasado caduca la pausa");
+        assert!(!en_pausa, "el proveedor tiene que volver a la cascada");
+    }
+
+    #[test]
+    fn la_pausa_sin_reset_expira_con_el_cooldown() {
+        // Sin `reset_at` (el proveedor no lo dice) ⇒ cooldown acotado.
+        let e = estado_de_prueba(Nivel::Pausa, None, 1_000);
+        assert!(evaluar_pausa(&e, 1_000 + 899, 900).0, "aún dentro del cooldown");
+        let (en_pausa, caducada) = evaluar_pausa(&e, 1_000 + 900, 900);
+        assert!(caducada, "el cooldown se agota");
+        assert!(!en_pausa);
+    }
+
+    #[test]
+    fn un_nivel_normal_no_esta_en_pausa() {
+        let e = estado_de_prueba(Nivel::Normal, None, 1_000);
+        assert_eq!(evaluar_pausa(&e, 2_000, 900), (false, false));
+    }
+
+    #[test]
+    fn la_pausa_caducada_se_limpia_del_estado() {
+        let p = "test-proveedor-pausa-caduca";
+        // reset_at en el pasado (2023) => la ventana caduca de verdad.
+        registrar_error_cuota(p, 429, "rate limit reached; resets at 1700000000");
+        assert!(!en_pausa(p), "no debe seguir en pausa");
+        let e = estado(Some(p)).pop().unwrap();
+        assert_ne!(e.nivel, Nivel::Pausa, "el estado guardado dice: {:?}", e.nivel);
     }
 }
