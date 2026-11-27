@@ -1,0 +1,50 @@
+{
+  "con_marco_de_pila": 0,
+  "ctrl_exactos": 11,
+  "ctrl_n": 231,
+  "destino_rama_ctrl": 6,
+  "destino_rama_ctrl_n": 231,
+  "destino_rama_fallo": 0,
+  "destino_rama_fallo_n": 103,
+  "fallo_exactos": 0,
+  "fallo_mayores": 87,
+  "huecos_pclntab": 16325,
+  "pendientes": 103,
+  "por_categoria": {
+    "jetski (codigo propio de Antigravity)": 18,
+    "librerias publicas (third_party/golang)": 40,
+    "otras third_party": 7,
+    "runtime Go": 38
+  },
+  "por_error_motor437": {
+    "Low-level Error: Cannot properly adjust input varnodes": 80,
+    "Low-level Error: Joined varnode does not match size of record": 5,
+    "Low-level Error: Overlapping input varnodes": 1,
+    "Low-level Error: Symbol plRamffffffffffffffff extends beyond the end of the address space": 1,
+    "Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space": 14,
+    "Low-level Error: Symbol uRamffffffffffffffff extends beyond the end of the address space": 1,
+    "Recoverable Error: Unable to find unique hash for varnode": 1
+  },
+  "por_primera_instr": {
+    "B": 4,
+    "BL": 9,
+    "insn": 90
+  },
+  "por_veredicto": {
+    "IRRECONSTRUIBLE": 84,
+    "RECONSTRUIBLE-CON-PISTA": 18,
+    "THUNK": 1
+  },
+  "prologo_ctrl_sin": 172,
+  "prologo_fallo_n": 103,
+  "prologo_fallo_sin": 77,
+  "prologue_ctrl_n": 231,
+  "ratio_ctrl": 1.0,
+  "ratio_fallo": 6.54,
+  "simbolo_duplicado": 0,
+  "tamano_real": {
+    "max": 1968,
+    "mediana": 112,
+    "min": 16
+  }
+}
