@@ -460,32 +460,36 @@ fn sh_plano(cmd: &str, timeout_ms: u64) -> Salida {
     }
 }
 
-/// Contador de interacciones con el móvil (sólo en tests).
-///
-/// Cada llamada a [`sh`] es **un proceso en el móvil** (y cada `settings put`
-/// o `dumpsys` dentro son JVM).  Este contador permite **medir** el coste en
-/// vez de estimarlo: es el número que los tests acotan.
-///
-/// MEDIDO (2026-11-27): el contador era GLOBAL y `cargo test` corre los tests
-/// EN PARALELO, así que los tests de coste contaban también las llamadas de
-/// los OTROS tests de este módulo que estaban corriendo a la vez.  En el CI
-/// (suite completa, 1.624 tests) salían 5 y 8 interacciones donde el módulo
-/// hace 2 y 5 => tres tests rojos por una razón que no era del módulo.
-/// Ahora el contador es **por hilo** (cada test mide sus propias llamadas) y
-/// [`reset_llamadas_sh`] lo pone a cero antes de medir.
-#[cfg(test)]
+// Contador de interacciones con el móvil (POR HILO).
+//
+// Cada llamada a `sh` es **un proceso en el móvil** (y cada `settings put` o
+// `dumpsys` dentro son JVM).  Este contador permite **medir** el coste en vez
+// de estimarlo: lo usan los tests (que acotan el número) y la acción `costo`
+// (que lo mide **en el móvil**).
+//
+// MEDIDO (2026-11-27): el contador era GLOBAL y `cargo test` corre los tests
+// EN PARALELO, así que los tests de coste contaban también las llamadas de
+// los OTROS tests de este módulo que estaban corriendo a la vez.  En el CI
+// (suite completa, 1.624 tests) salían 5 y 8 interacciones donde el módulo
+// hace 2 y 5 => tres tests rojos por una razón que no era del módulo.
+// Ahora el contador es **por hilo** (cada test mide sus propias llamadas) y
+// `reset_llamadas_sh()` lo pone a cero antes de medir.
+//
+// (No se reintroduce el global: el arreglo de root se conserva.)
 thread_local! {
     static CONTADOR_SH: std::cell::Cell<usize> = std::cell::Cell::new(0);
 }
 
-/// Interacciones con el móvil desde el último reset (sólo tests).
-#[cfg(test)]
+/// Interacciones con el móvil desde el último reset (de ESTE hilo).
+///
+/// Disponible **en producción** porque la acción `costo` tiene que medir en
+/// el móvil (en el CI no hay Android): el número del encargo sale del
+/// aparato, no de una estimación.
 pub fn llamadas_sh() -> usize {
     CONTADOR_SH.with(|c| c.get())
 }
 
-/// Pone a cero el contador de interacciones de ESTE hilo (sólo tests).
-#[cfg(test)]
+/// Pone a cero el contador de interacciones de ESTE hilo.
 pub fn reset_llamadas_sh() {
     CONTADOR_SH.with(|c| c.set(0));
 }
@@ -519,7 +523,6 @@ fn somos_root() -> bool {
 /// sistema lo deniega (SELinux), se reintenta con `su -mm -c` para no perder
 /// funcionalidad.
 fn sh(cmd: &str, root: bool, timeout_ms: u64) -> Salida {
-    #[cfg(test)]
     CONTADOR_SH.with(|c| c.set(c.get() + 1));
     if !root {
         return sh_plano(cmd, timeout_ms);
@@ -2033,21 +2036,25 @@ pub fn costo_por_evento(state_dir: Option<&str>) -> Value {
         .float
         .or_else(|| lectura.int.map(|i| i as f64 / 255.0));
     let objetivo = Some(ctx.objetivo());
+    // Se MIDE, no se afirma: el techo de la política sale de una caché con
+    // caducidad (30 s), así que normalmente no cuesta ningún proceso.
+    reset_llamadas_sh();
     let d = decidir(
         &ctx.cfg.politica,
         objetivo,
         actual,
         lectura.modo,
         ctx.cfg.permitir_automatico,
-        ctx.cfg.techo_energia,
+        techo_energia(),
         ctx.estado.bajo_politica,
         None,
     );
+    let n = llamadas_sh();
     json!({
         "ok": true,
         "decision": format!("{:?}", d),
-        "costo_interacciones": 0,
-        "nota": "la lectura es del XML (fichero): 0 procesos; sólo escribe si la decisión lo exige",
+        "costo_interacciones": n,
+        "nota": "la lectura es del XML (fichero): 0 procesos; el techo sale de una caché (30 s); sólo escribe si la decisión lo exige",
         "brillo_ajuste": lectura.int,
         "modo": lectura.modo,
     })
@@ -2441,7 +2448,7 @@ pub fn diagnostico(state_dir: Option<&str>, aplicar: bool) -> Value {
             "screen_brightness": lectura.int,
             "screen_auto_brightness_adj": lectura.auto_ajuste,
             "content_adaptive_brightness": lectura.adaptativo,
-            "existe_float": todo.float_existe,
+            "existe_float": existe_float(),
             "crudo": lectura.crudo.trim(),
         },
         "aplicado": {
