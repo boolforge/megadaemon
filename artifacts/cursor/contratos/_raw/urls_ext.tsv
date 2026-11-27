@@ -1,0 +1,350 @@
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/135.js:1	Attempting credential expiration extension due to a credential service availability issue. A refresh of these credentials will be attempted after ${new Date(n)}.\nFor more information, please visit: https://docs.aws.amazon.com/sdkref/latest/guide/feature-static-credentials.html
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/135.js:1	http://169.254.169.254
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/355.js:1	@smithy/node-http-handler:WARN - socket usage at capacity=${t} and ${a} additional requests are enqueued.\nSee https://docs.aws.amazon.com/sdk-for-javascript/v3/developer-guide/node-configuring-maxsockets.html\nor increase socketAcquisitionWarningTimeout=(millis) in the NodeHttpHandler config.
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/355.js:1	Cannot transform payload Blob to web stream. Please make sure the Blob.stream() is polyfilled.\nIf you are using React Native, this API is not yet supported, see: https://react-native.canny.io/feature-requests/p/fetch-streaming-body
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/355.js:1	http://169.254.170.2${o}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/359.js:1	Profile is configured with invalid SSO credentials. Required parameters "sso_account_id", "sso_region", "sso_role_name", "sso_start_url". Got ${Object.keys(e).join(", ")}\nReference: https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/457.js:1	@smithy/config-resolver WARN - Please use the caller region instead of "*". See "sigv4a" in https://github.com/aws/aws-sdk-js-v3/blob/main/supplemental-docs/CLIENTS.md.
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/516.js:1	Attempting credential expiration extension due to a credential service availability issue. A refresh of these credentials will be attempted after ${new Date(r)}.\nFor more information, please visit: https://docs.aws.amazon.com/sdkref/latest/guide/feature-static-credentials.html
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/516.js:1	http://169.254.169.254
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/626.js:1	https://signin-fips.{Region}.{PartitionResult#dnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/626.js:1	https://signin-fips.{Region}.{PartitionResult#dualStackDnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/626.js:1	https://signin.{Region}.{PartitionResult#dnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/626.js:1	https://signin.{Region}.{PartitionResult#dualStackDnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/652.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/679.js:1	https://portal.sso-fips.{Region}.{PartitionResult#dnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/679.js:1	https://portal.sso-fips.{Region}.{PartitionResult#dualStackDnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/679.js:1	https://portal.sso.{Region}.amazonaws.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/679.js:1	https://portal.sso.{Region}.{PartitionResult#dnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/679.js:1	https://portal.sso.{Region}.{PartitionResult#dualStackDnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/736.js:1	@smithy/node-http-handler:WARN - socket usage at capacity=${t} and ${a} additional requests are enqueued.\nSee https://docs.aws.amazon.com/sdk-for-javascript/v3/developer-guide/node-configuring-maxsockets.html\nor increase socketAcquisitionWarningTimeout=(millis) in the NodeHttpHandler config.
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/736.js:1	Cannot transform payload Blob to web stream. Please make sure the Blob.stream() is polyfilled.\nIf you are using React Native, this API is not yet supported, see: https://react-native.canny.io/feature-requests/p/fetch-streaming-body
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/736.js:1	http://169.254.170.2${o}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/740.js:1	Profile is configured with invalid SSO credentials. Required parameters "sso_account_id", "sso_region", "sso_role_name", "sso_start_url". Got ${Object.keys(e).join(", ")}\nReference: https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/752.js:1	;]. For more information please go to https://github.com/aws/aws-sdk-js-v3#functionality-requiring-aws-common-runtime-crt')}return this.sigv4Signer.presign(e,t)}async presignWithCredentials(e,t,n={}){if(
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/752.js:1	;]. For more information please go to https://github.com/aws/aws-sdk-js-v3#functionality-requiring-aws-common-runtime-crt')}return this.sigv4Signer.signWithCredentials(e,t,n)}async presign(e,t={}){if(
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/752.js:1	https://sts-fips.{Region}.{PartitionResult#dnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/752.js:1	https://sts-fips.{Region}.{PartitionResult#dualStackDnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/752.js:1	https://sts.amazonaws.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/754.js:1	Attempting credential expiration extension due to a credential service availability issue. A refresh of these credentials will be attempted after ${new Date(n)}.\nFor more information, please visit: https://docs.aws.amazon.com/sdkref/latest/guide/feature-static-credentials.html
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/754.js:1	http://169.254.169.254
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/783.js:1	https://oidc-fips.{Region}.{PartitionResult#dnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/783.js:1	https://oidc-fips.{Region}.{PartitionResult#dualStackDnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/main.js:2	 in https://github.com/aws/aws-sdk-js-v3/blob/main/supplemental-docs/CLIENTS.md.')}})(e),e},useFipsEndpoint:async()=>{const e=
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/main.js:2	http://json-schema.org/draft-07/schema
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/main.js:2	http://json-schema.org/schema
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/main.js:8	","<",'preview url="http://127.0.0.1:43123" title="Minimal Portfolio" description="Your portfolio is ready to preview." image="/absolute/path/screenshot.png"',">","<","/preview",">","
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/main.js:8	","<",'preview url="http://127.0.0.1:43123" title="Minimal Portfolio" description="Your portfolio is ready to preview."',">","<","/preview",">","
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/main.js:8	,I=`https://cursor.com${x}`,C={provider:
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/main.js:8	,i=n?`${o}\n\nFormatting:\n- A question's prompt may use inline markdown (bold, italics, code, links); the title and option labels are plain text\n- To mention a pull request in a prompt, link its full URL, for example [#1234](https://github.com/owner/repo/pull/1234); a bare #1234 is not linked\n- Link text must make sense without the link: use the PR number (#1234) or the PR title, never 
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/main.js:8	When mentioning URLs, do NOT paste bare URLs. Always use backticks or markdown links. Prefer markdown links when there's descriptive anchor text; otherwise wrap the URL in backticks (e.g., `https://example.com`).
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/main.js:8	[Minimal Portfolio](http://127.0.0.1:43123)
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/main.js:8	})}}),e.fetch),r=()=>{var t,r;return null!=(r=qXe(null!=(t=e.baseURL)?t:`https://bedrock-runtime.${vXe({settingValue:e.region,settingName:
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/main.js:213	)&&(o=o.slice(2)),s&&(o=`${s}/${o}`),`https://raw.githubusercontent.com/${t}/${r}/${n}/${o}`}function my(e){return!e.includes(
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/main.js:213	,externalUrl:`https://github.com/${e.repo}.git`,externalRef:e.ref,externalSha:e.sha,effectiveRef:e.sha??e.ref});break;case
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/main.js:213	. Expected format: https://github.com/owner/repo or .../owner/repo/tree/branch`);const r=`${t.owner}-${t.repo}`,n=t.repo,s=await this.readFile();if(s.plugins.some((e=>e.id===r)))throw new Error(`Plugin 
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/pdf-worker.js:1	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/pdf.worker.mjs:28	<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/">
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/pdf.worker.mjs:28	http://ns.adobe.com/xdp/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/pdf.worker.mjs:28	http://ns.adobe.com/xdp/pdf/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/pdf.worker.mjs:28	http://ns.adobe.com/xfdf/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/pdf.worker.mjs:28	http://ns.adobe.com/xmpmeta/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/pdf.worker.mjs:28	http://www.w3.org/1999/XSL/Transform
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/pdf.worker.mjs:28	http://www.w3.org/1999/xhtml
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/pdf.worker.mjs:28	http://www.w3.org/2000/09/xmldsig#
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xci/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xdc/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-connection-set/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-data/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-form/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-locale-set/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-source-set/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-exec/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-template/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/3652.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/4846.js:1	)&&(o=o.slice(2)),i&&(o=`${i}/${o}`),`https://raw.githubusercontent.com/${t}/${r}/${n}/${o}`}function Y(e){return e.some((e=>f.includes(e)))}function J(e){return!e.includes(
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/4846.js:1	,externalUrl:`https://github.com/${e.repo}.git`,externalRef:e.ref,externalSha:e.sha,effectiveRef:e.sha??e.ref});break;case
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/7115.js:1	http://127.0.0.1
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/7764.js:1	","<",'preview url="http://127.0.0.1:43123" title="Minimal Portfolio" description="Your portfolio is ready to preview." image="/absolute/path/screenshot.png"',">","<","/preview",">","
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/7764.js:1	","<",'preview url="http://127.0.0.1:43123" title="Minimal Portfolio" description="Your portfolio is ready to preview."',">","<","/preview",">","
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/7764.js:1	,i=o?`${s}\n\nFormatting:\n- A question's prompt may use inline markdown (bold, italics, code, links); the title and option labels are plain text\n- To mention a pull request in a prompt, link its full URL, for example [#1234](https://github.com/owner/repo/pull/1234); a bare #1234 is not linked\n- Link text must make sense without the link: use the PR number (#1234) or the PR title, never 
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/7764.js:1	When mentioning URLs, do NOT paste bare URLs. Always use backticks or markdown links. Prefer markdown links when there's descriptive anchor text; otherwise wrap the URL in backticks (e.g., `https://example.com`).
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/7764.js:1	[Minimal Portfolio](http://127.0.0.1:43123)
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/9877.js:1	https://api2.cursor.sh
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/backend-endpoint.js:6	https://api2.cursor.sh
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/daemon.cjs:4	https://downloads.cursor.com/agent-host-harness/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/daemon.cjs:717	;MCP_OAUTH_CLIENT_METADATA_DOCUMENT_URL=`https://cursor.com${MCP_OAUTH_CLIENT_METADATA_DOCUMENT_PATH}`;DATABRICKS_GENIE_ONE_POLICY={provider:
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/daemon.cjs:1716	http://json-schema.org/draft-04/schema#
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/daemon.cjs:1716	http://json-schema.org/draft-07/schema#
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/daemon.cjs:1716	https://json-schema.org/draft/2020-12/schema
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/daemon.cjs:6914	?f.call(receiver):f?f.value:state.get(receiver)};EnvProxyConfigError=class extends Error{constructor(variable){super(`${variable} is s\
+et but is not an http:// or https:// proxy URL, so Cursor sends no request that would go through it. Set ${variable} to http://host:port, or unset it.`);this.variable=variable;this.name=
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/daemon.cjs:12508	https://api2.cursor.sh
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/daemon.cjs:18981	","<",'preview url="http://127.0.0.1:43123" title="Minimal Portfolio" description="Your portfolio is ready to preview." image="/absolute/path/screenshot.png"',">","<","/preview",">","
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/daemon.cjs:18981	[Minimal Portfolio](http://127.0.0.1:43123)
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/daemon.cjs:19505	When mentioning URLs, do NOT paste bare URLs. Always use backticks or markdown links. Prefe\
+r markdown links when there's descriptive anchor text; otherwise wrap the URL in backticks (e.g., `https://example.com`).
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/daemon.cjs:19581	","<",'preview url="http://127.0.0.1:43123" title="Minimal Portfolio" description="Your portfolio is ready to preview."',">","<","/preview",">","
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/pdf-worker.js:5145	http://example.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/pdf.worker.mjs:28	<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/">
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/pdf.worker.mjs:28	http://ns.adobe.com/xdp/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/pdf.worker.mjs:28	http://ns.adobe.com/xdp/pdf/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/pdf.worker.mjs:28	http://ns.adobe.com/xfdf/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/pdf.worker.mjs:28	http://ns.adobe.com/xmpmeta/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/pdf.worker.mjs:28	http://www.w3.org/1999/XSL/Transform
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/pdf.worker.mjs:28	http://www.w3.org/1999/xhtml
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/pdf.worker.mjs:28	http://www.w3.org/2000/09/xmldsig#
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/pdf.worker.mjs:28	http://www.xfa.org/schema/xci/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/pdf.worker.mjs:28	http://www.xfa.org/schema/xdc/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-connection-set/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-data/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-form/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-locale-set/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-source-set/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/agent-host-daemon/dist/bin/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-template/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/main.js:2	http://json-schema.org/draft-07/schema
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/main.js:2	http://json-schema.org/schema
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/main.js:8	,C=`https://cursor.com${x}`,E={provider:
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/main.js:8	===t.protocol?443:80}(t))?void 0:r}class m extends Error{constructor(t){super(`${t} is set but is not an http:// or https:// proxy URL, so Cursor sends no request that would go through it. Set ${t} to http://host:port, or unset it.`),this.variable=t,this.name=
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/main.js:213	https://cursor.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/pdf-worker.js:1	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/pdf.worker.mjs:28	<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/">
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/pdf.worker.mjs:28	http://ns.adobe.com/xdp/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/pdf.worker.mjs:28	http://ns.adobe.com/xdp/pdf/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/pdf.worker.mjs:28	http://ns.adobe.com/xfdf/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/pdf.worker.mjs:28	http://ns.adobe.com/xmpmeta/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/pdf.worker.mjs:28	http://www.w3.org/1999/XSL/Transform
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/pdf.worker.mjs:28	http://www.w3.org/1999/xhtml
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/pdf.worker.mjs:28	http://www.w3.org/2000/09/xmldsig#
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xci/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xdc/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-connection-set/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-data/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-form/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-locale-set/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-source-set/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-template/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/135.js:1	Attempting credential expiration extension due to a credential service availability issue. A refresh of these credentials will be attempted after ${new Date(n)}.\nFor more information, please visit: https://docs.aws.amazon.com/sdkref/latest/guide/feature-static-credentials.html
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/135.js:1	http://169.254.169.254
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/355.js:1	@smithy/node-http-handler:WARN - socket usage at capacity=${t} and ${a} additional requests are enqueued.\nSee https://docs.aws.amazon.com/sdk-for-javascript/v3/developer-guide/node-configuring-maxsockets.html\nor increase socketAcquisitionWarningTimeout=(millis) in the NodeHttpHandler config.
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/355.js:1	Cannot transform payload Blob to web stream. Please make sure the Blob.stream() is polyfilled.\nIf you are using React Native, this API is not yet supported, see: https://react-native.canny.io/feature-requests/p/fetch-streaming-body
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/355.js:1	http://169.254.170.2${o}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/359.js:1	Profile is configured with invalid SSO credentials. Required parameters "sso_account_id", "sso_region", "sso_role_name", "sso_start_url". Got ${Object.keys(e).join(", ")}\nReference: https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/457.js:1	@smithy/config-resolver WARN - Please use the caller region instead of "*". See "sigv4a" in https://github.com/aws/aws-sdk-js-v3/blob/main/supplemental-docs/CLIENTS.md.
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/516.js:1	Attempting credential expiration extension due to a credential service availability issue. A refresh of these credentials will be attempted after ${new Date(r)}.\nFor more information, please visit: https://docs.aws.amazon.com/sdkref/latest/guide/feature-static-credentials.html
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/516.js:1	http://169.254.169.254
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/626.js:1	https://signin-fips.{Region}.{PartitionResult#dnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/626.js:1	https://signin-fips.{Region}.{PartitionResult#dualStackDnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/626.js:1	https://signin.{Region}.{PartitionResult#dnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/626.js:1	https://signin.{Region}.{PartitionResult#dualStackDnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/652.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/679.js:1	https://portal.sso-fips.{Region}.{PartitionResult#dnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/679.js:1	https://portal.sso-fips.{Region}.{PartitionResult#dualStackDnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/679.js:1	https://portal.sso.{Region}.amazonaws.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/679.js:1	https://portal.sso.{Region}.{PartitionResult#dnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/679.js:1	https://portal.sso.{Region}.{PartitionResult#dualStackDnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/736.js:1	@smithy/node-http-handler:WARN - socket usage at capacity=${t} and ${a} additional requests are enqueued.\nSee https://docs.aws.amazon.com/sdk-for-javascript/v3/developer-guide/node-configuring-maxsockets.html\nor increase socketAcquisitionWarningTimeout=(millis) in the NodeHttpHandler config.
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/736.js:1	Cannot transform payload Blob to web stream. Please make sure the Blob.stream() is polyfilled.\nIf you are using React Native, this API is not yet supported, see: https://react-native.canny.io/feature-requests/p/fetch-streaming-body
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/736.js:1	http://169.254.170.2${o}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/740.js:1	Profile is configured with invalid SSO credentials. Required parameters "sso_account_id", "sso_region", "sso_role_name", "sso_start_url". Got ${Object.keys(e).join(", ")}\nReference: https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/752.js:1	;]. For more information please go to https://github.com/aws/aws-sdk-js-v3#functionality-requiring-aws-common-runtime-crt')}return this.sigv4Signer.presign(e,t)}async presignWithCredentials(e,t,n={}){if(
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/752.js:1	;]. For more information please go to https://github.com/aws/aws-sdk-js-v3#functionality-requiring-aws-common-runtime-crt')}return this.sigv4Signer.signWithCredentials(e,t,n)}async presign(e,t={}){if(
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/752.js:1	https://sts-fips.{Region}.{PartitionResult#dnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/752.js:1	https://sts-fips.{Region}.{PartitionResult#dualStackDnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/752.js:1	https://sts.amazonaws.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/754.js:1	Attempting credential expiration extension due to a credential service availability issue. A refresh of these credentials will be attempted after ${new Date(n)}.\nFor more information, please visit: https://docs.aws.amazon.com/sdkref/latest/guide/feature-static-credentials.html
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/754.js:1	http://169.254.169.254
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/783.js:1	https://oidc-fips.{Region}.{PartitionResult#dnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/783.js:1	https://oidc-fips.{Region}.{PartitionResult#dualStackDnsSuffix}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/main.js:2	 in https://github.com/aws/aws-sdk-js-v3/blob/main/supplemental-docs/CLIENTS.md.')}})(e),e},useFipsEndpoint:async()=>{const e=
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/main.js:2	","<",'preview url="http://127.0.0.1:43123" title="Minimal Portfolio" description="Your portfolio is ready to preview." image="/absolute/path/screenshot.png"',">","<","/preview",">","
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/main.js:2	","<",'preview url="http://127.0.0.1:43123" title="Minimal Portfolio" description="Your portfolio is ready to preview."',">","<","/preview",">","
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/main.js:2	,i=r?`${s}\n\nFormatting:\n- A question's prompt may use inline markdown (bold, italics, code, links); the title and option labels are plain text\n- To mention a pull request in a prompt, link its full URL, for example [#1234](https://github.com/owner/repo/pull/1234); a bare #1234 is not linked\n- Link text must make sense without the link: use the PR number (#1234) or the PR title, never 
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/main.js:2	When mentioning URLs, do NOT paste bare URLs. Always use backticks or markdown links. Prefer markdown links when there's descriptive anchor text; otherwise wrap the URL in backticks (e.g., `https://example.com`).
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/main.js:2	[Minimal Portfolio](http://127.0.0.1:43123)
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/main.js:2	})}}),e.fetch),n=()=>{var t,n;return null!=(n=h4e(null!=(t=e.baseURL)?t:`https://bedrock-runtime.${V9e({settingValue:e.region,settingName:
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/pdf-worker.js:1	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/pdf.worker.mjs:28	<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/">
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/pdf.worker.mjs:28	http://ns.adobe.com/xdp/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/pdf.worker.mjs:28	http://ns.adobe.com/xdp/pdf/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/pdf.worker.mjs:28	http://ns.adobe.com/xfdf/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/pdf.worker.mjs:28	http://ns.adobe.com/xmpmeta/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/pdf.worker.mjs:28	http://www.w3.org/1999/XSL/Transform
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/pdf.worker.mjs:28	http://www.w3.org/1999/xhtml
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/pdf.worker.mjs:28	http://www.w3.org/2000/09/xmldsig#
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xci/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xdc/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-connection-set/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-data/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-form/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-locale-set/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-source-set/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-local-agent-runtime/dist/pdf.worker.mjs:28	http://www.xfa.org/schema/xfa-template/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-mcp/dist/main.js:1	http://json-schema.org/draft-07/schema
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-mcp/dist/main.js:1	http://json-schema.org/schema
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-mcp/dist/main.js:212	,P=`https://cursor.com${T}`,I={provider:
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-mcp/dist/main.js:212	===e.protocol?443:80}(e))?void 0:r}class Vu extends Error{constructor(e){super(`${e} is set but is not an http:// or https:// proxy URL, so Cursor sends no request that would go through it. Set ${e} to http://host:port, or unset it.`),this.variable=e,this.name=
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/extensions/cursor-retrieval/dist/main.js:2	[before-after-hook]: "Hook()" repurposing warning, use "Hook.Collection()". Read more: https://git.io/upgrade-before-after-hook-to-1.4
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/canvas/canvas-runtime-cursor-pages.esm.js:7213	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/canvas/canvas-runtime-cursor-pages.esm.js:7219	http://www.w3.org/1998/Math/MathML
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/canvas/canvas-runtime.esm.js:7213	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/canvas/canvas-runtime.esm.js:7219	http://www.w3.org/1998/Math/MathML
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	http://localhost:8787/callback
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	https://chat.x.com/connectors/oauth_callback
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	https://cursor.com${ne}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	https://grok.com/connectors-oauth-exchange-code/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	https://lite.x.com/i/connectors/oauth_callback
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	https://mcp.shop.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	https://www.googleapis.com/auth/bigquery
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	https://www.googleapis.com/auth/calendar.calendarlist.readonly
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	https://www.googleapis.com/auth/calendar.events
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	https://www.googleapis.com/auth/calendar.events.freebusy
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	https://www.googleapis.com/auth/calendar.events.readonly
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	https://www.googleapis.com/auth/documents
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	https://www.googleapis.com/auth/drive.file
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	https://www.googleapis.com/auth/drive.readonly
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	https://www.googleapis.com/auth/gmail.compose
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	https://www.googleapis.com/auth/gmail.modify
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	https://www.googleapis.com/auth/gmail.readonly
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	https://www.googleapis.com/auth/presentations
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	https://www.googleapis.com/auth/spreadsheets
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/cursor-links.cjs:2	https://x.com/i/connectors/oauth_callback
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/host.cjs:168	,d=e.resolveUrl(l);return d===null?`Invalid URL provided to browser_navigate: ${JSON.stringify(l)} is not a web address. Pass a full URL such as https://example.com; browser_navigate does not search the web.`:Uw({url:d,allowlist:r})}if(are.has(n))return null;let i=typeof t.viewId==
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/host.cjs:333	;return Pd(t)||/^\d{1,3}(\.\d{1,3}){3}$/.test(r)?n.href:/\.[a-z]{2,}$/i.test(t)?`https://${e}`:null}function ML(e){let n=e.trim();return IL(n)??`https://www.google.com/search?q=${encodeURIComponent(n)}`}function NL(e){return IL(e.trim())}c();var XL=require(
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/electron-main/host.cjs:386	||El.has(n)?null:`https://www.google.com/s2/favicons?domain=${n}&sz=64`}function lie(e){return e!==null&&e.length<=iie?e:null}function cie(e){if(typeof e!=
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/automations-loader.cjs:37	s Slack channel is archived. Choose an active channel for the automation, and the next run will post its results.",ctaLabel:"Slack setup guide",ctaPath:"https://cursor.com/docs/integrations/slack"},empty_repository:{title:"The default branch has no commits",message:"This run couldn
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/automations-loader.cjs:37	s Slack channel. Invite the Cursor app to the channel, and the next run will post its results.",ctaLabel:"Slack setup guide",ctaPath:"https://cursor.com/docs/integrations/slack"},slack_channel_archived:{title:"The Slack channel is archived",message:"This run couldn
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	http://localhost:8787/callback
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://chat.x.com/connectors/oauth_callback
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://cursor.com${iBr}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://grok.com/connectors-oauth-exchange-code/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://lite.x.com/i/connectors/oauth_callback
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://mcp.shop.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://www.cursor.com/agents/mcp/oauth/callback
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://www.googleapis.com/auth/bigquery
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://www.googleapis.com/auth/calendar.calendarlist.readonly
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://www.googleapis.com/auth/calendar.events
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://www.googleapis.com/auth/calendar.events.freebusy
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://www.googleapis.com/auth/calendar.events.readonly
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://www.googleapis.com/auth/documents
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://www.googleapis.com/auth/drive.file
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://www.googleapis.com/auth/drive.readonly
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://www.googleapis.com/auth/gmail.compose
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://www.googleapis.com/auth/gmail.modify
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://www.googleapis.com/auth/gmail.readonly
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://www.googleapis.com/auth/presentations
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://www.googleapis.com/auth/spreadsheets
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:26	https://x.com/i/connectors/oauth_callback
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:66	,owner:r,repo:e,prNumber:t,canonicalUrl:`https://github.com/${r.toLowerCase()}/${e.toLowerCase()}/pull/${t}`}}function HAt({identityHost:r,owner:e,repo:t,prNumber:n}){return`https://${r}/codebase/${e.toLowerCase()}/${t.toLowerCase()}/pull/${n}`}function qDr({identityHost:r,owner:e,repo:t,prNumber:n,identityHosts:s}){if(!(!jC(s).has(r)||!UDr(e,t)||!FDr(n)))return{provider:
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:66	?XAs({hostname:n,pathParts:s,identityHosts:e}):void 0}function $Dr({provider:r,owner:e,repo:t,identityHost:n,identityHosts:s}){let o=e.toLowerCase(),i=t.toLowerCase(),a=`https://github.com/${o}/${i}`,l=d=>`https://${d}${Vw({owner:o,name:i})}`;if(r===
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:66	?[`https://gitlab.com/${e.join(
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:148	,owner:r,repo:e,number:n,canonicalUrl:`https://github.com/${r.toLowerCase()}/${e.toLowerCase()}/pull/${n}`,identityHost:null}}function SCe(r,e=
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:354	))return;let s=DHt(n),o=CP(t,`https://github.com/${t}`);return{markdown:{kind:
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:354	);if(n===void 0||n.length===0)return;let s=IP(xP(r.argsJson)?.channelId),o=s!==void 0&&Ozs.test(s)?`https://slack.com/app_redirect?channel=${encodeURIComponent(s)}`:void 0;return CP(`#${DHt(n)}`,o)}function _Ne(r,e){return{markdown:{kind:
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:354	,author:RNe(n),repo:CP(t,`https://github.com/${t}`)},plain:{kind:
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:354	,repo:CP(t,`https://github.com/${t}`)},plain:{kind:
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:354	||!Number.isInteger(s)||s<=0)return;let o=`${n}#${s}`;return _Ne(CP(o,`https://github.com/${n}/pull/${s}`),o)}case
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:843	,externalUrl:`https://github.com/${s.repo}.git`,externalRef:s.ref,externalSha:s.sha,effectiveRef:s.sha??s.ref});break;case
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:1722	https://cursor.com/docs/skills#frontmatter-fields
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:3355	);return{cluster:o,url:`https://probe.${o}/`,cursorVm:!0}}}let n=e.protocol===
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/engine.cjs:4471	?t(ub.notConnected):t(ub.noAccess);case Nr.GITHUB_USER_NO_ACCESS:return t(ub.noAccess);case Nr.GITHUB_APP_NO_ACCESS:return t(v3o(e)?ub.appNotInstalled:ub.noAccess);default:return null}}function A8e(r){return`https://github.com/${encodeURIComponent(r)}.png?size=40`}_t();var N$n=
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/html-block.cjs:3	http://www.ibm.com/data/dtd/v11/ibmxhtml1-transitional.dtd
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/picker-parse.cjs:3	http://www.ibm.com/data/dtd/v11/ibmxhtml1-transitional.dtd
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/plugin-mcp-host.cjs:4	,UJ=`https://cursor.com${DJ}`,r3={provider:
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/plugin-mcp-host.cjs:64	https://raw.githubusercontent.com/ajv-validator/ajv/master/lib/refs/data.json#
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/plugins-loader.cjs:98	,externalUrl:`https://github.com/${i.repo}.git`,externalRef:i.ref,externalSha:i.sha,effectiveRef:i.sha??i.ref});break;case
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/plugins-worker.cjs:98	,externalUrl:`https://github.com/${i.repo}.git`,externalRef:i.ref,externalSha:i.sha,effectiveRef:i.sha??i.ref});break;case
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/project-notes-worker.cjs:2	,owner:e,repo:t,number:r,canonicalUrl:`https://github.com/${e.toLowerCase()}/${t.toLowerCase()}/pull/${r}`,identityHost:null}}function Tn(e,t=
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/project-notes-worker.cjs:2	,owner:e,repo:t,prNumber:n,canonicalUrl:`https://github.com/${e.toLowerCase()}/${t.toLowerCase()}/pull/${n}`}}function Kt({identityHost:e,owner:t,repo:n,prNumber:r}){return`https://${e}/codebase/${t.toLowerCase()}/${n.toLowerCase()}/pull/${r}`}function $t({identityHost:e,owner:t,repo:n,prNumber:r,identityHosts:o}){if(!(!se(o).has(e)||!Vt(t,n)||!jt(r)))return{provider:
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/search-worker.cjs:63	https://github.com/${r.toLowerCase()}/${e.toLowerCase()}/pull/${t}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/engine/search-worker.cjs:129	http://127.0.0.1
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/AzureDevOpsLogo-DXuvRR1H.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/FigmaLogo-CTXL0nIO.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/LinearLogo-DVcGOaSM.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/MCPLogo-CsmssID-.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/McpServerConfigForm-b6wWaceE.js:2	https://example.com/mcp
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/MicrosoftTeamsLogo-C1LbF7zv.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/NotionLogo-BSp1ZeQB.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/Plugins.utils-ONv0V94_.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/SlackLogo-DNDEGw0Q.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	http://localhost:8787/callback
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	https://chat.x.com/connectors/oauth_callback
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	https://grok.com/connectors-oauth-exchange-code/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	https://lite.x.com/i/connectors/oauth_callback
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	https://mcp.shop.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	https://www.cursor.com/agents/mcp/oauth/callback
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	https://www.googleapis.com/auth/bigquery
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	https://www.googleapis.com/auth/calendar.calendarlist.readonly
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	https://www.googleapis.com/auth/calendar.events
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	https://www.googleapis.com/auth/calendar.events.freebusy
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	https://www.googleapis.com/auth/calendar.events.readonly
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	https://www.googleapis.com/auth/documents
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	https://www.googleapis.com/auth/drive.file
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	https://www.googleapis.com/auth/drive.readonly
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	https://www.googleapis.com/auth/gmail.compose
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	https://www.googleapis.com/auth/gmail.modify
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	https://www.googleapis.com/auth/gmail.readonly
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	https://www.googleapis.com/auth/presentations
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	https://www.googleapis.com/auth/spreadsheets
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/boot-adA7W7PA.js:3	https://x.com/i/connectors/oauth_callback
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/bot-mark-live-DaLP6HgE.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/bot-mark-still-rIAJsnEO.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/chat-kit-DxxdYsqK.js:3	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/cursor-backend-ChqkVT9m.js:2	https://api.cursor.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/cursor-backend-ChqkVT9m.js:2	https://api2.cursor.sh
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/de.gen-SURafJpj.js:9	Enter a web link, like https://example.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/de.gen-SURafJpj.js:9	Gib einen Weblink ein, z. B. https://example.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/diff-view-xqIbtNSO.js:4	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/es.gen-tBvdtrVF.js:9	Enter a web link, like https://example.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/es.gen-tBvdtrVF.js:9	Ingresa un enlace web, como https://example.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/extractErrorMessage-CXEF937h.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/finish-setup-C1C5dUD0.js:2	https://cursor.com/docs/rollouts#send-deployment-events-to-rollouts
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/form-page-OO2eHNH-.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/formatters-BEBhNy91.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/fr.gen-CbmDkA-E.js:9	Enter a web link, like https://example.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/fr.gen-CbmDkA-E.js:9	Saisissez un lien web, par exemple https://example.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/glass-model-picker-DIQ_38mA.js:2	https://cursor.com/docs/models
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/host-statsig-overrides-DDC4xY4S.js:2	https://console.statsig.com/5oWaLs1Xr8U2ei9Hq2R45w/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/in-app-ad-modal-Cc6O5P1V.js:3	http://www.w3.org/1999/xhtml
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/ja.gen-DWI6Y02k.js:9	Enter a web link, like https://example.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/ja.gen-DWI6Y02k.js:9	https://example.com \u306E\u3088\u3046\u306AWeb\u30EA\u30F3\u30AF\u3092\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/ko.gen-wXpf3j-2.js:9	Enter a web link, like https://example.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/ko.gen-wXpf3j-2.js:9	\uC6F9 \uB9C1\uD06C\uB97C \uC785\uB825\uD558\uC138\uC694(\uC608: https://example.com)
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/lazy-entry-BmMO3zBp.js:3	https://cursor.com/docs/approval-agents
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/lazy-entry-BmMO3zBp.js:3	https://cursor.com/docs/approval-agents#approval-policy-files
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/main-DLj-dUIu.js:2	https://docs.datadoghq.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/math-rehype-1x4Zhzcz.js:252	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/mermaid-viewer-hKVKYAUE.js:2	<svg xmlns="http://www.w3.org/2000/svg" width="${Math.max(1,Math.round(e))}" height="${Math.max(1,Math.round(t))}"/>
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/new-agent-pane-1EkwHgJt.js:4	https://cursor.com/dashboard?tab=integrations
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/onboarding-DZjXyj66.js:3	https://cursor.com/dashboard
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/page-lznzVes8.js:2	https://cursor.com/docs/bugbot#team-rules
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/page-lznzVes8.js:2	https://cursor.com/docs/bugbot#usage-based-billing
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/page-lznzVes8.js:10	https://cursor.com/docs/integrations/bitbucket
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/pdf-wNEuIz27.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/pdf-worker-CjSGGhRp.js:19	<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/">
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/pr-stack-rail-D-cRLcsM.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/prefill-Buesy3C_.js:2	https://github.com/apps/cursor/installations/new
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/profiling-CTrdh-ZN.js:2	https://react.dev/errors/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/pt.gen-Df1ea8WC.js:9	Digite um link da web, como https://example.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/pt.gen-Df1ea8WC.js:9	Enter a web link, like https://example.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/runtime-DCEFe97v.js:2	https://cursor.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/safeHref-BLfdKpvF.js:2	https://safe-href.invalid/
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/setup-step-DAVYpabq.js:2	https://app.slack.com/apps-manage/${encodeURIComponent(e)}/integrations/requests
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/setup-trays-BBcHPADV.js:4	http://www.ibm.com/data/dtd/v11/ibmxhtml1-transitional.dtd
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/slack-data-y6Qy2Hms.js:2	https://app.slack.com/apps-manage/${encodeURIComponent(e)}/integrations/requests
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/standaloneServices-ChdJSiNg.js:52	http://www.w3.org/1999/xhtml
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/startRecording-no53nEMz.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/startup-shared-DCzB370L.js:4	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/startup-shared-DCzB370L.js:7	https://github.com/${a}/${o}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/startup-shared-DCzB370L.js:51	https://github.com/${t.pr.org}/${t.pr.name}
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/steer-dialog-DbFVdg2M.js:2	https://cursor.com/mobile-launch-in-app-ad-modal-dark.png
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/steer-dialog-DbFVdg2M.js:2	https://cursor.com/mobile-launch-in-app-ad-modal-light.png
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/teams-DPBRQVc3.js:2	https://RscBasedStoreApp
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/teams-DPBRQVc3.js:2	https://cursor.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/teams-DPBRQVc3.js:2	https://cursor.com/privacy
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/teams-DPBRQVc3.js:2	https://cursor.com/terms-of-service
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/templateCardMetadata-oJZbkYDQ.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/upgrade-cta-CbaiPSeJ.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/view-CjItXGFq.js:40	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/view-vQ2xt6O8.js:2	http://www.w3.org/2000/svg
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/zh-CN.gen-CEbOLaWO.js:9	Enter a web link, like https://example.com
+/workspace/re-productos/cursor/usr/share/cursor/resources/app/molten/dist/renderer/assets/zh-CN.gen-CEbOLaWO.js:9	\u8F93\u5165\u7F51\u9875\u94FE\u63A5\uFF0C\u4F8B\u5982 https://example.com
