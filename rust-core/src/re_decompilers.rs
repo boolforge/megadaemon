@@ -770,18 +770,18 @@ mod tests {
     #[test]
     fn identificadores_ignoran_palabras_clave() {
         let ids = identificadores("int main(void) { return aux(1); }");
-        assert!(ids.contains("main".to_string()));
-        assert!(ids.contains("aux".to_string()));
-        assert!(!ids.contains("int".to_string()));
-        assert!(!ids.contains("return".to_string()));
+        assert!(ids.contains("main"));
+        assert!(ids.contains("aux"));
+        assert!(!ids.contains("int"));
+        assert!(!ids.contains("return"));
     }
 
     #[test]
     fn llamadas_detectan_el_callee() {
         let c = llamadas("void f() { g(); h(1); }");
-        assert!(c.contains("g".to_string()));
-        assert!(c.contains("h".to_string()));
-        assert!(!c.contains("f".to_string()));
+        assert!(c.contains("g"));
+        assert!(c.contains("h"));
+        assert!(!c.contains("f"));
     }
 
     #[test]
