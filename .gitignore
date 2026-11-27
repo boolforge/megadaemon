@@ -57,6 +57,12 @@ rust-core/target-test/
 crates/hooks-payload/target/
 crates/hooks-payload/dist/
 
+# MEDIDO (2026-11-28): 'dist/' (11 MB de binarios compilados: adbonly,
+# mddoctor, hooks...) NO estaba ignorado pese al comentario de arriba
+# ("target/dist nunca se suben").  Un 'git add -A' de un agente se habria
+# llevado 11 MB de binarios al repo.
+dist/
+
 # Nucleo forense en C (binario COMPILADO: no va al repo)
 tools/mddoctor
 tools/mddoctor-arm64
