@@ -287,6 +287,15 @@ jobs:
           sha256sum dist/mddoctor-android-arm64 > dist/mddoctor-android-arm64.sha256
           cp dist/mddoctor-android-arm64 dist/mddoctor-android-arm64-${GITHUB_SHA::7}
           sha256sum dist/mddoctor-android-arm64-${GITHUB_SHA::7} > dist/mddoctor-android-arm64-${GITHUB_SHA::7}.sha256
+          # El binario COMPRIMIDO va aparte: el artefacto que baja el movil
+          # ocupa menos de 20 KB (MEDIDO: 43 KB -> ~14 KB con xz) y el
+          # instalador lo descomprime antes de ejecutarlo.  El binario que
+          # corre sigue siendo el MISMO, con todas sus capacidades.
+          if command -v xz >/dev/null 2>&1; then
+            xz -9 -k -f dist/mddoctor-android-arm64
+            sha256sum dist/mddoctor-android-arm64.xz > dist/mddoctor-android-arm64.xz.sha256
+            echo "mddoctor comprimido: $(wc -c < dist/mddoctor-android-arm64.xz) B"
+          fi
           cp target/aarch64-linux-android/release/megadaemon-core dist/megadaemon-core-android-arm64
           sha256sum dist/megadaemon-core-android-arm64 > dist/megadaemon-core-android-arm64.sha256
           # Copia VERSIONADA (mismo motivo que en el build de Linux): en el

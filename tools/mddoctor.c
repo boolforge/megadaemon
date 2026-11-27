@@ -1314,29 +1314,31 @@ static void procesos_megadaemon(char *out, size_t on) {
 
 /* Ultimas n lineas de un fichero.  out queda con lo que haya. */
 static void tail_file(const char *path, int n, char *out, size_t on) {
+    /* SIN malloc: un buffer estatico y una ventana de lineas.  En un movil
+     * con la RAM justa, la pila no se toca y el binario no depende del
+     * heap (ademas el binario es mas pequeno: sin malloc/free/strdup). */
+    static char ventana[16][256];
     out[0] = 0;
+    if (n < 1) return;
+    if (n > 16) n = 16;
     FILE *f = fopen(path, "r");
     if (!f) return;
-    char *linea = malloc(1024);
-    char **ventana = calloc((size_t)n, sizeof(char *));
-    if (!linea || !ventana) { free(linea); free(ventana); fclose(f); return; }
+    char linea[256];
     int i = 0, c = 0;
-    while (fgets(linea, 1024, f)) {
-        char *cp = strdup(linea);
-        if (!cp) break;
-        free(ventana[i]);
-        ventana[i] = cp;
+    while (fgets(linea, sizeof(linea), f)) {
+        size_t l = strlen(linea);
+        if (l >= sizeof(ventana[0])) l = sizeof(ventana[0]) - 1;
+        memcpy(ventana[i], linea, l);
+        ventana[i][l] = 0;
         i = (i + 1) % n;
         c++;
     }
     fclose(f);
-    free(linea);
     int total = c >= n ? n : c;
     int ini = c >= n ? i : 0;
     size_t used = 0;
     for (int k = 0; k < total; k++) {
-        char *ln = ventana[(ini + k) % n];
-        if (!ln) continue;
+        const char *ln = ventana[(ini + k) % n];
         size_t len = strlen(ln);
         if (used + len + 2 >= on) break;
         memcpy(out + used, ln, len);
@@ -1344,8 +1346,6 @@ static void tail_file(const char *path, int n, char *out, size_t on) {
         if (len && out[used - 1] != '\n') out[used++] = '\n';
     }
     out[used] = 0;
-    for (int k = 0; k < n; k++) free(ventana[k]);
-    free(ventana);
 }
 
 /* Recoge la salud del movil.  `espera` son segundos de espera por /health
@@ -1610,9 +1610,11 @@ MD_COLD static int reparar(int aplicar) {
     /* 1) el directorio de estado */
     if (!existe(sd)) {
         if (aplicar) {
-            char cmd[600];
-            snprintf(cmd, sizeof(cmd), "mkdir -p '%.240s' && chmod 700 '%.240s'", sd, sd);
-            if (system(cmd) == 0 && existe(sd))
+            /* mkdir/chmod DIRECTOS: sin shell (el movil no siempre tiene uno
+             * util) y sin inyectar la ruta en una linea de comandos. */
+            mkdir(sd, 0700);
+            chmod(sd, 0700);
+            if (existe(sd) && escribible(sd))
                 printf("  [hecho] creado el directorio de estado %s\n", sd);
             else {
                 printf("  [FALLO] no se pudo crear %s\n", sd);
@@ -1624,9 +1626,8 @@ MD_COLD static int reparar(int aplicar) {
         }
     } else if (!escribible(sd)) {
         if (aplicar) {
-            char cmd[600];
-            snprintf(cmd, sizeof(cmd), "chmod 700 '%.240s'", sd);
-            if (system(cmd) == 0 && escribible(sd))
+            chmod(sd, 0700);
+            if (escribible(sd))
                 printf("  [hecho] arreglado el permiso de escritura de %s\n", sd);
             else {
                 printf("  [FALLO] %s sigue sin escritura\n", sd);
@@ -1644,9 +1645,8 @@ MD_COLD static int reparar(int aplicar) {
     if (existe(bin)) {
         if (access(bin, X_OK) != 0) {
             if (aplicar) {
-                char cmd[600];
-                snprintf(cmd, sizeof(cmd), "chmod 755 '%.240s'", bin);
-                if (system(cmd) == 0 && access(bin, X_OK) == 0)
+                chmod(bin, 0755);
+                if (access(bin, X_OK) == 0)
                     printf("  [hecho] permiso de ejecucion puesto en %s\n", bin);
                 else {
                     printf("  [FALLO] no se pudo chmod +x %s\n", bin);
