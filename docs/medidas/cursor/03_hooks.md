@@ -22,14 +22,7 @@ Todas las rutas son relativas a `usr/share/cursor/resources/app/`.
 Generado por el propio producto — `workbench.desktop.main.js:18714`:
 
 ```json
-{
-  "version": 1,
-  "hooks": {
-    "beforeSubmitPrompt": [
-      { "command": "./hooks/beforePromptSubmit.sh" }
-    ]
-  }
-}
+> [recortado: 8 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 Cita literal (`workbench.desktop.main.js:18714`):
@@ -43,14 +36,7 @@ const b=JSON.stringify({version:1,hooks:{beforeSubmitPrompt:[{command:"./hooks/b
 
 ```js
 function qmu(e,t,i=cYe){
-  const n={loop_limit:null,failClosed:!1};
-  if(t&&t!=="*"&&(n.matcher=t),
-     e.timeout!==void 0&&(n.timeout=e.timeout),
-     e.type==="prompt")
-      return e.prompt?{type:"prompt",prompt:e.prompt,...n}:null;
-  const r=$mu(e,i);
-  return r===null?null:{type:"command",command:r,...n}
-}
+> [recortado: 9 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 Campos:
@@ -78,15 +64,7 @@ Citations:
 
 ```js
 yl={beforeShellExecution:"beforeShellExecution",beforeMCPExecution:"beforeMCPExecution",
-afterShellExecution:"afterShellExecution",afterMCPExecution:"afterMCPExecution",
-beforeReadFile:"beforeReadFile",afterFileEdit:"afterFileEdit",
-beforeTabFileRead:"beforeTabFileRead",afterTabFileEdit:"afterTabFileEdit",
-stop:"stop",beforeSubmitPrompt:"beforeSubmitPrompt",
-afterAgentResponse:"afterAgentResponse",afterAgentThought:"afterAgentThought",
-sessionStart:"sessionStart",sessionEnd:"sessionEnd",preCompact:"preCompact",
-subagentStart:"subagentStart",subagentStop:"subagentStop",
-preToolUse:"preToolUse",postToolUse:"postToolUse",
-postToolUseFailure:"postToolUseFailure",workspaceOpen:"workspaceOpen"}
+> [recortado: 10 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 Lista plana:
@@ -101,20 +79,7 @@ Lista plana:
 `workbench.desktop.main.js:634`, función `egu`:
 
 ```js
-function egu(e,t){switch(e){
-  case"beforeShellExecution": case"afterShellExecution": return Ppi(t,"command");
-  case"beforeMCPExecution":  case"afterMCPExecution":  return Ppi(t,"tool_name");
-  case"beforeReadFile":   return"Read";
-  case"afterFileEdit":    return"Write";
-  case"beforeTabFileRead":return"TabRead";
-  case"afterTabFileEdit": return"TabWrite";
-  case"beforeSubmitPrompt":return"UserPromptSubmit";
-  case"stop":             return"Stop";
-  case"afterAgentResponse":return"AgentResponse";
-  case"afterAgentThought": return"AgentThought";
-  case"subagentStart": case"subagentStop": return Ppi(t,"subagent_type");
-  case"preToolUse": case"postToolUse": case"postToolUseFailure": return Ppi(t,"tool_name");
-  default: return}}
+> [recortado: 14 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 Y el matching es **regex** (`workbench.desktop.main.js:634`, `tgu`):
@@ -159,14 +124,7 @@ function wgu(e,t){if(e==="deny"||t==="deny")return"deny";if(e==="ask"||t==="ask"
 
 ```js
 VTt={PreToolUse:yl.preToolUse, PermissionRequest:null, PostToolUse:yl.postToolUse,
-     UserPromptSubmit:yl.beforeSubmitPrompt, Stop:yl.stop, SubagentStop:yl.subagentStop,
-     SessionStart:yl.sessionStart, SessionEnd:yl.sessionEnd, PreCompact:yl.preCompact,
-     Notification:null}
-OCa=Object.fromEntries(Object.entries(VTt).filter(e=>NCa(e[0])&&e[1]!==null).map(([e,t])=>[t,e]))
-FCa={Bash:"Shell",Read:"Read",Write:"Write",Edit:"Write",Glob:null,Grep:"Grep",
-     WebFetch:"WebFetch",WebSearch:"WebSearch",Task:"Task"}
-BCa=["Glob"]
-UCa=["Notification","PermissionRequest"]
+> [recortado: 9 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 - `PermissionRequest` y `Notification` → **evento no soportado**, se ignora con warning.
@@ -179,20 +137,7 @@ UCa=["Notification","PermissionRequest"]
 
 ```js
 function Gmu(e,t=cYe){
-  if(!e||e==="*")return"*";
-  const i=e.split("|"),n=[],r=[];
-  for(const s of i){
-    const o=s.trim();
-    if(o.startsWith("mcp__")){
-      const l=o.split("__");
-      if(l.length>=3){const c=l.slice(2).join("__");n.push(`MCP:${c}`);continue}}
-    const a=FCa[o];
-    if(a===null){BCa.includes(o)&&r.push(`Tool "${o}" is not supported in Cursor and will be ignored`);continue}
-    a!==void 0?n.includes(a)||n.push(a):n.push(o)
-  }
-  for(const s of r)t.warn(s);
-  return n.length===0?null:n.join("|")
-}
+> [recortado: 15 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 → El matcher de Claude es una **OR de nombres de tool** separados por `|`; `mcp__server__tool` se mapea a `MCP:server__tool`; los nombres de tool de Claude se traducen al catálogo de Cursor.

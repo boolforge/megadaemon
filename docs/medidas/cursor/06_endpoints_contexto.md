@@ -41,11 +41,7 @@ Lo que **no** está en el paquete se marca explícitamente como NO MEDIDO.
 Cita literal (línea 23):
 ```js
 const response = await authFetch(`${baseUrl}/auth/exchange_user_api_key`,
-  {method:"POST",headers,body:JSON.stringify({})});
-if(response.status===403){
-  const body = await response.json().catch(()=>void 0);
-  if(isSignInPolicyViolation(body)){throw new SignInPolicyViolation...}
-}
+> [recortado: 6 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 → El flujo es: `login_intent` → (poll) → `exchange_user_api_key` con `Bearer <apiKey>`.
 **NO MEDIDO**: el contenido del body de `login_intent`, el nombre exacto del campo de la api key
@@ -65,22 +61,7 @@ en la respuesta, y el refresh de tokens.
 `out/vs/workbench/workbench.desktop.main.js:23` — nombres de span/atributos literales:
 
 ```
-ai.response.toolCalls
-ai.prompt.messages
-ai.prompt.tools
-ai.model.id
-ai.model.provider
-ai.response.providerMetadata
-ai.usage.cachedInputTokens
-ai.telemetry.functionId
-ai.usage.completionTokens
-ai.usage.promptTokens
-ai.toolCall.name
-ai.toolCall.id
-ai.toolCall.args
-gen_ai.response.model
-gen_ai.usage.input_tokens
-gen_ai.usage.output_tokens
+> [recortado: 16 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 → Son las **semantic conventions de OpenTelemetry para GenAI** (`ai.*` + `gen_ai.*`).
@@ -142,15 +123,7 @@ Fuente: `out/vs/workbench/workbench.desktop.main.js:792`, módulo `mcp-url-utils
 
 ```js
 Jja=new Set(["airtable.com","anysphere.co","api.aws","apify.com","asana.com","ashbyhq.com",
-"atlassian.com","atlassian.net","azuredatabricks.net","box.com","buildkite.com","calendly.com",
-"canva.com","clickhouse.cloud","clickup.com","cloudflare.com","composio.dev","context7.com",
-"cursor.com","cursor.sh","cursorapi.com","databricks.com","datadoghq.com","datadoghq.eu",
-"ddog-gov.com","dropbox.com","elevenlabs.io","exa.ai","figma.com","firecrawl.dev","frontapp.com",
-"github.com","githubcopilot.com","gitlab.com","google.com","googleapis.com","granola.ai","hex.tech",
-"hubspot.com","huggingface.co","intercom.com","linear.app","monday.com","neon.tech","notion.com",
-"plain.com","posthog.com","prisma.io","railway.com","ramp.com","render.com","salesforce.com",
-"sentry.dev","sentry.io","slack.com","snowflakecomputing.com","spacelift.io","statsig.com",
-"stripe.com","supabase.com","todoist.net","vercel.com","workos.com","x.ai","x.com","zapier.com"])
+> [recortado: 10 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 → Es la lista de **servicios MCP de terceros que Cursor permite de fábrica** (Airtable, Notion,
@@ -162,15 +135,7 @@ producto, no un formato.** Copiar la lista exacta en un repo público es discuti
 
 ```js
 XRt="(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)?"                     // etiqueta de hostname
-Zja=new RegExp(`^(?:${XRt}\\.)*${XRt}$`)                              // hostname
-eYa=new RegExp(`^\\*\\.(?:${XRt}\\.)*${XRt}$`)                         // wildcard *.dominio
-QRt="(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)"                          // octeto
-tYa=new RegExp(`^${QRt}(?:\\.${QRt}){3}$`)                            // IPv4
-iYa=/^[0-9a-f:]+$/                                                   // IPv6
-nYa=new RegExp(`^(?:${QRt}(?:\\.${QRt}){3}|[0-9a-f:]+)\\/\\d{1,3}$`)   // CIDR
-JRt=2048                                                            // longitud máx de URL
-H$n=/^([^/?#]+\/\/[^/?#]*):\*(?=[/?#]|$)/                             // wildcard de puerto
-rYa=/^[^/?#]+\/\/[^/?#]*\*$/                                          // wildcard de host
+> [recortado: 10 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 ### Campos de la política
@@ -231,11 +196,7 @@ Detalle fino **NO MEDIDO**: la lista exacta de patrones que excluye y su precede
 → Los recursos MCP/rules/skills/etc. tienen scope: `project` | `user` | `workspaces` | `team` | `sources`.
 Y `workbench.desktop.main.js:694` (`_vi`) marca qué scopes existen por tipo:
 ```js
-function _vi(e,t){switch(e){
-  case"plugins": case"mcps": return!0;
-  case"rules": case"commands": return!0;
-  case"skills": case"agents": case"hooks": return t!=="team";
-  default: return!1}}
+> [recortado: 5 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 → **los hooks, skills y agents NO tienen scope "team"** en esta versión: el scope `team` queda
 excluido para ellos (`return t!=="team"`). Dato útil y **copiable tal cual**.

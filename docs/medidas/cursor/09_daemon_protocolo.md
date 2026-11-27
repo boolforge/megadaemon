@@ -19,19 +19,7 @@ Copiados en `contratos/ficheros/`.
 
 `dist/bin/daemon.js`:
 ```js
-#!/usr/bin/env node
-import "./stdio-errors-at-start.js";
-import "./environment-file-at-start.js";
-import "./backend-endpoint-at-start.js";
-import "./orbit-build-guard.js";
-import "./data-sink-at-start.js";
-import "./client-machine-id-at-start.js";
-import { runDaemonProcess } from "../process/run-process.js";
-...
-delete process.env.NODE_COMPILE_CACHE;
-process.env.NODE_DISABLE_COMPILE_CACHE = "1";
-process.stderr.write(`agent-host-daemon entered at ${enteredAtMs.toFixed(1)}ms\n`);
-void runDaemonProcess(process.argv.slice(2)).then((exitCode)=>{ if(exitCode!==0) process.exit(exitCode); });
+> [recortado: 13 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 ### Flags y variables
@@ -45,10 +33,7 @@ void runDaemonProcess(process.argv.slice(2)).then((exitCode)=>{ if(exitCode!==0)
 `backend-endpoint.js` (fuente legible, literal):
 ```js
 export const BACKEND_URL_FLAG = "--backend-url";
-/** The variable every part of the daemon reads its backend from. */
-export const BACKEND_ENDPOINT_VARIABLE = "CURSOR_API_ENDPOINT";
-/** The backend a daemon with none named talks to. */
-const DEFAULT_BACKEND_ENDPOINT = "https://api2.cursor.sh";
+> [recortado: 5 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 Y la política de seguridad (**patrón muy copiable**), literal:
@@ -63,32 +48,13 @@ credenciales embebidas; (4) nunca http://; (5) nunca un host ajeno.
 
 `backend-endpoint.d.ts` — contrato de resolución:
 ```ts
-export interface AppliedBackendEndpoint {
-    /** Where the backend came from: the launcher's flag, the environment's
-     *  variable, or neither, which leaves the daemon on its default. */
-    readonly source: "flag" | "environment" | "default";
-    /** The backend the daemon talks to. */
-    readonly endpoint: string;
-}
+> [recortado: 7 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 ### `environment-file.d.ts` — contrato de variables de entorno (seguro)
 
 ```ts
-/** The only file names the daemon reads. The name is checked before the file is
- *  opened, so a mistyped path to an SSH key or a credentials file is refused
- *  without being read or deleted. */
-export declare const ENVIRONMENT_FILE_NAME: RegExp;
-/** Names outside this are skipped: Bash's exported functions (`BASH_FUNC_x%%`) and the like. */
-export declare const PORTABLE_VARIABLE_NAME: RegExp;
-/** Read by Node, libuv or OpenSSL, wholly or in part, only while a process starts.
- *  From the file they reach the daemon's children but not the daemon. */
-export declare const STARTUP_VARIABLES: ReadonlySet<string>;
-
-export declare function takeEnvironmentFile(path: string, options?: TakeEnvironmentFileOptions): EnvironmentFileContents;
-export declare function applyEnvironmentFile(argv: readonly string[], env: Record<string,string|undefined>, options?: TakeEnvironmentFileOptions): AppliedEnvironmentFile | undefined;
-export declare function openVerifiedEnvironmentFile(path: string, linkStats: Stats, uid: number): number;
-export declare function deleteOpenFile(path: string, fd: number): void;
+> [recortado: 14 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 Invariantes (del doc comment):
@@ -112,12 +78,7 @@ MegaDaemon (que también reparte claves a workers).
 
 `daemon.cjs:14993` — el daemon implementa un endpoint **stateless** (Streamable HTTP MCP):
 ```js
-function readJsonRpcPost(input2,init,endpoint){
-  if((init?.method??"GET").toUpperCase()!=="POST"||typeof init?.body!=="string"||!targetsEndpoint(input2,endpoint))return void 0;
-  let parsed;try{parsed=JSON.parse(init.body)}catch{return void 0}
-  if(!isObject4(parsed)||parsed["jsonrpc"]!=="2.0")return void 0;
-  const method=typeof parsed["method"]==="string"?parsed["method"]:void 0;
-  return{message:parsed,method,isRequest:method!==void 0&&"id"in parsed}}
+> [recortado: 6 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 ### Mensajes
@@ -125,11 +86,7 @@ function readJsonRpcPost(input2,init,endpoint){
 `daemon.cjs:14906` — esquemas Zod exactos:
 ```js
 RequestIdSchema = union([string(), number().int()])
-JSONRPCRequestSchema = object({jsonrpc:literal(JSONRPC_VERSION), id:RequestIdSchema, ...RequestSchema.shape}).strict()
-JSONRPCNotificationSchema = object({jsonrpc:literal(JSONRPC_VERSION), ...NotificationSchema.shape}).strict()
-JSONRPCResultResponseSchema = object({jsonrpc:literal(JSONRPC_VERSION), id:RequestIdSchema, result:ResultSchema}).strict()
-JSONRPCErrorResponseSchema = object({jsonrpc:literal(JSONRPC_VERSION), id:RequestIdSchema.optional(),
-  error:object({code:number().int(), message:string(), data:unknown().optional()})}).strict()
+> [recortado: 6 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 ### Códigos de error JSON-RPC propios
@@ -147,15 +104,7 @@ autorización sin inventar un código.
 Extraídos del bundle (`daemon.cjs`):
 
 ```
-initialize            notifications/initialized    notifications/cancelled
-ping                  tools/list                   tools/call
-tools/common          tools/grep                   tools/mcp
-tools/read            tools/shell
-resources/list        resources/read               resources/subscribe
-resources/unsubscribe prompts/list                 prompts/get
-server/discover       notifications/progress        notifications/message
-tasks/list            tasks/get                    tasks/result
-tasks/cancel
+> [recortado: 9 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 Citados:
@@ -184,9 +133,7 @@ MegaDaemon ya tiene `protocol.rs`; esto encaja como un `TaskEnvelope`.
 `daemon.cjs:14995`:
 ```js
 bodyMessage.params = {...params, _meta:{...meta3,
-  [META_PROTOCOL_VERSION]: STATELESS_MCP_PROTOCOL_VERSION,
-  [META_CLIENT_CAPABILITIES]: hello.capabilities,
-  [META_CLIENT_INFO]: hello.clientInfo}}
+> [recortado: 4 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 → Los clientes/daemons se identifican en `_meta` con `protocolVersion`, `capabilities`, `clientInfo`.
 **Es el handshake de MCP**, pero con un campo `_meta` propio de Cursor.
@@ -198,20 +145,7 @@ bodyMessage.params = {...params, _meta:{...meta3,
 `daemon.cjs:13924` — el daemon habla con un RPC de computer-use (macOS) por el mismo formato:
 ```js
 const response = await this.sendWithRelaunchRetry(ctx,()=>{
-  const startedAtEpochSeconds = Date.now()/1e3;
-  const sessionId = this.activeSessionId;
-  return{
-    id: requestID,
-    method:"tools/call",
-    requestID: randomUUID(),
-    name: name17,
-    arguments: args,
-    timeoutSeconds: timeoutMs/1e3,
-    startedAtEpochSeconds,
-    deadlineEpochSeconds: startedAtEpochSeconds + timeoutMs/1e3,
-    mode: this.mode,
-    ...(sessionId!==void 0&&{sessionId})
-  }}, name17);
+> [recortado: 15 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 → **Overhead de sesión con deadlines explícitos** (`timeoutSeconds`, `startedAtEpochSeconds`,
@@ -225,14 +159,7 @@ MegaDaemon debería adoptar: el deadline viaja en el mensaje, no se recalcula en
 `daemon.cjs:3647` — constantes literales:
 ```js
 AGENT_RETRY_CAPS = {serverCap:3, transportCap:10};
-AGENT_RETRY_TRANSPORT_CAP_IN_TEST = 2;
-STALL_RETRY_BUDGET_MS = 3*60*1e3;      // 3 min
-RATE_LIMIT_RETRY_BUDGET_MS = 5*60*1e3; // 5 min
-RETRY_BUDGET_BY_KIND = {
-  alpn_failure:"server", poll_seqno_gap:"server", append_fatal:"by_signature",
-  http_464:"server", http_404_unimplemented:"server", socket_reset:"transport",
-  stream_closed_early:"server", idle_deadline:"server", stall:"transport", other:"server"}
-MAX_RETRIES_CEILING = 100
+> [recortado: 9 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 → **Copiar tal cual**: dos tapas (server / transport), presupuestos temporales por tipo de fallo,
@@ -252,22 +179,7 @@ Los comandos del daemon llegan al backend por **ConnectRPC** (`@connectrpc/conne
 
 `cursor-mcp/dist/main.js:212`, `RequestContext`:
 ```
-RequestContext|2 rules #0*|4 env #1|6 repository_info #2*|7 tools #3*|
-8 conversation_notes_listing 9?|9 shared_notes_listing 9?|11 git_repos #4*|
-13 project_layouts #5*|14 mcp_instructions #6*|15 debug_mode_config 7?|
-16 cloud_rule 9?|17 web_search_enabled 8?|18 skill_options 8?|
-19 repository_info_should_query_prod 8?|20 file_contents 9,9|21 user_intent_summary 9?|
-22 custom_subagents #9*|23 mcp_file_system_options 10?|24 web_fetch_enabled 8?|
-25 hooks_additional_context 9?|26 commit_attribution_message 9?|27 pr_attribution_message 9?|
-28 hooks_config #11?|29 agent_skills #12*|30 precomputed_human_changes #13*|
-31 recently_added_plugin #14?|32 supports_mcp_auth 8?|33 git_repo_info_complete 8?|
-34 mcp_meta_tool_options 15?|35 read_lints_enabled 8?|36 mcp_info_complete 8?|
-37 non_file_rules #0*|38 matched_installed_plugin #16?|39 rules_info_complete 8?|
-40 env_info_complete 8?|41 repository_info_complete 8?|42 custom_subagents_info_complete 8?|
-43 agent_skills_info_complete 8?|44 mcp_file_system_info_complete 8?|45 git_status_info_complete 8?|
-46 user_permissions_auto_run #17?|47 project_permissions_auto_run #17?|48 admin_permissions_auto_run #17?|
-49 disabled_team_rules 9*|50 search_conversations_enabled 8?|51 send_message_enabled 8?|
-52 admin_command_denylist 9*|53 system_prompt_override #18?
+> [recortado: 16 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 **Esto ES el contrato de "qué entra al prompt"** (punto 6 del encargo). C.campos clave:

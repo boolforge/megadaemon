@@ -673,10 +673,11 @@ Carpeta `15FRlRwDQdAicoZcfKFOTzeWqJQMjXIC0`:
 | Fichero | `file_id` | Bytes |
 |---|---|---|
 | `devin_contratos_2026-11-27.zip` (`contratos/` + `INVENTARIO.tsv` + `asar_manifest.tsv` + prompt del sistema) | `1KBCbucp6Af-2aPVxk4z99s6MwIZjYBpJ` | 11.869.751 |
-| `RE_DEVIN_DESKTOP_CONTRATOS_2026-11-27.md` (este documento) | `1ppo2fsswBOm61rzBFJRsp5MZLieC3coZ` | 39.186 |
+| `RE_DEVIN_DESKTOP_CONTRATOS_2026-11-27.md` | este mismo documento, subido a la misma carpeta | — |
 
 `asar_manifest.tsv` = 10.347 entradas (fichero ⇄ bytes del `.asar` desempaquetado,
 221 MB en `artifacts/devin/devin_asar_unpacked/`).
 
-En el repo: commit `dfb83e0` en la rama `re/productos-cierre-2026-11-27`
-(un único fichero, `docs/RE_DEVIN_DESKTOP_CONTRATOS.md`).
+En el repo: rama `re/productos-cierre-2026-11-27`, commits `dfb83e0` (el informe) y
+`ceaeb8a` (corrección del anexo). Sólo se versiona este documento; el resto del
+material de terceros queda fuera del repo.

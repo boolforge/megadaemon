@@ -10,11 +10,7 @@ El bundle está minificado pero **los literales de string sobreviven**, así que
 Cita literal (línea 719):
 
 ```js
-function I6u(e,t){switch(t){
-  case"readToolCall":return"read_file_v2";
-  case"deleteToolCall":return"delete_file";
-  ...
-}}
+> [recortado: 5 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 ### Tabla `caso proto → nombre de tool en el cable`
@@ -101,13 +97,7 @@ function I6u(e,t){switch(t){
 `workbench.desktop.main.js:719`:
 ```js
 case"mcpToolCall":{
-  if(e.tool.case==="mcpToolCall"){
-    const i=e.tool.value.args,
-          n=i?.providerIdentifier||"",
-          r=i?.toolName||i?.name||"";
-    return`mcp-${n}-${r}`
-  }
-  return"mcp"}
+> [recortado: 8 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 → El nombre de una tool MCP es **`mcp-<providerIdentifier>-<toolName>`**. Ej: `mcp-github-create_issue`.
 → Esto **encaja exactamente** con la convención `mcp__server__tool` de Claude Code, pero con guiones.
@@ -135,47 +125,13 @@ Razón: la petición `RequestContext` (`cursor-mcp/dist/main.js:212`) lleva los 
 
 ```js
 ToolSchema=object({
-  ...BaseMetadataSchema.shape,          // name, title
-  ...IconsSchema.shape,
-  description:string().optional(),
-  inputSchema:object({
-    type:literal("object"),
-    properties:record(string(),AssertObjectSchema).optional(),
-    required:array(string()).optional()
-  }).catchall(unknown()),
-  outputSchema:object({
-    type:literal("object"),
-    properties:record(string(),AssertObjectSchema).optional(),
-    required:array(string()).optional()
-  }).catchall(unknown()).optional(),
-  annotations:ToolAnnotationsSchema.optional(),
-  execution:ToolExecutionSchema.optional(),
-  _meta:record(string(),unknown()).optional()
-})
-
-ToolAnnotationsSchema=object({
-  title:string().optional(),
-  readOnlyHint:boolean().optional(),
-  destructiveHint:boolean().optional(),
-  idempotentHint:boolean().optional(),
-  openWorldHint:boolean().optional()
-})
-
-ToolExecutionSchema=object({
-  taskSupport:_enum(["required","optional","forbidden"]).optional()
-})
+> [recortado: 30 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 `CallToolResultSchema` (`daemon.cjs:14919`):
 ```js
 CallToolResultSchema=ResultSchema.extend({
-  content:array(ContentBlockSchema).default([]),
-  structuredContent:record(string(),unknown()).optional(),
-  isError:boolean().optional()
-})
-CallToolRequestParamsSchema=TaskAugmentedRequestParamsSchema.extend({
-  name:string(), arguments:record(string(),unknown()).optional()
-})
+> [recortado: 8 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 ---
@@ -188,12 +144,7 @@ CallToolRequestParamsSchema=TaskAugmentedRequestParamsSchema.extend({
 
 ```js
 case"fileNotFound":  return`File not found: ${t.result.value.path}`;
-case"notFile":       {const i=t.result.value; return`Not a file (${i.actualType}): ${i.path}`}
-case"permissionDenied": return`Permission denied: ${t.result.value.path}`;
-case"fileBusy":      return`File busy: ${t.result.value.path}`;
-case"rejected":      return`Delete rejected: ${t.result.value.reason}`;
-case"error":         return t.result.value.error||"Unknown error";
-case"success":       return null;
+> [recortado: 7 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 → **Copia tal cual**: es una taxonomía de errores de fichero ideal para un daemon

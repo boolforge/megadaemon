@@ -11,54 +11,13 @@ Cita literal de la línea **212** (el fichero tiene 213 líneas, minificado a un
 
 ```js
 const Ga=Aa({type:La(literal("stdio")),
-  command:Pa(),
-  args:La(Ra(Pa())),
-  env:La(Ua(Pa(),Pa())),
-  envFile:La(Pa()),
-  cwd:La(Pa()),
-  enabledTools:La(Ra(Pa())),
-  startupTimeoutSec:La(number().check(...))});      // con .catch(default)
-
-const Xa=Aa({type:La(Fa(["http","sse"])),
-  url:Pa(),
-  headers:La(Ua(Pa(),Pa())),
-  auth:La(Va),
-  tls:La(Ka),
-  placement:La(Fa(["server","client"])),
-  enabledTools:La(Ra(Pa()))});
-
-const Qa=Ja([Ga,Xa]);            // union
-Aa({mcpServers:Ua(Pa(),Qa)});     // Record<string, Server>
+> [recortado: 19 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 Traducido a JSON Schema:
 
 ```jsonc
-{
-  "mcpServers": {
-    "<nombre>": {
-      // ── variante stdio ──
-      "type": "stdio",
-      "command": "string",              // obligatorio
-      "args": ["string"],               // opcional
-      "env": { "<K>": "<V>" },          // opcional
-      "envFile": "string",              // opcional
-      "cwd": "string",                  // opcional
-      "enabledTools": ["string"],       // opcional
-      "startupTimeoutSec": 0            // opcional (número, con valor por defecto)
-
-      // ── variante http/sse ──
-      // "type": "http" | "sse",
-      // "url": "string",                // obligatorio
-      // "headers": { "<K>": "<V>" },    // opcional
-      // "auth": { "CLIENT_ID": "string", "CLIENT_SECRET": "string?",
-      //            "scopes": ["string"]?, "redirectUris": ["string"]? },
-      // "tls": { "caBundle": "string" },
-      // "placement": "server" | "client",
-      // "enabledTools": ["string"]
-    }
-  }
-}
+> [recortado: 25 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 ### Tabla campo por campo
@@ -146,14 +105,7 @@ function UJg(e){return Object.keys(e??{}).some(t=>t.toLowerCase()==="authorizati
 
 ```js
 _w = jc(Mc.proto3, gw, "McpServerTransport",
-  [[0,"UNSPECIFIED"],[1,"STDIO"],[2,"HTTP"]], 1)
-
-vw = jc(Mc.proto3, gw, "McpPolicyBlockedReason",
-  [[0,"UNSPECIFIED"],[1,"MCP_SERVERS_OFF"],[2,"MCP_ALLOWLIST"],
-   [3,"CLOUD_AGENT_ALLOWLIST"],[4,"DENYLIST"],[5,"APPLIES_TO"],[6,"TOOL_ACCESS"]], 1)
-
-ww = jc(Mc.proto3, gw, "McpRefreshPolicy",
-  [[0,"UNSPECIFIED"],[1,"FORCE_IF_MISSING"],[2,"FORCE"]], 1)
+> [recortado: 9 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 > Nota: el proto tiene `STDIO` y `HTTP` (2 valores) mientras que el **fichero de config** tiene `stdio`/`http`/`sse` (3 valores). El `sse` es legacy solo del cliente.
@@ -162,14 +114,7 @@ ww = jc(Mc.proto3, gw, "McpRefreshPolicy",
 
 `cursor-mcp/dist/main.js:212`:
 ```js
-class bw extends yw{constructor(e){super(),
-  this.name="", this.args={}, this.toolCallId="", this.providerIdentifier="",
-  this.toolName="", this.smartModeApprovalOnly=!1, this.skipApproval=!1,
-  this.serverIdentifier="", this.symbolicPathArguments=[], this.argumentsRepaired=!1,
-  this.refuseSavedSecrets=!1, ...}}
-static $(){return["McpArgs|1 name 9|2 args 9,#0|3 tool_call_id 9|4 provider_identifier 9|
-  5 tool_name 9|6 smart_mode_approval_only 8|7 skip_approval 8|8 server_identifier 9|
-  9 symbolic_path_arguments 9*|10 arguments_repaired 8|11 refuse_saved_secrets 8"]}}
+> [recortado: 8 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 Campos notables:
@@ -182,12 +127,7 @@ Campos notables:
 
 `cursor-agent-host/.../daemon.cjs:3647`:
 ```js
-function mcpToolDefinitionsToProto(mcpTools){
-  return new McpTools({mcpTools:mcpTools.map(tool=>({
-    name:tool.name, providerIdentifier:tool.providerIdentifier, toolName:tool.toolName,
-    description:tool.description,
-    inputSchema:tool.inputSchema?Value.fromJson(tool.inputSchema):void 0,
-    outputSchemaJson:tool.outputSchema!==void 0?JSON.stringify(tool.outputSchema):void 0}))})}
+> [recortado: 6 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 ---
@@ -198,19 +138,7 @@ function mcpToolDefinitionsToProto(mcpTools){
 `contratos/ficheros/permissions.schema.json`:
 
 ```jsonc
-{
-  "mcpAllowlist": ["<server>:<tool>", "<server>:*", "*:<tool>", "*:*"],
-  "terminalAllowlist": ["<patrón de comando>"],
-  "approvalMode": "allowlist" | "unrestricted" | "manual",
-  "autoRun": {
-    "allow_instructions": ["..."],
-    "block_instructions": ["..."]
-  },
-  "autoReview": {
-    "allow_instructions": ["..."],
-    "block_instructions": ["..."]
-  }
-}
+> [recortado: 13 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 Cita literal del patrón de allowlist:
@@ -233,14 +161,7 @@ Patrón regex del ítem:
 
 ```jsonc
 "disableAllMcpServers": { "type": "boolean",
-  "description": "When true, block every user and team MCP server for agents using this environment. Cursor built-in MCP servers are never restricted. An empty mcpServerAllowlist alone does not disable MCP." },
-
-"mcpServerAllowlist": [{
-  "name": "string",
-  "serverUrl": "string",     // HTTP MCP, por patrón de URL/dominio
-  "command": "string",       // stdio MCP, por patrón de comando
-  "toolAllowlist": ["string"]
-}],
+> [recortado: 9 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 Con `anyOf: [{required:["serverUrl"]}, {required:["command"]}]` y `additionalProperties: false`.
 

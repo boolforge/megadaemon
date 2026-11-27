@@ -6,16 +6,7 @@
 
 ```js
 vRt = UJ(".claude/skills")
-_Rt = UJ(".codex/skills")
-SRt = UJ(".grok/skills")
-jwe = UJ(".claude/plugins")
-bGn = UJ(".cursor/skills")
-CQe = UJ(".agents/skills")
-CGn = UJ(".cursor/agents")
-b$a = UJ(".cursor/plugins")
-C$a = UJ(".cursor/plugins/cache")
-k$a = UJ(".claude/plugins/cache")
-YG  = UJ(".cursor/skills-cursor")
+> [recortado: 11 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 → Cursor lee **skills de 4 ecosystems distintos** (`.claude/`, `.codex/`, `.grok/`, `.agents/`) más el suyo.
@@ -54,11 +45,7 @@ Evidencia de `~/.cursor/agents`: `workbench.desktop.main.js:832` —
 `workbench.desktop.main.js:18381` (`s7c`):
 
 ```js
-function s7c(e){return e?"global"in e&&e.global?"global"
-  :"fileGlobbed"in e&&e.fileGlobbed?"fileGlobbed"
-  :"agentFetched"in e&&e.agentFetched?"agentFetched"
-  :"manuallyAttached"in e&&e.manuallyAttached?"manuallyAttached"
-  :"none":"none"}
+> [recortado: 5 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 | Tipo | Significado |
@@ -83,41 +70,19 @@ Campos completos del objeto regla (`workbench.desktop.main.js:18381`, `kxm` los 
 `workbench.desktop.main.js:18387-18390`:
 
 ```js
-async updateRule(e,t,i){
-  ...
-  const r=i?.alwaysApply??!0, s=[];
-  i?.description!==void 0&&s.push(`description: ${i.description}`),
-  i?.globs&&s.push(`globs: ${i.globs}`),
-  s.push(`alwaysApply: ${r?"true":"false"}`);
-  const o=`---
-${s.join(`
-`)}
----
-${t.trimEnd()}`
+> [recortado: 11 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 → Formato exacto:
 
 ```
----
-description: <texto>
-globs: <glob[, glob...]>
-alwaysApply: true|false
----
-<markdown del cuerpo>
+> [recortado: 6 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 ### Lectura (parser de frontmatter) — `workbench.desktop.main.js:18715`, función `Usg`
 
 ```js
-function Usg(e){
-  const t={description:"", globs:"", alwaysApply:!1, attachToBackgroundAgents:!1,
-           "metadata.environments":[], "metadata.disabledEnvironments":[]};
-  ...
-  d&&u&&(d==="alwaysApply"||d==="attachToBackgroundAgents"
-        ? t[d]=u==="true"
-        : (d==="description"||d==="globs")&&(t[d]=u))
-  return t}
+> [recortado: 8 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 Claves aceptadas en el frontmatter de una regla:
@@ -144,16 +109,7 @@ Detalles del parser (útiles para reimplementarlo):
 `molten/dist/engine/engine.cjs:4729` (función `pki`):
 
 ```js
-async function pki(r,e){
-  let t=await r.readText(e);
-  if(t===null)return null;
-  if(!e.endsWith(".mdc"))return{fullPath:e,content:t,description:"",alwaysApply:!0,globs:[]};
-  let n=FXn(t);
-  return n===null?null:{fullPath:e,content:n.body,
-    description:Ng(qXn(n.frontmatter)),
-    alwaysApply:n.frontmatter.alwaysApply===!0,
-    globs:UXn(n.frontmatter.globs)};
-}
+> [recortado: 10 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 → **Un `.md` sin frontmatter es SIEMPRE `alwaysApply:true` con `globs:[]`.**
@@ -192,12 +148,7 @@ Fuente: `extensions/cursor-agent-exec/dist/main.js:213` y `:8`.
 
 Normalización de arrays (`cursor-agent-exec/dist/main.js:213`, función `D_`):
 ```js
-function D_(e){
-  if(Array.isArray(e)){const t=e.filter(t=>"string"==typeof t&&t.length>0);
-    return 0===t.length?void 0:t}
-  if("string"==typeof e){const t=e.split(",").map(t=>t.trim()).filter(t=>t.length>0);
-    return 0===t.length?void 0:t}
-}
+> [recortado: 6 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 → **acepta array o CSV** en el mismo campo. Muy copiable.
 
@@ -206,11 +157,7 @@ function D_(e){
 `cursor-agent-exec/dist/main.js:213`:
 
 ```js
-`Name is ${ec(o.length)} characters; the limit is 64. Rename the skill's folder.`
-'Name should be lowercase letters and numbers joined by single hyphens, like "pdf-helper". Rename the skill\'s folder.'
-`Frontmatter name ${JSON.stringify(t)} doesn't match the folder name ${JSON.stringify(o)}, which is the name the skill goes by. Make them the same.`
-`Description is ${ec(i)} characters; the limit is ${ec(1024)}.`
-`Body is about ${ec(a)} tokens; the recommended limit is ${ec(5e3)}. Move details into reference files that SKILL.md links to.`
+> [recortado: 5 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 Y (`molten/dist/engine/engine.cjs:4729`):
@@ -251,26 +198,14 @@ En MegaDaemon ya existe un parser propio en `rust-core/src/skills.rs` (subconjun
 Fuente: `extensions/cursor-mcp/dist/main.js:212`.
 
 ```js
-class qv extends Av{constructor(e){super(),
-  this.fullPath="", this.name="", this.description="", this.tools=[],
-  this.model="", this.prompt="", this.permissionMode=Mv.UNSPECIFIED,
-  this.isBackground=!1, this.forceDefaultModel=!1, ...}}
-static $(){return["CustomSubagent|1 full_path 9|2 name 9|3 description 9|4 tools 9*|
-  5 model 9|6 prompt 9|7 permission_mode #0|8 is_background 8|9 plugin 9?|10 marketplace 9?|
-  11 plugin_id 9?|12 marketplace_id 9?|13 force_default_model 8|14 source 9?",Mv]}}
+> [recortado: 7 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 ### Enums
 
 ```js
 Mv = jc(Mc.proto3, Nv, "CustomSubagentPermissionMode",
-  [[0,"UNSPECIFIED"],[1,"DEFAULT"],[2,"READONLY"],[3,"AGENT_ONLY"]], 1)
-Jv = jc(Mc.proto3, Nv, "SubagentExecutionEnvironment",
-  [[0,"UNSPECIFIED"],[1,"LOCAL"],[2,"CLOUD"]], 1)
-Dv = jc(Mc.proto3, Nv, "SubagentBackgroundReason",
-  [[0,"UNSPECIFIED"],[1,"AGENT_REQUEST"],[2,"USER_REQUEST"],[3,"QUEUED_FOLLOW_UP"]], 1)
-Uv = jc(Mc.proto3, Nv, "TaskMode",
-  [[0,"UNSPECIFIED"],[1,"AGENT"],[2,"PLAN"]], 1)
+> [recortado: 8 lineas; la copia integra esta en la Drive privada, `cursor-3.32.4-contratos/`]
 ```
 
 ### Tabla de campos
