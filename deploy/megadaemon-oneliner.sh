@@ -278,6 +278,23 @@ r() {
   fi
 }
 
+# --- preguntas y ejecuciones sobre rutas de ROOT ---------------------------
+# MEDIDO (2026-11-27, móvil SM-G998B): /data/adb es 0700 (sólo root).  Con el
+# script corriendo como usuario normal, `[ -f "$PREFIX/..." ]` da FALSO
+# SIEMPRE y ejecutar "$DAEMON" da "Permission denied".  Eso producía cuatro
+# bugs reales, todos vistos en el móvil:
+#   * "el bundle no trae el binario" con el bundle CORRECTO delante
+#     (el bundle sí traía bin/megadaemon-core: 13.101.098 B, sha256 OK);
+#   * sin idempotencia: reinstalaba y cambiaba la URL del túnel en cada
+#     ejecución (el bug más caro de este script);
+#   * sin copia de seguridad: el rollback no tenía de qué volver;
+#   * un diagnóstico que siempre decía "NO INSTALADO".
+# Toda pregunta, lectura y ejecución sobre rutas de root se hace COMO ROOT.
+existe()     { r "test -e '$1'" >/dev/null 2>&1; }
+ejecutable() { r "test -x '$1'" >/dev/null 2>&1; }
+# Ejecuta el daemon COMO ROOT (vive en $PREFIX, que es de root).
+daemon()     { r "'$DAEMON' $*" 2>&1; }
+
 # ===========================================================================
 # 1) HTTP (tres capas: curl, wget, el daemon)
 # ===========================================================================
@@ -294,8 +311,8 @@ descargar() {
   fi
   # Capa 3: el propio daemon (HTTP nativo en Rust). Ya está instalado ⇒
   # no necesita nada externo.
-  if [ -x "$DAEMON" ]; then
-    "$DAEMON" probe "$d_url" >/dev/null 2>&1
+  if ejecutable "$DAEMON"; then
+    daemon probe "$d_url" >/dev/null 2>&1
     if command -v md-curl >/dev/null 2>&1; then
       md-curl -o "$d_dest" "$d_url" >/dev/null 2>&1 && return 0
     fi
@@ -334,8 +351,8 @@ codigo_http() {
     return 0
   fi
   # Sin downloader: el daemon sabe hacerlo (HTTP nativo).
-  if [ -x "$DAEMON" ]; then
-    printf '%s' "$("$DAEMON" probe "$c_url" 2>/dev/null | tr -d ' \r\n')"
+  if ejecutable "$DAEMON"; then
+    printf '%s' "$(daemon probe "$c_url" | tr -d ' \r\n')"
     return 0
   fi
   printf '0'
@@ -439,11 +456,14 @@ verificar_sha() {
 
 # sha16 de un fichero (para el informe: identificador, no secreto).
 sha16_de() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" 2>/dev/null | cut -c1-16
-  else
-    r "'$DAEMON' hash '$1' 2>/dev/null" | tr -d '\r\n ' | cut -c1-16
+  # MEDIDO (2026-11-27, movil): sha256sum del usuario normal NO puede leer
+  # un fichero de /data/adb (0700) => salia vacio.  Ahora, si falla, se
+  # pregunta al daemon COMO ROOT.
+  if command -v sha256sum >/dev/null/2>&1 || command -v sha256sum >/dev/null 2>&1; then
+    h=$(sha256sum "$1" 2>/dev/null | cut -c1-16)
+    [ -n "$h" ] && { printf '%s' "$h"; return 0; }
   fi
+  r "'$DAEMON' hash '$1' 2>/dev/null" | tr -d '\r\n ' | cut -c1-16
 }
 
 # ===========================================================================
@@ -522,8 +542,8 @@ health_local() {
 tunel_responde() {
   t_u="$1"
   case "$t_u" in https://*) ;; *) return 1 ;; esac
-  if [ -x "$DAEMON" ]; then
-    "$DAEMON" telemetria sonda "$t_u" >/dev/null 2>&1 && return 0
+  if ejecutable "$DAEMON"; then
+    daemon telemetria sonda "$t_u" >/dev/null 2>&1 && return 0
   fi
   t_c=$(codigo_http "$t_u")
   case "$t_c" in 200|401|403) return 0 ;; esac
@@ -712,23 +732,23 @@ diagnostico() {
   say "--- binario ---"
   DIAG_BIN_SZ=0
   DIAG_BIN_SHA=""
-  if [ -x "$DAEMON" ]; then
-    DIAG_BIN_SZ=$(wc -c < "$DAEMON" 2>/dev/null | tr -d ' ')
+  if ejecutable "$DAEMON"; then
+    DIAG_BIN_SZ=$(r "wc -c < '$DAEMON'" | tr -d ' \r\n ')
     DIAG_BIN_SHA=$(sha16_de "$DAEMON")
     say "  $DAEMON ($DIAG_BIN_SZ B, sha16 ${DIAG_BIN_SHA:-?})"
   else
     warn "  NO INSTALADO"
   fi
-  if [ -f "$DAEMON.prev" ]; then
+  if existe "$DAEMON.prev"; then
     say "  hay respaldo (.prev, sha16 $(sha16_de "$DAEMON.prev"))"
   fi
 
   say "--- stack ---"
   for f in 99-megadaemon.sh 97-megadaemon-keeper.sh 98-cloudflared.sh 91-adb-tcp.sh; do
     p="/data/adb/service.d/$f"
-    if [ -f "$p" ]; then say "  $f: OK ($(wc -c < "$p" | tr -d ' ') B)"; else warn "  $f: FALTA"; fi
+    if existe "$p"; then say "  $f: OK ($(r "wc -c < '$p'" | tr -d ' \r\n ') B)"; else warn "  $f: FALTA"; fi
   done
-  if [ -f "$PREFIX/tunnel-watchdog.sh" ]; then
+  if existe "$PREFIX/tunnel-watchdog.sh"; then
     say "  tunnel-watchdog.sh: OK en el prefijo"
   else
     warn "  tunnel-watchdog.sh: FALTA en el prefijo"
@@ -742,14 +762,14 @@ diagnostico() {
   say "--- canal ---"
   DIAG_URL=""
   DIAG_QUICK=""
-  if [ -f "$STATE/tunnel.url" ]; then
-    DIAG_URL=$(cat "$STATE/tunnel.url" 2>/dev/null | tr -d '\r\n ')
+  if existe "$STATE/tunnel.url"; then
+    DIAG_URL=$(r "cat '$STATE/tunnel.url' 2>/dev/null" | tr -d '\r\n ')
     say "  tunnel.url: $DIAG_URL"
   else
     warn "  no hay $STATE/tunnel.url"
   fi
-  if [ -f "$STATE/channel.json" ]; then
-    DIAG_QUICK=$(sed -n 's/.*"quick"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$STATE/channel.json" 2>/dev/null | head -1)
+  if existe "$STATE/channel.json"; then
+    DIAG_QUICK=$(r "cat '$STATE/channel.json' 2>/dev/null" | sed -n 's/.*"quick"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
     say "  channel.json: quick=${DIAG_QUICK:-vacío}"
   else
     warn "  no hay $STATE/channel.json"
@@ -764,7 +784,7 @@ diagnostico() {
 
   say "--- credenciales (0600; nunca se imprimen) ---"
   DIAG_DRIVE=false
-  if [ -f "$STATE/gdrive_credentials.json" ]; then
+  if existe "$STATE/gdrive_credentials.json"; then
     DIAG_DRIVE=true
     say "  Drive: credenciales presentes ($(wc -c < "$STATE/gdrive_credentials.json" | tr -d ' ') B)"
   else
@@ -791,8 +811,8 @@ diagnostico() {
   done
 
   say "--- canal del daemon ---"
-  if [ -x "$DAEMON" ]; then
-    "$DAEMON" telemetria conexion 2>/dev/null | head -18 | sed 's/^/  /'
+  if ejecutable "$DAEMON"; then
+    daemon telemetria conexion | head -18 | sed 's/^/  /'
   fi
 
   # Datos para el informe JSON.
@@ -823,7 +843,7 @@ instalar() {
   # Si ya está instalado Y el túnel responde, NO se toca nada: matar el
   # daemon y relanzar cloudflared cambiaría el hostname y ciegaría a la flota
   # en cada reejecución (el bug más caro de este script).
-  if [ "$FORCE" != "1" ] && [ -x "$DAEMON" ]; then
+  if [ "$FORCE" != "1" ] && ejecutable "$DAEMON"; then
     URL0=$(r "cat '$STATE/tunnel.url' 2>/dev/null" | tr -d '\r\n ')
     if [ -n "$URL0" ] && tunel_responde "$URL0"; then
       say "ya está instalado y el túnel responde ($URL0): no toco nada."
@@ -918,7 +938,7 @@ instalar() {
 
   say "=== 3/8 instalando (atómico, con rollback) ==="
   BACKUP=""
-  if [ -f "$DAEMON" ]; then
+  if existe "$DAEMON"; then
     BACKUP="$PREFIX/megadaemon-core.prev"
     r "cp -f '$DAEMON' '$BACKUP'" >/dev/null 2>&1 && say "respaldo del binario actual: $BACKUP"
   fi
@@ -937,17 +957,21 @@ instalar() {
   # Instalar el binario (del stage o del propio bundle).
   NUEVO=""
   for cand in "$STAGE/bin/megadaemon-core" "$STAGE/megadaemon-core" "$STAGE/megadaemon-movil/megadaemon-core"; do
-    [ -f "$cand" ] && { NUEVO="$cand"; break; }
+    ejecutable "$cand" && { NUEVO="$cand"; break; }
   done
   if [ -z "$NUEVO" ]; then
     NUEVO=$(r "find '$STAGE' -name 'megadaemon-core' -type f 2>/dev/null | head -1" | tr -d '\r\n')
   fi
-  [ -n "$NUEVO" ] && [ -f "$NUEVO" ] || {
+  # La comprobacion va COMO ROOT: /data/adb es 0700 y el usuario normal no
+  # puede ni mirar dentro.  MEDIDO (2026-11-27, movil): el bundle SI traia
+  # bin/megadaemon-core (13.101.098 B, sha256 verificado) y el instalador
+  # decia que no => no instalaba nada.
+  if [ -z "$NUEVO" ] || ! ejecutable "$NUEVO"; then
     r "rm -rf '$STAGE'" >/dev/null 2>&1
     informe_paso "instalar_binario" false "no viene en el bundle"
     informe_cierra
     die "el bundle no trae el binario (esperado: bin/megadaemon-core)"
-  }
+  fi
   # .new + mv (atómico en el MISMO sistema de ficheros) + ejecutable.
   # Nunca se copia ENCIMA del binario en ejecución: si el móvil se duerme a
   # mitad, el binario queda truncado y el móvil se queda sin daemon.
@@ -1106,13 +1130,13 @@ instalar() {
   fi
 
   say "=== 6/8 publicando el canal (repo + relé + paste + Drive) ==="
-  if [ -x "$DAEMON" ]; then
+  if ejecutable "$DAEMON"; then
     r "'$DAEMON' channel publish" 2>/dev/null | head -12 | sed 's/^/  /'
   fi
   # El REPO (Contents API: NO cachea en CDN) es el punto canónico de
   # descubrimiento: sin esto, cuando cambia el hostname del quick tunnel la
   # flota se queda ciega.  Lo publica `channel-publish --repo-publish`.
-  if [ -x "$PREFIX/channel-publish" ]; then
+  if ejecutable "$PREFIX/channel-publish"; then
     publico=0
     for t in "$PREFIX/.gh_token" "$PREFIX/github.token" "$STATE/.gh_token" "$STATE/github.token"; do
       [ -f "$t" ] || continue
@@ -1204,8 +1228,8 @@ case "$MODO" in
   instalar)         instalar ;;
   pc)               instalar_pc ;;
   solo-telemetria)
-    [ -x "$DAEMON" ] || die "el daemon no está instalado"
-    "$DAEMON" telemetria publicar
+    ejecutable "$DAEMON" || die "el daemon no está instalado"
+    daemon telemetria publicar
     "$DAEMON" telemetria conexion
     ;;
   *) die "modo desconocido: $MODO" ;;

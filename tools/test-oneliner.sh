@@ -219,6 +219,76 @@ grep -q 'NO cuadra' "$LAB/salida4.log" && ok "lo dice claramente" || mal "no exp
 say "8) el modo PC se detecta"
 grep -q 'instalar_pc()' "$LAB/oneliner.sh" && ok "el modo PC existe" || mal "el modo PC no existe"
 
+# ---------------------------------------------------------------------------
+# 9) EL BUG DEL PREFIJO DE ROOT (MEDIDO 2026-11-27 en el movil del usuario).
+#
+# En el movil /data/adb es 0700 (solo root) y el one-liner lo ejecuta un
+# usuario normal de Termux.  El bundle SI traia bin/megadaemon-core
+# (13.101.098 B, sha256 verificado) y el instalador decia "el bundle no trae
+# el binario" => no instalaba nada.  La causa: la comprobacion se hacia como
+# usuario normal (`[ -f ... ]`), que no puede ni mirar dentro de /data/adb.
+#
+# Aqui se reproduce de verdad: el prefijo es 0700 de root y el instalador
+# corre como un usuario NORMAL, escalando con un `su` de mentira (setuid).
+# ---------------------------------------------------------------------------
+say "9) prefijo 0700 de ROOT + instalador como usuario NORMAL (con escalada)"
+
+cat > "$LAB/fakesu.c" <<'EOF'
+/* `su` de mentira con escalada real: hace setuid(0) y ejecuta la orden.
+   Sólo vive en el laboratorio del test; no se instala en ningun movil. */
+#include <unistd.h>
+#include <stdio.h>
+int main(int argc, char **argv) {
+    if (setuid(0) != 0) { fprintf(stderr, "fakesu: sin privilegios\n"); return 1; }
+    if (argc >= 3 && argv[1][0] == '-') {   /* -c "cmd" */
+        execl("/bin/sh", "sh", "-c", argv[2], (char *)NULL);
+        return 127;
+    }
+    execvp(argv[1], argv + 1);
+    return 127;
+}
+EOF
+if cc -O2 -o "$LAB/su" "$LAB/fakesu.c" 2>/dev/null; then
+  chown root:root "$LAB/su" 2>/dev/null || true
+  chmod 4755 "$LAB/su"
+  id -u mdlab >/dev/null 2>&1 || useradd -m mdlab 2>/dev/null || true
+  PRIV="$LAB/priv"
+  rm -rf "$PRIV" "$LAB/home"
+  mkdir -p "$PRIV/state" "$LAB/home"
+  chown -R root:root "$PRIV"
+  chmod 700 "$PRIV" "$PRIV/state"
+  chown -R mdlab "$LAB/home" 2>/dev/null || true
+  # El instalador con el prefijo de root:
+  sed "s#/data/adb/megadaemon#$PRIV#g; s#/data/adb/service.d#$LAB/service.d#g; s#/data/data/com.termux/files/usr/bin#$LAB/termux#g" \
+    "$RAIZ/deploy/megadaemon-oneliner.sh" > "$LAB/oneliner_priv.sh"
+  chmod 755 "$LAB/oneliner_priv.sh"
+  : > "$MD_LOG"
+  su mdlab -s /bin/sh -c "cd '$LAB' && HOME='$LAB/home' PATH='$LAB':\"\$PATH\" MD_LAB='$LAB' MD_LOG='$MD_LOG' sh '$LAB/oneliner_priv.sh' --instalar --sin-telemetria" \
+    > "$LAB/salida_priv.log" 2>&1
+  RCP=$?
+  if grep -q 'no trae el binario' "$LAB/salida_priv.log"; then
+    mal "el bundle SI traía el binario y el instalador dijo que no (el bug de /data/adb 0700)"
+  else
+    ok "no confundió 'no puedo mirar dentro de /data/adb' con 'el bundle no lo trae'"
+  fi
+  [ "$RCP" = "0" ] && ok "instaló como usuario normal escalando a root (salida 0)" || mal "salida $RCP"
+  [ -x "$PRIV/megadaemon-core" ] && ok "el binario quedó instalado en el prefijo de root" || mal "el binario NO se instaló"
+  [ -f "$PRIV/state/tunnel.url" ] && ok "tunnel.url escrito en el estado de root" || mal "tunnel.url NO escrito"
+  # Idempotencia vista como usuario NORMAL: la 2ª vez NO debe reinstalar
+  # (el bug de `[ -x "$DAEMON" ]` hacía reinstalar siempre y cambiar la URL).
+  URLP1=$(cat "$PRIV/state/tunnel.url" 2>/dev/null)
+  su mdlab -s /bin/sh -c "cd '$LAB' && HOME='$LAB/home' PATH='$LAB':\"\$PATH\" MD_LAB='$LAB' MD_LOG='$MD_LOG' sh '$LAB/oneliner_priv.sh' --instalar --sin-telemetria" \
+    > "$LAB/salida_priv2.log" 2>&1
+  URLP2=$(cat "$PRIV/state/tunnel.url" 2>/dev/null)
+  [ "$URLP1" = "$URLP2" ] && ok "la 2ª ejecución NO cambió la URL (idempotencia real)" \
+                         || mal "la URL cambió ($URLP1 -> $URLP2): reinstala cada vez"
+  grep -q 'no toco nada' "$LAB/salida_priv2.log" \
+    && ok "la 2ª ejecución usó el atajo de idempotencia (no reinstala)" \
+    || mal "la 2ª ejecución reinstala: el chequeo de '$DAEMON' se hace sin root"
+else
+  mal "no se pudo compilar el `su` de mentira (sin cc): el escenario 9 no se ha comprobado"
+fi
+
 printf '\n===== RESULTADO: %s fallo(s) =====\n' "$FALLOS"
 [ "$FALLOS" = "0" ] || { echo "--- salida de la instalación ---"; tail -30 "$LAB/salida.log"; }
 exit "$FALLOS"
