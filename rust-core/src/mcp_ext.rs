@@ -3306,7 +3306,11 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         },
         // v16: RE masivo por app (worklist + analisis por unidad + digest).
         // Modulo propio: `mass_re.rs`.
-        "re_masivo" => Some(crate::mass_re::dispatch(args)),
+        // MEDIDO (2026-11-27, CI 46073417966): este brazo devolvía
+        // `Option<Value>` mientras que TODOS los demás devuelven `Value`
+        // ⇒ E0308 "match arms have incompatible types".  El `Some` sobra:
+        // el `match` entero se envuelve en `Some(r)` al final.
+        "re_masivo" => crate::mass_re::dispatch(args),
         // v14: decompilador DEX.  El agente externo de Android lo usa para
         // analizar APKs crudas sin invertir en Ghidra-DEX ni en smali.
         "dex_decompile" => match s("action").as_str() {

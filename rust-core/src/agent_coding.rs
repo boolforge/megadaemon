@@ -1668,6 +1668,34 @@ pub fn call_provider_messages_with(
         ));
     }
 
+    // MEDIDO (2026-11-27, CI 46073417966): este bloque usaba `parsed`,
+    // `final_content` y `tool_calls` SIN DEFINIR ⇒ E0425 ×9.  La v16 movió
+    // el parseo de la respuesta a `providers::parse_provider_reply` (función
+    // pura y testeada) y este módulo se quedó a medias.
+    //
+    // Ahora se usa ESE parseo: es el mismo que usa el chat del daemon ⇒ la
+    // paridad que pedía el comentario v16 de abajo es el mismo código, no
+    // una promesa.
+    let parsed = match crate::providers::parse_provider_reply(&provider.id, trimmed) {
+        Ok(p) => p,
+        Err(e) => {
+            return Err(crate::providers::redact_secret(
+                &format!("Provider API error ({}): {}", provider.id, e),
+                &api_key,
+            ))
+        }
+    };
+    let final_content = parsed.content.clone();
+    let tool_calls: Vec<ToolCall> = parsed
+        .tool_calls
+        .iter()
+        .map(|tc| ToolCall {
+            id: tc.id.clone(),
+            name: tc.name.clone(),
+            arguments: tc.arguments.clone(),
+        })
+        .collect();
+
     if final_content.is_empty() && tool_calls.is_empty() && parsed.reasoning.is_empty() {
         return Err(format!(
             "respuesta vacia del proveedor {} (finish_reason={})",

@@ -483,139 +483,126 @@ pub fn parse_provider_reply(provider: &str, body: &str) -> Result<ParsedReply, P
     })
 }
 
-/// Parsea las `tool_calls` nativas de OpenAI.
+/// Extrae las `tool_calls` nativas de un mensaje OpenAI.
+/// Construye la **cascada ordenada** de proveedores: el pedido primero y,
+/// detrás, los demás habilitados.
 ///
-/// **PÚBLICA a propósito** (MEDIDO 2026-11-27): `agent_coding.rs` la llama
-/// como `providers::parse_native_tool_calls(...)` para que el motor de
-/// codificación y el chat del daemon interpreten las `tool_calls`
-/// EXACTAMENTE igual (paridad).  La función faltaba en este modulo y el
-/// CI daba 5 errores E0425 ("cannot find function `parse_native_tool_calls`
-/// in module `providers`") que tumbaban los 3 builds y el job de calidad.
-/// Cuerpo restaurado del commit WIP `da1cf89` (el que la escribio).
-pub fn parse_native_tool_calls(msg_node: &Value) -> Vec<ParsedToolCall> {
-    let mut out = Vec::new();
-    let Some(arr) = msg_node.get("tool_calls").and_then(|c| c.as_array()) else {
-        return out;
-    };
-    for (idx, item) in arr.iter().enumerate() {
-        let id = item
-            .get("id")
-            .and_then(|i| i.as_str())
-            .filter(|s| !s.is_empty())
-            .map(String::from)
-            .unwrap_or_else(|| format!("call_native_{}", idx + 1));
-        let func = item.get("function").unwrap_or(item);
-        let Some(name) = func.get("name").and_then(|n| n.as_str()) else {
-            continue;
-        };
-        let arguments = match func.get("arguments") {
-            Some(Value::String(s)) => serde_json::from_str::<Value>(s).unwrap_or_else(|_| json!({})),
-            Some(Value::Object(_)) => func.get("arguments").cloned().unwrap_or_else(|| json!({})),
-            _ => json!({}),
-        };
-        out.push(ParsedToolCall {
-            id,
-            name: name.to_string(),
-            arguments,
-        });
-    }
-    out
-}
-
-/// Construye la cascada de candidatos y las notas para el usuario.
+/// MEDIDO (2026-11-27, CI 46073417966): `agent_coding.rs` delegaba aquí
+/// para que el motor de codificación y el chat del daemon usaran la MISMA
+/// cascada ("una sola fuente de verdad"), pero la función NO existía ⇒ E0425
+/// "cannot find function `build_candidates`".
 ///
-/// **PÚBLICA a propósito** (MEDIDO 2026-11-27): `agent_coding.rs` la llama
-/// como `providers::build_candidates(&vault, target_id, &policy)` para que
-/// el motor de codificacion use **la misma** cascada que el chat del daemon
-/// ("una sola fuente de verdad": antes el motor de codificacion tenia su
-/// propia y se comia proveedores RETIRADOS y de PAGO).  La funcion faltaba
-/// en este modulo y el CI daba 3 errores E0425 mas ("cannot find function
-/// `build_candidates` in module `providers`").
-/// Cuerpo restaurado del commit WIP `da1cf89` (el que la escribio).
-
-/// Construye la cascada de candidatos y las notas para el usuario.
+/// Reglas (v16, AUDIT-LLM-16-C):
+///  * el proveedor **pedido** va primero (se busca por id **o** por modelo:
+///    el LS de Antigravity pide "gemini-3.8-flash", no "google-ai-studio");
+///  * detrás entran los proveedores **habilitados** que no son locales
+///    (`auth_type` "local"/"hybrid");
+///  * un proveedor **retirado** no entra (ni pedido ni de rebote);
+///  * un proveedor **de pago** no entra en el FALLBACK salvo que la política
+///    lo permita: el pedido explícito sí se usa siempre (es lo que el usuario
+///    pidió), pero caerse a otro de pago **sin avisar** no.
 ///
-/// Devuelve `(candidatos, notas)`.  Las notas son **visibles**: el usuario
-/// tiene que saber si su proveedor fue descartado por estar deshabilitado,
-/// por estar retirado o por ser de pago.
+/// Devuelve `(candidatos, notas)`: las notas son legibles y van al cliente
+/// (nunca se salta a un proveedor de pago en silencio).
 pub fn build_candidates(
     vault: &ProviderVault,
     target_id: &str,
     policy: &ChatPolicy,
 ) -> (Vec<ProviderEntry>, Vec<String>) {
+    let mut out: Vec<ProviderEntry> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
-    let mut candidates: Vec<ProviderEntry> = Vec::new();
 
-    let requested = vault.providers.iter().find(|p| p.id == target_id);
-    match requested {
-        Some(p) => {
-            if let Some((_, rmodel, rnote)) = provider_catalog::is_retired(&p.id) {
-                notes.push(format!(
-                    "{} esta RETIRADO ({}): no se usa",
-                    p.id, rnote
-                ));
-            } else if provider_catalog::is_retired(&p.model).is_some() {
-                let (_, rmodel, rnote) = provider_catalog::is_retired(&p.model).unwrap();
-                notes.push(format!(
-                    "{} apunta al modelo RETIRADO {} ({}): no se usa",
-                    p.id, rmodel, rnote
-                ));
-            } else if !p.enabled {
-                // v16 (AUDIT-LLM-16-C): un proveedor deshabilitado se usaba
-                // igual si era el pedido.  Ahora no, y se avisa.
-                notes.push(format!("{} esta DESHABILITADO: no se usa", p.id));
-            } else {
-                candidates.push(p.clone());
-            }
-        }
-        None => {
-            notes.push(format!(
-                "el proveedor pedido '{}' no esta en la boveda: se usa la cascada",
-                target_id
-            ));
+    // El pedido: por id o por modelo.
+    if let Some(p) = vault
+        .providers
+        .iter()
+        .find(|p| p.id == target_id || p.model == target_id)
+    {
+        match candidato_valido(p, true, policy) {
+            Ok(()) => out.push(p.clone()),
+            Err(n) => notes.push(n),
         }
     }
 
+    // El resto de la cascada.
     for p in &vault.providers {
-        if p.id == target_id {
+        if out.iter().any(|c| c.id == p.id) {
             continue;
         }
-        if !p.enabled {
+        if !p.enabled || p.auth_type == "local" || p.auth_type == "hybrid" {
             continue;
         }
-        if p.auth_type == "local" || p.auth_type == "hybrid" {
-            continue;
+        match candidato_valido(p, false, policy) {
+            Ok(()) => out.push(p.clone()),
+            Err(n) => notes.push(n),
         }
-        // v16 (AUDIT-LLM-16-C): un proveedor RETIRADO no puede entrar en la
-        // cascada de reserva.  Antes entraba: la comprobación de "retirado"
-        // sólo se hacía sobre el modelo PEDIDO, no sobre los de reserva.
-        if provider_catalog::is_retired(&p.id).is_some()
-            || provider_catalog::is_retired(&p.model).is_some()
-        {
-            continue;
-        }
-        if !policy.allow_paid_fallback && !provider_catalog::tier_free(&p.tier) {
-            // v16 (AUDIT-LLM-16-C): el fallback NO gasta dinero sin que se
-            // pida.  Se anota para que el usuario lo sepa.
-            notes.push(format!(
-                "{} (tier {}) no entra en el fallback: es de pago",
-                p.id, p.tier
-            ));
-            continue;
-        }
-        candidates.push(p.clone());
     }
 
-    (candidates, notes)
+    (out, notes)
 }
 
-/// Extrae las `tool_calls` nativas de un mensaje OpenAI.
+/// ¿Este proveedor puede entrar en la cascada?  Si no, la nota del porqué.
+fn candidato_valido(p: &ProviderEntry, es_pedido: bool, policy: &ChatPolicy) -> Result<(), String> {
+    // v16 (DEFECTO-03): un proveedor RETIRADO no puede usarse de rebote.
+    if let Some((_, rmodel, _)) =
+        provider_catalog::is_retired(&p.id).or_else(|| provider_catalog::is_retired(&p.model))
+    {
+        return Err(format!("{} => SALTADO (modelo retirado: {})", p.id, rmodel));
+    }
+    // v16 (AUDIT-LLM-16-C): el fallback NO cae a un proveedor de pago sin
+    // permiso.  El pedido explícito sí (es lo que el usuario pidió).
+    if !es_pedido && !policy.allow_paid_fallback && !provider_catalog::tier_free(&p.tier) {
+        return Err(format!(
+            "{} => SALTADO (proveedor de pago y la politica no permite el fallback)",
+            p.id
+        ));
+    }
+    Ok(())
+}
+
+/// Tool calls nativas de OpenAI a partir del nodo de un mensaje.
 ///
-/// MEDIDO (2026-11-27): ahora DELEGA en [`parse_native_tool_calls`] (una
-/// sola fuente de verdad: el motor de codificacion y el chat del daemon
-/// interpretan las tool calls igual).
+/// MEDIDO (2026-11-27, CI 46073417966): `agent_coding.rs` delegaba aquí
+/// para que el motor de codificación y el chat del daemon interpretaran las
+/// `tool_calls` **exactamente igual** (paridad), pero la función NO existía
+/// ⇒ E0425 "cannot find function `parse_native_tool_calls`".
+///
+/// Es el MISMO parseo que usa [`parse_provider_reply`]: misma función, misma
+/// forma ⇒ la paridad no es una promesa, es el mismo código.
+pub fn parse_native_tool_calls(msg_node: &Value) -> Vec<ParsedToolCall> {
+    parse_tool_calls(msg_node.get("tool_calls"))
+}
+
 fn parse_tool_calls(node: Option<&Value>) -> Vec<ParsedToolCall> {
-    node.map(parse_native_tool_calls).unwrap_or_default()
+    let arr = match node.and_then(|n| n.as_array()) {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for c in arr {
+        let f = c.get("function").cloned().unwrap_or(Value::Null);
+        let name = f
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let args = match f.get("arguments") {
+            Some(Value::String(s)) => {
+                serde_json::from_str::<Value>(s).unwrap_or(Value::String(s.clone()))
+            }
+            Some(v) => v.clone(),
+            None => Value::Object(serde_json::Map::new()),
+        };
+        out.push(ParsedToolCall {
+            id: c.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string(),
+            name,
+            arguments: args,
+        });
+    }
+    out
 }
 
 /// Recupera del TEXTO las tool calls que el proveedor dejó ahí.
@@ -1051,7 +1038,22 @@ pub struct ChatDeps<'a> {
     pub retries: u32,
     /// Espera base entre reintentos (ms).  0 en tests (sin esperas).
     pub backoff_ms: u64,
+    /// El motor local (SEERE) **inyectado**.
+    ///
+    /// MEDIDO (2026-11-27, CI 46073417966): el cuerpo de la cascada usaba
+    /// `local.run(...)` pero `ChatDeps` NO tenía ningún campo `local` ⇒
+    /// E0425 "cannot find value `local`".  La v16 quería el motor local
+    /// inyectable (para que la suite fuese offline y determinista): por
+    /// defecto es el SEERE real y los tests pueden sustituirlo con
+    /// `with_local`.
+    pub local: &'a dyn LocalFallback,
 }
+
+/// Motor local por defecto (SEERE v12 offline).
+///
+/// MEDIDO: `SeereLocal` es una estructura unitaria (sin campos) ⇒ se puede
+/// compartir como `static` sin coste.
+pub static SEERE_LOCAL: SeereLocal = SeereLocal;
 
 impl<'a> ChatDeps<'a> {
     /// Dependencias de producción (timeout y reintentos por defecto).
@@ -1064,7 +1066,14 @@ impl<'a> ChatDeps<'a> {
             timeout: Duration::from_secs(DEFAULT_PROVIDER_TIMEOUT_SECS),
             retries: MAX_RETRIES,
             backoff_ms: 250,
+            local: &SEERE_LOCAL,
         }
+    }
+
+    /// Sustituye el motor local (para tests offline y deterministas).
+    pub fn with_local(mut self, local: &'a dyn LocalFallback) -> Self {
+        self.local = local;
+        self
     }
 }
 
@@ -1631,6 +1640,41 @@ pub fn save_vault(vault: &ProviderVault) -> Result<(), String> {
     save_vault_at(&providers_path(), vault)
 }
 
+/// Valida el **id** de un proveedor.
+///
+/// MEDIDO (2026-11-27, CI 46073417966): la ruta de "crear un proveedor
+/// personalizado" (`update_provider` con un id que no existe en el vault)
+/// llamaba a `validate_provider_id()`, que **no existía** ⇒ E0425 "cannot
+/// find function".
+///
+/// Por qué hace falta: el id es la clave del proveedor en `providers.json` y
+/// puede acabar en rutas y en URLs.  Con un id libre (`../../etc/passwd`,
+/// `con espacio`, `con\n`) se rompe el vault o se injecta una ruta.  Regla
+/// (la misma que usa `plugin_data::validar_identidad`): ASCII en minúsculas,
+/// dígitos, `-`, `_` y `.`; sin separadores, sin `..` y sin empezar por `.`.
+pub fn validate_provider_id(id: &str) -> Result<String, String> {
+    let s = id.trim();
+    if s.is_empty() {
+        return Err("el id del proveedor está vacío".to_string());
+    }
+    if s.len() > 64 {
+        return Err("el id del proveedor es demasiado largo (>64)".to_string());
+    }
+    if s == "." || s == ".." {
+        return Err("el id del proveedor no puede ser '.' ni '..'".to_string());
+    }
+    if s.starts_with('.') {
+        return Err("el id del proveedor no puede empezar por '.'".to_string());
+    }
+    for c in s.chars() {
+        let ok = c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_' || c == '.';
+        if !ok {
+            return Err(format!("carácter no permitido en el id del proveedor: {:?}", c));
+        }
+    }
+    Ok(s.to_string())
+}
+
 /// Valida el endpoint de un proveedor.
 ///
 /// v16 (DEFECTO-06): `update_provider` aceptaba CUALQUIER endpoint
@@ -1740,6 +1784,14 @@ pub fn update_provider(
     // se aceptaba y el vault quedaba con un modelo muerto.
     let nuevo_endpoint: Option<String> = match endpoint {
         Some(ep) if !ep.trim().is_empty() => Some(validar_endpoint(ep)?),
+        _ => None,
+    };
+    // MEDIDO (2026-11-27, CI 46073417966): el cuerpo usaba `nuevo_modelo`
+    // pero el parámetro se llama `model` ⇒ E0425 "cannot find value
+    // `nuevo_modelo`".  Se define aquí, con la MISMA validación de modelo
+    // retirado que hay justo debajo (se reutiliza el valor ya validado).
+    let nuevo_modelo: Option<String> = match model {
+        Some(m) if !m.trim().is_empty() => Some(m.trim().to_string()),
         _ => None,
     };
     if let Some(m) = model {
@@ -2355,6 +2407,18 @@ pub fn execute_chat_con_tools_with(
 ) -> ChatResult {
     let t0 = Instant::now();
     let vault = deps.vault;
+    // MEDIDO (2026-11-27, CI 46073417966): el cuerpo usaba `req.prompt` y
+    // `req.attachment_path` pero la función recibe los parámetros SUELTOS
+    // (la v16 los partió) ⇒ E0425 "cannot find value `req`".  Se reconstruye
+    // la petición aquí: es la MISMA información, con los mismos valores.
+    let req = ChatRequest {
+        prompt: prompt.to_string(),
+        requested_model: requested_model.map(|s| s.to_string()),
+        attachment_path: attachment_path.map(|s| s.to_string()),
+        system: system_override.map(|s| s.to_string()),
+        max_tokens,
+        messages: mensajes.map(|m| m.to_vec()).unwrap_or_default(),
+    };
     let target_id: &str = match requested_model.map(|s| s.trim()).filter(|s| !s.is_empty()) {
         Some(s) => s,
         None => vault.default_model.as_str(),
@@ -2397,7 +2461,7 @@ pub fn execute_chat_con_tools_with(
     // Explicit Local SEERE v12 offline path
     if target_id == "local-seere" || target_id == "local" {
         let (_, pol) = crate::power_policy::current_policy();
-        let res = local.run(&enriched_prompt, pol.max_turns.max(1));
+        let res = deps.local.run(&enriched_prompt, pol.max_turns.max(1));
         let ans = res["answer"]
             .as_str()
             .unwrap_or("Sin respuesta local")
@@ -2468,27 +2532,24 @@ pub fn execute_chat_con_tools_with(
         max_tokens.min(MAX_TOKENS_CAP)
     };
 
-    // Build ordered candidate cascade: requested model first -> other enabled cloud models -> local SEERE v12
-    let mut candidates: Vec<ProviderEntry> = Vec::new();
-    // MEDIDO (2026-11-26, móvil): el LS pide el modelo por NOMBRE
-    // ("gemini-3.8-flash"), no por id de proveedor ("google-ai-studio") ⇒
-    // el matching tiene que mirar el `model` también, o el modelo pedido
-    // no iría primero en la cascada.
-    if let Some(p) = vault
-        .providers
-        .iter()
-        .find(|p| p.id == actual_cloud_id || p.model == actual_cloud_id)
-    {
-        candidates.push(p.clone());
-    }
-    for p in &vault.providers {
-        if p.id != actual_cloud_id && p.enabled && p.auth_type != "local" && p.auth_type != "hybrid" {
-            candidates.push(p.clone());
-        }
-    }
+    // MEDIDO (2026-11-27): la cascada se construye con `build_candidates`,
+    // la MISMA función que usa el motor de codificación (`agent_coding`) ⇒
+    // una sola fuente de verdad: no pueden divergir.  Antes esta cascada
+    // estaba escrita aquí a mano (copia) y el motor de codificación tenía
+    // la suya (con los MISMOS defectos: DEFECTO-03 y AUDIT-LLM-16-C).
+    //
+    // El pedido explícito se usa siempre; el FALLBACK no cae a un proveedor
+    // de pago sin permiso (v16, AUDIT-LLM-16-C) y las notas lo dicen.
+    let policy_cascada = ChatPolicy::default();
+    let (candidates, notas_cascada) = build_candidates(vault, actual_cloud_id, &policy_cascada);
 
     let mut errors: Vec<String> = Vec::new();
     let mut trace: Vec<String> = Vec::new();
+    // Las notas de la cascada son visibles en la traza (nada se salta en
+    // silencio).
+    for n in &notas_cascada {
+        trace.push(n.clone());
+    }
     for (idx, p) in candidates.iter().enumerate() {
         // v16 (DEFECTO-03): un proveedor RETIRADO no puede usarse "de
         // rebote" en la cascada.  El aviso de "modelo retirado" sólo
@@ -2696,6 +2757,13 @@ pub fn execute_chat_con_tools_with(
                                 vendor: p.vendor.clone(),
                                 latency_ms: (t0.elapsed().as_secs_f64() * 1000.0).round(),
                                 tokens_used: parsed.tokens_used,
+                                // MEDIDO (2026-11-27, CI 46073417966): faltan
+                                // los dos campos que el proveedor parsea
+                                // (E0063).  Aqui SÍ se sabe el
+                                // desglose: son los tokens que ya se usaron
+                                // para el gasto y la cuota.
+                                prompt_tokens: tokens_in,
+                                completion_tokens: tokens_out,
                                 tools_used,
                                 fallback_used: idx > 0,
                                 quota: Some(crate::quota_guard::snapshot_compacto_de(Some(&p.id))),
@@ -2751,7 +2819,7 @@ pub fn execute_chat_con_tools_with(
 
     // Final guaranteed offline fallback to Local SEERE v12 Rust GBNF
     let (_, pol) = crate::power_policy::current_policy();
-    let res = local.run(&enriched_prompt, pol.max_turns.max(1));
+    let res = deps.local.run(&enriched_prompt, pol.max_turns.max(1));
     let ans = res["answer"].as_str().unwrap_or("Sin respuesta").to_string();
     if let Some(arr) = res["tools"].as_array() {
         for t in arr {
