@@ -662,6 +662,12 @@ fn main() {
                     "accion": "adaptativo",
                     "aplicar": args.get(3).map(|s| s.as_str()) == Some("aplicar"),
                 })),
+                "costo" => megadaemon_core::brightness::costo(sd.as_deref()),
+                "shim_probar" => megadaemon_core::brightness::dispatch(&serde_json::json!({
+                    "accion": "shim_probar",
+                    "clave": args.get(3).cloned().unwrap_or_else(|| "screen_brightness".to_string()),
+                    "valor": args.get(4).cloned().unwrap_or_else(|| "247".to_string()),
+                })),
                 "diagnostico" => megadaemon_core::brightness::diagnostico(
                     sd.as_deref(),
                     args.get(4).map(|s| s.as_str()) == Some("aplicar"),
