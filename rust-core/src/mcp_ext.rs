@@ -277,6 +277,44 @@ pub fn tool_definitions() -> Value {
                 }
             },
             {
+                "name": "acp_transport",
+                "description": "TRANSPORTE JSON-RPC 2.0 de ACP v1 (docs/DECISION_ACP.md §3): parsea una linea del cable (una linea por mensaje, NDJSON), la devuelve clasificada (solicitud/notificacion/respuesta) y encuadra mensajes. En stdio el framing es NDJSON; el framing LSP se rechaza con un mensaje claro.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["parsear", "enmarcar"], "default": "parsear" },
+                        "linea": { "type": "string", "description": "La linea del cable (JSON-RPC)" },
+                        "metodo": { "type": "string", "description": "Metodo para encuadrar" }
+                    }
+                }
+            },
+            {
+                "name": "acp_sesion",
+                "description": "CICLO DE VIDA DE SESION ACP v1 (docs/DECISION_ACP.md §3): new/list/cancel/resume/fork. MEDIDO (registro ACP, 2026-11-26): loadSession 39/41, sessionList 35/41, sessionResume 25/41, sessionFork 18/41, y sessionStop 0/41 (NO es minimo comun). El fork crea un HIJO que conserva el historial del padre (el 'bosque'), sin tocar el padre.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["nueva", "listar", "cancelar", "reanudar", "fork", "bosque"], "default": "listar" },
+                        "session_id": { "type": "string", "description": "Id de la sesion" },
+                        "cwd": { "type": "string", "description": "Directorio de trabajo" }
+                    }
+                }
+            },
+            {
+                "name": "acp_permisos",
+                "description": "PERMISOS ACP (mdaemon/policy/evaluate y mdaemon/sandbox/describe): el veredicto de la politica del repo con el orden DENY > ASK > ALLOW, y el aislamiento REAL de esta maquina (bwrap / seatbelt). El permiso logico y el aislamiento son el mismo objeto: 'tool_policy.rs' decide y 'sandbox_linux.rs' compila esa decision a una regla de aislamiento.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["evaluar", "describir"], "default": "describir" },
+                        "tool": { "type": "string", "description": "Nombre de la herramienta" },
+                        "args": { "type": "object", "description": "Argumentos de la herramienta" },
+                        "caller": { "type": "string", "description": "Quien pide (para el contexto de politica)" },
+                        "workspace_root": { "type": "string", "description": "Raiz del espacio de trabajo" }
+                    }
+                }
+            },
+            {
                 "name": "drive_tubo",
                 "description": "EL TUBO: Google Drive como almacen EXTERNO (nativo en Rust, sin scripts). 'listar'/'inventario' que hay en la carpeta; 'subir' sube un fichero o una CARPETA (empaquetada en .tar.gz); 'bajar' descarga y verifica el sha256; 'tubo' = subir + VERIFICAR + borrar la copia local (solo borra si el sha256 cuadra). Pensado para cuando la cuota de disco es el cuello de botella.",
                 "inputSchema": {
@@ -2979,6 +3017,132 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     otro => Err(format!("acción desconocida: {}", otro)),
                 }
             })();
+            match res {
+                Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
+                Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+            }
+        }
+        "acp_transport" => {
+            // Transporte JSON-RPC 2.0 de ACP (patrón de protocol.rs).
+            let action = {
+                let a = s("action");
+                if a.is_empty() { "parsear".to_string() } else { a }
+            };
+            let linea = s("linea");
+            let metodo = s("metodo");
+            let res: Result<Value, String> = match action.as_str() {
+                "parsear" => (|| -> Result<Value, String> {
+                    match crate::protocol_acp::transport::parsear(&linea) {
+                        Ok(e) => {
+                            let tipo = match e {
+                                crate::protocol_acp::transport::Entrada::Solicitud(_) => "solicitud",
+                                crate::protocol_acp::transport::Entrada::Notificacion(_) => "notificacion",
+                                crate::protocol_acp::transport::Entrada::Respuesta(_) => "respuesta",
+                            };
+                            Ok(json!({
+                                "ok": true,
+                                "tipo": tipo,
+                                "metodo": e.metodo(),
+                                "id": e.id(),
+                                "es_error": e.es_error(),
+                            }))
+                        }
+                        Err(err) => Ok(json!({
+                            "ok": false,
+                            "error": { "code": err.code, "message": err.message },
+                        })),
+                    }
+                })(),
+                "enmarcar" => (|| -> Result<Value, String> {
+                    if metodo.is_empty() {
+                        return Err("falta el método".to_string());
+                    }
+                    let m = crate::protocol_acp::transport::solicitud(json!(1), &metodo, None);
+                    Ok(json!({
+                        "ok": true,
+                        "linea": crate::protocol_acp::transport::enmarcar(&m).trim_end().to_string(),
+                    }))
+                })(),
+                otro => Err(format!("acción desconocida: {}", otro)),
+            };
+            match res {
+                Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
+                Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+            }
+        }
+        "acp_sesion" => {
+            // Ciclo de vida de sesión ACP.
+            let action = {
+                let a = s("action");
+                if a.is_empty() { "listar".to_string() } else { a }
+            };
+            let session_id = s("session_id");
+            let cwd = s("cwd");
+            let res: Result<Value, String> = (|| -> Result<Value, String> {
+                // MEDIDO: el registro es GLOBAL del proceso: `cancelar`,
+                // `reanudar` y `fork` son llamadas sueltas y tienen que ver
+                // la sesión que se creó antes.
+                crate::protocol_acp::sesion::con_global(|r| {
+                    let base = r.nueva(if cwd.is_empty() { "/tmp" } else { &cwd }, None);
+                    match action.as_str() {
+                        "nueva" => Ok(json!({ "ok": true, "sesion": base.resumen() })),
+                        "listar" => Ok(json!({ "ok": true, "sesiones": r.listar() })),
+                        "cancelar" => {
+                            let e = r.cancelar(&session_id)?;
+                            Ok(json!({ "ok": true, "estado": e.nombre() }))
+                        }
+                        "reanudar" => {
+                            let e = r.reanudar(&session_id)?;
+                            Ok(json!({ "ok": true, "estado": e.nombre() }))
+                        }
+                        "fork" => {
+                            let h = r.fork(&session_id, None)?;
+                            Ok(json!({ "ok": true, "sesion": h.resumen() }))
+                        }
+                        "bosque" => Ok(json!({ "ok": true, "bosque": r.bosque() })),
+                        otro => Err(format!("acción desconocida: {}", otro)),
+                    }
+                })
+            })();
+            match res {
+                Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
+                Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
+            }
+        }
+        "acp_permisos" => {
+            // mdaemon/policy/evaluate y mdaemon/sandbox/describe.
+            let action = {
+                let a = s("action");
+                if a.is_empty() { "describir".to_string() } else { a }
+            };
+            let tool = s("tool");
+            let caller = s("caller");
+            let workspace_root = s("workspace_root");
+            let res: Result<Value, String> = match action.as_str() {
+                "evaluar" => (|| -> Result<Value, String> {
+                    if tool.is_empty() {
+                        return Err("falta 'tool'".to_string());
+                    }
+                    let args = args.get("args").cloned().unwrap_or_else(|| json!({}));
+                    let root = if workspace_root.is_empty() {
+                        std::path::PathBuf::from("/tmp")
+                    } else {
+                        std::path::PathBuf::from(&workspace_root)
+                    };
+                    let ctx = crate::tool_policy::ToolContext::for_agent(
+                        root,
+                        if caller.is_empty() { "acp-mcp".to_string() } else { caller.clone() },
+                        false,
+                    );
+                    let v = crate::protocol_acp::permisos::evaluar(&ctx, &tool, &args, None);
+                    Ok(json!({ "ok": true, "veredicto": v.a_json() }))
+                })(),
+                "describir" => Ok(json!({
+                    "ok": true,
+                    "sandbox": crate::protocol_acp::permisos::describir_sandbox(),
+                })),
+                otro => Err(format!("acción desconocida: {}", otro)),
+            };
             match res {
                 Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
                 Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
