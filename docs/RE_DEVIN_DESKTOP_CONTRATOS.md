@@ -678,5 +678,5 @@ Carpeta `15FRlRwDQdAicoZcfKFOTzeWqJQMjXIC0`:
 `asar_manifest.tsv` = 10.347 entradas (fichero ⇄ bytes del `.asar` desempaquetado,
 221 MB en `artifacts/devin/devin_asar_unpacked/`).
 
-En el repo: commit `5e537df` en la rama `re/productos-cierre-2026-11-27`
+En el repo: commit `dfb83e0` en la rama `re/productos-cierre-2026-11-27`
 (un único fichero, `docs/RE_DEVIN_DESKTOP_CONTRATOS.md`).
