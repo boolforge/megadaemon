@@ -1482,6 +1482,17 @@ fn main() {
             std::process::exit(rc);
         }
 
+        //   megadaemon-core plugin-data <validar-glob|validar-identidad|listar|
+        //     plugins|escribir|leer|purgar>
+        //     PLUGIN_DATA por IDENTIDAD (patrón 9 de
+        //     docs/DISENO_PATRONES_CLI_RUST.md): los datos de un plugin
+        //     sobreviven a sus actualizaciones (la ruta no lleva la versión)
+        //     y los globs se validan sin '..', '#' ni '@'.
+        "plugin-data" | "plugin_data" => {
+            let rc = megadaemon_core::plugin_data::run_cli(&args[2..]);
+            std::process::exit(rc);
+        }
+
         //   megadaemon-core reparar [--diagnostico] [--json]
         //     Diagnostica y REPARA el entorno del propio nodo (prefijo
         //     persistente, binario, watchdog, keeper, API key, credenciales

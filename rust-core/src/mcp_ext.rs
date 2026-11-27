@@ -236,6 +236,20 @@ pub fn tool_definitions() -> Value {
                 }
             },
             {
+                "name": "plugin_data",
+                "description": "PLUGIN_DATA por IDENTIDAD (patrón 9 de docs/DISENO_PATRONES_CLI_RUST.md): los datos de un plugin viven en <estado>/plugins/<identidad>, SIN la versión, así que sobreviven a las actualizaciones del plugin (y se borran al desinstalarlo). Los globs se validan sin '..', '#' ni '@' (anti path-traversal). Acciones: 'validar_glob', 'validar_identidad', 'listar', 'plugins', 'escribir', 'leer', 'purgar'.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["validar_glob", "validar_identidad", "listar", "plugins", "escribir", "leer", "purgar"], "default": "listar" },
+                        "identidad": { "type": "string", "description": "Identidad del plugin (ASCII minúsculas, dígitos, '.', '_', '-')" },
+                        "nombre": { "type": "string", "description": "Nombre del fichero de datos (sin separadores)" },
+                        "contenido": { "type": "string", "description": "Contenido a escribir (UTF-8)" },
+                        "glob": { "type": "string", "description": "Glob a validar (sin '..', '#' ni '@')" }
+                    }
+                }
+            },
+            {
                 "name": "drive_tubo",
                 "description": "EL TUBO: Google Drive como almacen EXTERNO (nativo en Rust, sin scripts). 'listar'/'inventario' que hay en la carpeta; 'subir' sube un fichero o una CARPETA (empaquetada en .tar.gz); 'bajar' descarga y verifica el sha256; 'tubo' = subir + VERIFICAR + borrar la copia local (solo borra si el sha256 cuadra). Pensado para cuando la cuota de disco es el cuello de botella.",
                 "inputSchema": {
@@ -2759,6 +2773,75 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 Err(e) => {
                     json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true })
                 }
+            }
+        }
+        "plugin_data" => {
+            // PLUGIN_DATA por identidad (patrón 9): persistencia que sobrevive
+            // a las actualizaciones + globs sin path-traversal.
+            let base = crate::plugin_data::raiz();
+            let action = {
+                let a = s("action");
+                if a.is_empty() { "listar".to_string() } else { a }
+            };
+            let identidad = s("identidad");
+            let nombre = s("nombre");
+            let contenido = s("contenido");
+            let glob = s("glob");
+            let res: Result<Value, String> = match action.as_str() {
+                "validar_glob" => (|| -> Result<Value, String> {
+                    crate::plugin_data::validar_glob(&glob)?;
+                    Ok(json!({ "ok": true, "glob": glob }))
+                })(),
+                "validar_identidad" => (|| -> Result<Value, String> {
+                    crate::plugin_data::validar_identidad(&identidad)?;
+                    Ok(json!({ "ok": true, "identidad": identidad }))
+                })(),
+                "listar" | "ls" => (|| -> Result<Value, String> {
+                    let es = crate::plugin_data::listar(&base, &identidad)?;
+                    let items: Vec<Value> = es
+                        .iter()
+                        .map(|e| {
+                            json!({ "nombre": e.nombre, "bytes": e.bytes, "modificado_s": e.modificado_s })
+                        })
+                        .collect();
+                    Ok(json!({ "identidad": identidad, "entradas": items }))
+                })(),
+                "plugins" => (|| -> Result<Value, String> {
+                    let ids = crate::plugin_data::listar_plugins(&base)?;
+                    Ok(json!({ "plugins": ids }))
+                })(),
+                "escribir" | "write" => (|| -> Result<Value, String> {
+                    if identidad.is_empty() {
+                        return Err("falta 'identidad'".to_string());
+                    }
+                    if nombre.is_empty() {
+                        return Err("falta 'nombre'".to_string());
+                    }
+                    let ruta = crate::plugin_data::escribir(&base, &identidad, &nombre, contenido.as_bytes())?;
+                    Ok(json!({ "ok": true, "ruta": ruta.display().to_string() }))
+                })(),
+                "leer" | "read" => (|| -> Result<Value, String> {
+                    if identidad.is_empty() {
+                        return Err("falta 'identidad'".to_string());
+                    }
+                    if nombre.is_empty() {
+                        return Err("falta 'nombre'".to_string());
+                    }
+                    let txt = crate::plugin_data::leer(&base, &identidad, &nombre)?;
+                    Ok(json!({ "ok": true, "contenido": txt }))
+                })(),
+                "purgar" | "purge" => (|| -> Result<Value, String> {
+                    if identidad.is_empty() {
+                        return Err("falta 'identidad'".to_string());
+                    }
+                    let bytes = crate::plugin_data::purgar(&base, &identidad)?;
+                    Ok(json!({ "ok": true, "bytes_borrados": bytes }))
+                })(),
+                otro => Err(format!("acción desconocida: {}", otro)),
+            };
+            match res {
+                Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
+                Err(e) => json!({ "content": [{ "type": "text", "text": json!({"ok": false, "error": e}).to_string() }], "isError": true }),
             }
         }
         "drive_tubo" => {

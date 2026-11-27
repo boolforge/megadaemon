@@ -40,7 +40,7 @@ escritorio** sin Electron ni navegador. Es el mismo camino que llevó a
 | 6 | **`fx/context.rs` + `fx/driver.rs`**: separar **construcción de contexto** y **conducción del agente** | `agent_core.rs` / `agent_loop.rs` | dos módulos separados en vez de uno gigante | S |
 | 7 | **daemon**: socket Unix + lock + **handshake que verifica que quien conecta es su daemon** + RPC de cola (`list claimed sessions`, `list queued sessions`, `list outposts`) | `cockpit_server.rs` / `service_bus.rs` | handshake + cola de sesiones | M |
 | 8 | **sandbox medido**: *"macOS seatbelt / Linux bwrap+seccomp"*; en Linux exige `bwrap` **y** `socat`; el permiso lógico **se compila a regla de sandbox** | `tool_policy.rs` + **nuevo `sandbox_linux.rs`** | ya hecho: `rust-core/src/sandbox_linux.rs` (bwrap + seatbelt, deny>allow, 9 tests) | **hecho** |
-| 9 | **plugins**: `PLUGIN_DATA` persistente **por identidad, no por versión**; globs prohibidos **sin `..`, `#` ni `@`** | `skills.rs` / `plugin.rs` (P3) | persistencia por identidad + validación de globs (anti path-traversal) | S |
+| 9 | **plugins**: `PLUGIN_DATA` persistente **por identidad, no por versión**; globs prohibidos **sin `..`, `#` ni `@`** | **nuevo `plugin_data.rs`** | ya hecho: persistencia por identidad + validación de globs (anti path-traversal) | **hecho** |
 | 10 | **esquema SQLite de sesiones (10 tablas)** medido literal | `board.rs` (rusqlite) | migración con el esquema | M |
 
 ### 2.1 Los tres que se concretan primero
@@ -56,8 +56,23 @@ escritorio** sin Electron ni navegador. Es el mismo camino que llevó a
 
 | entregable | commit | qué |
 |---|---|---|
-| `rust-core/src/sandbox_linux.rs` | este commit | **aislamiento real**: `bwrap` (Linux) y `sandbox-exec` (macOS), montajes ro/rw/tmpfs, `--unshare-net`, `--cap-drop ALL`, `--seccomp`, política **deny > allow**, `which()` propio, y **fallar cerrado** si no hay aislamiento |
+| `rust-core/src/sandbox_linux.rs` | `2b393f5` (patrón 8) | **aislamiento real**: `bwrap` (Linux) y `sandbox-exec` (macOS), montajes ro/rw/tmpfs, `--unshare-net`, `--cap-drop ALL`, `--seccomp`, política **deny > allow**, `which()` propio, y **fallar cerrado** si no hay aislamiento |
 | `rust-core/src/re_decompilers.rs` | `bfb6b80` | registro de motores de decompilación con contrato común |
+| `rust-core/src/plugin_data.rs` | este commit (patrón 9) | **`PLUGIN_DATA` por IDENTIDAD**: los datos viven en `<estado>/plugins/<identidad>` — la ruta **no lleva la versión**, así que sobreviven a las actualizaciones del plugin y se borran al desinstalarlo. Validación anti path-traversal: identidad ASCII en minúsculas (sin `/`, `\`, `..`, ni empezar por `.`), nombre de fichero sin separadores, y globs **sin `..`, `#` ni `@`** y nunca absolutos |
+
+### 3.1 Cómo se expone (patrón 9)
+
+La regla del repo es que **toda capacidad nueva vive en Rust dentro del daemon** y
+se expone por **CLI** y por **tool MCP** (nada de Python):
+
+* CLI: `megadaemon-core plugin-data <validar-glob|validar-identidad|listar|plugins|escribir|leer|purgar>`
+  (`rust-core/src/main.rs`, subcomando `plugin-data`).
+* Tool MCP: `plugin_data` (`rust-core/src/mcp_ext.rs`), con las mismas acciones.
+
+**MEDIDO 2026-11-28**: el módulo se tipó y sus **10 tests pasaron** en un crate
+aislado (sólo `serde_json`) con un stub de `cockpit_server::state_dir`; el
+crate completo se valida en el CI. `cockpit_server::state_dir()` devuelve
+`String` (no `PathBuf`) ⇒ hay que convertirla antes de encadenar el `join`.
 
 El módulo de sandbox se apoya en el modelo de permisos que ya existe:
 `tool_policy.rs` decide (allow/ask/deny) y `sandbox_linux.rs` **compila esa
