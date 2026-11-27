@@ -475,6 +475,43 @@ class TestHerramienta(unittest.TestCase):
         self.assertIn("module ", mod)
         self.assertIn("go 1.", mod)
 
+    # ---------------- import "unsafe" ----------------
+
+    def test_el_import_unsafe_solo_va_donde_hace_falta(self):
+        """REGRESION: `import "unsafe"` solo si el fichero lo usa.
+
+        El bug original decidia el import mirando si ALGUN prototipo C del
+        fichero tenia un `*`, pero los stubs Go no usaban ese tipo: el
+        modulo emitia `import "unsafe"` en ficheros que no lo usaban y Go
+        rechazaba el paquete con "unsafe imported and not used".
+        """
+        abi = (
+            self.out / "gomodulo/third_party/go/gc/src/internal/abi/abi.go"
+        ).read_text(encoding="utf-8")
+        # este fichero SI usa unsafe.Pointer (param_2) => necesita el import
+        self.assertIn("unsafe.Pointer", abi)
+        self.assertIn('import "unsafe"', abi)
+
+        srv = (
+            self.out / "gomodulo/third_party/jetski/language_server/server.go"
+        ).read_text(encoding="utf-8")
+        # este fichero NO lo usa => no debe llevar el import
+        self.assertNotIn("unsafe.Pointer", srv)
+        self.assertNotIn('import "unsafe"', srv)
+
+    def test_ningun_fichero_del_modulo_tiene_imports_sin_usar(self):
+        """Invariante global del modulo: import <-> uso."""
+        mod = self.out / "gomodulo"
+        for go in sorted(mod.rglob("*.go")):
+            texto = go.read_text(encoding="utf-8")
+            usa = "unsafe.Pointer" in texto
+            importa = 'import "unsafe"' in texto
+            self.assertEqual(
+                usa,
+                importa,
+                "%s: importa=%s usa=%s (import sin usar rompe `go build`)" % (go, importa, usa),
+            )
+
     # ---------------- sintaxis del modulo Go ----------------
 
     def test_el_modulo_go_es_sintacticamente_valido(self):
@@ -641,6 +678,79 @@ class TestIndiceDelPseudocodigo(unittest.TestCase):
         assert rc == 0, "la herramienta devolvio %d" % rc
         resumen = (out / "RESUMEN.md").read_text(encoding="utf-8")
         self.assertIn("| indice del pseudocodigo | `ruta` |", resumen)
+
+
+#: Un `.c` de r2ghidra: un fichero POR FUNCION, sin marcadores `/* ==== */`.
+PSEUDO_R2 = """/* third_party/go/gc/src/internal/abi/abi.go -- pseudocodigo decompilado por r2ghidra (radare2 6.2.6 + r2ghidra 6.2.6) */
+/* go: internal_abi.__RegArgs_.Dump */
+
+
+void internal_abi.__RegArgs_.Dump(int64_t *param_1,ulong param_2)
+
+{
+  FUN_04d06cb8(param_1,param_2);
+}
+"""
+
+
+class TestLayoutR2Ghidra(unittest.TestCase):
+    """El segundo layout del arbol (r2ghidra) tambien se regenera.
+
+    r2ghidra escribe UN `.c` POR FUNCION dentro del directorio del fichero
+    Go original y lo llama por el simbolo; ademas usa tipos C99
+    (``int64_t``, ``ulong``) que Ghidra no escribe.  Si el generador no
+    entiende ese layout, esas funciones se quedan sin pseudocodigo.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix="test-regenerar-r2-"))
+        cls.base = cls.tmp / "base"
+        d = cls.base / "pseudo/rz0/third_party/go/gc/src/internal/abi/abi.go"
+        d.mkdir(parents=True, exist_ok=True)
+        (cls.base / "funcs.tsv").write_text(TSV_EJEMPLO, encoding="utf-8")
+        (cls.base / "pseudo/rz0/_index.tsv").write_text(INDICE_EJEMPLO, encoding="utf-8")
+        (d / "internal_abi.__RegArgs_.Dump.c").write_text(PSEUDO_R2, encoding="utf-8")
+        cls.out = cls.tmp / "out"
+        rc = ejecutar(cls.base, cls.out)
+        assert rc == 0, "la herramienta devolvio %d" % rc
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_la_funcion_de_r2ghidra_tiene_pseudocodigo(self):
+        c = (
+            self.out / "codigo/third_party/go/gc/src/internal/abi/abi.c"
+        ).read_text(encoding="utf-8")
+        # el cuerpo de r2ghidra esta volcado (no el marcador SIN PSEUDOCODIGO)
+        self.assertIn("FUN_04d06cb8(param_1,param_2);", c)
+        self.assertIn(
+            "/* firma Ghidra   : void internal_abi.__RegArgs_.Dump(int64_t *param_1,ulong param_2) */",
+            c,
+        )
+        # las demas funciones del fichero no tienen .c propio: siguen stubs
+        self.assertIn("SIN PSEUDOCODIGO", c)
+
+    def test_la_firma_traduce_los_tipos_c99(self):
+        go = (
+            self.out / "gomodulo/third_party/go/gc/src/internal/abi/abi.go"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "func Internal_abi_RegArgs_Dump(param_1 unsafe.Pointer, param_2 uint64) {", go
+        )
+        # `int64_t *` es un puntero => el fichero TIENE que importar unsafe
+        self.assertIn('import "unsafe"', go)
+
+    def test_ningun_fichero_tiene_imports_sin_usar(self):
+        mod = self.out / "gomodulo"
+        for g in sorted(mod.rglob("*.go")):
+            texto = g.read_text(encoding="utf-8")
+            self.assertEqual(
+                "unsafe.Pointer" in texto,
+                'import "unsafe"' in texto,
+                "%s: import sin usar" % g,
+            )
 
 
 if __name__ == "__main__":
