@@ -61,6 +61,16 @@ jobs:
         run: |
           bash tools/test-oneliner.sh
           bash tools/test-energia.sh
+      # El "tubo" de Drive: el workspace tiene 5 GB de cuota y los artifacts
+      # de RE son GB, asi que Drive (privado) es el almacen externo.  Se
+      # prueba SIN RED, con un servidor de Drive falso: token (que nunca se
+      # imprime), credenciales 0600, listar, subir/bajar byte a byte.
+      - name: banco del tubo de Drive (servidor falso, sin red)
+        run: |
+          python3 tools/test_drive_api.py
+          python3 tools/drive_tube.py --help > /dev/null
+          python3 tools/agentes_fuentes.py --help > /dev/null
+          echo "tubo de Drive: OK"
 
   quality:
     name: calidad (fmt + clippy + tests)
