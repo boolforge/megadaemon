@@ -145,6 +145,29 @@ impl std::fmt::Display for GatewayError {
     }
 }
 
+/// Conversación ya parseada de una petición OpenAI.
+///
+/// MEDIDO (2026-11-28): el snapshot v16 (`da1cf89`) cambió `parse_messages`
+/// para que devolviera esta ESTRUCTURA en vez de una tupla, pero **nunca la
+/// definió**: el crate no compilaba (E0412, "cannot find type
+/// `ParsedConversation`").  Aquí se define con los campos que los propios
+/// tests del fichero ya exigían (`user_text`, `system`, `messages`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedConversation {
+    /// El prompt de sistema, si el cliente lo mandó (`role` = system/developer).
+    pub system: Option<String>,
+    /// Los mensajes NORMALIZADOS (roles canónicos: system/user/assistant).
+    ///
+    /// El `role` "tool"/"function" se guarda como "user" (es lo que el
+    /// proveedor espera) y el contenido multimodal se aplana a texto.
+    pub messages: Vec<Value>,
+    /// El texto del usuario (los trozos de usuario unidos con `\n\n`).
+    ///
+    /// Es lo que va al proveedor como prompt: MEDIDO, la versión anterior
+    /// (`parse_messages` → tupla) mandaba exactamente estos trozos.
+    pub user_text: String,
+}
+
 /// Extrae el prompt y el system prompt de una petición OpenAI.
 ///
 /// Acepta:
@@ -274,6 +297,13 @@ pub fn chat_completions_with(
         .trim()
         .to_string();
     let conv = parse_messages(body.get("messages").unwrap_or(&Value::Null))?;
+    // MEDIDO (2026-11-28): `parse_messages` devuelve una ESTRUCTURA
+    // (`ParsedConversation`), no una tupla como antes ⇒ el prompt y el
+    // system salen de sus campos.  `user_text` es EXACTAMENTE lo que antes
+    // devolvía la tupla (los trozos de usuario unidos con "\n\n"), así que
+    // el comportamiento hacia el proveedor NO cambia.
+    let prompt = conv.user_text;
+    let system = conv.system;
     let max_tokens = body
         .get("max_tokens")
         .and_then(|v| v.as_u64())
@@ -295,7 +325,9 @@ pub fn chat_completions_with(
     {
         None
     } else {
-        Some(model.clone())
+        // MEDIDO (2026-11-28): `execute_chat_with` pide `Option<&str>`, no
+        // `Option<String>` ⇒ `Some(model.clone())` no compila (E0308).
+        Some(model.as_str())
     };
 
     let res = crate::providers::execute_chat_with(
@@ -411,6 +443,9 @@ pub fn chat_completions_with(
             "provider_trace": res.provider_trace,
             // v16: el estado de la cuota viaja DENTRO de la respuesta.
             "quota": res.quota,
+            // MEDIDO (2026-11-28): cuántos mensajes normalizados traía la
+            // petición (el `messages` de `ParsedConversation`).
+            "mensajes": conv.messages.len(),
         });
     }
 

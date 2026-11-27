@@ -1984,7 +1984,7 @@ fn handle_client(mut stream: TcpStream) {
                             &crate::llm_gateway::parse_messages(
                                 body.get("messages").unwrap_or(&Value::Null),
                             )
-                            .map(|(p, _)| p)
+                            .map(|c| c.user_text)
                             .unwrap_or_default(),
                             json!({
                                 "provider": v.pointer("/megadaemon/provider_id").and_then(|x| x.as_str()).unwrap_or(""),
