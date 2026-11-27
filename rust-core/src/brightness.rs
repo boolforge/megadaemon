@@ -452,13 +452,29 @@ fn sh_plano(cmd: &str, timeout_ms: u64) -> Salida {
 /// Cada llamada a [`sh`] es **un proceso en el móvil** (y cada `settings put`
 /// o `dumpsys` dentro son JVM).  Este contador permite **medir** el coste en
 /// vez de estimarlo: es el número que los tests acotan.
+///
+/// MEDIDO (2026-11-27): el contador era GLOBAL y `cargo test` corre los tests
+/// EN PARALELO, así que los tests de coste contaban también las llamadas de
+/// los OTROS tests de este módulo que estaban corriendo a la vez.  En el CI
+/// (suite completa, 1.624 tests) salían 5 y 8 interacciones donde el módulo
+/// hace 2 y 5 => tres tests rojos por una razón que no era del módulo.
+/// Ahora el contador es **por hilo** (cada test mide sus propias llamadas) y
+/// [`reset_llamadas_sh`] lo pone a cero antes de medir.
 #[cfg(test)]
-static CONTADOR_SH: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+thread_local! {
+    static CONTADOR_SH: std::cell::Cell<usize> = std::cell::Cell::new(0);
+}
 
 /// Interacciones con el móvil desde el último reset (sólo tests).
 #[cfg(test)]
 pub fn llamadas_sh() -> usize {
-    CONTADOR_SH.load(Ordering::Relaxed)
+    CONTADOR_SH.with(|c| c.get())
+}
+
+/// Pone a cero el contador de interacciones de ESTE hilo (sólo tests).
+#[cfg(test)]
+pub fn reset_llamadas_sh() {
+    CONTADOR_SH.with(|c| c.set(0));
 }
 
 /// ¿El proceso actual ya es root?  (lectura de `/proc/self/status`, cacheada)
@@ -491,7 +507,7 @@ fn somos_root() -> bool {
 /// funcionalidad.
 fn sh(cmd: &str, root: bool, timeout_ms: u64) -> Salida {
     #[cfg(test)]
-    CONTADOR_SH.fetch_add(1, Ordering::Relaxed);
+    CONTADOR_SH.with(|c| c.set(c.get() + 1));
     if !root {
         return sh_plano(cmd, timeout_ms);
     }
@@ -2919,9 +2935,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("md_brillo_tick_{}", ahora()));
         let _ = std::fs::create_dir_all(&dir);
         let sd = dir.to_string_lossy().to_string();
-        let antes = llamadas_sh();
+        reset_llamadas_sh();
         let _ = tick(Some(&sd));
-        let n = llamadas_sh() - antes;
+        let n = llamadas_sh();
         println!("MEDIDO vigilante: {} interacciones con el móvil", n);
         assert!(n <= 4, "el vigilante hizo {} interacciones con el móvil", n);
         let _ = std::fs::remove_dir_all(&dir);
@@ -2932,9 +2948,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("md_brillo_fijar_{}", ahora()));
         let _ = std::fs::create_dir_all(&dir);
         let sd = dir.to_string_lossy().to_string();
-        let antes = llamadas_sh();
+        reset_llamadas_sh();
         let _ = fijar(200, Some(&sd));
-        let n = llamadas_sh() - antes;
+        let n = llamadas_sh();
         println!("MEDIDO fijar: {} interacciones con el móvil", n);
         // escritura (1) + verificación (1) + vía alternativa (1) + firma (1)
         assert!(n <= 5, "fijar hizo {} interacciones con el móvil", n);
@@ -2949,9 +2965,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("md_brillo_est_{}", ahora()));
         let _ = std::fs::create_dir_all(&dir);
         let sd = dir.to_string_lossy().to_string();
-        let antes = llamadas_sh();
+        reset_llamadas_sh();
         let _ = estado(Some(&sd));
-        let n = llamadas_sh() - antes;
+        let n = llamadas_sh();
         println!("MEDIDO estado: {} interacciones con el móvil", n);
         assert!(n <= 4, "estado hizo {} interacciones con el móvil", n);
         let _ = std::fs::remove_dir_all(&dir);
