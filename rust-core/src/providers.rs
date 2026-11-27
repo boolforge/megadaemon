@@ -483,37 +483,139 @@ pub fn parse_provider_reply(provider: &str, body: &str) -> Result<ParsedReply, P
     })
 }
 
-/// Extrae las `tool_calls` nativas de un mensaje OpenAI.
-fn parse_tool_calls(node: Option<&Value>) -> Vec<ParsedToolCall> {
-    let arr = match node.and_then(|n| n.as_array()) {
-        Some(a) => a,
-        None => return Vec::new(),
-    };
+/// Parsea las `tool_calls` nativas de OpenAI.
+///
+/// **PÚBLICA a propósito** (MEDIDO 2026-11-27): `agent_coding.rs` la llama
+/// como `providers::parse_native_tool_calls(...)` para que el motor de
+/// codificación y el chat del daemon interpreten las `tool_calls`
+/// EXACTAMENTE igual (paridad).  La función faltaba en este modulo y el
+/// CI daba 5 errores E0425 ("cannot find function `parse_native_tool_calls`
+/// in module `providers`") que tumbaban los 3 builds y el job de calidad.
+/// Cuerpo restaurado del commit WIP `da1cf89` (el que la escribio).
+pub fn parse_native_tool_calls(msg_node: &Value) -> Vec<ParsedToolCall> {
     let mut out = Vec::new();
-    for c in arr {
-        let f = c.get("function").cloned().unwrap_or(Value::Null);
-        let name = f
-            .get("name")
-            .and_then(|n| n.as_str())
-            .unwrap_or("")
-            .to_string();
-        if name.is_empty() {
+    let Some(arr) = msg_node.get("tool_calls").and_then(|c| c.as_array()) else {
+        return out;
+    };
+    for (idx, item) in arr.iter().enumerate() {
+        let id = item
+            .get("id")
+            .and_then(|i| i.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .unwrap_or_else(|| format!("call_native_{}", idx + 1));
+        let func = item.get("function").unwrap_or(item);
+        let Some(name) = func.get("name").and_then(|n| n.as_str()) else {
             continue;
-        }
-        let args = match f.get("arguments") {
-            Some(Value::String(s)) => {
-                serde_json::from_str::<Value>(s).unwrap_or(Value::String(s.clone()))
-            }
-            Some(v) => v.clone(),
-            None => Value::Object(serde_json::Map::new()),
+        };
+        let arguments = match func.get("arguments") {
+            Some(Value::String(s)) => serde_json::from_str::<Value>(s).unwrap_or_else(|_| json!({})),
+            Some(Value::Object(_)) => func.get("arguments").cloned().unwrap_or_else(|| json!({})),
+            _ => json!({}),
         };
         out.push(ParsedToolCall {
-            id: c.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string(),
-            name,
-            arguments: args,
+            id,
+            name: name.to_string(),
+            arguments,
         });
     }
     out
+}
+
+/// Construye la cascada de candidatos y las notas para el usuario.
+///
+/// **PÚBLICA a propósito** (MEDIDO 2026-11-27): `agent_coding.rs` la llama
+/// como `providers::build_candidates(&vault, target_id, &policy)` para que
+/// el motor de codificacion use **la misma** cascada que el chat del daemon
+/// ("una sola fuente de verdad": antes el motor de codificacion tenia su
+/// propia y se comia proveedores RETIRADOS y de PAGO).  La funcion faltaba
+/// en este modulo y el CI daba 3 errores E0425 mas ("cannot find function
+/// `build_candidates` in module `providers`").
+/// Cuerpo restaurado del commit WIP `da1cf89` (el que la escribio).
+
+/// Construye la cascada de candidatos y las notas para el usuario.
+///
+/// Devuelve `(candidatos, notas)`.  Las notas son **visibles**: el usuario
+/// tiene que saber si su proveedor fue descartado por estar deshabilitado,
+/// por estar retirado o por ser de pago.
+pub fn build_candidates(
+    vault: &ProviderVault,
+    target_id: &str,
+    policy: &ChatPolicy,
+) -> (Vec<ProviderEntry>, Vec<String>) {
+    let mut notes: Vec<String> = Vec::new();
+    let mut candidates: Vec<ProviderEntry> = Vec::new();
+
+    let requested = vault.providers.iter().find(|p| p.id == target_id);
+    match requested {
+        Some(p) => {
+            if let Some((_, rmodel, rnote)) = provider_catalog::is_retired(&p.id) {
+                notes.push(format!(
+                    "{} esta RETIRADO ({}): no se usa",
+                    p.id, rnote
+                ));
+            } else if provider_catalog::is_retired(&p.model).is_some() {
+                let (_, rmodel, rnote) = provider_catalog::is_retired(&p.model).unwrap();
+                notes.push(format!(
+                    "{} apunta al modelo RETIRADO {} ({}): no se usa",
+                    p.id, rmodel, rnote
+                ));
+            } else if !p.enabled {
+                // v16 (AUDIT-LLM-16-C): un proveedor deshabilitado se usaba
+                // igual si era el pedido.  Ahora no, y se avisa.
+                notes.push(format!("{} esta DESHABILITADO: no se usa", p.id));
+            } else {
+                candidates.push(p.clone());
+            }
+        }
+        None => {
+            notes.push(format!(
+                "el proveedor pedido '{}' no esta en la boveda: se usa la cascada",
+                target_id
+            ));
+        }
+    }
+
+    for p in &vault.providers {
+        if p.id == target_id {
+            continue;
+        }
+        if !p.enabled {
+            continue;
+        }
+        if p.auth_type == "local" || p.auth_type == "hybrid" {
+            continue;
+        }
+        // v16 (AUDIT-LLM-16-C): un proveedor RETIRADO no puede entrar en la
+        // cascada de reserva.  Antes entraba: la comprobación de "retirado"
+        // sólo se hacía sobre el modelo PEDIDO, no sobre los de reserva.
+        if provider_catalog::is_retired(&p.id).is_some()
+            || provider_catalog::is_retired(&p.model).is_some()
+        {
+            continue;
+        }
+        if !policy.allow_paid_fallback && !provider_catalog::tier_free(&p.tier) {
+            // v16 (AUDIT-LLM-16-C): el fallback NO gasta dinero sin que se
+            // pida.  Se anota para que el usuario lo sepa.
+            notes.push(format!(
+                "{} (tier {}) no entra en el fallback: es de pago",
+                p.id, p.tier
+            ));
+            continue;
+        }
+        candidates.push(p.clone());
+    }
+
+    (candidates, notes)
+}
+
+/// Extrae las `tool_calls` nativas de un mensaje OpenAI.
+///
+/// MEDIDO (2026-11-27): ahora DELEGA en [`parse_native_tool_calls`] (una
+/// sola fuente de verdad: el motor de codificacion y el chat del daemon
+/// interpretan las tool calls igual).
+fn parse_tool_calls(node: Option<&Value>) -> Vec<ParsedToolCall> {
+    node.map(parse_native_tool_calls).unwrap_or_default()
 }
 
 /// Recupera del TEXTO las tool calls que el proveedor dejó ahí.
