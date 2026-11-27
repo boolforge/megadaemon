@@ -1,0 +1,126 @@
+{
+  "escapados_del_registro_acp": [
+    {
+      "id": "amp-acp",
+      "name": "Amp",
+      "repo": "tao12345666333/amp-acp"
+    },
+    {
+      "id": "auggie",
+      "name": "Auggie CLI",
+      "repo": "augmentcode/auggie"
+    },
+    {
+      "id": "claude-acp",
+      "name": "Claude Agent",
+      "repo": "agentclientprotocol/claude-agent-acp"
+    },
+    {
+      "id": "codex-acp",
+      "name": "Codex",
+      "repo": "agentclientprotocol/codex-acp"
+    },
+    {
+      "id": "cortex-code",
+      "name": "Cortex Code",
+      "repo": "https://docs.snowflake.com/en/user-guide/cortex-code/cortex-code"
+    },
+    {
+      "id": "corust-agent",
+      "name": "Corust Agent",
+      "repo": "corust-ai/corust-agent-release"
+    },
+    {
+      "id": "crow-cli",
+      "name": "crow-cli",
+      "repo": "crow-cli/crow-cli"
+    },
+    {
+      "id": "devin",
+      "name": "Devin",
+      "repo": "cognitionai/devin-cli"
+    },
+    {
+      "id": "dirac",
+      "name": "Dirac",
+      "repo": "dirac-run/dirac"
+    },
+    {
+      "id": "github-copilot",
+      "name": "GitHub Copilot",
+      "repo": "github/copilot-language-server-release"
+    },
+    {
+      "id": "glm-acp-agent",
+      "name": "GLM Agent",
+      "repo": "stefandevo/glm-acp-agent"
+    },
+    {
+      "id": "harn",
+      "name": "Harn",
+      "repo": "burin-labs/harn"
+    },
+    {
+      "id": "junie",
+      "name": "Junie",
+      "repo": "jetbrains/junie-acp-release"
+    },
+    {
+      "id": "kimchi",
+      "name": "Kimchi",
+      "repo": "getkimchi/kimchi"
+    },
+    {
+      "id": "kimi-code",
+      "name": "Kimi Code",
+      "repo": "moonshotai/kimi-code"
+    },
+    {
+      "id": "kiro",
+      "name": "Kiro CLI",
+      "repo": "kirodotdev/kiro"
+    },
+    {
+      "id": "mistral-vibe",
+      "name": "Mistral Vibe",
+      "repo": "mistralai/mistral-vibe"
+    },
+    {
+      "id": "nova",
+      "name": "Nova",
+      "repo": "compass-agentic-platform/nova"
+    },
+    {
+      "id": "pi-acp",
+      "name": "pi ACP",
+      "repo": "svkozak/pi-acp"
+    },
+    {
+      "id": "poolside",
+      "name": "Poolside",
+      "repo": "poolsideai/pool"
+    },
+    {
+      "id": "sigit",
+      "name": "siGit Code",
+      "repo": "getsigit/sigit"
+    },
+    {
+      "id": "stakpak",
+      "name": "Stakpak",
+      "repo": "stakpak/agent"
+    }
+  ],
+  "sin_repo": [
+    "antigravity-acp",
+    "bob",
+    "codebuddy-code",
+    "cursor",
+    "dimcode",
+    "factory-droid",
+    "grok-build",
+    "minimax-code",
+    "muse-code",
+    "qoder"
+  ]
+}

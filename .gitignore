@@ -60,3 +60,11 @@ crates/hooks-payload/dist/
 # Nucleo forense en C (binario COMPILADO: no va al repo)
 tools/mddoctor
 tools/mddoctor-arm64
+
+# --- 2026-11-27: material de TERCEROS descargado para analisis ---
+# NO se redistribuye en el repo publico: esto va a la Drive.
+artifacts/agentes-fuente/
+artifacts/vendor/
+artifacts/acp-comparado/acpira_*
+artifacts/acp-comparado/acpschema_*
+artifacts/acp-comparado/mcode_*

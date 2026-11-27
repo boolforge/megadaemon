@@ -333,7 +333,15 @@ public class MdGhidra extends GhidraScript {
         if (safe.length() > 150) {
             safe = safe.substring(0, 150);
         }
-        String base = tag + "__" + safe;
+        // MEDIDO 2026-11-27: el `tag` es la ruta del paquete Go y lleva "/" (p.ej.
+        // "third_party/go"). Al usarlo tal cual en el nombre de fichero, Ghidra
+        // intentaba escribir en <out>/third_party/go__x.c y fallaba con
+        // FileNotFoundException en 351 de 400 funciones. El tag va saneado.
+        String safeTag = tag.replaceAll("[^A-Za-z0-9._-]", "_");
+        if (safeTag.length() > 80) {
+            safeTag = safeTag.substring(0, 80);
+        }
+        String base = safeTag + "__" + safe;
         PrintWriter pw = new PrintWriter(new OutputStreamWriter(
             new FileOutputStream(new File(outDir, base + ".c")), StandardCharsets.UTF_8));
         pw.println("// " + tag + "  " + name);

@@ -1,0 +1,57 @@
+[
+  {
+    "categoria": "generado (blaze/protobuf)",
+    "funciones": 69466,
+    "con_pseudocodigo": 772,
+    "pct": 1.11,
+    "ficheros": 942
+  },
+  {
+    "categoria": "autogenerado (compilador)",
+    "funciones": 30320,
+    "con_pseudocodigo": 45,
+    "pct": 0.15,
+    "ficheros": 1
+  },
+  {
+    "categoria": "jetski (codigo propio de Antigravity)",
+    "funciones": 11928,
+    "con_pseudocodigo": 11892,
+    "pct": 99.7,
+    "ficheros": 1130
+  },
+  {
+    "categoria": "runtime Go",
+    "funciones": 12298,
+    "con_pseudocodigo": 12026,
+    "pct": 97.79,
+    "ficheros": 971
+  },
+  {
+    "categoria": "librerias publicas (third_party/golang)",
+    "funciones": 33659,
+    "con_pseudocodigo": 33552,
+    "pct": 99.68,
+    "ficheros": 2011
+  },
+  {
+    "categoria": "otras third_party",
+    "funciones": 2665,
+    "con_pseudocodigo": 2644,
+    "pct": 99.21,
+    "ficheros": 191
+  },
+  {
+    "categoria": "resto",
+    "funciones": 1346,
+    "con_pseudocodigo": 1344,
+    "pct": 99.85,
+    "ficheros": 137
+  },
+  {
+    "categoria": "TOTAL",
+    "funciones": 161682,
+    "con_pseudocodigo": 62275,
+    "pct": 38.52
+  }
+]

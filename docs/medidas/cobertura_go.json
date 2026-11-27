@@ -1,0 +1,34 @@
+{
+  "cobertura": {
+    "bloques_no_cubiertos_por_pclntab": 0,
+    "con_pseudocodigo_legible": 62274,
+    "funciones_del_binario": 161682,
+    "pct_pseudocodigo": 38.52,
+    "pct_stub": 61.48,
+    "stub_sin_decompilar": 99408
+  },
+  "pclntab": {
+    "ficheros_distintos": 5383,
+    "funciones": 161682,
+    "sin_fichero": 2
+  },
+  "pseudocodigo": {
+    "bloques": 161682,
+    "bytes_pseudocodigo": 428973242,
+    "con_pseudocodigo": 62274,
+    "ficheros_c": 5383,
+    "sin_pseudocodigo": 99408
+  },
+  "raiz": "/workspace/entrega/regenerado",
+  "stubs": {
+    "con_parametros": 25156,
+    "con_retorno": 13911,
+    "con_tipos_reales": 29764,
+    "con_unsafe_pointer": 9254,
+    "ficheros_go": 5383,
+    "funciones_go": 161682,
+    "imports_unsafe": 2264,
+    "imports_unsafe_sin_uso": 0
+  },
+  "tsv": "/workspace/agy-re/tools-out/go.funcs.tsv"
+}
