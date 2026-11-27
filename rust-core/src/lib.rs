@@ -178,6 +178,7 @@ pub mod re_cff;
 pub mod re_crypto;
 pub mod re_opaque;
 pub mod re_obf;
+pub mod deobf;
 pub mod recording_vault;
 pub mod recordings;
 pub mod axml_parser;

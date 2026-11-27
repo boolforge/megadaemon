@@ -1991,16 +1991,26 @@ pub fn device_plan(st: &DeviceState, th: &Thresholds) -> Vec<DeviceAction> {
         }
     }
 
-    // 3) Brillo: techo en conserve/thermal/seal.
+    // 3) Brillo: **la politica de energia NO lo toca**.
+    //
+    // MEDIDO (2026-11-27, SM-G998B): recortar a 60 y luego restaurar producia
+    // el serrucho 247 -> 60 -> 247 cada ~75 s, que es exactamente el "el
+    // brillo se me cambia a random" que reporto el usuario.  El brillo es una
+    // decision de USABILIDAD, no de energia: lo gobierna el modulo de brillo
+    // (`rust-core/src/brightness.rs`), que lo deja 100% manual y respeta al
+    // usuario.  Aqui solo se INFORMA del techo, sin escribir nada.
     if class != PolicyClass::Normal {
         let max = match class {
             PolicyClass::Seal => th.brightness_max - 20,
             _ => th.brightness_max,
         };
         out.push(DeviceAction::new(
-            "brightness",
-            &format!("settings put system screen_brightness {}", max.max(1)),
-            "settings get system screen_brightness",
+            "brightness_informativo",
+            &format!(
+                "echo cap={} > /data/adb/megadaemon/brightness_cap 2>/dev/null; settings get system screen_brightness 2>/dev/null",
+                max.max(1)
+            ),
+            "cat /data/adb/megadaemon/brightness_cap 2>/dev/null",
             true,
         ));
     }
@@ -2353,13 +2363,20 @@ mod device_tests {
     }
 
     #[test]
-    fn plan_conservacion_recorta_fondo_brillo_y_no_toca_termux() {
+    fn plan_conservacion_no_toca_el_brillo_y_no_toca_termux() {
         let t = Thresholds::default();
         let plan = device_plan(&st(30, false, 25.0, 3_000_000), &t);
         let cmds: Vec<&str> = plan.iter().map(|a| a.cmd.as_str()).collect();
         assert!(cmds
             .iter()
             .any(|c| c.contains("RUN_ANY_IN_BACKGROUND ignore")));
+        // MEDIDO 2026-11-27 (SM-G998B): la politica de energia recortaba el
+        // brillo a 60 y lo restauraba (247 -> 60 -> 247 cada ~75 s).  Ahora
+        // SOLO informa: el brillo es del modulo de brillo, que lo deja
+        // 100% manual.
+        assert!(!cmds
+            .iter()
+            .any(|c| c.contains("settings put system screen_brightness")));
         assert!(cmds.iter().any(|c| c.contains("screen_brightness")));
         assert!(!cmds.iter().any(|c| c.contains("com.termux")));
         assert!(!cmds.iter().any(|c| c.contains("com.agy")));

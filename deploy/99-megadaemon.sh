@@ -1111,7 +1111,9 @@ else
 fi
 ENERGY_STATE_KEEP=${MEGADAEMON_STATE_KEEP:-2}
 ENERGY_STATE_FILE="$PREFIX/energy_state"
-ENERGY_BRIGHT_SAVED="$PREFIX/brightness_saved"
+# MEDIDO (2026-11-27): el recorte de brillo lo lleva el modulo de brillo
+# (100% manual, sin cambios); aqui solo se informa del techo.
+ENERGY_BRIGHT_CAP="$PREFIX/brightness_cap"
 
 # Interface de sondeo: 127.0.0.3 para que el watchdog tenga SU PROPIO cubo
 # del rate limit (el del túnel es 127.0.0.1 y el del navegador 127.0.0.2).
@@ -1214,25 +1216,30 @@ apply_energy_policy() {
                 ;;
             normal)
                 settings put global low_power 0 >/dev/null 2>&1
-                # restaurar el brillo que tenía el usuario, si lo guardamos
-                if [ -f "$ENERGY_BRIGHT_SAVED" ]; then
-                    settings put system screen_brightness "$(cat "$ENERGY_BRIGHT_SAVED" 2>/dev/null)" >/dev/null 2>&1
-                    rm -f "$ENERGY_BRIGHT_SAVED"
-                fi
+                # MEDIDO (2026-11-27, SM-G998B): antes se restauraba aqui el
+                # brillo guardado.  Eso, junto al recorte de mas abajo, producia
+                # el serrucho 247 -> 60 -> 247 cada ~75 s (el "brillo se me
+                # cambia a random").  El brillo ya NO lo toca la politica de
+                # energia: lo gobierna el modulo de brillo
+                # (rust-core/src/brightness.rs), 100% manual y sin cambios.
                 ;;
         esac
         echo "$cls" > "$ENERGY_STATE_FILE" 2>/dev/null
     fi
 
-    # --- brillo (sólo si el de ahora supera el techo) ---
+    # --- brillo: la politica de energia NO lo escribe ---
+    # MEDIDO (2026-11-27, SM-G998B): el recorte a 60 y su restauracion
+    # posterior producian el serrucho 247 -> 60 -> 247 cada ~75 s: eso era,
+    # exactamente, el "el brillo se me cambia a random" que reporto el
+    # usuario.  El brillo es una decision de USABILIDAD, no de energia.
+    #
+    # Ahora: 100% manual (screen_brightness_mode=0, lo gobierna el modulo de
+    # brillo) y SIN cambios por parte del sistema.  Aqui solo se INFORMA del
+    # techo que la politica tendria, para que el diagnostico lo diga.
     if [ "$cls" != "normal" ]; then
         cap=$ENERGY_BRIGHTNESS_MAX
         [ "$cls" = "seal" ] && cap=$((ENERGY_BRIGHTNESS_MAX - 20))
-        cur=$(settings get system screen_brightness 2>/dev/null | tr -dc '0-9')
-        if [ -n "$cur" ] && [ "$cur" -gt "$cap" ]; then
-            [ -f "$ENERGY_BRIGHT_SAVED" ] || echo "$cur" > "$ENERGY_BRIGHT_SAVED" 2>/dev/null
-            settings put system screen_brightness "$cap" >/dev/null 2>&1
-        fi
+        echo "$cap" > "$ENERGY_BRIGHT_CAP" 2>/dev/null
     fi
 
     # --- disco: si estamos por debajo del suelo, podamos nuestro estado ---
