@@ -2182,7 +2182,19 @@ impl<'a> Interpreter<'a> {
                 let taken = compare(op, x, y);
                 let _ = against_zero;
                 if taken {
-                    if target < next as i64 && bucle_cerrado(decoded, target as u32, ins.offset) {
+                    // El CFG manda sobre la estructura: `bucle_cerrado` es
+                    // una aproximación barata (no hay `return` dentro del
+                    // bloque) y se equivocaba con los bucles LEGÍTIMOS, cuyo
+                    // bloque (cuerpo + condicional) no contiene ningún
+                    // return pero tiene su salida en la CAÍDA del condicional.
+                    // El grafo de CFG sí lo dice: si el destino de la rama
+                    // puede alcanzar un `return`, no es código muerto y no
+                    // se poda.
+                    let destino_vivo = con_return.contains(&(target as u32));
+                    if !destino_vivo
+                        && target < next as i64
+                        && bucle_cerrado(decoded, target as u32, ins.offset)
+                    {
                         return Err(ExecError::new(
                             &info.class_name,
                             &info.name,
@@ -3521,7 +3533,11 @@ mod unit {
 
     #[test]
     fn pkcs5_valida_relleno() {
-        assert_eq!(pkcs5_unpad(&[1, 2, 3, 4, 4, 4]), Some(&[1u8, 2, 3][..]));
+        // PKCS#5: el último byte dice cuántos bytes de relleno hay y TODOS
+        // valen ese número.  Texto "123" + 3 bytes de relleno = [1,2,3,3,3,3].
+        assert_eq!(pkcs5_unpad(&[1, 2, 3, 3, 3, 3]), Some(&[1u8, 2, 3][..]));
+        // Relleno incoherente (el byte dice 4 pero hay un 3 dentro).
+        assert!(pkcs5_unpad(&[1, 2, 3, 4, 4, 4]).is_none());
         assert!(pkcs5_unpad(&[1, 2, 3, 4, 5]).is_none());
         assert!(pkcs5_unpad(&[]).is_none());
     }
@@ -3590,8 +3606,15 @@ mod unit {
 
     #[test]
     fn interprete_ejecuta_bucle() {
-        // v0 = 3; v1 = 1; v0 -= v1; if-nez v0 -> -3; return v0
-        let insns = vec![const4(0, 3), const4(1, 1), 0x10b1, 0x0039, 0xfffd, 0x000f];
+        // v0 = 3; v1 = 1; v0 -= v1; if-nez v0 -> -1 (vuelve al cuerpo);
+        // return v0.
+        //
+        // MEDIDO: el destino de un salto es el offset de la rama más el
+        // delta (como en Dalvik), y en este banco cada instrucción ocupa una
+        // palabra.  El cuerpo del bucle es la palabra 2 (el `v0 -= v1`),
+        // así que el delta es -1; con -3 se volvería al inicio (al `v0 = 3`)
+        // y el bucle no terminaría nunca.
+        let insns = vec![const4(0, 3), const4(1, 1), 0x10b1, 0x0039, 0xffff, 0x000f];
         let mut interp = Interpreter::new(&[]);
         let v = interp.exec_raw(&insns, 4, &[]).expect("falló la ejecución");
         assert_eq!(v, Value::Int(0));
@@ -3599,10 +3622,16 @@ mod unit {
 
     #[test]
     fn interprete_bifurca_y_conserva_el_camino_bueno() {
-        // if-eqz v0 (desconocido) -> bifurca; el camino tomado devuelve 5.
-        // 0000 if-eqz v0,+3 | 0001 const/4 v0,9 | 0002 goto +2
-        // 0003 const/4 v0,5 | 0004 return v0
-        let insns = vec![0x0038, 0x0003, 0x9012, 0x0228, 0x5012, 0x000f];
+        // v0 nunca se asigna => la condición es INDETERMINADA y el
+        // intérprete tiene que decidir con el CFG.  La rama (el destino)
+        // lanza una excepción: es código muerto (no alcanza ningún
+        // `return`).  La caída devuelve 5.  El camino bueno es la caída.
+        //
+        // 0000 if-eqz v0, +4  -> 0004 (throw: código muerto)
+        // 0002 const/4 v0, #5 (caída: el camino bueno)
+        // 0003 return v0
+        // 0004 throw v0       (rama: código muerto)
+        let insns = vec![0x0038, 0x0004, 0x5012, 0x000f, 0x0027];
         let mut interp = Interpreter::new(&[]);
         let v = interp.exec_raw(&insns, 4, &[]).expect("falló la ejecución");
         assert_eq!(v, Value::Int(5));
