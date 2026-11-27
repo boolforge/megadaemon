@@ -2810,7 +2810,9 @@ mod tests {
                 actual,
                 Some(0),
                 false,
-                Some(60)
+                Some(60),
+                false,
+                None
             ),
             Decision::CambioDePolitica
         );
@@ -2856,6 +2858,8 @@ mod tests {
                 Some(0.5),
                 Some(1),
                 false,
+                None,
+                false,
                 None
             ),
             Decision::ForzarManual
@@ -2867,6 +2871,8 @@ mod tests {
                 Some(1.0),
                 Some(0.5),
                 Some(0),
+                false,
+                None,
                 false,
                 None
             ),
@@ -2937,6 +2943,8 @@ mod tests {
                 Some(0.5),
                 Some(0.5001),
                 Some(0),
+                false,
+                None,
                 false,
                 None
             ),
@@ -3074,6 +3082,10 @@ mod tests {
             veces_modo_auto_corregido: 1,
             veces_cambio_usuario: 2,
             veces_cambio_politica: 1,
+            bajo_politica: false,
+            eventos_recibidos: 0,
+            sondeos: 0,
+            ultimo_evento: None,
             ultima_accion: "forzar_manual".to_string(),
             ultima_via: "settings".to_string(),
         };
