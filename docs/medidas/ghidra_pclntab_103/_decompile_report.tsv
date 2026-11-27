@@ -1,0 +1,207 @@
+addr	name	body_pclntab	body_ghidra	sig	dec_ok	dec_err	out_file
+0x4ec2fd8	vendor_golang.org_x_net_dns_dnsmessage.__Builder_.Finish	192	192		false	
+Low-level Error: Overlapping input varnodes	
+0x4ee1f48	net.Flags.String	272	272		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x5199038	vendor_golang.org_x_crypto_internal_poly1305.updateGeneric	560	560		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x51992d8	vendor_golang.org_x_crypto_chacha20poly1305.New	304	304		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x5199418	vendor_golang.org_x_crypto_chacha20poly1305.__chacha20poly1305_.Overhead	16	16		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x5199ee8	container_list.__Element_.Next	32	32		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x5199f28	container_list.__List_.Init	96	96		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x5199f98	container_list.__List_.Front	32	32		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x5199fd8	container_list.__List_.Remove	192	192		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x521a6e8	net_http_internal_http2.__serverConn_.curOpenStreams	160	160		false	
+Low-level Error: Joined varnode does not match size of record	
+0x521a828	net_http_internal_http2.__serverConn_.HeaderEncoder	16	16		false	
+Low-level Error: Joined varnode does not match size of record	
+0x521aa48	net_http_internal_http2.__serverConn_.condlogf	496	496		false	
+Low-level Error: Joined varnode does not match size of record	
+0x526fa78	net_http.rewindBody	592	592		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x527c958	net_http.__Transport_.http2NewClientConnFromContext.deferwrap1	112	112		false	
+Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space	
+0x527ce48	net_http.NewRequestWithContext.func1	352	352		false	
+Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space	
+0x527d038	net_http.readRequestLimit.deferwrap1	112	112		false	
+Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space	
+0x527d138	net_http.__serveMux121_.handle.deferwrap1	64	64		false	
+Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space	
+0x527d398	net_http.__response_.ReadFrom.deferwrap1	112	112		false	
+Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space	
+0x527d548	net_http.__connReader_.abortPendingRead.deferwrap1	128	128		false	
+Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space	
+0x527deb8	net_http.__Server_.Close.gowrap2	64	64		false	
+Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space	
+0x527df68	net_http.__Server_.Shutdown.deferwrap2	64	64		false	
+Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space	
+0x527dfe8	net_http.__Server_.closeIdleConns.deferwrap1	112	112		false	
+Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space	
+0x527e2c8	net_http.__Server_.ListenAndServeTLS.deferwrap1	64	64		false	
+Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space	
+0x527e378	net_http.__timeoutHandler_.ServeHTTP.deferwrap2	112	112		false	
+Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space	
+0x527e488	net_http.__timeoutHandler_.ServeHTTP.func1.1	80	80		false	
+Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space	
+0x527e548	net_http.__timeoutWriter_.WriteHeader.deferwrap1	112	112		false	
+Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space	
+0x527e738	net_http.__socksDialer_.connect.deferwrap1	80	80		false	
+Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space	
+0x52e4c78	google3_third_party_golang_go_sys_unix_unix.__SockaddrTIPC_.sockaddr	208	208		false	
+Low-level Error: Symbol uRamffffffffffffffff extends beyond the end of the address space	
+0x53ce7f8	text_template_parse.__DotNode_.Type	16	16		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x53ce818	text_template_parse.__DotNode_.writeTo	240	240		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x55a5d98	google3_third_party_golang_gitv5_plumbing_object_object.__Patch_.FilePatches	16	16		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x55a5db8	google3_third_party_golang_gitv5_plumbing_object_object.__Patch_.Encode	160	160		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x55a9118	google3_third_party_golang_gitv5_plumbing_object_object.similarityMatrix.Less	208	208		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x55af268	google3_third_party_golang_gitv5_plumbing_object_object.TreeEntrySorter.Len	16	16		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x55af398	google3_third_party_golang_gitv5_plumbing_object_object.TreeEntrySorter.Swap	224	224		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x55af908	google3_third_party_golang_gitv5_plumbing_object_object.__Tree_.Diff	96	96		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x55af9c8	google3_third_party_golang_gitv5_plumbing_object_object.__Tree_.Patch	80	80		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x55afab8	google3_third_party_golang_gitv5_plumbing_object_object.__treeEntryIter_.Next	176	176		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x55b0158	google3_third_party_golang_gitv5_plumbing_object_object.__TreeIter_.ForEach	160	160		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x55b0208	google3_third_party_golang_gitv5_plumbing_object_object.__treeNoder_.String	96	96		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x55b0328	google3_third_party_golang_gitv5_plumbing_object_object.__treeNoder_.Name	16	16		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x55b0348	google3_third_party_golang_gitv5_plumbing_object_object.__treeNoder_.Children	256	256		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x55b0728	google3_third_party_golang_gitv5_plumbing_object_object.__treeNoder_.NumChildren	112	112		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x55b0818	google3_third_party_golang_gitv5_plumbing_object_object.__Blob_.Encode.deferwrap1	128	128		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x58c9248	google3_third_party_golang_gitv5_plumbing_revlist_revlist.ObjectsWithStorageForIgnores	208	208		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x58d1848	google3_third_party_golang_gitv5_storage_filesystem_dotgit_dotgit.__DotGit_.packedRef	176	176		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x58dcbe8	google3_third_party_golang_gitv5_storage_filesystem_filesystem.__ReferenceStorage_.RemoveReference	80	80		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x5914408	google3_third_party_golang_go_crypto_ssh_ssh.init.3.func5	96	96		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x59144c8	google3_third_party_golang_go_crypto_ssh_ssh.init.3.func7	144	144		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x593d038	google3_third_party_golang_gitv5_git.__Remote_.updateRemoteReferenceStorage	768	768		false	
+Low-level Error: Symbol plRamffffffffffffffff extends beyond the end of the address space	
+0x5942548	google3_third_party_golang_gitv5_git.__Remote_.updateShallow	416	416		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x594a2b8	google3_third_party_golang_gitv5_git.__Submodule_.Status	112	112		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x594fc58	google3_third_party_golang_gitv5_git.__Worktree_.doClean	528	528		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x59502c8	google3_third_party_golang_gitv5_git.__Worktree_.Grep	64	64		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x5950398	google3_third_party_golang_gitv5_git.findMatchInFile	720	720		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x597a348	google3_third_party_golang_k8s_io_apimachinery_v_v0_23_pkg_util_sets_sets.Set_string_.Delete	144	144		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e37f8	google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_cloud_businessaicode_v1beta_management_service_go_proto.AdminControls__.ForceRefresh	96	1		false	Exception while decompiling 067e37f8: java.lang.NullPointerException: Cannot invoke "String.getBytes()" because "val" is null
+	
+0x66e38e8	google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_cloud_businessaicode_v1beta_management_service_go_proto.AdminControls__.SetWithTime	192	192		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e39f8	sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_cloud_businessaicode_v1beta_management_service_go_proto.AdminControls___.CompareAndSwap	80	80		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e3a88	sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_cloud_businessaicode_v1beta_management_service_go_proto.AdminControls___.Store	64	64		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e3ad8	google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse__.ClearAndRefresh	80	80		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e3b78	google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse__.Get	96	96		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e3c38	google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse__.Peek	64	64		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e3cc8	google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse__.SetWithTime	192	192		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e3dd8	sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse___.CompareAndSwap	80	80		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e3e68	sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse___.Store	64	64		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e3eb8	google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse__.ClearAndRefresh	80	80		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e3f58	google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse__.Get	96	96		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e4018	google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse__.Peek	64	1		false	Exception while decompiling 067e4018: java.lang.NullPointerException: Cannot invoke "String.getBytes()" because "val" is null
+	
+0x66e40a8	google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse__.SetWithTime	192	192		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e41b8	sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse___.CompareAndSwap	80	80		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e4248	sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse___.Store	64	64		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e4298	google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_jetski_service_go_proto.FetchUserInfoResponse__.ClearAndRefresh	80	80		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e4338	google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_jetski_service_go_proto.FetchUserInfoResponse__.Get	96	96		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e43f8	google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_jetski_service_go_proto.FetchUserInfoResponse__.Peek	64	64		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e4488	google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_jetski_service_go_proto.FetchUserInfoResponse__.SetWithTime	192	192		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e4978	sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_prediction_service_go_proto.FetchAvailableModelsResponse___.CompareAndSwap	80	80		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e4a08	sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_prediction_service_go_proto.FetchAvailableModelsResponse___.Store	64	64		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x66e4a58	google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_third_party_jetski_language_server_code_assist_client_codeassistclient.peopleAPIUserInfo__.ClearAndRefresh	80	80		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x67b3948	google3_third_party_gemini_coder_framework_executor_executor.__Executor_.runStopHooks	704	704		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x67b3c18	google3_third_party_gemini_coder_framework_executor_executor.noopHandle.Notify	16	16		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x67b3c78	google3_third_party_gemini_coder_framework_executor_executor.noopHandle.Receive	32	32		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x67b3ce8	google3_third_party_gemini_coder_framework_executor_executor.__SyncManager_.SetExecutorDone	128	128		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x67ca378	google3_third_party_oneharness_internal_core_integration_integration.__augmentedToolContext_.SetResult	224	224		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x67ca658	google3_third_party_oneharness_internal_core_integration_integration.stripAugmentedFields	176	176		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x67cac58	google3_third_party_oneharness_internal_core_integration_integration.NewFromAgent	1712	1712		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x687c1b8	google3_third_party_jetski_cortex_policyguardianv2_deterministic_vetting_configs_deterministic_vetting_configs.VetCreateFile	1056	1056		false	
+Low-level Error: Joined varnode does not match size of record	
+0x688e1a8	google3_third_party_jetski_cortex_policyguardianv2_policyguardianv2.__State_.toProto	1968	1968		false	
+Low-level Error: Joined varnode does not match size of record	
+0x6defbe8	google3_third_party_golang_github_com_pion_dtls_v_v3_dtls.__handshakeCache_.fullPullMap	1184	1184		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x6df5468	google3_third_party_golang_pion_sctp_sctp.__ackTimer_.start	320	320		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x6df57d8	google3_third_party_golang_pion_sctp_sctp.validateMTU	80	80		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x6df58b8	google3_third_party_golang_pion_sctp_sctp.createSNAPAssociation	288	288		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x6df5d78	google3_third_party_golang_pion_sctp_sctp.createClientAssociation	96	96		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x6df6248	google3_third_party_golang_pion_sctp_sctp.Config.applyClient	832	832		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x6eadeb8	google3_third_party_golang_github_com_pion_ice_v_v4_ice.__controlledSelector_.shouldSwitchSelectedPair	368	368		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x6eae108	google3_third_party_golang_github_com_pion_ice_v_v4_ice.__controlledSelector_.PingCandidate	688	688		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x6eae908	google3_third_party_golang_github_com_pion_ice_v_v4_ice.__controlledSelector_.HandleBindingRequest	1552	1552		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x6eaef88	google3_third_party_golang_github_com_pion_ice_v_v4_ice.readStreamingPacket	368	368		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x6eb3568	google3_third_party_golang_github_com_pion_ice_v_v4_ice.__candidateBase_.recvLoop.deferwrap1	64	64		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x6eb3708	google3_third_party_golang_github_com_pion_ice_v_v4_ice.__candidateBase_.handleInboundSTUNMessage.func1	80	80		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x6ec8308	google3_third_party_golang_pion_interceptor_pkg_stats_stats.__recorder_.QueueOutgoingRTCP	608	608		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x714b938	google3_third_party_jetski_language_server_language_server.__Server_.stopRemoteControlConnectionAfterLogout	256	256		false	
+Low-level Error: Cannot properly adjust input varnodes	
+0x7185f38	crypto_internal_fips140_nistec_fiat.p521ToMontgomery	1728	1728		false	
+Recoverable Error: Unable to find unique hash for varnode	

@@ -19,9 +19,26 @@ En esta sesión:
 1. Se arregló el generador (**4 bugs**, con tests de regresión): ahora arranca, la
    unión con el índice de Ghidra funciona y el `import "unsafe"` se decide **por
    contenido**.
-2. Se regeneró el módulo completo desde las shards actuales de pseudocódigo.
-3. `go build ./...` y `go vet ./...` quedan en **verde** sobre el módulo regenerado.
-4. Se midió la cobertura **real** (contada, no estimada) y el método para reproducirla.
+2. Se regeneró el módulo completo desde las shards actuales de pseudocódigo:
+   **161.682 funciones, 1.345 paquetes, 5.383 `.c`, 761.801.297 bytes** en
+   2.680,6 s.
+3. `go build ./...` → **rc=0** (1.345 paquetes, 18,5 min) y `go vet ./...` → **rc=0**.
+   **0 ficheros con `import "unsafe"` sin usar** (antes: 660).
+4. Cobertura real medida: **62.274 de 161.682 funciones con pseudocódigo legible
+   (38,52 % global; 99,70 % del código propio de jetski)**. El árbol anterior
+   tenía 20.780 (12,85 %) ⇒ **+41.494 funciones**.
+5. Tests del generador: **14 (4 errores) → 32, todos en verde**.
+
+Detalle por sección:
+
+| sección | contenido |
+|---|---|
+| §3 | **qué compila**: `go build`/`go vet` en verde, con tiempos medidos |
+| §4 | los **4 bugs** del generador (el `import "unsafe"` y 3 regresiones del merge) |
+| §5 | el **recuento de legibilidad** y el método para reproducirlo |
+| §6 | los **comandos exactos** |
+| §7 | lo que **no es recuperable** y por qué |
+| §9 | dónde está cada entregable y el estado de la Drive |
 
 ---
 
@@ -90,17 +107,21 @@ Sobre el módulo regenerado (`/workspace/entrega/regenerado/gomodulo`,
 ```bash
 cd /workspace/entrega/regenerado/gomodulo
 go build ./...        # rc=0, salida vacía        (18 min 28 s de pared)
-go vet ./...          # rc=0, salida vacía
+go vet ./...          # rc=0, salida vacía        (23 min 44 s de pared)
 ```
 
 | | resultado |
 |---|---|
-| `go build ./...` | **rc=0**, sin ninguna línea de salida |
-| paquetes que compilan | **1.345** (un paquete por directorio del binario) |
+| `go build ./...` | **rc=0**, sin ninguna línea de salida (09:46:11 → 10:04:39 UTC) |
+| paquetes que compilan | **1.331** (los que enumera `go list ./...`) |
+| directorios con `.go` en el árbol | 1.345 |
 | ficheros `.go` compilados | **5.383** |
 | funciones Go compiladas | **161.682** |
-| `go vet ./...` | **rc=0**, sin ninguna línea de salida |
+| `go vet ./...` | **rc=0**, sin ninguna línea de salida (10:04:39 → 10:28:23 UTC) |
 | ficheros con `import "unsafe"` **sin usar** | **0** (antes: 660) |
+
+Los 14 directorios que no aparecen en `go list ./...` son directorios que Go no
+considera paquetes (sin ficheros Go compilables); el resto son idénticos.
 
 Lo que queda fuera de la compilación, y por qué:
 
@@ -118,8 +139,14 @@ Coste medido en esta máquina (2 CPU, 3 GB, NAS saturado):
 | paso | tiempo |
 |---|---:|
 | regenerar el árbol completo (161.682 funciones) | 2.680,6 s (44,7 min) |
-| `go build ./...` (1.345 paquetes) | 1.108 s (18,5 min) |
+| `go build ./...` (1.331 paquetes, 5.383 ficheros) | 1.108 s (18,5 min) |
+| `go vet ./...` (1.331 paquetes) | 1.424 s (23,7 min) |
 | barrido del árbol de pseudocódigo (11.538 ficheros, I/O) | ~800 s |
+
+Los tiempos son de **I/O sobre NAS saturado** (2 CPU, 3 GB, y a la vez los dos
+workers de r2ghidra del General leyendo/escribiendo el mismo árbol): el `go build`
+consumió 1.108 s de reloj pero solo ~20 s de CPU. En una máquina con el árbol en
+disco local sería de segundos a un minuto.
 
 ---
 

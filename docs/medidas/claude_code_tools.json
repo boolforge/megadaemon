@@ -1,0 +1,2648 @@
+{
+  "producto": "Claude Code",
+  "version": "2.1.332",
+  "paquete_npm": "@anthropic-ai/claude-code",
+  "fuente_del_esquema": "/workspace/agy-re/productos/claude-code/package/sdk-tools.d.ts",
+  "nota": "El .d.ts lo genera json-schema-to-typescript a partir del JSON Schema real; las firmas son las que el binario aplica.",
+  "n_tools": 44,
+  "n_tools_salida": 44,
+  "tools": [
+    {
+      "tool": "Agent",
+      "entrada": [
+        {
+          "campo": "description",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "A short (3-5 word) description of the task"
+        },
+        {
+          "campo": "prompt",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The task for the agent to perform"
+        },
+        {
+          "campo": "subagent_type",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "The type of specialized agent to use for this task"
+        },
+        {
+          "campo": "model",
+          "tipo": "\"sonnet\" | \"opus\" | \"haiku\" | \"fable\"",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Optional model override for this agent. Takes precedence over the agent definition's model frontmatter and the configured default subagent model. If omitted, uses the agent definition's model, else the default (inherits "
+        },
+        {
+          "campo": "effort",
+          "tipo": "\"low\" | \"medium\" | \"high\" | \"xhigh\" | \"max\"",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Reasoning effort for this agent. Set this ONLY when the user, or instructions such as CLAUDE.md or a skill, explicitly ask that this agent or delegated work run at a specific effort level, never on your own judgment; oth"
+        },
+        {
+          "campo": "run_in_background",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Agents run in the background by default; you will be notified when one completes. Set to false only when your very next action depends on this agent's result and nothing else could usefully happen while it runs — otherwi"
+        },
+        {
+          "campo": "name",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Name for the spawned agent. Makes it addressable via SendMessage({to: name}) while running."
+        },
+        {
+          "campo": "team_name",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Deprecated; ignored. The session has a single implicit team."
+        },
+        {
+          "campo": "mode",
+          "tipo": "\"acceptEdits\" | \"auto\" | \"bypassPermissions\" | \"default\" | \"dontAsk\" | \"plan\"",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Deprecated; ignored. Subagents inherit the parent session's permission mode; agent-definition frontmatter may override it."
+        },
+        {
+          "campo": "isolation",
+          "tipo": "\"worktree\" | \"remote\"",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Isolation mode. \"worktree\" creates a temporary git worktree so the agent works on an isolated copy of the repo. \"remote\" launches the agent in a remote cloud environment (always runs in background; availability is gated)"
+        }
+      ],
+      "salida": [],
+      "n_campos_entrada": 10,
+      "n_campos_salida": 0
+    },
+    {
+      "tool": "Bash",
+      "entrada": [
+        {
+          "campo": "command",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The command to execute"
+        },
+        {
+          "campo": "timeout",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Optional timeout in milliseconds (max 600000 for a foreground command)"
+        },
+        {
+          "campo": "description",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Clear, concise description of what this command does in active voice. Never use words like \"complex\" or \"risk\" in the description - just describe what it does. Say what the command does in plain words: do not echo the co"
+        },
+        {
+          "campo": "run_in_background",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Set to true to run this command in the background. With it, `timeout` limits how long the command may run in the background before it is stopped (default 1800000 ms, max 7200000 ms)."
+        },
+        {
+          "campo": "dangerouslyDisableSandbox",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Set this to true to dangerously override sandbox mode and run commands without sandboxing."
+        }
+      ],
+      "salida": [
+        {
+          "campo": "stdout",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The standard output of the command"
+        },
+        {
+          "campo": "stderr",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The standard error output of the command"
+        },
+        {
+          "campo": "rawOutputPath",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Path to raw output file for large MCP tool outputs"
+        },
+        {
+          "campo": "interrupted",
+          "tipo": "boolean",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Whether the command was interrupted"
+        },
+        {
+          "campo": "isImage",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Flag to indicate if stdout contains image data"
+        },
+        {
+          "campo": "backgroundTaskId",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "ID of the background task if command is running in background"
+        },
+        {
+          "campo": "backgroundedByUser",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "True if the user manually backgrounded the command with Ctrl+B"
+        },
+        {
+          "campo": "timedOutAfterMs",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Set when the command hit its timeout and was auto-backgrounded; the timeout value in ms"
+        },
+        {
+          "campo": "backgroundCwdHint",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Model-facing note that the session cwd was not changed by a backgrounded command containing a directory-change builtin (cd/pushd/popd/chdir)"
+        },
+        {
+          "campo": "backgroundEndsWithFinalResponse",
+          "tipo": "true",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "True when this backgrounded command is terminated at its caller's final response, so no completion notification can follow (a synchronous subagent's command, or a headless session that takes no further input and is not w"
+        },
+        {
+          "campo": "backgroundWakesOwner",
+          "tipo": "true",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "True when the subagent that owns this backgrounded command parks for its end and is woken by it"
+        },
+        {
+          "campo": "dangerouslyDisableSandbox",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Flag to indicate if sandbox mode was overridden"
+        },
+        {
+          "campo": "returnCodeInterpretation",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Semantic interpretation for non-error exit codes with special meaning"
+        },
+        {
+          "campo": "noOutputExpected",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Whether the command is expected to produce no output on success"
+        },
+        {
+          "campo": "structuredContent",
+          "tipo": "unknown[]",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Structured content blocks"
+        },
+        {
+          "campo": "persistedOutputPath",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Path to the persisted full output in tool-results dir (set when output is too large for inline)"
+        },
+        {
+          "campo": "persistedOutputSize",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Total size of the output in bytes (set when output is too large for inline)"
+        },
+        {
+          "campo": "staleReadFileStateHint",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Model-facing note listing readFileState entries whose mtime bumped during this command (set when WRITE_COMMAND_MARKERS matches)"
+        },
+        {
+          "campo": "ghRateLimitHint",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Model-facing system-reminder appended when a gh command reports a GitHub API rate-limit error"
+        },
+        {
+          "campo": "gitOperation",
+          "tipo": "{ commit?: { sha: string; kind: \"committed\" | \"amended\" | \"cherry-picked\"; branch?: string; }; push?: { branch: string; ",
+          "obligatorio": false,
+          "compuesto": true,
+          "desc": "Structured classification of git/gh operations detected in this command (commit/push/merge/rebase/PR). Client-facing — lets clients render git activity without re-parsing stdout; not surfaced to the model."
+        }
+      ],
+      "n_campos_entrada": 5,
+      "n_campos_salida": 20
+    },
+    {
+      "tool": "ExitPlanMode",
+      "entrada": [
+        {
+          "campo": "allowedPrompts",
+          "tipo": "{ /** * The tool this prompt applies to */ tool: \"Bash\"; /** * Semantic description of the action, e.g. \"run tests\", \"in",
+          "obligatorio": false,
+          "compuesto": true,
+          "desc": "Deprecated: no longer used."
+        }
+      ],
+      "salida": [
+        {
+          "campo": "plan",
+          "tipo": "string | null",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The plan that was presented to the user"
+        },
+        {
+          "campo": "isAgent",
+          "tipo": "boolean",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "filePath",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "The file path where the plan was saved"
+        },
+        {
+          "campo": "hasTaskTool",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Whether the Agent tool is available in the current context"
+        },
+        {
+          "campo": "planWasEdited",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "True when the user edited the plan (CCR web UI or Ctrl+G); determines whether the plan is echoed back in tool_result"
+        },
+        {
+          "campo": "awaitingLeaderApproval",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "When true, the teammate has sent a plan approval request to the team leader"
+        },
+        {
+          "campo": "requestId",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Unique identifier for the plan approval request"
+        }
+      ],
+      "n_campos_entrada": 1,
+      "n_campos_salida": 7
+    },
+    {
+      "tool": "FileEdit",
+      "entrada": [
+        {
+          "campo": "file_path",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The absolute path to the file to modify"
+        },
+        {
+          "campo": "old_string",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The text to replace"
+        },
+        {
+          "campo": "new_string",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The text to replace it with (must be different from old_string)"
+        },
+        {
+          "campo": "replace_all",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Replace all occurrences of old_string (default false)"
+        }
+      ],
+      "salida": [
+        {
+          "campo": "filePath",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The file path that was edited"
+        },
+        {
+          "campo": "oldString",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The original string that was replaced"
+        },
+        {
+          "campo": "newString",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The new string that replaced it"
+        },
+        {
+          "campo": "originalFile",
+          "tipo": "string | null",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The original file contents before editing"
+        },
+        {
+          "campo": "structuredPatch",
+          "tipo": "{ oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[]; }[]",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": "Diff patch showing the changes"
+        },
+        {
+          "campo": "userModified",
+          "tipo": "boolean",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Whether the user modified the proposed changes"
+        },
+        {
+          "campo": "replaceAll",
+          "tipo": "boolean",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Whether all occurrences were replaced"
+        },
+        {
+          "campo": "gitDiff",
+          "tipo": "{ filename: string; status: \"modified\" | \"added\"; additions: number; deletions: number; changes: number; patch: string; ",
+          "obligatorio": false,
+          "compuesto": true,
+          "desc": ""
+        },
+        {
+          "campo": "staged",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "True when the edit was held for the machine owner to review instead of written; the file is unchanged"
+        }
+      ],
+      "n_campos_entrada": 4,
+      "n_campos_salida": 9
+    },
+    {
+      "tool": "FileRead",
+      "entrada": [
+        {
+          "campo": "file_path",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The absolute path to the file to read"
+        },
+        {
+          "campo": "offset",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "The line number to start reading from. Only provide if the file is too large to read at once"
+        },
+        {
+          "campo": "limit",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "The number of lines to read. Only provide if the file is too large to read at once."
+        },
+        {
+          "campo": "pages",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Page range for PDF files (e.g., \"1-5\", \"3\", \"10-20\"). Only applicable to PDF files. Maximum 20 pages per request."
+        },
+        {
+          "campo": "allow_large",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Set to true to read a text file, or a line range of one, that is over the usual size limits, up to what still fits in your context. Only use this when you genuinely need all of it or the user asked for the whole file; ot"
+        }
+      ],
+      "salida": [],
+      "n_campos_entrada": 5,
+      "n_campos_salida": 0
+    },
+    {
+      "tool": "FileWrite",
+      "entrada": [
+        {
+          "campo": "file_path",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The absolute path to the file to write (must be absolute, not relative)"
+        },
+        {
+          "campo": "content",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The content to write to the file"
+        }
+      ],
+      "salida": [
+        {
+          "campo": "type",
+          "tipo": "\"create\" | \"update\"",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Whether a new file was created or an existing file was updated"
+        },
+        {
+          "campo": "filePath",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The path to the file that was written"
+        },
+        {
+          "campo": "content",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The content that was written to the file"
+        },
+        {
+          "campo": "structuredPatch",
+          "tipo": "{ oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[]; }[]",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": "Diff patch showing the changes (empty when nothing changed, the diff timed out, or — with originalFile null on an update — the previous content was too large to diff)"
+        },
+        {
+          "campo": "originalFile",
+          "tipo": "string | null",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The original file content before the write (null for new files, or when the previous content was too large to include)"
+        },
+        {
+          "campo": "gitDiff",
+          "tipo": "{ filename: string; status: \"modified\" | \"added\"; additions: number; deletions: number; changes: number; patch: string; ",
+          "obligatorio": false,
+          "compuesto": true,
+          "desc": ""
+        },
+        {
+          "campo": "userModified",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "True when the user edited the proposed content in the permission dialog before accepting"
+        },
+        {
+          "campo": "staged",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "True when the write was held for the machine owner to review instead of written; the file is unchanged"
+        }
+      ],
+      "n_campos_entrada": 2,
+      "n_campos_salida": 8
+    },
+    {
+      "tool": "Glob",
+      "entrada": [
+        {
+          "campo": "pattern",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The glob pattern to match files against"
+        },
+        {
+          "campo": "path",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter \"undefined\" or \"null\" - simply omit it for the default behav"
+        }
+      ],
+      "salida": [
+        {
+          "campo": "durationMs",
+          "tipo": "number",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Time taken to execute the search in milliseconds"
+        },
+        {
+          "campo": "numFiles",
+          "tipo": "number",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Number of file paths returned (after any truncation)"
+        },
+        {
+          "campo": "filenames",
+          "tipo": "string[]",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Array of file paths that match the pattern"
+        },
+        {
+          "campo": "truncated",
+          "tipo": "boolean",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Whether results were truncated (limited to 100 files)"
+        },
+        {
+          "campo": "totalMatches",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Total number of matching files before truncation. A lower bound when countIsComplete is false. Absent on results persisted by CLI versions predating this field."
+        },
+        {
+          "campo": "countIsComplete",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Whether totalMatches is the exact total (true) or a floor because the underlying search truncated its own output (false). Absent on results persisted by CLI versions predating this field."
+        },
+        {
+          "campo": "timedOut",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "True when the time limit stopped the search after these paths were read, so more matches may exist. Absent otherwise."
+        }
+      ],
+      "n_campos_entrada": 2,
+      "n_campos_salida": 7
+    },
+    {
+      "tool": "Grep",
+      "entrada": [
+        {
+          "campo": "pattern",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The regular expression pattern to search for in file contents"
+        },
+        {
+          "campo": "path",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "File or directory to search in (rg PATH). Defaults to current working directory."
+        },
+        {
+          "campo": "glob",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\") - maps to rg --glob"
+        },
+        {
+          "campo": "output_mode",
+          "tipo": "\"content\" | \"files_with_matches\" | \"count\"",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Output mode: \"content\" shows matching lines (supports -A/-B/-C context, -n line numbers, head_limit), \"files_with_matches\" shows file paths (supports head_limit), \"count\" shows match counts (supports head_limit). Default"
+        },
+        {
+          "campo": "context",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Number of lines to show before and after each match (rg -C). Requires output_mode: \"content\", ignored otherwise."
+        },
+        {
+          "campo": "type",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "File type to search (rg --type). Common types: js, py, rust, go, java, etc. More efficient than include for standard file types."
+        },
+        {
+          "campo": "head_limit",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Limit output to first N lines/entries, equivalent to \"| head -N\". Works across all output modes: content (limits output lines), files_with_matches (limits file paths), count (limits count entries). Defaults to 250 when u"
+        },
+        {
+          "campo": "offset",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Skip first N lines/entries before applying head_limit, equivalent to \"| tail -n +N | head -N\". Works across all output modes. Defaults to 0."
+        },
+        {
+          "campo": "multiline",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall). Default: false."
+        }
+      ],
+      "salida": [
+        {
+          "campo": "mode",
+          "tipo": "\"content\" | \"files_with_matches\" | \"count\"",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "numFiles",
+          "tipo": "number",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "filenames",
+          "tipo": "string[]",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "content",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "numLines",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "numMatches",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "totalFiles",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "totalLines",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "appliedLimit",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "appliedOffset",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "timedOut",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        }
+      ],
+      "n_campos_entrada": 9,
+      "n_campos_salida": 11
+    },
+    {
+      "tool": "TaskStop",
+      "entrada": [
+        {
+          "campo": "task_id",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "The ID of the background task to stop. Agent-team teammates and named background agents are also accepted by agent ID or name."
+        },
+        {
+          "campo": "shell_id",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Deprecated: use task_id instead"
+        }
+      ],
+      "salida": [
+        {
+          "campo": "message",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Status message about the operation"
+        },
+        {
+          "campo": "task_id",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The ID of the task that was stopped"
+        },
+        {
+          "campo": "task_type",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The type of the task that was stopped"
+        },
+        {
+          "campo": "command",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "The command or description of the stopped task"
+        }
+      ],
+      "n_campos_entrada": 2,
+      "n_campos_salida": 4
+    },
+    {
+      "tool": "ListMcpResources",
+      "entrada": [
+        {
+          "campo": "server",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Optional server name to filter resources by"
+        }
+      ],
+      "salida": [],
+      "n_campos_entrada": 1,
+      "n_campos_salida": 0
+    },
+    {
+      "tool": "RefreshMcpTools",
+      "entrada": [
+        {
+          "campo": "server",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Optional server name: refresh only this server. Omit to refresh all connected servers."
+        }
+      ],
+      "salida": [],
+      "n_campos_entrada": 1,
+      "n_campos_salida": 0
+    },
+    {
+      "tool": "Mcp",
+      "entrada": [],
+      "salida": [],
+      "n_campos_entrada": 0,
+      "n_campos_salida": 0
+    },
+    {
+      "tool": "NotebookEdit",
+      "entrada": [
+        {
+          "campo": "notebook_path",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The absolute path to the Jupyter notebook file to edit (must be absolute, not relative)"
+        },
+        {
+          "campo": "cell_id",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "The ID of the cell to edit. When inserting a new cell, the new cell will be inserted after the cell with this ID, or at the beginning if not specified."
+        },
+        {
+          "campo": "new_source",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The new source for the cell"
+        },
+        {
+          "campo": "cell_type",
+          "tipo": "\"code\" | \"markdown\"",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "The type of the cell (code or markdown). If not specified, it defaults to the current cell type. If using edit_mode=insert, this is required."
+        },
+        {
+          "campo": "edit_mode",
+          "tipo": "\"replace\" | \"insert\" | \"delete\"",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "The type of edit to make (replace, insert, delete). Defaults to replace."
+        }
+      ],
+      "salida": [
+        {
+          "campo": "new_source",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The new source code that was written to the cell"
+        },
+        {
+          "campo": "old_source",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "The previous cell source (replace/delete only). Enables cell-relative diff rendering without re-reading the notebook."
+        },
+        {
+          "campo": "cell_id",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "The ID of the cell that was edited"
+        },
+        {
+          "campo": "cell_type",
+          "tipo": "\"code\" | \"markdown\"",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The type of the cell"
+        },
+        {
+          "campo": "language",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The programming language of the notebook"
+        },
+        {
+          "campo": "edit_mode",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The edit mode that was used"
+        },
+        {
+          "campo": "error",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Error message if the operation failed"
+        },
+        {
+          "campo": "notebook_path",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The path to the notebook file"
+        },
+        {
+          "campo": "original_file",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The original notebook content before modification"
+        },
+        {
+          "campo": "updated_file",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The updated notebook content after modification"
+        }
+      ],
+      "n_campos_entrada": 5,
+      "n_campos_salida": 10
+    },
+    {
+      "tool": "ReadMcpResourceDir",
+      "entrada": [
+        {
+          "campo": "server",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The MCP server name"
+        },
+        {
+          "campo": "uri",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The directory resource URI to list"
+        }
+      ],
+      "salida": [
+        {
+          "campo": "resources",
+          "tipo": "{ /** * Child resource URI */ uri: string; /** * Child resource name */ name: string; /** * Child MIME type */ mimeType?",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": "Direct children of the directory resource. Subdirectories appear with mimeType \"inode/directory\"."
+        },
+        {
+          "campo": "error",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Human-readable error when the server could not list the directory"
+        }
+      ],
+      "n_campos_entrada": 2,
+      "n_campos_salida": 2
+    },
+    {
+      "tool": "ReadMcpResource",
+      "entrada": [
+        {
+          "campo": "server",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The MCP server name"
+        },
+        {
+          "campo": "uri",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The resource URI to read"
+        }
+      ],
+      "salida": [
+        {
+          "campo": "contents",
+          "tipo": "{ /** * Resource URI */ uri: string; /** * MIME type of the content */ mimeType?: string; /** * Text content of the reso",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": ""
+        },
+        {
+          "campo": "error",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Human-readable error when the server could not read the resource"
+        }
+      ],
+      "n_campos_entrada": 2,
+      "n_campos_salida": 2
+    },
+    {
+      "tool": "ReportFindings",
+      "entrada": [
+        {
+          "campo": "level",
+          "tipo": "\"low\" | \"medium\" | \"high\" | \"xhigh\" | \"max\"",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Effort level the review ran at"
+        },
+        {
+          "campo": "findings",
+          "tipo": "{ /** * Repo-relative path of the file the finding is in */ file: string; /** * 1-indexed line the finding anchors to */",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": "Verified findings, most-severe first; empty if none survived @maxItems 32"
+        }
+      ],
+      "salida": [
+        {
+          "campo": "count",
+          "tipo": "number",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Number of findings reported"
+        },
+        {
+          "campo": "level",
+          "tipo": "\"low\" | \"medium\" | \"high\" | \"xhigh\" | \"max\"",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Effort level the review ran at"
+        },
+        {
+          "campo": "findings",
+          "tipo": "{ /** * Repo-relative path of the file the finding is in */ file: string; /** * 1-indexed line the finding anchors to */",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": "Echoed for the result body"
+        }
+      ],
+      "n_campos_entrada": 2,
+      "n_campos_salida": 3
+    },
+    {
+      "tool": "TodoWrite",
+      "entrada": [
+        {
+          "campo": "todos",
+          "tipo": "{ content: string; status: \"pending\" | \"in_progress\" | \"completed\"; activeForm: string; }[]",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": "The updated todo list"
+        }
+      ],
+      "salida": [
+        {
+          "campo": "oldTodos",
+          "tipo": "{ content: string; status: \"pending\" | \"in_progress\" | \"completed\"; activeForm: string; }[]",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": "The todo list before the update"
+        },
+        {
+          "campo": "newTodos",
+          "tipo": "{ content: string; status: \"pending\" | \"in_progress\" | \"completed\"; activeForm: string; }[]",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": "The todo list after the update"
+        }
+      ],
+      "n_campos_entrada": 1,
+      "n_campos_salida": 2
+    },
+    {
+      "tool": "WebFetch",
+      "entrada": [
+        {
+          "campo": "url",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The URL to fetch content from"
+        },
+        {
+          "campo": "prompt",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The prompt to run on the fetched content"
+        },
+        {
+          "campo": "offset",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Character position in the page text to start reading from. Use it to read on through a page too long for one call, with the value the previous result gave."
+        }
+      ],
+      "salida": [
+        {
+          "campo": "bytes",
+          "tipo": "number",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Size of the fetched content in bytes"
+        },
+        {
+          "campo": "code",
+          "tipo": "number",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "HTTP response code"
+        },
+        {
+          "campo": "codeText",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "HTTP response code text"
+        },
+        {
+          "campo": "result",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Processed result from applying the prompt to the content"
+        },
+        {
+          "campo": "durationMs",
+          "tipo": "number",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Time taken to fetch and process the content"
+        },
+        {
+          "campo": "url",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The URL that was fetched"
+        },
+        {
+          "campo": "artifactRead",
+          "tipo": "{ slug: string; ver?: string; seeded?: false; }",
+          "obligatorio": false,
+          "compuesto": true,
+          "desc": ""
+        }
+      ],
+      "n_campos_entrada": 3,
+      "n_campos_salida": 7
+    },
+    {
+      "tool": "WebSearch",
+      "entrada": [
+        {
+          "campo": "query",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The search query to use"
+        },
+        {
+          "campo": "allowed_domains",
+          "tipo": "string[]",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Only include search results from these domains"
+        },
+        {
+          "campo": "blocked_domains",
+          "tipo": "string[]",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Never include search results from these domains"
+        }
+      ],
+      "salida": [
+        {
+          "campo": "query",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The search query that was executed"
+        },
+        {
+          "campo": "results",
+          "tipo": "( | { /** * ID of the tool use */ tool_use_id: string; /** * Array of search hits */ content: { /** * The title of the s",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": "Search results and/or text commentary from the model"
+        },
+        {
+          "campo": "durationSeconds",
+          "tipo": "number",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Time taken to complete the search operation"
+        },
+        {
+          "campo": "searchCount",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Number of web searches performed"
+        }
+      ],
+      "n_campos_entrada": 3,
+      "n_campos_salida": 4
+    },
+    {
+      "tool": "AskUserQuestion",
+      "entrada": [
+        {
+          "campo": "questions",
+          "tipo": "| [ { /** * The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: \"Wh",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": "Questions to ask the user (1-4 questions) @minItems 1 @maxItems 4"
+        },
+        {
+          "campo": "answers",
+          "tipo": "{ [k: string]: string; }",
+          "obligatorio": false,
+          "compuesto": true,
+          "desc": "User answers collected by the permission component"
+        },
+        {
+          "campo": "annotations",
+          "tipo": "{ [k: string]: { /** * The preview content of the selected option, if the question used previews. */ preview?: string; /",
+          "obligatorio": false,
+          "compuesto": true,
+          "desc": "Optional per-question annotations from the user (e.g., notes on preview selections). Keyed by question text."
+        },
+        {
+          "campo": "metadata",
+          "tipo": "{ /** * Optional identifier for the source of this question (e.g., \"remember\" for /remember command). Used for analytics",
+          "obligatorio": false,
+          "compuesto": true,
+          "desc": "Optional metadata for tracking and analytics purposes. Not displayed to user."
+        }
+      ],
+      "salida": [
+        {
+          "campo": "questions",
+          "tipo": "{ /** * The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: \"Which ",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": "The questions that were asked"
+        },
+        {
+          "campo": "answers",
+          "tipo": "{ [k: string]: string; }",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": "The answers provided by the user (question text -> answer string; multi-select answers are comma-separated)"
+        },
+        {
+          "campo": "response",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Freeform text the user typed instead of selecting a structured option"
+        },
+        {
+          "campo": "annotations",
+          "tipo": "{ [k: string]: { /** * The preview content of the selected option, if the question used previews. */ preview?: string; /",
+          "obligatorio": false,
+          "compuesto": true,
+          "desc": "Optional per-question annotations from the user (e.g., notes on preview selections). Keyed by question text."
+        },
+        {
+          "campo": "afkTimeoutMs",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Set when the dialog auto-resolved after this many milliseconds of idle (user away from keyboard). Absent on every human-resolved path."
+        }
+      ],
+      "n_campos_entrada": 4,
+      "n_campos_salida": 5
+    },
+    {
+      "tool": "SendFeedback",
+      "entrada": [
+        {
+          "campo": "type",
+          "tipo": "\"bug\" | \"idea\" | \"missing_capability\"",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "What kind of feedback this is."
+        },
+        {
+          "campo": "title",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Short, specific one-line summary of the issue."
+        },
+        {
+          "campo": "details",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Labeled bullets, in order: **What happened:** (observed vs. expected, exact error text if short); **What the user said:** (quoted, or \"User didn't comment; observed by the model.\"); **Repro:** (minimal steps); **Evidence"
+        },
+        {
+          "campo": "area",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Optional short tag naming the part of Claude Code this is about (e.g. \"hooks config\", \"/help\", \"file editing\"). Leave blank if unclear."
+        },
+        {
+          "campo": "failure_mode",
+          "tipo": "| \"instruction_following\" | \"destructive_actions\" | \"code_quality\" | \"repetition_and_looping\" | \"model_regression\" | \"ov",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "When the report is about MODEL BEHAVIOR (not a product bug), the closest failure mode, or `other` when it is a model-behavior issue that fits no listed value. Omit only when the report is a product/tool bug with no model"
+        },
+        {
+          "campo": "task_category",
+          "tipo": "\"code_edit\" | \"debug\" | \"explain\" | \"plan\" | \"shell\" | \"search\" | \"review\" | \"other\"",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "What kind of task the session was doing when the issue occurred, or `other` when it is a clear task that fits no listed value. Omit only if genuinely unclear."
+        }
+      ],
+      "salida": [
+        {
+          "campo": "success",
+          "tipo": "boolean",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "message",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        }
+      ],
+      "n_campos_entrada": 6,
+      "n_campos_salida": 2
+    },
+    {
+      "tool": "ClaudeDesign",
+      "entrada": [
+        {
+          "campo": "operation",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Claude Design action to perform. Call with \"list\" first to discover the available operations and their argument schemas."
+        },
+        {
+          "campo": "arguments",
+          "tipo": "{ [k: string]: unknown; }",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": "Action input object (server-validated). Pass {} for operations that take no input."
+        }
+      ],
+      "salida": [
+        {
+          "campo": "operation",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "content",
+          "tipo": "{ [k: string]: unknown; }[]",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": ""
+        },
+        {
+          "campo": "isError",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        }
+      ],
+      "n_campos_entrada": 2,
+      "n_campos_salida": 3
+    },
+    {
+      "tool": "Projects",
+      "entrada": [
+        {
+          "campo": "method",
+          "tipo": "| \"project_info\" | \"project_read\" | \"project_search\" | \"project_write\" | \"project_delete\" | \"project_memory_list\" | \"pro",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "path",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "project_read/project_write/project_delete: doc path. project_write: an existing path is replaced in place; a new bare filename (no \"/\") is namespaced to \"claude/<name>\". project_memory_read: memory file path as listed by"
+        },
+        {
+          "campo": "content",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "project_write: inline doc text. Mutually exclusive with local_path. Use local_path for anything you have on disk."
+        },
+        {
+          "campo": "local_path",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "project_write: a file inside the working directory to upload. The tool reads, encodes, and uploads directly — contents never enter your context. Mutually exclusive with content."
+        },
+        {
+          "campo": "present_to_user",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "project_write: true marks this doc as the file the user needs to see — the deliverable they asked for or must act on. Defaults to false; leave it unset for routine saves, notes, and bulk writes."
+        },
+        {
+          "campo": "query",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "project_search: knowledge-base query"
+        },
+        {
+          "campo": "n",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "project_search: number of hits (default 5)"
+        }
+      ],
+      "salida": [],
+      "n_campos_entrada": 7,
+      "n_campos_salida": 0
+    },
+    {
+      "tool": "EnterPlanMode",
+      "entrada": [],
+      "salida": [
+        {
+          "campo": "message",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Confirmation that plan mode was entered"
+        }
+      ],
+      "n_campos_entrada": 0,
+      "n_campos_salida": 1
+    },
+    {
+      "tool": "TaskCreate",
+      "entrada": [
+        {
+          "campo": "subject",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "A brief title for the task"
+        },
+        {
+          "campo": "description",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "What needs to be done"
+        },
+        {
+          "campo": "activeForm",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Present continuous form shown in spinner when in_progress (e.g., \"Running tests\")"
+        },
+        {
+          "campo": "metadata",
+          "tipo": "{ [k: string]: unknown; }",
+          "obligatorio": false,
+          "compuesto": true,
+          "desc": "Arbitrary metadata to attach to the task"
+        }
+      ],
+      "salida": [
+        {
+          "campo": "task",
+          "tipo": "{ id: string; subject: string; /** * The task's description as saved. It can differ from the tool_use input if Claude Co",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": ""
+        }
+      ],
+      "n_campos_entrada": 4,
+      "n_campos_salida": 1
+    },
+    {
+      "tool": "TaskGet",
+      "entrada": [
+        {
+          "campo": "taskId",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The ID of the task to retrieve"
+        }
+      ],
+      "salida": [
+        {
+          "campo": "task",
+          "tipo": "{ id: string; subject: string; description: string; status: \"pending\" | \"in_progress\" | \"completed\"; blocks: string[]; b",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": ""
+        }
+      ],
+      "n_campos_entrada": 1,
+      "n_campos_salida": 1
+    },
+    {
+      "tool": "TaskUpdate",
+      "entrada": [
+        {
+          "campo": "taskId",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The ID of the task to update"
+        },
+        {
+          "campo": "subject",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "New subject for the task"
+        },
+        {
+          "campo": "description",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "New description for the task"
+        },
+        {
+          "campo": "activeForm",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Present continuous form shown in spinner when in_progress (e.g., \"Running tests\")"
+        },
+        {
+          "campo": "status",
+          "tipo": "(\"pending\" | \"in_progress\" | \"completed\") | \"deleted\"",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "New status for the task"
+        },
+        {
+          "campo": "addBlocks",
+          "tipo": "string[]",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Task IDs that this task blocks"
+        },
+        {
+          "campo": "addBlockedBy",
+          "tipo": "string[]",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Task IDs that block this task"
+        },
+        {
+          "campo": "owner",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "New owner for the task"
+        },
+        {
+          "campo": "metadata",
+          "tipo": "{ [k: string]: unknown; }",
+          "obligatorio": false,
+          "compuesto": true,
+          "desc": "Metadata keys to merge into the task. Set a key to null to delete it."
+        }
+      ],
+      "salida": [
+        {
+          "campo": "success",
+          "tipo": "boolean",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "taskId",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "updatedFields",
+          "tipo": "string[]",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "error",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "statusChange",
+          "tipo": "{ from: string; to: string; }",
+          "obligatorio": false,
+          "compuesto": true,
+          "desc": ""
+        }
+      ],
+      "n_campos_entrada": 9,
+      "n_campos_salida": 5
+    },
+    {
+      "tool": "TaskList",
+      "entrada": [],
+      "salida": [
+        {
+          "campo": "tasks",
+          "tipo": "{ id: string; subject: string; status: \"pending\" | \"in_progress\" | \"completed\"; owner?: string; blockedBy: string[]; }[]",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": ""
+        }
+      ],
+      "n_campos_entrada": 0,
+      "n_campos_salida": 1
+    },
+    {
+      "tool": "Workflow",
+      "entrada": [
+        {
+          "campo": "script",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Self-contained workflow script. Must begin with `export const meta = { name, description, phases }` (pure literal, no computed values) followed by the script body using agent()/parallel()/pipeline()/phase()."
+        },
+        {
+          "campo": "name",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Name of a predefined workflow (built-in or from .claude/workflows/). Resolves to a self-contained script."
+        },
+        {
+          "campo": "description",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Ignored — set the workflow description in the script's `meta` block."
+        },
+        {
+          "campo": "title",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Ignored — set the workflow title in the script's `meta` block."
+        },
+        {
+          "campo": "args",
+          "tipo": "{ [k: string]: unknown; }",
+          "obligatorio": false,
+          "compuesto": true,
+          "desc": "Optional input value exposed to the script as the global `args`, verbatim. Pass arrays/objects as actual JSON values, NOT as a JSON-encoded string — a stringified list breaks `args.filter`/`args.map` in the script. Use f"
+        },
+        {
+          "campo": "scriptPath",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Path to a workflow script file on disk. Every Workflow invocation persists its script under the session directory and returns the path in the tool result. To iterate, edit that file with Write/Edit and re-invoke Workflow"
+        },
+        {
+          "campo": "resumeFromRunId",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Run ID of a prior Workflow invocation to resume from. The cache is positional: agent() calls replay from cache up to the first call that failed, no longer matches the earlier run (edited, added, removed or reordered) or "
+        }
+      ],
+      "salida": [
+        {
+          "campo": "status",
+          "tipo": "\"async_launched\" | \"remote_launched\"",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "taskId",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "taskType",
+          "tipo": "\"local_workflow\" | \"remote_agent\"",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "TaskType of the registered background task — 'local_workflow' for in-process runs, 'remote_agent' when remote:true dispatches to CCR. Set on all new writes; absent only on transcripts written before this field existed."
+        },
+        {
+          "campo": "workflowName",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "meta.name from the workflow script — same value as task_started.workflow_name. Set on all new writes; absent only on transcripts written before this field existed."
+        },
+        {
+          "campo": "runId",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Local workflow run identifier for resumeFromRunId. Absent for remote_launched (the CCR session URL is the resume handle there) and on transcripts written before this field existed."
+        },
+        {
+          "campo": "summary",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "transcriptDir",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Directory where subagent transcripts are written during execution"
+        },
+        {
+          "campo": "scriptPath",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Path to the persisted workflow script for this invocation. Editable via Write/Edit; pass back as `scriptPath` to re-run without resending the script."
+        },
+        {
+          "campo": "sessionUrl",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "CCR session URL when status is remote_launched"
+        },
+        {
+          "campo": "warning",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Non-blocking heads-up (e.g. local git state diverges from the pushed branch the cloud session will clone)"
+        },
+        {
+          "campo": "error",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Set if syntax check failed"
+        }
+      ],
+      "n_campos_entrada": 7,
+      "n_campos_salida": 11
+    },
+    {
+      "tool": "CronCreate",
+      "entrada": [
+        {
+          "campo": "cron",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Standard 5-field cron expression in local time: \"M H DoM Mon DoW\" (e.g. \"* /5 * * * *\" = every 5 minutes, \"30 14 28 2 *\" = Feb 28 at 2:30pm local once)."
+        },
+        {
+          "campo": "prompt",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The prompt to enqueue at each fire time."
+        },
+        {
+          "campo": "recurring",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "true (default) = fire on every cron match until deleted or auto-expired after 30 days. false = fire once at the next match, then auto-delete. Use false for \"remind me at X\" one-shot requests with pinned minute/hour/dom/m"
+        },
+        {
+          "campo": "durable",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "true = persist to .claude/scheduled_tasks.json and survive restarts (the result says Session-only if the job could not be saved). false (default) = in-memory only, dies when this Claude session ends. Use true only when t"
+        }
+      ],
+      "salida": [
+        {
+          "campo": "id",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "humanSchedule",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "recurring",
+          "tipo": "boolean",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "durable",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "nextFireAt",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Epoch ms of the job's next run, the scheduler's per-job offset included"
+        },
+        {
+          "campo": "maxAgeMs",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Age at which a recurring job ends; 0 = never"
+        },
+        {
+          "campo": "otherOneShots",
+          "tipo": "{ id: string; humanSchedule: string; prompt: string; }[]",
+          "obligatorio": false,
+          "compuesto": true,
+          "desc": "Other session-only one-shot tasks that have yet to fire"
+        }
+      ],
+      "n_campos_entrada": 4,
+      "n_campos_salida": 7
+    },
+    {
+      "tool": "CronDelete",
+      "entrada": [
+        {
+          "campo": "id",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Job ID returned by CronCreate."
+        }
+      ],
+      "salida": [
+        {
+          "campo": "id",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "endedLoopWakeup",
+          "tipo": "true",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        }
+      ],
+      "n_campos_entrada": 1,
+      "n_campos_salida": 2
+    },
+    {
+      "tool": "CronList",
+      "entrada": [],
+      "salida": [
+        {
+          "campo": "jobs",
+          "tipo": "{ id: string; cron: string; humanSchedule: string; prompt: string; recurring?: boolean; durable?: boolean; /** * Epoch m",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": ""
+        }
+      ],
+      "n_campos_entrada": 0,
+      "n_campos_salida": 1
+    },
+    {
+      "tool": "ScheduleWakeup",
+      "entrada": [
+        {
+          "campo": "delaySeconds",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Seconds from now to wake up. Clamped to [60, 3600] by the runtime. Required unless `stop` is true."
+        },
+        {
+          "campo": "reason",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "One short sentence explaining the chosen delay. Goes to telemetry and is shown to the user. Be specific. Required unless `stop` is true."
+        },
+        {
+          "campo": "prompt",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "The /loop input to fire on wake-up. Pass the same /loop input verbatim each turn so the next firing re-enters the skill and continues the loop. For autonomous /loop (no user prompt), pass the literal sentinel `<<autonomo"
+        },
+        {
+          "campo": "stop",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Set to true to end the dynamic loop immediately instead of scheduling another wakeup. When true, all other fields are ignored and no further wakeups fire."
+        },
+        {
+          "campo": "noop",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "true = nothing changed (you checked and there is nothing to report). false = something happened worth keeping (edited a file, posted a message, advanced state, surfaced a finding). Consecutive noop:true ticks are collaps"
+        }
+      ],
+      "salida": [
+        {
+          "campo": "scheduledFor",
+          "tipo": "number",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Epoch ms timestamp when the next wakeup will fire"
+        },
+        {
+          "campo": "clampedDelaySeconds",
+          "tipo": "number",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Actual delay used after clamping to runtime bounds"
+        },
+        {
+          "campo": "wasClamped",
+          "tipo": "boolean",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "True if the requested delaySeconds was outside [60, 3600]"
+        },
+        {
+          "campo": "stopped",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "True when the model ended the loop via `stop: true`"
+        },
+        {
+          "campo": "cancelledWakeups",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "How many pending dynamic-loop wakeups stop:true cancelled. 0 means nothing was pending — a recurring /loop cron is not cancelled by stop:true."
+        }
+      ],
+      "n_campos_entrada": 5,
+      "n_campos_salida": 5
+    },
+    {
+      "tool": "RemoteTrigger",
+      "entrada": [
+        {
+          "campo": "action",
+          "tipo": "\"list\" | \"get\" | \"create\" | \"update\" | \"run\" | \"create_webhook_trigger\" | \"list_runs\" | \"get_run_log\"",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "trigger_id",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Required for get, update, run, and list_runs"
+        },
+        {
+          "campo": "session_id",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Required for get_run_log: a run session id (cse_… or session_…, from list_runs)"
+        },
+        {
+          "campo": "cursor",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "The next_cursor from the previous page of the same listing (list_runs with the same trigger_id, or get_run_log with the same session_id), passed back unchanged. Not an offset, a count or an event number."
+        },
+        {
+          "campo": "body",
+          "tipo": "{ [k: string]: unknown; }",
+          "obligatorio": false,
+          "compuesto": true,
+          "desc": "Required for create and update; optional for run"
+        }
+      ],
+      "salida": [
+        {
+          "campo": "status",
+          "tipo": "number",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "json",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "summary",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        }
+      ],
+      "n_campos_entrada": 5,
+      "n_campos_salida": 3
+    },
+    {
+      "tool": "ShowOnboardingRolePicker",
+      "entrada": [],
+      "salida": [
+        {
+          "campo": "role",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "dismissed",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        }
+      ],
+      "n_campos_entrada": 0,
+      "n_campos_salida": 2
+    },
+    {
+      "tool": "OfferChromeSetup",
+      "entrada": [
+        {
+          "campo": "reason",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "A short phrase naming what the task needs the user's own browser for."
+        }
+      ],
+      "salida": [
+        {
+          "campo": "outcome",
+          "tipo": "\"connected\" | \"not_now\" | \"no_attempt_yet\"",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        }
+      ],
+      "n_campos_entrada": 1,
+      "n_campos_salida": 1
+    },
+    {
+      "tool": "ReadNotifications",
+      "entrada": [],
+      "salida": [
+        {
+          "campo": "notifications",
+          "tipo": "{ /** * Server-assigned stable id — the dedup key across redeliveries. */ notification_id: string; /** * Server-attested",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": ""
+        },
+        {
+          "campo": "remaining",
+          "tipo": "number",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Notifications still queued after this drain (drains are size-budgeted); call the tool again to read them."
+        },
+        {
+          "campo": "read_at",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "RFC3339 timestamp, by this machine's clock, of when this call read the queue. Missing from results saved before this field existed."
+        }
+      ],
+      "n_campos_entrada": 0,
+      "n_campos_salida": 3
+    },
+    {
+      "tool": "Monitor",
+      "entrada": [
+        {
+          "campo": "description",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Short human-readable description of what you are monitoring (shown in notifications)."
+        },
+        {
+          "campo": "timeout_ms",
+          "tipo": "number",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Kill the monitor after this deadline. Default 300000ms. Deadlines above 1800000ms are capped to 1800000ms. You are notified at expiry and can re-arm."
+        },
+        {
+          "campo": "command",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Shell command or script. Each stdout line is an event; exit ends the watch."
+        },
+        {
+          "campo": "ws",
+          "tipo": "{ url: string; protocols?: string[]; }",
+          "obligatorio": false,
+          "compuesto": true,
+          "desc": "WebSocket to open. Each text frame is an event; binary frames are reported as a placeholder line. Socket close ends the watch. Cannot be combined with command."
+        }
+      ],
+      "salida": [
+        {
+          "campo": "taskId",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "ID of the background monitor task."
+        },
+        {
+          "campo": "timeoutMs",
+          "tipo": "number",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Timeout deadline in milliseconds (0 when persistent)."
+        },
+        {
+          "campo": "persistent",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "No timeout — runs until TaskStop or session end."
+        },
+        {
+          "campo": "keptInSandboxByCheck",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "True when the command ran in the sandbox only because its permission check relied on the sandbox; the settings would otherwise have exempted it."
+        }
+      ],
+      "n_campos_entrada": 4,
+      "n_campos_salida": 4
+    },
+    {
+      "tool": "ProposeSkills",
+      "entrada": [
+        {
+          "campo": "proposals",
+          "tipo": "| [ { /** * kebab-case skill slug; must not contain \"claude\" or \"anthropic\"; at most 64 characters for a new skill */ na",
+          "obligatorio": true,
+          "compuesto": true,
+          "desc": "@minItems 1 @maxItems 3"
+        }
+      ],
+      "salida": [
+        {
+          "campo": "proposalCount",
+          "tipo": "number",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Number of proposals shown on the review card"
+        }
+      ],
+      "n_campos_entrada": 1,
+      "n_campos_salida": 1
+    },
+    {
+      "tool": "ProposeGoal",
+      "entrada": [
+        {
+          "campo": "condition",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The completion condition to set, written so a separate evaluator can verify it from the conversation (e.g. \"all tests in test/auth pass (bun test exits 0)\"). At most 500 characters — the user must be able to read the who"
+        },
+        {
+          "campo": "ask_user",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Whether to ask the user for approval before the goal is set. Defaults to true — an approval dialog is shown. Set false ONLY when the user's own words in this conversation stated this outcome as what they want; the goal i"
+        }
+      ],
+      "salida": [
+        {
+          "campo": "condition",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The condition shown to the user for approval, or set directly"
+        },
+        {
+          "campo": "askUser",
+          "tipo": "boolean",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "Whether the user was asked for approval (true) or the goal was set directly (false)"
+        }
+      ],
+      "n_campos_entrada": 2,
+      "n_campos_salida": 2
+    },
+    {
+      "tool": "Artifact",
+      "entrada": [
+        {
+          "campo": "action",
+          "tipo": "| \"publish\" | \"list\" | \"read\" | \"list_types\" | \"watch\" | \"unwatch\" | \"status\" | \"upload_asset\" | \"list_assets\" | \"read_a",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Omit (or 'publish') to publish file_path. 'list' enumerates artifacts — the user's own by default, see `scope`; only `limit`, `scope` and `page_token` may accompany it. 'read' returns the content of the published artifac"
+        },
+        {
+          "campo": "file_path",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Path to the .html file to render. Required to publish (the default action). Use a short, distinctive basename — it is the last-resort title when the HTML has no <title> and no `title` parameter is given. For 'upload_asse"
+        },
+        {
+          "campo": "favicon",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Deprecated; omit it. Use `icon`."
+        },
+        {
+          "campo": "icon",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "One short generic word for the artifact's browser-tab icon, such as chart, calendar, recipe, code or map — a plain signifier, not a product or brand name. Include it on every page's first publish; omit when republishing "
+        },
+        {
+          "campo": "limit",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "list only: maximum artifacts to return (default 25)."
+        },
+        {
+          "campo": "page_token",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "list only: the `next_page_token` a listing of the same scope gave, to list the artifacts after it."
+        },
+        {
+          "campo": "scope",
+          "tipo": "\"mine\" | \"shared\" | \"all\"",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "list only: 'mine' (default) lists artifacts the user owns; 'shared' lists artifacts other people shared with the user; 'all' lists both. Rows are labeled (mine)/(shared) whenever scope is not 'mine'."
+        },
+        {
+          "campo": "title",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Title for the artifact — the name shown in the browser tab and gallery. A short, distinctive noun-phrase name — not a generic label, a summary, or a name with an appended explainer. Prefer a <title> tag at the top of the"
+        },
+        {
+          "campo": "description",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "One-sentence subtitle shown on the gallery card. Say what the page is or does."
+        },
+        {
+          "campo": "label",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "A short name for this publish, max 60 chars (e.g. \"Draft to legal\"). Optional — a few words, not a description."
+        },
+        {
+          "campo": "url",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "An existing artifact's claude.ai link (claude.ai/artifact/{id} or claude.ai/code/artifact/{uuid}; a chat, project or session link is not one) to update in place. Pass whenever the user wants to update an artifact this co"
+        },
+        {
+          "campo": "prompt",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "read only: what to extract from an artifact shared with the user — its content reaches you as an isolated summary answering this. Ignored for artifacts the user owns and for a page published in this session's own Slack c"
+        },
+        {
+          "campo": "force",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Last-resort overwrite that DISCARDS the newer published version's page — another session's publish, or someone's save from a page that can publish new versions of itself. On a conflict the fix is to merge your changes on"
+        },
+        {
+          "campo": "pin",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "publish only: true also pins the published artifact to the user's claude.ai sidebar once it is published — pass it only when the user asked for that; a pin that fails never fails the publish (the result says so)."
+        },
+        {
+          "campo": "out_dir",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "read_asset: directory to save into — default: this artifact’s folder in your scratchpad directory, where saving needs no approval and which you can Read from. read_asset names the file by the asset id plus the extension "
+        },
+        {
+          "campo": "file_paths",
+          "tipo": "[string, ...string[]]",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "upload_asset: several local image, video, PDF, font, stylesheet or script files in place of `file_path`, up to 25 in one call, all into the artifact that `url` names; one approval covers the call, and the result lists ea"
+        },
+        {
+          "campo": "asset_id",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "read_asset and delete_asset: the asset's id (32 hex characters), from a list_assets or upload_asset result."
+        },
+        {
+          "campo": "after",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "list_assets only: the `next` value from a previous list_assets result, to continue that listing."
+        },
+        {
+          "campo": "capabilities",
+          "tipo": "{ [k: string]: unknown; }",
+          "obligatorio": false,
+          "compuesto": true,
+          "desc": "Runtime capabilities this page declares, as {name: config}. The control plane is the authority on valid names and config shapes. An empty object clears any previously stored declaration; omit the field on a redeploy to c"
+        },
+        {
+          "campo": "contract",
+          "tipo": "\"latest\" | string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "The artifact's runtime version. Omit to keep its current version (the default); 'latest' to upgrade; a specific version to pin or roll back. Changing it changes how the published page behaves — pass only when the author "
+        }
+      ],
+      "salida": [],
+      "n_campos_entrada": 20,
+      "n_campos_salida": 0
+    },
+    {
+      "tool": "PushNotification",
+      "entrada": [
+        {
+          "campo": "message",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "The notification body. Keep it under 200 characters; mobile OSes truncate."
+        },
+        {
+          "campo": "status",
+          "tipo": "\"proactive\"",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        }
+      ],
+      "salida": [
+        {
+          "campo": "message",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "pushSent",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "localSent",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "disabledReason",
+          "tipo": "\"config_off\" | \"user_present\" | \"no_transport\"",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "sentAt",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "ISO timestamp captured at tool execution on the emitting process. Optional — resumed sessions replay pre-sentAt outputs verbatim."
+        }
+      ],
+      "n_campos_entrada": 2,
+      "n_campos_salida": 5
+    },
+    {
+      "tool": "EnterWorktree",
+      "entrada": [
+        {
+          "campo": "name",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Optional name for a new worktree. Each \"/\"-separated segment may contain only letters, digits, dots, underscores, and dashes; max 64 chars total. A random name is generated if not provided. Mutually exclusive with `path`"
+        },
+        {
+          "campo": "path",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Path to an existing worktree to switch into instead of creating a new one. Must appear in `git worktree list` for the current repo — or, on first entry from the launch directory, for a repo nested inside it (multi-repo w"
+        }
+      ],
+      "salida": [
+        {
+          "campo": "worktreePath",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "worktreeBranch",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "message",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        }
+      ],
+      "n_campos_entrada": 2,
+      "n_campos_salida": 3
+    },
+    {
+      "tool": "ExitWorktree",
+      "entrada": [
+        {
+          "campo": "action",
+          "tipo": "\"keep\" | \"remove\"",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": "\"keep\" leaves the worktree and branch on disk; \"remove\" deletes the worktree and, unless a hook made it or git refuses, its branch."
+        },
+        {
+          "campo": "discard_changes",
+          "tipo": "boolean",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": "Required true when action is \"remove\" and the worktree has uncommitted files or unmerged commits. The tool will refuse and list them otherwise. It also removes the worktree under any task still running there, so set it o"
+        }
+      ],
+      "salida": [
+        {
+          "campo": "action",
+          "tipo": "\"keep\" | \"remove\"",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "originalCwd",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "worktreePath",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "worktreeBranch",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "tmuxSessionName",
+          "tipo": "string",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "discardedFiles",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "discardedCommits",
+          "tipo": "number",
+          "obligatorio": false,
+          "compuesto": false,
+          "desc": ""
+        },
+        {
+          "campo": "message",
+          "tipo": "string",
+          "obligatorio": true,
+          "compuesto": false,
+          "desc": ""
+        }
+      ],
+      "n_campos_entrada": 2,
+      "n_campos_salida": 8
+    }
+  ]
+}
