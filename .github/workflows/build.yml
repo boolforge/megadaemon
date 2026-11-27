@@ -267,9 +267,23 @@ jobs:
           # clang del NDK que ya esta aqui, y se publica CON sha256 para que
           # el movil lo verifique.  Es lo que puede diagnosticar al daemon
           # CUANDO el daemon esta roto (no depende de la libreria de Rust).
+          # Los MISMOS flags que tools/build-mddoctor.sh (MEDIDO 2026-11-27):
+          # sin ellos el binario pesa 57.536 B y con ellos 43.384 B, con las
+          # mismas capacidades.  El tope de 100 KB es un REQUISITO del
+          # usuario: si esto crece, el gate lo dice.
+          MDD_OPT="-O2 -s -ffunction-sections -fdata-sections -Wl,--gc-sections"
+          MDD_OPT="$MDD_OPT -fmerge-all-constants -fno-ident -fno-plt -Wl,--as-needed"
+          MDD_OPT="$MDD_OPT -fno-unwind-tables -fno-asynchronous-unwind-tables"
           "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" \
-            -O2 -Wall -o dist/mddoctor-android-arm64 "$GITHUB_WORKSPACE/tools/mddoctor.c"
+            $MDD_OPT -Wall -o dist/mddoctor-android-arm64 "$GITHUB_WORKSPACE/tools/mddoctor.c"
           chmod 755 dist/mddoctor-android-arm64
+          # GATE DE TAMAÑO: el binario forense no puede pasar de 100 KB.
+          TAM=$(wc -c < dist/mddoctor-android-arm64)
+          echo "mddoctor-android-arm64: $TAM B"
+          if [ "$TAM" -gt 102400 ]; then
+            echo "::error::mddoctor pesa $TAM B y el tope es 102400 B (100 KB)"
+            exit 1
+          fi
           sha256sum dist/mddoctor-android-arm64 > dist/mddoctor-android-arm64.sha256
           cp dist/mddoctor-android-arm64 dist/mddoctor-android-arm64-${GITHUB_SHA::7}
           sha256sum dist/mddoctor-android-arm64-${GITHUB_SHA::7} > dist/mddoctor-android-arm64-${GITHUB_SHA::7}.sha256

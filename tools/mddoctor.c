@@ -56,11 +56,54 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netdb.h>
+#include <sys/select.h>
+#include <signal.h>
+#include <stdint.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <stdint.h>
 
 #define MAXF 512
 #define MAXH 96
 static char host[256] = "desconocido";
+
+/* Versión y esquema: los que integran este binario (el tool MCP `doctor`,
+ * la Web UI, los scripts) necesitan saber QUÉ CONTRATO ofrece. */
+#define MDDOCTOR_VERSION "1.2.0"
+#define MDDOCTOR_SCHEMA "megadaemon.doctor/1"
+
+/* Prototipos de las secciones que se definen más abajo del fichero. */
+static int status_hex(const char *clave, uint64_t *val);
+static void status_txt(const char *clave, char *out, size_t on);
+static void capacidades(uint64_t mask, char *out, size_t on);
+static void montajes(char *out, size_t on);
+static void limites(char *out, size_t on);
+static int tcp_puerto(const char *host, int port, int ms);
+static void elf_info(const char *path, char *out, size_t on);
+static int matar(const char *patron, int espera_ms);
+static void url_host(const char *url, char *out, size_t on);
+static const char *prefijo(void);
+static const char *serviced(void);
+
+/* ---------------------------------------------------------------------- */
+/* OPTIMIZACIÓN MIXTA: velocidad donde importa, tamaño donde NO.          */
+/* MEDIDO (2026-11-27): el SHA-256 de 64 MB tardaba 1.261 ms con -O2 y   */
+/* 1.834 ms con -Os (-45% de rapidez).  El binario entero con -Os pesa   */
+/* 43.576 B y con -O2 51.416 B (+18%), pero la RAPIDEZ es una capacidad   */
+/* que no se negocia.  Solución: -O2 global + `MD_HOT` (O3) en el camino  */
+/* crítico y `MD_COLD` (Os) en las funciones voluminosas, que se ejecutan*/
+/* una vez y están limitadas por E/S, no por CPU.  Y `cold` además las  */
+/* aparta del camino caliente de la caché de instrucciones.             */
+/* ---------------------------------------------------------------------- */
+#if defined(__GNUC__)
+#define MD_HOT __attribute__((optimize("O3"), hot))
+#define MD_COLD __attribute__((optimize("Os"), cold))
+#else
+#define MD_HOT
+#define MD_COLD
+#endif
 
 /* ---------------------------------------------------------------------- */
 /* Utilidades                                                               */
@@ -151,8 +194,23 @@ static Hallazgo H[MAXH];
 static int NH = 0;
 static int peor = VER_OK;
 
+/* Dos versiones a proposito: la mayoria de las llamadas tienen el motivo
+ * LITERAL, y `add()` sin variadicos evita el `va_start` en esos puntos de
+ * llamada (el binario es pequeno a proposito: va al movil con un `cat`). */
 static void add(const char *clave, const char *valor, int ver,
-                const char *motivo_fmt, ...) {
+                const char *motivo) {
+    if (NH >= MAXH) return;
+    Hallazgo *h = &H[NH++];
+    snprintf(h->clave, sizeof(h->clave), "%s", clave);
+    snprintf(h->valor, sizeof(h->valor), "%s", valor);
+    h->veredicto = ver;
+    snprintf(h->motivo, sizeof(h->motivo), "%s", motivo);
+    if (ver > peor) peor = ver;
+}
+
+/* La version con formato, para los pocos motivos que llevan datos. */
+static void addf(const char *clave, const char *valor, int ver,
+                 const char *motivo_fmt, ...) {
     if (NH >= MAXH) return;
     Hallazgo *h = &H[NH++];
     snprintf(h->clave, sizeof(h->clave), "%s", clave);
@@ -314,14 +372,40 @@ static void permisos(void) {
             w ? "el daemon puede escribir su estado"
               : "el estado NO es escribible: el daemon no arranca");
     }
+
+    /* INTROSPECCIÓN REAL DEL ENTORNO (todo sale de /proc, sin getcap ni
+     * capsh, que no existen en Android). */
+    uint64_t cap = 0;
+    if (status_hex("CapEff", &cap) == 0) {
+        char caps[220];
+        capacidades(cap, caps, sizeof(caps));
+        int es_root = (cap & (1ULL << 0)) && (cap & (1ULL << 3)); /* CHOWN+FOWNER */
+        add("capacidades", caps, es_root ? VER_OK : VER_AVISO,
+            es_root ? "el proceso tiene capacidades casi de root"
+                    : "capacidades limitadas: no puede tocar el sistema");
+    }
+    char seccomp[64], nnp[64];
+    status_txt("Seccomp", seccomp, sizeof(seccomp));
+    status_txt("NoNewPrivs", nnp, sizeof(nnp));
+    snprintf(v, sizeof(v), "seccomp=%s no_new_privs=%s", seccomp, nnp);
+    add("aislamiento", v, VER_OK,
+        "sandbox del kernel: seccomp filtra las llamadas al sistema");
+
+    char mont[220];
+    montajes(mont, sizeof(mont));
+    add("montajes", mont, VER_OK, "particiones del sistema y si son escribibles");
+
+    char lim[220];
+    limites(lim, sizeof(lim));
+    add("limites", lim, VER_OK, "limites del proceso (ficheros, pila, memoria)");
 }
 
 /* ---------------------------------------------------------------------- */
 /* FORENSE DE DISCO: que se esta comiendo el espacio                        */
 /* ---------------------------------------------------------------------- */
 
-#define MAXG 64
-typedef struct { char ruta[192]; long bytes; } Grande;
+#define MAXG 32
+typedef struct { char ruta[160]; long bytes; } Grande;
 static Grande G[MAXG];
 static int NG = 0;
 
@@ -343,7 +427,7 @@ static void escanear(const char *dir, int prof, long *tot, int *nf, long *viejos
         *tot += st.st_size;
         if (ahora - st.st_mtime > 30L * 86400) (*viejos)++;
         if (NG < MAXG) {
-            snprintf(G[NG].ruta, sizeof(G[NG].ruta), "%.190s", p);
+            snprintf(G[NG].ruta, sizeof(G[NG].ruta), "%.150s", p);
             G[NG].bytes = st.st_size;
             NG++;
         }
@@ -351,7 +435,7 @@ static void escanear(const char *dir, int prof, long *tot, int *nf, long *viejos
     closedir(d);
 }
 
-static void forense(const char *dir) {
+MD_COLD static void forense(const char *dir) {
     long tot = 0, viejos = 0;
     int nf = 0;
     NG = 0;
@@ -377,7 +461,7 @@ static void forense(const char *dir) {
 /* AUTOTEST: el propio diagnostico se prueba a si mismo                    */
 /* ---------------------------------------------------------------------- */
 
-static int autotest(void) {
+MD_COLD static int autotest(void) {
     struct { const char *n; const char *r; } p[] = {
         {"meminfo", "/proc/meminfo"},
         {"loadavg", "/proc/loadavg"},
@@ -411,7 +495,7 @@ static int autotest(void) {
 /* Clasificacion                                                            */
 /* ---------------------------------------------------------------------- */
 
-static void clasificar(void) {
+MD_COLD static void clasificar(void) {
     char det[128];
     permisos();
     int pct;
@@ -421,11 +505,11 @@ static void clasificar(void) {
     if (pct < 0) {
         add("bateria", "sin sensor", VER_OK, "no aplica (no hay power_supply)");
     } else if (pct <= 15) {
-        add("bateria", det, VER_CRITICO,
-            "bateria al %d%%: el daemon puede morir en cualquier momento", pct);
+        addf("bateria", det, VER_CRITICO,
+             "bateria al %d%%: el daemon puede morir en cualquier momento", pct);
     } else if (pct <= 25) {
-        add("bateria", det, VER_AVISO,
-            "bateria al %d%%: conviene modo ahorro y nada de trabajo pesado", pct);
+        addf("bateria", det, VER_AVISO,
+             "bateria al %d%%: conviene modo ahorro y nada de trabajo pesado", pct);
     } else {
         add("bateria", det, VER_OK, "carga suficiente");
     }
@@ -455,12 +539,12 @@ static void clasificar(void) {
         snprintf(v, sizeof(v), "%ld MiB total, %ld MiB libres", tot / 1024, av / 1024);
         long pctused = 100 - (av * 100 / tot);
         if (pctused >= 92)
-            add("memoria", v, VER_CRITICO,
-                "%ld%% usada: el OOM killer esta a la vuelta de la esquina", pctused);
+            addf("memoria", v, VER_CRITICO,
+                 "%ld%% usada: el OOM killer esta a la vuelta de la esquina", pctused);
         else if (pctused >= 80)
-            add("memoria", v, VER_AVISO, "%ld%% usada: sin swap, roza el limite", pctused);
+            addf("memoria", v, VER_AVISO, "%ld%% usada: sin swap, roza el limite", pctused);
         else
-            add("memoria", v, VER_OK, "%ld%% usada", pctused);
+            addf("memoria", v, VER_OK, "%ld%% usada", pctused);
     } else {
         add("memoria", "sin /proc/meminfo", VER_OK, "no aplica");
     }
@@ -519,11 +603,11 @@ static void clasificar(void) {
         char v[96];
         snprintf(v, sizeof(v), "%ld MiB libres", mb);
         if (mb < 200)
-            add("disco", v, VER_CRITICO, "%s: casi sin sitio; el daemon no puede escribir", rutas[i]);
+            addf("disco", v, VER_CRITICO, "%s: casi sin sitio; el daemon no puede escribir", rutas[i]);
         else if (mb < 800)
-            add("disco", v, VER_AVISO, "%s: poco sitio", rutas[i]);
+            addf("disco", v, VER_AVISO, "%s: poco sitio", rutas[i]);
         else
-            add("disco", v, VER_OK, "%s: sitio de sobra", rutas[i]);
+            addf("disco", v, VER_OK, "%s: sitio de sobra", rutas[i]);
     }
 
     /* --- red: trafico por interfaz y estado ------------------------------ */
@@ -581,7 +665,7 @@ static void clasificar(void) {
     char v[96];
     snprintf(v, sizeof(v), "%d procesos, %d zombie, %d en D", total, zomb, dstat);
     if (zomb >= 20)
-        add("procesos", v, VER_AVISO, "%d zombies: alguien no los esta recogiendo", zomb);
+        addf("procesos", v, VER_AVISO, "%d zombies: alguien no los esta recogiendo", zomb);
     else
         add("procesos", v, VER_OK, "sin acumulacion de zombies");
     snprintf(v, sizeof(v), "%d procesos de MegaDaemon", md);
@@ -715,7 +799,7 @@ static int recuperar(int aplicar) {
 /* Salida                                                                   */
 /* ---------------------------------------------------------------------- */
 
-static void imprimir_tabla(void) {
+MD_COLD static void imprimir_tabla(void) {
     printf("%-16s %-44s %-8s %s\n", "CLAVE", "VALOR", "VEREDICTO", "MOTIVO");
     printf("----------------------------------------------------------------------------------------------------------------\n");
     for (int i = 0; i < NH; i++)
@@ -731,9 +815,18 @@ static void imprimir_tabla(void) {
     printf("resumen: %d OK, %d avisos, %d criticos\n", nok, nwa, ncr);
 }
 
-static void imprimir_json(void) {
-    printf("{\n  \"host\": \"%s\",\n  \"veredicto\": \"%s\",\n  \"hallazgos\": [\n", host,
-           ver_txt(peor));
+/* La huella de memoria del propio binario (VmHWM = pico de RSS).  Se
+ * publica en el JSON para que el consumidor vea el coste real. */
+static long memoria_kb(void) {
+    char b[64];
+    status_txt("VmHWM", b, sizeof(b));
+    return atol(b);
+}
+
+MD_COLD static void imprimir_json(void) {
+    printf("{\n  \"schema\": \"%s\",\n  \"version\": \"%s\",\n  \"host\": \"%s\",\n"
+           "  \"memoria_kb\": %ld,\n  \"veredicto\": \"%s\",\n  \"hallazgos\": [\n",
+           MDDOCTOR_SCHEMA, MDDOCTOR_VERSION, host, memoria_kb(), ver_txt(peor));
     for (int i = 0; i < NH; i++) {
         printf("    {\"clave\": \"%s\", \"valor\": \"%s\", \"veredicto\": \"%s\", \"motivo\": \"%s\"}%s\n",
                H[i].clave, H[i].valor, ver_txt(H[i].veredicto), H[i].motivo,
@@ -762,7 +855,7 @@ static const uint32_t SHA_K[64] = {
 
 static uint32_t ror32(uint32_t x, int n) { return (x >> n) | (x << (32 - n)); }
 
-static void sha256_block(Sha256 *s, const unsigned char *p) {
+MD_HOT static void sha256_block(Sha256 *s, const unsigned char *p) {
     uint32_t w[64];
     for (int i = 0; i < 16; i++)
         w[i] = ((uint32_t)p[i*4] << 24) | ((uint32_t)p[i*4+1] << 16) |
@@ -796,7 +889,7 @@ static void sha256_hex(const char *path, char *hex) {
     if (fd < 0) return;
     Sha256 s = {{0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
                  0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19},0,{0},0};
-    unsigned char buf[65536];
+    unsigned char buf[8192];
     ssize_t r;
     while ((r = read(fd, buf, sizeof(buf))) > 0) {
         for (ssize_t i = 0; i < r; i++) {
@@ -822,6 +915,259 @@ static void sha256_hex(const char *path, char *hex) {
 }
 
 /* ---------------------------------------------------------------------- */
+/* INTROSPECCIÓN DEL ENTORNO: qué permisos tiene REALMENTE este proceso     */
+/* ---------------------------------------------------------------------- */
+/* MEDIDO: el shell de Android NO tiene `su` fiable, ni `getcap`, ni
+ * `capsh`, ni `ping`, ni `curl`.  Todo esto se lee de /proc y /sys, que
+ * siempre existen.  Es la respuesta a "¿qué puede hacer este binario aquí". */
+
+static const char *cap_nombre(int bit) {
+    /* Tabla como blob CONTIGUO y no como array de punteros: cada puntero
+     * costaba una relocalizacion de 24 B en .rela.dyn (el binario tiene que
+     * ser pequeno: va al movil con un `cat`). */
+    static const char n[][18] = {
+        "CHOWN", "DAC_OVERRIDE", "DAC_READ_SEARCH", "FOWNER", "FSETID", "KILL",
+        "SETGID", "SETUID", "SETPCAP", "LINUX_IMMUTABLE", "NET_BIND_SERVICE",
+        "NET_BROADCAST", "NET_ADMIN", "NET_RAW", "IPC_LOCK", "IPC_OWNER",
+        "SYS_MODULE", "SYS_RAWIO", "SYS_CHROOT", "SYS_PTRACE", "SYS_PACCT",
+        "SYS_ADMIN", "SYS_BOOT", "SYS_NICE", "SYS_RESOURCE", "SYS_TIME",
+        "SYS_TTY_CONFIG", "MKNOD", "LEASE", "AUDIT_WRITE", "AUDIT_CONTROL",
+        "SETFCAP"
+    };
+    if (bit < 0 || bit >= (int)(sizeof(n) / sizeof(n[0]))) return NULL;
+    return n[bit];
+}
+
+/* Decodifica una mascara de capacidades (/proc/self/status). */
+MD_HOT static void capacidades(uint64_t mask, char *out, size_t on) {
+    out[0] = 0;
+    size_t used = 0;
+    int ninguna = 1;
+    for (int b = 0; b < 64; b++) {
+        if (!(mask & (1ULL << b))) continue;
+        const char *nm = cap_nombre(b);
+        if (!nm) continue;
+        ninguna = 0;
+        size_t l = strlen(nm);
+        if (used + l + 2 >= on) break;
+        if (used) out[used++] = ' ';
+        memcpy(out + used, nm, l);
+        used += l;
+        out[used] = 0;
+    }
+    if (ninguna) snprintf(out, on, "ninguna");
+}
+
+/* Valor hexadecimal de una clave de /proc/self/status. */
+static int status_hex(const char *clave, uint64_t *val) {
+    FILE *f = fopen("/proc/self/status", "r");
+    if (!f) return -1;
+    char linea[512];
+    size_t kl = strlen(clave);
+    int r = -1;
+    while (fgets(linea, sizeof(linea), f)) {
+        if (strncmp(linea, clave, kl) == 0) {
+            const char *p = linea + kl;
+            while (*p && *p != ':') p++;
+            if (*p == ':') {
+                p++;
+                while (*p == ' ' || *p == '\t') p++;
+                *val = strtoull(p, NULL, 16);
+                r = 0;
+            }
+            break;
+        }
+    }
+    fclose(f);
+    return r;
+}
+
+/* Texto de una clave de /proc/self/status ("Seccomp", "NoNewPrivs"...). */
+static void status_txt(const char *clave, char *out, size_t on) {
+    snprintf(out, on, "?");
+    FILE *f = fopen("/proc/self/status", "r");
+    if (!f) return;
+    char linea[512];
+    size_t kl = strlen(clave);
+    while (fgets(linea, sizeof(linea), f)) {
+        if (strncmp(linea, clave, kl) == 0) {
+            char *p = linea + kl;
+            while (*p && *p != ':') p++;
+            if (*p == ':') {
+                p++;
+                while (*p == ' ' || *p == '\t') p++;
+                trim(p);
+                size_t max = on > 1 ? on - 1 : 0;
+                snprintf(out, on, "%.*s", (int)max, p);
+            }
+            break;
+        }
+    }
+    fclose(f);
+}
+
+/* Montajes: cuantas son solo-lectura y donde estan /system, /data y /sdcard. */
+static void montajes(char *out, size_t on) {
+    out[0] = 0;
+    FILE *f = fopen("/proc/mounts", "r");
+    if (!f) { snprintf(out, on, "no se pudo leer /proc/mounts"); return; }
+    char linea[512], b[2048];
+    int ro = 0, total = 0;
+    b[0] = 0;
+    size_t used = 0;
+    while (fgets(linea, sizeof(linea), f)) {
+        char *mp = strchr(linea, ' ');
+        if (!mp) continue;
+        *mp++ = 0;
+        char *fs = strchr(mp, ' ');
+        if (!fs) continue;
+        *fs++ = 0;
+        char *opts = strchr(fs, ' ');
+        if (!opts) continue;
+        opts++;
+        total++;
+        if (strstr(opts, "ro,") || strstr(opts, ",ro")) ro++;
+        if (!strcmp(mp, "/system") || !strcmp(mp, "/data") || !strcmp(mp, "/sdcard")) {
+            int r = strstr(opts, "ro") ? 1 : 0;
+            size_t l = strlen(mp) + 4;
+            if (used + l + 2 < sizeof(b)) {
+                int k = snprintf(b + used, sizeof(b) - used, "%s%s ", r ? "ro:" : "rw:", mp);
+                used += (size_t)k;
+            }
+        }
+    }
+    fclose(f);
+    if (b[0]) b[used ? used - 1 : 0] = 0;
+    snprintf(out, on, "%d montajes, %d solo-lectura%s%s", total, ro,
+             b[0] ? ", " : "", b);
+}
+
+/* Limites del proceso (ficheros abiertos, pila, memoria). */
+static void limites(char *out, size_t on) {
+    out[0] = 0;
+    FILE *f = fopen("/proc/self/limits", "r");
+    if (!f) { snprintf(out, on, "no se pudo leer /proc/self/limits"); return; }
+    char linea[512], b[1024];
+    b[0] = 0;
+    size_t used = 0;
+    while (fgets(linea, sizeof(linea), f)) {
+        if (!strncmp(linea, "Max open files", 14) ||
+            !strncmp(linea, "Max stack size", 14) ||
+            !strncmp(linea, "Max locked memory", 17)) {
+            char *p = linea;
+            while (*p == ' ' || *p == '\t') p++;
+            char *nl = strchr(p, '\n');
+            if (nl) *nl = 0;
+            size_t l = strlen(p);
+            if (used + l + 2 < sizeof(b)) {
+                memcpy(b + used, p, l);
+                used += l;
+                b[used++] = ';';
+                b[used++] = ' ';
+                b[used] = 0;
+            }
+        }
+    }
+    fclose(f);
+    snprintf(out, on, "%s", b);
+}
+
+/* ---------------------------------------------------------------------- */
+/* RED SIN curl: DNS y TCP con sockets (el shell de Android no tiene curl) */
+/* ---------------------------------------------------------------------- */
+
+/* 1 = conecta, 0 = resuelve pero no conecta, -1 = no resuelve, -2 = error */
+static int tcp_puerto(const char *host, int port, int ms) {
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    char portstr[16];
+    snprintf(portstr, sizeof(portstr), "%d", port);
+    if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) return -1;
+    int r = 0;
+    for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+        int fd = socket(ai->ai_family, ai->ai_socktype, 0);
+        if (fd < 0) continue;
+        int fl = fcntl(fd, F_GETFL, 0);
+        fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+        int c = connect(fd, ai->ai_addr, ai->ai_addrlen);
+        if (c == 0) { r = 1; close(fd); break; }
+        if (errno == EINPROGRESS) {
+            fd_set w;
+            FD_ZERO(&w);
+            FD_SET(fd, &w);
+            struct timeval tv = {ms / 1000, (ms % 1000) * 1000};
+            if (select(fd + 1, NULL, &w, NULL, &tv) > 0) {
+                int e = 0;
+                socklen_t el = sizeof(e);
+                getsockopt(fd, SOL_SOCKET, SO_ERROR, &e, &el);
+                if (e == 0) { r = 1; close(fd); break; }
+            }
+        }
+        close(fd);
+    }
+    freeaddrinfo(res);
+    return r;
+}
+
+/* El binario en servicio: es un ELF valido y de que arquitectura. */
+static void elf_info(const char *path, char *out, size_t on) {
+    out[0] = 0;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) { snprintf(out, on, "no se puede leer"); return; }
+    unsigned char h[20];
+    ssize_t r = read(fd, h, sizeof(h));
+    close(fd);
+    if (r < 20 || h[0] != 0x7f || h[1] != 'E' || h[2] != 'L' || h[3] != 'F') {
+        snprintf(out, on, "NO es un ELF (fichero roto o no es un binario)");
+        return;
+    }
+    const char *clase = (h[4] == 2) ? "64-bit" : (h[4] == 1) ? "32-bit" : "??";
+    unsigned ma = (unsigned)h[18] | ((unsigned)h[19] << 8);
+    const char *arch = ma == 0x3e ? "x86-64" : ma == 0xb7 ? "aarch64" :
+                       ma == 0x03 ? "x86" : ma == 0x28 ? "arm" : "desconocida";
+    snprintf(out, on, "ELF %s %s", clase, arch);
+}
+
+/* ---------------------------------------------------------------------- */
+/* pkill en C: termina procesos por nombre (no hay pgrep/pkill en Android)  */
+/* ---------------------------------------------------------------------- */
+
+/* Termina los procesos cuyo cmdline contiene `patron`.  SIGTERM primero y
+ * SIGKILL si hace falta.  Devuelve cuantos ha terminado. */
+static int matar(const char *patron, int espera_ms) {
+    DIR *d = opendir("/proc");
+    if (!d) return -1;
+    struct dirent *e;
+    int self = (int)getpid();
+    int n = 0;
+    int pids[64];
+    int np = 0;
+    while ((e = readdir(d)) && np < 64) {
+        if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+        int pid = atoi(e->d_name);
+        if (pid == self) continue;
+        char p[256], cmd[600];
+        snprintf(p, sizeof(p), "/proc/%.200s/cmdline", e->d_name);
+        if (read_file(p, cmd, sizeof(cmd)) != 0) continue;
+        if (!strstr(cmd, patron)) continue;
+        pids[np++] = pid;
+    }
+    closedir(d);
+    for (int i = 0; i < np; i++) kill(pids[i], SIGTERM);
+    if (np && espera_ms > 0) {
+        struct timespec ts = {espera_ms / 1000, (espera_ms % 1000) * 1000000L};
+        nanosleep(&ts, NULL);
+    }
+    for (int i = 0; i < np; i++) {
+        if (kill(pids[i], 0) == 0) kill(pids[i], SIGKILL);
+        else n++;
+    }
+    return n;
+}
+
+/* ---------------------------------------------------------------------- */
 /* SALUD DEL MOVIL: estado-movil.sh + verificar-movil.sh en C              */
 /* ---------------------------------------------------------------------- */
 /* POR QUE EN C Y NO EN SHELL
@@ -835,7 +1181,7 @@ static void sha256_hex(const char *path, char *hex) {
 
 /* GET HTTP en crudo a un host IPv4.  Devuelve el codigo HTTP (0 si fallo) y
  * deja el cuerpo en out.  Sin TLS: solo para el origen local (127.0.0.1). */
-static int http_get(const char *host, int port, const char *path,
+MD_HOT static int http_get(const char *host, int port, const char *path,
                     char *out, size_t n) {
     if (!n) return 0;
     out[0] = 0;
@@ -1005,7 +1351,20 @@ static void tail_file(const char *path, int n, char *out, size_t on) {
 /* Recoge la salud del movil.  `espera` son segundos de espera por /health
  * (el bucle de espera de verificar-movil.sh, contra el ORIGEN local: la
  * parte que funciona sin TLS). */
-static void salud(int espera) {
+/* Extrae el host de una URL ("https://host/path" -> "host"). */
+static void url_host(const char *url, char *out, size_t on) {
+    out[0] = 0;
+    const char *p = strstr(url, "://");
+    p = p ? p + 3 : url;
+    size_t k = 0;
+    while (*p && *p != '/' && *p != ':' && *p != '?' && k < on - 1) out[k++] = *p++;
+    out[k] = 0;
+}
+
+/* Recoge la salud del movil.  `espera` son segundos de espera por /health
+ * (el bucle de espera de verificar-movil.sh, contra el ORIGEN local: la
+ * parte que funciona sin TLS). */
+MD_COLD static void salud(int espera) {
     char v[220];
 
     char url[512] = "";
@@ -1013,6 +1372,22 @@ static void salud(int espera) {
     if (url[0]) add("tunel", url, VER_OK, "la URL publica del movil");
     else add("tunel", "NO ENCONTRADO", VER_AVISO,
              "ni tunnel.log ni tunnel.url: el tunel no esta levantado");
+
+    /* ¿El tunel esta vivo?  DNS + TCP, sin curl (que no existe en Android).
+     * Esto dice SI el corte esta en el DNS, en el tunel o mas abajo. */
+    if (url[0]) {
+        char host[256];
+        url_host(url, host, sizeof(host));
+        int r = tcp_puerto(host, 443, 3000);
+        if (r == 1)
+            add("tunel-tcp", host, VER_OK, "el tunel acepta conexiones en el 443");
+        else if (r == 0)
+            add("tunel-tcp", host, VER_CRITICO,
+                "el host resuelve pero el 443 NO acepta: el tunel esta caido");
+        else
+            add("tunel-tcp", host, VER_CRITICO,
+                "el host del tunel NO resuelve: el corte esta en el DNS");
+    }
 
     char body[4096];
     int code = 0;
@@ -1068,6 +1443,10 @@ static void salud(int espera) {
         sha256_hex(binpath, hex);
         snprintf(v, sizeof(v), "%.64s", hex);
         add("sha-servicio", v, VER_OK, "sha256 del binario en servicio");
+        char elf[64];
+        elf_info(binpath, elf, sizeof(elf));
+        add("elf-servicio", elf, strncmp(elf, "ELF", 3) == 0 ? VER_OK : VER_CRITICO,
+            "cabecera ELF del binario en servicio (arquitectura y validez)");
     } else {
         add("sha-servicio", "sin binario", VER_AVISO,
             "no se encuentra megadaemon-core en el movil");
@@ -1085,7 +1464,7 @@ static void salud(int espera) {
 }
 
 /* Texto extra del modo salud (solo modo texto): las colas de log. */
-static void salud_tails(void) {
+MD_COLD static void salud_tails(void) {
     char b[2048];
     char autolog[512], daemonlog[512];
     snprintf(autolog, sizeof(autolog), "%s/state/auto_update.log", prefijo());
@@ -1103,18 +1482,246 @@ static void salud_tails(void) {
 }
 
 /* ---------------------------------------------------------------------- */
+/* Modo `entorno`: la introspección del entorno en detalle.                  */
+/* Es la respuesta a "¿qué puede hacer este binario AQUÍ?".                */
+/* ---------------------------------------------------------------------- */
+MD_COLD static void entorno(int json) {
+    char caps[1024];
+    uint64_t cap = 0;
+    int hay_cap = status_hex("CapEff", &cap) == 0;
+    if (hay_cap) capacidades(cap, caps, sizeof(caps));
 
-static void uso(void) {
+    char seccomp[64], nnp[64], umask[64];
+    status_txt("Seccomp", seccomp, sizeof(seccomp));
+    status_txt("NoNewPrivs", nnp, sizeof(nnp));
+    status_txt("Umask", umask, sizeof(umask));
+
+    char mont[1024], lim[1024];
+    montajes(mont, sizeof(mont));
+    limites(lim, sizeof(lim));
+
+    char enf[64];
+    int hay_selinux = read_file("/sys/fs/selinux/enforce", enf, sizeof(enf)) == 0;
+    if (hay_selinux) trim(enf);
+
+    static const char linkers[][24] = {"/system/bin/linker64", "/system/bin/linker",
+                                       "/system/xbin/linker64", {0}};
+    int hay_linker = 0;
+    for (int i = 0; linkers[i][0]; i++)
+        if (existe(linkers[i])) hay_linker = 1;
+
+    static const char herr[][10] = {"su", "magisk", "busybox", "curl", "wget",
+                                    "pgrep", "pkill", "adb", {0}};
+    char lista[256];
+    lista[0] = 0;
+    size_t used = 0;
+    for (int i = 0; herr[i][0]; i++) {
+        char ruta[256];
+        int la_hay = 0;
+        static const char dirs[][20] = {"/system/bin", "/system/xbin",
+                                       "/data/adb/magisk", {0}};
+        for (int d = 0; dirs[d][0] && !la_hay; d++) {
+            snprintf(ruta, sizeof(ruta), "%s/%s", dirs[d], herr[i]);
+            la_hay = existe(ruta);
+        }
+        if (!la_hay) continue;
+        size_t l = strlen(herr[i]);
+        if (used + l + 2 >= sizeof(lista)) break;
+        if (used) lista[used++] = ' ';
+        memcpy(lista + used, herr[i], l);
+        used += l;
+        lista[used] = 0;
+    }
+    if (!lista[0]) snprintf(lista, sizeof(lista), "ninguna de las habituales");
+
+    /* Los mismos datos, como hallazgos: así `entorno --json` se integra. */
+    char v[220];
+    snprintf(v, sizeof(v), "euid=%d uid=%d egid=%d", (int)geteuid(),
+             (int)getuid(), (int)getegid());
+    add("identidad", v, VER_OK, "con quien se ejecuta este binario");
+    if (hay_cap) {
+        int es_root = (cap & (1ULL << 0)) && (cap & (1ULL << 3));
+        add("capacidades", caps, es_root ? VER_OK : VER_AVISO,
+            es_root ? "capacidades casi de root" : "capacidades limitadas");
+    }
+    snprintf(v, sizeof(v), "seccomp=%s no_new_privs=%s umask=%s", seccomp, nnp, umask);
+    add("aislamiento", v, VER_OK, "lo que el kernel permite a este proceso");
+    add("montajes", mont, VER_OK, "particiones y si son escribibles");
+    add("limites", lim, VER_OK, "limites del proceso");
+    add("selinux", hay_selinux ? enf : "no hay SELinux", VER_OK,
+        "enforcement de SELinux");
+    add("linker-android", hay_linker ? "presente" : "AUSENTE",
+        hay_linker ? VER_OK : VER_CRITICO,
+        hay_linker ? "los binarios ARM64 arrancan"
+                   : "sin linker64 los binarios ARM64 no arrancan");
+    add("herramientas", lista, VER_OK,
+        "herramientas del sistema (este binario no las necesita)");
+
+    if (json) return;
+
+    printf("== ENTORNO: permisos reales de este proceso ==\n");
+    printf("  euid=%d uid=%d egid=%d\n", (int)geteuid(), (int)getuid(),
+           (int)getegid());
+    if (hay_cap) printf("  capacidades efectivas: %s\n", caps);
+    printf("  seccomp: %s\n", seccomp);
+    printf("  no_new_privs: %s\n", nnp);
+    printf("  umask: %s\n", umask);
+    printf("  montajes: %s\n", mont);
+    printf("  limites: %s\n", lim);
+    if (hay_selinux)
+        printf("  selinux: %s (%s)\n", enf, enf[0] == '0' ? "permisivo" : "enforcing");
+    else
+        printf("  selinux: no hay /sys/fs/selinux/enforce (no hay SELinux)\n");
+    printf("  linker de Android: %s\n",
+           hay_linker ? "presente" : "AUSENTE (los binarios ARM64 no arrancaran)");
+    printf("  herramientas del sistema: %s\n", lista);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Modo `repair`: la recuperación que se puede hacer SIN el daemon.         */
+/* Con --apply ejecuta; sin él, sólo dice qué haría.                      */
+/* ---------------------------------------------------------------------- */
+
+/* Las rutas llegan del ENTORNO (MEGADAEMON_STATE_DIR), y este modo las
+ * mete en `system()`.  Una ruta con comillas o `;` sería una inyección de
+ * comandos, así que se rechaza: el binario no ejecuta lo que le metan. */
+static int ruta_segura(const char *p) {
+    if (!p || !*p) return 0;
+    for (const char *q = p; *q; q++)
+        if (*q == '\'' || *q == '"' || *q == ';' || *q == '|' || *q == '&' ||
+            *q == '$' || *q == '`' || *q == '\n')
+            return 0;
+    return 1;
+}
+
+MD_COLD static int reparar(int aplicar) {
+    char sd[512], bin[512];
+    const char *est = getenv("MEGADAEMON_STATE_DIR");
+    snprintf(sd, sizeof(sd), "%s", (est && *est) ? est : "/data/user/0/com.agy/files/state");
+    snprintf(bin, sizeof(bin), "%s/megadaemon-core", prefijo());
+
+    int problemas = 0;
+
+    if (!ruta_segura(sd)) {
+        printf("  [FALLO] la ruta del estado contiene caracteres peligrosos: no se toca\n");
+        return 1;
+    }
+
+    /* 1) el directorio de estado */
+    if (!existe(sd)) {
+        if (aplicar) {
+            char cmd[600];
+            snprintf(cmd, sizeof(cmd), "mkdir -p '%.240s' && chmod 700 '%.240s'", sd, sd);
+            if (system(cmd) == 0 && existe(sd))
+                printf("  [hecho] creado el directorio de estado %s\n", sd);
+            else {
+                printf("  [FALLO] no se pudo crear %s\n", sd);
+                problemas++;
+            }
+        } else {
+            printf("  [plan]   crear el directorio de estado %s (mkdir -p + chmod 700)\n", sd);
+            problemas++;
+        }
+    } else if (!escribible(sd)) {
+        if (aplicar) {
+            char cmd[600];
+            snprintf(cmd, sizeof(cmd), "chmod 700 '%.240s'", sd);
+            if (system(cmd) == 0 && escribible(sd))
+                printf("  [hecho] arreglado el permiso de escritura de %s\n", sd);
+            else {
+                printf("  [FALLO] %s sigue sin escritura\n", sd);
+                problemas++;
+            }
+        } else {
+            printf("  [plan]   %s no es escribible (chmod 700)\n", sd);
+            problemas++;
+        }
+    } else {
+        printf("  [ok]     el directorio de estado esta bien (%s)\n", sd);
+    }
+
+    /* 2) el binario en servicio */
+    if (existe(bin)) {
+        if (access(bin, X_OK) != 0) {
+            if (aplicar) {
+                char cmd[600];
+                snprintf(cmd, sizeof(cmd), "chmod 755 '%.240s'", bin);
+                if (system(cmd) == 0 && access(bin, X_OK) == 0)
+                    printf("  [hecho] permiso de ejecucion puesto en %s\n", bin);
+                else {
+                    printf("  [FALLO] no se pudo chmod +x %s\n", bin);
+                    problemas++;
+                }
+            } else {
+                printf("  [plan]   %s no es ejecutable (chmod 755)\n", bin);
+                problemas++;
+            }
+        } else {
+            char elf[64];
+            elf_info(bin, elf, sizeof(elf));
+            printf("  [ok]     el binario en servicio esta bien (%s)\n", elf);
+        }
+    } else {
+        printf("  [FALLO] no hay binario en %s\n", bin);
+        problemas++;
+    }
+
+    /* 3) procesos zombis del daemon (pkill en C: no hay pkill en Android) */
+    char procs[1024];
+    procesos_megadaemon(procs, sizeof(procs));
+    int hay = strcmp(procs, "ninguno") != 0;
+    if (hay && aplicar) {
+        int n = matar("megadaemon-core", 500);
+        printf("  [hecho] %d proceso(s) de megadaemon-core terminado(s)\n", n);
+    } else if (hay) {
+        printf("  [plan]   terminar los procesos de megadaemon-core (%s)\n", procs);
+    }
+
+    /* 4) relanzar el supervisor (si esta instalado) */
+    char sup[512];
+    snprintf(sup, sizeof(sup), "%s/99-megadaemon.sh", serviced());
+    if (existe(sup)) {
+        if (aplicar) {
+            char cmd[600];
+            snprintf(cmd, sizeof(cmd), "'%.240s' >/dev/null 2>&1 &", sup);
+            int rc = system(cmd);
+            printf("  [%s] supervisor relanzado (%s)\n", rc == 0 ? "hecho" : "FALLO", sup);
+            if (rc != 0) problemas++;
+        } else {
+            printf("  [plan]   relanzar el supervisor %s\n", sup);
+        }
+    } else {
+        printf("  [aviso]  no hay supervisor en %s (el daemon no arrancara solo)\n", sup);
+        problemas++;
+    }
+
+    if (!aplicar && problemas)
+        printf("\n(sin --apply esto es SOLO un plan: nada se ha tocado)\n");
+    return problemas ? 1 : 0;
+}
+
+/* ---------------------------------------------------------------------- */
+
+MD_COLD static void uso(void) {
     fprintf(stderr,
-            "mddoctor — diagnostico, salud y recuperacion de MegaDaemon\n"
-            "uso: mddoctor [doctor|salud|scan|recover|selftest] [--json] [--apply] [--espera N]\n"
+            "mddoctor — diagnostico, salud y recuperacion de MegaDaemon (v" MDDOCTOR_VERSION ")\n"
+            "uso: mddoctor [doctor|salud|entorno|repair|scan|recover|selftest|todo]\n"
+            "                      [--json] [--apply] [--espera N]\n"
             "  doctor    recoge los hechos y dice que esta mal\n"
-            "  salud     estado del movil: tunel real, /health, procesos, sha256 del binario\n"
-            "            (--espera N reintenta /health hasta N segundos)\n"
+            "  salud     estado del movil: tunel real, DNS y TCP del tunel, /health\n"
+            "            por sockets (sin curl ni wget), procesos, SHA-256 y ELF del\n"
+            "            binario en servicio (--espera N reintenta /health)\n"
+            "  entorno   los permisos REALES de este proceso: capacidades, seccomp,\n"
+            "            montajes, limites, SELinux, linker de Android\n"
+            "  repair    repara lo que se puede SIN el daemon (--apply lo ejecuta)\n"
             "  scan      recoge los hechos y los lista\n"
             "  recover   plan de recuperacion (--apply lo ejecuta)\n"
+            "  todo      doctor + salud en un solo informe (para integrar)\n"
             "  selftest  prueba las sondas que usa este binario\n"
-            "  --json    salida en JSON\n");
+            "  --json    salida en JSON (schema " MDDOCTOR_SCHEMA ")\n"
+            "  --version version y contrato\n"
+            "\n"
+            "codigos de salida: 0 = todo OK, 1 = hay avisos, 2 = hay criticos, 3 = uso incorrecto\n");
 }
 
 int main(int argc, char **argv) {
@@ -1126,11 +1733,18 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "doctor")) modo = "doctor";
         else if (!strcmp(argv[i], "recover")) modo = "recover";
         else if (!strcmp(argv[i], "salud")) modo = "salud";
+        else if (!strcmp(argv[i], "entorno")) modo = "entorno";
+        else if (!strcmp(argv[i], "repair")) modo = "repair";
+        else if (!strcmp(argv[i], "todo")) modo = "todo";
         else if (!strcmp(argv[i], "--json")) json = 1;
         else if (!strcmp(argv[i], "--apply")) aplicar = 1;
         else if (!strcmp(argv[i], "--yes")) yes = 1;
         else if (!strcmp(argv[i], "--todo")) todo = 1;
         else if (!strcmp(argv[i], "--espera") && i + 1 < argc) espera = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--version")) {
+            printf("mddoctor %s (schema %s)\n", MDDOCTOR_VERSION, MDDOCTOR_SCHEMA);
+            return 0;
+        }
         else if (!strcmp(argv[i], "selftest")) modo = "selftest";
         else { uso(); return 3; }
     }
@@ -1140,12 +1754,33 @@ int main(int argc, char **argv) {
         return autotest() ? 1 : 0;
     }
 
+    if (!strcmp(modo, "entorno")) {
+        entorno(json);
+        if (json) imprimir_json();
+        else imprimir_tabla();
+        return peor;
+    }
+
+    if (!strcmp(modo, "repair")) {
+        return reparar(aplicar);
+    }
+
     if (!strcmp(modo, "recover")) {
         int a = recuperar(aplicar);
         return a ? 1 : 0;
     }
 
     if (!strcmp(modo, "salud")) {
+        salud(espera);
+        if (json) imprimir_json();
+        else { imprimir_tabla(); salud_tails(); }
+        return peor;
+    }
+
+    /* `todo`: el informe completo en una sola llamada (lo que integra el
+     * tool MCP `doctor` y la Web UI). */
+    if (!strcmp(modo, "todo")) {
+        clasificar();
         salud(espera);
         if (json) imprimir_json();
         else { imprimir_tabla(); salud_tails(); }

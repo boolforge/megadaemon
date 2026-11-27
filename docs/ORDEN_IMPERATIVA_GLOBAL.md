@@ -102,7 +102,9 @@ siguiente.
 | Un solo `bus_ejecutor::ciclo()` en vez de N llamadas | `bus_ejecutor.rs` | un ciclo = un ciclo de contexto |
 | Autodetección de "listo" | `telemetria::estado_listo()` | no preguntar "¿ya estás?" |
 | Informes con `NO VERIFICADO` explícito | esta orden | no discutir sobre lo que nadie comprobó |
-| Núcleo forense propio en C (26 KB, sin deps) | `tools/mddoctor.c` | diagnostica en **<1 s** donde el build de Rust se muere por RAM |
+| Núcleo forense propio en C (48 KB, sin deps) | `tools/mddoctor.c` | diagnostica en **<1 s** donde el build de Rust se muere por RAM |
+| Diagnóstico del móvil en C (sin `curl` ni `wget`) | `mddoctor salud` | el shell de Android no trae esas herramientas |
+| Tool MCP `doctor` (diagnóstico + recuperación) | `mcp_ext.rs` → `doctor.rs` | diagnosticar por la API, sin ssh ni ADB |
 | Tablón del enjambre en un comando | `tools/estado.sh` | no releer el repo para saber dónde está el trabajo |
 | Ejecutar un binario ARM64 de verdad | `tools/verificar-arm64.sh` (+ `qemu-aarch64-static`) | "compila" ⇒ "funciona", sin esperar al CI |
 

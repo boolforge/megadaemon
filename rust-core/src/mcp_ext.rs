@@ -267,6 +267,19 @@ pub fn tool_definitions() -> Value {
             },
 
             {
+                "name": "doctor",
+                "description": "Diagnóstico y recuperación del móvil en UN comando, con el binario forense en C (mddoctor, 43 KB, <1 MB de RAM): funciona CUANDO el daemon está roto. Acciones: doctor (hechos + veredicto), salud (URL real del túnel, DNS y TCP del túnel, /health por sockets sin curl ni wget, procesos, SHA-256 y ELF del binario en servicio), entorno (los permisos REALES del proceso: capacidades, seccomp, montajes, límites, SELinux), repair (repara lo que se puede sin el daemon; aplicar=true lo ejecuta y exige confirmar=true), scan (hechos crudos), recover (plan de recuperación; aplicar=true lo ejecuta y exige confirmar=true), todo (doctor+salud en un informe), selftest (prueba sus propias sondas). Si el binario no está, devuelve el diagnóstico nativo.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": { "type": "string", "enum": ["doctor", "salud", "entorno", "repair", "scan", "recover", "todo", "selftest"], "default": "doctor" },
+                        "aplicar": { "type": "boolean", "description": "En accion=recover o repair: ejecutar en vez de solo mostrar el plan." },
+                        "confirmar": { "type": "boolean", "description": "Obligatorio si aplicar=true (acciones destructivas)." },
+                        "espera": { "type": "integer", "description": "En accion=salud o todo: segundos de espera por /health antes de rendirse." }
+                    }
+                }
+            },
+            {
                 "name": "capabilities",
                 "description": "Catálogo de capacidades de MegaDaemon con verificación REAL de dependencias en el dispositivo (binarios, rutas, módulos). Devuelve también la huella del catálogo para detectar deriva entre versiones.",
                 "inputSchema": {
@@ -1516,6 +1529,13 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         // subsistema de datos de la app del operador.
         "re_profunda" => {
             let v = crate::re_deep::dispatch(args);
+            json!({ "content": [{ "type": "text", "text": v.to_string() }] })
+        }
+        // v17 — Doctor: el diagnóstico forense en C (mddoctor) a través de
+        // la API de MegaDaemon.  Funciona CUANDO el daemon está roto, que
+        // es cuando hace falta.  Sin binario, degrada al diagnóstico nativo.
+        "doctor" => {
+            let v = crate::doctor::dispatch(args);
             json!({ "content": [{ "type": "text", "text": v.to_string() }] })
         }
         // v17 — Telemetría a Drive: el móvil **empuja** su estado (red

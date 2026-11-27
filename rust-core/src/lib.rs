@@ -99,6 +99,7 @@ pub mod delegate;
 pub mod deobfuscate;
 pub mod device_inventory;
 pub mod diagnostico;
+pub mod doctor;
 pub mod dex_decompile;
 pub mod dict_sync;
 pub mod disasm;

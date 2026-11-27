@@ -110,6 +110,40 @@ int main(void) {
        "toma el ULTIMO host bueno del log (como el tail -1 del script)");
     ok(strstr(url, "api.") == NULL, "descarta api.trycloudflare.com");
 
+    printf("== capacidades del proceso (decodificadas) ==\n");
+    char caps[256];
+    capacidades((1ULL << 0) | (1ULL << 5) | (1ULL << 21), caps, sizeof(caps));
+    ok(strcmp(caps, "CHOWN KILL SYS_ADMIN") == 0, "decodifica CHOWN+KILL+SYS_ADMIN");
+    capacidades(0, caps, sizeof(caps));
+    ok(strcmp(caps, "ninguna") == 0, "una mascara vacia dice 'ninguna'");
+    uint64_t ce = 0;
+    ok(status_hex("CapEff", &ce) == 0, "lee CapEff de /proc/self/status");
+
+    printf("== host de una URL ==\n");
+    char h[256];
+    url_host("https://abc-def.trycloudflare.com/health", h, sizeof(h));
+    ok(strcmp(h, "abc-def.trycloudflare.com") == 0, "extrae el host de la URL");
+    url_host("http://1.2.3.4:9090/x", h, sizeof(h));
+    ok(strcmp(h, "1.2.3.4") == 0, "quita el puerto");
+
+    printf("== cabecera ELF ==\n");
+    char elf[64];
+    elf_info("/tmp/md_t_grande", elf, sizeof(elf));
+    ok(strncmp(elf, "NO es un ELF", 10) == 0, "un fichero cualquiera NO es un ELF");
+    elf_info(fx("elf_real"), elf, sizeof(elf));
+    ok(strncmp(elf, "ELF", 3) == 0, "un ELF de verdad se identifica");
+
+    printf("== rutas seguras (inyeccion de comandos) ==\n");
+    ok(ruta_segura("/data/adb/megadaemon/state") == 1, "una ruta normal vale");
+    ok(ruta_segura("/tmp/x; rm -rf /") == 0, "una ruta con ';' se rechaza");
+    ok(ruta_segura("/tmp/$(id)") == 0, "una ruta con '$()' se rechaza");
+    ok(ruta_segura("/tmp/'x'") == 0, "una ruta con comilla se rechaza");
+    ok(ruta_segura("") == 0, "una ruta vacia se rechaza");
+
+    printf("== red sin curl ==\n");
+    ok(tcp_puerto("127.0.0.1", 1, 500) == 0, "un puerto cerrado da 0 (resuelve, no conecta)");
+    ok(tcp_puerto("no.existe.invalido.local", 80, 500) == -1, "un host que no resuelve da -1");
+
     printf("== cola de lineas ==\n");
     char cola[1024];
     tail_file(fx("lineas"), 3, cola, sizeof(cola));

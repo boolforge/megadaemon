@@ -78,4 +78,21 @@ done
 
 # --- Compilar y ejecutar ---------------------------------------------------
 "$CC" -O2 -Wall -o "$TMP/test" "$RAIZ/tools/test-mddoctor.c"
+# Un ELF de verdad para probar la cabecera (el propio binario sirve).
+cp "$TMP/test" "$TMP/elf_real"
 MDDOCTOR_TEST_FIX="$TMP" MDDOCTOR_TEST_PORT="$PUERTO" "$TMP/test"
+
+# --- GATE DE TAMAÑO -------------------------------------------------------
+# El usuario fijó un tope ESTRICTO de 100 KB para el binario forense (va al
+# movil con un `cat`, y el movil es el que tiene la RAM justa).
+# MEDIDO 2026-11-27: 43.576 B con los flags optimizados.
+"$CC" -Os -s -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -fmerge-all-constants -fno-ident -fno-plt -Wl,--as-needed \
+    -fno-unwind-tables -fno-asynchronous-unwind-tables \
+    -o "$TMP/md" "$RAIZ/tools/mddoctor.c"
+TAM=$(wc -c < "$TMP/md")
+echo "mddoctor: $TAM B (tope: 102400 B)"
+if [ "$TAM" -gt 102400 ]; then
+    echo "FALLO: mddoctor pesa $TAM B y el tope es 102400 B" >&2
+    exit 1
+fi
