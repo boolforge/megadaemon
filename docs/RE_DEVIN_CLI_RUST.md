@@ -405,7 +405,7 @@ al desinstalar. `stdin` de los servidores stdio recibe `PLUGIN_ROOT` y
 
 ⇒ Para MegaDaemon `skills.rs`: un modelo de plugin con **datos persistentes por
 identidad** y **variables de plantilla** es justo lo que hace falta para que los
-skills写成 Agent Skills (`.agents/skills/<name>/SKILL.md`) funcionen.
+skills escritos como Agent Skills (`.agents/skills/<name>/SKILL.md`) funcionen.
 
 ---
 
