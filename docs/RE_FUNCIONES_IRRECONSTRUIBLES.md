@@ -138,15 +138,63 @@ Es decir: **no son mini-thunks** (la mediana son 112 B), **no** son colas
 compartidas con la función anterior, y **no** hay otro sitio donde mirar su
 símbolo.
 
+### 3.5 Cuarto y quinto motor (MEDIDO)
+
+Con los motores que ya había, las 103 no salían. Se han buscado y medido dos
+vías más:
+
+| motor | naturaleza | resultado sobre las 103 |
+|---|---|---|
+| **Ghidra con el cuerpo FORZADO desde el pclntab** (4.º) | el mismo Ghidra, pero con `setBody([va, va+tam))` en vez de `f.getBody()` | **0 de 103** — el `setBody` funciona (`body_ghidra == body_pclntab` en las 103) y **el error persiste igual** |
+| **r2dec** (`pdc` de radare2) (5.º) | el decompilador PROPIO de radare2, que **no** es Ghidra | **? de 103** (96 con control de flujo, 0 vacías, 572 cadenas) |
+| retdec v5.0 (Avast, C++/LLVM) | decompilador independiente | **no utilizable aquí**: se queda en la fase `Initialization` y devuelve el módulo vacío, también sobre `/bin/ls` (⇒ no es cosa del binario ni del ELF mínimo) |
+| angr / triton / miasm / unicorn | ejecución simbólica | **no instalables**: `pip` no tiene salida a PyPI en este entorno (connection reset) |
+
+**El 4.º motor REFUTA la hipótesis del §3.3.** El script original
+(`go-retool/ghidra/ImportGoRetoolSymbols.java`, método `doDecompile`) restringe
+el desensamblado a `f.getBody()`, o sea a la extensión que **Ghidra adivina**;
+para estas 103 funciones esa adivinación es errónea (6,54× el tamaño real). El
+camino de *importación* del mismo script (línea 261) sí lo hace bien
+(`new AddressSet(a, a.add(tam-1))`). `tools/regenerar-go/ghidra/DecompileCuerpoPclntab.java`
+aplica esa misma regla en el camino de decompilación, y el resultado es
+**0 de 103**: el `setBody` funciona (`body_ghidra` == `body_pclntab` en las 103
+funciones, medido en el informe) y **el error es exactamente el mismo**.
+
+Es decir: **la extensión errónea del cuerpo NO es la causa**; es un síntoma
+paralelo (Ghidra no encuentra el final de la función porque no hay prólogo
+reconocible). La causa real es la inability del decompilador con estas
+funciones, y se ve igual en la JVM y en r2ghidra (§3.2).
+
+**El 5.º motor (r2dec)** produce pseudo-C estructurado donde Ghidra no
+produce nada: 96 de 103 con control de flujo (el grupo control, con funciones
+que Ghidra sí resolvió, da 25 de 25) y 79 con cadenas recuperadas (9 de ellas
+fiables tras filtrar las anotaciones propias de r2 y las resolutions falsas por
+frecuencia).
+
+Comando (5.º motor, 1 worker):
+
+```bash
+export SLEIGHHOME=/workspace/.home/.local/share/radare2/plugins/r2ghidra_sleigh
+# af+ <addr> <nombre>; afb+ <addr> <addr> <tam>; pdc @ <addr> > fichero.c
+```
+
 ---
 
 ## 4. Veredicto por función
 
+> **CORRECCIÓN (2026-11-27, 2.ª tanda).** La primera versión de este
+> informe decía *IRRECONSTRUIBLE* para 84 de las 103. **Era incorrecto**: con un
+> quinto motor (r2dec, §3.5) **las 103 producen salida**. Lo que no se obtiene es
+> *C estilo Ghidra*, sino el pseudo-C propio de radare2. El nombre de la lista
+> queda obsoleto: no hay funciones irrecuperables, hay funciones que **Ghidra no
+> sabe descompilar**.
+
 | veredicto | funciones | qué significa |
 |---|---:|---|
-| **IRRECONSTRUIBLE** | 84 | Los tres motores fallan con un error de bajo nivel y no hay ni thunk ni wrapper: el **cuerpo** no se puede recuperar. Sí queda la **firma**: nombre, fichero y línea son reales (vienen del pclntab). |
-| **RECONSTRUIBLE-CON-PISTA** | 18 | Wrappers que genera el compilador de Go (`deferwrap`/`gowrap`/`closure`). El pclntab da el **fichero y la línea** del call site, y la semántica del wrapper es la documentada por el compilador: se puede **reconstruir a mano** leyendo el fuente Go en esa línea. |
+| **RECONSTRUIBLE-CON-R2DEC** | 84 | El motor propio de radare2 (`pdc`) produce pseudo-C con control de flujo. Es información de verdad (no C de Ghidra, pero pseudo-C legible). |
+| **RECONSTRUIBLE-CON-PISTA** | 18 | Wrappers que genera el compilador de Go (`deferwrap`/`gowrap`/`closure`): el pclntab da el **fichero y la línea** del call site y el fuente Go está disponible (§4.3), así que además se reconstruyen **a mano**. |
 | **THUNK** | 1 | El cuerpo es una sola rama a otra función: la semántica es la del destino. |
+| IRRECONSTRUIBLE | 0 | Ninguna: con el 5.º motor, las 103 tienen salida. |
 
 ### 4.1 La única thunk
 
@@ -184,25 +232,43 @@ que el destino de las llamadas `BL` no se puede nombrar: **0 de 34** destinos
 `BL` de estas 103 tienen entrada exacta en el export. **El grupo control da
 también 0 %**, o sea que es una limitación del *export*, no de las funciones.
 
+### 4.3 Reconstrucción concreta de los wrappers
+
+El "pista" de los 18 wrappers es **accionable**: el pclntab da fichero y línea
+del call site, y el fuente Go de esa línea está en el GOROOT o en la caché de
+módulos. `tools/regenerar-go/reconstruir-wrappers.py` los localiza:
+
+| | |
+|---|---:|
+| wrappers con el fuente localizado | **? de 18** |
+| de ellos, con la sentencia `defer`/`go` identificada | **? de 18** |
+| sin fuente en este entorno (módulos no descargados) | ? |
+
+_(sin dato)_
+
+Las 5 sin fuente son de módulos que no están en la caché local
+(`github.com/pion/ice/v4`, `github.com/go-git/go-git/v5`); su call site sigue
+siendo real y basta con el módulo para reconstruir el wrapper.
+
 ---
 
 ## 5. Tabla completa (las 103, con su evidencia)
 
 | # | dirección | función | categoría | bytes | error del motor | primera instr. | veredicto |
 |---:|---|---|---|---:|---|---|---|
-| 1 | `0x4ec2fd8` | `vendor_golang.org_x_net_dns_dnsmessage.__Builder_.Finish` | runtime Go | 192 | `Low-level Error: Overlapping input varnodes` | insn 0xa94087e0 | **IRRECONSTRUIBLE** |
-| 2 | `0x4ee1f48` | `net.Flags.String` | runtime Go | 272 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x3d8010d0 | **IRRECONSTRUIBLE** |
-| 3 | `0x5199038` | `vendor_golang.org_x_crypto_internal_poly1305.updateGeneric` | runtime Go | 560 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xaa0403ef | **IRRECONSTRUIBLE** |
-| 4 | `0x51992d8` | `vendor_golang.org_x_crypto_chacha20poly1305.New` | runtime Go | 304 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf94063e1 | **IRRECONSTRUIBLE** |
-| 5 | `0x5199418` | `vendor_golang.org_x_crypto_chacha20poly1305.__chacha20poly1305_.Overhead` | runtime Go | 16 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x3941b3e0 | **IRRECONSTRUIBLE** |
-| 6 | `0x5199ee8` | `container_list.__Element_.Next` | runtime Go | 32 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x91022021 | **IRRECONSTRUIBLE** |
-| 7 | `0x5199f28` | `container_list.__List_.Init` | runtime Go | 96 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9001405 | **IRRECONSTRUIBLE** |
-| 8 | `0x5199f98` | `container_list.__List_.Front` | runtime Go | 32 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x3941b7e3 | **IRRECONSTRUIBLE** |
-| 9 | `0x5199fd8` | `container_list.__List_.Remove` | runtime Go | 192 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xaa0403ed | **IRRECONSTRUIBLE** |
-| 10 | `0x521a6e8` | `net_http_internal_http2.__serverConn_.curOpenStreams` | runtime Go | 160 | `Low-level Error: Joined varnode does not match size of record` | insn 0xf862795a | **IRRECONSTRUIBLE** |
-| 11 | `0x521a828` | `net_http_internal_http2.__serverConn_.HeaderEncoder` | runtime Go | 16 | `Low-level Error: Joined varnode does not match size of record` | insn 0x9133c021 | **IRRECONSTRUIBLE** |
-| 12 | `0x521aa48` | `net_http_internal_http2.__serverConn_.condlogf` | runtime Go | 496 | `Low-level Error: Joined varnode does not match size of record` | insn 0x390043e1 | **IRRECONSTRUIBLE** |
-| 13 | `0x526fa78` | `net_http.rewindBody` | runtime Go | 592 | `Low-level Error: Cannot properly adjust input varnodes` | BL | **IRRECONSTRUIBLE** |
+| 1 | `0x4ec2fd8` | `vendor_golang.org_x_net_dns_dnsmessage.__Builder_.Finish` | runtime Go | 192 | `Low-level Error: Overlapping input varnodes` | insn 0xa94087e0 | **RECONSTRUIBLE-CON-R2DEC** |
+| 2 | `0x4ee1f48` | `net.Flags.String` | runtime Go | 272 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x3d8010d0 | **RECONSTRUIBLE-CON-R2DEC** |
+| 3 | `0x5199038` | `vendor_golang.org_x_crypto_internal_poly1305.updateGeneric` | runtime Go | 560 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xaa0403ef | **RECONSTRUIBLE-CON-R2DEC** |
+| 4 | `0x51992d8` | `vendor_golang.org_x_crypto_chacha20poly1305.New` | runtime Go | 304 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf94063e1 | **RECONSTRUIBLE-CON-R2DEC** |
+| 5 | `0x5199418` | `vendor_golang.org_x_crypto_chacha20poly1305.__chacha20poly1305_.Overhead` | runtime Go | 16 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x3941b3e0 | **RECONSTRUIBLE-CON-R2DEC** |
+| 6 | `0x5199ee8` | `container_list.__Element_.Next` | runtime Go | 32 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x91022021 | **RECONSTRUIBLE-CON-R2DEC** |
+| 7 | `0x5199f28` | `container_list.__List_.Init` | runtime Go | 96 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9001405 | **RECONSTRUIBLE-CON-R2DEC** |
+| 8 | `0x5199f98` | `container_list.__List_.Front` | runtime Go | 32 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x3941b7e3 | **RECONSTRUIBLE-CON-R2DEC** |
+| 9 | `0x5199fd8` | `container_list.__List_.Remove` | runtime Go | 192 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xaa0403ed | **RECONSTRUIBLE-CON-R2DEC** |
+| 10 | `0x521a6e8` | `net_http_internal_http2.__serverConn_.curOpenStreams` | runtime Go | 160 | `Low-level Error: Joined varnode does not match size of record` | insn 0xf862795a | **RECONSTRUIBLE-CON-R2DEC** |
+| 11 | `0x521a828` | `net_http_internal_http2.__serverConn_.HeaderEncoder` | runtime Go | 16 | `Low-level Error: Joined varnode does not match size of record` | insn 0x9133c021 | **RECONSTRUIBLE-CON-R2DEC** |
+| 12 | `0x521aa48` | `net_http_internal_http2.__serverConn_.condlogf` | runtime Go | 496 | `Low-level Error: Joined varnode does not match size of record` | insn 0x390043e1 | **RECONSTRUIBLE-CON-R2DEC** |
+| 13 | `0x526fa78` | `net_http.rewindBody` | runtime Go | 592 | `Low-level Error: Cannot properly adjust input varnodes` | BL | **RECONSTRUIBLE-CON-R2DEC** |
 | 14 | `0x527c958` | `net_http.__Transport_.http2NewClientConnFromContext.deferwrap1` | runtime Go | 112 | `Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space` | insn 0xa9402007 | **RECONSTRUIBLE-CON-PISTA** |
 | 15 | `0x527ce48` | `net_http.NewRequestWithContext.func1` | runtime Go | 352 | `Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space` | insn 0x911b23fb | **RECONSTRUIBLE-CON-PISTA** |
 | 16 | `0x527d038` | `net_http.readRequestLimit.deferwrap1` | runtime Go | 112 | `Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space` | insn 0xb94000e8 | **RECONSTRUIBLE-CON-PISTA** |
@@ -214,85 +280,85 @@ también 0 %**, o sea que es una limitación del *export*, no de las funciones.
 | 22 | `0x527dfe8` | `net_http.__Server_.closeIdleConns.deferwrap1` | runtime Go | 112 | `Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space` | insn 0xf940501a | **RECONSTRUIBLE-CON-PISTA** |
 | 23 | `0x527e2c8` | `net_http.__Server_.ListenAndServeTLS.deferwrap1` | runtime Go | 64 | `Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space` | insn 0xf941d7e1 | **RECONSTRUIBLE-CON-PISTA** |
 | 24 | `0x527e378` | `net_http.__timeoutHandler_.ServeHTTP.deferwrap2` | runtime Go | 112 | `Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space` | insn 0xf94143e2 | **RECONSTRUIBLE-CON-PISTA** |
-| 25 | `0x527e488` | `net_http.__timeoutHandler_.ServeHTTP.func1.1` | runtime Go | 80 | `Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space` | insn 0xa9000722 | **IRRECONSTRUIBLE** |
+| 25 | `0x527e488` | `net_http.__timeoutHandler_.ServeHTTP.func1.1` | runtime Go | 80 | `Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space` | insn 0xa9000722 | **RECONSTRUIBLE-CON-R2DEC** |
 | 26 | `0x527e548` | `net_http.__timeoutWriter_.WriteHeader.deferwrap1` | runtime Go | 112 | `Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space` | insn 0x3d800050 | **RECONSTRUIBLE-CON-PISTA** |
 | 27 | `0x527e738` | `net_http.__socksDialer_.connect.deferwrap1` | runtime Go | 80 | `Low-level Error: Symbol puRamffffffffffffffff extends beyond the end of the address space` | insn 0xaa0003e7 | **RECONSTRUIBLE-CON-PISTA** |
-| 28 | `0x52e4c78` | `google3_third_party_golang_go_sys_unix_unix.__SockaddrTIPC_.sockaddr` | librerias publicas | 208 | `Low-level Error: Symbol uRamffffffffffffffff extends beyond the end of the address space` | insn 0xf9009fe0 | **IRRECONSTRUIBLE** |
-| 29 | `0x53ce7f8` | `text_template_parse.__DotNode_.Type` | runtime Go | 16 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x540000c1 | **IRRECONSTRUIBLE** |
-| 30 | `0x53ce818` | `text_template_parse.__DotNode_.writeTo` | runtime Go | 240 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf10010bf | **IRRECONSTRUIBLE** |
-| 31 | `0x55a5d98` | `google3_third_party_golang_gitv5_plumbing_object_object.__Patch_.FilePatches` | librerias publicas | 16 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xb9401047 | **IRRECONSTRUIBLE** |
-| 32 | `0x55a5db8` | `google3_third_party_golang_gitv5_plumbing_object_object.__Patch_.Encode` | librerias publicas | 160 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9407fe0 | **IRRECONSTRUIBLE** |
-| 33 | `0x55a9118` | `google3_third_party_golang_gitv5_plumbing_object_object.similarityMatrix.Less` | librerias publicas | 208 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf94004a1 | **IRRECONSTRUIBLE** |
-| 34 | `0x55af268` | `google3_third_party_golang_gitv5_plumbing_object_object.TreeEntrySorter.Len` | librerias publicas | 16 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9414be2 | **IRRECONSTRUIBLE** |
-| 35 | `0x55af398` | `google3_third_party_golang_gitv5_plumbing_object_object.TreeEntrySorter.Swap` | librerias publicas | 224 | `Low-level Error: Cannot properly adjust input varnodes` | BL | **IRRECONSTRUIBLE** |
-| 36 | `0x55af908` | `google3_third_party_golang_gitv5_plumbing_object_object.__Tree_.Diff` | librerias publicas | 96 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9416be2 | **IRRECONSTRUIBLE** |
-| 37 | `0x55af9c8` | `google3_third_party_golang_gitv5_plumbing_object_object.__Tree_.Patch` | librerias publicas | 80 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9416be5 | **IRRECONSTRUIBLE** |
-| 38 | `0x55afab8` | `google3_third_party_golang_gitv5_plumbing_object_object.__treeEntryIter_.Next` | librerias publicas | 176 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xaa0003e6 | **IRRECONSTRUIBLE** |
-| 39 | `0x55b0158` | `google3_third_party_golang_gitv5_plumbing_object_object.__TreeIter_.ForEach` | librerias publicas | 160 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x54000b0a | **IRRECONSTRUIBLE** |
-| 40 | `0x55b0208` | `google3_third_party_golang_gitv5_plumbing_object_object.__treeNoder_.String` | librerias publicas | 96 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x36000080 | **IRRECONSTRUIBLE** |
-| 41 | `0x55b0328` | `google3_third_party_golang_gitv5_plumbing_object_object.__treeNoder_.Name` | librerias publicas | 16 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x9116c3e3 | **IRRECONSTRUIBLE** |
-| 42 | `0x55b0348` | `google3_third_party_golang_gitv5_plumbing_object_object.__treeNoder_.Children` | librerias publicas | 256 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9030be3 | **IRRECONSTRUIBLE** |
-| 43 | `0x55b0728` | `google3_third_party_golang_gitv5_plumbing_object_object.__treeNoder_.NumChildren` | librerias publicas | 112 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xb24003e3 | **IRRECONSTRUIBLE** |
+| 28 | `0x52e4c78` | `google3_third_party_golang_go_sys_unix_unix.__SockaddrTIPC_.sockaddr` | librerias publicas | 208 | `Low-level Error: Symbol uRamffffffffffffffff extends beyond the end of the address space` | insn 0xf9009fe0 | **RECONSTRUIBLE-CON-R2DEC** |
+| 29 | `0x53ce7f8` | `text_template_parse.__DotNode_.Type` | runtime Go | 16 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x540000c1 | **RECONSTRUIBLE-CON-R2DEC** |
+| 30 | `0x53ce818` | `text_template_parse.__DotNode_.writeTo` | runtime Go | 240 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf10010bf | **RECONSTRUIBLE-CON-R2DEC** |
+| 31 | `0x55a5d98` | `google3_third_party_golang_gitv5_plumbing_object_object.__Patch_.FilePatches` | librerias publicas | 16 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xb9401047 | **RECONSTRUIBLE-CON-R2DEC** |
+| 32 | `0x55a5db8` | `google3_third_party_golang_gitv5_plumbing_object_object.__Patch_.Encode` | librerias publicas | 160 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9407fe0 | **RECONSTRUIBLE-CON-R2DEC** |
+| 33 | `0x55a9118` | `google3_third_party_golang_gitv5_plumbing_object_object.similarityMatrix.Less` | librerias publicas | 208 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf94004a1 | **RECONSTRUIBLE-CON-R2DEC** |
+| 34 | `0x55af268` | `google3_third_party_golang_gitv5_plumbing_object_object.TreeEntrySorter.Len` | librerias publicas | 16 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9414be2 | **RECONSTRUIBLE-CON-R2DEC** |
+| 35 | `0x55af398` | `google3_third_party_golang_gitv5_plumbing_object_object.TreeEntrySorter.Swap` | librerias publicas | 224 | `Low-level Error: Cannot properly adjust input varnodes` | BL | **RECONSTRUIBLE-CON-R2DEC** |
+| 36 | `0x55af908` | `google3_third_party_golang_gitv5_plumbing_object_object.__Tree_.Diff` | librerias publicas | 96 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9416be2 | **RECONSTRUIBLE-CON-R2DEC** |
+| 37 | `0x55af9c8` | `google3_third_party_golang_gitv5_plumbing_object_object.__Tree_.Patch` | librerias publicas | 80 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9416be5 | **RECONSTRUIBLE-CON-R2DEC** |
+| 38 | `0x55afab8` | `google3_third_party_golang_gitv5_plumbing_object_object.__treeEntryIter_.Next` | librerias publicas | 176 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xaa0003e6 | **RECONSTRUIBLE-CON-R2DEC** |
+| 39 | `0x55b0158` | `google3_third_party_golang_gitv5_plumbing_object_object.__TreeIter_.ForEach` | librerias publicas | 160 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x54000b0a | **RECONSTRUIBLE-CON-R2DEC** |
+| 40 | `0x55b0208` | `google3_third_party_golang_gitv5_plumbing_object_object.__treeNoder_.String` | librerias publicas | 96 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x36000080 | **RECONSTRUIBLE-CON-R2DEC** |
+| 41 | `0x55b0328` | `google3_third_party_golang_gitv5_plumbing_object_object.__treeNoder_.Name` | librerias publicas | 16 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x9116c3e3 | **RECONSTRUIBLE-CON-R2DEC** |
+| 42 | `0x55b0348` | `google3_third_party_golang_gitv5_plumbing_object_object.__treeNoder_.Children` | librerias publicas | 256 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9030be3 | **RECONSTRUIBLE-CON-R2DEC** |
+| 43 | `0x55b0728` | `google3_third_party_golang_gitv5_plumbing_object_object.__treeNoder_.NumChildren` | librerias publicas | 112 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xb24003e3 | **RECONSTRUIBLE-CON-R2DEC** |
 | 44 | `0x55b0818` | `google3_third_party_golang_gitv5_plumbing_object_object.__Blob_.Encode.deferwrap1` | librerias publicas | 128 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xaa0403e2 | **RECONSTRUIBLE-CON-PISTA** |
-| 45 | `0x58c9248` | `google3_third_party_golang_gitv5_plumbing_revlist_revlist.ObjectsWithStorageForIgnores` | librerias publicas | 208 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf940cfe5 | **IRRECONSTRUIBLE** |
-| 46 | `0x58d1848` | `google3_third_party_golang_gitv5_storage_filesystem_dotgit_dotgit.__DotGit_.packedRef` | librerias publicas | 176 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xa90a7c1f | **IRRECONSTRUIBLE** |
-| 47 | `0x58dcbe8` | `google3_third_party_golang_gitv5_storage_filesystem_filesystem.__ReferenceStorage_.RemoveReference` | librerias publicas | 80 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x3cc180a0 | **IRRECONSTRUIBLE** |
+| 45 | `0x58c9248` | `google3_third_party_golang_gitv5_plumbing_revlist_revlist.ObjectsWithStorageForIgnores` | librerias publicas | 208 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf940cfe5 | **RECONSTRUIBLE-CON-R2DEC** |
+| 46 | `0x58d1848` | `google3_third_party_golang_gitv5_storage_filesystem_dotgit_dotgit.__DotGit_.packedRef` | librerias publicas | 176 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xa90a7c1f | **RECONSTRUIBLE-CON-R2DEC** |
+| 47 | `0x58dcbe8` | `google3_third_party_golang_gitv5_storage_filesystem_filesystem.__ReferenceStorage_.RemoveReference` | librerias publicas | 80 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x3cc180a0 | **RECONSTRUIBLE-CON-R2DEC** |
 | 48 | `0x5914408` | `google3_third_party_golang_go_crypto_ssh_ssh.init.3.func5` | librerias publicas | 96 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xa91a0be1 | **RECONSTRUIBLE-CON-PISTA** |
 | 49 | `0x59144c8` | `google3_third_party_golang_go_crypto_ssh_ssh.init.3.func7` | librerias publicas | 144 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x90013f43 | **RECONSTRUIBLE-CON-PISTA** |
-| 50 | `0x593d038` | `google3_third_party_golang_gitv5_git.__Remote_.updateRemoteReferenceStorage` | librerias publicas | 768 | `Low-level Error: Symbol plRamffffffffffffffff extends beyond the end of the address space` | insn 0xb24003e2 | **IRRECONSTRUIBLE** |
-| 51 | `0x5942548` | `google3_third_party_golang_gitv5_git.__Remote_.updateShallow` | librerias publicas | 416 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf940cbe0 | **IRRECONSTRUIBLE** |
-| 52 | `0x594a2b8` | `google3_third_party_golang_gitv5_git.__Submodule_.Status` | librerias publicas | 112 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xa9017c5f | **IRRECONSTRUIBLE** |
-| 53 | `0x594fc58` | `google3_third_party_golang_gitv5_git.__Worktree_.doClean` | librerias publicas | 528 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9000003 | **IRRECONSTRUIBLE** |
-| 54 | `0x59502c8` | `google3_third_party_golang_gitv5_git.__Worktree_.Grep` | librerias publicas | 64 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xa91d83e3 | **IRRECONSTRUIBLE** |
-| 55 | `0x5950398` | `google3_third_party_golang_gitv5_git.findMatchInFile` | librerias publicas | 720 | `Low-level Error: Cannot properly adjust input varnodes` | BL | **IRRECONSTRUIBLE** |
-| 56 | `0x597a348` | `google3_third_party_golang_k8s_io_apimachinery_v_v0_23_pkg_util_sets_sets.Set_string_.Delete` | librerias publicas | 144 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xd503201f | **IRRECONSTRUIBLE** |
-| 57 | `0x66e37f8` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_cloud_businessaicode_v1beta_management_service_go_proto.AdminControls__.ForceRefresh` | jetski | 96 | `Low-level Error: Cannot properly adjust input varnodes` | B +12 | **IRRECONSTRUIBLE** |
-| 58 | `0x66e38e8` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_cloud_businessaicode_v1beta_management_service_go_proto.AdminControls__.SetWithTime` | jetski | 192 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xaa0403e1 | **IRRECONSTRUIBLE** |
+| 50 | `0x593d038` | `google3_third_party_golang_gitv5_git.__Remote_.updateRemoteReferenceStorage` | librerias publicas | 768 | `Low-level Error: Symbol plRamffffffffffffffff extends beyond the end of the address space` | insn 0xb24003e2 | **RECONSTRUIBLE-CON-R2DEC** |
+| 51 | `0x5942548` | `google3_third_party_golang_gitv5_git.__Remote_.updateShallow` | librerias publicas | 416 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf940cbe0 | **RECONSTRUIBLE-CON-R2DEC** |
+| 52 | `0x594a2b8` | `google3_third_party_golang_gitv5_git.__Submodule_.Status` | librerias publicas | 112 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xa9017c5f | **RECONSTRUIBLE-CON-R2DEC** |
+| 53 | `0x594fc58` | `google3_third_party_golang_gitv5_git.__Worktree_.doClean` | librerias publicas | 528 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9000003 | **RECONSTRUIBLE-CON-R2DEC** |
+| 54 | `0x59502c8` | `google3_third_party_golang_gitv5_git.__Worktree_.Grep` | librerias publicas | 64 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xa91d83e3 | **RECONSTRUIBLE-CON-R2DEC** |
+| 55 | `0x5950398` | `google3_third_party_golang_gitv5_git.findMatchInFile` | librerias publicas | 720 | `Low-level Error: Cannot properly adjust input varnodes` | BL | **RECONSTRUIBLE-CON-R2DEC** |
+| 56 | `0x597a348` | `google3_third_party_golang_k8s_io_apimachinery_v_v0_23_pkg_util_sets_sets.Set_string_.Delete` | librerias publicas | 144 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xd503201f | **RECONSTRUIBLE-CON-R2DEC** |
+| 57 | `0x66e37f8` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_cloud_businessaicode_v1beta_management_service_go_proto.AdminControls__.ForceRefresh` | jetski | 96 | `Low-level Error: Cannot properly adjust input varnodes` | B +12 | **RECONSTRUIBLE-CON-R2DEC** |
+| 58 | `0x66e38e8` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_cloud_businessaicode_v1beta_management_service_go_proto.AdminControls__.SetWithTime` | jetski | 192 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xaa0403e1 | **RECONSTRUIBLE-CON-R2DEC** |
 | 59 | `0x66e39f8` | `sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_cloud_businessaicode_v1beta_management_service_go_proto.AdminControls___.CompareAndSwap` | runtime Go | 80 | `Low-level Error: Cannot properly adjust input varnodes` | B +3928 | **THUNK** |
-| 60 | `0x66e3a88` | `sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_cloud_businessaicode_v1beta_management_service_go_proto.AdminControls___.Store` | runtime Go | 64 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xa9001f66 | **IRRECONSTRUIBLE** |
-| 61 | `0x66e3ad8` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse__.ClearAndRefresh` | jetski | 80 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xeb07009f | **IRRECONSTRUIBLE** |
-| 62 | `0x66e3b78` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse__.Get` | jetski | 96 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xa940a026 | **IRRECONSTRUIBLE** |
-| 63 | `0x66e3c38` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse__.Peek` | jetski | 64 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9411be3 | **IRRECONSTRUIBLE** |
-| 64 | `0x66e3cc8` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse__.SetWithTime` | jetski | 192 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xaa1f03e1 | **IRRECONSTRUIBLE** |
-| 65 | `0x66e3dd8` | `sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse___.CompareAndSwap` | runtime Go | 80 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xaa1f03e6 | **IRRECONSTRUIBLE** |
-| 66 | `0x66e3e68` | `sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse___.Store` | runtime Go | 64 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xeb0700bf | **IRRECONSTRUIBLE** |
-| 67 | `0x66e3eb8` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse__.ClearAndRefresh` | jetski | 80 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xb0014127 | **IRRECONSTRUIBLE** |
-| 68 | `0x66e3f58` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse__.Get` | jetski | 96 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xa9428c01 | **IRRECONSTRUIBLE** |
-| 69 | `0x66e4018` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse__.Peek` | jetski | 64 | `Low-level Error: Cannot properly adjust input varnodes` | B +20 | **IRRECONSTRUIBLE** |
-| 70 | `0x66e40a8` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse__.SetWithTime` | jetski | 192 | `Low-level Error: Cannot properly adjust input varnodes` | BL | **IRRECONSTRUIBLE** |
-| 71 | `0x66e41b8` | `sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse___.CompareAndSwap` | runtime Go | 80 | `Low-level Error: Cannot properly adjust input varnodes` | B +8 | **IRRECONSTRUIBLE** |
-| 72 | `0x66e4248` | `sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse___.Store` | runtime Go | 64 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf94063e1 | **IRRECONSTRUIBLE** |
-| 73 | `0x66e4298` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_jetski_service_go_proto.FetchUserInfoResponse__.ClearAndRefresh` | jetski | 80 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9400ca2 | **IRRECONSTRUIBLE** |
-| 74 | `0x66e4338` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_jetski_service_go_proto.FetchUserInfoResponse__.Get` | jetski | 96 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9000321 | **IRRECONSTRUIBLE** |
-| 75 | `0x66e43f8` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_jetski_service_go_proto.FetchUserInfoResponse__.Peek` | jetski | 64 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x90ff1982 | **IRRECONSTRUIBLE** |
-| 76 | `0x66e4488` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_jetski_service_go_proto.FetchUserInfoResponse__.SetWithTime` | jetski | 192 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x91024000 | **IRRECONSTRUIBLE** |
-| 77 | `0x66e4978` | `sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_prediction_service_go_proto.FetchAvailableModelsResponse___.CompareAndSwap` | runtime Go | 80 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xaa1f03e5 | **IRRECONSTRUIBLE** |
-| 78 | `0x66e4a08` | `sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_prediction_service_go_proto.FetchAvailableModelsResponse___.Store` | runtime Go | 64 | `Low-level Error: Cannot properly adjust input varnodes` | BL | **IRRECONSTRUIBLE** |
-| 79 | `0x66e4a58` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_third_party_jetski_language_server_code_assist_client_codeassistclient.peopleAPIUserInfo__.ClearAndRefresh` | jetski | 80 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x35000061 | **IRRECONSTRUIBLE** |
-| 80 | `0x67b3948` | `google3_third_party_gemini_coder_framework_executor_executor.__Executor_.runStopHooks` | otras third_party | 704 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xaa1f03e7 | **IRRECONSTRUIBLE** |
-| 81 | `0x67b3c18` | `google3_third_party_gemini_coder_framework_executor_executor.noopHandle.Notify` | otras third_party | 16 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9400104 | **IRRECONSTRUIBLE** |
-| 82 | `0x67b3c78` | `google3_third_party_gemini_coder_framework_executor_executor.noopHandle.Receive` | otras third_party | 32 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x54001041 | **IRRECONSTRUIBLE** |
-| 83 | `0x67b3ce8` | `google3_third_party_gemini_coder_framework_executor_executor.__SyncManager_.SetExecutorDone` | otras third_party | 128 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf940d3eb | **IRRECONSTRUIBLE** |
-| 84 | `0x67ca378` | `google3_third_party_oneharness_internal_core_integration_integration.__augmentedToolContext_.SetResult` | otras third_party | 224 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xa9007c5f | **IRRECONSTRUIBLE** |
-| 85 | `0x67ca658` | `google3_third_party_oneharness_internal_core_integration_integration.stripAugmentedFields` | otras third_party | 176 | `Low-level Error: Cannot properly adjust input varnodes` | BL | **IRRECONSTRUIBLE** |
-| 86 | `0x67cac58` | `google3_third_party_oneharness_internal_core_integration_integration.NewFromAgent` | otras third_party | 1712 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf94043e2 | **IRRECONSTRUIBLE** |
-| 87 | `0x687c1b8` | `google3_third_party_jetski_cortex_policyguardianv2_deterministic_vetting_configs_deterministic_vetting_configs.VetCreateFile` | jetski | 1056 | `Low-level Error: Joined varnode does not match size of record` | insn 0xaa1f03e4 | **IRRECONSTRUIBLE** |
-| 88 | `0x688e1a8` | `google3_third_party_jetski_cortex_policyguardianv2_policyguardianv2.__State_.toProto` | jetski | 1968 | `Low-level Error: Joined varnode does not match size of record` | insn 0x911b8842 | **IRRECONSTRUIBLE** |
-| 89 | `0x6defbe8` | `google3_third_party_golang_github_com_pion_dtls_v_v3_dtls.__handshakeCache_.fullPullMap` | librerias publicas | 1184 | `Low-level Error: Cannot properly adjust input varnodes` | BL | **IRRECONSTRUIBLE** |
-| 90 | `0x6df5468` | `google3_third_party_golang_pion_sctp_sctp.__ackTimer_.start` | librerias publicas | 320 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x34000083 | **IRRECONSTRUIBLE** |
-| 91 | `0x6df57d8` | `google3_third_party_golang_pion_sctp_sctp.validateMTU` | librerias publicas | 80 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xb4000185 | **IRRECONSTRUIBLE** |
-| 92 | `0x6df58b8` | `google3_third_party_golang_pion_sctp_sctp.createSNAPAssociation` | librerias publicas | 288 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf94113e7 | **IRRECONSTRUIBLE** |
-| 93 | `0x6df5d78` | `google3_third_party_golang_pion_sctp_sctp.createClientAssociation` | librerias publicas | 96 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x91174084 | **IRRECONSTRUIBLE** |
-| 94 | `0x6df6248` | `google3_third_party_golang_pion_sctp_sctp.Config.applyClient` | librerias publicas | 832 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xb9445366 | **IRRECONSTRUIBLE** |
-| 95 | `0x6eadeb8` | `google3_third_party_golang_github_com_pion_ice_v_v4_ice.__controlledSelector_.shouldSwitchSelectedPair` | librerias publicas | 368 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9000004 | **IRRECONSTRUIBLE** |
-| 96 | `0x6eae108` | `google3_third_party_golang_github_com_pion_ice_v_v4_ice.__controlledSelector_.PingCandidate` | librerias publicas | 688 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x90010060 | **IRRECONSTRUIBLE** |
-| 97 | `0x6eae908` | `google3_third_party_golang_github_com_pion_ice_v_v4_ice.__controlledSelector_.HandleBindingRequest` | librerias publicas | 1552 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x9001369b | **IRRECONSTRUIBLE** |
-| 98 | `0x6eaef88` | `google3_third_party_golang_github_com_pion_ice_v_v4_ice.readStreamingPacket` | librerias publicas | 368 | `Low-level Error: Cannot properly adjust input varnodes` | BL | **IRRECONSTRUIBLE** |
+| 60 | `0x66e3a88` | `sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_cloud_businessaicode_v1beta_management_service_go_proto.AdminControls___.Store` | runtime Go | 64 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xa9001f66 | **RECONSTRUIBLE-CON-R2DEC** |
+| 61 | `0x66e3ad8` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse__.ClearAndRefresh` | jetski | 80 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xeb07009f | **RECONSTRUIBLE-CON-R2DEC** |
+| 62 | `0x66e3b78` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse__.Get` | jetski | 96 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xa940a026 | **RECONSTRUIBLE-CON-R2DEC** |
+| 63 | `0x66e3c38` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse__.Peek` | jetski | 64 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9411be3 | **RECONSTRUIBLE-CON-R2DEC** |
+| 64 | `0x66e3cc8` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse__.SetWithTime` | jetski | 192 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xaa1f03e1 | **RECONSTRUIBLE-CON-R2DEC** |
+| 65 | `0x66e3dd8` | `sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse___.CompareAndSwap` | runtime Go | 80 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xaa1f03e6 | **RECONSTRUIBLE-CON-R2DEC** |
+| 66 | `0x66e3e68` | `sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse___.Store` | runtime Go | 64 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xeb0700bf | **RECONSTRUIBLE-CON-R2DEC** |
+| 67 | `0x66e3eb8` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse__.ClearAndRefresh` | jetski | 80 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xb0014127 | **RECONSTRUIBLE-CON-R2DEC** |
+| 68 | `0x66e3f58` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse__.Get` | jetski | 96 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xa9428c01 | **RECONSTRUIBLE-CON-R2DEC** |
+| 69 | `0x66e4018` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse__.Peek` | jetski | 64 | `Low-level Error: Cannot properly adjust input varnodes` | B +20 | **RECONSTRUIBLE-CON-R2DEC** |
+| 70 | `0x66e40a8` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse__.SetWithTime` | jetski | 192 | `Low-level Error: Cannot properly adjust input varnodes` | BL | **RECONSTRUIBLE-CON-R2DEC** |
+| 71 | `0x66e41b8` | `sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse___.CompareAndSwap` | runtime Go | 80 | `Low-level Error: Cannot properly adjust input varnodes` | B +8 | **RECONSTRUIBLE-CON-R2DEC** |
+| 72 | `0x66e4248` | `sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse___.Store` | runtime Go | 64 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf94063e1 | **RECONSTRUIBLE-CON-R2DEC** |
+| 73 | `0x66e4298` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_jetski_service_go_proto.FetchUserInfoResponse__.ClearAndRefresh` | jetski | 80 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9400ca2 | **RECONSTRUIBLE-CON-R2DEC** |
+| 74 | `0x66e4338` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_jetski_service_go_proto.FetchUserInfoResponse__.Get` | jetski | 96 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9000321 | **RECONSTRUIBLE-CON-R2DEC** |
+| 75 | `0x66e43f8` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_jetski_service_go_proto.FetchUserInfoResponse__.Peek` | jetski | 64 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x90ff1982 | **RECONSTRUIBLE-CON-R2DEC** |
+| 76 | `0x66e4488` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_jetski_service_go_proto.FetchUserInfoResponse__.SetWithTime` | jetski | 192 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x91024000 | **RECONSTRUIBLE-CON-R2DEC** |
+| 77 | `0x66e4978` | `sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_prediction_service_go_proto.FetchAvailableModelsResponse___.CompareAndSwap` | runtime Go | 80 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xaa1f03e5 | **RECONSTRUIBLE-CON-R2DEC** |
+| 78 | `0x66e4a08` | `sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_prediction_service_go_proto.FetchAvailableModelsResponse___.Store` | runtime Go | 64 | `Low-level Error: Cannot properly adjust input varnodes` | BL | **RECONSTRUIBLE-CON-R2DEC** |
+| 79 | `0x66e4a58` | `google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_third_party_jetski_language_server_code_assist_client_codeassistclient.peopleAPIUserInfo__.ClearAndRefresh` | jetski | 80 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x35000061 | **RECONSTRUIBLE-CON-R2DEC** |
+| 80 | `0x67b3948` | `google3_third_party_gemini_coder_framework_executor_executor.__Executor_.runStopHooks` | otras third_party | 704 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xaa1f03e7 | **RECONSTRUIBLE-CON-R2DEC** |
+| 81 | `0x67b3c18` | `google3_third_party_gemini_coder_framework_executor_executor.noopHandle.Notify` | otras third_party | 16 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9400104 | **RECONSTRUIBLE-CON-R2DEC** |
+| 82 | `0x67b3c78` | `google3_third_party_gemini_coder_framework_executor_executor.noopHandle.Receive` | otras third_party | 32 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x54001041 | **RECONSTRUIBLE-CON-R2DEC** |
+| 83 | `0x67b3ce8` | `google3_third_party_gemini_coder_framework_executor_executor.__SyncManager_.SetExecutorDone` | otras third_party | 128 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf940d3eb | **RECONSTRUIBLE-CON-R2DEC** |
+| 84 | `0x67ca378` | `google3_third_party_oneharness_internal_core_integration_integration.__augmentedToolContext_.SetResult` | otras third_party | 224 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xa9007c5f | **RECONSTRUIBLE-CON-R2DEC** |
+| 85 | `0x67ca658` | `google3_third_party_oneharness_internal_core_integration_integration.stripAugmentedFields` | otras third_party | 176 | `Low-level Error: Cannot properly adjust input varnodes` | BL | **RECONSTRUIBLE-CON-R2DEC** |
+| 86 | `0x67cac58` | `google3_third_party_oneharness_internal_core_integration_integration.NewFromAgent` | otras third_party | 1712 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf94043e2 | **RECONSTRUIBLE-CON-R2DEC** |
+| 87 | `0x687c1b8` | `google3_third_party_jetski_cortex_policyguardianv2_deterministic_vetting_configs_deterministic_vetting_configs.VetCreateFile` | jetski | 1056 | `Low-level Error: Joined varnode does not match size of record` | insn 0xaa1f03e4 | **RECONSTRUIBLE-CON-R2DEC** |
+| 88 | `0x688e1a8` | `google3_third_party_jetski_cortex_policyguardianv2_policyguardianv2.__State_.toProto` | jetski | 1968 | `Low-level Error: Joined varnode does not match size of record` | insn 0x911b8842 | **RECONSTRUIBLE-CON-R2DEC** |
+| 89 | `0x6defbe8` | `google3_third_party_golang_github_com_pion_dtls_v_v3_dtls.__handshakeCache_.fullPullMap` | librerias publicas | 1184 | `Low-level Error: Cannot properly adjust input varnodes` | BL | **RECONSTRUIBLE-CON-R2DEC** |
+| 90 | `0x6df5468` | `google3_third_party_golang_pion_sctp_sctp.__ackTimer_.start` | librerias publicas | 320 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x34000083 | **RECONSTRUIBLE-CON-R2DEC** |
+| 91 | `0x6df57d8` | `google3_third_party_golang_pion_sctp_sctp.validateMTU` | librerias publicas | 80 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xb4000185 | **RECONSTRUIBLE-CON-R2DEC** |
+| 92 | `0x6df58b8` | `google3_third_party_golang_pion_sctp_sctp.createSNAPAssociation` | librerias publicas | 288 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf94113e7 | **RECONSTRUIBLE-CON-R2DEC** |
+| 93 | `0x6df5d78` | `google3_third_party_golang_pion_sctp_sctp.createClientAssociation` | librerias publicas | 96 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x91174084 | **RECONSTRUIBLE-CON-R2DEC** |
+| 94 | `0x6df6248` | `google3_third_party_golang_pion_sctp_sctp.Config.applyClient` | librerias publicas | 832 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xb9445366 | **RECONSTRUIBLE-CON-R2DEC** |
+| 95 | `0x6eadeb8` | `google3_third_party_golang_github_com_pion_ice_v_v4_ice.__controlledSelector_.shouldSwitchSelectedPair` | librerias publicas | 368 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9000004 | **RECONSTRUIBLE-CON-R2DEC** |
+| 96 | `0x6eae108` | `google3_third_party_golang_github_com_pion_ice_v_v4_ice.__controlledSelector_.PingCandidate` | librerias publicas | 688 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x90010060 | **RECONSTRUIBLE-CON-R2DEC** |
+| 97 | `0x6eae908` | `google3_third_party_golang_github_com_pion_ice_v_v4_ice.__controlledSelector_.HandleBindingRequest` | librerias publicas | 1552 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x9001369b | **RECONSTRUIBLE-CON-R2DEC** |
+| 98 | `0x6eaef88` | `google3_third_party_golang_github_com_pion_ice_v_v4_ice.readStreamingPacket` | librerias publicas | 368 | `Low-level Error: Cannot properly adjust input varnodes` | BL | **RECONSTRUIBLE-CON-R2DEC** |
 | 99 | `0x6eb3568` | `google3_third_party_golang_github_com_pion_ice_v_v4_ice.__candidateBase_.recvLoop.deferwrap1` | librerias publicas | 64 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x90022efb | **RECONSTRUIBLE-CON-PISTA** |
 | 100 | `0x6eb3708` | `google3_third_party_golang_github_com_pion_ice_v_v4_ice.__candidateBase_.handleInboundSTUNMessage.func1` | librerias publicas | 80 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0xf9405fe8 | **RECONSTRUIBLE-CON-PISTA** |
-| 101 | `0x6ec8308` | `google3_third_party_golang_pion_interceptor_pkg_stats_stats.__recorder_.QueueOutgoingRTCP` | librerias publicas | 608 | `Low-level Error: Cannot properly adjust input varnodes` | BL | **IRRECONSTRUIBLE** |
-| 102 | `0x714b938` | `google3_third_party_jetski_language_server_language_server.__Server_.stopRemoteControlConnectionAfterLogout` | jetski | 256 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x3d800360 | **IRRECONSTRUIBLE** |
-| 103 | `0x7185f38` | `crypto_internal_fips140_nistec_fiat.p521ToMontgomery` | runtime Go | 1728 | `Recoverable Error: Unable to find unique hash for varnode` | insn 0x4e284bc6 | **IRRECONSTRUIBLE** |
+| 101 | `0x6ec8308` | `google3_third_party_golang_pion_interceptor_pkg_stats_stats.__recorder_.QueueOutgoingRTCP` | librerias publicas | 608 | `Low-level Error: Cannot properly adjust input varnodes` | BL | **RECONSTRUIBLE-CON-R2DEC** |
+| 102 | `0x714b938` | `google3_third_party_jetski_language_server_language_server.__Server_.stopRemoteControlConnectionAfterLogout` | jetski | 256 | `Low-level Error: Cannot properly adjust input varnodes` | insn 0x3d800360 | **RECONSTRUIBLE-CON-R2DEC** |
+| 103 | `0x7185f38` | `crypto_internal_fips140_nistec_fiat.p521ToMontgomery` | runtime Go | 1728 | `Recoverable Error: Unable to find unique hash for varnode` | insn 0x4e284bc6 | **RECONSTRUIBLE-CON-R2DEC** |
 
 ---
 
@@ -315,7 +381,14 @@ también 0 %**, o sea que es una limitación del *export*, no de las funciones.
 
 * El nombre del destino de las llamadas `BL` de estas funciones (huecos del
   export del pclntab, §4.1).
-* Si retdec u otro motor alguno las decompila (§6.1).
+* Si retdec las decompila: **NO**, retdec v5.0 no es utilizable en este
+  entorno (§3.5).
+* Ejecución **simbólica**: no hay motor simbólico disponible (angr, triton,
+  miasm y unicorn no se pueden instalar: `pip` no tiene salida a PyPI aquí).
+  Sí funciona el emulador **ESIL** de radare2 para aarch64 (`aei`/`aeim`/`aeip`/
+  `aes`): se verificó que ejecuta y vuelca el estado de registros, de modo que
+  la vía de *ejecución concreta* queda disponible, pero no la de ejecución
+  simbólica con restricciones.
 * La reconstrucción manual de las 18 wrappers: **no se ha hecho ninguna**.
 * Si el fallo depende del tamaño de la función: la muestra va de 16 B a
   1968 B y falla en todo el rango, así que el tamaño **no** es el

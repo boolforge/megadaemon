@@ -1,0 +1,182 @@
+[
+  {
+    "nombre": "net_http.__Transport_.http2NewClientConnFromContext.deferwrap1",
+    "addr": "0x527c958",
+    "loc": "third_party/go/gc/src/net/http/http2.go:406",
+    "fichero_real": "/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/http2.go",
+    "linea_real": 406,
+    "linea_texto": "}",
+    "sentencia": "defer cc.stateHookMu.Unlock()",
+    "veredicto": "RECONSTRUIDO"
+  },
+  {
+    "nombre": "net_http.NewRequestWithContext.func1",
+    "addr": "0x527ce48",
+    "loc": "third_party/go/gc/src/net/http/request.go:934",
+    "fichero_real": "/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/request.go",
+    "linea_real": 934,
+    "linea_texto": "switch v := body.(type) {",
+    "sentencia": "",
+    "veredicto": "RECONSTRUIDO"
+  },
+  {
+    "nombre": "net_http.readRequestLimit.deferwrap1",
+    "addr": "0x527d038",
+    "loc": "third_party/go/gc/src/net/http/request.go:1096",
+    "fichero_real": "/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/request.go",
+    "linea_real": 1096,
+    "linea_texto": "}",
+    "sentencia": "defer putTextprotoReader(tp)",
+    "veredicto": "RECONSTRUIDO"
+  },
+  {
+    "nombre": "net_http.__serveMux121_.handle.deferwrap1",
+    "addr": "0x527d138",
+    "loc": "third_party/go/gc/src/net/http/servemux121.go:54",
+    "fichero_real": "/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/servemux121.go",
+    "linea_real": 54,
+    "linea_texto": "defer mux.mu.Unlock()",
+    "sentencia": "defer mux.mu.Unlock()",
+    "veredicto": "RECONSTRUIDO"
+  },
+  {
+    "nombre": "net_http.__response_.ReadFrom.deferwrap1",
+    "addr": "0x527d398",
+    "loc": "third_party/go/gc/src/net/http/server.go:611",
+    "fichero_real": "/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/server.go",
+    "linea_real": 611,
+    "linea_texto": "// copy method.",
+    "sentencia": "defer putCopyBuf(buf)",
+    "veredicto": "RECONSTRUIDO"
+  },
+  {
+    "nombre": "net_http.__connReader_.abortPendingRead.deferwrap1",
+    "addr": "0x527d548",
+    "loc": "third_party/go/gc/src/net/http/server.go:828",
+    "fichero_real": "/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/server.go",
+    "linea_real": 828,
+    "linea_texto": "if hijacked {",
+    "sentencia": "",
+    "veredicto": "RECONSTRUIDO"
+  },
+  {
+    "nombre": "net_http.__Server_.Close.gowrap2",
+    "addr": "0x527deb8",
+    "loc": "third_party/go/gc/src/net/http/server.go:3323",
+    "fichero_real": "/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/server.go",
+    "linea_real": 3323,
+    "linea_texto": "s.mu.Lock()",
+    "sentencia": "",
+    "veredicto": "RECONSTRUIDO"
+  },
+  {
+    "nombre": "net_http.__Server_.Shutdown.deferwrap2",
+    "addr": "0x527df68",
+    "loc": "third_party/go/gc/src/net/http/server.go:3397",
+    "fichero_real": "/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/server.go",
+    "linea_real": 3397,
+    "linea_texto": "",
+    "sentencia": "",
+    "veredicto": "FUENTE-SIN-LINEA"
+  },
+  {
+    "nombre": "net_http.__Server_.closeIdleConns.deferwrap1",
+    "addr": "0x527dfe8",
+    "loc": "third_party/go/gc/src/net/http/server.go:3426",
+    "fichero_real": "/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/server.go",
+    "linea_real": 3426,
+    "linea_texto": "//",
+    "sentencia": "",
+    "veredicto": "RECONSTRUIDO"
+  },
+  {
+    "nombre": "net_http.__Server_.ListenAndServeTLS.deferwrap1",
+    "addr": "0x527e2c8",
+    "loc": "third_party/go/gc/src/net/http/server.go:4067",
+    "fichero_real": "/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/server.go",
+    "linea_real": 4067,
+    "linea_texto": "defer cancelCtx()",
+    "sentencia": "defer cancelCtx()",
+    "veredicto": "RECONSTRUIDO"
+  },
+  {
+    "nombre": "net_http.__timeoutHandler_.ServeHTTP.deferwrap2",
+    "addr": "0x527e378",
+    "loc": "third_party/go/gc/src/net/http/server.go:4203",
+    "fichero_real": "/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/server.go",
+    "linea_real": 4203,
+    "linea_texto": "",
+    "sentencia": "",
+    "veredicto": "FUENTE-SIN-LINEA"
+  },
+  {
+    "nombre": "net_http.__timeoutWriter_.WriteHeader.deferwrap1",
+    "addr": "0x527e548",
+    "loc": "third_party/go/gc/src/net/http/server.go:4271",
+    "fichero_real": "/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/server.go",
+    "linea_real": 4271,
+    "linea_texto": "log.Printf(\"%s.Close() = %v\", c.name, err)",
+    "sentencia": "",
+    "veredicto": "RECONSTRUIDO"
+  },
+  {
+    "nombre": "net_http.__socksDialer_.connect.deferwrap1",
+    "addr": "0x527e738",
+    "loc": "third_party/go/gc/src/net/http/socks_bundle.go:34",
+    "fichero_real": "/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/socks_bundle.go",
+    "linea_real": 34,
+    "linea_texto": "defer c.SetDeadline(socksnoDeadline)",
+    "sentencia": "defer c.SetDeadline(socksnoDeadline)",
+    "veredicto": "RECONSTRUIDO"
+  },
+  {
+    "nombre": "google3_third_party_golang_gitv5_plumbing_object_object.__Blob_.Encode.deferwrap1",
+    "addr": "0x55b0818",
+    "loc": "third_party/golang/gitv5/plumbing/object/blob.go:78",
+    "fichero_real": "",
+    "linea_real": 78,
+    "linea_texto": "",
+    "sentencia": "",
+    "veredicto": "SIN-FUENTE"
+  },
+  {
+    "nombre": "google3_third_party_golang_go_crypto_ssh_ssh.init.3.func5",
+    "addr": "0x5914408",
+    "loc": "third_party/golang/go_crypto/ssh/mac.go:71",
+    "fichero_real": "/workspace/.home/go/pkg/mod/golang.org/x/crypto@v0.53.0/ssh/mac.go",
+    "linea_real": 71,
+    "linea_texto": "defaultMACs = slices.DeleteFunc(defaultMACs, func(algo string) bool {",
+    "sentencia": "",
+    "veredicto": "RECONSTRUIDO"
+  },
+  {
+    "nombre": "google3_third_party_golang_go_crypto_ssh_ssh.init.3.func7",
+    "addr": "0x59144c8",
+    "loc": "third_party/golang/go_crypto/ssh/mac.go:81",
+    "fichero_real": "/workspace/.home/go/pkg/mod/golang.org/x/crypto@v0.53.0/ssh/mac.go",
+    "linea_real": 81,
+    "linea_texto": "macModes[InsecureHMACSHA196] = &macMode{20, false, func(key []byte) hash.Hash {",
+    "sentencia": "",
+    "veredicto": "RECONSTRUIDO"
+  },
+  {
+    "nombre": "google3_third_party_golang_github_com_pion_ice_v_v4_ice.__candidateBase_.recvLoop.deferwrap1",
+    "addr": "0x6eb3568",
+    "loc": "third_party/golang/github_com/pion/ice/v/v4/candidate_base.go:273",
+    "fichero_real": "",
+    "linea_real": 273,
+    "linea_texto": "",
+    "sentencia": "",
+    "veredicto": "SIN-FUENTE"
+  },
+  {
+    "nombre": "google3_third_party_golang_github_com_pion_ice_v_v4_ice.__candidateBase_.handleInboundSTUNMessage.func1",
+    "addr": "0x6eb3708",
+    "loc": "third_party/golang/github_com/pion/ice/v/v4/candidate_base.go:401",
+    "fichero_real": "",
+    "linea_real": 401,
+    "linea_texto": "",
+    "sentencia": "",
+    "veredicto": "SIN-FUENTE"
+  }
+]

@@ -1,0 +1,21 @@
+{
+  "funciones": 103,
+  "motor_propio_ok": 0,
+  "motor_propio_errores": {
+    "Low-level Error: Cannot properly adjust input varnodes": 80,
+    "Low-level Error: Symbol puRamffffffffffffffff extends beyond the end o": 14,
+    "Low-level Error: Joined varnode does not match size of record": 5,
+    "Low-level Error: Overlapping input varnodes": 1,
+    "Low-level Error: Symbol uRamffffffffffffffff extends beyond the end of": 1,
+    "Low-level Error: Symbol plRamffffffffffffffff extends beyond the end o": 1,
+    "Recoverable Error: Unable to find unique hash for varnode": 1
+  },
+  "r2dec_ok": 103,
+  "r2dec_vacias": 0,
+  "r2dec_control_flujo": 96,
+  "r2dec_con_cadenas": 18,
+  "wr_ok": 13,
+  "wr_def": 6,
+  "wr_nofuente": 3,
+  "wr_tabla": "- `net_http.__Transport_.http2NewClientConnFromContext.deferwrap1` (`0x527c958`) → `/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/http2.go`:406 — `defer cc.stateHookMu.Unlock()`\n- `net_http.NewRequestWithContext.func1` (`0x527ce48`) → `/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/request.go`:934 — switch v := body.(type) {\n- `net_http.readRequestLimit.deferwrap1` (`0x527d038`) → `/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/request.go`:1096 — `defer putTextprotoReader(tp)`\n- `net_http.__serveMux121_.handle.deferwrap1` (`0x527d138`) → `/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/servemux121.go`:54 — `defer mux.mu.Unlock()`\n- `net_http.__response_.ReadFrom.deferwrap1` (`0x527d398`) → `/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/server.go`:611 — `defer putCopyBuf(buf)`\n- `net_http.__connReader_.abortPendingRead.deferwrap1` (`0x527d548`) → `/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/server.go`:828 — if hijacked {\n- `net_http.__Server_.Close.gowrap2` (`0x527deb8`) → `/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/server.go`:3323 — s.mu.Lock()\n- `net_http.__Server_.Shutdown.deferwrap2` (`0x527df68`) → `/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/server.go`:3397 — -\n- `net_http.__Server_.closeIdleConns.deferwrap1` (`0x527dfe8`) → `/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/server.go`:3426 — //\n- `net_http.__Server_.ListenAndServeTLS.deferwrap1` (`0x527e2c8`) → `/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/server.go`:4067 — `defer cancelCtx()`\n- `net_http.__timeoutHandler_.ServeHTTP.deferwrap2` (`0x527e378`) → `/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/server.go`:4203 — -\n- `net_http.__timeoutWriter_.WriteHeader.deferwrap1` (`0x527e548`) → `/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/server.go`:4271 — log.Printf(\"%s.Close() = %v\", c.name, err)\n- `net_http.__socksDialer_.connect.deferwrap1` (`0x527e738`) → `/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/md-resc/go/go/src/net/http/socks_bundle.go`:34 — `defer c.SetDeadline(socksnoDeadline)`\n- `google3_third_party_golang_gitv5_plumbing_object_object.__Blob_.Encode.deferwrap1` (`0x55b0818`) → `(sin fuente en este entorno)`:78 — -\n- `google3_third_party_golang_go_crypto_ssh_ssh.init.3.func5` (`0x5914408`) → `/workspace/.home/go/pkg/mod/golang.org/x/crypto@v0.53.0/ssh/mac.go`:71 — defaultMACs = slices.DeleteFunc(defaultMACs, func(algo string) bool {\n- `google3_third_party_golang_go_crypto_ssh_ssh.init.3.func7` (`0x59144c8`) → `/workspace/.home/go/pkg/mod/golang.org/x/crypto@v0.53.0/ssh/mac.go`:81 — macModes[InsecureHMACSHA196] = &macMode{20, false, func(key []byte) hash.Hash {\n- `google3_third_party_golang_github_com_pion_ice_v_v4_ice.__candidateBase_.recvLoop.deferwrap1` (`0x6eb3568`) → `(sin fuente en este entorno)`:273 — -\n- `google3_third_party_golang_github_com_pion_ice_v_v4_ice.__candidateBase_.handleInboundSTUNMessage.func1` (`0x6eb3708`) → `(sin fuente en este entorno)`:401 — -"
+}

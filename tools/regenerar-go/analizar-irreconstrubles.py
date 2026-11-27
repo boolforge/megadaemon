@@ -270,6 +270,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     p.add_argument("--motor-4k", type=Path, default=Path("/workspace/agy-re/tools-out/out_md/motor_propio_4k/_decompile_report.tsv"))
     p.add_argument("--shards", default="", help="indices _index.tsv separados por coma")
+    p.add_argument(
+        "--r2dec",
+        type=Path,
+        default=None,
+        help="directorio con los .c del motor r2dec (5.o motor): si decompila la "
+        "funcion, deja de ser IRRECONSTRUIBLE",
+    )
     p.add_argument("--salida", type=Path, required=True)
     p.add_argument("--json", type=Path, default=None)
     args = p.parse_args(argv)
@@ -346,6 +353,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         wrapper = es_wrapper(simbolo)
         dup = simbolo in duplicados
+        r2dec_ok = False
+        if args.r2dec and args.r2dec.is_dir():
+            # el nombre del fichero de r2dec es el simbolo saneado (y
+            # truncado a 80 caracteres, como en el barrido), con un indice
+            # delante: se busca por ambos formatos.
+            formas = (simbolo.replace("/", "_"), simbolo[:80].replace("/", "_"))
+            for cand in args.r2dec.glob("*.c"):
+                if any(f and f in cand.name for f in formas) and cand.stat().st_size > 20:
+                    r2dec_ok = True
+                    break
 
         # veredicto
         if es_thunk and rama_destino:
@@ -354,9 +371,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         elif wrapper:
             veredicto = "RECONSTRUIBLE-CON-PISTA"
             porque = "wrapper de Go (%s): el pclntab da la linea real del call site" % wrapper
+        elif r2dec_ok:
+            # MEDIDO: el motor PROPIO de radare2 (r2dec) SI produce salida para
+            # esta funcion => el cuerpo NO esta perdido; lo que no se obtiene
+            # es C estilo Ghidra, sino el pseudo-C de r2.
+            veredicto = "RECONSTRUIBLE-CON-R2DEC"
+            porque = "r2dec produce pseudo-C (no es C de Ghidra)"
         else:
             veredicto = "IRRECONSTRUIBLE"
-            porque = "los 3 motores fallan con error de bajo nivel y no es thunk ni wrapper"
+            porque = "ningun motor produce salida y no es thunk ni wrapper"
 
         filas.append(
             {
@@ -380,6 +403,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "rama_destino": rama_destino or "",
                 "wrapper": wrapper or "",
                 "simbolo_duplicado": "si" if dup else "no",
+                "r2dec": "si" if r2dec_ok else "no",
                 "veredicto": veredicto,
                 "porque": porque,
             }
@@ -390,7 +414,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "body_ghidra", "sig_ghidra", "dec_ok_motor437", "dec_err_motor437",
         "dec_ok_motor4k", "dec_err_motor4k", "shards", "shards_err",
         "primera_instr", "tiene_marco_pila", "rama_destino", "wrapper",
-        "simbolo_duplicado", "veredicto", "porque",
+        "simbolo_duplicado", "r2dec", "veredicto", "porque",
     ]
     args.salida.parent.mkdir(parents=True, exist_ok=True)
     with open(args.salida, "w", encoding="utf-8") as f:

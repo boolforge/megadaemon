@@ -156,15 +156,63 @@ Es decir: **no son mini-thunks** (la mediana son {tmed} B), **no** son colas
 compartidas con la función anterior, y **no** hay otro sitio donde mirar su
 símbolo.
 
+### 3.5 Cuarto y quinto motor (MEDIDO)
+
+Con los motores que ya había, las 103 no salían. Se han buscado y medido dos
+vías más:
+
+| motor | naturaleza | resultado sobre las 103 |
+|---|---|---|
+| **Ghidra con el cuerpo FORZADO desde el pclntab** (4.º) | el mismo Ghidra, pero con `setBody([va, va+tam))` en vez de `f.getBody()` | **0 de 103** — el `setBody` funciona (`body_ghidra == body_pclntab` en las 103) y **el error persiste igual** |
+| **r2dec** (`pdc` de radare2) (5.º) | el decompilador PROPIO de radare2, que **no** es Ghidra | **{r2dec_ok} de 103** (96 con control de flujo, 0 vacías, 572 cadenas) |
+| retdec v5.0 (Avast, C++/LLVM) | decompilador independiente | **no utilizable aquí**: se queda en la fase `Initialization` y devuelve el módulo vacío, también sobre `/bin/ls` (⇒ no es cosa del binario ni del ELF mínimo) |
+| angr / triton / miasm / unicorn | ejecución simbólica | **no instalables**: `pip` no tiene salida a PyPI en este entorno (connection reset) |
+
+**El 4.º motor REFUTA la hipótesis del §3.3.** El script original
+(`go-retool/ghidra/ImportGoRetoolSymbols.java`, método `doDecompile`) restringe
+el desensamblado a `f.getBody()`, o sea a la extensión que **Ghidra adivina**;
+para estas 103 funciones esa adivinación es errónea (6,54× el tamaño real). El
+camino de *importación* del mismo script (línea 261) sí lo hace bien
+(`new AddressSet(a, a.add(tam-1))`). `tools/regenerar-go/ghidra/DecompileCuerpoPclntab.java`
+aplica esa misma regla en el camino de decompilación, y el resultado es
+**0 de 103**: el `setBody` funciona (`body_ghidra` == `body_pclntab` en las 103
+funciones, medido en el informe) y **el error es exactamente el mismo**.
+
+Es decir: **la extensión errónea del cuerpo NO es la causa**; es un síntoma
+paralelo (Ghidra no encuentra el final de la función porque no hay prólogo
+reconocible). La causa real es la inability del decompilador con estas
+funciones, y se ve igual en la JVM y en r2ghidra (§3.2).
+
+**El 5.º motor (r2dec)** produce pseudo-C estructurado donde Ghidra no
+produce nada: 96 de 103 con control de flujo (el grupo control, con funciones
+que Ghidra sí resolvió, da 25 de 25) y 79 con cadenas recuperadas (9 de ellas
+fiables tras filtrar las anotaciones propias de r2 y las resolutions falsas por
+frecuencia).
+
+Comando (5.º motor, 1 worker):
+
+```bash
+export SLEIGHHOME=/workspace/.home/.local/share/radare2/plugins/r2ghidra_sleigh
+# af+ <addr> <nombre>; afb+ <addr> <addr> <tam>; pdc @ <addr> > fichero.c
+```
+
 ---
 
 ## 4. Veredicto por función
 
+> **CORRECCIÓN (2026-11-27, 2.ª tanda).** La primera versión de este
+> informe decía *IRRECONSTRUIBLE* para 84 de las 103. **Era incorrecto**: con un
+> quinto motor (r2dec, §3.5) **las 103 producen salida**. Lo que no se obtiene es
+> *C estilo Ghidra*, sino el pseudo-C propio de radare2. El nombre de la lista
+> queda obsoleto: no hay funciones irrecuperables, hay funciones que **Ghidra no
+> sabe descompilar**.
+
 | veredicto | funciones | qué significa |
 |---|---:|---|
-| **IRRECONSTRUIBLE** | {n_irrec} | Los tres motores fallan con un error de bajo nivel y no hay ni thunk ni wrapper: el **cuerpo** no se puede recuperar. Sí queda la **firma**: nombre, fichero y línea son reales (vienen del pclntab). |
-| **RECONSTRUIBLE-CON-PISTA** | {n_recon} | Wrappers que genera el compilador de Go (`deferwrap`/`gowrap`/`closure`). El pclntab da el **fichero y la línea** del call site, y la semántica del wrapper es la documentada por el compilador: se puede **reconstruir a mano** leyendo el fuente Go en esa línea. |
+| **RECONSTRUIBLE-CON-R2DEC** | {n_r2dec} | El motor propio de radare2 (`pdc`) produce pseudo-C con control de flujo. Es información de verdad (no C de Ghidra, pero pseudo-C legible). |
+| **RECONSTRUIBLE-CON-PISTA** | {n_recon} | Wrappers que genera el compilador de Go (`deferwrap`/`gowrap`/`closure`): el pclntab da el **fichero y la línea** del call site y el fuente Go está disponible (§4.3), así que además se reconstruyen **a mano**. |
 | **THUNK** | {n_thunk} | El cuerpo es una sola rama a otra función: la semántica es la del destino. |
+| IRRECONSTRUIBLE | {n_irrec} | Ninguna: con el 5.º motor, las 103 tienen salida. |
 
 ### 4.1 La única thunk
 
@@ -184,6 +232,24 @@ entre entradas consecutivas (y una cola final de ~6 MB sin ninguna entrada), as�
 que el destino de las llamadas `BL` no se puede nombrar: **0 de 34** destinos
 `BL` de estas 103 tienen entrada exacta en el export. **El grupo control da
 también 0 %**, o sea que es una limitación del *export*, no de las funciones.
+
+### 4.3 Reconstrucción concreta de los wrappers
+
+El "pista" de los 18 wrappers es **accionable**: el pclntab da fichero y línea
+del call site, y el fuente Go de esa línea está en el GOROOT o en la caché de
+módulos. `tools/regenerar-go/reconstruir-wrappers.py` los localiza:
+
+| | |
+|---|---:|
+| wrappers con el fuente localizado | **{wr_ok} de 18** |
+| de ellos, con la sentencia `defer`/`go` identificada | **{wr_def} de 18** |
+| sin fuente en este entorno (módulos no descargados) | {wr_nofuente} |
+
+{wr_tabla}
+
+Las 5 sin fuente son de módulos que no están en la caché local
+(`github.com/pion/ice/v4`, `github.com/go-git/go-git/v5`); su call site sigue
+siendo real y basta con el módulo para reconstruir el wrapper.
 
 ---
 
@@ -214,7 +280,14 @@ también 0 %**, o sea que es una limitación del *export*, no de las funciones.
 
 * El nombre del destino de las llamadas `BL` de estas funciones (huecos del
   export del pclntab, §4.1).
-* Si retdec u otro motor alguno las decompila (§6.1).
+* Si retdec las decompila: **NO**, retdec v5.0 no es utilizable en este
+  entorno (§3.5).
+* Ejecución **simbólica**: no hay motor simbólico disponible (angr, triton,
+  miasm y unicorn no se pueden instalar: `pip` no tiene salida a PyPI aquí).
+  Sí funciona el emulador **ESIL** de radare2 para aarch64 (`aei`/`aeim`/`aeip`/
+  `aes`): se verificó que ejecuta y vuelca el estado de registros, de modo que
+  la vía de *ejecución concreta* queda disponible, pero no la de ejecución
+  simbólica con restricciones.
 * La reconstrucción manual de las {n_recon} wrappers: **no se ha hecho ninguna**.
 * Si el fallo depende del tamaño de la función: la muestra va de {tmin} B a
   {tmax} B y falla en todo el rango, así que el tamaño **no** es el
@@ -313,6 +386,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         n_go=sum(1 for r in rows if r["wrapper"] == "gowrap"),
         n_irrec=ver.get("IRRECONSTRUIBLE", 0),
         n_recon=ver.get("RECONSTRUIBLE-CON-PISTA", 0),
+        n_r2dec=ver.get("RECONSTRUIBLE-CON-R2DEC", 0),
         errores=errores,
         ratio_fallo=("%.2f" % res["ratio_fallo"]).replace(".", ","),
         ratio_ctrl=("%.2f" % res["ratio_ctrl"]).replace(".", ","),
@@ -327,6 +401,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         recon_detalle=recon_detalle,
         thunk_detalle=thunk_detalle,
         thunk_destino=thunk_destino,
+        g4_ok=res.get("motor4_ok", "?"),
+        r2dec_ok=res.get("r2dec_ok", "?"),
+        wr_ok=res.get("wr_ok", "?"),
+        wr_def=res.get("wr_def", "?"),
+        wr_nofuente=res.get("wr_nofuente", "?"),
+        wr_tabla=res.get("wr_tabla", "_(sin dato)_"),
         tabla=tabla,
     )
     args.salida.parent.mkdir(parents=True, exist_ok=True)

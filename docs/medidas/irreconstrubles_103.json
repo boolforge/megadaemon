@@ -31,8 +31,8 @@
     "insn": 90
   },
   "por_veredicto": {
-    "IRRECONSTRUIBLE": 84,
     "RECONSTRUIBLE-CON-PISTA": 18,
+    "RECONSTRUIBLE-CON-R2DEC": 84,
     "THUNK": 1
   },
   "prologo_ctrl_sin": 172,

@@ -1,0 +1,1087 @@
+[
+ {
+  "addr": "0x4ec2fd8",
+  "nombre": "vendor_golang.org_x_net_dns_dnsmessage.__Builder_.Finish",
+  "loc": "third_party/go/gc/src/vendor/golang.org/x/net/dns/dnsmessage/message.go:1645",
+  "categoria": "runtime Go",
+  "bytes": 192,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x4ee1f48",
+  "nombre": "net.Flags.String",
+  "loc": "third_party/go/gc/src/net/interface.go:60",
+  "categoria": "runtime Go",
+  "bytes": 272,
+  "cadenas": [
+   "hot_cold_t"
+  ],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x5199038",
+  "nombre": "vendor_golang.org_x_crypto_internal_poly1305.updateGeneric",
+  "loc": "third_party/go/gc/src/vendor/golang.org/x/crypto/internal/poly1305/sum_generic.go:146",
+  "categoria": "runtime Go",
+  "bytes": 560,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x51992d8",
+  "nombre": "vendor_golang.org_x_crypto_chacha20poly1305.New",
+  "loc": "third_party/go/gc/src/vendor/golang.org/x/crypto/chacha20poly1305/chacha20poly1305.go:40",
+  "categoria": "runtime Go",
+  "bytes": 304,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x5199418",
+  "nombre": "vendor_golang.org_x_crypto_chacha20poly1305.__chacha20poly1305_.Overhead",
+  "loc": "third_party/go/gc/src/vendor/golang.org/x/crypto/chacha20poly1305/chacha20poly1305.go:57",
+  "categoria": "runtime Go",
+  "bytes": 16,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x5199ee8",
+  "nombre": "container_list.__Element_.Next",
+  "loc": "third_party/go/gc/src/container/list/list.go:32",
+  "categoria": "runtime Go",
+  "bytes": 32,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x5199f28",
+  "nombre": "container_list.__List_.Init",
+  "loc": "third_party/go/gc/src/container/list/list.go:54",
+  "categoria": "runtime Go",
+  "bytes": 96,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x5199f98",
+  "nombre": "container_list.__List_.Front",
+  "loc": "third_party/go/gc/src/container/list/list.go:70",
+  "categoria": "runtime Go",
+  "bytes": 32,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x5199fd8",
+  "nombre": "container_list.__List_.Remove",
+  "loc": "third_party/go/gc/src/container/list/list.go:134",
+  "categoria": "runtime Go",
+  "bytes": 192,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x521a6e8",
+  "nombre": "net_http_internal_http2.__serverConn_.curOpenStreams",
+  "loc": "third_party/go/gc/src/net/http/internal/http2/server.go:523",
+  "categoria": "runtime Go",
+  "bytes": 160,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x521a828",
+  "nombre": "net_http_internal_http2.__serverConn_.HeaderEncoder",
+  "loc": "third_party/go/gc/src/net/http/internal/http2/server.go:565",
+  "categoria": "runtime Go",
+  "bytes": 16,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x521aa48",
+  "nombre": "net_http_internal_http2.__serverConn_.condlogf",
+  "loc": "third_party/go/gc/src/net/http/internal/http2/server.go:653",
+  "categoria": "runtime Go",
+  "bytes": 496,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x526fa78",
+  "nombre": "net_http.rewindBody",
+  "loc": "third_party/go/gc/src/net/http/transport.go:814",
+  "categoria": "runtime Go",
+  "bytes": 592,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x527c958",
+  "nombre": "net_http.__Transport_.http2NewClientConnFromContext.deferwrap1",
+  "loc": "third_party/go/gc/src/net/http/http2.go:406",
+  "categoria": "runtime Go",
+  "bytes": 112,
+  "cadenas": [],
+  "magicas": [
+   "http"
+  ],
+  "veredicto": "RECONSTRUIBLE-CON-PISTA"
+ },
+ {
+  "addr": "0x527ce48",
+  "nombre": "net_http.NewRequestWithContext.func1",
+  "loc": "third_party/go/gc/src/net/http/request.go:934",
+  "categoria": "runtime Go",
+  "bytes": 352,
+  "cadenas": [],
+  "magicas": [
+   "http"
+  ],
+  "veredicto": "RECONSTRUIBLE-CON-PISTA"
+ },
+ {
+  "addr": "0x527d038",
+  "nombre": "net_http.readRequestLimit.deferwrap1",
+  "loc": "third_party/go/gc/src/net/http/request.go:1096",
+  "categoria": "runtime Go",
+  "bytes": 112,
+  "cadenas": [],
+  "magicas": [
+   "http"
+  ],
+  "veredicto": "RECONSTRUIBLE-CON-PISTA"
+ },
+ {
+  "addr": "0x527d138",
+  "nombre": "net_http.__serveMux121_.handle.deferwrap1",
+  "loc": "third_party/go/gc/src/net/http/servemux121.go:54",
+  "categoria": "runtime Go",
+  "bytes": 64,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "RECONSTRUIBLE-CON-PISTA"
+ },
+ {
+  "addr": "0x527d398",
+  "nombre": "net_http.__response_.ReadFrom.deferwrap1",
+  "loc": "third_party/go/gc/src/net/http/server.go:611",
+  "categoria": "runtime Go",
+  "bytes": 112,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "RECONSTRUIBLE-CON-PISTA"
+ },
+ {
+  "addr": "0x527d548",
+  "nombre": "net_http.__connReader_.abortPendingRead.deferwrap1",
+  "loc": "third_party/go/gc/src/net/http/server.go:828",
+  "categoria": "runtime Go",
+  "bytes": 128,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "RECONSTRUIBLE-CON-PISTA"
+ },
+ {
+  "addr": "0x527deb8",
+  "nombre": "net_http.__Server_.Close.gowrap2",
+  "loc": "third_party/go/gc/src/net/http/server.go:3323",
+  "categoria": "runtime Go",
+  "bytes": 64,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "RECONSTRUIBLE-CON-PISTA"
+ },
+ {
+  "addr": "0x527df68",
+  "nombre": "net_http.__Server_.Shutdown.deferwrap2",
+  "loc": "third_party/go/gc/src/net/http/server.go:3397",
+  "categoria": "runtime Go",
+  "bytes": 64,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "RECONSTRUIBLE-CON-PISTA"
+ },
+ {
+  "addr": "0x527dfe8",
+  "nombre": "net_http.__Server_.closeIdleConns.deferwrap1",
+  "loc": "third_party/go/gc/src/net/http/server.go:3426",
+  "categoria": "runtime Go",
+  "bytes": 112,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "RECONSTRUIBLE-CON-PISTA"
+ },
+ {
+  "addr": "0x527e2c8",
+  "nombre": "net_http.__Server_.ListenAndServeTLS.deferwrap1",
+  "loc": "third_party/go/gc/src/net/http/server.go:4067",
+  "categoria": "runtime Go",
+  "bytes": 64,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "RECONSTRUIBLE-CON-PISTA"
+ },
+ {
+  "addr": "0x527e378",
+  "nombre": "net_http.__timeoutHandler_.ServeHTTP.deferwrap2",
+  "loc": "third_party/go/gc/src/net/http/server.go:4203",
+  "categoria": "runtime Go",
+  "bytes": 112,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "RECONSTRUIBLE-CON-PISTA"
+ },
+ {
+  "addr": "0x527e488",
+  "nombre": "net_http.__timeoutHandler_.ServeHTTP.func1.1",
+  "loc": "third_party/go/gc/src/net/http/server.go:4180",
+  "categoria": "runtime Go",
+  "bytes": 80,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x527e548",
+  "nombre": "net_http.__timeoutWriter_.WriteHeader.deferwrap1",
+  "loc": "third_party/go/gc/src/net/http/server.go:4271",
+  "categoria": "runtime Go",
+  "bytes": 112,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "RECONSTRUIBLE-CON-PISTA"
+ },
+ {
+  "addr": "0x527e738",
+  "nombre": "net_http.__socksDialer_.connect.deferwrap1",
+  "loc": "third_party/go/gc/src/net/http/socks_bundle.go:34",
+  "categoria": "runtime Go",
+  "bytes": 80,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "RECONSTRUIBLE-CON-PISTA"
+ },
+ {
+  "addr": "0x52e4c78",
+  "nombre": "google3_third_party_golang_go_sys_unix_unix.__SockaddrTIPC_.sockaddr",
+  "loc": "third_party/golang/go_sys/unix/syscall_linux.go:860",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 208,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x53ce7f8",
+  "nombre": "text_template_parse.__DotNode_.Type",
+  "loc": "third_party/go/gc/src/text/template/parse/node.go:441",
+  "categoria": "runtime Go",
+  "bytes": 16,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x53ce818",
+  "nombre": "text_template_parse.__DotNode_.writeTo",
+  "loc": "third_party/go/gc/src/text/template/parse/node.go:448",
+  "categoria": "runtime Go",
+  "bytes": 240,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x55a5d98",
+  "nombre": "google3_third_party_golang_gitv5_plumbing_object_object.__Patch_.FilePatches",
+  "loc": "third_party/golang/gitv5/plumbing/object/patch.go:121",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 16,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x55a5db8",
+  "nombre": "google3_third_party_golang_gitv5_plumbing_object_object.__Patch_.Encode",
+  "loc": "third_party/golang/gitv5/plumbing/object/patch.go:128",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 160,
+  "cadenas": [
+   "parent %s LANGUAGE_CLANGUAGE_RRepoCommitRepoUploadGitUnstageGit"
+  ],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x55a9118",
+  "nombre": "google3_third_party_golang_gitv5_plumbing_object_object.similarityMatrix.Less",
+  "loc": "third_party/golang/gitv5/plumbing/object/rename.go:373",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 208,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x55af268",
+  "nombre": "google3_third_party_golang_gitv5_plumbing_object_object.TreeEntrySorter.Len",
+  "loc": "third_party/golang/gitv5/plumbing/object/tree.go:349",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 16,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x55af398",
+  "nombre": "google3_third_party_golang_gitv5_plumbing_object_object.TreeEntrySorter.Swap",
+  "loc": "third_party/golang/gitv5/plumbing/object/tree.go:357",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 224,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x55af908",
+  "nombre": "google3_third_party_golang_gitv5_plumbing_object_object.__Tree_.Diff",
+  "loc": "third_party/golang/gitv5/plumbing/object/tree.go:421",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 96,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x55af9c8",
+  "nombre": "google3_third_party_golang_gitv5_plumbing_object_object.__Tree_.Patch",
+  "loc": "third_party/golang/gitv5/plumbing/object/tree.go:436",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 80,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x55afab8",
+  "nombre": "google3_third_party_golang_gitv5_plumbing_object_object.__treeEntryIter_.Next",
+  "loc": "third_party/golang/gitv5/plumbing/object/tree.go:462",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 176,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x55b0158",
+  "nombre": "google3_third_party_golang_gitv5_plumbing_object_object.__TreeIter_.ForEach",
+  "loc": "third_party/golang/gitv5/plumbing/object/tree.go:623",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 160,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x55b0208",
+  "nombre": "google3_third_party_golang_gitv5_plumbing_object_object.__treeNoder_.String",
+  "loc": "third_party/golang/gitv5/plumbing/object/treenoder.go:49",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 96,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x55b0328",
+  "nombre": "google3_third_party_golang_gitv5_plumbing_object_object.__treeNoder_.Name",
+  "loc": "third_party/golang/gitv5/plumbing/object/treenoder.go:61",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 16,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x55b0348",
+  "nombre": "google3_third_party_golang_gitv5_plumbing_object_object.__treeNoder_.Children",
+  "loc": "third_party/golang/gitv5/plumbing/object/treenoder.go:70",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 256,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x55b0728",
+  "nombre": "google3_third_party_golang_gitv5_plumbing_object_object.__treeNoder_.NumChildren",
+  "loc": "third_party/golang/gitv5/plumbing/object/treenoder.go:135",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 112,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x55b0818",
+  "nombre": "google3_third_party_golang_gitv5_plumbing_object_object.__Blob_.Encode.deferwrap1",
+  "loc": "third_party/golang/gitv5/plumbing/object/blob.go:78",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 128,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "RECONSTRUIBLE-CON-PISTA"
+ },
+ {
+  "addr": "0x58c9248",
+  "nombre": "google3_third_party_golang_gitv5_plumbing_revlist_revlist.ObjectsWithStorageForIgnores",
+  "loc": "third_party/golang/gitv5/plumbing/revlist/revlist.go:32",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 208,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x58d1848",
+  "nombre": "google3_third_party_golang_gitv5_storage_filesystem_dotgit_dotgit.__DotGit_.packedRef",
+  "loc": "third_party/golang/gitv5/storage/filesystem/dotgit/dotgit.go:840",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 176,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x58dcbe8",
+  "nombre": "google3_third_party_golang_gitv5_storage_filesystem_filesystem.__ReferenceStorage_.RemoveReference",
+  "loc": "third_party/golang/gitv5/storage/filesystem/reference.go:34",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 80,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x5914408",
+  "nombre": "google3_third_party_golang_go_crypto_ssh_ssh.init.3.func5",
+  "loc": "third_party/golang/go_crypto/ssh/mac.go:71",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 96,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "RECONSTRUIBLE-CON-PISTA"
+ },
+ {
+  "addr": "0x59144c8",
+  "nombre": "google3_third_party_golang_go_crypto_ssh_ssh.init.3.func7",
+  "loc": "third_party/golang/go_crypto/ssh/mac.go:81",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 144,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "RECONSTRUIBLE-CON-PISTA"
+ },
+ {
+  "addr": "0x593d038",
+  "nombre": "google3_third_party_golang_gitv5_git.__Remote_.updateRemoteReferenceStorage",
+  "loc": "third_party/golang/gitv5/remote.go:351",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 768,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x5942548",
+  "nombre": "google3_third_party_golang_gitv5_git.__Remote_.updateShallow",
+  "loc": "third_party/golang/gitv5/remote.go:1486",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 416,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x594a2b8",
+  "nombre": "google3_third_party_golang_gitv5_git.__Submodule_.Status",
+  "loc": "third_party/golang/gitv5/submodule.go:60",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 112,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x594fc58",
+  "nombre": "google3_third_party_golang_gitv5_git.__Worktree_.doClean",
+  "loc": "third_party/golang/gitv5/worktree.go:911",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 528,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x59502c8",
+  "nombre": "google3_third_party_golang_gitv5_git.__Worktree_.Grep",
+  "loc": "third_party/golang/gitv5/worktree.go:1001",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 64,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x5950398",
+  "nombre": "google3_third_party_golang_gitv5_git.findMatchInFile",
+  "loc": "third_party/golang/gitv5/worktree.go:1048",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 720,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x597a348",
+  "nombre": "google3_third_party_golang_k8s_io_apimachinery_v_v0_23_pkg_util_sets_sets.Set_string_.Delete",
+  "loc": "third_party/golang/k8s_io/apimachinery/v/v0_23/pkg/util/sets/cherrypick_v26_set.go:60",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 144,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e37f8",
+  "nombre": "google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_cloud_businessaicode_v1beta_management_service_go_proto.AdminControls__.ForceRefresh",
+  "loc": "third_party/jetski/go_utils/cache/cache.go:153",
+  "categoria": "jetski (codigo propio de Antigravity)",
+  "bytes": 96,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e38e8",
+  "nombre": "google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_cloud_businessaicode_v1beta_management_service_go_proto.AdminControls__.SetWithTime",
+  "loc": "third_party/jetski/go_utils/cache/cache.go:83",
+  "categoria": "jetski (codigo propio de Antigravity)",
+  "bytes": 192,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e39f8",
+  "nombre": "sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_cloud_businessaicode_v1beta_management_service_go_proto.AdminControls___.CompareAndSwap",
+  "loc": "third_party/go/gc/src/sync/atomic/type.go:67",
+  "categoria": "runtime Go",
+  "bytes": 80,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "THUNK"
+ },
+ {
+  "addr": "0x66e3a88",
+  "nombre": "sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_cloud_businessaicode_v1beta_management_service_go_proto.AdminControls___.Store",
+  "loc": "third_party/go/gc/src/sync/atomic/type.go:61",
+  "categoria": "runtime Go",
+  "bytes": 64,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e3ad8",
+  "nombre": "google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse__.ClearAndRefresh",
+  "loc": "third_party/jetski/go_utils/cache/cache.go:191",
+  "categoria": "jetski (codigo propio de Antigravity)",
+  "bytes": 80,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e3b78",
+  "nombre": "google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse__.Get",
+  "loc": "third_party/jetski/go_utils/cache/cache.go:170",
+  "categoria": "jetski (codigo propio de Antigravity)",
+  "bytes": 96,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e3c38",
+  "nombre": "google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse__.Peek",
+  "loc": "third_party/jetski/go_utils/cache/cache.go:104",
+  "categoria": "jetski (codigo propio de Antigravity)",
+  "bytes": 64,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e3cc8",
+  "nombre": "google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse__.SetWithTime",
+  "loc": "third_party/jetski/go_utils/cache/cache.go:83",
+  "categoria": "jetski (codigo propio de Antigravity)",
+  "bytes": 192,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e3dd8",
+  "nombre": "sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse___.CompareAndSwap",
+  "loc": "third_party/go/gc/src/sync/atomic/type.go:67",
+  "categoria": "runtime Go",
+  "bytes": 80,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e3e68",
+  "nombre": "sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.FetchAdminControlsResponse___.Store",
+  "loc": "third_party/go/gc/src/sync/atomic/type.go:61",
+  "categoria": "runtime Go",
+  "bytes": 64,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e3eb8",
+  "nombre": "google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse__.ClearAndRefresh",
+  "loc": "third_party/jetski/go_utils/cache/cache.go:191",
+  "categoria": "jetski (codigo propio de Antigravity)",
+  "bytes": 80,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e3f58",
+  "nombre": "google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse__.Get",
+  "loc": "third_party/jetski/go_utils/cache/cache.go:170",
+  "categoria": "jetski (codigo propio de Antigravity)",
+  "bytes": 96,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e4018",
+  "nombre": "google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse__.Peek",
+  "loc": "third_party/jetski/go_utils/cache/cache.go:104",
+  "categoria": "jetski (codigo propio de Antigravity)",
+  "bytes": 64,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e40a8",
+  "nombre": "google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse__.SetWithTime",
+  "loc": "third_party/jetski/go_utils/cache/cache.go:83",
+  "categoria": "jetski (codigo propio de Antigravity)",
+  "bytes": 192,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e41b8",
+  "nombre": "sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse___.CompareAndSwap",
+  "loc": "third_party/go/gc/src/sync/atomic/type.go:67",
+  "categoria": "runtime Go",
+  "bytes": 80,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e4248",
+  "nombre": "sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_go_proto.LoadCodeAssistResponse___.Store",
+  "loc": "third_party/go/gc/src/sync/atomic/type.go:61",
+  "categoria": "runtime Go",
+  "bytes": 64,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e4298",
+  "nombre": "google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_jetski_service_go_proto.FetchUserInfoResponse__.ClearAndRefresh",
+  "loc": "third_party/jetski/go_utils/cache/cache.go:191",
+  "categoria": "jetski (codigo propio de Antigravity)",
+  "bytes": 80,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e4338",
+  "nombre": "google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_jetski_service_go_proto.FetchUserInfoResponse__.Get",
+  "loc": "third_party/jetski/go_utils/cache/cache.go:170",
+  "categoria": "jetski (codigo propio de Antigravity)",
+  "bytes": 96,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e43f8",
+  "nombre": "google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_jetski_service_go_proto.FetchUserInfoResponse__.Peek",
+  "loc": "third_party/jetski/go_utils/cache/cache.go:104",
+  "categoria": "jetski (codigo propio de Antigravity)",
+  "bytes": 64,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e4488",
+  "nombre": "google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_google_internal_cloud_code_v1internal_v1internal_jetski_service_go_proto.FetchUserInfoResponse__.SetWithTime",
+  "loc": "third_party/jetski/go_utils/cache/cache.go:83",
+  "categoria": "jetski (codigo propio de Antigravity)",
+  "bytes": 192,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e4978",
+  "nombre": "sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_prediction_service_go_proto.FetchAvailableModelsResponse___.CompareAndSwap",
+  "loc": "third_party/go/gc/src/sync/atomic/type.go:67",
+  "categoria": "runtime Go",
+  "bytes": 80,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e4a08",
+  "nombre": "sync_atomic.__Pointer_google3_third_party_jetski_go_utils_cache_cache.cachedEntry__google3_google_internal_cloud_code_v1internal_v1internal_prediction_service_go_proto.FetchAvailableModelsResponse___.Store",
+  "loc": "third_party/go/gc/src/sync/atomic/type.go:61",
+  "categoria": "runtime Go",
+  "bytes": 64,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x66e4a58",
+  "nombre": "google3_third_party_jetski_go_utils_cache_cache.__Cache__google3_third_party_jetski_language_server_code_assist_client_codeassistclient.peopleAPIUserInfo__.ClearAndRefresh",
+  "loc": "third_party/jetski/go_utils/cache/cache.go:191",
+  "categoria": "jetski (codigo propio de Antigravity)",
+  "bytes": 80,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x67b3948",
+  "nombre": "google3_third_party_gemini_coder_framework_executor_executor.__Executor_.runStopHooks",
+  "loc": "third_party/gemini_coder/framework/executor/executor.go:571",
+  "categoria": "otras third_party",
+  "bytes": 704,
+  "cadenas": [
+   "ogle3/third_party/jetski/codeium_common_pb/codeium_common_go_pr",
+   "ki/codeium_common_pb/codeium_common_go_proto.SearchResultType.S"
+  ],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x67b3c18",
+  "nombre": "google3_third_party_gemini_coder_framework_executor_executor.noopHandle.Notify",
+  "loc": "third_party/gemini_coder/framework/executor/sync_manager.go:27",
+  "categoria": "otras third_party",
+  "bytes": 16,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x67b3c78",
+  "nombre": "google3_third_party_gemini_coder_framework_executor_executor.noopHandle.Receive",
+  "loc": "third_party/gemini_coder/framework/executor/sync_manager.go:30",
+  "categoria": "otras third_party",
+  "bytes": 32,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x67b3ce8",
+  "nombre": "google3_third_party_gemini_coder_framework_executor_executor.__SyncManager_.SetExecutorDone",
+  "loc": "third_party/gemini_coder/framework/executor/sync_manager.go:77",
+  "categoria": "otras third_party",
+  "bytes": 128,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x67ca378",
+  "nombre": "google3_third_party_oneharness_internal_core_integration_integration.__augmentedToolContext_.SetResult",
+  "loc": "third_party/oneharness/internal/core/integration/augmented_tool.go:208",
+  "categoria": "otras third_party",
+  "bytes": 224,
+  "cadenas": [
+   "Cursor is on line: %dOther open documents:failed to read uri %s"
+  ],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x67ca658",
+  "nombre": "google3_third_party_oneharness_internal_core_integration_integration.stripAugmentedFields",
+  "loc": "third_party/oneharness/internal/core/integration/augmented_tool.go:253",
+  "categoria": "otras third_party",
+  "bytes": 176,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x67cac58",
+  "nombre": "google3_third_party_oneharness_internal_core_integration_integration.NewFromAgent",
+  "loc": "third_party/oneharness/internal/core/integration/cascade_factory.go:97",
+  "categoria": "otras third_party",
+  "bytes": 1712,
+  "cadenas": [
+   "RewriteUrienable-arkenable-ptystep_indexsearch_webwrite_fileLC_"
+  ],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x687c1b8",
+  "nombre": "google3_third_party_jetski_cortex_policyguardianv2_deterministic_vetting_configs_deterministic_vetting_configs.VetCreateFile",
+  "loc": "third_party/jetski/cortex/policyguardianv2/deterministic_vetting_configs/create_file.go:31",
+  "categoria": "jetski (codigo propio de Antigravity)",
+  "bytes": 1056,
+  "cadenas": [
+   "v = w11 - w12\n    if (v) goto 0x687c288 // likely\n    w10 = (byte) [x10 + 6]\n    v = w10 - 0x65 // 'e'\n    if (v) goto 0x687c288 // likely\n    x0 = 0\n    w1 = (byte) [sp + 0x64]\n    goto 0x687c2a0\n    w0 = (byte) [sp + 0x66]\n    x1 = 0\n    goto 0x687c2a0\n    x9 = [sp + 0x1e0]\n    w0 = (byte) [sp + 0x66]\n    w1 = (byte) [sp + 0x64]\n    [sp + 0x64] = (byte) w1\n    [sp + 0x66] = (byte) w0\n    x26 = sp + 0x198\n    stp 0, 0, [x26]\n    [x26 + 0x10] = (0, 2)\n    [x26 + 0x20] = 0\n    x10 = 0x68839d0\n    [sp + 0x198] = (x10, 2)\n    [sp + 0x1a8] = (byte) w1\n    [sp + 0x1a9] = (byte) w0\n    x10 = [sp + 0x1f8]\n    x11 = [sp + 0x98]\n    [sp + 0x1b0] = (x10, 2)\n    if (w1 == 0) goto 0x687c2e4 // unlikely\n    x2 = 0\n    goto 0x687c308\n    (x0, 2) = 3\n    x2 = [x10]\n    0x6875460 (0x10102464c457f, x1, 0x10102464c457f, x3)\n    w1 = (byte) [sp + 0x64]\n    x9 = [sp + 0x1e0]\n    x10 = [sp + 0x1f8]\n    x26 = sp + 0x198\n    x2 = x0\n    w0 = (byte) [sp + 0x66]\n    [sp + 0x63] = (byte) w2\n    if (w0 == 0) goto 0x687c318 // unlikely\n    x3 = 0\n    goto 0x687c378\n    (x0, 2) = 3   // section..text\n    x2 = [x10]\n    0x6875240 (0x100b70003, 0x4d0f000, 0x10102464c457f, x3)\n    if (w0 == 0) goto 0x687c348 // unlikely\n    w0 = (byte) [sp + 0x66]\n    w1 = (byte) [sp + 0x64]\n    w2 = (byte) [sp + 0x63]\n    x9 = [sp + 0x1e0]\n    x10 = [sp + 0x1f8]\n    x26 = sp + 0x198\n    x3 = 0\n    goto 0x687c378\n    x3 = [sp + 0x1e0]\n    (x0, 2) = 3   // section..text\n    x3 = [sp + 0x1f8]\n    x2 = [x3]\n    0x68758b0 (0x100b70003, 0x4d0f000, 0x10102464c457f, x3)\n    w1 = (byte) [sp + 0x64]\n    w2 = (byte) [sp + 0x63]\n    x9 = [sp + 0x1e0]\n    x10 = [sp + 0x1f8]\n    x26 = sp + 0x198\n    x3 = x0\n    w0 = (byte) [sp + 0x66]\n    [sp + 0x65] = (byte) w3\n    if (w2 == 0) goto 0x687c618 // unlikely\n    if (w0 == 0) goto 0x687c618 // unlikely\n    (x4, 2) = 3   // elf_phdr\n    goto 0x687d878\n    [sp + 0x128] = (0, 2)\n    (x0, 2) = 3\n    0x4d98880 (-1, -1, 0x7f, 0x100b70003)\n    x2 = 0x856f550\n    [sp + 0x128] = (x2, 2)\n    x0 = 0x44a6e3e\n    x1 = 0x54     // 'T'\n    x2 = sp + 0x128\n    x3 = 1\n    x4 = x3\n    0x4e34a60 (0x44a6e3e, 0x54, 0x10078128, 0x1)\n    x2 = sp + 0xa0\n    stp 0, 0, [x2]\n    [x2 + 0x10] = (0, 2)\n    [x2 + 0x20] = (0, 2)\n    [x2 + 0x30] = 0\n    (x4, 2) = 3\n    x2 = 4\n    [sp + 0xa0] = (x2, 2)\n    [sp + 0xb0] = x1\n    x3 = 0\n    x6 = 0\n    x7 = 0\n    x8 = x0       //",
+   "x0 = x2\n    x9 = x1\n    x1 = x8       //",
+   "x2 = x9\n    (x29, 2) = 3\n    sp += 0x1f0\n    x8 = sp + 0xa0\n    stp 0, 0, [x8]\n    [x8 + 0x10] = (0, 2)\n    [x8 + 0x20] = (0, 2)\n    [x8 + 0x30] = 0\n    (x4, 2) = 3\n    x0 = 3\n    x1 = 0x444c001\n    [sp + 0xa0] = (x0, 2)\n    x2 = 0x2e     // '.'\n    [sp + 0xb0] = x2\n    x3 = 0\n    x6 = 0\n    x7 = 0\n    (x29, 2) = 3\n    sp += 0x1f0\n    (x8, 2) = 3   // elf_shdr // elf_phdr\n    v = x9 - 7\n    if (v) goto 0x687c4dc // likely\n    w9 = [x8]     // elf_phdr\n    x10 = 0x72636573\n    v = w9 - w10\n    if (v) goto 0x687c4dc // likely\n    w9 = (word) [x8 + 4]\n    x10 = 0x7465  // 'et' //"
+  ],
+  "magicas": [
+   "read",
+   "exec",
+   "secr"
+  ],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x688e1a8",
+  "nombre": "google3_third_party_jetski_cortex_policyguardianv2_policyguardianv2.__State_.toProto",
+  "loc": "third_party/jetski/cortex/policyguardianv2/state.go:167",
+  "categoria": "jetski (codigo propio de Antigravity)",
+  "bytes": 1968,
+  "cadenas": [
+   "_ZNSt9exceptionD2Ev"
+  ],
+  "magicas": [
+   "comm",
+   "ute_",
+   "_com",
+   "mand",
+   "bash"
+  ],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x6defbe8",
+  "nombre": "google3_third_party_golang_github_com_pion_dtls_v_v3_dtls.__handshakeCache_.fullPullMap",
+  "loc": "third_party/golang/github_com/pion/dtls/v/v3/handshake_cache.go:77",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 1184,
+  "cadenas": [
+   "ki/codeium_common_pb/codeium_common_go_proto.SearchResultType.S",
+   "ogle3/third_party/jetski/codeium_common_pb/codeium_common_go_pr",
+   "Descriptor",
+   "'\n    x3 = x4\n    x4 = 1\n    x5 = x4\n    callreg x6    // 0x7470697263736544(0x16236a0, 0x440ab65, 0x22, 0x10)\n    x6 = [sp + 0x148]\n    (x6, 2) = 3   //",
+   "//",
+   "x6 = [x6 + 0x18] //",
+   "x7 = [sp + 0x138]\n    (x1, 2) = 3   // segment.GNU_RELRO\n    x3 = [x7 + 0x140]\n    callreg x6    // 0x6d756965646f632f(0x16236a0, 0x799b960, 0x799b960, 0x90)\n    if (x0) goto 0x6defdc8 // likely\n    x6 = [sp + 0xb8]\n    x8 = [sp + 0x138]\n    x7 = [sp + 0x148]\n    x9 = [x7 + 0x108]\n    if (!x9) goto 0x6defd74 // unlikely\n    (x9, 2) = 3   // elf_phdr\n    x11 = [x6 + 0x50] // elf_phdr\n    [x8 + 0x138] = (x10, 2)\n    x27 = 0xb48f000\n    w10 = [x27 + 0x450]\n    if (!w10) goto 0x6defd6c // likely\n    x10 = [x8 + 0x130] // segment.GNU_RELRO\n    0x4da3500 (0x16236a0, 0x799b960, 0x799b960, 0x90)\n    stp x9, x10, [x25]\n    [x8 + 0x130] = x9\n    goto 0x6defd9c\n    [x8 + 0x138] = (0, 2)\n    x27 = 0xb48f000\n    w9 = [x27 + 0x450]\n    if (!w9) goto 0x6defd90 // likely\n    x9 = [x8 + 0x130] // segment.GNU_RELRO\n    0x4da34f0 (0x16236a0, 0x799b960, 0x799b960, 0x90)\n    [x25] = x9\n    x9 = section..noptrbss\n    [x8 + 0x130] = x9\n    [x8 + 0xb0] = (0, 2)\n    x27 = 0xb48f000\n    w9 = [x27 + 0x450]\n    if (!w9) goto 0x6defdb8 // likely\n    x9 = [x8 + 0xa8]\n    0x4da34f0 (0x16236a0, 0x799b960, 0x799b960, 0x90)\n    [x25] = x9\n    x9 = section..noptrbss\n    [x8 + 0xa8] = x9\n    goto 0x6def578\n    [sp + 0xd0] = x1\n    [sp + 0x88] = x0\n    x0 = 2\n    x1 = 0x89932e0\n    x2 = 1\n    0x4d33a20 (0x2, 0x89932e0, 0x1, 0x90)\n    x3 = 0x5002   //",
+   "[x0] = (half) w3\n    x1 = x0\n    x2 = [sp + 0x88]\n    x3 = [sp + 0xd0] // segment.GNU_RELRO\n    x0 = 0\n    (x29, 2) = 3\n    sp += 0x110\n    x0 = 2\n    x1 = 0x89932e0\n    x2 = 1\n    0x4d33a20 (0x2, 0x89932e0, 0x1, 0x799b960)\n    x3 = 0x4702   //"
+  ],
+  "magicas": [
+   "ript",
+   "eium"
+  ],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x6df5468",
+  "nombre": "google3_third_party_golang_pion_sctp_sctp.__ackTimer_.start",
+  "loc": "third_party/golang/pion/sctp/ack_timer.go:57",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 320,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x6df57d8",
+  "nombre": "google3_third_party_golang_pion_sctp_sctp.validateMTU",
+  "loc": "third_party/golang/pion/sctp/association.go:101",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 80,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x6df58b8",
+  "nombre": "google3_third_party_golang_pion_sctp_sctp.createSNAPAssociation",
+  "loc": "third_party/golang/pion/sctp/association.go:480",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 288,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x6df5d78",
+  "nombre": "google3_third_party_golang_pion_sctp_sctp.createClientAssociation",
+  "loc": "third_party/golang/pion/sctp/association.go:649",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 96,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x6df6248",
+  "nombre": "google3_third_party_golang_pion_sctp_sctp.Config.applyClient",
+  "loc": "third_party/golang/pion/sctp/association.go:694",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 832,
+  "cadenas": [],
+  "magicas": [
+   "UNGf"
+  ],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x6eadeb8",
+  "nombre": "google3_third_party_golang_github_com_pion_ice_v_v4_ice.__controlledSelector_.shouldSwitchSelectedPair",
+  "loc": "third_party/golang/github_com/pion/ice/v/v4/selection.go:336",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 368,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x6eae108",
+  "nombre": "google3_third_party_golang_github_com_pion_ice_v_v4_ice.__controlledSelector_.PingCandidate",
+  "loc": "third_party/golang/github_com/pion/ice/v/v4/selection.go:370",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 688,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x6eae908",
+  "nombre": "google3_third_party_golang_github_com_pion_ice_v_v4_ice.__controlledSelector_.HandleBindingRequest",
+  "loc": "third_party/golang/github_com/pion/ice/v/v4/selection.go:447",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 1552,
+  "cadenas": [
+   "grx_enc_errorgtx_disparitygtx_enc_errorDiagnosticOffTypeInvaria",
+   "Failed to get TCP connections by ufrag: %s %s %sfailed to get s",
+   "lexive address %s %s: %vUnable to handle URL in gatherCandidate",
+   "s %s: %vUnable to handle URL in gatherCandidatesRelay %vfailed",
+   "ddress %s %s: %vUnable to handle URL in gatherCandidatesRelay %"
+  ],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x6eaef88",
+  "nombre": "google3_third_party_golang_github_com_pion_ice_v_v4_ice.readStreamingPacket",
+  "loc": "third_party/golang/github_com/pion/ice/v/v4/tcp_mux.go:443",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 368,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x6eb3568",
+  "nombre": "google3_third_party_golang_github_com_pion_ice_v_v4_ice.__candidateBase_.recvLoop.deferwrap1",
+  "loc": "third_party/golang/github_com/pion/ice/v/v4/candidate_base.go:273",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 64,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "RECONSTRUIBLE-CON-PISTA"
+ },
+ {
+  "addr": "0x6eb3708",
+  "nombre": "google3_third_party_golang_github_com_pion_ice_v_v4_ice.__candidateBase_.handleInboundSTUNMessage.func1",
+  "loc": "third_party/golang/github_com/pion/ice/v/v4/candidate_base.go:401",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 80,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "RECONSTRUIBLE-CON-PISTA"
+ },
+ {
+  "addr": "0x6ec8308",
+  "nombre": "google3_third_party_golang_pion_interceptor_pkg_stats_stats.__recorder_.QueueOutgoingRTCP",
+  "loc": "third_party/golang/pion/interceptor/pkg/stats/stats_recorder.go:395",
+  "categoria": "librerias publicas (third_party/golang)",
+  "bytes": 608,
+  "cadenas": [],
+  "magicas": [
+   "nack"
+  ],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x714b938",
+  "nombre": "google3_third_party_jetski_language_server_language_server.__Server_.stopRemoteControlConnectionAfterLogout",
+  "loc": "third_party/jetski/language_server/server.go:3913",
+  "categoria": "jetski (codigo propio de Antigravity)",
+  "bytes": 256,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ },
+ {
+  "addr": "0x7185f38",
+  "nombre": "crypto_internal_fips140_nistec_fiat.p521ToMontgomery",
+  "loc": "third_party/go/gc/src/crypto/internal/fips140/nistec/fiat/p521_fiat64.go:4283",
+  "categoria": "runtime Go",
+  "bytes": 1728,
+  "cadenas": [],
+  "magicas": [],
+  "veredicto": "IRRECONSTRUIBLE"
+ }
+]
