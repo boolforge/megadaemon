@@ -3,7 +3,7 @@
 //! Supports MiniMax (M2.7 / M2.5), GitHub Models (via gh CLI), Pollinations (zero-key),
 //! OpenRouter (:free), Groq, Cerebras, Google AI Studio, Mistral, Hybrid Tool+Cloud, and Local SEERE v12.
 
-use crate::{binwalk_die, cirx_rtl, kaitai_imhex, npu_bridge, provider_catalog, seere_v11};
+use crate::{binwalk_die, cirx_rtl, kaitai_imhex, npu_bridge, provider_catalog, provider_retry, seere_v11};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -162,7 +162,18 @@ pub enum ProviderError {
     /// Timeout: el proveedor no respondió a tiempo.
     Timeout { provider: String, detail: String },
     /// Status HTTP >= 400 (con el status REAL: 401/402/404/429/5xx).
-    Http { provider: String, status: u16, detail: String },
+    ///
+    /// `retry_after` son los **segundos** que dice el proveedor que hay que
+    /// esperar (cabecera `Retry-After`/`retry-after-ms`, o el texto del
+    /// cuerpo).  MEDIDO (2026-11-28): antes el `retry_after` **no viajaba**
+    /// en el error ⇒ el bucle de reintentos usaba un backoff fijo y
+    /// reintentaba **antes de tiempo** (y el proveedor volvía a dar 429).
+    Http {
+        provider: String,
+        status: u16,
+        detail: String,
+        retry_after: Option<u64>,
+    },
     /// Status 2xx pero cuerpo no interpretable.
     Parse { provider: String, detail: String },
     /// Falta la credencial (o no se pudo resolver).
@@ -191,6 +202,18 @@ impl ProviderError {
     pub fn status(&self) -> Option<u16> {
         match self {
             ProviderError::Http { status, .. } => Some(*status),
+            _ => None,
+        }
+    }
+
+    /// Segundos que dice el proveedor que hay que esperar (patrón 5).
+    ///
+    /// MEDIDO (2026-11-28): el dato **viaja en el tipo de error** (antes
+    /// sólo se parseaba del texto en `quota_guard`, y el bucle de reintentos
+    /// lo ignoraba).  `None` = el proveedor no dijo nada ⇒ backoff propio.
+    pub fn retry_after(&self) -> Option<u64> {
+        match self {
+            ProviderError::Http { retry_after, .. } => *retry_after,
             _ => None,
         }
     }
@@ -276,6 +299,11 @@ impl std::fmt::Display for ProviderError {
                 provider,
                 status,
                 detail,
+                // MEDIDO: el `retry_after` NO se mete en el texto: el
+                // formato de `Display` lo asertan los tests y lo consume
+                // `quota_guard` (que lo parsea del texto).  Viaja en el
+                // campo estructurado y se lee con `retry_after()`.
+                ..
             } => write!(f, "HTTP {} ({}): {}", status, provider, detail),
             ProviderError::Parse { provider, detail } => {
                 write!(f, "respuesta ilegible ({}): {}", provider, detail)
@@ -855,7 +883,24 @@ pub fn extract_error_detail(body: &str) -> String {
 ///
 /// v16: el status se conserva (antes se perdía: `ureq` convertía los 4xx
 /// en `Err` y el diagnóstico de 401/402/404/429 era código muerto).
+///
+/// Patrón 5: el `retry_after` se parsea del **cuerpo** (la cabecera la
+/// añade el transporte; ver [`parse_provider_error_con_retry`]).
 pub fn parse_provider_error(provider: &str, status: u16, body: &str) -> ProviderError {
+    parse_provider_error_con_retry(provider, status, body, None)
+}
+
+/// Como [`parse_provider_error`], pero **con** el `retry_after` de la
+/// cabecera `Retry-After` (que manda sobre el del cuerpo).
+///
+/// MEDIDO (2026-11-28): la cabecera es la fuente **fiable** (el cuerpo es
+/// texto libre del proveedor); si no está, se usa el cuerpo.
+pub fn parse_provider_error_con_retry(
+    provider: &str,
+    status: u16,
+    body: &str,
+    retry_after_cabecera: Option<u64>,
+) -> ProviderError {
     let detail = extract_error_detail(body);
     let hint = match status {
         401 | 403 => " (API key invalida o sin permisos)",
@@ -868,6 +913,8 @@ pub fn parse_provider_error(provider: &str, status: u16, body: &str) -> Provider
         provider: provider.to_string(),
         status,
         detail: format!("{}{}", detail, hint),
+        retry_after: retry_after_cabecera
+            .or_else(|| provider_retry::parse_retry_after_text(body)),
     }
 }
 
@@ -886,6 +933,22 @@ pub struct LlmRequest {
 pub struct LlmResponse {
     pub status: u16,
     pub body: String,
+    /// Segundos de espera que pide el proveedor (cabecera `Retry-After`).
+    ///
+    /// MEDIDO (2026-11-28): antes se tiraban las cabeceras ⇒ el
+    /// `retry_after` sólo se podía buscar en el cuerpo (y a veces no está).
+    pub retry_after: Option<u64>,
+}
+
+impl LlmResponse {
+    /// Respuesta sin `retry_after` (lo normal).
+    pub fn new(status: u16, body: String) -> Self {
+        LlmResponse {
+            status,
+            body,
+            retry_after: None,
+        }
+    }
 }
 
 /// Transporte HTTP **inyectable**.
@@ -974,13 +1037,32 @@ impl LlmTransport for UreqTransport {
             Err(e) => return Err(map_ureq_error(&req.model, e)),
         };
         let status = resp.status().as_u16();
+        // Patrón 5: la cabecera `Retry-After` (delta-seconds) o
+        // `retry-after-ms` (Anthropic).  MEDIDO (2026-11-28): antes las
+        // cabeceras se tiraban ⇒ el `retry_after` sólo se podía buscar en
+        // el cuerpo del error (y a veces no está).
+        let retry_after = resp
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(provider_retry::parse_retry_after_header)
+            .or_else(|| {
+                resp.headers()
+                    .get("retry-after-ms")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(provider_retry::parse_retry_after_ms_header)
+            });
         let text = resp.into_body().read_to_string().map_err(|e| {
             ProviderError::Transport {
                 provider: req.model.clone(),
                 detail: format!("HTTP body read error: {}", e),
             }
         })?;
-        Ok(LlmResponse { status, body: text })
+        Ok(LlmResponse {
+            status,
+            body: text,
+            retry_after,
+        })
     }
 }
 
@@ -991,6 +1073,7 @@ fn map_ureq_error(provider: &str, e: ureq::Error) -> ProviderError {
             provider: provider.to_string(),
             status: code,
             detail: String::new(),
+            retry_after: None,
         },
         ureq::Error::Timeout(_) => ProviderError::Timeout {
             provider: provider.to_string(),
@@ -2016,7 +2099,8 @@ pub fn call_openai_http(
 
     if resp.status >= 400 {
         // Diagnóstico accionable: distinguir saldo/agota/modelo-muerto.
-        let e = parse_provider_error(model, resp.status, &resp.body).redacted(api_key);
+        let e = parse_provider_error_con_retry(model, resp.status, &resp.body, resp.retry_after)
+            .redacted(api_key);
         return Err(e.to_string());
     }
 
@@ -2695,10 +2779,23 @@ pub fn execute_chat_con_tools_with(
             match deps.transport.post(&req, deps.timeout) {
                 Ok(resp) => {
                     if resp.status >= 400 {
-                        let e = parse_provider_error(&p.id, resp.status, &resp.body).redacted(&key);
+                        let e = parse_provider_error_con_retry(
+                            &p.id,
+                            resp.status,
+                            &resp.body,
+                            resp.retry_after,
+                        )
+                        .redacted(&key);
                         if e.retryable() && attempt < deps.retries {
                             attempt += 1;
-                            dormir_backoff(deps.backoff_ms, attempt);
+                            // Patrón 5: si el proveedor dijo cuánto esperar
+                            // (`Retry-After`), se espera ESO: reintentar
+                            // antes de su hora garantiza otro 429.
+                            dormir_espera(provider_retry::espera_reintento(
+                                deps.backoff_ms,
+                                attempt,
+                                e.retry_after(),
+                            ));
                             continue;
                         }
                         err = Some(e);
@@ -2782,7 +2879,12 @@ pub fn execute_chat_con_tools_with(
                     let e = e.redacted(&key);
                     if e.retryable() && attempt < deps.retries {
                         attempt += 1;
-                        dormir_backoff(deps.backoff_ms, attempt);
+                        // Patrón 5: el proveedor manda sobre el backoff.
+                        dormir_espera(provider_retry::espera_reintento(
+                            deps.backoff_ms,
+                            attempt,
+                            e.retry_after(),
+                        ));
                         continue;
                     }
                     err = Some(e);
@@ -2813,7 +2915,18 @@ pub fn execute_chat_con_tools_with(
             // v16 (DEFECTO-02): el error ya viene REDACTADO (la clave del
             // proveedor no puede acabar en el `reply` que ve el cliente).
             errors.push(format!("{}: {}", p.id, truncar(&e.to_string(), 200)));
-            trace.push(format!("{} => {}", p.id, truncar(&e.to_string(), 120)));
+            // Patrón 5: la traza dice **cuánto pidió esperar** el proveedor
+            // (para que el diagnóstico no parezca un 429 sin explicación).
+            let espera = match e.retry_after() {
+                Some(s) => format!(" (retry_after {}s)", s),
+                None => String::new(),
+            };
+            trace.push(format!(
+                "{} => {}{}",
+                p.id,
+                truncar(&e.to_string(), 120),
+                espera
+            ));
         }
     }
 
@@ -2857,13 +2970,15 @@ pub fn execute_chat_con_tools_with(
     }
 }
 
-/// Espera el backoff entre reintentos (0 en tests ⇒ sin esperas).
-fn dormir_backoff(base_ms: u64, attempt: u32) {
-    if base_ms == 0 {
+/// Duerme la espera calculada entre reintentos (0 en tests ⇒ sin esperas).
+///
+/// Patrón 5: la espera la calcula [`provider_retry::espera_reintento`], que
+/// tiene en cuenta el `retry_after` que pidió el proveedor.
+fn dormir_espera(espera: Duration) {
+    if espera.is_zero() {
         return;
     }
-    let mult = 1u64 << attempt.min(6);
-    std::thread::sleep(Duration::from_millis(base_ms.saturating_mul(mult)));
+    std::thread::sleep(espera);
 }
 
 pub fn test_provider_connection(id: &str) -> Value {

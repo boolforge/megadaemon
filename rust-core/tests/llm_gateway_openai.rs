@@ -202,9 +202,12 @@ fn parse_messages_separa_el_sistema_y_el_usuario() {
         {"role": "system", "content": "eres un agente"},
         {"role": "user", "content": "hola"}
     ]);
-    let (p, s) = parse_messages(&v).unwrap();
-    assert_eq!(p, "hola");
-    assert_eq!(s.unwrap(), "eres un agente");
+    // v16: `parse_messages` devuelve el struct `ParsedConversation` (antes
+    // una tupla `(prompt, system)`): el prompt del usuario es `user_text` y
+    // el sistema es `system`.
+    let c = parse_messages(&v).unwrap();
+    assert_eq!(c.user_text, "hola");
+    assert_eq!(c.system.unwrap(), "eres un agente");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

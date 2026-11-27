@@ -757,3 +757,395 @@ pub fn run_reference_pipeline(
         ],
     }
 }
+
+// ---------------------------------------------------------------- tests
+//
+// MEDIDO (2026-11-28): este módulo tenía 759 líneas y **CERO** tests (uno de
+// los 48 módulos sin cobertura queّمite `docs/VERIFICACION_AGENTES.md`).
+// Es `SOLO_STD` (sin dependencias del crate) ⇒ se testea **offline**.
+//
+// Los valores esperados NO son inventados: salen de las fórmulas normativas
+// que el propio módulo documenta (§6.1 riesgo, §15.2 closure lemma, el
+// cuantil conformal y las reglas de NZCV de AArch64).
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---------------------------------------------------------------- NZCV
+
+    #[test]
+    fn add_sin_acarreo() {
+        let (r, f) = Nzcv::from_add(Width::W64, 1, 2);
+        assert_eq!(r, 3);
+        assert_eq!(f, Nzcv { n: false, z: false, c: false, v: false });
+    }
+
+    #[test]
+    fn add_con_acarreo() {
+        let (r, f) = Nzcv::from_add(Width::W64, u64::MAX, 1);
+        assert_eq!(r, 0);
+        assert!(f.c, "el acarreo pone C=1");
+        assert!(f.z, "el resultado es cero");
+        assert!(!f.n);
+        assert!(!f.v, "u64::MAX + 1 no es overflow con signo");
+    }
+
+    #[test]
+    fn sub_con_prestamo_pone_c_a_cero() {
+        // AArch64: C = 1 si NO hay prestamo (a >=u b).
+        let (r, f) = Nzcv::from_sub(Width::W64, 1, 2);
+        assert_eq!(r, u64::MAX, "1-2 en 64 bits da la mascara");
+        assert!(!f.c, "con prestamo C=0");
+        assert!(f.n, "el resultado tiene el signo puesto");
+        assert!(!f.z);
+    }
+
+    #[test]
+    fn sub_igual_da_cero_y_c_a_uno() {
+        let (r, f) = Nzcv::from_sub(Width::W64, 5, 5);
+        assert_eq!(r, 0);
+        assert!(f.z);
+        assert!(f.c, "sin prestamo C=1");
+        assert!(!f.n);
+    }
+
+    #[test]
+    fn las_operaciones_logicas_dejan_c_y_v_a_cero() {
+        // ANDS en AArch64: C = V = 0 (AArch32 no; ver §20.3.1).
+        let f = Nzcv::from_logical(Width::W64, 0);
+        assert!(f.z);
+        assert!(!f.c);
+        assert!(!f.v);
+    }
+
+    #[test]
+    fn las_condiciones_leen_las_banderas() {
+        let f = Nzcv { n: true, z: true, c: false, v: false };
+        assert!(f.eval(CondCode::Eq));
+        assert!(!f.eval(CondCode::Ne));
+        assert!(f.eval(CondCode::Mi));
+        assert!(!f.eval(CondCode::Pl));
+        assert!(f.eval(CondCode::Always));
+        assert!(f.eval(CondCode::Lt), "Lt = N != V");
+        assert!(!f.eval(CondCode::Ge), "Ge = N == V");
+        assert!(!f.eval(CondCode::Hi), "Hi = C && !Z");
+    }
+
+    // ---------------------------------------------------------------- memoria
+
+    #[test]
+    fn la_memoria_es_little_endian() {
+        let mut m = MemorySpace::new();
+        m.store(0x1000, MemSize::B32, 0x0102_0304);
+        assert_eq!(m.load(0x1000, MemSize::B32, false).unwrap(), 0x0102_0304);
+        assert_eq!(m.load(0x1000, MemSize::B8, false).unwrap(), 0x04);
+        assert_eq!(m.load(0x1003, MemSize::B8, false).unwrap(), 0x01);
+    }
+
+    #[test]
+    fn leer_un_byte_no_escrito_es_error() {
+        // Leer memoria no inicializada NO es cero: es un error.
+        let m = MemorySpace::new();
+        assert_eq!(
+            m.load(0x1000, MemSize::B8, false),
+            Err(MemError::Uninitialized(0x1000))
+        );
+    }
+
+    #[test]
+    fn la_carga_con_signo_extiende_y_sin_signo_no() {
+        let mut m = MemorySpace::new();
+        m.store(0x1000, MemSize::B8, 0xFF);
+        assert_eq!(m.load(0x1000, MemSize::B8, false).unwrap(), 0xFF);
+        assert_eq!(m.load(0x1000, MemSize::B8, true).unwrap(), u64::MAX);
+    }
+
+    #[test]
+    fn regiones_distintas_no_aliasan() {
+        let mut m = MemorySpace::new();
+        m.add_region(0x1000, 0x100, Region::Stack);
+        m.add_region(0x2000, 0x100, Region::Heap);
+        assert_eq!(m.region_of(0x1000), Region::Stack);
+        assert_eq!(m.region_of(0x9999), Region::Unknown);
+        assert!(
+            !m.may_alias(0x1000, 8, 0x2000, 8),
+            "pila y heap nunca se solapan"
+        );
+        assert!(
+            m.may_alias(0x1000, 0x10, 0x1008, 8),
+            "si los rangos se solapan, puede haber alias"
+        );
+        assert!(
+            !m.may_alias(0x1000, 8, 0x1008, 8),
+            "justo al lado no se solapan"
+        );
+    }
+
+    // ---------------------------------------------------------------- maquina
+
+    #[test]
+    fn la_maquina_ejecuta_mov_y_binop() {
+        let mut m = Machine::new();
+        m.set(Reg::X0, 5);
+        m.step(&MicroInstr::Mov { w: Width::W64, dst: Reg::X1, src: Operand::Reg(Reg::X0) })
+            .unwrap();
+        assert_eq!(m.get(Reg::X1), 5);
+        m.step(&MicroInstr::BinOp {
+            op: BinOpKind::Add,
+            w: Width::W64,
+            dst: Reg::X2,
+            a: Operand::Reg(Reg::X1),
+            b: Operand::Imm(7),
+            set_flags: true,
+        })
+        .unwrap();
+        assert_eq!(m.get(Reg::X2), 12);
+        assert!(!m.nzcv.z);
+    }
+
+    #[test]
+    fn una_escritura_de_32_bits_no_ensucia_los_64() {
+        let mut m = Machine::new();
+        m.set(Reg::X0, 0xFFFF_FFFF_FFFF_FFFF);
+        m.step(&MicroInstr::Mov { w: Width::W32, dst: Reg::X1, src: Operand::Reg(Reg::X0) })
+            .unwrap();
+        assert_eq!(m.get(Reg::X1), 0xFFFF_FFFF, "W32 hace zero-extend");
+    }
+
+    #[test]
+    fn el_desplazamiento_aritmetico_conserva_el_signo() {
+        let mut m = Machine::new();
+        m.set(Reg::X0, 0xFFFF_FFFF_FFFF_FFF0); // -16 con signo
+        m.step(&MicroInstr::BinOp {
+            op: BinOpKind::Asr,
+            w: Width::W64,
+            dst: Reg::X1,
+            a: Operand::Reg(Reg::X0),
+            b: Operand::Imm(2),
+            set_flags: false,
+        })
+        .unwrap();
+        assert_eq!(m.get(Reg::X1), 0xFFFF_FFFF_FFFF_FFFC);
+    }
+
+    #[test]
+    fn el_branco_condicionado_usa_las_banderas() {
+        let mut m = Machine::new();
+        m.nzcv = Nzcv { n: false, z: true, c: false, v: false };
+        m.step(&MicroInstr::Branch { cond: CondCode::Eq, target: 0x1008 })
+            .unwrap();
+        assert_eq!(m.branch_taken, Some(0x1008));
+        assert_eq!(m.get(Reg::Pc), 0x1008);
+    }
+
+    #[test]
+    fn un_branco_no_tomado_no_mueve_el_pc() {
+        let mut m = Machine::new();
+        m.nzcv = Nzcv { n: false, z: false, c: false, v: false };
+        m.step(&MicroInstr::Branch { cond: CondCode::Eq, target: 0x1008 })
+            .unwrap();
+        assert_eq!(m.branch_taken, None);
+        assert_eq!(m.get(Reg::Pc), 0);
+    }
+
+    #[test]
+    fn store_y_load_con_direccion_base_y_desplazamiento() {
+        let mut m = Machine::new();
+        m.set(Reg::X0, 0x1000);
+        m.set(Reg::X1, 0xDEAD_BEEF);
+        m.step(&MicroInstr::Store { src: Reg::X1, base: Reg::X0, offset: 8, size: MemSize::B32 })
+            .unwrap();
+        m.step(&MicroInstr::Load {
+            dst: Reg::X2,
+            base: Reg::X0,
+            offset: 8,
+            size: MemSize::B32,
+            signed: false,
+        })
+        .unwrap();
+        assert_eq!(m.get(Reg::X2), 0xDEAD_BEEF);
+    }
+
+    #[test]
+    fn leer_memoria_no_escrita_es_error() {
+        let mut m = Machine::new();
+        m.set(Reg::X0, 0x1000);
+        let e = m.step(&MicroInstr::Load {
+            dst: Reg::X2,
+            base: Reg::X0,
+            offset: 0,
+            size: MemSize::B8,
+            signed: false,
+        });
+        assert_eq!(e, Err(ExecError::Mem(MemError::Uninitialized(0x1000))));
+    }
+
+    #[test]
+    fn el_retorno_deja_la_maquina_parada() {
+        let mut m = Machine::new();
+        m.step(&MicroInstr::Call {
+            target: Operand::Imm(0x2000),
+            ret_addr: 0x3000,
+            clobbers: vec![],
+        })
+        .unwrap();
+        assert_eq!(m.get(Reg::X30), 0x3000);
+        assert_eq!(m.get(Reg::Pc), 0x2000);
+        m.step(&MicroInstr::Ret).unwrap();
+        assert!(m.halted);
+        assert_eq!(m.get(Reg::Pc), 0x3000);
+    }
+
+    // ---------------------------------------------------------------- CFG / SSA
+
+    /// El CFG canonico del lazo (el mismo que usa `run_reference_pipeline`).
+    fn cfg_del_lazo() -> Cfg {
+        Cfg::new(vec![
+            BlockDef {
+                instrs: vec![MicroInstr::Mov { w: Width::W64, dst: Reg::X0, src: Operand::Imm(0) }],
+                succs: vec![1],
+            },
+            BlockDef {
+                instrs: vec![
+                    MicroInstr::BinOp {
+                        op: BinOpKind::Sub,
+                        w: Width::W64,
+                        dst: Reg::X9,
+                        a: Operand::Reg(Reg::X0),
+                        b: Operand::Imm(10),
+                        set_flags: true,
+                    },
+                    MicroInstr::Branch { cond: CondCode::Lt, target: 0x1008 },
+                ],
+                succs: vec![2, 3],
+            },
+            BlockDef {
+                instrs: vec![MicroInstr::BinOp {
+                    op: BinOpKind::Add,
+                    w: Width::W64,
+                    dst: Reg::X0,
+                    a: Operand::Reg(Reg::X0),
+                    b: Operand::Imm(1),
+                    set_flags: false,
+                }],
+                succs: vec![1],
+            },
+            BlockDef { instrs: vec![MicroInstr::Ret], succs: vec![] },
+        ])
+    }
+
+    #[test]
+    fn la_ssa_del_lazo_tiene_phi_y_es_valida() {
+        let cfg = cfg_del_lazo();
+        let ssa = build_ssa(&cfg);
+        assert!(
+            check_ssa(&cfg, &ssa).is_ok(),
+            "la SSA debe ser valida: {:?}",
+            check_ssa(&cfg, &ssa)
+        );
+        let phis: usize = ssa.blocks.iter().map(|b| b.phis.len()).sum();
+        assert_eq!(phis, 6, "MEDIDO: el lazo genera 6 phis (X0, X9 y las banderas)");
+    }
+
+    #[test]
+    fn el_checker_detecta_un_uso_sin_definir() {
+        // SSA construida a mano con un uso que no tiene definicion.
+        let cfg = Cfg::new(vec![BlockDef { instrs: vec![], succs: vec![] }]);
+        let ssa = SsaFunction {
+            blocks: vec![SsaBlock {
+                phis: vec![],
+                instrs: vec![SsaInstr {
+                    text: "uso inventado".into(),
+                    defs: vec![],
+                    uses: vec![SsaName { var: Var::Reg(Reg::X1), version: 7 }],
+                }],
+            }],
+        };
+        let e = check_ssa(&cfg, &ssa).unwrap_err();
+        assert!(e.contains("undefined"), "el error debe decirlo: {}", e);
+    }
+
+    // ---------------------------------------------------------------- normativo
+
+    #[test]
+    fn el_riesgo_normativo() {
+        // S = 8M + 1000P + 20A + 50L + 200I ; R = min(100, floor(S/50)).
+        assert_eq!(compute_risk_score(0.0, 0.0, 0.0, 0.0, 0.0), (0.0, 0));
+        assert_eq!(compute_risk_score(1.0, 0.0, 0.0, 0.0, 0.0), (8.0, 0));
+        assert_eq!(compute_risk_score(0.0, 1.0, 0.0, 0.0, 0.0), (1000.0, 20));
+        assert_eq!(compute_risk_score(0.0, 0.0, 1.0, 0.0, 0.0), (20.0, 0));
+        assert_eq!(compute_risk_score(0.0, 0.0, 0.0, 1.0, 0.0), (50.0, 1));
+        assert_eq!(compute_risk_score(0.0, 0.0, 0.0, 0.0, 1.0), (200.0, 4));
+    }
+
+    #[test]
+    fn el_riesgo_se_topea_en_100() {
+        let (_, r) = compute_risk_score(0.0, 1000.0, 0.0, 0.0, 0.0);
+        assert_eq!(r, 100, "R nunca pasa de 100");
+    }
+
+    #[test]
+    fn el_enrutamiento_por_mas() {
+        assert_eq!(route_track(0.70).0, "Track A");
+        assert_eq!(route_track(0.99).0, "Track A");
+        assert_eq!(route_track(0.69).0, "Track A'");
+        assert_eq!(route_track(0.30).0, "Track A'");
+        assert_eq!(route_track(0.29).0, "Track B");
+        assert_eq!(route_track(0.0).0, "Track B");
+    }
+
+    #[test]
+    fn el_cuantil_conformal() {
+        // k = ceil((n + 1)(1 - alpha)), con minimo 1.
+        assert_eq!(conformal_quantile(100, 0.05), 96);
+        assert_eq!(conformal_quantile(10, 0.1), 10);
+        assert_eq!(conformal_quantile(0, 0.0), 1);
+        assert_eq!(conformal_quantile(5, 1.0), 1, "alpha=1 no puede dar 0");
+    }
+
+    #[test]
+    fn la_polaridad_de_la_bandera_c() {
+        // x86 CF (presta) es la inversa de AArch64 C (no presta): 65.536 pares.
+        assert!(verify_flag_polarity_8bit());
+    }
+
+    #[test]
+    fn el_closure_lemma_solo_acepta_formal_control_flow() {
+        let (ok, msg) = verify_badge_closure("formal_control_flow", true);
+        assert!(ok, "{}", msg);
+        assert!(msg.contains("ACCEPTED"));
+
+        let (ok, msg) = verify_badge_closure("empirical_correlation", true);
+        assert!(!ok, "una clase que no esta en A se rechaza");
+        assert!(msg.contains("REJECTED"));
+
+        let (ok, _) = verify_badge_closure("empirical_correlation", false);
+        assert!(ok, "una claim relacional no exige el lema");
+    }
+
+    #[test]
+    fn la_consulta_smt_lleva_los_tamanos() {
+        let q = smt_overlap_query(8, 4);
+        assert!(q.contains("(set-logic QF_BV)"));
+        assert!(q.contains("(check-sat)"));
+        assert!(q.contains("bv8"));
+        assert!(q.contains("bv4"));
+    }
+
+    #[test]
+    fn el_pipeline_de_referencia_es_consistente() {
+        let rep = run_reference_pipeline(0.8, 1, 0.0, 0, 0, 0);
+        assert_eq!(rep.track, "Track A");
+        assert_eq!(rep.risk_s, 8.0);
+        assert_eq!(rep.risk_r, 0);
+        assert_eq!(rep.ssa_blocks, 4);
+        assert_eq!(rep.phi_nodes, 6, "MEDIDO: 6 phis en el CFG canonico");
+        assert!(rep.ssa_verified, "la SSA del lazo tiene que ser valida");
+        assert!(rep.flag_polarity_verified);
+        assert_eq!(rep.conformal_quantile_k, 96);
+        assert_eq!(rep.open_obligations.len(), 8);
+        assert!(rep.closure_lemma_status.contains("ACCEPTED"));
+        assert!(rep.ssa_listing.iter().any(|l| l.contains("phi(")));
+    }
+}

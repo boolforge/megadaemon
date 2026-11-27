@@ -756,3 +756,203 @@ pub fn extract_archive_or_carve(file_path: &str, out_dir: &str) -> Result<serde_
         "log": String::from_utf8_lossy(&out.stdout).chars().take(600).collect::<String>()
     }))
 }
+
+// ---------------------------------------------------------------- tests
+//
+// MEDIDO (2026-11-28): este módulo tenía 759 líneas y **CERO** tests (uno de
+// los 46 módulos sin cobertura que enumera `docs/VERIFICACION_AGENTES.md`).
+// Los valores esperados salen del propio detector: son los literales que el
+// módulo escribe en el informe.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Escribe un fichero temporal y devuelve su ruta.
+    fn escribir(nombre: &str, bytes: &[u8]) -> String {
+        let dir = std::env::temp_dir().join(format!("md-binwalk-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(nombre);
+        std::fs::write(&p, bytes).unwrap();
+        p.to_str().unwrap().to_string()
+    }
+
+    /// Cabecera ELF de 64 bytes: clase, endianness, e_type y e_machine.
+    fn elf(class: u8, endian: u8, etype: u16, emach: u16) -> Vec<u8> {
+        let mut v = vec![0u8; 64];
+        v[0] = 0x7f;
+        v[1] = b'E';
+        v[2] = b'L';
+        v[3] = b'F';
+        v[4] = class; // 1 = 32 bits, 2 = 64 bits
+        v[5] = endian; // 1 = little, 2 = big
+        if endian == 1 {
+            v[16..18].copy_from_slice(&etype.to_le_bytes());
+            v[18..20].copy_from_slice(&emach.to_le_bytes());
+        } else {
+            v[16..18].copy_from_slice(&etype.to_be_bytes());
+            v[18..20].copy_from_slice(&emach.to_be_bytes());
+        }
+        v
+    }
+
+    #[test]
+    fn un_fichero_inexistente_es_un_error_de_io() {
+        let r = analyze_binary_full("/no/existe/este/fichero");
+        assert!(
+            r.format_family.starts_with("IO Error:"),
+            "debe decirlo: {}",
+            r.format_family
+        );
+        assert_eq!(r.file_size, 0);
+    }
+
+    #[test]
+    fn un_fichero_vacio_se_reporta_como_vacio() {
+        let p = escribir("vacio.bin", b"");
+        let r = analyze_binary_full(&p);
+        assert_eq!(r.format_family, "Empty File (0 bytes)");
+        assert_eq!(r.file_size, 0);
+    }
+
+    #[test]
+    fn un_mz_corto_es_un_stub_dos() {
+        let mut v = b"MZ".to_vec();
+        v.extend_from_slice(&[0u8; 8]);
+        let p = escribir("corto.exe", &v);
+        let r = analyze_binary_full(&p);
+        assert_eq!(r.format_family, "DOS Raw / MZ Stub");
+        assert_eq!(r.target_os, "MS-DOS");
+        assert_eq!(r.bitness, 16);
+    }
+
+    #[test]
+    fn un_elf_de_64_bits() {
+        // ET_DYN (3) + x86-64 (0x3E), little-endian.
+        let p = escribir("lib.so", &elf(2, 1, 3, 0x3E));
+        let r = analyze_binary_full(&p);
+        assert_eq!(r.format_family, "ELF64 Shared Object / PIE (ET_DYN)");
+        assert_eq!(r.architecture, "x86-64 (AMD64)");
+        assert_eq!(r.endianness, "Little-Endian");
+        assert_eq!(r.bitness, 64);
+        assert_eq!(r.target_os, "Linux / UNIX");
+        assert!(
+            r.security_mitigations.iter().any(|m| m.contains("PIE")),
+            "un ET_DYN tiene PIE: {:?}",
+            r.security_mitigations
+        );
+    }
+
+    #[test]
+    fn un_elf_de_32_bits_big_endian() {
+        // ET_EXEC (2) + ARM32 (0x28), big-endian.
+        let p = escribir("bravo.elf", &elf(1, 2, 2, 0x28));
+        let r = analyze_binary_full(&p);
+        assert_eq!(r.format_family, "ELF32 Executable (ET_EXEC)");
+        assert_eq!(r.architecture, "ARM32");
+        assert_eq!(r.endianness, "Big-Endian");
+        assert_eq!(r.bitness, 32);
+    }
+
+    #[test]
+    fn un_dex_de_android() {
+        let p = escribir("classes.dex", b"dex\n035\0resto");
+        let r = analyze_binary_full(&p);
+        assert_eq!(r.format_family, "Android Dalvik Executable (DEX)");
+        assert_eq!(r.target_os, "Android");
+        assert_eq!(r.bitness, 32);
+    }
+
+    #[test]
+    fn un_zip_plano_no_es_un_apk() {
+        let mut v = b"PK\x03\x04".to_vec();
+        v.extend_from_slice(&[0u8; 32]);
+        let p = escribir("datos.zip", &v);
+        let r = analyze_binary_full(&p);
+        assert_eq!(r.format_family, "ZIP Archive Container");
+        assert_eq!(r.target_os, "Cross-Platform");
+    }
+
+    #[test]
+    fn un_zip_con_manifest_es_un_apk() {
+        let mut v = b"PK\x03\x04".to_vec();
+        v.extend_from_slice(b"AndroidManifest.xml");
+        v.extend_from_slice(&[0u8; 16]);
+        let p = escribir("app.apk", &v);
+        let r = analyze_binary_full(&p);
+        assert_eq!(r.format_family, "Android Package (APK)");
+        assert_eq!(r.target_os, "Android");
+    }
+
+    #[test]
+    fn un_7z() {
+        let p = escribir("archivo.7z", b"7z\xBC\xAF\x27\x1C\x00\x04");
+        let r = analyze_binary_full(&p);
+        assert_eq!(r.format_family, "7-Zip Archive (.7z)");
+        assert_eq!(r.architecture, "LZMA / LZMA2 Container");
+    }
+
+    #[test]
+    fn un_ejecutable_de_playstation() {
+        let p = escribir("juego.bin", b"PS-X EXE\0\0\0\0");
+        let r = analyze_binary_full(&p);
+        assert_eq!(r.format_family, "PlayStation 1 Executable (PS-X EXE)");
+        assert_eq!(r.architecture, "MIPS R3000A");
+        assert_eq!(r.bitness, 32);
+    }
+
+    #[test]
+    fn un_com_de_msdos() {
+        let p = escribir("juego.com", b"\xB4\x09\xBA\x0F\x00\x00");
+        let r = analyze_binary_full(&p);
+        assert_eq!(r.format_family, "MS-DOS / MSX .COM Flat Executable");
+        assert_eq!(r.bitness, 16);
+    }
+
+    #[test]
+    fn un_fichero_de_fuente_se_reconoce_por_la_extension() {
+        let p = escribir("codigo.rs", b"fn main() {}\n");
+        let r = analyze_binary_full(&p);
+        assert!(
+            r.format_family.starts_with("Source / Text Document ("),
+            "debe decirlo: {}",
+            r.format_family
+        );
+        assert_eq!(r.architecture, "UTF-8 Text / Code");
+    }
+
+    #[test]
+    fn la_entropia_de_ceros_es_cero() {
+        let p = escribir("ceros.bin", &vec![0u8; 4096]);
+        let r = analyze_binary_full(&p);
+        assert_eq!(r.global_entropy, 0.0);
+        assert_eq!(r.file_size, 4096);
+    }
+
+    #[test]
+    fn la_entropia_de_los_256_valores_es_ocho() {
+        // Cada byte aparece el mismo numero de veces => 8 bits de entropia.
+        let mut v = Vec::with_capacity(4096);
+        for _ in 0..16 {
+            for b in 0u16..256 {
+                v.push(b as u8);
+            }
+        }
+        let p = escribir("todos.bin", &v);
+        let r = analyze_binary_full(&p);
+        assert!(
+            (r.global_entropy - 8.0).abs() < 0.001,
+            "la entropia deberia ser 8: {}",
+            r.global_entropy
+        );
+    }
+
+    #[test]
+    fn el_informe_siempre_dice_de_que_motor_viene() {
+        let p = escribir("x.bin", b"contenido");
+        let r = analyze_binary_full(&p);
+        assert_eq!(r.engine, "megadaemon-die-binwalk-v13-rust-mmap");
+        assert_eq!(r.filename, "x.bin");
+        assert_eq!(r.path, p);
+    }
+}

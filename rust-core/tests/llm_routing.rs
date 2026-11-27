@@ -29,8 +29,8 @@ mod llm_mock;
 
 use self::llm_mock::{deps, prov, vault, MockTransport, KEY, OK};
 use megadaemon_core::providers::{
-    execute_chat_with, parse_provider_error, parse_provider_reply, redact_secret, truncar,
-    validar_endpoint, ChatResult, ProviderEntry, MAX_TOKENS_CAP,
+    execute_chat_with, parse_provider_error, parse_provider_error_con_retry, parse_provider_reply,
+    redact_secret, truncar, validar_endpoint, ChatResult, ProviderEntry, MAX_TOKENS_CAP,
 };
 use serde_json::Value;
 use std::time::Duration;
@@ -623,6 +623,62 @@ fn un_429_dice_el_motivo_de_la_cuota() {
     let d = detectada.unwrap();
     assert_eq!(d.reset_at, Some(1795130605));
     assert_eq!(d.retry_after, Some(42));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Patrón 5: el `retry_after` del proveedor viaja en el error (no se ignora)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn el_retry_after_del_cuerpo_viaja_en_el_error() {
+    // MEDIDO (2026-11-28): el `retry_after` se parseaba del texto **sólo**
+    // en `quota_guard` (para la pausa por cuota).  El error que usa el bucle
+    // de reintentos NO lo llevaba ⇒ se reintentaba antes de tiempo y el
+    // proveedor volvía a contestar 429.
+    let cuerpo = fixtures::cuerpo("groq-free__http_429.json");
+    let e = parse_provider_error("groq-free", 429, &cuerpo);
+    assert_eq!(e.retry_after(), Some(42));
+}
+
+#[test]
+fn la_cabecera_retry_after_manda_sobre_el_cuerpo() {
+    // La cabecera es la fuente fiable; el cuerpo es texto libre.
+    let cuerpo = fixtures::cuerpo("groq-free__http_429.json");
+    let e = parse_provider_error_con_retry("groq-free", 429, &cuerpo, Some(7));
+    assert_eq!(e.retry_after(), Some(7));
+}
+
+#[test]
+fn un_error_sin_retry_after_no_inventa() {
+    let e = parse_provider_error("p1", 401, r#"{"error":{"message":"Invalid API key"}}"#);
+    assert_eq!(e.retry_after(), None);
+    assert!(!e.retryable());
+}
+
+#[test]
+fn la_traza_dice_cuanto_pidio_esperar_el_proveedor() {
+    let t = MockTransport::new();
+    t.responde(
+        "https://p1.test/v1",
+        429,
+        r#"{"error":{"message":"Rate limit reached. Please try again in 42 seconds"}}"#,
+    );
+    t.responde("https://p2.test/v1", 200, OK);
+    let v = vault(
+        vec![
+            prov("p1", "https://p1.test/v1", "m1", "free"),
+            prov("p2", "https://p2.test/v1", "m2", "free"),
+        ],
+        "p1",
+    );
+    let d = deps(&v, &t);
+    let res = execute_chat_with("hola", Some("p1"), None, None, 128, &d);
+    let traza = res.provider_trace.join(" | ");
+    assert!(
+        traza.contains("retry_after 42s"),
+        "la traza debe decir cuanto hay que esperar: {}",
+        traza
+    );
 }
 
 #[test]

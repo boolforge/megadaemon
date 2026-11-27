@@ -68,23 +68,33 @@ fichero real, en `main`, con contenido sustantivo.
 
 | medida | valor |
 |---|---|
-| módulos en `rust-core/src/` | **228** |
-| módulos con **algún** test | 180 |
-| módulos **sin un solo test** | **48** |
-| de esos, los que pasan de 150 líneas | **41** |
+| módulos en `rust-core/src/` | **229** |
+| módulos con **algún** test | 184 |
+| módulos **sin un solo test** | **45** |
+| de esos, los que pasan de 150 líneas | **38** |
 
-Los 41 módulos sin test y con más de 150 líneas (MEDIDO, ordenados por tamaño):
+Los 38 módulos sin test y con más de 150 líneas (MEDIDO, ordenados por tamaño):
 
-`backup_apps.rs` (3321), `main.rs` (2439), `seere_v11.rs` (2430), `cert_vault.rs` (1973), `re_mba.rs` (1193), `automation_runtime.rs` (1159), `device_inventory.rs` (1047), `cirx_rtl.rs` (759), `binwalk_die.rs` (758), `root_intel.rs` (757), `backup_formats.rs` (676), `re_strenc.rs` (607), `argon2.rs` (575), `brillo_events.rs` (521), `cert_android.rs` (512), `mcp_server.rs` (498), `deobf.rs` (456), `drive_client.rs` (435), `npu_cv.rs` (427), `disasm.rs` (377), `npu_bridge.rs` (371), `kaitai_imhex.rs` (326), `swift_sba1.rs` (324), `recording_vault.rs` (318), `provider_catalog.rs` (316), `shm.rs` (290), `re_strings.rs` (284), `frida_dbi.rs` (275), `aegis.rs` (268), `rea_assistant.rs` (267), `tile_vram.rs` (261), `zstd.rs` (252), `cfg_lifter.rs` (245), `lib.rs` (237), `adb_tool.rs` (209), `hw_mapper.rs` (203), `freezer.rs` (196), `crypto_scan.rs` (194), `rom_locator.rs` (193), `deobfuscate.rs` (191), `unifier.rs` (171).
+`backup_apps.rs` (3322), `main.rs` (2459), `seere_v11.rs` (2431), `cert_vault.rs` (1974), `re_mba.rs` (1194), `automation_runtime.rs` (1160), `device_inventory.rs` (1048), `root_intel.rs` (758), `backup_formats.rs` (677), `re_strenc.rs` (608), `argon2.rs` (576), `brillo_events.rs` (532), `cert_android.rs` (513), `mcp_server.rs` (499), `deobf.rs` (457), `drive_client.rs` (436), `npu_cv.rs` (428), `disasm.rs` (378), `npu_bridge.rs` (372), `swift_sba1.rs` (325), `recording_vault.rs` (319), `provider_catalog.rs` (317), `shm.rs` (291), `re_strings.rs` (285), `frida_dbi.rs` (276), `aegis.rs` (269), `rea_assistant.rs` (268), `tile_vram.rs` (262), `zstd.rs` (253), `cfg_lifter.rs` (246), `lib.rs` (239), `adb_tool.rs` (210), `hw_mapper.rs` (204), `freezer.rs` (197), `crypto_scan.rs` (195), `rom_locator.rs` (194), `deobfuscate.rs` (192), `unifier.rs` (172).
+
+> MEDIDO 2026-11-28 (actualización): **`cirx_rtl.rs` (759), `kaitai_imhex.rs`
+> (326) y `binwalk_die.rs` (759) ya tienen tests** (28, 9 y 15
+> respectivamente) ⇒ el hueco baja de 48 a **45** módulos sin test (y de 41
+> a **38** los que pasan de 150 líneas).  Los tres son casi `SOLO_STD`: sus
+> tests se validan **offline**, sin red y sin el crate entero.
 
 ### Por qué la familia RE y NPU sale con 0
 
 Los 9 módulos de RE (`binwalk_die`, `bindiff`, `deobfuscate`, `disasm`,
-`kaitai_imhex`, `tile_vram`, `crypto_scan`, `entropy`, `cfg_lifter`) y dos de
+`tile_vram`, `crypto_scan`, `entropy`, `cfg_lifter`) y dos de
 NPU (`npu_bridge`, `npu_cv`) tienen **0 tests**.  No es casualidad: son los
 módulos que **nunca llegaron a compilar en el CI** (el crate entero no
 compilaba desde el merge del snapshot v16), así que su suite nunca pudo
 existir.  La causa raíz es la misma que la del CI rojo.
+
+MEDIDO 2026-11-28: `kaitai_imhex` (9 tests), `cirx_rtl` (28) y
+`binwalk_die` (15) **ya tienen suite** ⇒ la razón de fondo (el crate no
+compilaba) quedó sin efecto para esos tres, y los demás quedan en la cola.
 
 ## 3. Qué significa y qué NO significa
 
@@ -93,7 +103,7 @@ existir.  La causa raíz es la misma que la del CI rojo.
 * **NO significa**: que esté *probado*.  Un módulo de 3.000 líneas sin un
   solo test es un módulo cuya corrección no está medida; la verificación de
   esta tabla es de **presencia y volumen**, no de **calidad**.
-* **NO se ha medido**: el comportamiento en runtime de esos 48 módulos en el
+* **NO se ha medido**: el comportamiento en runtime de esos 45 módulos en el
   móvil.  Eso exige el dispositivo.
 
 ## 4. Orden de trabajo que sale de esta verificación

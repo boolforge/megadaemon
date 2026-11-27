@@ -5,10 +5,20 @@
 > se puede verificar en local es el resultado en **el móvil real**: por eso
 > esta lista.
 >
+> El móvil destapó además **4 bugs más** (`d0b7fd2`): todos estaban en el
+> mismo fichero y **todos son de permisos** (leer como usuario normal lo que
+> es de root).  Se comprueban en la **§3**.
+>
 > MEDIDO 2026-11-28.  Todos los comandos son de **lectura**: no borran nada.
 > Rutas medidas en `deploy/megadaemon-oneliner.sh`:
 > `PREFIX=/data/adb/megadaemon`, `STATE=$PREFIX/state`,
 > `DAEMON=$PREFIX/megadaemon-core`.
+>
+> **Ojo**: `/data/adb` es `0700` de root ⇒ **todos** los comandos que leen
+> el estado (telemetría, `cmdline`, el token, el canal) hay que lanzarlos
+> **como root**: `su -mm -c "…"` desde Termux, o directamente en un shell de
+> root.  Leídos como usuario normal dan **falsos negativos** (que es
+> exactamente lo que pasaba antes del fix).
 
 ## 1. Ejecutar
 
@@ -116,7 +126,128 @@ tail -5 /data/adb/megadaemon/state/tunnel.log
 Antes los dos se escribían fuera del estado persistente ⇒ se perdían al
 reiniciar.
 
-## 3. Si algo falla
+## 3. Los 4 bugs que destapó el móvil (`d0b7fd2`)
+
+> MEDIDO 2026-11-27 en el SM-G998B.  Los cuatro eran **lecturas hechas como
+> usuario normal** de cosas que son de **root** (`/data/adb` es `0700`), así
+> que el síntoma era siempre "no hay daemon" / "no hay token" **con el daemon
+> vivo**.  Se comprueban mirando **la salida del instalador** y con cuatro
+> comandos de lectura **como root**.
+
+### 3.1 La telemetría se publica (bug de `[ ! -x "$DAEMON" ]`)
+
+El instalador, en el paso `=== 7/8 telemetría a Google Drive ===`, **no**
+puede decir:
+
+```
+  no hay daemon: no hay nada que publicar
+```
+
+⇒ si lo dice, el `test -x` se sigue haciendo **como usuario normal**.
+
+Y **debajo** tienen que aparecer las líneas de la telemetría real (van
+sangradas con 4 espacios, son la salida de `megadaemon-core telemetria
+publicar`):
+
+```
+  publicando telemetría, conexión, informe y diagnóstico en Drive…
+```
+
+Comprobación independiente (como root):
+
+```sh
+su -mm -c "test -x /data/adb/megadaemon/megadaemon-core && echo EJECUTABLE_OK"
+```
+
+⇒ `EJECUTABLE_OK`.  Como usuario normal esto **falla** (y por eso el bug
+no se veía en local).
+
+### 3.2 El diagnóstico enseña la línea de comandos (bug de `/proc/<pid>/cmdline`)
+
+En el bloque de diagnóstico tiene que salir la **línea de comandos**, no
+sólo el PID:
+
+```
+  proceso: PID 25007 (/data/adb/megadaemon/megadaemon-core cockpit …)
+```
+
+⇒ si sale `proceso: PID 25007 ()` **vacío**, el `cmdline` se sigue leyendo
+como usuario normal (`cannot open /proc/25007/cmdline`).
+
+Comprobación independiente (como root):
+
+```sh
+su -mm -c "tr '\0' ' ' < /proc/\$(ls /proc | grep -E '^[0-9]+\$' | head -1)/cmdline"
+```
+
+o, mejor, sobre el PID real que reporte el diagnóstico:
+
+```sh
+su -mm -c "cat /proc/<PID>/cmdline | tr '\0' ' '"
+```
+
+⇒ tiene que devolver la ruta del daemon.
+
+### 3.3 El canal se publica en el repo (bug de las 4 rutas del token)
+
+El bucle de publicación buscaba el token del canal en **4** rutas y la
+función `token_github_ruta` en **5** ⇒ con el token en
+`$HOME/.mavis/github.token` el diagnóstico decía "hay token" pero el canal
+**no** iba al repo.
+
+En la salida del instalador tiene que aparecer:
+
+```
+  canal publicado en el repo (state/channel.json)
+```
+
+Comprobación independiente (como root):
+
+```sh
+su -mm -c "cat /data/adb/megadaemon/state/channel.json"
+```
+
+⇒ **tiene que existir y no estar vacío**.  Y la 5ª ruta (la que faltaba),
+si es donde está tu token:
+
+```sh
+su -mm -c "ls -l \$HOME/.mavis/github.token"
+```
+
+### 3.4 No quedan daemons duplicados (bug de `pgrep -f`)
+
+`pgrep` **no existe** en toybox (el shell de Android) ⇒ la limpieza
+**no mataba nada** y el móvil se quedó con **6 daemons, 6 cloudflared y 5
+watchdogs** (load 58 ⇒ el túnel no podía arrancar).
+
+Comprobación (como root) — la misma lista de PIDs que usa ahora el
+instalador:
+
+```sh
+su -mm -c "grep -lsa 'megadaemon-core cockpit' /proc/[0-9]*/cmdline 2>/dev/null" | sed 's#^.*/##; s#/cmdline$##'
+```
+
+⇒ tiene que devolver **un solo PID**, y ese PID **no** puede ser un
+envoltorio `sh -c` (el `cmdline` de un envoltorio contiene `sh -c`; si
+fuera un envoltorio, el instalador habría matado el daemon bueno).
+
+Los tres recuentos tienen que ser **1**:
+
+```sh
+su -mm -c "grep -lsa 'megadaemon-core cockpit' /proc/[0-9]*/cmdline 2>/dev/null" | wc -l
+su -mm -c "grep -lsa cloudflared /proc/[0-9]*/cmdline 2>/dev/null" | wc -l
+su -mm -c "grep -lsa tunnel-watchdog /proc/[0-9]*/cmdline 2>/dev/null" | wc -l
+cat /proc/loadavg
+```
+
+⇒ `1`, `1`, `1` y una **load baja** (antes: 58).
+
+> Si al ejecutar el instalador **no** se limpió, es que el móvil ya venía
+> con duplicados de antes del fix: se pueden matar a mano con los PIDs de
+> la primera lista (`kill -9 <PID>`), pero **con cuidado** de no matar el
+> envoltorio `sh -c` del daemon bueno.
+
+## 4. Si algo falla
 
 Pásame:
 
@@ -126,7 +257,7 @@ Pásame:
 Con eso se acota: el banco tiene 119 escenarios y cada bug tiene su
 escenario, así que se reproduce en local sin tocar el móvil.
 
-## 4. Lo que el banco ya garantiza (no hace falta repetir en el móvil)
+## 5. Lo que el banco ya garantiza (no hace falta repetir en el móvil)
 
 Los 119 escenarios pasan en local:
 

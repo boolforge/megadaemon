@@ -324,3 +324,118 @@ pub fn simplify_mba_expression(expr: &str) -> MbaSimplifyReport {
         engine: "megadaemon-mba-d810-rust-v13".into(),
     }
 }
+
+// ---------------------------------------------------------------- tests
+//
+// MEDIDO (2026-11-28): este módulo tenía 326 líneas y **CERO** tests (uno de
+// los 48 módulos sin cobertura que enumera `docs/VERIFICACION_AGENTES.md`).
+// Es `SOLO_STD` (sólo serde) ⇒ se testea **offline**.
+//
+// Los valores esperados salen del propio motor: el esquema DSL, el formato
+// `0xAB (171)` de la vista de campos y las identidades MBA canónicas.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn la_plantilla_elf64_tiene_los_campos_esperados() {
+        let t = builtin_template("elf64_header");
+        assert!(!t.is_empty(), "la plantilla no puede estar vacia");
+        assert_eq!(t[0].name, "e_ident_magic");
+        assert_eq!(t[0].field_type, "hex:4");
+        assert!(t.iter().any(|f| f.name == "e_entry"));
+        assert!(t.iter().any(|f| f.name == "e_machine"));
+    }
+
+    #[test]
+    fn una_plantilla_desconocida_cae_en_la_por_defecto() {
+        // El llamante muestra las plantillas disponibles: una desconocida
+        // NO puede devolver una lista vacia.
+        let t = builtin_template("no-existe-esta-plantilla");
+        assert!(!t.is_empty());
+    }
+
+    #[test]
+    fn mba_simplifica_la_identidad_de_la_suma() {
+        let r = simplify_mba_expression("(x^y)+2*(x&y)");
+        assert_eq!(r.simplified, "x+y");
+        assert_eq!(r.rules_applied, 1);
+        assert!(r.equivalence_verified);
+        assert!(r.steps[0].starts_with("MBA-ADD-1"), "{}", r.steps[0]);
+    }
+
+    #[test]
+    fn mba_ignora_los_espacios_pero_conserva_el_original() {
+        let r = simplify_mba_expression("  (x ^ y) + 2 * (x & y)  ");
+        assert_eq!(r.simplified, "x+y");
+        assert_eq!(r.original, "(x ^ y) + 2 * (x & y)", "el original se guarda recortado");
+    }
+
+    #[test]
+    fn mba_simplifica_las_identidades_de_opacos() {
+        assert_eq!(simplify_mba_expression("x^x").simplified, "0");
+        assert_eq!(simplify_mba_expression("x-x").simplified, "0");
+        assert_eq!(simplify_mba_expression("x&~x").simplified, "0");
+        assert_eq!(simplify_mba_expression("x|~x").simplified, "-1");
+        assert_eq!(simplify_mba_expression("~~x").simplified, "x");
+    }
+
+    #[test]
+    fn una_expresion_sin_reglas_no_se_toca() {
+        let r = simplify_mba_expression("x+1");
+        assert_eq!(r.simplified, "x+1");
+        assert_eq!(r.rules_applied, 0);
+        assert!(r.steps.is_empty());
+        assert!(
+            !r.equivalence_verified,
+            "sin reglas aplicadas no se puede afirmar la equivalencia"
+        );
+    }
+
+    #[test]
+    fn el_motor_se_identifica() {
+        let r = simplify_mba_expression("x^x");
+        assert_eq!(r.engine, "megadaemon-mba-d810-rust-v13");
+    }
+
+    #[test]
+    fn el_parseo_lee_los_campos_del_esquema() {
+        let dir = std::env::temp_dir().join(format!("md-kaitai-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("datos.bin");
+        // "AB" | 0x03 | u16le(0x0702) | u32le(0x09040506)
+        std::fs::write(&path, [0x41u8, 0x42, 0x03, 0x02, 0x07, 0x06, 0x05, 0x04, 0x09]).unwrap();
+
+        let esquema = "magic:hex:2\ntipo:u8\nnum:u16le\ngrande:u32le";
+        let r = parse_struct_at_offset(
+            path.to_str().unwrap(),
+            "personalizado",
+            0,
+            Some(esquema),
+        )
+        .unwrap();
+
+        assert_eq!(r.template, "personalizado");
+        assert_eq!(r.fields.len(), 4, "los 4 campos del esquema");
+        assert_eq!(r.total_bytes_parsed, 9);
+        assert_eq!(r.base_offset_hex, "0x00000000");
+        assert_eq!(r.fields[0].name, "magic");
+        assert_eq!(r.fields[0].value_display, "41 42");
+        assert_eq!(r.fields[0].size, 2);
+        assert_eq!(r.fields[1].value_display, "0x03 (3)");
+        assert_eq!(r.fields[2].value_display, "0x0702 (1794)");
+        assert_eq!(r.fields[3].value_display, "0x09040506 (151258374)");
+        assert!(r.available_templates.contains(&"elf64_header".to_string()));
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn un_fichero_inexistente_es_un_error() {
+        let e = parse_struct_at_offset("/no/existe/este/fichero", "elf64_header", 0, None)
+            .unwrap_err();
+        assert!(e.contains("Cannot open"), "el error debe decirlo: {}", e);
+    }
+}

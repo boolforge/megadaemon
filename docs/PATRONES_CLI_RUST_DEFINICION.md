@@ -197,13 +197,25 @@ al fallar un proveedor:
 3. `retry_after` del proveedor se **parsea** y se usa, no se ignora.
 4. Los umbrales por modelo se leen del catálogo, no están hardcodeados.
 
-**Estado**: **PARCIAL**.
-* La tipificación de errores **existe** (`ProviderError` con 5 variantes) y
+**Estado**: **PARCIAL** ⇒ el punto (3) ya está **HECHO**.
+* La tipificación de errores **existe** (`ProviderError` con 7 variantes) y
   el `reset_at` de cuota **existe** (`quota_guard::evaluar_pausa`).
-* **FALTA**: (a) `retry_after` estructurado en el camino del proveedor (hoy
-  el `retry_after` se guarda en `quota_guard`, no viaja en el tipo de error);
-  (b) `compaction_thresholds` por modelo; (c) `tool_formatter_type` por
-  modelo.
+* **HECHO (2026-11-28)**: el `retry_after` **viaja en el tipo de error**.
+  * `ProviderError::Http` lleva `retry_after: Option<u64>` y lo lee
+    `ProviderError::retry_after()` (`rust-core/src/providers.rs`).
+  * `LlmResponse` lleva `retry_after: Option<u64>` y el transporte **lee la
+    cabecera** `Retry-After` / `retry-after-ms` (antes se tiraban las
+    cabeceras: `ureq` con `http_status_as_error(false)` las deja
+    accesibles).
+  * El parseo es **fuente única** en `rust-core/src/provider_retry.rs`
+    (14 tests): cabecera, texto del cuerpo y espera real.
+    `quota_guard` lo usa en vez de su copia.
+  * El bucle de reintentos **espera lo que dice el proveedor**
+    (`espera_reintento`), con tope de 120 s; antes usaba un backoff fijo de
+    250 ms y reintentaba **antes de tiempo** (⇒ otro 429).
+  * La traza dice cuánto pidió esperar: `p1 => HTTP 429 (...) (retry_after 42s)`.
+* **FALTA**: (b) `compaction_thresholds` por modelo; (c) `tool_formatter_type`
+  por modelo.
 
 ---
 
@@ -329,7 +341,7 @@ cola (`list claimed sessions`, `list queued sessions`, `list outposts`).
 | 2 | keepalive del caché de prompt | **HECHO** | `cache_keepalive.rs` |
 | 3 | la conversación es un bosque | PARCIAL | `protocol_acp/sesion.rs` (falta SQLite + revert por pasos) |
 | 4 | compactación por época | **HECHO** | `compaction_epoch.rs` |
-| 5 | errores de proveedor tipados | PARCIAL | `providers.rs` (falta `retry_after` en el tipo + por modelo) |
+| 5 | errores de proveedor tipados | PARCIAL | `providers.rs` + `provider_retry.rs` (hecho el `retry_after`; falta lo por modelo) |
 | 6 | construir contexto ≠ conducir el agente | PARCIAL | falta el módulo `contexto` |
 | 7 | daemon: socket + handshake + cola | PARCIAL | falta el socket Unix con handshake |
 | 8 | sandbox compilado del permiso | **HECHO** | `sandbox_linux.rs` |

@@ -155,6 +155,7 @@ pub mod power_policy;
 pub mod price_table;
 pub mod profile_analysis;
 pub mod provider_catalog;
+pub mod provider_retry;
 pub mod providers;
 pub mod quota_guard;
 pub mod http_transfer;
