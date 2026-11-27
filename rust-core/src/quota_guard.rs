@@ -265,19 +265,10 @@ pub fn parsear_error_cuota(cuerpo: &str) -> Option<ErrorCuota> {
             break;
         }
     }
-    let mut retry_after = None;
-    for marca in ["retry after ", "retry-after: ", "retry_after=", "try again in "] {
-        if let Some(i) = t.find(marca) {
-            let resto = &t[i + marca.len()..];
-            let fin = resto
-                .find(|c: char| !c.is_ascii_digit())
-                .unwrap_or(resto.len());
-            if let Ok(s) = resto[..fin].trim().parse::<u64>() {
-                retry_after = Some(s);
-            }
-            break;
-        }
-    }
+    // MEDIDO (2026-11-28): el parseo del `retry_after` **no** es una copia:
+    // vive en `provider_retry` (fuente única) y lo usan tanto la pausa por
+    // cuota como el error que viaja por la cascada (patrón 5).
+    let retry_after = crate::provider_retry::parse_retry_after_text(cuerpo);
     let motivo = cuerpo
         .lines()
         .find(|l| {

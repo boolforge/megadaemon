@@ -120,7 +120,7 @@ impl LlmTransport for MockTransport {
         } else {
             cola.remove(0)
         };
-        Ok(LlmResponse { status, body })
+        Ok(LlmResponse::new(status, body))
     }
 
     fn name(&self) -> &'static str {
