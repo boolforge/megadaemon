@@ -248,12 +248,23 @@ Ficheros `.rs` distintos referenciados por el binario: **1.326**.
 ## 8. Lo que NO se ha medido
 
 - **NO MEDIDO**: pseudocódigo de las ~356 k funciones; sólo de un subconjunto.
-- **NO MEDIDO**: el fichero de debug del CLI `codex` (395 MB) no se ha
-  descargado ni procesado; sólo el del `codex-app-server`.
+- **SUBIDO, NO PROCESADO** (decisión del root, 2026-11-27): el fichero de
+  debug del CLI `codex` (395.260.220 B, asset
+  `codex-symbols-x86_64-unknown-linux-musl.tar.gz`, en Drive id
+  `1q93ULt4kAXiXMXV7Pzn3gc8HNGqjpS4i`) **queda sólo subido a Drive**; no se
+  descarga ni se procesa. Todo lo de este documento es del `codex-app-server`.
+- **NO MEDIDO**: el RE del CLI `codex` (321.244.472 B) no se ha hecho.
 - **NO MEDIDO**: `codex-exec-server.debug` y `codex-code-mode-host.debug` (dentro
   del mismo tar) no se han extraído.
 - **NO MEDIDO**: el contenido del crate de Rust (`codex-core`) no está disponible
   como fuente; el RE es sobre binario.
+
+## 8.1 Estado final del barrido r2dec (paralizado por el root)
+
+El barrido del 5.º motor (`r2dec`, worker `MegaDaemon-RE`) quedó **paralizado**
+en la parada ordenada: **9.565 pseudocódigos** parciales en
+`/workspace/agy-re/tools-out/todo/rzD` (se conservan; no se borra nada del NFS).
+Su informe vive en `docs/RE_FUNCIONES_IRRECONSTRUIBLES.md`.
 
 ## 9. Reproducir
 

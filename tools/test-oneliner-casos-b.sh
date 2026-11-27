@@ -723,9 +723,16 @@ caso_b_31_diagnostic_detects_old_binary() {
     omitir "no se pudo copiar un ELF como daemon"
     return
   fi
-  "$PRE/megadaemon-core" 120 &
+  # OJO (MEDIDO 2026-11-27 en el CI): en Debian, /usr/bin/sleep es el
+  # binario MULTICALL de coreutils, que decide qué hacer por argv[0]: al
+  # copiarlo como "megadaemon-core" y ejecutarlo con ese nombre dice
+  # "coreutils: unknown program 'megadaemon-core'" y se muere => el
+  # diagnóstico no tenía ningún proceso que mirar.  Con `exec -a sleep`
+  # el binario se comporta como sleep (y /proc/<pid>/exe sigue apuntando
+  # al daemon, que es lo que el instalador comprueba).
+  ( exec -a sleep "$PRE/megadaemon-core" 300 ) &
   PID=$!
-  sleep 2
+  sleep 1
   # El binario en disco es más nuevo que el arranque del proceso.
   touch "$PRE/megadaemon-core"
   fijar_pids megadaemon-core "$PID"
