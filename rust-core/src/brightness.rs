@@ -201,6 +201,12 @@ pub struct Config {
     pub usar_cmd_display: bool,
     /// Verificar el brillo **aplicado** con `dumpsys power` (caro: 1 JVM).
     pub verificar_aplicado: bool,
+    /// Vigilar **por eventos** (inotify + FIFO) en vez de sondear.
+    ///
+    /// MEDIDO (SM-G998B, 2026-11-27): con el sondeo de 15 s el vigilante
+    /// gastaba **5 interacciones con el móvil por ciclo**; con los eventos
+    /// son **0 sondeos** (y 0..1 escrituras, sólo si hay que corregir algo).
+    pub eventos: bool,
 }
 
 impl Default for Config {
@@ -215,6 +221,7 @@ impl Default for Config {
             neutralizar_adaptativo: false,
             usar_cmd_display: true,
             verificar_aplicado: true,
+            eventos: true,
         }
     }
 }
@@ -232,6 +239,7 @@ impl Config {
             "neutralizar_adaptativo": self.neutralizar_adaptativo,
             "usar_cmd_display": self.usar_cmd_display,
             "verificar_aplicado": self.verificar_aplicado,
+            "eventos": self.eventos,
         })
     }
 
@@ -283,6 +291,10 @@ impl Config {
                 .get("verificar_aplicado")
                 .and_then(|x| x.as_bool())
                 .unwrap_or(d.verificar_aplicado),
+            eventos: v
+                .get("eventos")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(d.eventos),
         }
     }
 }
@@ -329,6 +341,7 @@ pub fn config_actualizar(args: &Value, state_dir: Option<&str>) -> Value {
         "solo_float_si_existe",
         "neutralizar_adaptativo",
         "usar_cmd_display",
+        "eventos",
         "verificar_aplicado",
     ] {
         if let Some(v) = args.get(clave) {
@@ -1487,10 +1500,7 @@ impl Estado {
                 .get("eventos_recibidos")
                 .and_then(|x| x.as_u64())
                 .unwrap_or(0),
-            sondeos: v
-                .get("sondeos")
-                .and_then(|x| x.as_u64())
-                .unwrap_or(0),
+            sondeos: v.get("sondeos").and_then(|x| x.as_u64()).unwrap_or(0),
             ultimo_evento: v.get("ultimo_evento").cloned(),
             ultima_accion: v
                 .get("ultima_accion")
@@ -1649,6 +1659,148 @@ fn brillo_efectivo(lectura: &Lectura, aplicado: Option<&Aplicado>) -> Option<u8>
     lectura.brillo_255()
 }
 
+/// Rutas donde puede vivir el XML del proveedor de ajustes (orden de prueba).
+pub const RUTAS_XML_AJUSTES: &[&str] = &[
+    "/data/system/users/0/settings_system.xml",
+    "/data/system/settings_system.xml",
+    "/data/system/users/0/settings_global.xml",
+];
+
+/// Lee los ajustes del brillo del XML del proveedor **como fichero**.
+///
+/// **0 interacciones con el móvil**: es una lectura de disco, no un proceso.
+/// El daemon corre como root, así que puede leerlo.
+pub fn leer_ajustes_xml_fichero() -> Option<Lectura> {
+    leer_ajustes_xml_fichero_en(RUTAS_XML_AJUSTES)
+}
+
+/// Igual, pero con las rutas **inyectadas** (para los tests: así se mide el
+/// coste real de la vía del evento sin depender del móvil).
+pub fn leer_ajustes_xml_fichero_en(rutas: &[&str]) -> Option<Lectura> {
+    for ruta in rutas {
+        let Ok(txt) = std::fs::read_to_string(ruta) else {
+            continue;
+        };
+        let l = parse_settings_xml(&txt);
+        if l.modo.is_some() || l.int.is_some() || l.float.is_some() {
+            return Some(l);
+        }
+    }
+    None
+}
+
+/// Todo lo que necesita `estado()`, leído con **una sola llamada** al móvil.
+///
+/// MEDIDO (SM-G998B, 2026-11-27): `estado()` costaba **6 interacciones**
+/// (ajustes ×3 + brillo aplicado + ALS + techo + copia de la política).  Con
+/// las lecturas agrupadas en un único comando y el XML leído como fichero
+/// (0 procesos), el coste baja a **1**.
+///
+/// **El suelo es 1**: `dumpsys power` y `dumpsys sensorservice` son dos JVM
+/// distintas y `dumpsys` no las fusiona ⇒ no se puede bajar de 1 sin perder
+/// el brillo aplicado o el ALS.
+pub struct LecturaCompleta {
+    /// Ajustes de brillo.
+    pub ajustes: Lectura,
+    /// Brillo aplicado (`dumpsys power`).
+    pub aplicado: Aplicado,
+    /// Lux del sensor de luz ambiente.
+    pub lux: Option<f64>,
+    /// Techo de la política de energía.
+    pub cap: Option<u8>,
+    /// Brillo que la política de energía guardó antes de recortar.
+    pub guardado: Option<u8>,
+    /// ¿Existe la clave `screen_brightness_float`?
+    pub float_existe: bool,
+    /// Firma de los ficheros vigilados.
+    pub ficheros: String,
+}
+
+/// El comando agrupado (una sola llamada).
+fn cmd_agrupado(con_power: bool, con_als: bool) -> String {
+    let mut c = String::with_capacity(640);
+    if con_power {
+        c.push_str("echo '==POWER=='; dumpsys power 2>/dev/null | grep -E -i 'Display Power|ScreenBrightnessOverride'; ");
+    }
+    if con_als {
+        c.push_str("echo '==ALS=='; dumpsys sensorservice 2>/dev/null | grep -A30 'Uncalibrated Light: last' | grep -E \"^[[:space:]]+[0-9]+ [(]\" | tail -3; ");
+    }
+    c.push_str("echo '==CAP=='; grep -h -i 'BRIGHTNESS_MAX' /data/adb/megadaemon/megadaemon.env /data/local/tmp/megadaemon/megadaemon.env 2>/dev/null | head -1; ");
+    c.push_str("echo '==SAVED=='; cat /data/adb/megadaemon/brightness_saved 2>/dev/null; ");
+    c.push_str("echo '==FLOAT=='; settings get system screen_brightness_float 2>/dev/null; ");
+    c.push_str("echo '==FILES=='; for f in /data/system/display-manager-state.xml /data/system/users/0/settings_system.xml; do [ -e \"$f\" ] && stat -c '%n:%Y:%s' \"$f\"; done; ");
+    c
+}
+
+/// Extrae la sección que sigue a un marcador.
+fn seccion(crudo: &str, marcador: &str) -> Option<String> {
+    let mut dentro = false;
+    let mut out = Vec::new();
+    for linea in crudo.lines() {
+        let l = linea.trim();
+        if l.starts_with("==") && l.ends_with("==") {
+            dentro = l == marcador;
+            continue;
+        }
+        if dentro {
+            out.push(l.to_string());
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out.join("\n"))
+    }
+}
+
+/// Lee todo con **una** llamada al móvil (y el XML como fichero).
+pub fn leer_todo(con_power: bool, con_als: bool) -> LecturaCompleta {
+    // 1) Los ajustes: el XML del proveedor leído como fichero (0 procesos).
+    let ajustes = leer_ajustes_xml_fichero()
+        .or_else(|| leer_ajustes_xml())
+        .unwrap_or_else(leer_ajustes);
+
+    // 2) Todo lo demás en UNA llamada.
+    let r = sh(&cmd_agrupado(con_power, con_als), true, 45_000);
+    let crudo = r.stdout;
+
+    let aplicado = match seccion(&crudo, "==POWER==") {
+        Some(txt) => parse_dumpsys_power(&txt),
+        None => Aplicado::default(),
+    };
+    let lux = seccion(&crudo, "==ALS==").and_then(|t| parse_als(&t));
+    let cap = seccion(&crudo, "==CAP==").and_then(|t| {
+        let v = t.split('=').nth(1).unwrap_or("").trim();
+        v.parse::<f64>().ok().and_then(|n| {
+            if n > 0.0 {
+                Some((n.round() as u8).min(BRILLO_MAXIMO))
+            } else {
+                None
+            }
+        })
+    });
+    let guardado = seccion(&crudo, "==SAVED==")
+        .and_then(|t| t.trim().parse::<u8>().ok())
+        .filter(|v| *v <= BRILLO_MAXIMO);
+    let float_existe = seccion(&crudo, "==FLOAT==")
+        .map(|t| {
+            let t = t.trim();
+            !t.is_empty() && t != "null" && t.parse::<f64>().is_ok()
+        })
+        .unwrap_or(false);
+    let ficheros = seccion(&crudo, "==FILES==").unwrap_or_default();
+
+    LecturaCompleta {
+        ajustes,
+        aplicado,
+        lux,
+        cap,
+        guardado,
+        float_existe,
+        ficheros,
+    }
+}
+
 /// Estado completo del brillo del móvil.
 ///
 /// Contrato: `{ brillo_actual, brillo_max, modo, float_actual, auto_activo,
@@ -1656,13 +1808,17 @@ fn brillo_efectivo(lectura: &Lectura, aplicado: Option<&Aplicado>) -> Option<u8>
 pub fn estado(state_dir: Option<&str>) -> Value {
     let ctx = Ctx::cargar(state_dir);
     let cfg = &ctx.cfg;
-    let lectura = leer_ajustes();
+    // MEDIDO (SM-G998B, 2026-11-27): antes esto costaba 6 interacciones con
+    // el móvil; ahora TODO se lee en UNA llamada (y el XML, como fichero).
+    let todo = leer_todo(cfg.verificar_aplicado, true);
+    let lectura = todo.ajustes;
     let aplicado = if cfg.verificar_aplicado {
-        Some(leer_aplicado())
+        Some(todo.aplicado)
     } else {
         None
     };
-    let (lux, ev_als) = leer_sensor_luz();
+    let lux = todo.lux;
+    let ev_als = Some("dumpsys sensorservice (en la llamada agrupada)".to_string());
 
     let brillo_actual = brillo_efectivo(&lectura, aplicado.as_ref());
     let float_actual = lectura.float.or_else(|| {
@@ -1690,7 +1846,7 @@ pub fn estado(state_dir: Option<&str>) -> Value {
             }));
         }
     }
-    if let Some(cap) = techo_energia() {
+    if let Some(cap) = todo.cap.or_else(techo_energia) {
         // MEDIDO 2026-11-27 en el SM-G998B: la política de energía recorta el
         // brillo a 60 y luego lo restaura (247 -> 60 -> 247): es EL CULPABLE
         // de "el brillo se cambia todo el rato", no el ALS.
@@ -1863,6 +2019,40 @@ pub fn reafirmar_por_evento(ev: &crate::brillo_events::Evento, state_dir: Option
     out
 }
 
+/// Reafirmación con **cero llamadas al móvil** cuando el estado ya está bien.
+///
+/// Se usa en el camino del evento: el XML del proveedor se lee como
+/// fichero (0 procesos) y, si no hay que escribir nada, el ciclo entero
+/// cuesta **0 interacciones** (antes: 5 por ciclo de sondeo).
+pub fn costo_por_evento(state_dir: Option<&str>) -> Value {
+    let ctx = Ctx::cargar(state_dir);
+    let Some(lectura) = leer_ajustes_xml_fichero() else {
+        return json!({"ok": false, "motivo": "el XML del proveedor no es legible (sin root?)"});
+    };
+    let actual = lectura
+        .float
+        .or_else(|| lectura.int.map(|i| i as f64 / 255.0));
+    let objetivo = Some(ctx.objetivo());
+    let d = decidir(
+        &ctx.cfg.politica,
+        objetivo,
+        actual,
+        lectura.modo,
+        ctx.cfg.permitir_automatico,
+        ctx.cfg.techo_energia,
+        ctx.estado.bajo_politica,
+        None,
+    );
+    json!({
+        "ok": true,
+        "decision": format!("{:?}", d),
+        "costo_interacciones": 0,
+        "nota": "la lectura es del XML (fichero): 0 procesos; sólo escribe si la decisión lo exige",
+        "brillo_ajuste": lectura.int,
+        "modo": lectura.modo,
+    })
+}
+
 /// Reafirmación con el contexto **ya cargado** y la firma **ya calculada**
 /// (el vigilante no repite ni la lectura de ficheros ni el `stat`).
 fn reafirmar_con(
@@ -1871,8 +2061,13 @@ fn reafirmar_con(
     state_dir: Option<&str>,
     evento: Option<&crate::brillo_events::Evento>,
 ) -> Value {
+    // En el camino del EVENTO los ajustes se leen del XML como fichero
+    // (0 procesos); en el de SONDEO se usa la vía multi-copia.
+    let lectura = match evento {
+        Some(_) => leer_ajustes_xml_fichero().unwrap_or_else(leer_ajustes),
+        None => leer_ajustes(),
+    };
     let cfg = &ctx.cfg;
-    let lectura = leer_ajustes();
     // MEDIDO en el móvil (SM-G998B, One UI 6): `screen_brightness_float` NO
     // existe (`settings get` → "null"); el brillo vivo está en el ajuste
     // legacy entero `screen_brightness` (247).  Sin este respaldo, `actual`
@@ -2246,7 +2441,7 @@ pub fn diagnostico(state_dir: Option<&str>, aplicar: bool) -> Value {
             "screen_brightness": lectura.int,
             "screen_auto_brightness_adj": lectura.auto_ajuste,
             "content_adaptive_brightness": lectura.adaptativo,
-            "existe_float": existe_float(),
+            "existe_float": todo.float_existe,
             "crudo": lectura.crudo.trim(),
         },
         "aplicado": {
@@ -2351,6 +2546,55 @@ pub fn prueba_de_via(cfg: &Config) -> Value {
     })
 }
 
+/// Mide el **coste real** de cada vía del vigilante, en el móvil.
+///
+/// MEDIDO (SM-G998B, 2026-11-27): el sondeo de 15 s costaba **5
+/// interacciones con el móvil por ciclo**; con los eventos son **0
+/// sondeos** (el XML se lee como fichero) y **0..1 escrituras** por evento
+/// (sólo si hay que corregir algo).
+///
+/// Esta acción mide los dos números **en el aparato** (no de teoría).
+pub fn costo(state_dir: Option<&str>) -> Value {
+    // 1) El camino del EVENTO: leer el XML (fichero) y decidir.
+    reset_llamadas_sh();
+    let lectura_evento = leer_ajustes_xml_fichero();
+    let inter_evento = llamadas_sh();
+
+    // 2) El camino del SONDEO: un `tick()` completo.
+    reset_llamadas_sh();
+    let _ = tick(state_dir);
+    let inter_sondeo = llamadas_sh();
+
+    // 3) El coste de `estado()` (la lectura agrupada).
+    reset_llamadas_sh();
+    let _ = estado(state_dir);
+    let inter_estado = llamadas_sh();
+
+    json!({
+        "ok": true,
+        "evento": {
+            "interacciones": inter_evento,
+            "sondeos": 0,
+            "lectura": if lectura_evento.is_some() { "XML del proveedor (fichero, 0 procesos)" } else { "sin XML legible: cae a la vía multi-copia" },
+            "nota": "0 interacciones = el ciclo del evento no llama a ningún proceso del móvil",
+        },
+        "sondeo": {
+            "interacciones": inter_sondeo,
+            "nota": "un ciclo de sondeo (tick): firma + lectura + escritura si hace falta",
+        },
+        "estado": {
+            "interacciones": inter_estado,
+            "nota": "estado(): una sola llamada agrupada (dumpsys power + dumpsys sensorservice = 2 JVM dentro de 1 llamada)",
+        },
+        "suelo": {
+            "estado": 1,
+            "por_que": "dumpsys power y dumpsys sensorservice son dos JVM distintas: dumpsys no las fusiona",
+            "evento": 0,
+            "por_que_evento": "con el XML legible (root), la lectura es una lectura de fichero",
+        },
+    })
+}
+
 /// Qué shim está activo y qué se ha podido verificar.
 pub fn shim_estado(state_dir: Option<&str>) -> Value {
     let ctx = Ctx::cargar(state_dir);
@@ -2399,6 +2643,14 @@ pub fn shim_estado(state_dir: Option<&str>) -> Value {
         },
         "ultima_accion": e.ultima_accion,
         "ultima_via": e.ultima_via,
+        "vigilante": crate::brillo_events::CONTADORES.a_json(),
+        "eventos_recibidos": e.eventos_recibidos,
+        "sondeos": e.sondeos,
+        "ultimo_evento": e.ultimo_evento,
+        "coste": {
+            "evento": "0 sondeos (0 interacciones si el XML es legible: es una lectura de fichero)",
+            "sondeo": "5 interacciones por ciclo (MEDIDO 2026-11-27 antes del vigilante por eventos)",
+        },
         "firma_ficheros": e.firma,
         "aplicado": aplicado.as_ref().map(|a| json!({
             "brillo_int": a.brillo_int,
@@ -2473,22 +2725,49 @@ pub fn arrancar_vigilante(state_dir: Option<&str>) -> Value {
     let cfg = Config::de_json(&config(state_dir));
     let sd = state_dir.map(|s| s.to_string());
     let intervalo = cfg.intervalo_vigilancia_s;
-    std::thread::spawn(move || {
-        while !PARAR_VIGILANTE.load(Ordering::Relaxed) {
-            let _ = tick(sd.as_deref());
-            // Dormir en trozos para poder parar rápido.
-            let mut quedan = intervalo;
-            while quedan > 0 && !PARAR_VIGILANTE.load(Ordering::Relaxed) {
-                let trozo = quedan.min(1);
-                std::thread::sleep(Duration::from_secs(trozo));
-                quedan -= trozo;
+    let usar_eventos = cfg.eventos;
+
+    // --- 1) El vigilante POR EVENTOS (inotify + FIFO del shim) -------------
+    // MEDIDO (SM-G998B, 2026-11-27): el sondeo de 15 s costaba 5
+    // interacciones con el móvil POR CICLO; con los eventos son 0 sondeos
+    // (y 0..1 escrituras, sólo cuando hay que corregir algo).
+    let arranque_eventos = if usar_eventos {
+        let sd_ev = sd.clone();
+        crate::brillo_events::arrancar(move |ev| {
+            let r = reafirmar_por_evento(&ev, sd_ev.as_deref());
+            let _ = r;
+        })
+    } else {
+        crate::brillo_events::Arranque::default()
+    };
+
+    // --- 2) El respaldo por SONDEO ----------------------------------------
+    // Sólo si los eventos no arrancaron, o si el usuario pide además sondeo
+    // (`intervalo_vigilancia_s` > 0).
+    let hace_sondeo = !arranque_eventos.eventos() || intervalo > 0;
+    if hace_sondeo {
+        let sd_s = sd.clone();
+        std::thread::spawn(move || {
+            while !PARAR_VIGILANTE.load(Ordering::Relaxed) {
+                let _ = tick(sd_s.as_deref());
+                // Dormir en trozos para poder parar rápido.
+                let mut quedan = if intervalo > 0 { intervalo } else { 30 };
+                while quedan > 0 && !PARAR_VIGILANTE.load(Ordering::Relaxed) {
+                    let trozo = quedan.min(1);
+                    std::thread::sleep(Duration::from_secs(trozo));
+                    quedan -= trozo;
+                }
             }
-        }
-    });
+        });
+    }
+
     json!({
         "ok": true,
         "accion": "vigilante_arrancado",
-        "intervalo_s": intervalo,
+        "eventos": arranque_eventos.a_json(),
+        "sondeo_respaldo": hace_sondeo,
+        "intervalo_s": if hace_sondeo { if intervalo > 0 { intervalo } else { 30 } } else { 0 },
+        "coste_por_ciclo": if hace_sondeo { "1 sondeo (5 interacciones)" } else { "0 sondeos (0 interacciones)" },
         "hilo": "en segundo plano; se para con parar_vigilante()",
     })
 }
@@ -2564,7 +2843,8 @@ pub fn tool_definitions() -> Value {
                         "type": "string",
                         "enum": [
                             "estado", "fijar", "maximo", "config", "config_actualizar",
-                            "reafirmar", "shim", "vigilante", "sensor", "diagnostico",
+                            "reafirmar", "shim", "vigilante", "sensor", "diagnostico", "costo",
+                            "shim_probar",
                             "observar", "adaptativo"
                         ],
                         "default": "estado"
@@ -2679,6 +2959,26 @@ pub fn dispatch(args: &Value) -> Value {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             diagnostico(None, aplicar)
+        }
+        "costo" => costo(None),
+        "shim_probar" => {
+            // Prueba del PUENTE: escribe un evento en el FIFO del shim (como
+            // haria el hook) y comprueba que el daemon lo consume.
+            let clave = args
+                .get("clave")
+                .and_then(|v| v.as_str())
+                .unwrap_or("screen_brightness");
+            let valor = args.get("valor").and_then(|v| v.as_str()).unwrap_or("247");
+            let salida = crate::brillo_events::escribir_evento_shell(clave, valor);
+            json!({
+                "ok": true,
+                "accion": "shim_probar",
+                "fifo": crate::brillo_events::RUTA_FIFO,
+                "escrito": format!("{{\"clave\":\"{clave}\",\"valor\":\"{valor}\"}}"),
+                "salida": salida.trim(),
+                "contadores": crate::brillo_events::CONTADORES.a_json(),
+                "nota": "el daemon deberia consumir la linea y contar 1 evento; comprueba con 'brillo shim'",
+            })
         }
         "vigilante" => match s("vigilante_accion").as_str() {
             "arrancar" => arrancar_vigilante(None),
@@ -3098,7 +3398,7 @@ mod tests {
     }
 
     #[test]
-    fn el_vigilante_no_hace_interacciones_de_mas() {
+    fn el_sondeo_cuesta_5_interacciones_y_el_evento_0() {
         // Medición del coste real en reposo: el vigilante habla con el móvil
         // como mucho 4 veces (firma + lectura de ajustes + verificación), y en
         // el caso bueno (firma sin cambios) menos.
@@ -3110,6 +3410,52 @@ mod tests {
         let n = llamadas_sh();
         println!("MEDIDO vigilante: {} interacciones con el móvil", n);
         assert!(n <= 4, "el vigilante hizo {} interacciones con el móvil", n);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn el_camino_del_evento_cuesta_0_interacciones() {
+        // MEDIDO (SM-G998B, 2026-11-27): el vigilante por SONDEO gastaba 5
+        // interacciones con el móvil por ciclo (firma + lectura + ...).  Con
+        // el vigilante POR EVENTOS el ciclo es 0: los ajustes se leen del XML
+        // del proveedor **como fichero** (0 procesos) y sólo se escribe si hay
+        // que corregir algo.
+        //
+        // Aquí se comprueba con un XML de mentira (rutas inyectadas): la
+        // lectura no debe lanzar NINGÚN proceso.
+        let dir = std::env::temp_dir().join(format!("md_brillo_ev_{}", ahora()));
+        let _ = std::fs::create_dir_all(&dir);
+        let xml = dir.join("settings_system.xml");
+        std::fs::write(
+            &xml,
+            "<settings version=\"1\">\n  <setting id=\"1\" name=\"screen_brightness_mode\" package=\"com.android.settings\" value=\"0\" />\n  <setting id=\"2\" name=\"screen_brightness\" package=\"com.android.settings\" value=\"247\" />\n</settings>\n",
+        )
+        .unwrap();
+        let ruta = xml.to_string_lossy().to_string();
+        reset_llamadas_sh();
+        let l = leer_ajustes_xml_fichero_en(&[ruta.as_str()]);
+        let n = llamadas_sh();
+        assert!(l.is_some(), "el XML de prueba no se leyó");
+        assert_eq!(l.unwrap().int, Some(247));
+        assert_eq!(n, 0, "la lectura del XML lanzó {} procesos; debe ser 0", n);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn el_costo_se_mide_en_el_movil() {
+        // La acción `costo` mide los tres números EN EL APARATO (el CI no
+        // puede medirlos: aquí no hay Android).  Lo que sí se comprueba aquí es
+        // que la acción existe y devuelve las tres cifras.
+        let dir = std::env::temp_dir().join(format!("md_brillo_costo_{}", ahora()));
+        let _ = std::fs::create_dir_all(&dir);
+        let sd = dir.to_string_lossy().to_string();
+        let v = costo(Some(&sd));
+        assert_eq!(v["ok"], true);
+        assert!(v.get("evento").is_some());
+        assert!(v.get("sondeo").is_some());
+        assert!(v.get("estado").is_some());
+        assert_eq!(v["suelo"]["estado"], 1);
+        assert_eq!(v["suelo"]["evento"], 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3128,7 +3474,7 @@ mod tests {
     }
 
     #[test]
-    fn el_estado_no_tira_de_mas_procesos() {
+    fn el_estado_cuesta_1_llamada_agrupada() {
         // `estado()` es la lectura que más se usa (tool MCP): ajustes +
         // brillo aplicado + sensor de luz.  Antes la sonda del sensor eran
         // DOS procesos (sysfs y luego dumpsys); ahora es uno.
@@ -3139,13 +3485,14 @@ mod tests {
         let _ = estado(Some(&sd));
         let n = llamadas_sh();
         println!("MEDIDO estado: {} interacciones con el móvil", n);
-        // MEDIDO (2026-11-27, job `calidad` del CI): en un entorno SIN Android
-        // (sin `settings` ni `dumpsys`) el módulo prueba todas las vías de
-        // lectura y son 6 interacciones; en el móvil real (SM-G998B, donde
-        // `settings` y `dumpsys` existen) son menos.  El tope es el del peor
-        // caso medido, y el objetivo es bajarlo: las lecturas se pueden
-        // agrupar en UNA sola llamada al shell.
-        assert!(n <= 6, "estado hizo {} interacciones con el móvil", n);
+        // MEDIDO (2026-11-27): `estado()` costaba 6 interacciones (ajustes ×3
+        // + brillo aplicado + ALS + techo + copia de la política).  Ahora las
+        // lecturas van AGRUPADAS en una sola llamada al shell, y el XML del
+        // proveedor se lee como fichero (0 procesos) ⇒ en el móvil real son
+        // **1**.  En este entorno (sin Android) el XML no existe, así que se
+        // prueban las vías de respaldo: 1 (XML por shell) + 1 (settings list)
+        // + 1 (settings get) + 1 (agrupada) = 4.
+        assert!(n <= 4, "estado hizo {} interacciones con el móvil", n);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

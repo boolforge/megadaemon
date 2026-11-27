@@ -44,6 +44,55 @@
 //! {"ts":1795737000,"fuente":"fifo","clave":"screen_brightness","valor":"247"}
 //! ```
 //! Se acepta también la forma mínima `clave=valor` (una por línea).
+//!
+//! (b) EL CAMINO TÉCNICO DEL HOOK, CON SU MEDIDA
+//! ----------------------------------------------
+//! **Dónde enganchar** (AOSP 14, rama `android14-release`, leída):
+//!
+//! | Qué se quiere avisar | Clase y método exactos | Evidencia |
+//! |---|---|---|
+//! | el **valor** de brillo cambió | `com.android.server.display.BrightnessSetting#setBrightness(float)` | `BrightnessSetting.java:103`; la llama `DisplayPowerController#setBrightness` (`:2673`) y el deslizador del sistema (`SystemUI/.../settings/brightness/BrightnessController.java:342` → `DisplayManagerService$LocalService#setBrightness` → `DisplayManagerService.java:3985`) |
+//! | el **modo** (manual/auto) cambió | `com.android.server.display.DisplayPowerController#handleBrightnessModeChange()` | `DisplayPowerController.java:2626-2636` (lee `SCREEN_BRIGHTNESS_MODE` y decide `mUseAutoBrightness`) |
+//! | el ALS quiso cambiar el brillo | `com.android.server.display.AutomaticBrightnessController#updateAutoBrightness(boolean, boolean)` | `AutomaticBrightnessController.java:916` |
+//!
+//! **Cómo se llega al `ArtMethod`** (el camino real, con su fragility):
+//!
+//! 1. `dlopen("libart.so")` → `dlsym("_ZN3art6Runtime9CurrentEP")` (exportado)
+//!    → `Runtime::Current()->GetClassLinker()` (exportado);
+//! 2. `ClassLinker` → la `Class` de `com.android.server.display.*`;
+//! 3. `Class::GetMethod` → el puntero `ArtMethod*`;
+//! 4. **AHÍ ESTÁ LA FRAGILIDAD**: el código compilado (quick code) del método
+//!    está en un **offset interno del `ArtMethod` que cambia entre versiones
+//!    de ART**.  `art::ArtMethod::Hook` y `GetCompiledCode()` **no están
+//!    exportados** ⇒ sin el puente Java de Frida no hay forma *robusta* de
+//!    obtener la dirección; hay que leer el offset a mano para la versión de
+//!    ART del aparato (`getprop ro.build.version.sdk` + el fingerprint del
+//!    framework).
+//!
+//! **Coste**: además del ptrace a `system_server` (root ✓, Magisk), el hook
+//! necesita (i) resolver el offset del `ArtMethod` para **esa** versión de
+//! ART, (ii) un payload con puente Java, y (iii) un canal fiable hacia el
+//! daemon (el FIFO de aquí).  Con el payload actual **no se puede** ⇒ no es
+//! un problema de "es que cuesta": **falta el puente Java**.
+//!
+//! (c) EL SUSTITUTO QUE **SÍ** FUNCIONA HOY, CON SU MEDIDA
+//! -------------------------------------------------------
+//! Los tres métodos de arriba **terminan escribiendo un fichero**:
+//!
+//! * el del valor → `PersistentDataStore#setBrightness` → `saveIfNeeded()` →
+//!   reescribe **`/data/system/display-manager-state.xml`** (`AtomicFile`:
+//!   temporal + rename) ⇒ **`PersistentDataStore.java:972`**;
+//! * el del modo → el proveedor de ajustes reescribe
+//!   **`/data/system/users/0/settings_system.xml`**;
+//!
+//! ⇒ **vigilando esos ficheros con `inotify` se observa el *efecto* del hook
+//! sin tocar `system_server`**: 0 sondeos, 0 JVM, latencia de milisegundos y
+//! **sin el puente Java**.  Es lo que hace este módulo por defecto.
+//!
+//! Y el **FIFO** queda como el sitio donde escribirá el hook el día que
+//! exista: [`escribir_evento`] (o `echo '{...}' > /data/local/tmp/megadaemon/
+//! brillo.fifo` desde un shell) ⇒ el daemon lo consume bloqueando.
+//! `brillo shim_probar` lo prueba end-to-end sin hook.
 
 use std::io::Read;
 use std::os::unix::io::FromRawFd;
@@ -200,6 +249,55 @@ pub fn escribir_latido(estado: &str) {
     CONTADORES.latidos.fetch_add(1, Ordering::Relaxed);
     let linea = format!("ts={ts} estado={estado}\n");
     let _ = std::fs::write(RUTA_HEARTBEAT, linea);
+}
+
+/// Escribe un evento en el FIFO del shim.
+///
+/// **Ésta es la interfaz que usaría el hook**: un shim dentro de
+/// `system_server` (o un binario helper) escribe una línea por cambio y el
+/// daemon la consume bloqueando (0 sondeos, 0 JVM).
+///
+/// La línea es NDJSON mínimo:
+/// `{"ts":1795737000,"fuente":"fifo","clave":"screen_brightness","valor":"247"}`
+///
+/// Se puede escribir **desde un shell** (el shim más simple posible):
+/// ```sh
+/// echo '{"clave":"screen_brightness","valor":"247"}' > /data/local/tmp/megadaemon/brillo.fifo
+/// ```
+pub fn escribir_evento(clave: &str, valor: &str) -> std::io::Result<()> {
+    let _ = asegurar_fifo();
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().write(true).open(RUTA_FIFO)?;
+    writeln!(
+        f,
+        "{{\"ts\":{},\"fuente\":\"fifo\",\"clave\":\"{}\",\"valor\":\"{}\"}}",
+        ahora(),
+        clave.replace('"', ""),
+        valor.replace('"', "")
+    )?;
+    f.flush()
+}
+
+/// Escribe un evento desde un shell (para probar el puente sin hook).
+///
+/// Devuelve la salida del comando (el shim hypothetical).
+pub fn escribir_evento_shell(clave: &str, valor: &str) -> String {
+    let _ = asegurar_fifo();
+    let linea = format!(
+        "{{\"ts\":{},\"fuente\":\"fifo\",\"clave\":\"{}\",\"valor\":\"{}\"}}",
+        ahora(),
+        clave,
+        valor
+    );
+    let cmd = format!(
+        "printf '%s\\n' '{}' > {} 2>&1",
+        linea.replace('\'', "'\\''"),
+        RUTA_FIFO
+    );
+    let r = crate::android::root_exec(&cmd, 10_000, 8 * 1024);
+    let mut out = r.stdout.clone();
+    out.push_str(&r.stderr);
+    out
 }
 
 /// Arranca el vigilante por eventos.
