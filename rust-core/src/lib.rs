@@ -54,6 +54,7 @@ pub mod cron;
 pub mod energy_automation;
 pub mod llm_gateway;
 pub mod protocol;
+pub mod protocol_acp;
 pub mod skills;
 pub mod state_dir;
 pub mod telemetria;

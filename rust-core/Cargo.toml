@@ -15,6 +15,17 @@ description = "MegaDaemon v13.0 Zenith — Pure Rust Multi-OS RE Workbench (DiE,
 zstd = { version = "0.13", default-features = false, features = ["arrays"] }
 
 [dependencies]
+# **ACP (Agent Client Protocol)**: esquema canónico de la industria para
+# que un editor hable con un agente. MEDIDO (2026-11-27):
+#   * crate `agent-client-protocol-schema` v1.22.0, **Apache-2.0**, del repo
+#     canónico `agentclientprotocol/agent-client-protocol` (149 ficheros en
+#     `src/v1/` + `src/v2/`);
+#   * el registro oficial prueba **42 agentes**: 41 inicializan y **los 41 son
+#     `protocolVersion: 1`** => v2 (el de Devin) todavia no es widespread;
+#   * `sessionStop` no lo implementa **nadie** (0/41).
+# `default-features = false` => fuera `schemars` (que solo implementa
+# `JsonSchema` y pesa); `unstable_protocol_v2` es opt-in explicito.
+agent-client-protocol-schema = { version = "1.22", default-features = false }
 # Política de redacción de credenciales: **fuente única** compartida con el
 # payload de hooks que se inyecta en el móvil (`crates/injector-payload`).
 # Sin dependencias externas (ver `crates/redact/Cargo.toml`).
