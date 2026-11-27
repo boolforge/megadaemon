@@ -158,6 +158,7 @@ pub mod gobook;
 pub mod redact_forma;
 pub mod re_engine;
 pub mod re_fusion;
+pub mod re_decompilers;
 pub mod resonance;
 pub mod reparar_entorno;
 pub mod supervisor;
