@@ -1582,6 +1582,7 @@ mod tests {
             fallback_used: false,
             quota: None,
             provider_trace: Vec::new(),
+            finish_reason: String::new(),
             tool_calls: Vec::new(),
         };
         let v = gemini_response(&res, 3);
@@ -1609,6 +1610,7 @@ mod tests {
             fallback_used: false,
             quota: None,
             provider_trace: Vec::new(),
+            finish_reason: String::new(),
             tool_calls: Vec::new(),
         };
         let v = gemini_response(&res, 0);
@@ -1870,6 +1872,7 @@ mod tests {
             fallback_used: false,
             quota: None,
             provider_trace: Vec::new(),
+            finish_reason: String::new(),
             tool_calls: vec![crate::providers::ParsedToolCall {
                 id: "call_1".to_string(),
                 name: "view_file".to_string(),

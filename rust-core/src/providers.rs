@@ -1765,14 +1765,17 @@ pub fn recortar_prompt(texto: &str, max_chars: usize) -> (String, usize) {
     let cabeza = util * 35 / 100;
     let cola = util - cabeza;
     let quitados = n - cabeza - cola;
-    format!(
-        "{}\n\n[... {} caracteres omitidos: el prompt supera el presupuesto de {} ({} > {}) ...]\n\n{}",
-        head_chars(texto, cabeza),
+    (
+        format!(
+            "{}\n\n[... {} caracteres omitidos: el prompt supera el presupuesto de {} ({} > {}) ...]\n\n{}",
+            head_chars(texto, cabeza),
+            quitados,
+            max_chars,
+            n,
+            max_chars,
+            tail_chars(texto, cola)
+        ),
         quitados,
-        max_chars,
-        n,
-        max_chars,
-        tail_chars(texto, cola)
     )
 }
 
@@ -2227,14 +2230,24 @@ pub fn execute_chat_con_tools_with(
         // endpoint ni con qué forma de payload.  Con el 400 de google-ai-studio
         // ("function call turn comes immediately after a user turn") no había
         // forma de saber qué se había enviado de verdad.  Ahora la traza dice
-        // endpoint + modelo + tamaño, y el motivo del error lleva el endpoint.
+        // endpoint + modelo + tamaño del prompt (el total de los mensajes),
+        // que es lo que el proveedor cuenta.
+        let chars_prompt: usize = msgs
+            .iter()
+            .map(|m| {
+                m.get("content")
+                    .and_then(|c| c.as_str())
+                    .map(|s| s.chars().count())
+                    .unwrap_or(0)
+            })
+            .sum();
         trace.push(format!(
             "{} => POST {} modelo={} prompt={} chars system={} chars max_tokens={}",
             p.id,
             p.endpoint,
             p.model,
-            enriched_prompt.chars().count(),
-            sys_len,
+            chars_prompt,
+            sys_prompt.chars().count(),
             capped_max_tokens
         ));
 
