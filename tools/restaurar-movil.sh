@@ -34,6 +34,10 @@ set -u
 PREFIX=/data/adb/megadaemon
 SVC=/data/adb/service.d
 STATE="$PREFIX/state"
+# MEDIDO (2026-11-28, banco): el `/proc` es parametrizable para poder probar
+# la deteccion de roles en un laboratorio falso (MD_PROC).  En el movil es
+# el de verdad.
+PROC="${MD_PROC:-/proc}"
 RAW=https://raw.githubusercontent.com/boolforge/megadaemon/main
 CANON="$SVC/99-megadaemon.sh"
 TOKEN=""
@@ -51,7 +55,15 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-if [ "$(id -u)" != "0" ]; then
+# --- modo biblioteca (para el banco) ----------------------------------------
+# MEDIDO (2026-11-28): con MD_LIB_ONLY=1 este script sólo DEFINE sus
+# funciones (el banco las prueba contra un /proc falso) y NO ejecuta las
+# fases ni exige root.  En el móvil, sin esa variable, se comporta igual que
+# siempre.  El guard está AL FINAL (justo antes de las fases) para que las
+# funciones existan cuando se carga en modo biblioteca.
+MD_LIB_ONLY="${MD_LIB_ONLY:-0}"
+
+if [ "$MD_LIB_ONLY" != "1" ] && [ "$(id -u)" != "0" ]; then
   echo "este script necesita ROOT: su -mm -c \"sh $0\"" >&2
   exit 1
 fi
@@ -61,16 +73,25 @@ say() { echo "[$(date '+%H:%M:%S')] $*"; }
 # --- helpers: el argv de un proceso, ELEMENTO a elemento --------------------
 # MEDIDO: el `case` sobre el texto UNIDO no vale: la copia `.bak-50k` tiene
 # la ruta canónica como PREFIJO y pasaría por canónica.
-argv_de() { cat "/proc/$1/cmdline" 2>/dev/null | tr '\000' '\n'; }
+argv_de() { cat "$PROC/$1/cmdline" 2>/dev/null | tr '\000' '\n'; }
 
 # ¿algún elemento del argv de $1 TERMINA en $2? (p. ej. "cloudflared")
+#
+# MEDIDO (2026-11-28, banco): esto era `grep -q "$2\$"` => el patrón
+# resultante era `99-megadaemon\.sh$$` (DOS anclas de fin) y GNU grep lo
+# trata como un `$` LITERAL => NO casa con NADA y NO dice error: el
+# restaurador era CIEGO (no encontraba ni el supervisor canónico ni la
+# copia .bak) => paraba 0 procesos, no dejaba uno de cada y la verificación
+# reportaba "vivos: 0" para todos los roles.  Con ERE y UN solo `$` el
+# comportamiento es el correcto: el canónico casa y la copia .bak no.
 argv_acaba_en() {
-  argv_de "$1" | grep -q "$2\$"
+  argv_de "$1" | grep -qE "$2"
 }
 
 pids_del_rol() {
-  # $1 = sufijo del elemento del argv.  Imprime los PID (uno por línea).
-  for _p in /proc/[0-9]*; do
+  # $1 = expresión regular ERE (los llamantes pasan el sufijo con `$`).
+  # Imprime los PID (uno por línea).
+  for _p in "$PROC"/[0-9]*; do
     _pid=${_p##*/}
     argv_acaba_en "$_pid" "$1" && printf '%s\n' "$_pid"
   done
@@ -105,7 +126,7 @@ dejar_uno_rol() {
 dejar_un_supervisor() {
   # El que se queda es el CANONICO (argv = ruta canonica, elemento a
   # elemento): la copia .bak-50k tiene la ruta canonica como PREFIJO.
-  for _p in /proc/[0-9]*; do
+  for _p in "$PROC"/[0-9]*; do
     _pid=${_p##*/}
     argv_de "$_pid" | grep -q '99-megadaemon\.sh$' || continue
     argv_de "$_pid" | grep -qx "$CANON" && continue
@@ -225,7 +246,7 @@ fase_arrancar() {
         while true; do
           sleep 60
           _vivo=0
-          for _p in /proc/[0-9]*; do
+          for _p in "$PROC"/[0-9]*; do
             _pid=${_p##*/}
             argv_de "$_pid" | grep -qx "$CANON" && { _vivo=1; break; }
           done
@@ -280,8 +301,13 @@ fase_verificar() {
     echo "    NO hay binario en $_d"
   fi
   echo "  --- carga ---"
-  cat /proc/loadavg
+  cat "$PROC/loadavg" 2>/dev/null || cat /proc/loadavg
 }
+
+# --- modo biblioteca: aquí se corta (el resto son las fases) ---------------
+if [ "$MD_LIB_ONLY" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 fase_instalar
 fase_parar
