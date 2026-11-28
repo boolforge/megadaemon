@@ -146,6 +146,7 @@ pub mod mesh;
 pub mod messaging;
 pub mod meta_agent;
 pub mod migration_plan;
+pub mod model_options;
 pub mod npu_bridge;
 pub mod npu_cv;
 pub mod npu_nnapi;
