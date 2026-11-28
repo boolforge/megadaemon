@@ -257,7 +257,75 @@ Pásame:
 Con eso se acota: el banco tiene 119 escenarios y cada bug tiene su
 escenario, así que se reproduce en local sin tocar el móvil.
 
-## 5. Lo que el banco ya garantiza (no hace falta repetir en el móvil)
+## 5. Antigravity: el hooking y el modelo (2026-11-28)
+
+Estas 5 comprobaciones son **nuevas**: cubren los fallos que el jefe
+mandó en capturas el 2026-11-27 (`ERR_LLM_UNREACHABLE:127.0.0.1:8080`,
+hooking inutilizable, proveedores en pausa sin explicación).  El detalle
+de cada una está en `docs/ANTIGRAVITY_HOOKING.md`.
+
+El shell de Android **no tiene `curl`/`wget`/`pgrep`/`sha256sum`**: las
+comprobaciones van por el MCP del móvil, por la Web UI o por `busybox`.
+
+### 5.1 El daemon sirve el 8080 (el puerto que usa la app)
+
+Por el MCP: tool `antigravity_endpoint`, acción `estado` ⇒
+`puertos_con_listener` tiene que incluir **8080** y **9090**.
+
+O en el shell como root:
+
+```sh
+busybox netstat -ltn | grep -E ':(8080|9090)[[:space:]]'
+```
+
+⇒ los dos en `LISTEN`.  Si el 8080 no sale, el móvil corre un binario
+**viejo**: re-ejecuta el one-liner (§1) y comprueba `build.desfasado`.
+
+### 5.2 El hooking está activo **y** en un puerto con listener
+
+Por el MCP: `antigravity_endpoint` acción `estado` ⇒
+
+* `parcheado`: **true**,
+* `url_en_disco`: la URL con el puerto que tiene listener.
+
+Si `parcheado` es false, aplícalo: desde la **Web UI** (tarjeta "Hooking
+del endpoint" → botón **Aplicar**, puerto 8080 o 9090) o por el MCP con
+`accion: aplicar`, `puerto`, `confirm: true`.
+
+El daemon **rechaza** parchear a un puerto sin listener (`puerto_usable`):
+si lo intentas, dice `puerto_muerto` y **no toca el binario**.
+
+### 5.3 La app ya no da `ERR_LLM_UNREACHABLE`
+
+Haz una pregunta en la app de Antigravity.  Si sale
+`ERR_LLM_UNREACHABLE: LLM_UNREACHABLE:127.0.0.1:8080: Connection refused`,
+el LS sigue apuntando a un puerto sin listener ⇒ vuelve a 5.2 (el estado
+dice si hay listener) y comprueba 5.1.
+
+### 5.4 La cuota en pausa dice POR QUÉ y HASTA CUÁNDO
+
+La línea de estado del cockpit (nivel **cuota**) ahora trae el motivo de
+cada proveedor:
+
+```
+5 proveedor(es) en pausa por cuota: minimax-m3 (Token Plan usage limit
+reached (HTTP 429); vuelve en 14 min), pollinations-free (…)
+```
+
+En JSON, `cuota.por_proveedor[]` trae `proveedor`, `detalle` y
+`vuelve_en_s`.
+
+### 5.5 La traza dice qué pasó con el prompt y las tools
+
+En la traza del gateway (Web UI → logs, o el log del daemon):
+
+* `tools recortadas: N fuera (presupuesto …)` ⇒ el LS mandó más
+  `functionDeclarations` de las que caben en el límite del proveedor
+  (esto ya no da HTTP 413).
+* `gemini nativo: …` ⇒ el proveedor es `google-ai-studio` y la
+  conversación se ha reconstruido con la estructura que exige Gemini.
+
+## 6. Lo que el banco ya garantiza (no hace falta repetir en el móvil)
 
 Los 119 escenarios pasan en local:
 
