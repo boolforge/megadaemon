@@ -1015,6 +1015,14 @@ impl LlmTransport for UreqTransport {
                 }
                 r = r.header("anthropic-version", "2023-06-01");
             }
+            // MEDIDO (2026-11-28): la API NATIVA de Google (Gemini) NO
+            // acepta `Authorization: Bearer` para una API key: usa
+            // `x-goog-api-key` (el endpoint OpenAI-compat sí usa Bearer).
+            "goog_key" => {
+                if !key.is_empty() {
+                    r = r.header("x-goog-api-key", key);
+                }
+            }
             "none" | "local" => {}
             _ => {
                 if !key.is_empty() {
@@ -2237,6 +2245,69 @@ pub fn recortar_mensajes(
     (out, quitados)
 }
 
+/// Recorta las **herramientas** para que el total (mensajes + tools) quepa
+/// en el presupuesto del proveedor.
+///
+/// MEDIDO (2026-11-28, móvil): `pollinations-free` cuenta "mensajes y tools"
+/// contra 16.000 caracteres.  El recorte de MENSAJES ya existía, pero las
+/// **tools nunca se recortaban**: el language server de Antigravity manda 18
+/// `functionDeclarations` (decenas de KB) ⇒ el total se pasaba del límite
+/// y el proveedor respondía HTTP 413 "Prompt too long for the free Classic
+/// API" ⇒ ese proveedor quedaba inutilizable.
+///
+/// Política: las tools se quedan con **la mitad** del presupuesto (son
+/// estructura: sin ellas el modelo no puede llamar a nada) y se sueltan de
+/// la **última** a la primera (las últimas suelen ser las menos usadas).  Lo
+/// que se suelta queda en la traza: no es un misterio.
+pub fn recortar_tools(tools: &[Value], max_chars: usize) -> (Vec<Value>, usize) {
+    if tools.is_empty() || max_chars == 0 {
+        return (tools.to_vec(), 0);
+    }
+    let tam = |t: &Value| -> usize {
+        serde_json::to_string(t)
+            .map(|s| s.chars().count())
+            .unwrap_or(0)
+    };
+    let total: usize = tools.iter().map(tam).sum();
+    if total <= max_chars {
+        return (tools.to_vec(), 0);
+    }
+    let mut out: Vec<Value> = Vec::with_capacity(tools.len());
+    let mut usado = 0usize;
+    for t in tools {
+        let t0 = tam(t);
+        if usado + t0 > max_chars {
+            break;
+        }
+        usado += t0;
+        out.push(t.clone());
+    }
+    // Ni una sola tool cabe (o la primera es enorme): se deja al menos la
+    // primera recortada, porque sin tools el modelo pierde la capacidad de
+    // actuar y el resultado es inútil.
+    if out.is_empty() {
+        if let Some(first) = tools.first() {
+            let mut t = first.clone();
+            // MEDIDO (2026-11-28, test): la descripción de una tool OpenAI
+            // NO está en la raíz sino dentro de `function` ⇒ el recorte
+            // anterior no recortaba NADA y la tool seguía pesando 50 KB.
+            let dentro_de_function = t.get("function").is_some();
+            let desc: Option<&mut Value> = if dentro_de_function {
+                t.pointer_mut("/function/description")
+            } else {
+                t.get_mut("description")
+            };
+            if let Some(Value::String(d)) = desc {
+                let corto: String = d.chars().take(200).collect();
+                *d = corto;
+            }
+            out.push(t);
+        }
+    }
+    let quitadas = tools.len() - out.len();
+    (out, quitadas)
+}
+
 /// Devuelve `(texto_recortado, caracteres_quitados)`.
 pub fn recortar_prompt(texto: &str, max_chars: usize) -> (String, usize) {
     let n = texto.chars().count();
@@ -2479,6 +2550,514 @@ pub fn execute_chat_with(
 /// - `mensajes`: conversación completa en formato OpenAI.  Si viene `Some`,
 ///   se usa tal cual (⇒ el bucle de herramientas conserva el
 ///   `assistant.tool_calls` y el `role:"tool"` con el resultado).
+// ==================================================================
+// GEMINI NATIVO (MEDIDO 2026-11-28, móvil)
+// ==================================================================
+//
+// `google-ai-studio` con el endpoint **OpenAI-compat**
+// (`/v1beta/openai/chat/completions`) devolvía HTTP 400:
+//
+//   "Please ensure that function call turns come immediately after a user
+//    turn or after a function response turn."
+//
+// No es el modelo ni la key: la capa de compatibilidad de Google
+// convierte los mensajes OpenAI a `contents` Gemini y valida la
+// ESTRUCTURA.  Gemini decide el rol **por el índice** (par = usuario,
+// impar = modelo), no por el campo `role`, y exige:
+//
+//   1. `contents[0]` es de USUARIO;
+//   2. los turnos ALTERNAN usuario/modelo;
+//   3. cada `functionCall` tiene EXACTAMENTE un `functionResponse`.
+//
+// Con el endpoint **NATIVO** (`/v1beta/models/{model}:generateContent`)
+// la estructura la pone MegaDaemon ⇒ no hay sorpresas, y las tools
+// (`functionDeclarations`) van tal cual las manda el LS de Antigravity.
+
+/// ¿El endpoint es de la familia Gemini (Google AI Studio)?
+pub fn es_gemini_nativo(endpoint: &str) -> bool {
+    endpoint.contains("generativelanguage.googleapis.com")
+}
+
+/// URL NATIVA de Gemini para un modelo (`…/v1beta/models/{m}:generateContent`).
+pub fn url_gemini_nativo(endpoint: &str, modelo: &str) -> String {
+    let base = endpoint.split("/v1beta").next().unwrap_or(endpoint);
+    let base = base.trim_end_matches('/');
+    let m = if modelo.trim().is_empty() {
+        "gemini-2.0-flash"
+    } else {
+        modelo.trim()
+    };
+    format!("{}/v1beta/models/{}:generateContent", base, m)
+}
+
+/// Tools en formato OpenAI → `functionDeclarations` de Gemini.
+pub fn tools_openai_a_gemini(tools: &[Value]) -> Value {
+    let mut decls: Vec<Value> = Vec::new();
+    for t in tools {
+        // Acepta las dos formas: `{type,function:{…}}` y `{name,…}`.
+        let f = match t.get("function") {
+            Some(v) if v.is_object() => v.clone(),
+            _ => t.clone(),
+        };
+        let name = f
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let mut d = serde_json::Map::new();
+        d.insert("name".to_string(), json!(name));
+        if let Some(desc) = f.get("description").and_then(|x| x.as_str()) {
+            if !desc.trim().is_empty() {
+                d.insert("description".to_string(), json!(desc));
+            }
+        }
+        if let Some(params) = f.get("parameters") {
+            if params.is_object() {
+                d.insert("parameters".to_string(), params.clone());
+            }
+        }
+        decls.push(Value::Object(d));
+    }
+    json!([{ "functionDeclarations": decls }])
+}
+
+/// Nombres de las llamadas de función de un turno (partes `functionCall`).
+fn nombres_function_call(parts: &[Value]) -> Vec<String> {
+    parts
+        .iter()
+        .filter_map(|p| {
+            p.get("functionCall")
+                .and_then(|fc| fc.get("name"))
+                .and_then(|n| n.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect()
+}
+
+/// Convierte los mensajes OpenAI a `contents` NATIVOS de Gemini.
+///
+/// Devuelve `(contents, notas)`: las notas dicen **qué** se corrigió (no es
+/// un misterio: si el daemon recorta la estructura, se ve en la traza).
+///
+/// Puro y testeable: es donde estaba el 400.
+pub fn openai_a_gemini_contents(msgs: &[Value]) -> (Vec<Value>, Vec<String>) {
+    let mut notas: Vec<String> = Vec::new();
+    if msgs.is_empty() {
+        return (Vec::new(), notas);
+    }
+
+    // (1) nombre de cada `tool_call_id` (el `functionResponse` lo necesita).
+    let mut nombre_por_id: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for m in msgs {
+        if let Some(tcs) = m.get("tool_calls").and_then(|t| t.as_array()) {
+            for tc in tcs {
+                let id = tc
+                    .get("id")
+                    .and_then(|i| i.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let name = tc
+                    .pointer("/function/name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if !id.is_empty() && !name.is_empty() {
+                    nombre_por_id.insert(id, name);
+                }
+            }
+        }
+    }
+
+    // (2) mensajes -> turnos (`role`, `parts`).
+    let mut turnos: Vec<(String, Vec<Value>)> = Vec::new();
+    for m in msgs {
+        let role = m
+            .get("role")
+            .and_then(|r| r.as_str())
+            .unwrap_or("user")
+            .trim()
+            .to_string();
+        let texto = m
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .to_string();
+        match role.as_str() {
+            // El sistema va aparte (`systemInstruction`): dentro de
+            // `contents` Gemini no tiene rol de sistema.
+            "system" | "developer" => continue,
+            "assistant" => {
+                let mut parts: Vec<Value> = Vec::new();
+                if !texto.trim().is_empty() {
+                    parts.push(json!({ "text": texto }));
+                }
+                if let Some(tcs) = m.get("tool_calls").and_then(|t| t.as_array()) {
+                    for tc in tcs {
+                        let name = tc
+                            .pointer("/function/name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        if name.is_empty() {
+                            continue;
+                        }
+                        let args = match tc.pointer("/function/arguments") {
+                            Some(Value::String(s)) => {
+                                serde_json::from_str::<Value>(s).unwrap_or(Value::String(s.clone()))
+                            }
+                            Some(v) => v.clone(),
+                            None => json!({}),
+                        };
+                        parts.push(json!({ "functionCall": { "name": name, "args": args } }));
+                    }
+                }
+                if !parts.is_empty() {
+                    turnos.push(("model".to_string(), parts));
+                }
+            }
+            "tool" | "function" => {
+                let id = m
+                    .get("tool_call_id")
+                    .and_then(|i| i.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let name = nombre_por_id
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or_else(|| "herramienta".to_string());
+                let crudo = m.get("content").cloned().unwrap_or(Value::Null);
+                let respuesta = match &crudo {
+                    Value::String(s) => match serde_json::from_str::<Value>(s) {
+                        Ok(v) => v,
+                        Err(_) => Value::String(s.clone()),
+                    },
+                    other => other.clone(),
+                };
+                turnos.push((
+                    "user".to_string(),
+                    vec![json!({ "functionResponse": { "name": name, "response": respuesta } })],
+                ));
+            }
+            _ => {
+                if !texto.trim().is_empty() {
+                    turnos.push(("user".to_string(), vec![json!({ "text": texto })]));
+                }
+            }
+        }
+    }
+
+    // (3) SANEAR + FUSIONAR hasta que la estructura sea válida.
+    //
+    // El orden importa: primero se FUNDEN los turnos contiguos del mismo
+    // rol (las respuestas de una llamada en paralelo llegan en turnos de
+    // usuario contiguos y Gemini NO admite dos turnos de usuario
+    // seguidos) y después se EMPAREJAN las llamadas con sus respuestas.
+    //
+    // Bucle acotado: cada vuelta quita turnos inválidos o funde turnos
+    // del mismo rol => termina siempre.
+    for _ in 0..8 {
+        let mut cambios = false;
+
+        // (3.a) Fundir turnos contiguos del MISMO rol.
+        let mut fusionados: Vec<(String, Vec<Value>)> = Vec::new();
+        for (rol, parts) in turnos {
+            let ya_pegado = fusionados.last().map(|(r, _)| r == &rol).unwrap_or(false);
+            if ya_pegado {
+                let (_, ps) = fusionados.last_mut().expect("hay un turno previo");
+                for p in parts {
+                    let texto_p = p.get("text").and_then(|t| t.as_str()).map(|s| s.to_string());
+                    if let Some(tp) = texto_p {
+                        let previo = ps
+                            .last()
+                            .and_then(|q| q.get("text").and_then(|t| t.as_str()))
+                            .map(|s| s.to_string());
+                        if let Some(prev) = previo {
+                            if let Some(last) = ps.last_mut() {
+                                *last = json!({ "text": format!("{}\n\n{}", prev, tp) });
+                            }
+                            continue;
+                        }
+                    }
+                    ps.push(p);
+                }
+            } else {
+                fusionados.push((rol, parts));
+            }
+        }
+        turnos = fusionados;
+
+        // (3.b) Respuestas huérfanas: un `functionResponse` sin el
+        //       `functionCall` de su turno (el contexto se recortó) es
+        //       un 400 garantizado.  Y al revés: una llamada sin
+        //       respuesta (si no es el último turno) también.
+        let mut i = 0usize;
+        while i < turnos.len() {
+            if turnos[i].0 != "user" {
+                i += 1;
+                continue;
+            }
+            // Índices de las partes `functionResponse` de este turno.
+            let idx_resps: Vec<usize> = turnos[i]
+                .1
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.get("functionResponse").is_some())
+                .map(|(ix, _)| ix)
+                .collect();
+            if idx_resps.is_empty() {
+                i += 1;
+                continue;
+            }
+            let resps: Vec<String> = idx_resps
+                .iter()
+                .map(|ix| {
+                    turnos[i].1[*ix]
+                        .pointer("/functionResponse/name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                })
+                .collect();
+            // Índices y nombres de las `functionCall` del turno de modelo
+            // ANTERIOR (si lo hay).
+            let (idx_calls, calls_previas): (Vec<usize>, Vec<String>) =
+                if i > 0 && turnos[i - 1].0 == "model" {
+                    let idxs: Vec<usize> = turnos[i - 1]
+                        .1
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, p)| p.get("functionCall").is_some())
+                        .map(|(ix, _)| ix)
+                        .collect();
+                    let names: Vec<String> = idxs
+                        .iter()
+                        .map(|ix| {
+                            turnos[i - 1].1[*ix]
+                                .pointer("/functionCall/name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("")
+                                .to_string()
+                        })
+                        .collect();
+                    (idxs, names)
+                } else {
+                    (Vec::new(), Vec::new())
+                };
+            // Emparejar por NOMBRE, con multiplicidad (el mismo nombre
+            // puede repetirse: la i-ésima llamada con la i-ésima
+            // respuesta del mismo nombre).
+            let mut usadas: Vec<bool> = vec![false; resps.len()];
+            let mut keep_calls: Vec<usize> = Vec::new();
+            let mut keep_resps: Vec<usize> = Vec::new();
+            for (ic, nc) in calls_previas.iter().enumerate() {
+                let mut pareja: Option<usize> = None;
+                for (ir, nr) in resps.iter().enumerate() {
+                    if !usadas[ir] && nr == nc {
+                        pareja = Some(ir);
+                        break;
+                    }
+                }
+                if let Some(ir) = pareja {
+                    usadas[ir] = true;
+                    keep_calls.push(ic);
+                    keep_resps.push(ir);
+                }
+            }
+            // Respuestas sin llamada -> fuera (se saca por ÍNDICE de
+            // parte: con el mismo nombre repetido no se puede distinguir
+            // una respuesta de otra).
+            if keep_resps.len() < resps.len() {
+                let fuera = resps.len() - keep_resps.len();
+                notas.push(format!(
+                    "gemini: {} respuesta(s) de herramienta sin llamada (contexto recortado) -> fuera",
+                    fuera
+                ));
+                let keep_partes: Vec<usize> =
+                    keep_resps.iter().map(|ir| idx_resps[*ir]).collect();
+                turnos[i].1 = turnos[i]
+                    .1
+                    .iter()
+                    .enumerate()
+                    .filter(|(ix, p)| {
+                        p.get("functionResponse").is_none() || keep_partes.contains(ix)
+                    })
+                    .map(|(_, p)| p.clone())
+                    .collect();
+                cambios = true;
+            }
+            // Llamadas sin respuesta (y que no son el último turno) ->
+            // fuera: Gemini cuenta llamadas y respuestas y exige que
+            // sean las MISMAS.
+            if !calls_previas.is_empty()
+                && keep_calls.len() < calls_previas.len()
+                && i + 1 < turnos.len()
+            {
+                let sobran = calls_previas.len() - keep_calls.len();
+                let keep_partes: Vec<usize> =
+                    keep_calls.iter().map(|ic| idx_calls[*ic]).collect();
+                turnos[i - 1].1 = turnos[i - 1]
+                    .1
+                    .iter()
+                    .enumerate()
+                    .filter(|(ix, p)| {
+                        p.get("functionCall").is_none() || keep_partes.contains(ix)
+                    })
+                    .map(|(_, p)| p.clone())
+                    .collect();
+                notas.push(format!(
+                    "gemini: {} llamada(s) de herramienta sin respuesta -> fuera",
+                    sobran
+                ));
+                cambios = true;
+            }
+            i += 1;
+        }
+
+        // (3.c) Turnos vacíos fuera.
+        let antes = turnos.len();
+        turnos.retain(|(_, parts)| !parts.is_empty());
+        if turnos.len() != antes {
+            cambios = true;
+        }
+
+        // (3.d) `contents[0]` tiene que ser de USUARIO.
+        if turnos.first().map(|(r, _)| r.as_str()) == Some("model") {
+            let (_, parts) = turnos.remove(0);
+            let ncalls = nombres_function_call(&parts).len();
+            notas.push(format!(
+                "gemini: el primer turno era del modelo ({} llamada(s)) -> fuera; \
+                 Gemini exige que contents[0] sea de usuario",
+                ncalls
+            ));
+            cambios = true;
+        }
+
+        if !cambios {
+            break;
+        }
+    }
+
+    // (4) `contents` final (Gemini: `role` + `parts`).
+    let contents: Vec<Value> = turnos
+        .into_iter()
+        .map(|(rol, parts)| json!({ "role": rol, "parts": parts }))
+        .collect();
+    (contents, notas)
+}
+
+/// Parsea la respuesta **nativa** de Gemini (`candidates[0].content.parts`).
+///
+/// MEDIDO (2026-11-28): el endpoint OpenAI-compat devuelve `choices`; el
+/// nativo devuelve `candidates` ⇒ sin esta rama la respuesta nativa se
+/// leería como vacía.
+pub fn parse_gemini_nativo(provider: &str, body: &str) -> Result<ParsedReply, ProviderError> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return Err(ProviderError::Parse {
+            provider: provider.to_string(),
+            detail: "respuesta HTTP vacía".to_string(),
+        });
+    }
+    let v: Value = match serde_json::from_str::<Value>(trimmed) {
+        Ok(v) => v,
+        Err(_) => {
+            return Ok(ParsedReply {
+                content: trimmed.to_string(),
+                ..Default::default()
+            });
+        }
+    };
+    if let Some(err) = v.get("error") {
+        let msg = err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .or_else(|| err.as_str())
+            .unwrap_or("API error");
+        return Err(ProviderError::Parse {
+            provider: provider.to_string(),
+            detail: format!("la respuesta trae 'error': {}", msg),
+        });
+    }
+    let cand = v
+        .get("candidates")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .cloned()
+        .unwrap_or(Value::Null);
+    let parts = cand
+        .pointer("/content/parts")
+        .and_then(|p| p.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut content = String::new();
+    let mut reasoning = String::new();
+    let mut tool_calls: Vec<ParsedToolCall> = Vec::new();
+    for p in &parts {
+        if let Some(t) = p.get("text").and_then(|t| t.as_str()) {
+            // Gemini 2.5+ marca el razonamiento con `"thought": true`.
+            if p.get("thought").and_then(|x| x.as_bool()).unwrap_or(false) {
+                reasoning.push_str(t);
+            } else {
+                content.push_str(t);
+            }
+            continue;
+        }
+        if let Some(fc) = p.get("functionCall") {
+            let name = fc
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if name.is_empty() {
+                continue;
+            }
+            let args = fc.get("args").cloned().unwrap_or(json!({}));
+            tool_calls.push(ParsedToolCall {
+                id: format!("call_{}", tool_calls.len() + 1),
+                name,
+                arguments: args,
+            });
+        }
+    }
+    let usage = v.get("usageMetadata").cloned().unwrap_or(Value::Null);
+    let prompt_tokens = usage
+        .get("promptTokenCount")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let completion_tokens = usage
+        .get("candidatesTokenCount")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let tokens_used = usage
+        .get("totalTokenCount")
+        .and_then(|x| x.as_u64())
+        .unwrap_or_else(|| prompt_tokens.saturating_add(completion_tokens));
+    let finish_reason = cand
+        .get("finishReason")
+        .and_then(|f| f.as_str())
+        .unwrap_or("")
+        .to_string();
+    Ok(ParsedReply {
+        content,
+        reasoning,
+        tokens_used,
+        prompt_tokens,
+        completion_tokens,
+        tool_calls,
+        finish_reason,
+    })
+}
+
 pub fn execute_chat_con_tools_with(
     prompt: &str,
     requested_model: Option<&str>,
@@ -2720,7 +3299,15 @@ pub fn execute_chat_con_tools_with(
         // mensajes (el proveedor los cuenta TODOS) y deja sitio para las
         // tools, que también cuenta.
         let presupuesto = prompt_max_chars();
-        let tools_chars: usize = tools
+        // MEDIDO (2026-11-28, móvil): las TOOLS también las cuenta el
+        // proveedor ("mensajes y tools" contra 16.000) y NO se recortaban =>
+        // con las 18 `functionDeclarations` del LS de Antigravity el total se
+        // pasaba del límite y `pollinations-free` respondía HTTP 413.  Ahora
+        // las tools se recortan ANTES (con la mitad del presupuesto) y los
+        // mensajes con lo que queda.
+        let (tools_a_enviar, tools_quitadas) =
+            recortar_tools(tools, presupuesto.saturating_mul(2) / 3);
+        let tools_chars: usize = tools_a_enviar
             .iter()
             .map(|t| serde_json::to_string(t).map(|s| s.chars().count()).unwrap_or(0))
             .sum();
@@ -2731,25 +3318,65 @@ pub fn execute_chat_con_tools_with(
                 recortados, presupuesto
             ));
         }
-        let mut payload = json!({
-            "model": p.model,
-            "messages": msgs,
-            "max_tokens": capped_max_tokens,
-            "temperature": 0.3
-        });
-        // Las herramientas SÓLO se mandan si las pidió el cliente: sin
-        // `tools` el proveedor responde con su protocolo de TEXTO en vez de
-        // con `tool_calls` (MEDIDO 2026-11-26, móvil, contra MiniMax).
-        if !tools.is_empty() {
-            payload["tools"] = json!(tools);
-            payload["tool_choice"] = json!("auto");
+        if tools_quitadas > 0 {
+            trace.push(format!(
+                "tools recortadas: {} fuera (presupuesto {} chars; el proveedor cuenta mensajes Y tools)",
+                tools_quitadas, presupuesto
+            ));
         }
-        let req = LlmRequest {
-            endpoint: p.endpoint.clone(),
-            model: p.model.clone(),
-            api_key: key.clone(),
-            auth_type: p.auth_type.clone(),
-            body: payload,
+        // MEDIDO (2026-11-28): Google AI Studio con el endpoint
+        // OpenAI-compat devolvía HTTP 400 por la ESTRUCTURA de la
+        // conversación ("function call turn comes immediately after a user
+        // turn").  Con el endpoint NATIVO la estructura la pone
+        // MegaDaemon (`contents` con la alternancia que Gemini exige).
+        let es_nativo = es_gemini_nativo(&p.endpoint);
+        let req = if es_nativo {
+            let (contents, notas) = openai_a_gemini_contents(&msgs);
+            for n in &notas {
+                trace.push(format!("gemini nativo: {}", n));
+            }
+            let mut body = json!({
+                "contents": contents,
+                "generationConfig": {
+                    "maxOutputTokens": capped_max_tokens,
+                    "temperature": 0.3,
+                }
+            });
+            if !tools_a_enviar.is_empty() {
+                body["tools"] = tools_openai_a_gemini(&tools_a_enviar);
+            }
+            if !sys_prompt.trim().is_empty() {
+                body["systemInstruction"] = json!({ "parts": [ { "text": sys_prompt } ] });
+            }
+            LlmRequest {
+                endpoint: url_gemini_nativo(&p.endpoint, &p.model),
+                model: p.model.clone(),
+                api_key: key.clone(),
+                // La API nativa de Google usa `x-goog-api-key`, no Bearer.
+                auth_type: "goog_key".to_string(),
+                body,
+            }
+        } else {
+            let mut payload = json!({
+                "model": p.model,
+                "messages": msgs,
+                "max_tokens": capped_max_tokens,
+                "temperature": 0.3
+            });
+            // Las herramientas SÓLO se mandan si las pidió el cliente: sin
+            // `tools` el proveedor responde con su protocolo de TEXTO en vez de
+            // con `tool_calls` (MEDIDO 2026-11-26, móvil, contra MiniMax).
+            if !tools_a_enviar.is_empty() {
+                payload["tools"] = json!(tools_a_enviar);
+                payload["tool_choice"] = json!("auto");
+            }
+            LlmRequest {
+                endpoint: p.endpoint.clone(),
+                model: p.model.clone(),
+                api_key: key.clone(),
+                auth_type: p.auth_type.clone(),
+                body: payload,
+            }
         };
         // MEDIDO 2026-11-27: la traza decía QUIÉN respondió pero no a qué
         // endpoint ni con qué forma de payload.  Con el 400 de google-ai-studio
@@ -2769,7 +3396,7 @@ pub fn execute_chat_con_tools_with(
         trace.push(format!(
             "{} => POST {} modelo={} prompt={} chars system={} chars max_tokens={}",
             p.id,
-            p.endpoint,
+            req.endpoint,
             p.model,
             chars_prompt,
             sys_prompt.chars().count(),
@@ -2807,7 +3434,14 @@ pub fn execute_chat_con_tools_with(
                         err = Some(e);
                         break;
                     }
-                    match parse_provider_reply(&p.id, &resp.body) {
+                    match if es_nativo {
+                        // La API nativa de Google devuelve `candidates`, no
+                        // `choices` ⇒ sin esta rama la respuesta se leería
+                        // como vacía.
+                        parse_gemini_nativo(&p.id, &resp.body)
+                    } else {
+                        parse_provider_reply(&p.id, &resp.body)
+                    } {
                         Ok(parsed) => {
                             // v16 (DEFECTO-08): `tools_used` refleja lo
                             // REALMENTE usado: las tool calls nativas que
@@ -2998,6 +3632,279 @@ pub fn test_provider_connection(id: &str) -> Value {
         "latency_ms": (t0.elapsed().as_secs_f64() * 1000.0).round(),
         "fallback_used": res.fallback_used
     })
+}
+
+#[cfg(test)]
+mod recorte_tools_tests {
+    use super::*;
+
+    fn tool(nombre: &str, largo: usize) -> Value {
+        json!({
+            "type": "function",
+            "function": {
+                "name": nombre,
+                "description": "x".repeat(largo),
+                "parameters": {"type": "object", "properties": {}}
+            }
+        })
+    }
+
+    #[test]
+    fn unas_tools_que_caben_no_se_tocan() {
+        let tools = vec![tool("a", 10), tool("b", 10)];
+        let (out, fuera) = recortar_tools(&tools, 10_000);
+        assert_eq!(fuera, 0);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], tools[0]);
+    }
+
+    #[test]
+    fn las_tools_que_no_caben_se_recortan() {
+        // MEDIDO (2026-11-28): el LS de Antigravity manda 18
+        // `functionDeclarations` (decenas de KB) y el proveedor cuenta
+        // "mensajes y tools" contra 16.000 => HTTP 413.
+        let tools: Vec<Value> = (0..18).map(|i| tool(&format!("t{}", i), 2_000)).collect();
+        let (out, fuera) = recortar_tools(&tools, 8_000);
+        assert!(fuera > 0, "algo tiene que quedar fuera");
+        assert_eq!(out.len() + fuera, 18);
+        let chars: usize = out
+            .iter()
+            .map(|t| serde_json::to_string(t).map(|s| s.chars().count()).unwrap_or(0))
+            .sum();
+        assert!(chars <= 8_000, "las tools deben caber: {}", chars);
+        // Se sueltan de la última a la primera (las últimas son las menos
+        // usadas) ⇒ la primera sigue ahí.
+        assert_eq!(
+            out[0].pointer("/function/name").and_then(|n| n.as_str()),
+            Some("t0")
+        );
+    }
+
+    #[test]
+    fn sin_presupuesto_no_se_recorta() {
+        let tools = vec![tool("a", 100)];
+        let (out, fuera) = recortar_tools(&tools, 0);
+        assert_eq!(fuera, 0);
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn una_tool_enorme_se_deja_con_la_descripcion_corta() {
+        // Si ni la primera tool cabe, el modelo se queda sin capacidad de
+        // actuar ⇒ se deja una, recortada.
+        let tools = vec![tool("gigante", 50_000)];
+        let (out, fuera) = recortar_tools(&tools, 1_000);
+        assert_eq!(out.len(), 1, "siempre queda al menos una tool");
+        assert_eq!(fuera, 0);
+        let desc = out[0]
+            .pointer("/function/description")
+            .and_then(|d| d.as_str())
+            .unwrap_or("");
+        assert!(desc.chars().count() <= 200, "la descripción se recorta");
+    }
+}
+
+#[cfg(test)]
+mod gemini_nativo_tests {
+    use super::*;
+
+    fn partes_de(c: &Value, clave: &str) -> usize {
+        c.get("parts")
+            .and_then(|p| p.as_array())
+            .map(|a| a.iter().filter(|p| p.get(clave).is_some()).count())
+            .unwrap_or(0)
+    }
+
+    /// Las TRES reglas de la API de Gemini sobre `contents`.
+    fn assert_valido(contents: &[Value]) {
+        assert!(!contents.is_empty(), "la conversación no puede quedar vacía");
+        assert_eq!(
+            contents[0].get("role").and_then(|r| r.as_str()),
+            Some("user"),
+            "regla 1: contents[0] debe ser de usuario"
+        );
+        for i in 1..contents.len() {
+            let prev = contents[i - 1].get("role").and_then(|r| r.as_str()).unwrap_or("");
+            let cur = contents[i].get("role").and_then(|r| r.as_str()).unwrap_or("");
+            assert_ne!(prev, cur, "regla 2: los turnos deben alternar (índice {})", i);
+        }
+        for i in 0..contents.len() {
+            let calls = partes_de(&contents[i], "functionCall");
+            if calls == 0 || i + 1 >= contents.len() {
+                continue;
+            }
+            let resps = partes_de(&contents[i + 1], "functionResponse");
+            assert_eq!(
+                calls, resps,
+                "regla 3 en el turno {}: {} llamadas y {} respuestas",
+                i, calls, resps
+            );
+        }
+    }
+
+    fn llamada(id: &str, nombre: &str) -> Value {
+        json!({
+            "id": id,
+            "type": "function",
+            "function": {"name": nombre, "arguments": "{\"p\":\"x\"}"}
+        })
+    }
+
+    #[test]
+    fn el_endpoint_de_google_es_gemini_nativo() {
+        // MEDIDO (2026-11-28): el endpoint OpenAI-compat daba HTTP 400
+        // ("function call turn comes immediately after a user turn").
+        let compat = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+        assert!(es_gemini_nativo(compat));
+        assert_eq!(
+            url_gemini_nativo(compat, "gemini-3.8-flash"),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
+        );
+        assert!(!es_gemini_nativo("https://api.groq.com/openai/v1/chat/completions"));
+        assert!(!es_gemini_nativo("http://127.0.0.1:8081/v1/chat/completions"));
+    }
+
+    #[test]
+    fn una_conversacion_normal_alterna_y_empareja() {
+        let msgs = vec![
+            json!({"role": "user", "content": "hola"}),
+            json!({"role": "assistant", "tool_calls": [llamada("call_1", "leer")]}),
+            json!({"role": "tool", "tool_call_id": "call_1", "content": "{\"ok\":true}"}),
+            json!({"role": "assistant", "content": "hecho"}),
+            json!({"role": "user", "content": "gracias"}),
+        ];
+        let (contents, notas) = openai_a_gemini_contents(&msgs);
+        assert_valido(&contents);
+        assert_eq!(contents.len(), 5, "no se pierde ningún turno: {:?}", notas);
+        // La llamada viaja al turno del modelo y su respuesta al de usuario.
+        let turnos_modelo: Vec<&Value> = contents
+            .iter()
+            .filter(|c| c.get("role").and_then(|r| r.as_str()) == Some("model"))
+            .collect();
+        assert_eq!(turnos_modelo.len(), 2);
+        assert_eq!(partes_de(turnos_modelo[0], "functionCall"), 1);
+    }
+
+    #[test]
+    fn las_llamadas_paralelas_van_en_un_solo_turno() {
+        // MEDIDO (2026-11-28): Gemini NO admite dos turnos de usuario
+        // seguidos ⇒ las respuestas paralelas se funden en un turno.
+        let msgs = vec![
+            json!({"role": "user", "content": "lee dos archivos"}),
+            json!({
+                "role": "assistant",
+                "tool_calls": [llamada("call_1", "leer"), llamada("call_2", "leer")]
+            }),
+            json!({"role": "tool", "tool_call_id": "call_1", "content": "\"a\""}),
+            json!({"role": "tool", "tool_call_id": "call_2", "content": "\"b\""}),
+            json!({"role": "user", "content": "sigue"}),
+        ];
+        let (contents, _notas) = openai_a_gemini_contents(&msgs);
+        assert_valido(&contents);
+        let modelo = contents
+            .iter()
+            .find(|c| c.get("role").and_then(|r| r.as_str()) == Some("model"))
+            .expect("hay turno de modelo");
+        assert_eq!(partes_de(modelo, "functionCall"), 2, "las dos llamadas van juntas");
+        let total_resps: usize = contents
+            .iter()
+            .map(|c| partes_de(c, "functionResponse"))
+            .sum();
+        assert_eq!(total_resps, 2, "las dos respuestas se conservan");
+    }
+
+    #[test]
+    fn el_contexto_recortado_no_deja_turnos_invalidos() {
+        // El caso real del móvil: el LS manda 750 KB y el daemon recorta
+        // por la frente ⇒ el primer turno es del modelo y su respuesta
+        // se queda sin llamada (las dos cosas dan 400 en Gemini).
+        let msgs = vec![
+            json!({"role": "assistant", "tool_calls": [llamada("call_1", "leer")]}),
+            json!({"role": "tool", "tool_call_id": "call_1", "content": "\"a\""}),
+            json!({"role": "user", "content": "sigue"}),
+        ];
+        let (contents, notas) = openai_a_gemini_contents(&msgs);
+        assert_valido(&contents);
+        assert_eq!(contents.len(), 1, "sólo queda el turno de usuario");
+        assert!(
+            notas.iter().any(|n| n.contains("contents[0]")),
+            "se declara el recorte: {:?}",
+            notas
+        );
+    }
+
+    #[test]
+    fn una_respuesta_sin_llamada_se_quita() {
+        let msgs = vec![
+            json!({"role": "user", "content": "hola"}),
+            json!({"role": "tool", "tool_call_id": "call_x", "content": "\"a\""}),
+            json!({"role": "user", "content": "sigue"}),
+        ];
+        let (contents, notas) = openai_a_gemini_contents(&msgs);
+        assert_valido(&contents);
+        let total_resps: usize = contents
+            .iter()
+            .map(|c| partes_de(c, "functionResponse"))
+            .sum();
+        assert_eq!(total_resps, 0, "la respuesta huérfana no se envía");
+        assert!(!notas.is_empty(), "se declara: {:?}", notas);
+    }
+
+    #[test]
+    fn las_tools_se_traducen_a_function_declarations() {
+        let tools = vec![json!({
+            "type": "function",
+            "function": {
+                "name": "leer",
+                "description": "lee un fichero",
+                "parameters": {"type": "object", "properties": {"p": {"type": "string"}}}
+            }
+        })];
+        let v = tools_openai_a_gemini(&tools);
+        let decls = v[0]["functionDeclarations"].as_array().expect("declaraciones");
+        assert_eq!(decls.len(), 1);
+        assert_eq!(decls[0]["name"], "leer");
+        assert_eq!(decls[0]["description"], "lee un fichero");
+        assert!(decls[0]["parameters"].is_object());
+    }
+
+    #[test]
+    fn la_respuesta_nativa_se_parsea() {
+        // MEDIDO (2026-11-28): la API nativa devuelve `candidates`, no
+        // `choices` ⇒ sin esta rama la respuesta se leía vacía.
+        let body = r#"{
+            "candidates": [{
+                "content": {"role": "model", "parts": [
+                    {"text": "voy a leerlo"},
+                    {"functionCall": {"name": "leer", "args": {"p": "a.txt"}}},
+                    {"text": "razonamiento", "thought": true}
+                ]},
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": {"promptTokenCount": 11, "candidatesTokenCount": 7, "totalTokenCount": 18}
+        }"#;
+        let r = parse_gemini_nativo("google-ai-studio", body).expect("respuesta válida");
+        assert!(r.content.contains("voy a leerlo"));
+        assert!(!r.content.contains("razonamiento"), "el razonamiento va aparte");
+        assert_eq!(r.reasoning, "razonamiento");
+        assert_eq!(r.tool_calls.len(), 1);
+        assert_eq!(r.tool_calls[0].name, "leer");
+        assert_eq!(r.tool_calls[0].arguments["p"], "a.txt");
+        assert_eq!(r.prompt_tokens, 11);
+        assert_eq!(r.completion_tokens, 7);
+        assert_eq!(r.tokens_used, 18);
+        assert_eq!(r.finish_reason, "STOP");
+    }
+
+    #[test]
+    fn un_error_del_proveedor_no_se_confunde_con_una_respuesta() {
+        let e = parse_gemini_nativo(
+            "google-ai-studio",
+            r#"{"error": {"message": "quota exceeded"}}"#,
+        )
+        .unwrap_err();
+        assert!(format!("{:?}", e).contains("quota exceeded"));
+    }
 }
 
 #[cfg(test)]
