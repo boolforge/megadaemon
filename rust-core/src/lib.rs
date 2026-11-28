@@ -53,6 +53,7 @@ pub mod comms_automation;
 pub mod cron;
 pub mod energy_automation;
 pub mod llm_gateway;
+pub mod ls_auth;
 pub mod protocol;
 pub mod acp_schema;
 pub mod acp_sesion_store;
