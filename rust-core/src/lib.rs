@@ -176,6 +176,7 @@ pub mod sandbox_linux;
 pub mod resonance;
 pub mod reparar_entorno;
 pub mod supervisor;
+pub mod subagentes;
 pub mod frida_hooks;
 pub mod hooks_payload;
 pub mod inject;
