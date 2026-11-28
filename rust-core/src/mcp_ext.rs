@@ -963,6 +963,37 @@ pub fn tool_definitions() -> Value {
                 }
             },
             {
+                "name": "capacidades",
+                "description": "CAPACIDADES PROPIAS de MegaDaemon (las escritas con el procedimiento AST -> Rust): la cola de mensajes de la sesion, los subagentes del lead, las opciones de modelo, la construccion del contexto y el revert por pasos del bosque de la conversacion. Acciones: cola.listar | cola.encolar | cola.actualizar | cola.borrar | cola.redirigir | subagente.listar | subagente.obtener | subagente.foreground | subagente.background | subagente.cancelar | modelos.listar | modelos.enriquecer | modelos.filtrar | modelos.default | contexto.construir | revert.pasos | revert.ejecutar. La cola y los subagentes se PERSISTEN (sobreviven a un reinicio del daemon).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": {
+                            "type": "string",
+                            "description": "familia.opcion (ver la descripcion de la tool)"
+                        },
+                        "session_id": { "type": "string", "description": "Sesion (cola de mensajes y revert)." },
+                        "texto": { "type": "string", "description": "Cuerpo del mensaje (cola.encolar) o la peticion (contexto.construir)." },
+                        "id": { "type": "string", "description": "Id del mensaje o del subagente." },
+                        "prioridad": { "type": "integer", "description": "Prioridad del mensaje (mayor = antes)." },
+                        "lead": { "type": "string", "description": "Id del lead (subagentes)." },
+                        "tarea": { "type": "string", "description": "Tarea del subagente." },
+                        "presupuesto_tokens": { "type": "integer", "description": "Presupuesto del subagente." },
+                        "proveedor": { "type": "string", "description": "Filtro por proveedor (modelos.filtrar)." },
+                        "catalogo": { "type": "object", "description": "Catalogo nativo que propone el cliente (modelos.enriquecer)." },
+                        "sistema": { "type": "string", "description": "Instruccion base del agente (contexto.construir)." },
+                        "reglas": { "type": "array", "items": { "type": "string" }, "description": "Reglas, una por linea." },
+                        "memoria": { "type": "array", "items": { "type": "string" }, "description": "Memoria: lo que ya fallo." },
+                        "presupuesto_chars": { "type": "integer", "description": "Presupuesto del prompt (sin limite si no se pone)." },
+                        "mensajes": { "type": "array", "description": "Mensajes del bosque (revert): [{rol, texto}]." },
+                        "objetivo": { "type": "integer", "description": "Nodo objetivo del revert." },
+                        "indice": { "type": "integer", "description": "Paso del revert a ejecutar (revert.ejecutar)." },
+                        "capacidades": { "type": "array", "items": { "type": "string" }, "description": "Capacidades que el cliente declara (opt-in mutuo de los subagentes)." }
+                    },
+                    "required": ["accion"]
+                }
+            },
+            {
                 "name": "task_queue",
                 "description": "Cola de tareas COMPARTIDA de MegaDaemon (movil + PC + agentes). Acciones: list (ver cola), submit (encolar), claim (TOMAR tareas con lease para este nodo), lease (renovar), migrate (pasar el trabajo de un nodo a otro cuando uno falla o se queda sin cuota), pause (pausar por cuota/red), merge (fusionar con lo que hay en Drive). IMPORTANTE: si la cuota esta en 'pausa', claim NO devuelve tareas: termina tu paso actual, guarda tu checkpoint y espera al reset.",
                 "inputSchema": {
@@ -1209,6 +1240,17 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
     }
 
     let r = match name {
+        // Las capacidades propias (cola de mensajes, subagentes, opciones de
+        // modelo, contexto y revert por pasos): una sola fachada.
+        "capacidades" => {
+            let r = crate::capacidades::despachar(args);
+            let texto = serde_json::to_string_pretty(&r).unwrap_or_default();
+            let ok = r.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+            return Some(json!({
+                "content": [{ "type": "text", "text": texto }],
+                "isError": !ok,
+            }));
+        }
         // Puente contra Antigravity (el motor agéntico del móvil).
         // Mismas acciones que el CLI `md-antigravity`: paridad total.
         "instrumentacion_agy" => {

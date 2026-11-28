@@ -1076,6 +1076,48 @@ impl Capacidades {
 /// `protocol_acp::Extension { namespace: "mdaemon", metodo, para_que }` (ver
 /// `rust-core/src/protocol_acp.rs`).  Se devuelve una lista **propia** (sin
 /// tipos del crate) para que este módulo no dependa de nada.
+impl Cola {
+    /// El estado **COMPLETO** de la cola en JSON (lo que se persiste).
+    ///
+    /// MEDIDO (2026-11-28): el `a_json` de cada mensaje es el formato de la
+    /// API (no lleva `dirigido` ni `llegada`, que son internos), asi que
+    /// para persistir se serializa el estado entero con serde, que si los
+    /// lleva.  Sin esto, recargar la cola perderia el redireccionamiento y
+    /// el orden estable.
+    pub fn estado_json(&self) -> Value {
+        json!({
+            "version": 1,
+            "mensajes": self.mensajes,
+            "sesiones": self.sesiones,
+            "historial": self.historial,
+            "contador": self.contador,
+            "secuencia": self.secuencia,
+        })
+    }
+
+    /// Lee el estado completo de la cola.
+    ///
+    /// El error es un `String` (no un `ErrorCola`): esto es la CAPA DE
+    /// PERSISTENCIA (I/O), no la logica de la cola, que si tiene errores
+    /// tipados.
+    pub fn desde_json(v: &Value) -> Result<Cola, String> {
+        let leer = |clave: &str| v.get(clave).cloned().unwrap_or(Value::Null);
+        let mensajes: Vec<Mensaje> =
+            serde_json::from_value(leer("mensajes")).map_err(|e| format!("cola: mensajes ilegibles: {e}"))?;
+        let sesiones: Vec<String> =
+            serde_json::from_value(leer("sesiones")).map_err(|e| format!("cola: sesiones ilegibles: {e}"))?;
+        let historial: Vec<Evento> =
+            serde_json::from_value(leer("historial")).map_err(|e| format!("cola: historial ilegible: {e}"))?;
+        Ok(Cola {
+            mensajes,
+            sesiones,
+            historial,
+            contador: v.get("contador").and_then(|x| x.as_u64()).unwrap_or(0),
+            secuencia: v.get("secuencia").and_then(|x| x.as_u64()).unwrap_or(0),
+        })
+    }
+}
+
 pub fn extensiones() -> Vec<(&'static str, &'static str)> {
     vec![
         (

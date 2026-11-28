@@ -775,6 +775,49 @@ pub fn capacidades_agente() -> Vec<&'static str> {
 /// `protocol_acp::Extension { namespace: "mdaemon", metodo, para_que }` (ver
 /// `rust-core/src/protocol_acp.rs`).  Se devuelve una lista **propia** (sin
 /// tipos del crate) para que este módulo no dependa de nada.
+impl Subagentes {
+    /// El estado **COMPLETO** en JSON (lo que se persiste).
+    ///
+    /// MEDIDO (2026-11-28): el `a_json` de cada subagente es el formato de
+    /// la API; para persistir hace falta el estado entero (incluido el
+    /// turno y los contadores), asi que se serializa con serde.
+    pub fn estado_json(&self) -> Value {
+        json!({
+            "version": 1,
+            "lead": self.lead,
+            "lista": self.lista,
+            "turno": self.turno,
+            "contador": self.contador,
+            "secuencia": self.secuencia,
+            "eventos": self.eventos,
+        })
+    }
+
+    /// Lee el estado completo.
+    ///
+    /// El error es un `String`: esto es la CAPA DE PERSISTENCIA (I/O), no la
+    /// logica de los subagentes, que si tiene errores tipados.
+    pub fn desde_json(v: &Value) -> Result<Subagentes, String> {
+        let leer = |clave: &str| v.get(clave).cloned().unwrap_or(Value::Null);
+        let lead: String =
+            serde_json::from_value(leer("lead")).map_err(|e| format!("subagentes: lead ilegible: {e}"))?;
+        let lista: Vec<Subagente> =
+            serde_json::from_value(leer("lista")).map_err(|e| format!("subagentes: lista ilegible: {e}"))?;
+        let turno: Turno =
+            serde_json::from_value(leer("turno")).map_err(|e| format!("subagentes: turno ilegible: {e}"))?;
+        let eventos: Vec<EventoSubagente> = serde_json::from_value(leer("eventos"))
+            .map_err(|e| format!("subagentes: eventos ilegibles: {e}"))?;
+        Ok(Subagentes {
+            lead,
+            lista,
+            turno,
+            contador: v.get("contador").and_then(|x| x.as_u64()).unwrap_or(0),
+            secuencia: v.get("secuencia").and_then(|x| x.as_u64()).unwrap_or(0),
+            eventos,
+        })
+    }
+}
+
 pub fn extensiones() -> Vec<(&'static str, &'static str)> {
     vec![
         ("subagent/list", "listar los subagentes del lead"),
