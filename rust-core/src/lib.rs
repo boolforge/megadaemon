@@ -180,6 +180,7 @@ pub mod re_fusion;
 pub mod re_decompilers;
 pub mod sandbox_linux;
 pub mod resonance;
+pub mod autorreparacion;
 pub mod reparar_entorno;
 pub mod supervisor;
 pub mod subagentes;

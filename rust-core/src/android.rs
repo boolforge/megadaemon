@@ -1374,6 +1374,11 @@ pub fn dispatch(name: &str, args: &Value) -> Value {
             &s("text"),
             &s("save_path"),
         ),
+        // AUTORREPARACION: la orden del bus de ordenes (Drive) que dice
+        // "arreglate" al movil.  Es el MISMO camino que la API y el MCP
+        // (una sola implementacion) y el motor se guarda el presupuesto
+        // ⇒ no puede entrar en bucle.
+        "autorreparar" | "reparar_entorno" => crate::autorreparacion::tool_dispatch(args),
         other => err("unknown_tool", &format!("herramienta desconocida: {}", other)),
     }
 }

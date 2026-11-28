@@ -850,14 +850,38 @@ pub fn tool_definitions() -> Value {
             },
             {
                 "name": "reparar_entorno",
-                "description": "MegaDaemon se REPARA SOLO: diagnostica y arregla su propio entorno (prefijo persistente /data/adb/megadaemon, binario en servicio, watchdog de Magisk, guardian, API key, credenciales de Drive y plantilla web). Acciones: diagnostico (solo mira, no toca nada) | reparar (mira y arregla; es idempotente). Cada eslabon devuelve que/toque/bloquea. Util cuando el movil queda sin daemon, sin key (todo 403) o sin tunel: no hace falta PC ni ADB.",
+                "description": "MegaDaemon se REPARA SOLO: diagnostica y arregla su propio entorno (prefijo persistente /data/adb/megadaemon, binario en servicio, watchdog de Magisk, guardian, API key, credenciales de Drive y plantilla web). Acciones: diagnostico (solo mira, no toca nada) | reparar (mira y arregla; es idempotente) | restaurar (el proceso COMPLETO de tools/restaurar-movil.sh, hecho desde dentro y con presupuesto) | estado (presupuesto + registro de restauraciones). Cada eslabon devuelve que/toque/bloquea. Util cuando el movil queda sin daemon, sin key (todo 403) o sin tunel: no hace falta PC ni ADB.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "accion": {
                             "type": "string",
-                            "description": "diagnostico | reparar",
+                            "description": "diagnostico | reparar | restaurar | estado",
                             "default": "diagnostico"
+                        },
+                        "fuerza": {
+                            "type": "boolean",
+                            "description": "ignorar el presupuesto por hora (solo restauracion manual)",
+                            "default": false
+                        }
+                    }
+                }
+            },
+            {
+                "name": "autorreparar",
+                "description": "AUTORREPARACION AUTOMATICA: el daemon detecta los 9 sintomas MEDIDOS del movil (pastel de procesos, URL de tunel invalida, tunel caido, 8765 legacy con listener, daemon sin /health, build desfasado, telemetria sin publicar, canal sin publicar, base de la instancia ausente, stack desfasado, ficheros del stack ausentes) y se ARREGLA SOLO, sin que nadie lance un script a mano. Es el proceso de tools/restaurar-movil.sh hecho desde dentro. Acciones: diagnostico (solo mira) | restaurar (repara y deja rastro en el log y en el registro) | estado (presupuesto + registro). El presupuesto (maximo por hora), la marca de 'ya restaurado' y el backoff creciente evitan el bucle.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "accion": {
+                            "type": "string",
+                            "description": "diagnostico | restaurar | estado",
+                            "default": "diagnostico"
+                        },
+                        "fuerza": {
+                            "type": "boolean",
+                            "description": "ignorar el presupuesto por hora (solo restauracion manual)",
+                            "default": false
                         }
                     }
                 }
@@ -1699,15 +1723,31 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
             json!({ "content": [{ "type": "text", "text": r.to_string() }] })
         }
         "reparar_entorno" => {
+            // El motor base (ficheros, binario, key) MAS el motor de
+            // autorreparacion (procesos, tunel, sintomas).  La accion
+            // "restaurar" es el proceso COMPLETO de
+            // tools/restaurar-movil.sh, hecho desde dentro y con
+            // presupuesto para no entrar en bucle.
             let accion = args
                 .get("accion")
                 .and_then(|v| v.as_str())
                 .unwrap_or("diagnostico");
-            let v = match accion {
-                "reparar" | "repair" => crate::reparar_entorno::reparar_ahora(),
-                _ => crate::reparar_entorno::diagnosticar(),
+            let v: Value = match accion {
+                "reparar" | "repair" => crate::reparar_entorno::reparar_ahora().a_json(),
+                "restaurar" | "restore" | "estado" | "state" => {
+                    crate::autorreparacion::tool_dispatch(args)
+                }
+                _ => {
+                    // El diagnostico COMPLETO: eslabones del motor base +
+                    // los 11 sintomas + el presupuesto + el registro.
+                    crate::autorreparacion::tool_dispatch(&json!({"accion": "diagnostico"}))
+                }
             };
-            json!({ "content": [{ "type": "text", "text": v.a_json().to_string() }] })
+            json!({ "content": [{ "type": "text", "text": v.to_string() }] })
+        }
+        "autorreparar" => {
+            let v = crate::autorreparacion::tool_dispatch(args);
+            json!({ "content": [{ "type": "text", "text": v.to_string() }] })
         }
         // Stack autocontenido: el daemon lleva dentro el supervisor, el
         // keeper, los scripts de Antigravity y la Web UI, y los reconcilia.

@@ -439,6 +439,27 @@ fn main() {
                     })
                     .map_err(|e| eprintln!("stack: no se pudo arrancar la reconciliacion: {e}"));
             }
+            // v22: el daemon se REPARA SOLO.
+            //
+            // MEDIDO (2026-11-28, movil): el "pastel" de procesos (4
+            // supervisores, 4 watchdogs, 5 cloudflared, 6 daemons,
+            // load1=58) lo hacia el keeper, que cuenta como "muerto" al
+            // supervisor cuando no puede leer su cmdline (SELinux) y lo
+            // relanza DETRAS del que ya esta vivo.  Y la URL del tunel se
+            // quedaba con la de la API (api.trycloudflare.com) => el movil
+            // sin URL publica.  Todo eso lo detecta y lo arregla el propio
+            // daemon, cada N minutos, con presupuesto (max por hora),
+            // marca de "ya restaurado" y backoff creciente => NO entra en
+            // bucle.
+            {
+                let min = megadaemon_core::config_efectiva::u64_de("autorreparacion.ciclo_min", 10);
+                if min > 0 {
+                    match megadaemon_core::autorreparacion::bucle(min) {
+                        Ok(_) => eprintln!("autorreparacion: ciclo automatico cada {min} min"),
+                        Err(e) => eprintln!("autorreparacion: no se pudo arrancar el ciclo: {e}"),
+                    }
+                }
+            }
             // v19 — Brillo: el vigilante (shim de política) mantiene el
             // brillo en MANUAL y al máximo, y respeta lo que haga el usuario
             // con los botones del sistema.  Sólo arranca en un móvil Android
@@ -1542,6 +1563,21 @@ fn main() {
         //     de Drive y plantilla web).  Es idempotente.
         "reparar" | "repair" => {
             let rc = megadaemon_core::reparar_entorno::run_cli(&args[2..]);
+            std::process::exit(rc);
+        }
+
+        //   megadaemon-core autorreparar [--accion=restaurar|estado] [--json]
+        //                    [--fuerza] [--restaurar]
+        //
+        //   El daemon se ARREGLA SOLO: diagnostica los sintomas MEDIDOS del
+        //   movil (pastel de procesos, URL de tunel invalida, tunel caido,
+        //   8765 legacy, daemon sin /health, build desfasado, telemetria,
+        //   canal, base de la instancia, stack desfasado, ficheros del
+        //   stack) y ejecuta el proceso de tools/restaurar-movil.sh.
+        //   Con presupuesto por hora, marca de "ya restaurado" y backoff
+        //   creciente: no entra en bucle.
+        "autorreparar" | "autorreparacion" => {
+            let rc = megadaemon_core::autorreparacion::run_cli(&args[2..]);
             std::process::exit(rc);
         }
 

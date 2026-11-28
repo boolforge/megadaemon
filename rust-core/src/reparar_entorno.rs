@@ -280,6 +280,20 @@ pub struct Config {
     pub ruta_supervisor: String,
     /// Ruta del keeper.
     pub ruta_keeper: String,
+    /// Directorio de los scripts de Magisk (`service.d`).
+    ///
+    /// MEDIDO (2026-11-28): Magisk ejecuta **TODO** lo ejecutable de
+    /// `service.d` ⇒ una copia `.bak*` de un script es un SEGUNDO
+    /// servicio (y de ahí el "pastel" de procesos).
+    pub service_d: String,
+    /// Ruta del script del túnel (`98-cloudflared.sh`).
+    pub ruta_cloudflared: String,
+    /// Ruta del watchdog del túnel (`tunnel-watchdog.sh`).
+    pub ruta_watchdog: String,
+    /// Ruta del puente ADB (`91-adb-tcp.sh`).
+    pub ruta_adb_tcp: String,
+    /// Puerto del cockpit (el que sirve `/health`).
+    pub puerto: u16,
     /// ¿Estamos en Android?  (en un PC no se tocan `/data/adb`).
     pub android: bool,
 }
@@ -294,12 +308,30 @@ impl Config {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| PREFIJO_PERSISTENTE.to_string());
         let state_dir = crate::cockpit_server::state_dir();
+        // Las rutas del stack: **una sola fuente de verdad** (las usa el
+        // motor de autorreparacion, que no repite ninguna).
+        let service_d = std::path::Path::new(RUTA_SUPERVISOR)
+            .parent()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "/data/adb/service.d".to_string());
+        let ruta_cloudflared = format!("{service_d}/98-cloudflared.sh");
+        let ruta_adb_tcp = format!("{service_d}/91-adb-tcp.sh");
+        let ruta_watchdog = format!("{prefijo}/tunnel-watchdog.sh");
+        let puerto = std::env::var("MEGADAEMON_COCKPIT_PORT")
+            .ok()
+            .and_then(|s| s.trim().parse::<u16>().ok())
+            .unwrap_or(9090);
         Config {
             prefijo,
             prefijo_legacy: PREFIJO_LEGACY.to_string(),
             state_dir,
             ruta_supervisor: RUTA_SUPERVISOR.to_string(),
             ruta_keeper: RUTA_KEEPER.to_string(),
+            service_d,
+            ruta_cloudflared,
+            ruta_watchdog,
+            ruta_adb_tcp,
+            puerto,
             android,
         }
     }
@@ -1029,6 +1061,11 @@ mod tests {
             state_dir: "/data/adb/megadaemon/state".to_string(),
             ruta_supervisor: "/data/adb/service.d/99-megadaemon.sh".to_string(),
             ruta_keeper: "/data/adb/service.d/97-megadaemon-keeper.sh".to_string(),
+            service_d: "/data/adb/service.d".to_string(),
+            ruta_cloudflared: "/data/adb/service.d/98-cloudflared.sh".to_string(),
+            ruta_watchdog: "/data/adb/megadaemon/tunnel-watchdog.sh".to_string(),
+            ruta_adb_tcp: "/data/adb/service.d/91-adb-tcp.sh".to_string(),
+            puerto: 9090,
             android: true,
         }
     }

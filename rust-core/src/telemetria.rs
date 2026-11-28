@@ -80,6 +80,16 @@ fn sha16_real(texto: &str) -> String {
         .collect::<String>()
 }
 
+/// Ruta del **índice local** de telemetrías (cuándo se publicó la última
+/// vez).
+///
+/// La usa el motor de autorreparación para saber si "la telemetría se
+/// publica" **sin** tener que publicar nada (un diagnóstico no debe
+/// subir a Drive).
+pub fn ruta_indice(state_dir: Option<&str>) -> PathBuf {
+    dir_local(state_dir).join("indice.json")
+}
+
 /// Directorio local de telemetrías.
 fn dir_local(state_dir: Option<&str>) -> PathBuf {
     let base = state_dir

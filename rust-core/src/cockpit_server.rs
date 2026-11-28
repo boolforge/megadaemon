@@ -1862,16 +1862,40 @@ fn handle_client(mut stream: TcpStream) {
                 // El daemon repara SU PROPIO entorno.  GET = solo diagnostica;
                 // POST {"reparar": true} = diagnostica y arregla.
                 // Es idempotente y cada eslabon dice que/toque/bloquea.
-                let reparar = method == "POST"
-                    && serde_json::from_slice::<Value>(body_slice)
-                        .ok()
-                        .and_then(|b| b.get("reparar").and_then(|v| v.as_bool()))
-                        .unwrap_or(false);
-                let v = if reparar {
-                    crate::reparar_entorno::reparar_ahora().a_json()
-                } else {
-                    crate::reparar_entorno::diagnosticar().a_json()
+                // MEDIDO (2026-11-28): se anade {"accion": "restaurar"}
+                // (el proceso COMPLETO de tools/restaurar-movil.sh, con
+                // presupuesto) y {"accion": "estado"}.
+                let cuerpo: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);
+                let accion = cuerpo
+                    .get("accion")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let v = match accion.as_str() {
+                    "restaurar" | "restore" | "estado" | "state" => {
+                        crate::autorreparacion::tool_dispatch(&cuerpo)
+                    }
+                    _ => {
+                        let reparar = method == "POST"
+                            && cuerpo
+                                .get("reparar")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                        if reparar {
+                            crate::reparar_entorno::reparar_ahora().a_json()
+                        } else {
+                            crate::reparar_entorno::diagnosticar().a_json()
+                        }
+                    }
                 };
+                send_json(&mut stream, &v);
+            }
+            "/api/autorreparar" => {
+                // AUTORREPARACION: el daemon se arregla SOLO (los sintomas
+                // MEDIDOS del movil).  POST {"accion": "diagnostico" |
+                // "restaurar" | "estado", "fuerza": bool}.
+                let cuerpo: Value = serde_json::from_slice(body_slice).unwrap_or(Value::Null);
+                let v = crate::autorreparacion::tool_dispatch(&cuerpo);
                 send_json(&mut stream, &v);
             }
             "/api/resonance" => {
