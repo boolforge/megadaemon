@@ -25,14 +25,31 @@
 En el móvil (Termux, Magisk o el shell admin de Android):
 
 ```sh
-sh -c 'curl -fsSL --retry 3 https://raw.githubusercontent.com/boolforge/megadaemon/main/deploy/megadaemon-oneliner.sh -o /data/local/tmp/mdo.sh && sh /data/local/tmp/mdo.sh'
+sh -c 'curl -fsSL --retry 3 https://raw.githubusercontent.com/boolforge/megadaemon/main/deploy/megadaemon-oneliner.sh | sh'
 ```
 
-O, más corto (sin dejar el fichero):
-
-```sh
-sh -c 'curl -fsSL https://raw.githubusercontent.com/boolforge/megadaemon/main/deploy/megadaemon-oneliner.sh | sh'
-```
+> MEDIDO (2026-11-28, móvil): la variante que **guardaba** el fichero
+> (`-o /data/local/tmp/mdo.sh`) falla con `curl: (23) client returned ERROR on
+> write` ⇒ **la descarga va bien, la ESCRITURA no**: `/data/local/tmp` es de
+> otra app (o está lleno, o el fichero quedó de root).  Por eso la forma
+> **oficial es la de la tubería**: no escribe nada.
+>
+> El script **no lee de `stdin`** (MEDIDO: cero `read` en el fichero) ⇒
+> `curl | sh` es seguro: `sh` no se come el resto del script.
+>
+> Si aun así quieres el fichero en disco, guárdalo en `$HOME` (siempre
+> escribible por Termux):
+>
+> ```sh
+> sh -c 'curl -fsSL --retry 3 https://raw.githubusercontent.com/boolforge/megadaemon/main/deploy/megadaemon-oneliner.sh -o "$HOME/mdo.sh" && sh "$HOME/mdo.sh"'
+> ```
+>
+> Y para saber **por qué** falló la escritura (importa: un `/data/local/tmp`
+> lleno explica más problemas del móvil):
+>
+> ```sh
+> ls -l /data/local/tmp/mdo.sh; df -h /data/local/tmp | tail -1; du -sh /data/local/tmp 2>/dev/null
+> ```
 
 ## 2. Lo que tiene que salir (7 comprobaciones)
 
