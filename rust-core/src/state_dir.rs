@@ -16,6 +16,16 @@
 /// Directorio de estado por defecto (el de la app en el móvil).
 pub const STATE_DIR: &str = "/data/user/0/com.agy/files/megadaemon/state";
 
+/// Directorio de estado por defecto FUERA del móvil (escritorio y CI).
+///
+/// MEDIDO 2026-11-28 (CI run 46106444833): el default era la ruta de la app
+/// **ANDROID** para todos los hosts.  En el CI (Linux) esa ruta no existe y no
+/// es escribible, y los **arneses de integración** (`rust-core/tests/`) enlazan
+/// la librería **sin** `cfg(test)` ⇒ `state_dir()` les devolvía
+/// `/data/user/0/com.agy/...` ⇒ "Permission denied (os error 13)" al guardar
+/// el estado de cuota.  Fuera del móvil el estado va a casa del usuario.
+pub const STATE_DIR_ESCRITORIO: &str = ".local/share/megadaemon/state";
+
 /// Directorio de estado de la instancia.
 ///
 /// * `MEGADAEMON_STATE_DIR` si está puesto (y no está vacío);
@@ -33,15 +43,45 @@ pub fn state_dir() -> String {
     state_dir_real()
 }
 
-/// El estado REAL (producción): la env var si está puesta, si no el de la app.
+/// El estado REAL (producción): la env var si está puesta, si no el del host.
+///
+/// MEDIDO 2026-11-28 (CI run 46106444833): en Android (el móvil) el estado
+/// es el de la app; en cualquier otro host (escritorio, CI) es el del
+/// usuario, porque la ruta de la app **no existe** ahí.
 fn state_dir_real() -> String {
-    if let Ok(d) = std::env::var("MEGADAEMON_STATE_DIR") {
+    resolver(std::env::var("MEGADAEMON_STATE_DIR").ok().as_deref())
+}
+
+/// Resolución del estado: **pura** (no lee el entorno dentro), para que se
+/// pueda testear sin tocar variables globales (que en los tests son del
+/// proceso entero y los tests corren en paralelo).
+///
+/// MEDIDO 2026-11-28: la env var manda; si no está (o está en blanco), el
+/// default depende del host.
+pub fn resolver(env: Option<&str>) -> String {
+    if let Some(d) = env {
         let d = d.trim();
         if !d.is_empty() {
             return d.to_string();
         }
     }
-    STATE_DIR.to_string()
+    default_del_host()
+}
+
+/// El default del host: la app en Android, el del usuario en el resto.
+fn default_del_host() -> String {
+    if cfg!(target_os = "android") {
+        return STATE_DIR.to_string();
+    }
+    // MEDIDO 2026-11-28: sin `$HOME` no hay dónde escribir ⇒ se cae a la
+    // ruta de la app (que al menos es la que espera el resto del código).
+    match std::env::var("HOME") {
+        Ok(h) if !h.trim().is_empty() => {
+            let h = h.trim_end_matches('/');
+            format!("{h}/{STATE_DIR_ESCRITORIO}")
+        }
+        _ => STATE_DIR.to_string(),
+    }
 }
 
 /// Estado de los TESTS: un directorio **por hilo de test**.
@@ -106,16 +146,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn el_default_es_el_de_la_app() {
+    fn el_default_es_el_de_la_app_en_android_y_el_del_usuario_en_el_resto() {
         // Sin `MEGADAEMON_STATE_DIR`, EN PRODUCCIÓN el valor es el del móvil.
         // MEDIDO 2026-11-25: en los TESTS no (la ruta del móvil no es
         // escribible en el CI y los tests se pisarían entre sí) ⇒ el estado
         // de un test es su temporal por hilo.
-        assert_eq!(state_dir_real(), STATE_DIR);
+        // MEDIDO 2026-11-28 (CI run 46106444833): el default era la ruta
+        // Android para TODOS los hosts; en Linux (CI) no existe ⇒ los
+        // arneses de integración fallaban con "Permission denied".
+        if cfg!(target_os = "android") {
+            assert_eq!(state_dir_real(), STATE_DIR);
+        } else {
+            let s = state_dir_real();
+            assert!(
+                s.ends_with(STATE_DIR_ESCRITORIO),
+                "fuera del móvil el estado es del usuario: {s}"
+            );
+            assert!(!s.starts_with("/data/user/0/"), "{s}");
+        }
         // Y el estado de un test es un temporal, escribible y único por hilo.
         let s = state_dir();
         assert!(s.starts_with(std::env::temp_dir().to_str().unwrap_or("/tmp")), "{s}");
         assert!(s.contains("megadaemon-test-"), "{s}");
+    }
+
+    /// MEDIDO (CI run 46106444833): la env var manda sobre cualquier default,
+    /// también fuera del móvil.  Se prueba la FUNCIÓN PURA de resolución
+    /// (no se toca el entorno: en los tests es global al proceso).
+    #[test]
+    fn la_env_var_manda_sobre_el_default_del_host() {
+        assert_eq!(resolver(Some("/tmp/x")), "/tmp/x");
+        assert_eq!(resolver(Some("  /tmp/y  ")), "/tmp/y");
+        // En blanco ⇒ el default del host.
+        assert_eq!(resolver(Some("   ")), resolver(None));
+        assert_eq!(resolver(None), default_del_host());
     }
 
     /// MEDIDO (CI rojo, 3ª vez): dos hilos con el MISMO nombre compartían
