@@ -151,6 +151,125 @@ pub fn extensiones_propias() -> Vec<Extension> {
             metodo: "re/status",
             para_que: "estado del motor de RE y cobertura medida de un binario",
         },
+        // MEDIDO (2026-11-28): las capacidades propias escritas con el
+        // procedimiento AST -> Rust de `docs/EXTENSIONES_PROPIETARIAS.md` §4
+        // y los patrones CLI/Rust que ya estan cerrados.  Cada una esta
+        // atada a su modulo del crate.
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "queue/list",
+            para_que: "listar la cola de mensajes de la sesion (cola_mensajes.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "queue/enqueue",
+            para_que: "encolar un mensaje en la sesion (cola_mensajes.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "queue/update",
+            para_que: "actualizar un mensaje encolado (cola_mensajes.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "queue/delete",
+            para_que: "borrar un mensaje de la cola (cola_mensajes.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "queue/steer",
+            para_que: "redirigir un mensaje ya encolado para que tome el turno (cola_mensajes.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "subagent/list",
+            para_que: "listar los subagentes del lead (subagentes.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "subagent/get",
+            para_que: "obtener un subagente concreto (subagentes.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "subagent/foreground",
+            para_que: "promover un subagente a primer plano (subagentes.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "subagent/background",
+            para_que: "mandar un subagente a segundo plano (subagentes.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "subagent/cancel",
+            para_que: "cancelar un subagente (subagentes.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "mcp/servers/list",
+            para_que: "listar los servidores MCP que conoce el daemon (mcp_control.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "mcp/servers/toggle",
+            para_que: "encender o apagar un servidor MCP (mcp_control.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "mcp/tools/toggle",
+            para_que: "encender o apagar una tool MCP concreta (mcp_control.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "models/options/list",
+            para_que: "listar las opciones de modelo del daemon y del cliente (model_options.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "models/options/enrich",
+            para_que: "enriquecer las opciones con el catalogo nativo del cliente (model_options.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "models/options/filter",
+            para_que: "filtrar las opciones de modelo por proveedor (model_options.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "models/options/default",
+            para_que: "elegir la opcion de modelo por defecto (model_options.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "revert/listSteps",
+            para_que: "listar los pasos de revert de la conversacion (message_tree.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "revert/preview",
+            para_que: "previsualizar un paso de revert sin aplicarlo (message_tree.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "revert/execute",
+            para_que: "ejecutar el paso de revert elegido (message_tree.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "revert/forkFromStep",
+            para_que: "bifurcar la conversacion desde un paso (message_tree.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "context/build",
+            para_que: "armar el contexto (bloques y metadatos) sin hablar con el modelo (contexto.rs)",
+        },
+        Extension {
+            namespace: NAMESPACE_PROPIO,
+            metodo: "schema/verify",
+            para_que: "comprobar que el esquema SQLite creado es el medido (board_schema.rs)",
+        },
     ]
 }
 
