@@ -279,8 +279,8 @@ al fallar un proveedor:
 2. `construir_contexto` no referencia `providers::` ni ejecuta herramientas
    (se comprueba con `grep`).
 
-**Estado**: **HECHO el módulo** (2026-11-28) ⇒
-`rust-core/src/contexto.rs` (15 tests).
+**Estado**: **HECHO** (2026-11-28) ⇒
+`rust-core/src/contexto.rs` (15 tests) **+ cableado en el bucle**.
 
 * `construir_contexto(estado, entrada) -> Contexto` es **puro**: no habla
   con el modelo, no ejecuta herramientas y no hace E/S.
@@ -292,9 +292,44 @@ al fallar un proveedor:
   "sin límite", no un número inventado.
 * El criterio 2 está comprobado **por test**: el código (sin comentarios) no
   menciona `providers::` ni ninguna tool.
-* **PENDIENTE**: el cableado en `AgentLoop::build_prompt` (el ancla estable;
-  `agent_loop.rs` lo movió el patrón 1).  Hoy el bucle sigue armando el
-  prompt en su sitio, así que el módulo es la pieza lista, no la usada.
+* **CABLEADO (2026-11-28)**: `efectos::construir_prompt` (y por tanto
+  `AgentLoop::build_prompt` y el prompt que el bucle manda al modelo) ya
+  **no** se escribe a mano: se le pide el contexto a
+  `contexto::construir_contexto` y se ensambla con `Contexto::to_prompt()`.
+  El módulo `contexto` es la **única** fuente de los bloques del prompt.
+
+  El prompt del meta-agente pasa de un texto plano a los bloques canónicos
+  (MEDIDO, el contenido se conserva **todo**; lo que cambia son las
+  etiquetas y los saltos de línea):
+
+  ```
+  [SISTEMA]
+  Eres el meta-agente de MegaDaemon. Responde SOLO con una accion.
+
+  [REGLAS]
+  Formatos admitidos:
+    {"action":"tool","name":"<tool>","args":{...}}
+    {"action":"delegate","provider":"<id>","task_type":"<tipo>"}
+    {"action":"speak","text":"..."}
+  Provider local (SEERE) es el ultimo recurso: solo si los demas fallan.
+  Proveedores disponibles: seere (local, ultimo recurso)
+
+  [MEMORIA]
+  Lo que YA fallo (no lo repitas):
+    - <lo que ya falló>
+
+  [ENTRADA]
+  Tarea: <la tarea>
+  ```
+
+  * El bloque `[EPOCA]` **desaparece** si no hay historial: no hay bloques de
+    adorno (el bucle de efectos no compacta).  Es un cambio de contrato
+    del módulo `contexto` con su test (`un_estado_vacio_solo_tiene_la_entrada`).
+  * El bloque `[MEMORIA]` sólo aparece **si hay fallos** (igual que antes).
+  * El prompt es **determinista**: mismo estado ⇒ mismo prompt, byte a byte
+    (`el_prompt_es_determinista_byte_a_byte`).
+  * Validado en crate AISLADO (`agent_loop` + `efectos` + `contexto` +
+    `compaction_epoch`): **55 tests verdes** (6 nuevos del cableado).
 
 ---
 
@@ -420,16 +455,16 @@ cola (`list claimed sessions`, `list queued sessions`, `list outposts`).
 | 3 | la conversación es un bosque | **HECHO** | `message_tree.rs` |
 | 4 | compactación por época | **HECHO** | `compaction_epoch.rs` |
 | 5 | errores de proveedor tipados | PARCIAL | `providers.rs` + `provider_retry.rs` (hecho el `retry_after`; falta lo por modelo) |
-| 6 | construir contexto ≠ conducir el agente | **HECHO** (el módulo) | `contexto.rs` (falta el cableado en `build_prompt`) |
+| 6 | construir contexto ≠ conducir el agente | **HECHO** | `contexto.rs` (+ cableado en `efectos::construir_prompt` / `build_prompt`) |
 | 7 | daemon: socket + handshake + cola | **HECHO** | `daemon_socket.rs` |
 | 8 | sandbox compilado del permiso | **HECHO** | `sandbox_linux.rs` |
 | 9 | `PLUGIN_DATA` por identidad | **HECHO** | `plugin_data.rs` |
 | 10 | esquema SQLite de sesiones | **HECHO** | `board_schema.rs` |
 
 **8 de 10 completos** (2, 4, 9 y 8 ya estaban; este 2026-11-28 cierran
-1, 3, 6, 7 y 10).  Quedan dos cabos sueltos, ambos de cableado y no de
-núcleo: `build_prompt` debe usar `contexto::construir_contexto`, y el
-esquema medido debe llegar al `board.rs` (hoy cada uno usa el suyo).
+1, 3, 6, 7 y 10).  Queda **un** cabo suelto, y es de cableado y no de
+núcleo: el esquema medido debe llegar al `board.rs` (hoy cada uno usa el
+suyo).
 
 ## Capacidades propias nuevas (AST → Rust, 2026-11-28)
 

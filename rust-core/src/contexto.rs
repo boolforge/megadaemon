@@ -376,11 +376,14 @@ fn bloques_internos(estado: &EstadoContexto, entrada: &Entrada) -> Vec<BloqueInt
         .collect();
     v.push(BloqueInterno::nuevo(ClaseBloque::Ficheros, ficheros));
 
-    // 5) Época viva.
-    v.push(BloqueInterno::nuevo(
-        ClaseBloque::Epoca,
-        vec![linea_epoca(estado)],
-    ));
+    // 5) Época viva.  Sólo si hay historial: sin mensajes no hay época que
+    //    anunciar, y el prompt no lleva bloques de adorno.
+    if !estado.historial.historial_completo().is_empty() {
+        v.push(BloqueInterno::nuevo(
+            ClaseBloque::Epoca,
+            vec![linea_epoca(estado)],
+        ));
+    }
 
     // 6) Historial: **sólo la vista viva** (la época actual).  El historial
     //    entero no se borra (sigue en su sitio), pero aquí no se enseña.
@@ -921,16 +924,16 @@ Tarea: instalar el launcher"#;
     }
 
     #[test]
-    fn un_estado_vacio_solo_tiene_la_epoca_y_la_entrada() {
+    fn un_estado_vacio_solo_tiene_la_entrada() {
         // Sin sistema, reglas, memoria ni ficheros no hay bloques que enseñar;
-        // la época (que siempre existe) y la entrada sí.
+        // y sin historial tampoco hay época que anunciar (MEDIDO 2026-11-28:
+        // el bloque [EPOCA] con 0 mensajes era ruido en el prompt).
         let ctx = construir_contexto(&EstadoContexto::nuevo(), &entrada_demo());
-        assert_eq!(ctx.bloques.len(), 2);
-        assert_eq!(ctx.bloques[0].clase, ClaseBloque::Epoca);
-        assert_eq!(ctx.bloques[1].clase, ClaseBloque::Entrada);
+        assert_eq!(ctx.bloques.len(), 1);
+        assert_eq!(ctx.bloques[0].clase, ClaseBloque::Entrada);
         assert_eq!(
             ctx.metadatos.chars_totales,
-            ctx.bloques[0].texto.chars().count() + ctx.bloques[1].texto.chars().count()
+            ctx.bloques[0].texto.chars().count()
         );
     }
 

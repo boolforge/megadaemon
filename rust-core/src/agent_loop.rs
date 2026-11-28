@@ -1251,6 +1251,21 @@ mod tests {
     }
 
     #[test]
+    fn el_prompt_lleva_los_bloques_canonicos_del_contexto() {
+        // MEDIDO (2026-11-28, patrón 6): `build_prompt` (el ancla estable)
+        // ya NO arma el prompt a mano: lo arma `crate::contexto`
+        // (`construir_contexto`).  Los bloques canónicos son la prueba.
+        let path = tmp_path("prompt-bloques");
+        let _ = fs::remove_file(&path);
+        let ag = loop_with(path);
+        let p = ag.build_prompt("tarea");
+        assert!(p.contains("[SISTEMA]"), "{}", p);
+        assert!(p.contains("[REGLAS]"), "{}", p);
+        assert!(p.contains("[ENTRADA]"), "{}", p);
+        assert!(p.contains("Tarea: tarea"), "{}", p);
+    }
+
+    #[test]
     fn circuit_breaker_tres_estados_con_backoff() {
         let mut br = CircuitBreaker::new("p1");
         br.base_backoff_secs = 10;

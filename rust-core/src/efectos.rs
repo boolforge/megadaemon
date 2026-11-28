@@ -905,35 +905,72 @@ fn accion_descartada(estado: &mut Estado, accion: &Action, now: u64) -> Vec<Efec
     continuar_o_parar(estado, now)
 }
 
+/// La instrucción de sistema del meta-agente.
+const SISTEMA_METAAGENTE: &str = "Eres el meta-agente de MegaDaemon. Responde SOLO con una accion.";
+
+/// Los formatos que el meta-agente puede emitir (una regla).
+const FORMATOS_ADMITIDOS: &str = "Formatos admitidos:\n  {\"action\":\"tool\",\"name\":\"<tool>\",\"args\":{...}}\n  {\"action\":\"delegate\",\"provider\":\"<id>\",\"task_type\":\"<tipo>\"}\n  {\"action\":\"speak\",\"text\":\"...\"}";
+
+/// La regla del último recurso (el proveedor local).
+const ULTIMO_RECURSO: &str =
+    "Provider local (SEERE) es el ultimo recurso: solo si los demas fallan.";
+
+/// El estado del contexto del meta-agente, **ya resuelto**.
+///
+/// MEDIDO (2026-11-28, patrón 6): el prompt **no** se escribe a mano aquí:
+/// se le pide al módulo de contexto (`crate::contexto`) que lo arme.  Esta
+/// función sólo **traduce** lo que el bucle tiene (la tarea, los
+/// proveedores, la memoria de fallos) al modelo del contexto; el módulo
+/// `contexto` es el que decide el orden de los bloques, los recorta si
+/// llega un presupuesto y devuelve los metadatos (chars por bloque).
+fn estado_de_contexto(
+    tarea: &str,
+    proveedores: &[ProviderRef],
+    fallos: &[String],
+) -> crate::contexto::EstadoContexto {
+    use crate::contexto::{EstadoContexto, ProveedorContexto};
+    // La memoria: la cabecera explica el bloque y las entradas son lo que
+    // ya falló.  Sin fallos **no hay bloque** (no hay bloques de adorno).
+    let memoria = if fallos.is_empty() {
+        Vec::new()
+    } else {
+        let mut m = vec!["Lo que YA fallo (no lo repitas):".to_string()];
+        m.extend(fallos.iter().map(|s| format!("  - {}", s)));
+        m
+    };
+    EstadoContexto {
+        sistema: SISTEMA_METAAGENTE.to_string(),
+        reglas: vec![FORMATOS_ADMITIDOS.to_string(), ULTIMO_RECURSO.to_string()],
+        memoria,
+        ficheros: Vec::new(),
+        // El bucle de efectos no lleva historial de compactación: la
+        // memoria de fallos va en su propio bloque.
+        historial: crate::compaction_epoch::Historial::nuevo("metaagente"),
+        proveedores: proveedores
+            .iter()
+            .map(|p| ProveedorContexto {
+                id: p.id.clone(),
+                local: p.local,
+            })
+            .collect(),
+        // Sin presupuesto: el recorte por presupuesto es del llamador (el
+        // que sabe el modelo que se va a usar).
+        presupuesto_chars: None,
+    }
+}
+
 /// Construye el prompt.  **Nunca** lleva API key, token ni secretos: sólo
 /// la tarea, la memoria de fallos y la lista de proveedores.
+///
+/// MEDIDO (2026-11-28, patrón 6): el prompt sale de
+/// `crate::contexto::construir_contexto` (puro: sin red, sin disco, sin
+/// modelo) ⇒ los bloques son los canónicos (`[SISTEMA]`, `[REGLAS]`,
+/// `[MEMORIA]`, `[ENTRADA]`) y el prompt es **determinista** (mismo estado
+/// ⇒ mismo prompt, byte a byte).
 pub fn construir_prompt(tarea: &str, proveedores: &[ProviderRef], fallos: &[String]) -> String {
-    let lista: Vec<String> = proveedores
-        .iter()
-        .map(|p| {
-            if p.local {
-                format!("{} (local, ultimo recurso)", p.id)
-            } else {
-                p.id.clone()
-            }
-        })
-        .collect();
-    let mut p = String::new();
-    p.push_str("Eres el meta-agente de MegaDaemon. Responde SOLO con una accion.\n");
-    p.push_str("Formatos admitidos:\n");
-    p.push_str("  {\"action\":\"tool\",\"name\":\"<tool>\",\"args\":{...}}\n");
-    p.push_str("  {\"action\":\"delegate\",\"provider\":\"<id>\",\"task_type\":\"<tipo>\"}\n");
-    p.push_str("  {\"action\":\"speak\",\"text\":\"...\"}\n");
-    p.push_str(&format!("Tarea: {}\n", tarea));
-    p.push_str(&format!("Proveedores disponibles: {}\n", lista.join(", ")));
-    if !fallos.is_empty() {
-        p.push_str("Lo que YA fallo (no lo repitas):\n");
-        for s in fallos {
-            p.push_str(&format!("  - {}\n", s));
-        }
-    }
-    p.push_str("Provider local (SEERE) es el ultimo recurso: solo si los demas fallan.\n");
-    p
+    let estado = estado_de_contexto(tarea, proveedores, fallos);
+    let entrada = crate::contexto::Entrada::nueva(format!("Tarea: {}", tarea));
+    crate::contexto::construir_contexto(&estado, &entrada).to_prompt()
 }
 
 /// Resumen de lo que ya falló (para el prompt): "acción → error (n veces)".
@@ -1776,5 +1813,96 @@ mod tests {
         );
         assert!(executor.calls.is_empty(), "no debe ejecutar la tool");
         assert!(informe.acciones.iter().any(|a| a.contains("tope de shell")));
+    }
+
+    // -----------------------------------------------------------------------
+    // Patrón 6: el prompt lo arma el módulo de contexto
+    // -----------------------------------------------------------------------
+
+    /// Un proveedor de prueba.
+    fn prov(id: &str, local: bool) -> ProviderRef {
+        ProviderRef {
+            id: id.to_string(),
+            model: "m".to_string(),
+            local,
+        }
+    }
+
+    #[test]
+    fn el_prompt_lo_arma_el_modulo_de_contexto() {
+        // MEDIDO (2026-11-28, patrón 6): el prompt del meta-agente sale de
+        // `contexto::construir_contexto` => los bloques son los canónicos.
+        let p = construir_prompt("la tarea", &[prov("seere", true)], &[]);
+        assert!(p.contains("[SISTEMA]"), "{}", p);
+        assert!(p.contains("[REGLAS]"), "{}", p);
+        assert!(p.contains("[ENTRADA]"), "{}", p);
+        assert!(p.contains("Eres el meta-agente de MegaDaemon"), "{}", p);
+        assert!(p.contains("Formatos admitidos:"), "{}", p);
+        assert!(
+            p.contains("Proveedores disponibles: seere (local, ultimo recurso)"),
+            "{}",
+            p
+        );
+        assert!(p.contains("Tarea: la tarea"), "{}", p);
+    }
+
+    #[test]
+    fn la_memoria_de_fallos_va_en_su_bloque() {
+        // MEDIDO (2026-11-28): la frase que el bucle usa ("YA fallo") se
+        // mantiene: el bloque [MEMORIA] la lleva como cabecera.
+        let fallos = vec!["tool ls: no such file".to_string()];
+        let p = construir_prompt("la tarea", &[], &fallos);
+        assert!(p.contains("[MEMORIA]"), "{}", p);
+        assert!(p.contains("Lo que YA fallo (no lo repitas):"), "{}", p);
+        assert!(p.contains("  - tool ls: no such file"), "{}", p);
+    }
+
+    #[test]
+    fn sin_fallos_no_hay_bloque_de_memoria() {
+        // MEDIDO (2026-11-28): no hay bloques de adorno: sin fallos, el
+        // bloque [MEMORIA] no aparece (igual que antes del cableado).
+        let p = construir_prompt("la tarea", &[], &[]);
+        assert!(!p.contains("[MEMORIA]"), "{}", p);
+        assert!(!p.contains("[EPOCA]"), "{}", p);
+        assert!(!p.contains("[HISTORIAL]"), "{}", p);
+        assert!(!p.contains("[FICHEROS]"), "{}", p);
+    }
+
+    #[test]
+    fn el_prompt_es_determinista_byte_a_byte() {
+        // MEDIDO (2026-11-28): mismo estado => mismo prompt (el módulo de
+        // contexto no mete el reloj ni el azar).
+        let a = construir_prompt("la tarea", &[prov("seere", true)], &["x".to_string()]);
+        let b = construir_prompt("la tarea", &[prov("seere", true)], &["x".to_string()]);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn el_prompt_no_lleva_credenciales() {
+        // El prompt nunca lleva API key, token ni secretos.
+        let p = construir_prompt("la tarea", &[prov("seere", true)], &[]);
+        for prohibido in [
+            "X-Seere-Auth-Token",
+            "X-API-Key",
+            "mdaemon_sk",
+            "MEGADAEMON_API_KEY",
+            "MEGADAEMON_COCKPIT_TOKEN",
+        ] {
+            assert!(!p.contains(prohibido), "{} en el prompt", prohibido);
+        }
+    }
+
+    #[test]
+    fn el_prompt_y_el_contexto_coinciden_byte_a_byte() {
+        // MEDIDO (2026-11-28): el prompt **es** el contexto (no hay dos
+        // fuentes de verdad): se puede comparar con el prompt exacto que
+        // arma `contexto::construir_contexto` sin red.
+        let proveedores = [prov("seere", true)];
+        let fallos = vec!["x".to_string()];
+        let p = construir_prompt("la tarea", &proveedores, &fallos);
+        let estado = estado_de_contexto("la tarea", &proveedores, &fallos);
+        let entrada = crate::contexto::Entrada::nueva("Tarea: la tarea");
+        let ctx = crate::contexto::construir_contexto(&estado, &entrada);
+        assert_eq!(p, ctx.to_prompt());
     }
 }
