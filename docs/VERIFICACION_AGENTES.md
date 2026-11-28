@@ -68,8 +68,8 @@ fichero real, en `main`, con contenido sustantivo.
 
 | medida | valor |
 |---|---|
-| módulos en `rust-core/src/` | **229** |
-| módulos con **algún** test | 186 |
+| módulos en `rust-core/src/` | **230** |
+| módulos con **algún** test | 187 |
 | módulos **sin un solo test** | **43** |
 | de esos, los que pasan de 150 líneas | **36** |
 
@@ -77,6 +77,12 @@ Los 36 módulos sin test y con más de 150 líneas (MEDIDO, ordenados por tamañ
 
 `backup_apps.rs` (3322), `main.rs` (2465), `seere_v11.rs` (2431), `cert_vault.rs` (1974), `re_mba.rs` (1194), `automation_runtime.rs` (1160), `device_inventory.rs` (1048), `root_intel.rs` (758), `backup_formats.rs` (677), `re_strenc.rs` (608), `argon2.rs` (576), `brillo_events.rs` (532), `cert_android.rs` (513), `mcp_server.rs` (499), `deobf.rs` (457), `drive_client.rs` (436), `npu_cv.rs` (428), `disasm.rs` (378), `npu_bridge.rs` (372), `swift_sba1.rs` (325), `recording_vault.rs` (319), `provider_catalog.rs` (317), `shm.rs` (291), `frida_dbi.rs` (276), `aegis.rs` (269), `rea_assistant.rs` (268), `tile_vram.rs` (262), `zstd.rs` (253), `cfg_lifter.rs` (246), `lib.rs` (239), `adb_tool.rs` (210), `freezer.rs` (197), `crypto_scan.rs` (195), `rom_locator.rs` (194), `deobfuscate.rs` (192), `unifier.rs` (172).
 
+> MEDIDO 2026-11-28 (actualización 2): `model_catalog.rs` (267 líneas, el
+> catálogo **por modelo** del patrón 5) entra con **7 tests** ⇒ 230 módulos,
+> 187 con test.  El hueco de "sin un solo test" **sigue en 43** (un módulo
+> nuevo con suite no lo reduce) ⇒ el trabajo que falta son 43 módulos
+> concretos, no un número redondo.
+>
 > MEDIDO 2026-11-28 (actualización): **`cirx_rtl.rs` (759), `kaitai_imhex.rs`
 > (326), `binwalk_die.rs` (759), `re_strings.rs` (284) y `hw_mapper.rs` (203)
 > ya tienen tests** (28, 9, 15, 11 y 11 respectivamente) ⇒ el hueco baja de
