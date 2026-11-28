@@ -221,3 +221,231 @@ caso_base_11_los_4_bugs_del_movil() {
   contiene "el watchdog usa el prefijo persistente" "$RAIZ/deploy/tunnel-watchdog.sh" 'LOG_DIR=/data/adb/megadaemon'
   contiene "el watchdog deriva el state del prefijo" "$RAIZ/deploy/tunnel-watchdog.sh" 'STATE_DIR="\$\{MEGADAEMON_STATE_DIR:-\$LOG_DIR/state\}"'
 }
+
+# =============================================================================
+# ESCENARIOS DEL BLOQUE PID-FILES (MEDIDO 2026-11-28, móvil Samsung+Magisk)
+#
+# El "pastel" del móvil (vivos: supervisor=4 watchdog=4 cloudflared=5,
+# daemons=6, load1=58) lo causaba el GUARDIÁN: decidía si el supervisor
+# vivía LEYENDO /proc/<pid>/cmdline y, con SELinux, ese cmdline NO se puede
+# leer => el proceso se descartaba en silencio => el guardián creía que el
+# supervisor estaba MUERTO y lo relanzaba DETRÁS del que ya estaba vivo.
+#
+# Aquí se prueba POR EFECTO (el guardian tiene PROC_DIR como knob):
+#   * cmdline ILEGIBLE            => NO se relanza (regla de oro)
+#   * fichero de PID del supervisor=> el supervisor VIVO se respeta
+#   * supervisor MUERTO            => se relanza (el guardián sigue valiendo)
+#   * dos keepers a la vez         => sólo uno queda con el puesto
+#   * dos supervisores a la vez   => sólo uno arranca
+#   * las 4 copias del bloque      => son idénticas (que no divergan)
+# =============================================================================
+
+# --- un /proc de mentira con el cmdline ILEGIBLE ---------------------------
+# El cmdline es un DIRECTORIO: `tr` no lo puede leer => el mismo camino de
+# código que cuando SELinux lo prohíbe (lectura fallida => "no se pudo leer",
+# que NO es lo mismo que "no existe").
+proc_falso_ilegible() {
+    rm -rf "$1"
+    mkdir -p "$1/424242/cmdline"
+}
+
+# --- un /proc de mentira VACÍO (barrido concluyente: no hay nadie) --------
+proc_falso_vacio() {
+    rm -rf "$1"
+    mkdir -p "$1"
+}
+
+# --- el supervisor de mentira: deja constancia de que le lanzan -----------
+supervisor_falso() {
+    cat > "$1" <<'EOF'
+#!/bin/sh
+# Supervisor de mentira: anota el lanzamiento y se queda vivo un rato (si no,
+# el guardian lo relanzaría en bucle y el test no distinguiría los casos).
+echo "lanzado $$" >> "${MD_LANZAMIENTOS:-/dev/null}"
+if [ -n "${MD_PREFIX:-}" ]; then
+    echo "$$ 100" > "$MD_PREFIX/supervisor.pid"
+fi
+sleep 5
+exit 0
+EOF
+    chmod 755 "$1"
+}
+
+# --- 1) cmdline ILEGIBLE => NO se relanza (la regla de oro) ---------------
+caso_pf_01_cmdline_ilegible_no_relanza() {
+    preparar_lab
+    proc_falso_ilegible "$L/proc-real"
+    supervisor_falso "$L/sup-falso.sh"
+    : > "$L/lanzamientos.log"
+    MD_LANZAMIENTOS="$L/lanzamientos.log" MD_PREFIX="$PRE" \
+    MEGADAEMON_PREFIX="$PRE" MEGADAEMON_LOG="$L/keeper.log" \
+    MEGADAEMON_SUPERVISOR="$L/sup-falso.sh" \
+    KEEPER_START_WAIT=0 KEEPER_INTERVAL=1 KEEPER_RETRY_WAIT=1 \
+    PROC_DIR="$L/proc-real" PATH="$SB:$TBR" \
+    sh "$RAIZ/deploy/97-megadaemon-keeper.sh" > "$L/keeper.out" 2>&1 &
+    KP=$!
+    sleep 4
+    kill "$KP" 2>/dev/null
+    wait "$KP" 2>/dev/null
+    if [ -s "$L/lanzamientos.log" ]; then
+        mal "el guardian relanzo el supervisor con el cmdline ILEGIBLE"
+    else
+        ok "el guardian NO relanzo el supervisor (cmdline ilegible => inconcluyente)"
+    fi
+    contiene "el guardian deja constancia del motivo" "$L/keeper.log" 'cmdline ilegible'
+    no_contiene "el guardian no dice que lo relanzó" "$L/keeper.log" 'lo relanzo'
+}
+
+# --- 2) el supervisor VIVO (por su fichero de PID) no se relanza ----------
+# Éste es el caso MEDIDO en el móvil: el supervisor estaba vivo, pero su
+# cmdline no se podía leer, y el guardian lo relanzaba por detrás.
+caso_pf_02_pid_vivo_no_relanza() {
+    preparar_lab
+    proc_falso_ilegible "$L/proc-real"
+    supervisor_falso "$L/sup-falso.sh"
+    : > "$L/lanzamientos.log"
+    sleep 300 &
+    LIVE=$!
+    # El fichero de PID del supervisor: "<pid> <starttime>".
+    echo "$LIVE 100" > "$PRE/supervisor.pid"
+    MD_LANZAMIENTOS="$L/lanzamientos.log" MD_PREFIX="$PRE" \
+    MEGADAEMON_PREFIX="$PRE" MEGADAEMON_LOG="$L/keeper.log" \
+    MEGADAEMON_SUPERVISOR="$L/sup-falso.sh" \
+    KEEPER_START_WAIT=0 KEEPER_INTERVAL=1 KEEPER_RETRY_WAIT=1 \
+    PROC_DIR="$L/proc-real" PATH="$SB:$TBR" \
+    sh "$RAIZ/deploy/97-megadaemon-keeper.sh" > "$L/keeper.out" 2>&1 &
+    KP=$!
+    sleep 4
+    kill "$KP" 2>/dev/null
+    wait "$KP" 2>/dev/null
+    kill "$LIVE" 2>/dev/null
+    if [ -s "$L/lanzamientos.log" ]; then
+        mal "el guardian relanzo el supervisor que ya vivia (lo vio por su fichero de PID)"
+    else
+        ok "el guardian NO relanzo el supervisor vivo (fichero de PID, sin cmdline)"
+    fi
+}
+
+# --- 3) el supervisor MUERTO sí se relanza (el guardian sigue valiendo) ----
+caso_pf_03_supervisor_muerto_si_relanza() {
+    preparar_lab
+    proc_falso_vacio "$L/proc-real"
+    supervisor_falso "$L/sup-falso.sh"
+    : > "$L/lanzamientos.log"
+    # El PID del supervisor ya no existe => está muerto (prueba SIN cmdline).
+    echo "999999 100" > "$PRE/supervisor.pid"
+    MD_LANZAMIENTOS="$L/lanzamientos.log" MD_PREFIX="$PRE" \
+    MEGADAEMON_PREFIX="$PRE" MEGADAEMON_LOG="$L/keeper.log" \
+    MEGADAEMON_SUPERVISOR="$L/sup-falso.sh" \
+    KEEPER_START_WAIT=0 KEEPER_INTERVAL=1 KEEPER_RETRY_WAIT=1 \
+    PROC_DIR="$L/proc-real" PATH="$SB:$TBR" \
+    sh "$RAIZ/deploy/97-megadaemon-keeper.sh" > "$L/keeper.out" 2>&1 &
+    KP=$!
+    sleep 4
+    kill "$KP" 2>/dev/null
+    wait "$KP" 2>/dev/null
+    if grep -q 'lanzado' "$L/lanzamientos.log" 2>/dev/null; then
+        ok "el guardian relanzo el supervisor muerto"
+    else
+        mal "el guardian NO relanzo el supervisor muerto (el movil se quedaria sin daemon)"
+    fi
+}
+
+# --- 4) dos keepers a la vez => sólo uno queda con el puesto --------------
+caso_pf_04_dos_keepers_uno_solo() {
+    preparar_lab
+    proc_falso_vacio "$L/proc-real"
+    supervisor_falso "$L/sup-falso.sh"
+    : > "$L/lanzamientos.log"
+    MD_LANZAMIENTOS="$L/lanzamientos.log" MD_PREFIX="$PRE" \
+    MEGADAEMON_PREFIX="$PRE" MEGADAEMON_LOG="$L/keeper.log" \
+    MEGADAEMON_SUPERVISOR="$L/sup-falso.sh" \
+    KEEPER_START_WAIT=0 KEEPER_INTERVAL=1 KEEPER_RETRY_WAIT=1 \
+    PROC_DIR="$L/proc-real" PATH="$SB:$TBR" \
+    sh "$RAIZ/deploy/97-megadaemon-keeper.sh" > "$L/keeperA.out" 2>&1 &
+    KA=$!
+    sleep 2
+    MD_LANZAMIENTOS="$L/lanzamientos.log" MD_PREFIX="$PRE" \
+    MEGADAEMON_PREFIX="$PRE" MEGADAEMON_LOG="$L/keeper.log" \
+    MEGADAEMON_SUPERVISOR="$L/sup-falso.sh" \
+    KEEPER_START_WAIT=0 KEEPER_INTERVAL=1 KEEPER_RETRY_WAIT=1 \
+    PROC_DIR="$L/proc-real" PATH="$SB:$TBR" \
+    sh "$RAIZ/deploy/97-megadaemon-keeper.sh" > "$L/keeperB.out" 2>&1
+    RC=$?
+    kill "$KA" 2>/dev/null
+    wait "$KA" 2>/dev/null
+    comprobar "el segundo guardian sale con 0" [ "$RC" = "0" ]
+    contiene "el segundo guardian dice que ya hay uno vivo" "$L/keeper.log" 'ya hay un keeper vivo'
+}
+
+# --- 5) las 4 copias del bloque PID-FILES son idénticas -------------------
+caso_pf_05_bloques_identicos() {
+    preparar_lab
+    for f in 97-megadaemon-keeper.sh 98-cloudflared.sh 99-megadaemon.sh tunnel-watchdog.sh; do
+        if grep -qF '>>> BLOQUE PID-FILES' "$RAIZ/deploy/$f" \
+           && grep -qF '<<< BLOQUE PID-FILES' "$RAIZ/deploy/$f"; then
+            ok "$f tiene el bloque PID-FILES"
+        else
+            mal "$f NO tiene el bloque PID-FILES"
+        fi
+        awk '/^# >>> BLOQUE PID-FILES/{p=1} p{print} /^# <<< BLOQUE PID-FILES/{p=0}' \
+            "$RAIZ/deploy/$f" > "$L/$f.bloque"
+    done
+    IGUAL=1
+    for f in 98-cloudflared.sh 99-megadaemon.sh tunnel-watchdog.sh; do
+        cmp -s "$L/97-megadaemon-keeper.sh.bloque" "$L/$f.bloque" || IGUAL=0
+    done
+    if [ "$IGUAL" = "1" ]; then
+        ok "las 4 copias del bloque PID-FILES son idénticas"
+    else
+        mal "las copias del bloque PID-FILES han divergido (el fix dejó de ser el mismo)"
+    fi
+}
+
+# --- 6) dos supervisores a la vez => sólo uno arranca ---------------------
+caso_pf_06_dos_supervisores_uno_solo() {
+    preparar_lab
+    cp "$SB/megadaemon-core" "$PRE/megadaemon-core"
+    chmod 755 "$PRE/megadaemon-core"
+    : > "$LOG"
+    # /proc de mentira vacío: el barrido es CONCLUYENTE y no encuentra a
+    # nadie (así el supervisor cree que el daemon está muerto y lo arranca).
+    proc_falso_vacio "$L/proc-real"
+    MEGADAEMON_LOG="$L/sup.log" MEGADAEMON_PREFIX="$PRE" \
+    MEGADAEMON_STATE_FILE="$L/sup.state" MEGADAEMON_URL_FILE="$L/sup.url" \
+    PATH="$SB:$TBR" HOME="$HOME" TMPDIR="$TMPDIR" MD_LOG="$LOG" \
+    PROC_DIR="$L/proc-real" \
+    sh "$RAIZ/deploy/99-megadaemon.sh" > "$L/supA.out" 2>&1 &
+    SA=$!
+    sleep 3
+    MEGADAEMON_LOG="$L/sup.log" MEGADAEMON_PREFIX="$PRE" \
+    MEGADAEMON_STATE_FILE="$L/sup.state" MEGADAEMON_URL_FILE="$L/sup.url" \
+    PATH="$SB:$TBR" HOME="$HOME" TMPDIR="$TMPDIR" MD_LOG="$LOG" \
+    PROC_DIR="$L/proc-real" \
+    sh "$RAIZ/deploy/99-megadaemon.sh" > "$L/supB.out" 2>&1 &
+    SB=$!
+    i=0
+    while [ "$i" -lt 20 ]; do
+        kill -0 "$SB" 2>/dev/null || break
+        sleep 0.5
+        i=$((i + 1))
+    done
+    if kill -0 "$SB" 2>/dev/null; then
+        mal "el segundo supervisor NO sale: hay DOS supervisores (el pastel)"
+        kill -9 "$SB" 2>/dev/null
+    else
+        ok "el segundo supervisor sale solo (el puesto ya estaba tomado)"
+    fi
+    wait "$SB" 2>/dev/null
+    kill -9 "$SA" 2>/dev/null
+    wait "$SA" 2>/dev/null
+    contiene "el segundo supervisor dice que ya hay uno vivo" "$L/sup.log" 'ya hay un supervisor vivo'
+    # Y el daemon se lanzó UNA sola vez: el segundo supervisor no lo tocó.
+    N=$(grep -c 'invocacion: cockpit' "$LOG" 2>/dev/null || true)
+    case "$N" in ''|*[!0-9]*) N=0 ;; esac
+    if [ "$N" -le 1 ]; then
+        ok "el daemon se lanzó una sola vez ($N)"
+    else
+        mal "el daemon se lanzó $N veces (hay dos supervisores)"
+    fi
+}

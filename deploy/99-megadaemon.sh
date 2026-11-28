@@ -20,7 +20,10 @@
 # movil desaparece el binario => el supervisor se quedaba relanzando y
 # fallando con "no existe megadaemon-core" (sin daemon, sin tunel, sin
 # nada).  Ahora todo vive en `/data/adb/megadaemon` (persistente, root).
-PREFIX=/data/adb/megadaemon
+# MEDIDO (2026-11-28): el prefijo se puede cambiar por entorno (los otros
+# scripts del stack ya lo hacen: 98-cloudflared.sh, tunnel-watchdog.sh y el
+# guardian leen MEGADAEMON_PREFIX).  El valor por defecto no cambia.
+PREFIX="${MEGADAEMON_PREFIX:-/data/adb/megadaemon}"
 # Si el movil tiene el binario en la ruta antigua (instalado a mano), se
 # migra en el primer arranque.
 LEGACY_PREFIX=/data/local/tmp/megadaemon
@@ -64,15 +67,16 @@ export MEGADAEMON_LISTEN="${MEGADAEMON_LISTEN:-127.0.0.1:9090}"
 # El LLM local tiene ahora SU PROPIO puerto (8081) y este export dice cual
 # es.  Sin el, el daemon usa su defecto, que es el mismo 8081.
 export SEERE_LLM="${SEERE_LLM:-http://127.0.0.1:8081}"
-LOG=/sdcard/megadaemon.log
+# El log es configurable (para poder PROBAR el supervisor sin /sdcard).
+LOG="${MEGADAEMON_LOG:-/sdcard/megadaemon.log}"
 LOG_DIR=/sdcard/megadaemon-logs
 MAX_BYTES=$((10 * 1024 * 1024))
 KEEP=5
 # Puerto del cockpit.  Configurable por MEGADAEMON_COCKPIT_PORT (se lee del
 # fichero de entorno); el valor por defecto es el que usa el despliegue actual.
 PORT=9090
-URL_FILE=/sdcard/megadaemon.url
-STATE_FILE=/sdcard/megadaemon.state
+URL_FILE="${MEGADAEMON_URL_FILE:-/sdcard/megadaemon.url}"
+STATE_FILE="${MEGADAEMON_STATE_FILE:-/sdcard/megadaemon.state}"
 # Fallos de arranque seguidos => se considera fallo de código y el supervisor
 # para (antes reintentaba en bucle infinito y se comía la batería).
 MAX_FAST_FAILS=3
@@ -101,8 +105,8 @@ for cand in /data/data/com.termux/files/usr/bin/python3 \
             /system/bin/python3; do
     [ -x "$cand" ] && { PY_BIN="$cand"; break; }
 done
-URL_FILE=/sdcard/megadaemon.url
-STATE_FILE=/sdcard/megadaemon.state
+URL_FILE="${MEGADAEMON_URL_FILE:-/sdcard/megadaemon.url}"
+STATE_FILE="${MEGADAEMON_STATE_FILE:-/sdcard/megadaemon.state}"
 # Fallos de arranque seguidos => se considera fallo de código y el supervisor
 # para (antes reintentaba en bucle infinito y se comía la batería).
 MAX_FAST_FAILS=3
@@ -285,34 +289,295 @@ alias_ports_free() {
     echo "$out"
 }
 
-# --- ¿hay proceso vivo? (portable, sin `pgrep -f`) -------------------------
-# MEDIDO (2026-11-27, movil): `pgrep -f` NO es de fiar en toybox (el shell de
-# Android) y ademas cuenta como "vivo" a los ENVOLTORIOS `sh -c ...` (que no
-# son el proceso real) => el guardian creia que el supervisor estaba muerto y
-# lo relanzaba DETRAS de otro (6 supervisores, 6 daemons, 6 cloudflared y 5
-# watchdogs en el movil: load 58 => el tunel no podia arrancar).
-# Ahora: se listan los PIDs leyendo /proc, se descartan los envoltorios
-# `sh -c` y se pueden pedir VARIAS subcadenas (todas tienen que estar).
-# PROC_DIR se puede cambiar para poder PROBAR la funcion sin /proc real.
+# --- FICHEROS DE PID Y CERROJOS DEL STACK ----------------------------------
+# MEDIDO (2026-11-28, movil Samsung+Magisk): el stack se MULTIPLICABA (4
+# supervisores, 5 cloudflared, 4 watchdogs, 6 daemons, load1=58) porque la
+# "¿esta vivo?" se contestaba LEYENDO /proc/<pid>/cmdline: con SELinux ese
+# cmdline no se puede leer => el proceso se descartaba => el guardian
+# creia que el supervisor estaba muerto y lo relanzaba DETRAS del vivo.
+# Ahora: ficheros de PID (pid + starttime) + cerrojos atomicos + `kill -0`
+# (que NO leen el cmdline).  Ver el BLOQUE PID-FILES mas abajo.
+PID_SUPERVISOR="$PREFIX/supervisor.pid"
+PID_DAEMON="$PREFIX/daemon.pid"
+PID_CLOUDFLARED="$PREFIX/cloudflared.pid"
+PID_CLOUDFLARED_LEGACY="$PREFIX/cloudflared-legacy.pid"
+LOCK_SUPERVISOR="$PREFIX/.lock-supervisor"
+LOCK_CLOUDFLARED="$PREFIX/.lock-cloudflared"
+
+# >>> BLOQUE PID-FILES (copia idéntica en los 4 scripts del stack) >>>
+# --- PID: identidad del proceso (SIN cmdline) -----------------------------
+# Imprime "<starttime> <estado>" de /proc/<pid>/stat.  rc=1 si no se puede
+# leer (entonces NO se puede confirmar la identidad del proceso).
+pid_proc_info() {
+    _pi_s=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+    [ -n "$_pi_s" ] || return 1
+    # "pid (comm) ..." => se quita hasta el ÚLTIMO ") " (el comm puede llevar
+    # paréntesis dentro).  Lo que queda empieza por el estado.
+    _pi_s=${_pi_s##*) }
+    set -- $_pi_s
+    [ $# -ge 20 ] || return 1
+    printf '%s %s\n' "${20}" "${1}"
+}
+
+# --- FICHEROS DE PID ------------------------------------------------------
+# "<pid> <starttime>", escritos de forma ATÓMICA (a .tmp y mv) para que
+# nadie lea un PID a medias.
+pid_escribe() {
+    _pe_f=$1
+    _pe_p=$2
+    case "$_pe_p" in ''|*[!0-9]*) return 1 ;; esac
+    _pe_i=$(pid_proc_info "$_pe_p") || _pe_i="0 ?"
+    _pe_s=${_pe_i%% *}
+    [ -n "$_pe_s" ] || _pe_s=0
+    printf '%s %s\n' "$_pe_p" "$_pe_s" > "$_pe_f.tmp" 2>/dev/null || return 1
+    mv -f "$_pe_f.tmp" "$_pe_f" 2>/dev/null || {
+        rm -f "$_pe_f.tmp" 2>/dev/null
+        return 1
+    }
+    return 0
+}
+
+# --- Estado del actor con fichero de PID ----------------------------------
+#   0 = VIVO           (demostrado: el PID existe y es el nuestro)
+#   1 = MUERTO         (demostrado: el PID ya no existe)
+#   2 = INCONCLUYENTE  (el fichero existe pero no se puede interpretar)
+#   3 = SIN REGISTRO   (no hay fichero)
+pid_estado() {
+    _pe_f=$1
+    if [ ! -e "$_pe_f" ]; then return 3; fi
+    if [ ! -r "$_pe_f" ]; then return 2; fi
+    _pe_l=$(cat "$_pe_f" 2>/dev/null) || return 2
+    _pe_p=${_pe_l%% *}
+    case "$_pe_p" in ''|*[!0-9]*) return 2 ;; esac
+    case "$_pe_l" in
+        *" "*) _pe_s=${_pe_l#* } ;;
+        *) _pe_s=0 ;;
+    esac
+    if ! kill -0 "$_pe_p" 2>/dev/null; then
+        # Si /proc/<pid> sigue ahí, el proceso existe pero no se puede
+        # señalar (permisos): NO se puede afirmar que esté muerto.
+        [ -d "/proc/$_pe_p" ] && return 2
+        return 1
+    fi
+    _pe_i=$(pid_proc_info "$_pe_p") || return 2
+    _pe_now=${_pe_i%% *}
+    _pe_st=${_pe_i#* }
+    case "$_pe_st" in Z|z) return 1 ;; esac    # zombie: ya no hace nada
+    [ "$_pe_s" = "0" ] && return 2             # sin starttime: no se confirma
+    [ "$_pe_now" = "$_pe_s" ] && return 0      # es NUESTRO proceso
+    return 1                                    # el PID se ha reciclado
+}
+
+# --- CERROJOS (creación ATÓMICA con noclobber) ----------------------------
+# Un cerrojo es un fichero con "<pid> <starttime>" de quien lo tiene.
+#   0 = lo tiene un proceso VIVO
+#   1 = libre (o el titular está muerto)
+#   2 = INCONCLUYENTE (no se puede saber)
+lock_estado() {
+    _le_f=$1
+    if [ ! -e "$_le_f" ]; then return 1; fi
+    if [ ! -r "$_le_f" ]; then return 2; fi
+    _le_l=$(cat "$_le_f" 2>/dev/null) || return 2
+    _le_p=${_le_l%% *}
+    case "$_le_p" in ''|*[!0-9]*) return 2 ;; esac
+    case "$_le_l" in
+        *" "*) _le_s=${_le_l#* } ;;
+        *) _le_s=0 ;;
+    esac
+    if ! kill -0 "$_le_p" 2>/dev/null; then
+        [ -d "/proc/$_le_p" ] && return 2
+        return 1
+    fi
+    [ "$_le_s" = "0" ] && return 2
+    _le_i=$(pid_proc_info "$_le_p") || return 2
+    _le_now=${_le_i%% *}
+    if [ "$_le_now" = "$_le_s" ]; then return 0; fi
+    return 1
+}
+
+# Toma el cerrojo.  rc: 0 = tomado, 1 = otro lo tiene (vivo), 2 = no se pudo
+# saber (NO se toca).  La creación es ATÓMICA: con `set -C` el `>` falla si
+# el fichero ya existe => dos actores no pueden tomar el mismo puesto.
+lock_toma() {
+    _lt_f=$1
+    lock_estado "$_lt_f"
+    _lt_r=$?
+    # 0 = lo tiene uno vivo: NO se toca.
+    if [ "$_lt_r" = "0" ]; then return 1; fi
+    if [ "$_lt_r" = "2" ]; then
+        # No se puede saber si lo tiene alguien vivo.  Sólo se roba si el
+        # fichero es BASURA (no tiene un PID válido): si tiene un PID pero no
+        # se puede comprobar, NO se toca (regla de oro).
+        if [ -r "$_lt_f" ]; then
+            _lt_e=$(cat "$_lt_f" 2>/dev/null)
+            _lt_p=${_lt_e%% *}
+            case "$_lt_p" in
+                ''|*[!0-9]*) : ;;
+                *) return 2 ;;
+            esac
+        else
+            return 2
+        fi
+    fi
+    # Libre (o basura): se roba.  El fichero viejo se borra ANTES (el `>`
+    # con noclobber no pisa) y la creación nueva es ATÓMICA: si otro lo
+    # toma entre medias, el `>` falla y su estado decide.
+    [ -e "$_lt_f" ] && rm -rf "$_lt_f" 2>/dev/null
+    _lt_s=$(pid_proc_info "$$") || _lt_s="0 ?"
+    _lt_st=${_lt_s%% *}
+    [ -n "$_lt_st" ] || _lt_st=0
+    if ( set -C; printf '%s %s\n' "$$" "$_lt_st" > "$_lt_f" ) 2>/dev/null; then
+        return 0
+    fi
+    lock_estado "$_lt_f"
+    _lt_r=$?
+    [ "$_lt_r" = "0" ] && return 1
+    return 2
+}
+
+# Suelta el cerrojo (sólo si lo tenemos nosotros).
+lock_suelta() {
+    _ls_f=$1
+    _ls_l=$(cat "$_ls_f" 2>/dev/null)
+    _ls_p=${_ls_l%% *}
+    [ "$_ls_p" = "$$" ] && rm -f "$_ls_f" 2>/dev/null
+    return 0
+}
+
+# --- BARRIDO DE /proc (TRIVIAL) -------------------------------------------
+# Rellena _PIDS (PIDs separados por espacios) y _LECTURA:
+#   ok      = se pudo leer TODOS los cmdlines (barrido CONCLUYENTE)
+#   parcial = algún cmdline NO se pudo leer (barrido INCONCLUYENTE)
+# PROC_DIR se puede cambiar para poder PROBAR la función sin /proc real.
 PROC_DIR="${PROC_DIR:-/proc}"
-proc_pids() {
+_PIDS=""
+_LECTURA=ok
+proc_pids_scan() {
     _pat=$1; shift
+    _PIDS=""
+    _LECTURA=ok
     for _pp in "$PROC_DIR"/[0-9]*; do
-        [ -r "$_pp/cmdline" ] || continue
-        _pc=$(tr '\0' ' ' < "$_pp/cmdline" 2>/dev/null) || continue
+        [ -d "$_pp" ] || continue
+        if [ ! -r "$_pp/cmdline" ]; then
+            # El proceso se ha ido entre el glob y ahora: no es un problema.
+            # Si el directorio SIGUE ahí pero el cmdline no se puede leer
+            # (SELinux), el barrido es PARCIAL: no se puede concluir que ese
+            # proceso no existe (y antes se descartaba en silencio => el
+            # guardián relanzaba el supervisor DETRÁS del vivo).
+            [ -d "$_pp" ] || continue
+            _LECTURA=parcial
+            continue
+        fi
+        _pc=$(tr '\0' ' ' 2>/dev/null < "$_pp/cmdline") || {
+            _LECTURA=parcial
+            continue
+        }
         case "$_pc" in
             "sh -c "*|*/sh\ -c\ *) continue ;;
         esac
         _ok=1
-        case "$_pc" in *$_pat*) ;; *) _ok=0 ;; esac
+        case "$_pc" in *"$_pat"*) ;; *) _ok=0 ;; esac
         for _x in "$@"; do
             case "$_pc" in *"$_x"*) ;; *) _ok=0 ;; esac
         done
-        [ "$_ok" = "1" ] && printf '%s\n' "${_pp##*/}"
+        [ "$_ok" = "1" ] && _PIDS="$_PIDS ${_pp##*/}"
     done
     return 0
 }
+
+# La versión que imprime (la de siempre).
+proc_pids() {
+    proc_pids_scan "$@"
+    for _p in $_PIDS; do printf '%s\n' "$_p"; done
+}
+
+# --- matar SOLO lo que es NUESTRO ------------------------------------------
+# Por fichero de PID: el starttime registrado tiene que coincidir con el de
+# /proc/<pid>/stat (si el PID se ha reciclado, NO se mata).
+matar_pid_fichero() {
+    _mf_f=$1
+    _mf_l=$(cat "$_mf_f" 2>/dev/null) || return 1
+    _mf_p=${_mf_l%% *}
+    case "$_mf_p" in ''|*[!0-9]*) return 1 ;; esac
+    case "$_mf_l" in
+        *" "*) _mf_s=${_mf_l#* } ;;
+        *) _mf_s=0 ;;
+    esac
+    [ "$_mf_s" = "0" ] && return 1
+    _mf_i=$(pid_proc_info "$_mf_p") || return 1
+    _mf_now=${_mf_i%% *}
+    [ "$_mf_now" = "$_mf_s" ] || return 1
+    kill -9 "$_mf_p" 2>/dev/null
+}
+
+# Por barrido: el cmdline se relee JUSTO antes del kill; si ya no se puede
+# leer, NO se mata (podría ser otro proceso con el PID reciclado).
+matar_pid_barrido() {
+    _mb_p=$1
+    _mb_pat=$2
+    _mb_c=$(tr '\0' ' ' 2>/dev/null < "$PROC_DIR/$_mb_p/cmdline") || return 1
+    case "$_mb_c" in *"$_mb_pat"*) ;; *) return 1 ;; esac
+    kill -9 "$_mb_p" 2>/dev/null
+}
+# <<< BLOQUE PID-FILES (fin de la copia) <<<
+
+
 proc_vivo() { [ -n "$(proc_pids "$@")" ]; }
+
+# --- ¿hay OTRO supervisor vivo (distinto de yo)? ---------------------------
+# Se usa cuando el cerrojo no se puede leer: si el barrido encuentra otro
+# supervisor, este NO arranca (no se relanza nada a ciegas).
+otro_supervisor_vivo() {
+    proc_pids_scan "service.d/99-megadaemon.sh"
+    for _os_p in $_PIDS; do
+        [ "$_os_p" = "$$" ] && continue
+        return 0
+    done
+    return 1
+}
+
+# --- ¿esta vivo el daemon? (TRES estados) ----------------------------------
+#   0 = VIVO   1 = MUERTO   2 = INCONCLUYENTE
+daemon_estado() {
+    pid_estado "$PID_DAEMON"; _de_p=$?
+    # Nuestro daemon sigue vivo (PID + starttime): no hay duda.
+    [ "$_de_p" = "0" ] && return 0
+    if [ "$_de_p" = "1" ]; then
+        # NUESTRO daemon ya no existe (prueba SIN cmdline).  Pero puede
+        # haber otro (el que arranco el instalador): se busca y se adopta.
+        proc_pids_scan "megadaemon-core" "cockpit"
+        if [ -n "$_PIDS" ]; then
+            set -- $_PIDS
+            pid_escribe "$PID_DAEMON" "$1" 2>/dev/null
+            return 0
+        fi
+        return 1
+    fi
+    # Sin registro (3) o fichero ilegible (2): decide el barrido, y SÓLO si
+    # es CONCLUYENTE ("no se pudo leer" NO es "no existe").
+    proc_pids_scan "megadaemon-core" "cockpit"
+    if [ -n "$_PIDS" ]; then
+        set -- $_PIDS
+        pid_escribe "$PID_DAEMON" "$1" 2>/dev/null
+        return 0
+    fi
+    [ "$_LECTURA" = "ok" ] && return 1
+    return 2
+}
+
+# Registra el PID del cloudflared recien arrancado.  `setsid` puede hacer
+# fork (entonces $! no es el cloudflared): se comprueba /proc/<pid> y, si no
+# existe, se busca el cloudflared de ese puerto y se adopta.
+registrar_cloudflared() {
+    _rc_f=$1; _rc_p=$2; _rc_pat=$3
+    if [ -d "/proc/$_rc_p" ]; then
+        pid_escribe "$_rc_f" "$_rc_p" 2>/dev/null && return 0
+    fi
+    proc_pids_scan "cloudflared tunnel" "$_rc_pat"
+    set -- $_PIDS
+    [ $# -gt 0 ] || return 1
+    pid_escribe "$_rc_f" "$1" 2>/dev/null
+}
 
 ensure_web_bridge() {
     [ -f "$BRIDGE" ] || return 0
@@ -634,22 +899,69 @@ ensure_tunnel() {
     t_port=$1; t_log=$2; t_urlfile=$3; t_tag=$4; t_dedup=${5:-1}; t_fallback=${6:-}
     [ -x "$CLOUDFLARED" ] || return 0
     t_url=$(cat "$t_urlfile" 2>/dev/null)
+    # El fichero de PID del tunel de este puerto: la "¿vive?" NO depende de
+    # leer el cmdline (con SELinux no se puede).
+    if [ "$t_port" = "$PORT" ]; then
+        t_pidfile="$PID_CLOUDFLARED"
+    else
+        t_pidfile="$PID_CLOUDFLARED_LEGACY"
+    fi
     t_pids=$(proc_pids "cloudflared tunnel" "127.0.0.1:$t_port")
     t_n=0
     for p in $t_pids; do t_n=$((t_n + 1)); done
 
     if [ "$t_n" -eq 0 ]; then
-        log "tunel $t_tag caido: arrancando cloudflared (quic) -> 127.0.0.1:$t_port"
-        setsid nohup "$CLOUDFLARED" tunnel --no-autoupdate \
-            --url "http://127.0.0.1:$t_port" >>"$t_log" 2>&1 </dev/null &
-        sleep 6
+        # ¿Hay un cloudflared VIVO de este puerto?  (fichero de PID, sin
+        # cmdline).  Si lo hay NO se relanza: relanzarlo cambia el hostname
+        # publico y deja ciega a la flota.
+        pid_estado "$t_pidfile"; t_pe=$?
+        if [ "$t_pe" = "0" ]; then
+            log "tunel $t_tag: el cloudflared registrado sigue vivo: no lo relanzo"
+        else
+            # El puesto del tunel es COMPARTIDO con el 98 y el watchdog: si
+            # otro actor lo esta relanzando, no se hace nada (si no, los tres
+            # se matan el tunel entre ellos y el hostname publico cambia).
+            lock_toma "$LOCK_CLOUDFLARED"
+            _tl=$?
+            if [ "$_tl" = "1" ]; then
+                log "tunel $t_tag: otro actor esta relanzando el tunel: no lo hago"
+            elif [ "$_tl" = "2" ]; then
+                log "tunel $t_tag: no se puede saber si otro actor esta relanzando el tunel: no lo hago"
+            else
+                # Dentro del cerrojo: se vuelve a comprobar (otro puede
+                # haber relanzado mientras lo tomabamos).
+                pid_estado "$t_pidfile"; _tl2=$?
+                if [ "$_tl2" = "0" ]; then
+                    log "tunel $t_tag: otro actor relanzo el tunel: no lo hago"
+                else
+                    log "tunel $t_tag caido: arrancando cloudflared (quic) -> 127.0.0.1:$t_port"
+                    setsid nohup "$CLOUDFLARED" tunnel --no-autoupdate \
+                        --url "http://127.0.0.1:$t_port" >>"$t_log" 2>&1 </dev/null &
+                    t_newpid=$!
+                    sleep 6
+                    registrar_cloudflared "$t_pidfile" "$t_newpid" "127.0.0.1:$t_port" \
+                        || log "AVISO: no se pudo registrar el PID del tunel $t_tag"
+                fi
+                lock_suelta "$LOCK_CLOUDFLARED"
+            fi
+        fi
     elif [ "$t_dedup" -eq 1 ] && [ "$t_n" -gt 1 ]; then
         # Varias instancias para el MISMO origen: sobra una y cada una
-        # consume RAM en un movil que va justo.  Se queda la mas antigua.
-        keep=$(echo "$t_pids" | head -1)
+        # consume RAM en un movil que va justo.  Se queda la CANONICA (la del
+        # fichero de PID; si no, la mas antigua) y se matan las demas
+        # (verificando el cmdline justo antes del kill).
+        t_kl=$(cat "$t_pidfile" 2>/dev/null)
+        t_keep=${t_kl%% *}
+        t_found=0
         for p in $t_pids; do
-            [ "$p" = "$keep" ] && continue
-            kill "$p" 2>/dev/null && log "tunel $t_tag: instance duplicada PID $p eliminada"
+            [ "$p" = "$t_keep" ] && t_found=1
+        done
+        [ "$t_found" = "1" ] || t_keep=$(echo "$t_pids" | head -1)
+        for p in $t_pids; do
+            [ "$p" = "$t_keep" ] && continue
+            if matar_pid_barrido "$p" "cloudflared tunnel"; then
+                log "tunel $t_tag: instance duplicada PID $p eliminada"
+            fi
         done
     fi
 
@@ -1142,6 +1454,14 @@ start_daemon() {
         return 1
     fi
     fast_fails=0
+    # El daemon vivo queda registrado (PID + starttime): a partir de aqui,
+    # "¿vive el daemon?" NO depende de leer su cmdline.
+    if [ -d "/proc/$pid" ]; then
+        pid_escribe "$PID_DAEMON" "$pid" 2>/dev/null \
+            && log "daemon registrado en $PID_DAEMON (PID $pid)"
+    else
+        log "AVISO: no se pudo registrar el PID del daemon (setsid habra hecho fork?)"
+    fi
     ensure_web_bridge
     ensure_llama_server
     sync_antigravity_bridge
@@ -1405,10 +1725,7 @@ try_update() {
     "$upd" >>"$LOG" 2>&1 || log "auto-update: fallo (se mantiene la version actual)"
 }
 
-i=0
-last_update=0
 mkdir -p "$PREFIX" "$STATE" 2>/dev/null
-write_state "ARRANCANDO: supervisor activo, puerto $PORT (prefijo $PREFIX)"
 # MEDIDO (2026-11-28, movil): Magisk ejecuta TODO lo ejecutable de
 # `/data/adb/service.d/`, asi que la "copia de seguridad" del supervisor
 # (`99-megadaemon.sh.bak-50k`) era un SEGUNDO supervisor: los dos se
@@ -1425,6 +1742,38 @@ for _bak in "$_service_d"/99-megadaemon.sh.bak*; do
     [ -f "$_bak" ] || continue
     rm -f "$_bak" 2>/dev/null && log "supervisor: copia obsoleta borrada ($_bak)"
 done
+# --- el puesto del supervisor (UNO solo) -----------------------------------
+# MEDIDO (2026-11-28, movil): 4 supervisores vivos => 4 daemons + 4
+# cloudflared + 4 watchdogs => load1=58 => el tunel no arranca (HTTP 0) y
+# el movil se satura.  El puesto se toma con un cerrojo ATOMICO: si otro
+# supervisor lo tiene (y vive), este NO arranca => no puede haber pastel.
+lock_toma "$LOCK_SUPERVISOR"
+case $? in
+    0) : ;;
+    1) log "ya hay un supervisor vivo: no arranco (el canonico manda; para forzar uno nuevo: rm -f $LOCK_SUPERVISOR $PID_SUPERVISOR)"; exit 0 ;;
+    2)
+        # No se puede saber si hay otro supervisor: solo se arranca si el
+        # barrido NO encuentra ninguno (y el barrido es concluyente).
+        if otro_supervisor_vivo; then
+            log "hay otro supervisor vivo: no arranco (el canonico manda)"
+            exit 0
+        fi
+        if [ "$_LECTURA" != "ok" ]; then
+            log "no se puede saber si hay otro supervisor (cmdline ilegible): no arranco"
+            exit 0
+        fi
+        lock_toma "$LOCK_SUPERVISOR"
+        case $? in
+            0) : ;;
+            *) log "no se pudo tomar el puesto de supervisor: no arranco"; exit 0 ;;
+        esac
+        ;;
+esac
+pid_escribe "$PID_SUPERVISOR" "$$"
+log "supervisor arrancado (PID $$), puesto tomado"
+i=0
+last_update=0
+write_state "ARRANCANDO: supervisor activo, puerto $PORT (prefijo $PREFIX)"
 # Los túneles se levantan ANTES de arrancar el daemon: la URL pública (y la
 # del MCP legacy) no dependen de que el cockpit esté listo, y así el túnel
 # ya está cuando el daemon tarda unos segundos.
@@ -1433,7 +1782,14 @@ ensure_mcp_legacy_tunnel
 while true; do
     rotate
     prune_caches
-    if ! proc_vivo "megadaemon-core cockpit"; then
+    daemon_estado
+    _da=$?
+    if [ "$_da" = "2" ]; then
+        # INCONCLUYENTE: no se puede saber si el daemon vive (cmdline
+        # ilegible).  NO se relanza (regla de oro) y NO se toca nada.
+        log "no se puede comprobar si el daemon vive (cmdline ilegible): no relanzo"
+    fi
+    if [ "$_da" = "1" ]; then
         log "megadaemon no está corriendo: relanzando (intento $i)"
         start_daemon
         rc=$?
@@ -1475,9 +1831,11 @@ while true; do
             k=$((k + 1))
             ensure_web_bridge
             ensure_llama_server
-            if ! proc_vivo "megadaemon-core cockpit"; then
-                break
-            fi
+            daemon_estado
+            _dk=$?
+            # Solo se sale del bucle si el daemon esta MUERTO de verdad; si
+            # la comprobacion es inconcluyente, se sigue esperando.
+            [ "$_dk" = "1" ] && break
         done
         # ROBUSTEZ: vigilar RESPONSIVIDAD, no solo la EXISTENCIA del proceso.
         # Un daemon vivo pero envenenado (mutex envenenado por un panic) o
@@ -1532,8 +1890,12 @@ while true; do
         done
         if [ "$miss" -ge 3 ]; then
             log "daemon VIVO pero NO RESPONDE: se reinicia (antes se quedaba en 502 para siempre)"
+            # Primero el daemon registrado (verificado por su starttime) y
+            # luego los que aparezcan en el barrido (verificados por su
+            # cmdline): nunca se mata un PID sin comprobar que es el suyo.
+            matar_pid_fichero "$PID_DAEMON" 2>/dev/null
             for p in $(proc_pids "megadaemon-core cockpit"); do
-                kill "$p" 2>/dev/null
+                matar_pid_barrido "$p" "megadaemon-core" 2>/dev/null
             done
             sleep 3
         fi
