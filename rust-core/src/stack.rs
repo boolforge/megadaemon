@@ -360,7 +360,7 @@ fn nombres_de_servicio() -> Vec<String> {
 /// nombre canónico de un fichero del stack): los de otras apps no se
 /// tocan.  Los directorios tampoco.
 fn limpiar_servicios_sobrantes(cfg: &Config, inf: &mut Informe) {
-    let dir = Path::new(cfg.prefijo)
+    let dir = Path::new(&cfg.prefijo)
         .parent()
         .unwrap_or_else(|| Path::new("/data/adb"))
         .join("service.d");
