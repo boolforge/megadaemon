@@ -296,6 +296,23 @@ ejecutable() { r "test -x '$1'" >/dev/null 2>&1; }
 # Ejecuta el daemon COMO ROOT (vive en $PREFIX, que es de root).
 daemon()     { r "'$DAEMON' $*" 2>&1; }
 
+# --- la URL del TUNEL: UN SOLO CRITERIO para todo el script ----------------
+# MEDIDO (2026-11-28, movil SM-G998B, build 4a51e82): el regex
+# `https://[a-z0-9-]+\.trycloudflare\.com` TAMBIEN casa
+# `https://api.trycloudflare.com` (la URL de la API que el propio cloudflared
+# escribe en su log) => `$PREFIX/tunnel.url` guardaba una URL que NO es el
+# tunel => la sonda de salud decia "el tunel NO responde" y el veredicto del
+# instalador acababa en "ko" AUNQUE el tunel estuviera VIVO (el watchdog veia
+# HTTP 403 en el host real).  Ademas, el `quick` que se publica en el canal
+# salia con esa URL muerta => la flota veía una URL que no contestaba.
+# CRITERIO UNICO (el mismo que `deploy/99-megadaemon.sh:tunnel_url_from_log`):
+#   * solo hosts de quick tunnel: `https://<etiqueta>.trycloudflare.com`;
+#   * EXCLUIDOS `api.` y `developers.` (no son tuneles).
+# Se escribe UNA vez (aqui) y lo usan los dos sitios que lo necesitan.
+url_tunel_del_log() {
+  r "grep -ao 'https://[a-z0-9-]*\.trycloudflare\.com' '$1' 2>/dev/null | grep -v '^https://api\.' | grep -v '^https://developers\.' | tail -1" | tr -d '\r\n '
+}
+
 # --- inventario de procesos POR /proc (toybox no tiene pgrep -f fiable) ---
 # MEDIDO (2026-11-27, móvil SM-G998B): `pgrep -f` y `pkill -f` NO son de
 # fiar en toybox (el shell de Android) => la limpieza de duplicados NO
@@ -377,13 +394,36 @@ dejar_uno() {
 # MEDIDO (2026-11-27, móvil): era la causa del "pastel de Android": 6
 # supervisores + 6 cloudflared + 5 watchdogs => load 58, el túnel no
 # arrancaba y la URL cambiando cada minuto.
+#
+# MEDIDO (2026-11-28, móvil SM-G998B, build 4a51e82): el ORDEN de la muerte
+# es lo que fallaba.  El instalador mataba así: supervisores no canónicos →
+# duplicados por rol (`dejar_uno` deja el más ANTIGUO) → copias de service.d
+# → TODOS los daemons → lanza uno.  Pero el keeper relanza al supervisor y
+# el supervisor relanza el daemon: matarlos en ese orden deja que se
+# RE-CONSTRUYAN.  Al final de la limpieza seguían vivos 4 supervisores,
+# 4 watchdogs, 5 cloudflared y 6 daemons (load1=58).
+# El orden correcto es el INVERSO al de arranque:
+#     cloudflared → watchdog → keeper → supervisor → daemon
+# (se mata primero a quien puede resucitar a los demás) y el único
+# supervisor que se queda es el CANÓNICO
+# (`/data/adb/service.d/99-megadaemon.sh`, comparando el argv ELEMENTO a
+# elemento).
 limpiar_stack_duplicado() {
   say "--- limpiando duplicados del stack (si los hay) ---"
-  dejar_uno "tunnel-watchdog.sh" "watchdog"
-  dejar_uno "97-megadaemon-keeper.sh" "keeper"
-  dejar_uno "99-megadaemon.sh" "supervisor"
+  # 1) cloudflared: el que puede resucitar el túnel.
   dejar_uno "cloudflared" "cloudflared" "tunnel"
-  dejar_uno "megadaemon-core" "daemon" "cockpit"
+  # 2) watchdog: el que resucita al cloudflared.
+  dejar_uno "tunnel-watchdog.sh" "watchdog"
+  # 3) keeper: el que resucita al supervisor (con cuatro keepers vivos,
+  #    cuando el supervisor cae, los cuatro se pelean por relanzarlo y
+  #    quedan cuatro supervisores).
+  dejar_uno "97-megadaemon-keeper.sh" "keeper"
+  # 4) supervisor: de todos los que quedan se queda SÓLO el canónico.
+  matar_supervisores_no_canonicos
+  # 5) daemon: el ÚLTIMO.  Se matan TODOS (el que se lance justo después es
+  #    el del binario nuevo) y, como ya sólo queda un supervisor, no hay
+  #    carrera por relanzarlo.
+  matar_daemons
   return 0
 }
 
@@ -480,6 +520,10 @@ limpiar_copias_service_d() {
 # ERROR: la copia `.bak-50k` se creo al actualizar, asi que es MAS ANTIGUA
 # que el canonico => se quedaba el malo y se mataba el bueno.  El que se
 # queda es el que apunta a la RUTA CANONICA.
+# MEDIDO (2026-11-28, movil): puede haber VARIOS canonicos (el keeper relanzo
+# el supervisor mientras el viejo seguia vivo) => del grupo canonico se
+# queda SOLO el primero (el mas antiguo: /proc va en orden numerico) y los
+# demas mueren.  El requisito es UN supervisor.
 matar_supervisores_no_canonicos() {
   # ⚠️ El patron es "99-megadaemon.sh" (con .sh): el grep del banco indexa
   # los PID por nombre de fichero ("99-megadaemon.sh.pids") y con
@@ -488,6 +532,8 @@ matar_supervisores_no_canonicos() {
   _pids=$(r "grep -lsa '99-megadaemon.sh' /proc/[0-9]*/cmdline 2>/dev/null" | sed 's#/cmdline$##; s#.*/##')
   [ -z "$_pids" ] && return 0
   _n=0
+  _nd=0
+  _canonico_vivo=0
   for _p in $_pids; do
     # El argv, elemento a elemento (los NUL son separadores).
     # (mismo motivo que en `proc_pids`: el error del shell contaminaba el
@@ -505,6 +551,15 @@ matar_supervisores_no_canonicos() {
     # (`.../99-megadaemon.sh.bak-50k`) => con un `case` sobre el texto
     # unido la copia PASABA por canonica y se quedaba el malo.
     if printf '%s\n' "$_argv" | grep -qx "$SERVICE_D/99-megadaemon.sh"; then
+      # Es canonico: se queda el PRIMERO (el mas antiguo).  Los demas
+      # canonicos tambien mueren: solo puede quedar UN supervisor.
+      if [ "$_canonico_vivo" = "1" ]; then
+        matar_pid "$_p"
+        say "  supervisor canonico duplicado (PID $_p): eliminado (se queda uno)"
+        _nd=$((_nd + 1))
+      else
+        _canonico_vivo=1
+      fi
       continue
     fi
     matar_pid "$_p"
@@ -512,6 +567,7 @@ matar_supervisores_no_canonicos() {
     _n=$((_n + 1))
   done
   [ "$_n" -gt 0 ] && informe_paso "supervisores_no_canonicos" true "$_n eliminado(s)"
+  [ "$_nd" -gt 0 ] && informe_paso "supervisores_duplicados" true "$_nd eliminado(s)"
   return 0
 }
 
@@ -738,7 +794,7 @@ autorreparar() {
     r "'$DOC' reconectar --apply --espera 30" 2>&1 | tail -n 8 | sed 's/^/    /'
     U2=$(r "cat '$STATE/tunnel.url' 2>/dev/null" | tr -d '\r\n ')
     if [ -z "$U2" ]; then
-      U2=$(r "grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' '$LOGDIR/tunnel.log' 2>/dev/null | tail -1" | tr -d '\r\n ')
+      U2=$(url_tunel_del_log "$LOGDIR/tunnel.log")
       [ -n "$U2" ] && r "printf '%s' '$U2' > '$STATE/tunnel.url' && chmod 644 '$STATE/tunnel.url'" >/dev/null
     fi
     if [ -n "$U2" ] && r "'$DAEMON' telemetria sonda '$U2'" >/dev/null 2>&1; then
@@ -1164,8 +1220,14 @@ publicar_telemetria() {
     return 1
   fi
   say "  publicando telemetría, conexión, informe y diagnóstico en Drive…"
-  "$DAEMON" telemetria publicar 2>&1 | head -6 | sed 's/^/    /'
-  "$DAEMON" telemetria conexion 2>&1 | head -6 | sed 's/^/    /'
+  # MEDIDO (2026-11-28, movil SM-G998B): estas tres llamadas iban SIN root
+  # => `/data/adb` es 0700 de root => en el movil salia
+  #   "sh: 1167: /data/adb/megadaemon/megadaemon-core: Permission denied"
+  # y la telemetria NO se publicaba desde el script (la flota no recibia
+  # nada).  El daemon vive en el prefijo de root => se ejecuta COMO ROOT
+  # (mismo patron que el resto del fichero: `r`).
+  r "'$DAEMON' telemetria publicar" 2>&1 | head -6 | sed 's/^/    /'
+  r "'$DAEMON' telemetria conexion" 2>&1 | head -6 | sed 's/^/    /'
   if [ -s "$INFORME" ]; then
     # El informe se sube como ARTEFACTO a la carpeta PRIVADA de Drive: el
     # repo es público, aquí no van datos del dispositivo.
@@ -1173,7 +1235,7 @@ publicar_telemetria() {
       say "    informe de instalación subido a Drive ($INFORME)"
     fi
   fi
-  "$DAEMON" diagnostico --publicar 2>&1 | head -4 | sed 's/^/    /'
+  r "'$DAEMON' diagnostico --publicar" 2>&1 | head -4 | sed 's/^/    /'
   return 0
 }
 
@@ -1574,16 +1636,18 @@ instalar() {
   # ANTES de arrancar: si el stack está MULTIPLICADO (pastel de Android) se
   # deja uno de cada.  MEDIDO (2026-11-27, móvil): 6 supervisores + 6
   # cloudflared + 5 watchdogs => load 58 y el túnel sin poder arrancar.
-  # MEDIDO (2026-11-28): PRIMERO el supervisor canonico se queda.  El
-  # cleanup generico (`dejar_uno`) deja "el mas antiguo", y la copia
-  # `.bak-50k` es MAS ANTIGUA que el canonico => si corriera despues, se
-  # quedaria con el malo y mataria al bueno.
-  matar_supervisores_no_canonicos
-  limpiar_stack_duplicado
-  # Y las COPIAS de `service.d` (p.ej. el `.bak-50k`) se BORRAN: son la
-  # causa real del pastel (Magisk ejecuta todo lo ejecutable de ahi) y
-  # matarlas no basta: el fichero las vuelve a cerrar en el arranque.
+  # MEDIDO (2026-11-28): PRIMERO se BORRAN las COPIAS de `service.d` (p.ej.
+  # el `.bak-50k`): son la causa real del pastel (Magisk ejecuta todo lo
+  # ejecutable de ahi) y matarlas no basta: el fichero las vuelve a cerrar
+  # en el arranque.
   limpiar_copias_service_d
+  # Y DESPUES la muerte del stack, en el orden INVERSO al de arranque
+  # (cloudflared → watchdog → keeper → supervisor → daemon): matarlos en
+  # otro orden los resucitan (el keeper al supervisor, el supervisor al
+  # daemon).  MEDIDO (2026-11-28, movil): con el orden viejo, al final de
+  # la limpieza seguian vivos 4 supervisores, 4 watchdogs, 5 cloudflared y
+  # 6 daemons (load1=58).
+  limpiar_stack_duplicado
   # El token de GitHub (canal al repo), plantado sin imprimirlo.
   plantar_token
   # El bus de órdenes por Drive: el único mando que funciona sin túnel.
@@ -1593,8 +1657,8 @@ instalar() {
   # queda colgada).
   # MEDIDO (2026-11-27): `pkill -f` no es de fiar en toybox => los daemons
   # viejos se quedaban vivos y el móvil acababa con 6.  Ahora se matan
-  # leyendo /proc (mismo criterio que `proc_pids`).
-  matar_daemons
+  # leyendo /proc (mismo criterio que `proc_pids`); los mata
+  # `limpiar_stack_duplicado` (el último del orden inverso al de arranque).
   sleep 1
   r "MEGADAEMON_PREFIX='$PREFIX' MEGADAEMON_STATE_DIR='$STATE' MEGADAEMON_BIN='$DAEMON' setsid nohup '$DAEMON' cockpit $PORT >> '$LOGDIR/daemon.log' 2>&1 < /dev/null &" >/dev/null
 
@@ -1677,7 +1741,7 @@ instalar() {
   while [ "$i" -le 24 ]; do
     URL=$(r "cat '$STATE/tunnel.url' 2>/dev/null" | tr -d '\r\n ')
     [ -n "$URL" ] && break
-    URL=$(r "grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' '$LOGDIR/tunnel.log' 2>/dev/null | tail -1" | tr -d '\r\n ')
+    URL=$(url_tunel_del_log "$LOGDIR/tunnel.log")
     if [ -n "$URL" ]; then
       r "printf '%s' '$URL' > '$STATE/tunnel.url' && chmod 644 '$STATE/tunnel.url'" >/dev/null
       r "printf '%s' '$URL' > '$PREFIX/tunnel.url'" >/dev/null 2>&1
@@ -1842,7 +1906,7 @@ case "$MODO" in
   solo-telemetria)
     ejecutable "$DAEMON" || die "el daemon no está instalado"
     daemon telemetria publicar
-    "$DAEMON" telemetria conexion
+    daemon telemetria conexion
     ;;
   *) die "modo desconocido: $MODO" ;;
 esac

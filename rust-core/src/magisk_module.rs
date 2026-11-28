@@ -306,7 +306,16 @@ start_tunnel() {{
     log "tunnel arrancado PID $(cat "$TUNNEL_PIDFILE")"
     n=0
     while [ "$n" -lt 30 ]; do
-        U=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$LOG_DIR/tunnel.log" 2>/dev/null | tail -1)
+        # MEDIDO (2026-11-28, movil SM-G998B): este regex TAMBIEN casa
+        # "https://api.trycloudflare.com" (la URL de la API que el propio
+        # cloudflared escribe en su log) => "tunnel.url" guardaba una URL
+        # que NO es el tunel => la sonda de salud decia "el tunel NO
+        # responde" con el tunel VIVO (el watchdog veia HTTP 403 en el host
+        # real) y el veredicto del instalador acababa en "ko".
+        # CRITERIO UNICO (el mismo que `deploy/99-megadaemon.sh:
+        # tunnel_url_from_log` y que el one-liner): solo hosts de quick
+        # tunnel y fuera "api." y "developers." (no son tuneles).
+        U=$(grep -ao 'https://[a-z0-9-]*\.trycloudflare\.com' "$LOG_DIR/tunnel.log" 2>/dev/null | grep -v '^https://api\.' | grep -v '^https://developers\.' | tail -1)
         if [ -n "$U" ]; then
             echo "$U" > "$STATE_DIR/tunnel.url"
             log "tunnel URL: $U"

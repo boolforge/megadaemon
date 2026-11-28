@@ -105,7 +105,7 @@ omitir(){ printf '  OMIT  %s\n' "$*"; printf '%s\n' "$*" >> "$L/omites.txt"; }
 # ESPACIO_MB número = MB libres que ve `df` (0 = disco lleno)
 # SIN_CURL   1 = no hay curl en la caja (ni en el PATH)
 # DAEMONS    número = cuántos daemons "viven"
-# SUPERVISORS/WATCHDOGS/CLOUDFLARED = cuántos viven de cada clase
+# SUPERVISORS/WATCHDOGS/CLOUDFLARED/KEEPERS = cuántos viven de cada clase
 # SIN_MDOCTOR 1 = el bundle NO trae el núcleo forense
 knobs_reset() {
   NET=ok; BUNDLE=ok; SHA=ok; DL=curl; SIN_SHA256SUM=0; PREFIX_0700=0
@@ -126,7 +126,7 @@ knobs_reset() {
   # Por defecto el móvil está VACÍO (instalación en limpio): nada corriendo.
   # Los escenarios que necesitan "ya hay un daemon/supervisor/watchdog vivo"
   # lo piden con DAEMONS=1 / SUPERVISORS=1 / WATCHDOGS=1.
-  DAEMONS=0; SUPERVISORS=0; WATCHDOGS=0; CLOUDFLARED=0
+  DAEMONS=0; SUPERVISORS=0; WATCHDOGS=0; CLOUDFLARED=0; KEEPERS=0
   USUARIO_DISPONIBLE=0
 }
 
@@ -148,6 +148,7 @@ preparar_lab() {
   rm -rf "$PRE" "$SB" "$TBR" "$SVC" "$L/termux" "$L/proc" "$L/tmp" "$L/bundle" 2>/dev/null
   mkdir -p "$PRE" "$ST" "$SB" "$TBR" "$SVC" "$L/termux" "$L/proc" "$L/tmp" "$HOME" "$TMPDIR"
   : > "$LOG"
+  : > "${MD_KILLS:-$L/kills.log}"
 
   # --- el daemon de mentira -------------------------------------------------
   cat > "$SB/megadaemon-core" <<EOF
@@ -163,6 +164,11 @@ preparar_lab() {
     echo "    MEGADAEMON_PREFIX=\${MEGADAEMON_PREFIX:-<vacio>}"
     echo "    MEGADAEMON_BIN=\${MEGADAEMON_BIN:-<vacio>}"
   fi
+  # MEDIDO (2026-11-28, movil): el daemon vive en /data/adb (0700 de root)
+  # => si el instalador lo llama SIN root sale "Permission denied" y no se
+  # publica nada.  El banco anota el uid de cada invocacion para poder
+  # comprobar que la telemetria se publica COMO ROOT.
+  echo "    uid=\$(id -u 2>/dev/null || echo '?')"
 } >> "\${MD_LOG:-/dev/null}"
 case "\$1" in
   telemetria)
@@ -221,7 +227,15 @@ EOF
 # Falso de mddoctor (el nucleo forense en C).
 echo "--- mddoctor $*"
 case "$1" in
-  reconectar) echo "reconectado"; exit 0 ;;
+  reconectar)
+    # MEDIDO (2026-11-28, movil): si MD_TUNEL_LOG apunta al log del tunel,
+    # el nucleo forense "reconecta" el tunel y su log trae la URL (la de la
+    # API y la del tunel).  Asi se puede ejercitar el SEGUNDO sitio del
+    # instalador que extrae la URL del log (la autorreparacion).
+    if [ -n "${MD_TUNEL_LOG:-}" ]; then
+      printf '%s\n' "${MD_TUNEL_LOG_CONTENIDO:-}" >> "$MD_TUNEL_LOG"
+    fi
+    echo "reconectado"; exit 0 ;;
   todo)       echo "veredicto: todo bien"; exit 0 ;;
   *)          echo "entorno: ok"; exit 0 ;;
 esac
@@ -502,6 +516,9 @@ for a in "\$@"; do
   case "\$a" in -*) ;; *) pids="\$pids \$a" ;; esac
 done
 for p in \$pids; do
+  # MEDIDO (2026-11-28): el ORDEN de las muertes es lo que arregla el
+  # instalador (el inverso al de arranque) => el banco lo registra.
+  [ -n "\${MD_KILLS:-}" ] && echo "kill \$p" >> "\$MD_KILLS"
   for f in "\$LAB_PROC"/*.pids; do
     [ -f "\$f" ] || continue
     # MEDIDO (2026-11-28): con "grep -v ... && mv", si el PID matado era la
@@ -687,6 +704,16 @@ EOF
   [ "$SUPERVISORS" -gt 0 ] || rm -f "$LAB_PROC/99-megadaemon.sh.pids"
   fijar_pids tunnel-watchdog.sh $(seq 424442 $((424442 + WATCHDOGS - 1)) 2>/dev/null)
   [ "$WATCHDOGS" -gt 0 ] || rm -f "$LAB_PROC/tunnel-watchdog.sh.pids"
+  # MEDIDO (2026-11-28, movil): el keeper tambien multiplica (cada keeper
+  # relanza un supervisor => 4 keepers = 4 supervisores) => el banco lo
+  # simula tambien.
+  fijar_pids 97-megadaemon-keeper.sh $(seq 424642 $((424642 + KEEPERS - 1)) 2>/dev/null)
+  [ "$KEEPERS" -gt 0 ] || rm -f "$LAB_PROC/97-megadaemon-keeper.sh.pids"
+  # Y el cloudflared: hasta ahora solo habia el marcador (`ps`), no una lista
+  # de PIDs => la limpieza de duplicados del cloudflared no se podia
+  # examinar en el banco.
+  fijar_pids cloudflared $(seq 424542 $((424542 + CLOUDFLARED - 1)) 2>/dev/null)
+  [ "$CLOUDFLARED" -gt 0 ] || rm -f "$LAB_PROC/cloudflared.pids"
   [ "$CLOUDFLARED" -gt 0 ] && { touch "$LAB_PROC/cloudflared.vivo"; } || rm -f "$LAB_PROC/cloudflared.vivo"
 
   # --- el túnel: el log con la URL (salvo que el escenario diga que no) -----
@@ -953,10 +980,11 @@ ejecutar_uno() {
     HOME="$dir/home"
     TMPDIR="$dir/tmp"
     MD_LOG="$dir/invocaciones.log"
+    MD_KILLS="$dir/kills.log"
     MD_STARTTIME=100
     MD_EXE=""
     export L PRE ST SB TBR SVC LOG OUT LAB_PROC HOME TMPDIR MD_LOG LAB_RELOJ
-    export MD_STARTTIME MD_EXE
+    export MD_STARTTIME MD_EXE MD_KILLS
     mkdir -p "$HOME" "$TMPDIR" "$LAB_PROC"
     : > "$LOG"
     : > "$dir/fallos.txt"
