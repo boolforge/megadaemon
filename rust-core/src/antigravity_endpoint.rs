@@ -50,6 +50,72 @@ pub const GATE_CONDICION: &str = "osName===\"linux\"&&k.isGoogleInternal";
 /// Puerto por defecto del gateway (cockpit) del MegaDaemon en el móvil.
 pub const PUERTO_GATEWAY: u16 = 9090;
 
+/// Puertos que el daemon **escucha de verdad** (principal + alias).
+///
+/// MEDIDO (2026-11-28, captura del jefe en el móvil): el parche del
+/// language server se aplicó con el puerto **8080** y el daemon **no
+/// escuchaba** ahí ⇒ la app de Antigravity respondía
+/// `ERR_LLM_UNREACHABLE: LLM_UNREACHABLE:127.0.0.1:8080: Connection
+/// refused (os error 111)` y el modelo no llegaba nunca.
+///
+/// 8080 es un **alias** del cockpit (ver `cockpit_server::ALIAS_PORTS`):
+/// sirve la MISMA instancia, así que las rutas del dialecto Gemini (que
+/// en loopback están exentas de token) responden ahí igual que en 9090.
+pub const PUERTOS_SERVIDOS: &[u16] = &[8080, 9090];
+
+/// ¿El daemon escucha en ese puerto?
+pub fn puerto_servido(p: u16) -> bool {
+    PUERTOS_SERVIDOS.contains(&p)
+}
+
+/// ¿Hay **algo** escuchando en `127.0.0.1:p` AHORA?
+///
+/// MEDIDO (2026-11-28, telemetría del móvil): el 8080 lo sirve el **web
+/// bridge** (`web_bridge.py`, un proceso de Termux) que reenvía al 9090 del
+/// daemon; y si el bridge no está, lo sirve el propio daemon con su alias.
+/// O sea: "puerto del daemon" y "puerto con listener" NO son lo mismo, y
+/// lo que decide si el agente llega al modelo es que **haya** alguien
+/// escuchando.
+pub fn puerto_con_listener(p: u16) -> bool {
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+    let addr = SocketAddr::from(([127, 0, 0, 1], p));
+    TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok()
+}
+
+/// ¿Tiene sentido parchear el language server a este puerto?
+///
+/// * el daemon lo sirve (alias o principal) ⇒ sí; o
+/// * hay alguien escuchando ahora mismo (el web bridge del móvil).
+///
+/// MEDIDO (2026-11-28): parchear a un puerto sin listener deja al agente
+/// apuntando a un puerto muerto ⇒ `ERR_LLM_UNREACHABLE:127.0.0.1:8080`.
+pub fn puerto_usable(p: u16) -> bool {
+    puerto_servido(p) || puerto_con_listener(p)
+}
+
+/// Puertos con listener ahora mismo (para la Web UI).
+pub fn puertos_con_listener() -> Vec<u16> {
+    let mut out: Vec<u16> = PUERTOS_SERVIDOS
+        .iter()
+        .copied()
+        .filter(|p| puerto_con_listener(*p))
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Texto del error cuando se parchea a un puerto que nadie escucha.
+fn error_puerto_muerto(p: u16) -> String {
+    format!(
+        "puerto_muerto: el daemon no escucha en {} (sirve {:?}). \
+         Si el agente apunta a un puerto sin listener, la app da \
+         ERR_LLM_UNREACHABLE y el modelo no llega nunca.",
+        p, PUERTOS_SERVIDOS
+    )
+}
+
 /// Raíz de los datos de la app en el móvil.
 pub const RAIZ_APP: &str = "/data/user/0/com.agy/files";
 
@@ -375,15 +441,27 @@ pub fn estado() -> Value {
     let gate = ruta_gate();
     let manifest = ruta_manifest();
 
-    let (occ, parcheado, sha) = match std::fs::read(&ls) {
+    let (occ, parcheado, url_en_disco, sha) = match std::fs::read(&ls) {
         Ok(d) => {
             let original = CLOUCODE_URL.as_bytes();
             let occ = d.windows(original.len()).filter(|w| *w == original).count();
-            let destino = url_destino(PUERTO_GATEWAY);
-            let parcheado = d.windows(destino.len()).any(|w| w == destino.as_bytes());
-            (occ, parcheado, Some(sha256_hex(&d)))
+            // MEDIDO (2026-11-28): el parche puede haberse aplicado con
+            // CUALQUIERA de los puertos servidos (8080 o 9090).  Mirar sólo
+            // el de por defecto daba "parcheado: false" con el binario
+            // parcheado de verdad ⇒ el Web UI no podía ni mostrar el estado.
+            let mut parcheado = false;
+            let mut url_en_disco: Option<String> = None;
+            for p in PUERTOS_SERVIDOS {
+                let destino = url_destino(*p);
+                if d.windows(destino.len()).any(|w| w == destino.as_bytes()) {
+                    parcheado = true;
+                    url_en_disco = Some(destino);
+                    break;
+                }
+            }
+            (occ, parcheado, url_en_disco, Some(sha256_hex(&d)))
         }
-        Err(_) => (0, false, None),
+        Err(_) => (0, false, None, None),
     };
 
     let gate_info = match std::fs::read_to_string(&gate) {
@@ -415,6 +493,9 @@ pub fn estado() -> Value {
             "parcheado": parcheado,
             "url_original": CLOUCODE_URL,
             "url_destino": url_destino(PUERTO_GATEWAY),
+            "url_en_disco": url_en_disco,
+            "puertos_servidos": PUERTOS_SERVIDOS,
+            "puertos_con_listener": puertos_con_listener(),
             "longitud_conservada": url_destino_valido(PUERTO_GATEWAY),
             "sha256": sha,
             "sha256_manifesto": manifest_sha,
@@ -431,10 +512,28 @@ pub fn estado() -> Value {
 /// Plan del parche del binario (no escribe nada).
 pub fn plan_endpoint(puerto: u16) -> Value {
     let url = url_destino(puerto);
+    // MEDIDO (2026-11-28): el aviso del puerto va ANTES de leer el binario:
+    // si el LS no está (o no se puede leer) el aviso se perdía, y el
+    // puerto muerto era justo lo que había que decir.
+    let servido = puerto_servido(puerto);
+    let usable = puerto_usable(puerto);
+    let aviso = if usable {
+        Value::Null
+    } else {
+        Value::String(error_puerto_muerto(puerto))
+    };
     let datos = match std::fs::read(ruta_ls()) {
         Ok(d) => d,
         Err(e) => {
-            return json!({ "ok": false, "error": e.to_string(), "ruta": ruta_ls().to_string_lossy() });
+            return json!({
+                "ok": false,
+                "error": e.to_string(),
+                "ruta": ruta_ls().to_string_lossy(),
+                "puerto": puerto,
+                "puerto_servido": servido,
+                "puerto_usable": usable,
+                "aviso": aviso,
+            });
         }
     };
     let occ = datos.windows(CLOUCODE_URL.len()).filter(|w| *w == CLOUCODE_URL.as_bytes()).count();
@@ -444,6 +543,10 @@ pub fn plan_endpoint(puerto: u16) -> Value {
         "ocurrencias": occ,
         "de": CLOUCODE_URL,
         "a": url,
+        "puerto": puerto,
+        "puerto_servido": servido,
+        "puerto_usable": usable,
+        "aviso": aviso,
         "longitud_original": CLOUCODE_URL.len(),
         "longitud_destino": url.len(),
         "conserva_longitud": url.len() == CLOUCODE_URL.len(),
@@ -456,6 +559,15 @@ pub fn plan_endpoint(puerto: u16) -> Value {
 pub fn aplicar_endpoint(puerto: u16, confirmar: bool) -> Result<Value, String> {
     if !confirmar {
         return Err("confirm_required".to_string());
+    }
+    // MEDIDO (2026-11-28): aplicar el parche hacia un puerto que nadie
+    // escucha deja al agente apuntando a un puerto muerto => la app da
+    // ERR_LLM_UNREACHABLE.  Se rechaza ANTES de tocar el binario.
+    //
+    // Se acepta si lo sirve el daemon (alias) O si hay un listener AHORA
+    // (el web bridge del móvil sirve el 8080 hacia el 9090 del daemon).
+    if !puerto_usable(puerto) {
+        return Err(error_puerto_muerto(puerto));
     }
     if !url_destino_valido(puerto) {
         return Err(format!(
@@ -782,4 +894,73 @@ mod tests {
     fn dispatch_rechaza_otros_nombres() {
         assert!(dispatch("otro", &json!({})).is_none());
     }
+    #[test]
+    fn solo_se_puede_parchear_a_un_puerto_que_el_daemon_escucha() {
+        // MEDIDO (2026-11-28): el parche se aplico con el 8080 y el daemon no
+        // lo escuchaba => la app: ERR_LLM_UNREACHABLE:127.0.0.1:8080.
+        assert!(puerto_servido(8080), "8080 es alias del cockpit");
+        assert!(puerto_servido(9090), "9090 es el puerto principal");
+        assert!(!puerto_servido(50999), "con 5 digitos no cabe la URL");
+        assert!(!puerto_servido(3000), "3000 no lo usa el agente");
+    }
+
+    #[test]
+    fn el_puerto_usable_acepta_el_del_daemon_y_descarta_los_muertos() {
+        // MEDIDO (2026-11-28, móvil): el 8080 lo sirve el web bridge hacia
+        // el 9090 del daemon; si el bridge no esta, lo sirve el daemon con
+        // su alias.  Lo que decide es que HAYA listener.
+        assert!(puerto_usable(8080), "el daemon sirve el 8080");
+        assert!(puerto_usable(9090), "el daemon sirve el 9090");
+        assert!(!puerto_usable(50999), "nadie escucha en un puerto raro");
+    }
+
+    #[test]
+    fn aplicar_a_un_puerto_muerto_falla_antes_de_tocar_el_binario() {
+        // Sin telefono no hay binario: si el guardia de puerto esta antes de
+        // leer el fichero, el error es el del puerto y no "no such file".
+        let e = aplicar_endpoint(50999, true).unwrap_err();
+        assert!(
+            e.contains("puerto_muerto"),
+            "debe senalar el puerto muerto: {}",
+            e
+        );
+        // Y sin confirmar tampoco se toca nada.
+        let e2 = aplicar_endpoint(8080, false).unwrap_err();
+        assert_eq!(e2, "confirm_required");
+    }
+
+    #[test]
+    fn el_plan_avisa_del_puerto_muerto() {
+        let p = plan_endpoint(50999);
+        assert_eq!(p.get("puerto_servido").and_then(|v| v.as_bool()), Some(false));
+        assert!(p
+            .get("aviso")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .contains("puerto_muerto"));
+    }
+
+    #[test]
+    fn el_dispatch_reconoce_las_acciones_del_hook() {
+        for accion in [
+            "estado",
+            "plan",
+            "plan_gate",
+            "catalogo",
+            "aplicar",
+            "aplicar_gate",
+            "restaurar",
+        ] {
+            let v = dispatch("antigravity_endpoint", &json!({ "action": accion }))
+                .expect("la tool siempre responde");
+            assert_eq!(v.get("accion").and_then(|x| x.as_str()), Some(accion));
+            assert!(v.get("resultado").is_some(), "falta el resultado de {}", accion);
+        }
+        let v = dispatch("antigravity_endpoint", &json!({ "action": "inventada" })).unwrap();
+        assert_eq!(
+            v.pointer("/resultado/error").and_then(|x| x.as_str()),
+            Some("accion_desconocida")
+        );
+    }
+
 }

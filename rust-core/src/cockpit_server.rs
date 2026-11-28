@@ -3983,7 +3983,24 @@ fn spawn_listener_thread(listener: TcpListener) {
 /// Se mantienen los puertos que el usuario ha usado historicamente para no
 /// romper ningún acceso existente (bookmarks, túnel, scripts).  Todos sirven
 /// la MISMA instancia y comparten token, estado y cola de tareas.
-pub const ALIAS_PORTS: &[u16] = &[3000, 3030, 8090, 9090];
+///
+/// MEDIDO (2026-11-28, captura del jefe en el móvil): la app de Antigravity
+/// respondía `ERR_LLM_UNREACHABLE: LLM_UNREACHABLE:127.0.0.1:8080:
+/// Connection refused (os error 111)`.  Causa: el parche del language server
+/// se había aplicado con el puerto **8080** y el daemon **no escuchaba**
+/// ahí ⇒ el agente apuntaba a un puerto muerto.
+///
+/// Y el 8080 **tenía** que estar: el motor local (llama-server) se movió al
+/// 8081 JUSTO para dejarle el 8080 al cockpit (ver
+/// `seere_v11::LLM_LOCAL_PORT` y su comentario: «8080 queda libre para la
+/// UI»; el supervisor lo lista en `BRIDGE_CANDIDATES="80 3000 3030 8090
+/// 8080"`).  El alias, sencillamente, **nunca se añadió**.
+///
+/// Por eso 8080 entra como alias: es el puerto que usa la app (y el proxy
+/// de Playwright) y, al servirlo la MISMA instancia, la petición llega al
+/// gateway canónico (las rutas del dialecto Gemini ya están exentas de
+/// token en loopback, ver `necesita_token`).
+pub const ALIAS_PORTS: &[u16] = &[3000, 3030, 8080, 8090, 9090];
 
 #[cfg(test)]
 mod v2_asset_tests {
