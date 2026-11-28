@@ -496,3 +496,46 @@ Además, el instalador ahora:
 > Y el `sed` que extrae el PID de `/proc/<pid>/cmdline` va en este orden:
 > primero `s#/cmdline$##` y **después** `s#.*/##` (al revés, el voraz se
 > comía el PID y devolvía `cmdline` ⇒ `kill -9 cmdline` no mataba nada).
+
+## 9. Lo que el móvil destapó (2026-11-28, tarde)
+
+El jefe ejecutó el one-liner en el móvil (Samsung + Magisk, build `4a51e82`)
+**dos veces**. Lo que salió:
+
+### Lo que quedó PROBADO (bien)
+* La limpieza de duplicados **mata de verdad** (2 daemons, 4 supervisores,
+  3 keepers, 3 watchdogs, 2 cloudflared) ⇒ confirma que los bugs del `sed`
+  voraz y del `kill` builtin estaban también en el móvil.
+* `verificaciones: 7/8` · `service.d: solo los canonicos` · `8765 sin
+  listener` · `8080 y 9090 con listener` · **`board.sqlite` presente** ·
+  `stack en linea` · `/health` 200 con el build correcto.
+
+### Los 4 fallos que quedaban (y su causa)
+1. **`tunnel.url = https://api.trycloudflare.com`** (la URL de la API, NO un
+   túnel) ⇒ la sonda falla ⇒ veredicto `ko` **con el túnel VIVO**. Causa: el
+   regex `https://[a-z0-9-]+\.trycloudflare\.com` **también casa `api.`**.
+   Arreglado en: `magisk_module.rs`, el one-liner, el supervisor empaquetado,
+   `phone-recover.sh` y `phone_finalize.sh`.
+2. **La telemetría se publicaba sin root** ⇒ `Permission denied`
+   (`/data/adb` es `0700` root). Arreglado: las tres llamadas van por `r`.
+3. **El estado converge al MISMO equilibrio** (supervisor=4 watchdog=4
+   cloudflared=5 daemons=6, `load1=58`) en las dos ejecuciones, con PIDs
+   distintos ⇒ es un **relanzamiento mutuo**, no un residuo. Causa:
+   `97-megadaemon-keeper.sh:49` (`[ -r "$_pp/cmdline" ] || continue`): si el
+   cmdline no es legible, el proceso cuenta como **muerto** ⇒ el keeper
+   relanza al supervisor detrás del vivo. Arreglo en curso: ficheros de PID
+   + `kill -0` (no depender de leer cmdlines).
+4. **El daemon contaba 0 supervisores y el shell 4** ⇒ los dos contadores
+   identificaban por subcadena y **se contaban a sí mismos**. Arreglado con
+   `EstadoSupervisores` (`total`, `hay_canonico`, `fiable`) y comparación
+   del argv **elemento a elemento**.
+
+### El restaurador (sin reiniciar)
+```sh
+curl -fsSL https://raw.githubusercontent.com/boolforge/megadaemon/main/tools/restaurar-movil.sh -o $HOME/restaurar.sh
+su -mm -c "sh $HOME/restaurar.sh"
+```
+Instala/actualiza → **para todo** el stack (keeper primero: es el que
+relanza) → limpia (copias `.bak*` y URLs) → **arranca uno de cada** →
+verifica. Ojo: como root el PATH no tiene `curl` (lo tiene Termux) ⇒ el
+script lo busca en `/data/data/com.termux/files/usr/bin`.
