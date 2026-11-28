@@ -40,6 +40,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: parsear cada .rs
         run: bash tools/check-sintaxis.sh
+      # MEDIDO (2026-11-28): un arnés de test que copiaba un módulo de la
+      # librería (`#[path = "../src/x.rs"]`) rompía la compilación del
+      # target de tests (dentro del arnés `crate::` es la raíz del arnés)
+      # => el job "calidad" moría con rc=101 SIN ejecutar ni un test, tras
+      # 15-20 min de runner.  Este gate lo detecta en segundos.
+      - name: ningun arnés copia módulos de la librería
+        run: python3 tools/check-arnes.py
       # El nucleo forense en C se prueba aqui (no en 'calidad'): compila en
       # un segundo y su banco contrasta el SHA-256 contra `sha256sum`, el
       # cliente HTTP contra un servidor local y el parser del tunel contra un

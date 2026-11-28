@@ -39,3 +39,16 @@ if [ "$MAL" -gt 0 ]; then
   exit 1
 fi
 echo "sintaxis OK en los $N ficheros"
+
+# MEDIDO (2026-11-28): main estaba en ROJO desde el 2026-11-21 por un arnés
+# de test que copiaba un modulo de la libreria (`#[path = "../src/x.rs"]`):
+# dentro del arnes `crate::` es la raiz del ARNES, no de la libreria => el
+# target de test no compilaba => el job "calidad" moria con rc=101 SIN
+# ejecutar ni un test (y tardaba 15-20 min en descubrirlo).  Este gate lo
+# ve en SEGUNDOS.
+if ! out="$(python3 tools/check-arnes.py 2>&1)"; then
+  printf '%s\n' "$out"
+  echo "ARNES ROTOS - no compiles todavia"
+  exit 1
+fi
+printf '%s\n' "$out" | tail -2
