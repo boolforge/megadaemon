@@ -74,6 +74,19 @@
 //! No hace falta ninguna tabla extra: `app_state` (tabla **medida**) guarda la
 //! cabeza viva con la clave `message_tree.head/{session_id}` (el nombre de la
 //! clave es **nuestro**).
+//!
+//! ## Reparto de las tablas medidas (patrón 10)
+//!
+//! | tabla | dueño | qué escribe |
+//! |---|---|---|
+//! | `message_nodes` | **el bosque** | la topología (un nodo = una fila) |
+//! | `app_state` | **el bosque** | la cabeza viva (`message_tree.head/<id>`) |
+//! | `sessions` | el store de sesiones | la fila de la sesión (`current_epoch`) |
+//! | `messages` | el store de sesiones | los mensajes (con el `Value` ACP exacto) |
+//!
+//! [`guardar_bosque`] es el escritor **de la topología** (lo usa el store de
+//! sesiones ACP, que ya es el dueño de `sessions` y de `messages`);
+//! [`guardar`] escribe además esas dos, y es el escritor completo del módulo.
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
@@ -378,6 +391,69 @@ impl Estado {
         Ok(id)
     }
 
+    /// Añade un mensaje con su **época** y su **`seq`** **explícitos**.
+    ///
+    /// Para **reconstruir** un bosque desde un historial ya persistido: el
+    /// `seq` es el `sequence_number` **medido** de `messages` y la época es
+    /// su `compaction_epoch` ⇒ el bosque reconstruido tiene exactamente las
+    /// mismas claves que las filas de `messages` (y por tanto el mismo
+    /// `UNIQUE(session_id, compaction_epoch, sequence_number)`).
+    ///
+    /// El padre es la **cabeza viva** (igual que [`Estado::anadir_mensaje`]):
+    /// el mensaje se cuelga del nodo vivo.
+    pub fn anadir_mensaje_completo(
+        &mut self,
+        rol: impl Into<String>,
+        contenido: impl Into<String>,
+        epoch: u32,
+        seq: u64,
+        creado_en: i64,
+    ) -> Result<i64, String> {
+        let padre = self.cabeza;
+        let base = match padre {
+            Some(p) => self
+                .nodos
+                .get(&p)
+                .ok_or_else(|| format!("el nodo vivo {} no existe", p))?
+                .historial
+                .clone(),
+            None => Vec::new(),
+        };
+        let mensaje = Mensaje {
+            seq,
+            epoch,
+            rol: rol.into(),
+            contenido: contenido.into(),
+        };
+        let mut historial = base;
+        historial.push(mensaje.clone());
+
+        let id = self.siguiente_id;
+        self.siguiente_id += 1;
+        // El `seq` es global: nunca se reinicia.
+        if seq.saturating_add(1) > self.siguiente_seq {
+            self.siguiente_seq = seq.saturating_add(1);
+        }
+        // La época viva es la de la rama viva.
+        if epoch > self.current_epoch {
+            self.current_epoch = epoch;
+        }
+        self.nodos.insert(
+            id,
+            Nodo {
+                id,
+                padre,
+                secuencia: seq,
+                epoch,
+                mensaje: Some(mensaje),
+                historial,
+                creado_en,
+            },
+        );
+        self.cabeza = Some(id);
+        Ok(id)
+    }
+
     /// Crea una **raíz nueva**: una cadena independiente dentro de la misma
     /// sesión.  Es lo que hace que el árbol sea un **bosque** y no una lista.
     pub fn nueva_raiz(
@@ -453,6 +529,26 @@ impl Estado {
         self.cabeza = Some(id);
         self.revert_objetivo = None;
         Ok(id)
+    }
+
+    /// **Copia** el bosque para otra sesión (el *fork*).
+    ///
+    /// La topología y los mensajes se copian tal cual —el historial se
+    /// copia y el padre **no** cambia ni un mensaje (criterio 1 del patrón
+    /// 3)— y lo único que cambia es la sesión a la que pertenecen los
+    /// nodos: las filas van a `message_nodes` con el `session_id` nuevo.
+    ///
+    /// NO MEDIDO: la referencia no dice si el fork **del bosque** copia la
+    /// topología o sólo los mensajes.  Aquí se copia la topología entera
+    /// porque es lo que hace el fork del patrón 3 (`fork` = hijo con el
+    /// historial copiado) y porque el `parent_node_id` medido es **dentro**
+    /// de la sesión (`UNIQUE(session_id, node_id)`).
+    pub fn copiar_para(&self, session_id: impl Into<String>) -> Estado {
+        let mut copia = self.clone();
+        copia.session_id = session_id.into();
+        // El objetivo de revert no se hereda: es de otra rama.
+        copia.revert_objetivo = None;
+        copia
     }
 
     /// **Revierte** a un nodo: la cabeza pasa a ese nodo **sin borrar nada**.
@@ -648,25 +744,6 @@ pub fn guardar(conn: &Connection, estado: &Estado) -> Result<(), rusqlite::Error
         ],
     )?;
 
-    // Los nodos (la topología del bosque).
-    for nodo in estado.nodos.values() {
-        conn.execute(
-            "INSERT INTO message_nodes(session_id, node_id, parent_node_id, chat_message, created_at)
-             VALUES(?1,?2,?3,?4,?5)
-             ON CONFLICT(session_id, node_id) DO UPDATE SET
-                parent_node_id=excluded.parent_node_id,
-                chat_message=excluded.chat_message,
-                created_at=excluded.created_at",
-            params![
-                estado.session_id,
-                nodo.id,
-                nodo.padre,
-                nodo_a_json(nodo).to_string(),
-                nodo.creado_en
-            ],
-        )?;
-    }
-
     // El registro de mensajes, por época.  `INSERT OR IGNORE` porque el
     // UNIQUE medido es (session_id, compaction_epoch, sequence_number) y la
     // copia del fork tiene los MISMOS seq que el padre (en otra época).
@@ -687,6 +764,60 @@ pub fn guardar(conn: &Connection, estado: &Estado) -> Result<(), rusqlite::Error
                 ],
             )?;
         }
+    }
+
+    // La topología del bosque y la cabeza viva.
+    guardar_bosque(conn, estado)?;
+
+    Ok(())
+}
+
+/// Guarda **sólo la topología** del bosque: la tabla medida `message_nodes`
+/// y la cabeza viva en `app_state`.
+///
+/// MEDIDO (patrón 10): el DDL medido no tiene ninguna columna para la
+/// cabeza ⇒ la cabeza vive en `app_state` (la tabla medida de clave/valor)
+/// con la clave `message_tree.head/<session_id>`.  **No se le inventan
+/// columnas al esquema medido**.
+///
+/// POR QUÉ NO ESCRIBE `sessions` NI `messages`
+/// ------------------------------------------
+/// Esas filas son **de otro dueño**: el store de sesiones ACP
+/// (`acp_sesion_store`) escribe la fila de `sessions` (con `created_at`,
+/// `last_activity_at` y `total_tokens`) y los mensajes (con el `Value` ACP
+/// exacto en `tool_calls_json`).  Si el bosque los sobrescribiera:
+///
+/// * se perderían `total_tokens` y `last_activity_at` (el bosque no los
+///   conoce: su [`DatosSesion`] va por defecto), y
+/// * los mensajes del bosque (sin `tool_calls_json`) chocarían con el
+///   `UNIQUE(session_id, compaction_epoch, sequence_number)` **medido** ⇒
+///   el guardado del mensaje fallaría.
+///
+/// ⇒ El bosque escribe **su** tabla (`message_nodes`) y **su** clave
+/// (`app_state`); el contenido de los mensajes es del store de sesiones.
+///
+/// Es **idempotente**: un `upsert` por nodo ⇒ guardar el mismo bosque dos
+/// veces no duplica ni corrompe nada.
+pub fn guardar_bosque(conn: &Connection, estado: &Estado) -> Result<(), rusqlite::Error> {
+    asegurar_esquema(conn)?;
+
+    // Los nodos (la topología del bosque).
+    for nodo in estado.nodos.values() {
+        conn.execute(
+            "INSERT INTO message_nodes(session_id, node_id, parent_node_id, chat_message, created_at)
+             VALUES(?1,?2,?3,?4,?5)
+             ON CONFLICT(session_id, node_id) DO UPDATE SET
+                parent_node_id=excluded.parent_node_id,
+                chat_message=excluded.chat_message,
+                created_at=excluded.created_at",
+            params![
+                estado.session_id,
+                nodo.id,
+                nodo.padre,
+                nodo_a_json(nodo).to_string(),
+                nodo.creado_en
+            ],
+        )?;
     }
 
     // La cabeza viva, en `app_state` (tabla medida).

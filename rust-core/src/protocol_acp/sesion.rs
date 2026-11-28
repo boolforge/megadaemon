@@ -17,6 +17,7 @@
 
 use serde_json::{json, Value};
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
 
 use super::super::acp_schema::{ContentBlock, SessionId, StopReason};
@@ -156,6 +157,15 @@ pub struct Registro {
     sesiones: Vec<Sesion>,
     /// Contador para los ids.
     siguiente: u64,
+    /// El **BOSQUE** de cada sesión (patrón 3): los nodos de mensajes.
+    ///
+    /// MEDIDO (2026-11-28): el bosque se **persiste** en la tabla medida
+    /// `message_nodes` (`acp_sesion_store::guardar_bosque`) y se
+    /// **restaura** al arrancar ([`Registro::restaurar`]).  Antes el bosque
+    /// sólo existía en memoria del proceso y cada llamada lo reconstruía
+    /// desde los mensajes que le pasaban (`capacidades.rs::revert`): al
+    /// reiniciar el daemon se perdían las ramas.
+    bosques: BTreeMap<String, crate::message_tree::Estado>,
 }
 
 impl Registro {
@@ -182,6 +192,13 @@ impl Registro {
             for res in resumenes {
                 let historial =
                     crate::acp_sesion_store::cargar_historial(store.conexion(), &res.id).ok();
+                // Los mensajes **detallados** (con su época y su `seq`): son
+                // los que permiten **reconstruir** el bosque si no estuviera
+                // guardado.
+                let detallados = historial
+                    .as_ref()
+                    .map(|h| h.mensajes.clone())
+                    .unwrap_or_default();
                 let (modo, padre, estado, turnos, mensajes) = match historial {
                     Some(h) => (
                         h.sesion.modo.clone(),
@@ -211,6 +228,12 @@ impl Registro {
                     mensajes,
                     turnos,
                 });
+                // EL BOSQUE (patrón 3): se restaura de `message_nodes` ⇒ la
+                // topología (padre/hijo, ramas) sobrevive al reinicio.
+                r.bosques.insert(
+                    res.id.clone(),
+                    Self::restaurar_bosque(store, &res.id, &detallados),
+                );
                 // El contador de ids sigue DESPUES de las ids restauradas,
                 // para que una sesion nueva no repita una id.
                 if let Some(n) = res
@@ -268,11 +291,30 @@ impl Registro {
     /// **upsert** que anexa **sólo el sufijo** del historial que faltaba
     /// (prefijo común) ⇒ guardar dos veces la misma sesión **no** duplica
     /// mensajes.
-    fn persistir(&self, id: &str) {
+    fn persistir(&mut self, id: &str) {
         let Some(s) = self.obtener(id) else {
             return;
         };
-        let sesion = self.a_sesion_store(s);
+        let cwd = s.cwd.clone();
+        let modo = s.modo.clone();
+        let mut sesion = self.a_sesion_store(s);
+        // El bosque conoce los datos de su sesión (los que guarda la tabla
+        // medida `sessions`): se sincronizan aquí ⇒ el bosque **restaurado**
+        // es igual al que había en memoria.
+        if let Some(b) = self.bosques.get_mut(id) {
+            b.sesion.working_directory = cwd;
+            b.sesion.backend_type = modo.unwrap_or_default();
+            b.sesion.model = String::new();
+            b.sesion.permission_mode = String::new();
+            b.sesion.total_tokens = 0;
+        }
+        // La época viva es la del BOSQUE (patrón 3): una bifurcación (un
+        // revert por pasos) abre una época nueva y la fila medida
+        // `sessions.current_epoch` la guarda.
+        let bosque = self.bosques.get(id);
+        if let Some(b) = bosque {
+            sesion.current_epoch = b.current_epoch;
+        }
         con_store(|store| {
             if let Err(e) = crate::acp_sesion_store::guardar_sesion(store.conexion(), &sesion) {
                 eprintln!(
@@ -280,7 +322,115 @@ impl Registro {
                     sesion.id, e
                 );
             }
+            // El BOSQUE en la tabla medida `message_nodes`.  Si falla, la
+            // sesión sigue **en memoria** (la persistencia es un efecto
+            // secundario, nunca un bloqueo) y el fallo se avisa por stderr.
+            if let Some(b) = bosque {
+                if let Err(e) = crate::acp_sesion_store::guardar_bosque(store.conexion(), b) {
+                    eprintln!(
+                        "acp-sesion: no se pudo guardar el bosque de {}: {}",
+                        b.session_id, e
+                    );
+                }
+            }
         });
+    }
+
+    /// El **bosque de mensajes** de una sesión (si lo hay): la topología de
+    /// sus nodos (patrón 3, tabla medida `message_nodes`).
+    ///
+    /// No confundir con [`Registro::bosque`]: aquel es el árbol de
+    /// **sesiones** (padre → hijos) y éste el de **mensajes** de una sesión.
+    pub fn bosque_mensajes(&self, id: &str) -> Option<&crate::message_tree::Estado> {
+        self.bosques.get(id)
+    }
+
+    /// El bosque de una sesión, **creándolo** si no está (para que siempre
+    /// haya uno donde colgar los mensajes).
+    fn bosque_mut(&mut self, id: &str) -> &mut crate::message_tree::Estado {
+        self.bosques
+            .entry(id.to_string())
+            .or_insert_with(|| crate::message_tree::Estado::nuevo(id.to_string()))
+    }
+
+    /// **Añade un nodo** al bosque de la sesión.
+    ///
+    /// El rol y el contenido salen del **mismo** `Value` ACP que se persiste
+    /// en `messages` ⇒ el nodo del bosque y la fila del mensaje dicen
+    /// exactamente lo mismo.
+    fn anadir_nodo(&mut self, id: &str, v: &Value) {
+        let rol = crate::acp_sesion_store::rol_de_json(v);
+        let contenido = crate::acp_sesion_store::contenido_de_json(v);
+        let b = self.bosque_mut(id);
+        if let Err(e) = b.anadir_mensaje(rol, contenido) {
+            eprintln!(
+                "acp-sesion: no se pudo anadir el nodo al bosque de {}: {}",
+                id, e
+            );
+        }
+    }
+
+    /// **Restaura** el bosque de una sesión del almacén.
+    ///
+    /// * Si el bosque está guardado (`message_nodes`) ⇒ se carga **tal cual**
+    ///   (con sus ramas).
+    /// * Si **no** está (la sesión se guardó antes de que existiera la
+    ///   persistencia del bosque) ⇒ se **reconstruye** del historial
+    ///   persistido ⇒ no se pierde nada y el bosque queda completo desde el
+    ///   primer arranque.
+    fn restaurar_bosque(
+        store: &crate::acp_sesion_store::AcpSesionStore,
+        id: &str,
+        historial: &[crate::acp_sesion_store::MensajeAcp],
+    ) -> crate::message_tree::Estado {
+        match crate::acp_sesion_store::cargar_bosque(store.conexion(), id) {
+            Ok(Some(b)) => b,
+            Ok(None) => {
+                let b = Self::bosque_desde_historial(id, historial);
+                if let Err(e) = crate::acp_sesion_store::guardar_bosque(store.conexion(), &b) {
+                    eprintln!(
+                        "acp-sesion: no se pudo guardar el bosque reconstruido de {}: {}",
+                        id, e
+                    );
+                }
+                b
+            }
+            Err(e) => {
+                eprintln!("acp-sesion: no se pudo leer el bosque de {}: {}", id, e);
+                // Sin bosque en el almacén: se reconstruye igual (en memoria)
+                // ⇒ la sesión sigue funcionando.
+                Self::bosque_desde_historial(id, historial)
+            }
+        }
+    }
+
+    /// Reconstruye el bosque de una sesión a partir de su historial
+    /// **persistido** (los mensajes con su época y su `seq`).
+    ///
+    /// El `seq` y la época son los **medidos** de `messages`
+    /// (`sequence_number` y `compaction_epoch`) ⇒ el bosque reconstruido
+    /// tiene las mismas claves que las filas del historial.
+    fn bosque_desde_historial(
+        id: &str,
+        historial: &[crate::acp_sesion_store::MensajeAcp],
+    ) -> crate::message_tree::Estado {
+        let mut b = crate::message_tree::Estado::nuevo(id.to_string());
+        for m in historial {
+            if let Err(e) = b.anadir_mensaje_completo(
+                m.rol.clone(),
+                m.contenido.clone(),
+                m.compaction_epoch,
+                m.sequence_number,
+                m.created_at,
+            ) {
+                eprintln!(
+                    "acp-sesion: no se pudo reconstruir el nodo {} de {}: {}",
+                    m.sequence_number, id, e
+                );
+                break;
+            }
+        }
+        b
     }
 
     /// `session/new`.
@@ -296,6 +446,9 @@ impl Registro {
             turnos: 0,
         };
         self.sesiones.push(s.clone());
+        // El bosque empieza vacío: la sesión todavía no tiene mensajes.
+        self.bosques
+            .insert(id.clone(), crate::message_tree::Estado::nuevo(id.clone()));
         self.persistir(&s.id);
         s
     }
@@ -372,12 +525,23 @@ impl Registro {
             turnos: padre.turnos,
         };
         self.sesiones.push(hija.clone());
+        // El BOSQUE del hijo: una **COPIA** del del padre (patrón 3: el
+        // fork copia el historial y el padre **no** cambia, ni un mensaje).
+        let bosque = match self.bosques.get(id_padre) {
+            Some(b) => b.copiar_para(id.clone()),
+            None => crate::message_tree::Estado::nuevo(id.clone()),
+        };
+        self.bosques.insert(id.clone(), bosque);
         self.persistir(&hija.id);
         Ok(hija)
     }
 
     /// Registra un prompt en la sesión (para el historial).
     pub fn registrar_prompt(&mut self, id: &str, bloques: &[ContentBlock]) -> Result<(), String> {
+        let v = json!({
+            "role": "user",
+            "content": bloques,
+        });
         {
             let s = self
                 .obtener_mut(id)
@@ -389,11 +553,10 @@ impl Registro {
                     s.estado.nombre()
                 ));
             }
-            s.mensajes.push(json!({
-                "role": "user",
-                "content": bloques,
-            }));
+            s.mensajes.push(v.clone());
         }
+        // El BOSQUE: un nodo **hijo** de la cabeza viva.
+        self.anadir_nodo(id, &v);
         self.persistir(id);
         Ok(())
     }
@@ -411,6 +574,8 @@ impl Registro {
                 .ok_or_else(|| format!("no existe la sesión {}", id))?;
             s.mensajes.push(update.clone());
         }
+        // El BOSQUE: un nodo **hijo** de la cabeza viva.
+        self.anadir_nodo(id, update);
         self.persistir(id);
         Ok(())
     }
@@ -425,14 +590,15 @@ impl Registro {
 
     /// Registra la respuesta de un turno y cierra el turno.
     pub fn cerrar_turno(&mut self, id: &str, razon: StopReason) -> Result<(), String> {
+        let v = json!({
+            "role": "assistant",
+            "stopReason": format!("{:?}", razon),
+        });
         {
             let s = self
                 .obtener_mut(id)
                 .ok_or_else(|| format!("no existe la sesión {}", id))?;
-            s.mensajes.push(json!({
-                "role": "assistant",
-                "stopReason": format!("{:?}", razon),
-            }));
+            s.mensajes.push(v.clone());
             s.turnos += 1;
             // MEDIDO: `sessionStop` no existe en ACP v1 (0/41) ⇒ una sesión
             // que termina por el `stopReason` del turno queda TERMINADA.
@@ -440,8 +606,54 @@ impl Registro {
                 s.estado = Estado::Terminada;
             }
         }
+        // El BOSQUE: un nodo **hijo** de la cabeza viva.
+        self.anadir_nodo(id, &v);
         self.persistir(id);
         Ok(())
+    }
+
+    /// Los **pasos de revert** de una sesión: los puntos a los que se puede
+    /// volver (patrón 3, `message_tree::pasos_revert`).
+    ///
+    /// MEDIDO: la referencia expone `cognition.ai/revert/listSteps` ⇒ los
+    /// puntos de retorno se **listan** y luego se ejecuta el elegido.
+    pub fn pasos_de_revert(&self, id: &str, objetivo: i64) -> Vec<crate::message_tree::PasoRevert> {
+        match self.bosques.get(id) {
+            Some(b) => crate::message_tree::pasos_revert(b, objetivo),
+            None => Vec::new(),
+        }
+    }
+
+    /// **Revierte** a un punto del bosque **sin borrar nada** y **bifurca**
+    /// (patrón 3): la rama nueva es la que sigue viva y la rama anterior
+    /// sigue consultable.
+    ///
+    /// MEDIDO: el revert de la referencia es un **fork** del bosque
+    /// (`cognition.ai/revert/forkFromStep`) ⇒ el punto elegido se convierte
+    /// en un punto de retorno nuevo y **nada se borra**.
+    ///
+    /// Devuelve cuántos mensajes ve ahora el agente (la vista viva de la
+    /// rama nueva).
+    pub fn revertir_a_paso(
+        &mut self,
+        id: &str,
+        objetivo: i64,
+        indice: usize,
+    ) -> Result<usize, String> {
+        let bosque = self
+            .bosques
+            .get(id)
+            .ok_or_else(|| format!("no existe la sesión {}", id))?
+            .clone();
+        let mut preparado = bosque.clone();
+        preparado.preparar_revert(objetivo)?;
+        let nuevo = crate::message_tree::aplicar_paso(&preparado, indice)?;
+        let vista = nuevo.vista_viva().len();
+        self.bosques.insert(id.to_string(), nuevo);
+        // El BOSQUE cambia ⇒ se persiste (la rama nueva queda en
+        // `message_nodes`).
+        self.persistir(id);
+        Ok(vista)
     }
 
     /// El árbol de sesiones (padre → hijos): el BOSQUE.
@@ -677,5 +889,198 @@ mod tests {
         assert_eq!(s.mensajes.len(), 2);
         assert_eq!(s.mensajes[0]["role"], json!("user"));
         assert_eq!(s.mensajes[1]["role"], json!("assistant"));
+    }
+
+    // ── EL BOSQUE (patrón 3) ───────────────────────────────────────────
+
+    #[test]
+    fn el_bosque_se_persiste_y_vuelve_al_arrancar() {
+        // MEDIDO (2026-11-28): el bosque (patrón 3) se **persiste** en la
+        // tabla medida `message_nodes` y se **restaura** al arrancar: al
+        // reiniciar el daemon el árbol sigue ahí (antes sólo vivía en
+        // memoria y se reconstruía en cada llamada).
+        let mut r = Registro::nuevo();
+        let s = r.nueva("/tmp/mi-proyecto", None);
+        r.registrar_prompt(&s.id, &[bloque("hola")]).unwrap();
+        r.registrar_update(
+            &s.id,
+            &json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "buenas"},
+            }),
+        )
+        .unwrap();
+
+        // 1) En el almacén, en la tabla MEDIDA.
+        let store = crate::acp_sesion_store::AcpSesionStore::abrir_en_state_dir()
+            .expect("el almacen tiene que abrir");
+        let filas: i64 = store
+            .conexion()
+            .query_row(
+                "SELECT COUNT(*) FROM message_nodes WHERE session_id=?1",
+                [&s.id],
+                |r| r.get(0),
+            )
+            .expect("cuenta los nodos");
+        assert_eq!(filas, 2, "un nodo por mensaje");
+
+        // 2) Al arrancar de nuevo, el bosque vuelve con su topología.
+        let r2 = Registro::restaurar();
+        let b = r2.bosque_mensajes(&s.id).expect("el bosque restaurado");
+        assert_eq!(b.nodos.len(), 2, "los dos nodos vuelven");
+        assert_eq!(b.raices().len(), 1, "una raíz");
+        let cabeza = b.cabeza.expect("cabeza viva");
+        assert_eq!(
+            b.nodos[&cabeza].padre,
+            Some(1),
+            "el segundo cuelga del primero"
+        );
+        assert_eq!(
+            b.vista_viva().len(),
+            2,
+            "la vista viva son los dos mensajes"
+        );
+        // Y el bosque restaurado es IGUAL al que había en memoria.
+        assert_eq!(b, r.bosque_mensajes(&s.id).expect("el bosque vivo"));
+    }
+
+    #[test]
+    fn el_revert_por_pasos_bifurca_el_bosque_y_la_rama_se_persiste() {
+        // MEDIDO (patrón 3): el revert es un **fork** del bosque: la rama
+        // original **no** se toca y la nueva es la que sigue viva.
+        let mut r = Registro::nuevo();
+        let s = r.nueva("/tmp", None);
+        r.registrar_prompt(&s.id, &[bloque("uno")]).unwrap();
+        r.registrar_prompt(&s.id, &[bloque("dos")]).unwrap();
+        r.registrar_prompt(&s.id, &[bloque("tres")]).unwrap();
+        assert_eq!(r.bosque_mensajes(&s.id).unwrap().nodos.len(), 3);
+
+        // Los puntos de retorno, del más cercano al más lejano.
+        let pasos = r.pasos_de_revert(&s.id, 1);
+        assert_eq!(pasos.len(), 2, "dos puntos de retorno");
+        assert_eq!(pasos[0].nodo_id, 2, "el más cercano primero");
+        assert_eq!(pasos[1].nodo_id, 1);
+
+        // Se ejecuta el paso elegido: el bosque se bifurca (y no borra).
+        let vista = r.revertir_a_paso(&s.id, 1, 1).expect("revierte");
+        assert_eq!(vista, 1, "la rama nueva ve sólo el primer mensaje");
+        let b = r.bosque_mensajes(&s.id).expect("el bosque");
+        assert_eq!(b.nodos.len(), 4, "tres mensajes y el nodo de bifurcación");
+        assert_eq!(b.raices().len(), 1, "sigue siendo un árbol con una raíz");
+        assert_eq!(b.historial_de(3).len(), 3, "la rama original sigue intacta");
+
+        // Al arrancar de nuevo, la bifurcación sigue ahí.
+        let r2 = Registro::restaurar();
+        let b2 = r2.bosque_mensajes(&s.id).expect("el bosque restaurado");
+        assert_eq!(b2.nodos, b.nodos, "la rama vuelve igual");
+        assert_eq!(b2.cabeza, b.cabeza);
+        assert_eq!(b2.current_epoch, b.current_epoch, "la época viva también");
+    }
+
+    #[test]
+    fn el_fork_copia_el_bosque_y_el_padre_no_cambia() {
+        // MEDIDO (patrón 3, criterio 1): tras un fork el padre **no**
+        // cambia (ni un mensaje) y el hijo tiene el historial copiado.
+        let mut r = Registro::nuevo();
+        let p = r.nueva("/tmp", None);
+        r.registrar_prompt(&p.id, &[bloque("hola")]).unwrap();
+        let antes = r.bosque_mensajes(&p.id).expect("bosque del padre").clone();
+
+        let h = r.fork(&p.id, None).expect("fork");
+        let hijo = r.bosque_mensajes(&h.id).expect("bosque del hijo");
+        assert_eq!(hijo.nodos.len(), 1, "el hijo tiene su copia");
+        assert_eq!(hijo.nodos[&1].historial.len(), 1);
+        // El padre no se ha movido.
+        assert_eq!(
+            r.bosque_mensajes(&p.id).expect("bosque del padre"),
+            &antes,
+            "el padre no cambia"
+        );
+        // Y al arrancar, los dos bosques vuelven.
+        let r2 = Registro::restaurar();
+        assert_eq!(r2.bosque_mensajes(&p.id).expect("padre"), &antes);
+        assert_eq!(r2.bosque_mensajes(&h.id).expect("hijo").nodos.len(), 1);
+    }
+
+    #[test]
+    fn una_sesion_sin_bosque_se_reconstruye_al_arrancar() {
+        // Si la sesión se guardó **antes** de que existiera la persistencia
+        // del bosque, al arrancar se **reconstruye** del historial
+        // persistido ⇒ no se pierde nada (y queda guardado para la
+        // siguiente vez).
+        let mut r = Registro::nuevo();
+        let s = r.nueva("/tmp", None);
+        r.registrar_prompt(&s.id, &[bloque("hola")]).unwrap();
+        r.registrar_update(
+            &s.id,
+            &json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "buenas"},
+            }),
+        )
+        .unwrap();
+
+        // Se borra el bosque (como si la sesión se hubiera guardado antes).
+        let store = crate::acp_sesion_store::AcpSesionStore::abrir_en_state_dir()
+            .expect("el almacen tiene que abrir");
+        store
+            .conexion()
+            .execute("DELETE FROM message_nodes WHERE session_id=?1", [&s.id])
+            .expect("borra el bosque");
+        assert!(
+            crate::acp_sesion_store::cargar_bosque(store.conexion(), &s.id)
+                .expect("carga")
+                .is_none()
+        );
+
+        // Al arrancar, el bosque vuelve (reconstruido del historial).
+        let r2 = Registro::restaurar();
+        let b = r2.bosque_mensajes(&s.id).expect("el bosque reconstruido");
+        assert_eq!(b.nodos.len(), 2, "los dos mensajes vuelven al bosque");
+        assert_eq!(b.vista_viva().len(), 2);
+        assert_eq!(b.raices().len(), 1);
+        // Y queda guardado: la próxima vez viene de `message_nodes`.
+        assert!(
+            crate::acp_sesion_store::cargar_bosque(store.conexion(), &s.id)
+                .expect("carga")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn si_el_almacen_no_abre_la_sesion_sigue_en_memoria() {
+        // MEDIDO (2026-11-28): la persistencia es un efecto secundario: si
+        // el almacén no se puede abrir, el ACP sigue **en memoria** y el
+        // fallo se avisa por stderr (no se pierde nada).
+        // Se rompe el almacén poniendo un DIRECTORIO donde debería estar la
+        // base (`board.sqlite`): SQLite no puede abrirlo.
+        let dir = crate::state_dir::state_dir();
+        std::fs::create_dir_all(&dir).expect("crea el estado");
+        std::fs::create_dir_all(format!("{}/{}", dir, crate::acp_sesion_store::ACPS_DB_FILE))
+            .expect("rompe la base");
+        assert!(
+            crate::acp_sesion_store::AcpSesionStore::abrir_en_state_dir().is_err(),
+            "el almacen tiene que estar caido para que este test signifique algo"
+        );
+
+        let mut r = Registro::nuevo();
+        let s = r.nueva("/tmp", None);
+        r.registrar_prompt(&s.id, &[bloque("hola")]).unwrap();
+        r.registrar_update(
+            &s.id,
+            &json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "hola"}}),
+        )
+        .unwrap();
+
+        // La sesión sigue en memoria, con su historial...
+        let sesion = r.obtener(&s.id).expect("la sesion sigue en memoria");
+        assert_eq!(sesion.mensajes.len(), 2, "el historial no se pierde");
+        // ...y su bosque.
+        let b = r
+            .bosque_mensajes(&s.id)
+            .expect("el bosque sigue en memoria");
+        assert_eq!(b.nodos.len(), 2, "los dos nodos siguen en memoria");
+        assert_eq!(b.vista_viva().len(), 2);
+        assert_eq!(b.raices().len(), 1);
     }
 }

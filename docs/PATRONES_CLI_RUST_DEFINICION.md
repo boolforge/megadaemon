@@ -151,6 +151,31 @@ fork(nodo, cwd):
 * El fork abre una época nueva: no es inventado, lo fuerza el `UNIQUE`
   medido de `messages` (la copia tiene los mismos `seq` que el padre).
 
+### CABLEADO (2026-11-28): el bosque se persiste en `message_nodes` y se restaura
+
+La persistencia del bosque **existía** en `message_tree.rs` pero **nadie la
+llamaba** en runtime: el bosque vivía en memoria del proceso y cada llamada
+lo reconstruía desde los mensajes que le pasaban
+(`rust-core/src/capacidades.rs::revert`) ⇒ al reiniciar el daemon se perdían
+las ramas.
+
+* `rust-core/src/message_tree.rs`: `guardar_bosque()` escribe **sólo** la
+  topología (la tabla medida `message_nodes` y la cabeza viva en `app_state`)
+  ⇒ **no** le inventa columnas al esquema medido y **no** pisa `sessions` ni
+  `messages` (esos son del store de sesiones).
+* `rust-core/src/acp_sesion_store.rs`: `guardar_bosque()` / `cargar_bosque()`
+  / `listar_bosques()` sobre el almacén; el borrado explícito de una sesión
+  se lleva su bosque.
+* `rust-core/src/protocol_acp/sesion.rs`: el registro ACP guarda **un bosque
+  por sesión** (un nodo por mensaje, padre = la cabeza viva), lo **persiste**
+  al mutar y lo **restaura** al arrancar (`Registro::restaurar`); si una
+  sesión se guardó sin bosque, se **reconstruye** de su historial persistido
+  (no se pierde nada).  El `session/fork` copia el bosque (el padre no
+  cambia) y el **revert por pasos** lo bifurca (nada se borra).
+* MEDIDO: si el almacén no abre o no escribe, el ACP **sigue en memoria** y
+  avisa por stderr (la persistencia es un efecto secundario, nunca un
+  bloqueo).
+
 ---
 
 ## Patrón 4 — La compactación **no borra**: marca una **época**

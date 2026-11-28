@@ -60,6 +60,7 @@
 //! | tabla | quién la usa |
 //! |---|---|
 //! | `sessions` | la fila de la sesión (`id`, `working_directory`, `backend_type`, `current_epoch`, …) |
+//! | `message_nodes` | el **BOSQUE** (patrón 3): la topología de los nodos de mensajes (`node_id`, `parent_node_id`) |
 //! | `messages` | el historial (`sequence_number` global, `compaction_epoch`, `role`, `content`, `tool_calls_json`) |
 //! | `app_state` | la versión del esquema **y** los campos del ACP que el esquema medido no tiene (`estado`, `padre`, `turnos`), con la clave `acp:sesion:<id>` |
 //! | `acp_session_extensions` | **extensión propia**: las extensiones clave/valor de una sesión |
@@ -422,6 +423,8 @@ pub struct Borrado {
     pub session_id: String,
     /// Mensajes eliminados.
     pub mensajes: usize,
+    /// Nodos del **bosque** eliminados (tabla medida `message_nodes`).
+    pub nodos: usize,
     /// Extensiones eliminadas.
     pub extensiones: usize,
 }
@@ -1230,6 +1233,13 @@ pub fn borrar_sesion(conn: &Connection, id: &str) -> Result<Borrado, ErrorStore>
     }
     let tx = conn.unchecked_transaction()?;
     let mensajes = tx.execute("DELETE FROM messages WHERE session_id=?1", params![id])?;
+    // El BOSQUE de la sesión (tabla medida `message_nodes`) y su cabeza
+    // viva (`app_state`): el borrado es EXPLÍCITO ⇒ se va con la sesión.
+    let nodos = tx.execute("DELETE FROM message_nodes WHERE session_id=?1", params![id])?;
+    tx.execute(
+        "DELETE FROM app_state WHERE key=?1",
+        params![format!("{}{}", crate::message_tree::PREFIJO_CABEZA, id)],
+    )?;
     let extensiones = tx.execute(
         "DELETE FROM acp_session_extensions WHERE session_id=?1",
         params![id],
@@ -1248,6 +1258,7 @@ pub fn borrar_sesion(conn: &Connection, id: &str) -> Result<Borrado, ErrorStore>
     Ok(Borrado {
         session_id: id.to_string(),
         mensajes,
+        nodos,
         extensiones,
     })
 }
@@ -1374,6 +1385,69 @@ pub fn cargar_extension(
         )
         .optional()?;
     Ok(txt.map(|t| serde_json::from_str::<Value>(&t).unwrap_or(Value::Null)))
+}
+
+// =============================================================================
+// EL BOSQUE (patrón 3): la tabla medida `message_nodes`
+// =============================================================================
+//
+// MEDIDO (patrón 3 + 10): la conversación es un **bosque** de nodos de
+// mensajes; la tabla medida es `message_nodes(session_id, node_id,
+// parent_node_id, chat_message, created_at)` con `UNIQUE(session_id, node_id)`
+// y `parent_node_id` nulo en la raíz.  La cabeza viva (que el DDL medido no
+// tiene dónde poner) va a `app_state`, que **sí** es una tabla medida.
+//
+// El bosque lo construye y lo usa `crate::message_tree`; aquí sólo se
+// **guarda** y se **carga** (el store es el almacén, no decide la topología).
+
+/// Guarda el **bosque** de una sesión en la tabla **medida** `message_nodes`.
+///
+/// MEDIDO: un `upsert` por nodo ⇒ el guardado es **idempotente**: guardar el
+/// mismo bosque dos veces no duplica ni corrompe nada.
+///
+/// No toca `sessions` ni `messages`: esas filas son de este store (que es su
+/// dueño) y sobrescribirlas perdería datos (`total_tokens`,
+/// `last_activity_at` y el `Value` ACP exacto).  La topología del bosque y
+/// la cabeza viva (en `app_state`) son suyas.
+pub fn guardar_bosque(
+    conn: &Connection,
+    estado: &crate::message_tree::Estado,
+) -> Result<(), ErrorStore> {
+    crate::message_tree::guardar_bosque(conn, estado).map_err(ErrorStore::from)
+}
+
+/// Carga el **bosque** de una sesión desde `message_nodes`.
+///
+/// `None` si esa sesión **no tiene** bosque guardado (todavía no se
+/// persistió): así el llamante distingue "no hay bosque" de "hay uno
+/// vacío" y puede reconstruirlo del historial sin perder nada.
+pub fn cargar_bosque(
+    conn: &Connection,
+    id: &str,
+) -> Result<Option<crate::message_tree::Estado>, ErrorStore> {
+    let hay: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM message_nodes WHERE session_id=?1",
+        params![id],
+        |r| r.get(0),
+    )?;
+    if hay == 0 {
+        return Ok(None);
+    }
+    crate::message_tree::cargar(conn, id)
+        .map(Some)
+        .map_err(ErrorStore::from)
+}
+
+/// Los ids de las sesiones que **tienen** bosque guardado.
+pub fn listar_bosques(conn: &Connection) -> Result<Vec<String>, ErrorStore> {
+    let mut stmt =
+        conn.prepare("SELECT DISTINCT session_id FROM message_nodes ORDER BY session_id")?;
+    let filas = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for f in filas {
+        out.push(f?);
+    }
+    Ok(out)
 }
 
 /// Quita la **tumba** de una sesión borrada (resucitar es explícito).
@@ -2196,6 +2270,155 @@ mod tests {
         assert_eq!(
             EstadoSesion::desde_nombre("inventado"),
             EstadoSesion::Activa
+        );
+    }
+
+    // ── EL BOSQUE (patrón 3) ───────────────────────────────────────────
+
+    /// Un bosque con una **rama**: tres nodos, el último cuelga del
+    /// primero (la rama original queda intacta).
+    fn bosque_con_rama(id: &str) -> crate::message_tree::Estado {
+        let mut b = crate::message_tree::Estado::nuevo(id.to_string());
+        let raiz = b.anadir_mensaje("user", "hola").expect("raiz");
+        b.anadir_mensaje("assistant", "adios").expect("hijo");
+        // Se vuelve a la raíz y se sigue por otro camino: eso es una rama.
+        b.revertir_a(raiz).expect("vuelve a la raiz");
+        b.anadir_mensaje("user", "otro camino").expect("rama");
+        b
+    }
+
+    #[test]
+    fn el_bosque_se_guarda_y_vuelve_igual() {
+        // MEDIDO (patrón 3 + 10): el bosque vive en la tabla medida
+        // `message_nodes` y al reabrir la base vuelve **igual** (la
+        // topología, el historial de cada nodo y la cabeza viva).
+        let store = store("bosque");
+        let b = bosque_con_rama("ses-bosque");
+        crate::acp_sesion_store::guardar_bosque(store.conexion(), &b).expect("guarda el bosque");
+
+        // Las filas están en la tabla MEDIDA (y sólo en ésa).
+        let filas: i64 = store
+            .conexion()
+            .query_row(
+                "SELECT COUNT(*) FROM message_nodes WHERE session_id=?1",
+                ["ses-bosque"],
+                |r| r.get(0),
+            )
+            .expect("cuenta los nodos");
+        assert_eq!(filas, 3, "tres nodos en `message_nodes`");
+
+        // Cerrar y reabrir la base (otra conexión al mismo fichero).
+        let ruta = store.ruta().expect("ruta").to_path_buf();
+        drop(store);
+        let store2 = AcpSesionStore::open(&ruta).expect("reabre el store");
+        let leido = crate::acp_sesion_store::cargar_bosque(store2.conexion(), "ses-bosque")
+            .expect("carga el bosque")
+            .expect("hay bosque");
+
+        // El bosque vuelve **igual**: los mismos nodos, los mismos padres,
+        // el mismo historial y la misma cabeza.
+        assert_eq!(leido, b);
+        assert_eq!(leido.raices().len(), 1);
+        assert_eq!(leido.nodos[&3].padre, Some(1), "la rama cuelga de la raíz");
+        assert_eq!(
+            leido.historial_de(2).len(),
+            2,
+            "la rama original sigue intacta"
+        );
+    }
+
+    #[test]
+    fn guardar_el_bosque_dos_veces_no_duplica_nada() {
+        // MEDIDO: el guardado es un `upsert` ⇒ es **idempotente**.
+        let store = store("bosque-idem");
+        let b = bosque_con_rama("ses-idem");
+        crate::acp_sesion_store::guardar_bosque(store.conexion(), &b).expect("guarda");
+        crate::acp_sesion_store::guardar_bosque(store.conexion(), &b).expect("guarda otra vez");
+
+        let filas: i64 = store
+            .conexion()
+            .query_row(
+                "SELECT COUNT(*) FROM message_nodes WHERE session_id=?1",
+                ["ses-idem"],
+                |r| r.get(0),
+            )
+            .expect("cuenta");
+        assert_eq!(filas, 3, "tres nodos, no seis");
+        // Y la cabeza viva (en `app_state`) tampoco se duplica.
+        let cabezas: i64 = store
+            .conexion()
+            .query_row(
+                "SELECT COUNT(*) FROM app_state WHERE key LIKE 'message_tree.head/%'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("cuenta");
+        assert_eq!(cabezas, 1, "una sola cabeza viva");
+    }
+
+    #[test]
+    fn una_sesion_sin_bosque_no_inventa_uno() {
+        // `None` = "no hay bosque guardado" (distinto de "hay uno vacío").
+        let store = store("bosque-vacio");
+        assert!(
+            crate::acp_sesion_store::cargar_bosque(store.conexion(), "no-existe")
+                .expect("carga")
+                .is_none()
+        );
+        let ids = crate::acp_sesion_store::listar_bosques(store.conexion()).expect("lista");
+        assert!(ids.is_empty(), "no hay ningún bosque: {:?}", ids);
+    }
+
+    #[test]
+    fn si_el_bosque_no_se_puede_guardar_el_error_es_tipado() {
+        // El fallo del almacén **no borra nada**: el bosque sigue en
+        // memoria (el parámetro es `&Estado`) y el error es **tipado** (no
+        // un pánico).
+        let ruta = ruta_temporal("bosque-solo-lectura");
+        let store = AcpSesionStore::open(&ruta).expect("abre el store");
+        let b = bosque_con_rama("ses-rota");
+        drop(store);
+        let conn = Connection::open_with_flags(&ruta, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .expect("abre en solo lectura");
+        let e = crate::acp_sesion_store::guardar_bosque(&conn, &b)
+            .expect_err("no se puede escribir en solo lectura");
+        match e {
+            ErrorStore::Sqlite(_) | ErrorStore::EsquemaIncompatible(_) => {}
+            otro => panic!("esperaba un error de SQLite, {:?}", otro),
+        }
+        // El bosque sigue intacto en memoria.
+        assert_eq!(b.nodos.len(), 3);
+        assert_eq!(b.cabeza, Some(3));
+    }
+
+    #[test]
+    fn borrar_la_sesion_se_lleva_su_bosque() {
+        // El borrado es EXPLÍCITO ⇒ el bosque va con la sesión.
+        let store = store("bosque-borrar");
+        let b = bosque_con_rama("ses-borrar");
+        crate::acp_sesion_store::guardar_bosque(store.conexion(), &b).expect("guarda");
+        crate::acp_sesion_store::guardar_sesion(
+            store.conexion(),
+            &SesionAcp::nueva("ses-borrar", "/tmp"),
+        )
+        .expect("guarda la sesion");
+
+        let r =
+            crate::acp_sesion_store::borrar_sesion(store.conexion(), "ses-borrar").expect("borra");
+        assert_eq!(r.nodos, 3, "los tres nodos se van con la sesión");
+        let filas: i64 = store
+            .conexion()
+            .query_row(
+                "SELECT COUNT(*) FROM message_nodes WHERE session_id=?1",
+                ["ses-borrar"],
+                |r| r.get(0),
+            )
+            .expect("cuenta");
+        assert_eq!(filas, 0, "no queda ningún nodo");
+        assert!(
+            crate::acp_sesion_store::cargar_bosque(store.conexion(), "ses-borrar")
+                .expect("carga")
+                .is_none()
         );
     }
 }
