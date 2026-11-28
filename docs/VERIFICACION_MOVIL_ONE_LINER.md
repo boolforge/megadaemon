@@ -247,6 +247,55 @@ cat /proc/loadavg
 > la primera lista (`kill -9 <PID>`), pero **con cuidado** de no matar el
 > envoltorio `sh -c` del daemon bueno.
 
+### 3.5 No queda un **supervisor duplicado** en `service.d` (2026-11-28)
+
+MEDIDO (2026-11-28, telemetria del movil): el tunel `mcp-legacy`
+(`127.0.0.1:8765`) se relanzaba **en bucle** (12 reinicios/15 min, load 20,
+1 GB de datos, 26 reinicios/dia) y **nadie escuchaba en el 8765**.
+
+La causa raiz esta en el movil: `/data/adb/service.d/99-megadaemon.sh.bak-50k`
+era una **copia VIEJA** del supervisor, y **Magisk ejecuta todo lo ejecutable
+de `service.d/`** => era un **segundo supervisor** (sin el gate
+`mcp_legacy_enabled` y con `pgrep -f`, que en toybox no es fiable) =>
+relanzaba el cloudflared del 8765 cada vuelta, mientras el supervisor
+canonico lo mataba cada vez (los dos se peleaban: 70 s / 133 s alternados).
+
+Comprobaciones (como root; `busybox` no tiene `pgrep`):
+
+```sh
+# 1) Los ficheros de service.d: SOLO el canonico (99-megadaemon.sh).
+su -mm -c "ls -l /data/adb/service.d/ | grep -i megadaemon"
+
+# 2) Los procesos: SOLO el supervisor canonico (ningun .bak).
+su -mm -c "for p in /proc/[0-9]*; do c=\$(tr '\\0' ' ' < \$p/cmdline 2>/dev/null); case \"\$c\" in *99-megadaemon.sh*) echo \"\${p##*/} \$c\";; esac; done"
+
+# 3) El 8765 NO tiene que tener listener (8765 = 0x2235): salida vacia.
+su -mm -c "grep -i ':2235 ' /proc/net/tcp /proc/net/tcp6"
+
+# 4) El log del supervisor no debe anunciar el tunel legacy (0 apariciones).
+su -mm -c "grep -c 'mcp-legacy caido' /sdcard/megadaemon.log"
+
+# 5) La carga (antes: load 20) y el consumo de datos.
+cat /proc/loadavg
+```
+
+=> (1) solo `99-megadaemon.sh`; (2) un solo PID y su cmdline **no** puede
+contener `.bak`; (3) **vacio**; (4) `0`; (5) load baja.
+
+Si (1) enseña un `.bak*`, se borra a mano (el instalador ya lo hace desde el
+2026-11-28, pero si el fichero quedo de una instalacion anterior hay que
+quitarlo):
+
+```sh
+su -mm -c "rm -f /data/adb/service.d/99-megadaemon.sh.bak*"
+```
+
+Y para el proceso viejo (borrar el fichero no mata el proceso ya arrancado):
+
+```sh
+su -mm -c "for p in /proc/[0-9]*; do c=\$(tr '\\0' ' ' < \$p/cmdline 2>/dev/null); case \"\$c\" in *99-megadaemon.sh.bak*) kill -9 \${p##*/};; esac; done"
+```
+
 ## 4. Si algo falla
 
 Pásame:
