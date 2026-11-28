@@ -76,6 +76,7 @@ pub mod binwalk_die;
 pub mod bookmarks;
 pub mod call_recorder;
 pub mod board;
+pub mod board_schema;
 pub mod cache_keepalive;
 pub mod brightness;
 pub mod brillo_events;
