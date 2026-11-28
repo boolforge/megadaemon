@@ -237,6 +237,28 @@ impl Registro {
         Ok(())
     }
 
+    /// Registra un **update** de la sesión (notificación `session/update`).
+    ///
+    /// MEDIDO (2026-11-28, `docs/DECISION_ACP.md` §3.2): el dispatch de los
+    /// updates no estaba cableado.  El update se guarda en el **historial**
+    /// de la sesión (que es lo que `session/load` devuelve) ⇒ el cliente que
+    /// recarga la sesión ve también lo que pasó en ella.
+    pub fn registrar_update(&mut self, id: &str, update: &Value) -> Result<(), String> {
+        let s = self
+            .obtener_mut(id)
+            .ok_or_else(|| format!("no existe la sesión {}", id))?;
+        s.mensajes.push(update.clone());
+        Ok(())
+    }
+
+    /// El historial de una sesión (los mensajes y los updates).
+    pub fn historial(&self, id: &str) -> Vec<Value> {
+        match self.obtener(id) {
+            Some(s) => s.mensajes.clone(),
+            None => Vec::new(),
+        }
+    }
+
     /// Registra la respuesta de un turno y cierra el turno.
     pub fn cerrar_turno(&mut self, id: &str, razon: StopReason) -> Result<(), String> {
         let s = self

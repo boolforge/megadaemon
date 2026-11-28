@@ -295,9 +295,11 @@ pub fn tool_definitions() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "action": { "type": "string", "enum": ["nueva", "listar", "cancelar", "reanudar", "fork", "bosque"], "default": "listar" },
+                        "action": { "type": "string", "enum": ["nueva", "listar", "cancelar", "reanudar", "fork", "bosque", "update", "historial"], "default": "listar" },
                         "session_id": { "type": "string", "description": "Id de la sesion" },
-                        "cwd": { "type": "string", "description": "Directorio de trabajo" }
+                        "cwd": { "type": "string", "description": "Directorio de trabajo" },
+                        "tipo": { "type": "string", "enum": ["agente", "usuario", "pensamiento"], "default": "agente", "description": "Que clase de update se emite (action=update)" },
+                        "texto": { "type": "string", "description": "Contenido del update (action=update)" }
                     }
                 }
             },
@@ -3099,9 +3101,15 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 // `reanudar` y `fork` son llamadas sueltas y tienen que ver
                 // la sesión que se creó antes.
                 crate::protocol_acp::sesion::con_global(|r| {
-                    let base = r.nueva(if cwd.is_empty() { "/tmp" } else { &cwd }, None);
+                    // MEDIDO (2026-11-28): la sesion se creaba ANTES de
+                    // mirar la accion => CADA llamada (incluso "listar")
+                    // dejaba una sesion basura en el registro.  Ahora solo
+                    // se crea en la accion "nueva".
                     match action.as_str() {
-                        "nueva" => Ok(json!({ "ok": true, "sesion": base.resumen() })),
+                        "nueva" => {
+                            let base = r.nueva(if cwd.is_empty() { "/tmp" } else { &cwd }, None);
+                            Ok(json!({ "ok": true, "sesion": base.resumen() }))
+                        }
                         "listar" => Ok(json!({ "ok": true, "sesiones": r.listar() })),
                         "cancelar" => {
                             let e = r.cancelar(&session_id)?;
@@ -3116,6 +3124,33 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                             Ok(json!({ "ok": true, "sesion": h.resumen() }))
                         }
                         "bosque" => Ok(json!({ "ok": true, "bosque": r.bosque() })),
+                        // MEDIDO (2026-11-28, docs/DECISION_ACP.md §3.2): el
+                        // dispatch de `session/update` no estaba cableado.
+                        // Aquí sí: se construye la notificación canónica,
+                        // se mete en el HISTORIAL de la sesión (lo que
+                        // devuelve `session/load`) y se devuelve la línea
+                        // NDJSON lista para el cable.
+                        "update" => {
+                            let texto = s("texto");
+                            let tipo = s("tipo");
+                            let u = match tipo.as_str() {
+                                "usuario" => crate::protocol_acp::updates::texto_usuario(&texto),
+                                "pensamiento" => crate::protocol_acp::updates::pensamiento(&texto),
+                                _ => crate::protocol_acp::updates::texto_agente(&texto),
+                            };
+                            let v = crate::protocol_acp::updates::params(&session_id, &u);
+                            r.registrar_update(&session_id, &v)?;
+                            Ok(json!({
+                                "ok": true,
+                                "notificacion": crate::protocol_acp::updates::enmarcar(&session_id, &u),
+                                "update": v,
+                            }))
+                        }
+                        "historial" => Ok(json!({
+                            "ok": true,
+                            "session_id": session_id,
+                            "historial": r.historial(&session_id),
+                        })),
                         otro => Err(format!("acción desconocida: {}", otro)),
                     }
                 })

@@ -51,6 +51,9 @@ pub mod sesion;
 /// Permisos: `mdaemon/policy/evaluate` y `mdaemon/sandbox/describe`.
 pub mod permisos;
 
+/// Dispatch de la notificación `session/update` (updates de la sesión).
+pub mod updates;
+
 /// Versión del crate del esquema canónico que usamos.
 ///
 /// MEDIDO (2026-11-27): el `pub use` de arriba renombra el modulo a `acp`,

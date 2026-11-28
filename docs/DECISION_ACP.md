@@ -44,7 +44,7 @@
 | `transport.rs` | JSON-RPC 2.0 sobre stdio y sobre HTTP (nuestro `cockpit_server.rs` ya lo tiene) | **hecho**: `rust-core/src/protocol_acp/transport.rs` (11 tests) |
 | `v1.rs` | reexport de los tipos canónicos | **hecho**: es `rust-core/src/acp_schema.rs` (vendorizado, 9 tests) |
 | `session.rs` | ciclo de vida de sesión (nuevo\|load\|resume\|cancel\|list) | **hecho**: `rust-core/src/protocol_acp/sesion.rs` (10 tests) + `session/fork` |
-| `updates.rs` | los `SessionUpdate` (13 de Devin ⊂ 22 canónicos) | **hecho**: `SessionUpdate` está en el esquema vendorizado; falta el *dispatch* de la notificación |
+| `updates.rs` | los `SessionUpdate` (13 de Devin ⊂ 22 canónicos) | **hecho**: `rust-core/src/protocol_acp/updates.rs` (5 tests): la notificación `session/update` canónica, su línea NDJSON (el framing lo pone el transporte) y el update en el historial de la sesión (lo que devuelve `session/load`) |
 | `extensions.rs` | nuestras extensiones `mdaemon/*` y las de terceros que nos sirvan | **hecho**: `protocol_acp.rs` (extensiones propias con namespace `mdaemon/`) |
 | `permissions.rs` | `policy/evaluate` con **deny > ask > allow** y el sandbox | **hecho**: `rust-core/src/protocol_acp/permisos.rs` (7 tests) |
 
@@ -66,14 +66,16 @@ se valida en el CI.
 * **Persistencia de sesiones**: el registro es **global del proceso** (en
   memoria).  ACP no dice dónde guarda el cliente el historial (lo trae con
   `session/load`); persistirlo en SQLite (`board.rs`) es otro módulo.
-* **`session/update` (notificación)**: el TIPO está en el esquema vendorizado,
-  pero el *dispatch* (emitir updates hacia el cliente) no está cableado al
-  bucle de `agent_loop.rs`.
+* **`session/update` (notificación)**: el *dispatch* ya está (2026-11-28,
+  `protocol_acp/updates.rs` + la acción `update` del tool `acp_sesion`), pero
+  **sigue sin estar cableado al bucle de `agent_loop.rs`**: hoy se emite a
+  mano (o desde el tool), no automáticamente en cada fragmento del turno.
+  El cableado al bucle es lo que falta.
 * **ACP v2**: no se activa (`unstable_protocol_v2`): sólo Devin Desktop lo
   habla y el registro oficial no lo prueba (medido, tabla de la §1).
 
 ## 4. Lo que NO se copia
 
 Las extensiones de terceros (`cognition.ai/*` de Devin, `mcode/*` de MiniMax,
-`acpira/*`) quedan **documentadas**, no copiadas: son de年产 productos
+`acpira/*`) quedan **documentadas**, no copiadas: son de productos
 proprietarios. Del crate ACP sí dependemos (Apache-2.0).
