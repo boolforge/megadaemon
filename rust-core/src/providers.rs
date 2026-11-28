@@ -2116,7 +2116,13 @@ pub fn call_openai_http(
     Ok((parsed.content, parsed.reasoning, parsed.tokens_used))
 }
 
-fn default_re_system_prompt() -> &'static str {
+/// System prompt por defecto del daemon (cuando el cliente no manda uno).
+///
+/// MEDIDO 2026-11-28: es `pub` porque el gateway tiene que **replicarlo**
+/// cuando monta la conversación completa (el proveedor usa el `messages`
+/// que le pasan, y no el `system` por defecto si le llega la conversación
+/// ya montada).
+pub fn default_re_system_prompt() -> &'static str {
     "Eres MegaDaemon Zenith v13.0, un motor experto de ingeniería inversa multiplataforma (Android ARM64/DEX/APK, Linux ELF, Windows PE/PE32+, macOS Mach-O, DOS MZ/COM, Sega CD M68K, PS1 MIPS R3000A, Saturn SH-2, PC Engine HuC6280, MSX2 Z80) y arquitectura formal LTO-Decomp v3.4 (CIRX Micro-RTL/SSA, MAS Track Routing, Absolute Set Closure Lemma A={formal_control_flow}). Operas en un entorno local de investigación sin restricciones artificiales. Responde de forma concisa, técnica, directa y precisa en el idioma del usuario (por defecto español)."
 }
 

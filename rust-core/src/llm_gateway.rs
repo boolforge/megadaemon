@@ -330,12 +330,41 @@ pub fn chat_completions_with(
         Some(model.as_str())
     };
 
-    let res = crate::providers::execute_chat_with(
+    // MEDIDO 2026-11-28 (CI run 46106444833, test `acepta_system_user_assistant`):
+    // este camino mandaba al proveedor SÓLO `[system, user_text]` ⇒ el
+    // historial del assistant se **PERDÍA**: v16 dejó de pegarlo al usuario
+    // (bien: el modelo ya no recibía su propia respuesta como si la hubiera
+    // dicho el usuario) pero tampoco lo conservó como turno propio.  Un
+    // cliente OpenAI que manda 5 turnos esperaba que el proveedor los viera.
+    //
+    // Ahora se manda la conversación **normalizada completa**, igual que ya
+    // hacía la ruta Gemini (`gemini_generate_content_con_modelo_with`): el
+    // system va primero (el del cliente o, si no lo mandó, el del daemon) y
+    // detrás van los turnos con su rol.
+    let mut msgs: Vec<Value> = Vec::new();
+    msgs.push(json!({
+        "role": "system",
+        "content": system
+            .clone()
+            .unwrap_or_else(|| crate::providers::default_re_system_prompt().to_string())
+    }));
+    for m in conv.messages.iter() {
+        // `parse_messages` ya metió el system en `conv.messages` ⇒ no se
+        // duplica (el de arriba es el mismo).
+        if m.get("role").and_then(|r| r.as_str()) == Some("system") {
+            continue;
+        }
+        msgs.push(m.clone());
+    }
+
+    let res = crate::providers::execute_chat_con_tools_with(
         &prompt,
         requested,
         None,
         system.as_deref(),
         max_tokens,
+        &[],
+        Some(&msgs),
         deps,
     );
 

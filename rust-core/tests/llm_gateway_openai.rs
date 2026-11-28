@@ -143,13 +143,22 @@ fn acepta_system_user_assistant() {
         .cuerpo_enviado("https://p1.test/v1")
         .expect("no se envió la petición");
     let mensajes = enviado["messages"].as_array().unwrap();
+    // MEDIDO 2026-11-28 (CI run 46106444833): este test llevaba **meses** sin
+    // ejecutarse (la suite no compilaba) y afirmaba un comportamiento que v16
+    // cambió a propósito: el assistant se pegaba al prompt del usuario ("el
+    // modelo recibía su propia respuesta anterior como si la hubiera dicho el
+    // usuario").  El defecto real era otro: el historial del assistant se
+    // **perdía** (el proveedor recibía sólo `[system, user_text]`).
+    // Ahora la conversación va entera y con su rol (como en la ruta Gemini).
+    assert_eq!(mensajes.len(), 4, "los cuatro turnos van al proveedor");
     assert_eq!(mensajes[0]["role"], "system");
     assert_eq!(mensajes[0]["content"], "eres un agente");
     assert_eq!(mensajes[1]["role"], "user");
-    let prompt = mensajes[1]["content"].as_str().unwrap();
-    assert!(prompt.contains("hola"), "prompt: {}", prompt);
-    assert!(prompt.contains("buenas"), "prompt: {}", prompt);
-    assert!(prompt.contains("continua"), "prompt: {}", prompt);
+    assert_eq!(mensajes[1]["content"], "hola");
+    assert_eq!(mensajes[2]["role"], "assistant");
+    assert_eq!(mensajes[2]["content"], "buenas");
+    assert_eq!(mensajes[3]["role"], "user");
+    assert_eq!(mensajes[3]["content"], "continua");
 }
 
 #[test]
