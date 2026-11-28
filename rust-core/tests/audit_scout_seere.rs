@@ -727,23 +727,84 @@ fn s09_la_politica_de_energia_se_aplica_al_agente() {
     );
 
     let src2 = std::fs::read_to_string("src/providers.rs").expect("leer providers.rs");
-    for line2 in src2
-        .lines()
-        .filter(|l| l.contains("run_seere_v11"))
+    // MEDIDO (2026-11-28): el guard recorria el fichero LINEA A LINEA y
+    // exigia que cada linea con `run_seere_v11` trajera `pol.max_turns`.
+    // En `providers.rs` la llamada esta PARTIDA en varias lineas y el
+    // parametro se llama `max_turns` (es el del trait `LocalFallback`), y
+    // la politica llega un nivel mas arriba (`deps.local.run(...)`) =>
+    // el guard fallaba SIN que hubiera defecto (falso positivo).  Ahora se
+    // mira la LLAMA COMPLETA: el bloque desde la linea hasta que se cierra
+    // el parentesis.
+    let bloque_de_la_llamada = |lineas: &[&str], desde: usize| -> String {
+        let mut out = String::new();
+        let mut paren: i32 = 0;
+        for l in lineas.iter().skip(desde) {
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(l.trim());
+            paren += l.matches('(').count() as i32;
+            paren -= l.matches(')').count() as i32;
+            if out.contains('(') && paren <= 0 {
+                break;
+            }
+            if out.len() > 800 {
+                break;
+            }
+        }
+        out
+    };
+    let lineas: Vec<&str> = src2.lines().collect();
+    let mut llamadas = 0usize;
+    for (i, l) in lineas.iter().enumerate() {
+        if !l.contains("run_seere_v11") {
+            continue;
+        }
         // MEDIDO (2026-11-28): los COMENTARIOS que explican el v6
         // ("`execute_chat` llamaba a `seere_v11::run_seere_v11` in situ")
         // mencionan la llamada pero NO son la llamada => el guard fallaba
         // sin que hubiera defecto (falso positivo).  Sólo cuentan las
         // lineas de CODIGO: mismo criterio que `declared_modules.rs`.
-        .filter(|l| !l.trim_start().starts_with("//"))
-    {
-        println!("[S09] providers: {}", line2.trim());
+        if l.trim_start().starts_with("//") {
+            continue;
+        }
+        llamadas += 1;
+        let bloque = bloque_de_la_llamada(&lineas, i);
+        println!("[S09] providers: {}", bloque);
+        // El motor recibe el numero de turnos que le pasa el trait.
         assert!(
-            line2.contains("pol.max_turns"),
-            "[S09] DEFECTO: el fallback local ignora pol.max_turns: {}",
-            line2.trim()
+            bloque.contains("max_turns"),
+            "[S09] DEFECTO: el fallback local ignora el numero de turnos: {}",
+            bloque
         );
     }
+    assert!(
+        llamadas > 0,
+        "[S09] no se encontro ninguna llamada a run_seere_v11 en providers.rs"
+    );
+
+    // Y el que llama al fallback local le pasa la POLITICA de energia.
+    let mut llamadas_local = 0usize;
+    for (i, l) in lineas.iter().enumerate() {
+        if !l.contains(".local.run(") {
+            continue;
+        }
+        if l.trim_start().starts_with("//") {
+            continue;
+        }
+        llamadas_local += 1;
+        let bloque = bloque_de_la_llamada(&lineas, i);
+        println!("[S09] fallback local: {}", bloque);
+        assert!(
+            bloque.contains("pol.max_turns"),
+            "[S09] DEFECTO: el fallback local ignora pol.max_turns: {}",
+            bloque
+        );
+    }
+    assert!(
+        llamadas_local > 0,
+        "[S09] no se encontro la llamada al fallback local en providers.rs"
+    );
 
     // El presupuesto por turno del agente no puede superar el de la política
     // más restrictiva (critical = 256).

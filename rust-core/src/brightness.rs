@@ -1615,7 +1615,26 @@ pub fn decidir(
         if t < BRILLO_MAXIMO {
             let techo_f = t as f64 / 255.0;
             if (actual - techo_f).abs() < 0.002 && (objetivo - actual).abs() >= 0.002 {
-                return Decision::CambioDePolitica;
+                // MEDIDO (2026-11-28): con la COPIA que la politica guardo se
+                // distinguen las dos cosas que el codigo confundia:
+                //
+                // * el objetivo es el MISMO que la copia (p.ej. 247) => el
+                //   objetivo del usuario sigue siendo 247 y el que bajo la
+                //   pantalla a 60 fue el daemon => se respeta el techo
+                //   (`CambioDePolitica`) y el objetivo no se toca;
+                // * el objetivo es OTRO (p.ej. 128) => el usuario movio el
+                //   deslizador MIENTRAS estaba recortado => con la politica
+                //   "respetar_usuario" su cambio se adopta (`AdoptarCambio`).
+                //
+                // Sin la copia no hay con que comparar => se mantiene el
+                // comportamiento anterior (es la politica la que cambio).
+                let es_cambio_de_la_politica = match guardado_por_politica {
+                    Some(g) => (objetivo - g as f64 / 255.0).abs() < 0.002,
+                    None => true,
+                };
+                if es_cambio_de_la_politica {
+                    return Decision::CambioDePolitica;
+                }
             }
         }
     }
@@ -3616,6 +3635,65 @@ mod tests {
                 Some(247)
             ),
             Decision::Reafirmar
+        );
+    }
+
+    #[test]
+    fn el_usuario_puede_mover_el_deslizador_mientras_la_politica_recorta() {
+        // MEDIDO (2026-11-28): el caso 3 de `el_ciclo_completo_del_veto` no
+        // pasaba porque el CODIGO confundia dos cosas distintas:
+        //
+        // * la politica bajo la pantalla a 60 (el objetivo del usuario sigue
+        //   siendo el 247 que la politica guardo) => se respeta el techo;
+        // * el usuario movio el deslizador a 128 mientras estaba recortado
+        //   (el objetivo ya no es el de la copia) => su cambio se adopta.
+        //
+        // Este test fija LOS DOS LADOS de la distincion.
+        let f = |v: u8| Some(v as f64 / 255.0);
+        // La politica bajo la pantalla: el objetivo es su copia (247).
+        assert_eq!(
+            decidir(
+                "respetar_usuario",
+                f(247),
+                f(60),
+                Some(0),
+                false,
+                Some(60),
+                true,
+                Some(247)
+            ),
+            Decision::CambioDePolitica,
+            "la politica bajo la pantalla: se respeta el techo"
+        );
+        // El usuario movio el deslizador a 128: su cambio se adopta.
+        assert_eq!(
+            decidir(
+                "respetar_usuario",
+                f(128),
+                f(60),
+                Some(0),
+                false,
+                Some(60),
+                true,
+                Some(247)
+            ),
+            Decision::AdoptarCambio,
+            "el usuario movio el deslizador: se adopta su objetivo"
+        );
+        // Y con la politica "firme" manda la politica, no el usuario.
+        assert_eq!(
+            decidir(
+                "firme",
+                f(128),
+                f(60),
+                Some(0),
+                false,
+                Some(60),
+                true,
+                Some(247)
+            ),
+            Decision::Reafirmar,
+            "con la politica firme manda la politica"
         );
     }
 
