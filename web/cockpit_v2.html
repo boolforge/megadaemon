@@ -655,6 +655,25 @@
 
       <div class="card">
         <div class="card__head">
+          <h2 class="card__title">Hooking del endpoint (language server)</h2>
+          <div class="btn-row">
+            <button class="btn btn--sm btn--ghost" id="btn-hook-refresh">Ver estado</button>
+            <button class="btn btn--sm btn--primary" id="btn-hook-apply">Aplicar hook</button>
+            <button class="btn btn--sm btn--danger" id="btn-hook-restore">Restaurar</button>
+          </div>
+        </div>
+        <div class="row mt-3" style="gap:8px;flex-wrap:wrap;">
+          <label class="small muted" for="hook-port">Puerto del gateway</label>
+          <select id="hook-port" class="input input--sm" style="max-width:220px;">
+            <option value="8080">8080 — el que usa la app (127.0.0.1:8080)</option>
+            <option value="9090">9090 — puerto principal del daemon</option>
+          </select>
+        </div>
+        <div id="agy-hook"></div>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
           <h2 class="card__title">Estado y catálogo real de modelos</h2>
           <button class="btn btn--sm btn--ghost" id="btn-agy-refresh">Refrescar</button>
         </div>
@@ -2997,6 +3016,84 @@ async function instrumentacionAccion(accion) {
   toast(res.ok === false ? "error" : "ok", "Instrumentación", res.ok === false ? (res.error || "falló") : (piezas.length + " piezas revisadas"));
 }
 
+/* ===========================================================================
+   HOOKING DEL ENDPOINT (patche del language server + gate de la GUI).
+
+   MEDIDO (2026-11-28): la UI no tenía NINGÚN control del parche del endpoint:
+   el usuario tenía que ir al MCP a mano.  Y el parche se había aplicado con
+   el puerto 8080, que el daemon NO escuchaba => la app respondía
+   ERR_LLM_UNREACHABLE:127.0.0.1:8080 (connection refused).
+
+   Ahora: el estado dice si el binario está parcheado y CON QUÉ URL, y los
+   botones aplican/restanuran el hook contra un puerto que el daemon escucha
+   de verdad (el daemon rechaza los demás con "puerto_muerto").
+   =========================================================================== */
+
+function hookPuerto() {
+  var el = document.getElementById("hook-port");
+  var v = el && el.value ? parseInt(el.value, 10) : 9090;
+  return isNaN(v) ? 9090 : v;
+}
+
+function hookPintar(res) {
+  var cont = document.getElementById("agy-hook");
+  if (!cont) return;
+  if (!res || res.ok === false) {
+    cont.innerHTML = '<pre class="logbox mono">' + esc(JSON.stringify(res, null, 2)) + "</pre>";
+    return;
+  }
+  var ep = res.endpoint || {};
+  var gate = res.gate || {};
+  var puertos = (ep.puertos_servidos || []).join(", ");
+  var filas = [
+    ["Binario del LS", ep.ruta || "--"],
+    ["Parcheado", ep.parcheado ? "SÍ" : "no"],
+    ["URL en el binario", ep.url_en_disco || "(ninguna)"],
+    ["URL original", ep.url_original || "--"],
+    ["Gate de la GUI", gate.parcheado ? "parcheado" : ((gate.error) ? ("error: " + gate.error) : "sin parchear")],
+    ["Puertos del daemon", puertos || "--"],
+    ["sha256 en disco", (ep.sha256 || "--").slice(0, 16)],
+    ["sha256 en manifiesto", (ep.sha256_manifesto || "--").slice(0, 16)],
+    ["Manifesto al día", ep.sha256_coincide_manifesto ? "sí" : "NO"]
+  ];
+  cont.innerHTML = '<div class="table-wrap"><table class="table"><thead><tr><th>Campo</th><th>Valor</th></tr></thead><tbody>' +
+    filas.map(function (f) {
+      return "<tr><td class='small muted'>" + esc(f[0]) + "</td><td class='small mono'>" + esc(f[1]) + "</td></tr>";
+    }).join("") + "</tbody></table></div>" +
+    (ep.parcheado ? "" : "<p class='small muted'>El binario NO está parcheado: el language server sigue hablando con el Cloud Code de Google (y la app cae en el modelo nativo, no en MegaDaemon).</p>");
+}
+
+async function loadAntigravityHook() {
+  var res = await apiCall("/api/v2/antigravity/hook", function () {
+    return fetch("/api/v2/antigravity/hook", { cache: "no-store", headers: authHeaders() });
+  });
+  hookPintar(res);
+}
+
+async function hookAccion(accion) {
+  var confirmar = accion !== "plan";
+  if (confirmar) {
+    var ok = await confirmModal(
+      accion === "restaurar" ? "Restaurar el hooking" : "Aplicar el hooking",
+      accion === "restaurar"
+        ? "<p>Se devuelve el binario del language server y el gate de la GUI a su estado original. Es reversible.</p>"
+        : "<p>El binario del language server pasa a apuntar al gateway de MegaDaemon en el puerto elegido. Se guarda una copia (.bak-megadaemon) antes de tocar nada.</p>",
+      "Aplicar"
+    );
+    if (!ok) return;
+  }
+  var res = await apiCall("/api/v2/antigravity/hook", function () {
+    return fetch("/api/v2/antigravity/hook", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ accion: accion, puerto: hookPuerto(), confirmar: confirmar })
+    });
+  });
+  hookPintar(res);
+  toast(res && res.ok === false ? "error" : "ok", "Hooking",
+    res && res.ok === false ? (res.error || "falló") : ("acción " + (res.accion || accion) + " aplicada"));
+}
+
 async function loadAntigravity() {
   // MEDIDO (2026-11-23): si UNA llamada falla (p.ej. el language server de
   // Antigravity está parado ⇒ /api/v2/antigravity da error), la vista se
@@ -3051,7 +3148,10 @@ async function loadAntigravity() {
   await Promise.all([
     loadAntigravityModels(),
     loadAntigravityConversations(),
-    loadAntigravityTasks()
+    loadAntigravityTasks(),
+    // MEDIDO (2026-11-28): el estado del hooking del endpoint se pide
+    // también al entrar en la vista (antes sólo se veía al pulsar un botón).
+    loadAntigravityHook().catch(function () {})
   ]);
 }
 
@@ -4474,6 +4574,11 @@ function bindEvents() {
   $("#btn-inst-refresh").addEventListener("click", function () { loadAntigravity(); });
   $("#btn-inst-apply").addEventListener("click", function () { instrumentacionAccion("aplicar"); });
   $("#btn-inst-restore").addEventListener("click", function () { instrumentacionAccion("restore"); });
+
+  // MEDIDO (2026-11-28): control del hooking del endpoint (no existía).
+  $("#btn-hook-refresh").addEventListener("click", function () { loadAntigravityHook(); });
+  $("#btn-hook-apply").addEventListener("click", function () { hookAccion("aplicar"); });
+  $("#btn-hook-restore").addEventListener("click", function () { hookAccion("restaurar"); });
 
   $("#logs-refresh").addEventListener("click", loadLogs);
   $("#logs-fuente").addEventListener("change", loadLogs);

@@ -112,6 +112,12 @@ pub fn api_v2_routes() -> Vec<(&'static str, &'static str)> {
         ("GET", "/api/v2/antigravity/tasks"),
         ("POST", "/api/v2/antigravity/enqueue"),
         ("POST", "/api/v2/antigravity/reparar-proyectos"),
+        // MEDIDO (2026-11-28): la UI NO tenía ninguna forma de ACTIVAR ni
+        // DESACTIVAR el parche (el "hooking"): el panel era de sólo lectura
+        // y el usuario tenía que ir al MCP.  Estas rutas lo hacen desde la
+        // Web UI, reutilizando el MISMO dispatch del tool (fuente única).
+        ("GET", "/api/v2/antigravity/hook"),
+        ("POST", "/api/v2/antigravity/hook"),
         // ── Superficie nueva (2026-11-23): la UI refleja de verdad el daemon
         ("GET", "/api/v2/logs"),
         ("GET", "/api/v2/config"),
@@ -182,6 +188,8 @@ fn route_descriptions() -> Vec<(&'static str, &'static str, &'static str)> {
         ("GET", "/api/v2/antigravity/tasks", "Cola de tareas del daemon de Antigravity (daemon/tasks.json): hooks, trigger e intervalo."),
         ("POST", "/api/v2/antigravity/enqueue", "Encola trabajo en el agente de Antigravity (consume cuota y crea una conversación): exige confirm=true."),
         ("POST", "/api/v2/antigravity/reparar-proyectos", "Repara la lista de PROYECTOS de Antigravity: borra las conversaciones con project_id vacio (huerfanas), que hacen que el language server falle con read_projects_empty_id y la app pida el login. Copia de seguridad antes; exige confirm=true."),
+        ("GET", "/api/v2/antigravity/hook", "Estado del HOOKING de Antigravity: si el binario del language server está parcheado (y con qué URL), si el gate de la GUI está parcheado, y los puertos que el daemon escucha de verdad."),
+        ("POST", "/api/v2/antigravity/hook", "Activa o DESACTIVA el hooking de Antigravity. Cuerpo: {accion: aplicar|aplicar_gate|restaurar|estado|plan, puerto?: 8080|9090, confirmar: true}. Aplicar exige confirmar=true y un puerto que el daemon escuche; restaurar deja el binario y el gate como estaban."),
         ("POST", "/api/v2/tasks/claim", "Reclama una tarea del tablero del bus bajo lock (BEGIN IMMEDIATE) con lease y rol; won=false si otro se adelantó."),
         ("POST", "/api/v2/tasks/release", "Devuelve una tarea a `queued`; sólo quien la tiene puede soltarla."),
         ("POST", "/api/v2/tasks/report", "Reporta el resultado de una tarea (hecha/fallida) con su informe."),
@@ -4513,6 +4521,49 @@ fn antigravity_bridge() -> Result<crate::antigravity_bridge::AntigravityBridge, 
 }
 
 /// Panel Antigravity en un fetch: estado + catálogo + tareas.
+/// Estado y control del **HOOKING** de Antigravity.
+///
+/// MEDIDO (2026-11-28): el panel de Antigravity en la Web UI era de **sólo
+/// lectura**: no había ninguna forma de ACTIVAR ni de DESACTIVAR el parche
+/// del language server (el "hooking") ni el gate de la GUI.  El usuario
+/// tenía que ir al MCP (`antigravity_endpoint`) a mano.
+///
+/// Aquí se reutiliza el **mismo** dispatch del tool (fuente única): la Web
+/// UI hace exactamente lo mismo que el MCP, con las mismas reglas
+/// (`confirmar` obligatorio, puerto que el daemon escuche de verdad).
+pub fn antigravity_hook(body: &Value) -> Value {
+    let mut args = body.clone();
+    if let Some(o) = args.as_object_mut() {
+        // El cuerpo de la UI usa "accion"/"confirmar"; el tool usa
+        // "action"/"confirm".  Se aceptan las dos formas.
+        let accion = o
+            .get("accion")
+            .cloned()
+            .or_else(|| o.get("action").cloned())
+            .unwrap_or_else(|| Value::String("estado".into()));
+        o.insert("action".into(), accion);
+        if let Some(c) = o.get("confirmar").cloned() {
+            o.insert("confirm".into(), c);
+        }
+    }
+    match crate::antigravity_endpoint::dispatch("antigravity_endpoint", &args) {
+        Some(v) => {
+            let resultado = v.get("resultado").cloned().unwrap_or(Value::Null);
+            let accion = v.get("accion").cloned().unwrap_or(Value::Null);
+            // El estado se devuelve plano (lo consume la UI); las acciones
+            // devuelven su informe + la acción ejecutada.
+            if let Some(obj) = resultado.as_object() {
+                let mut out = obj.clone();
+                out.insert("accion".into(), accion);
+                json!(out)
+            } else {
+                json!({ "accion": accion, "resultado": resultado })
+            }
+        }
+        None => json!({"ok": false, "error": "tool no encontrado"}),
+    }
+}
+
 fn antigravity_overview() -> Value {
     let br = match antigravity_bridge() {
         Ok(b) => b,
@@ -5397,6 +5448,9 @@ pub fn dispatch(method: &str, path: &str, body: &Value) -> Option<Value> {
                 let confirm = body.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false);
                 crate::antigravity_sessions::reparar_proyectos(confirm)
             }
+            // MEDIDO (2026-11-28): activar/desactivar el hooking desde la UI.
+            ("GET", "/api/v2/antigravity/hook") => antigravity_hook(&json!({})),
+            ("POST", "/api/v2/antigravity/hook") => antigravity_hook(&b),
             ("POST", "/api/v2/antigravity/enqueue") => {
                 let prompt = s("prompt");
                 let confirm = b.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false);

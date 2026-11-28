@@ -104,3 +104,62 @@ async function agyEnqueue() {
     await agyConversations();
   } catch (e) { agyText("agyEnqState", "error"); agyText("agyEnqNote", String(e)); }
 }
+
+/* ===========================================================================
+   HOOKING DEL ENDPOINT (patch del language server + gate de la GUI).
+
+   MEDIDO (2026-11-28): el panel era de SÓLO LECTURA: no había forma de
+   ACTIVAR ni DESACTIVAR el parche.  Y el parche se había aplicado con el
+   puerto 8080, que el daemon NO escuchaba => la app de Antigravity daba
+   ERR_LLM_UNREACHABLE:127.0.0.1:8080 (connection refused) y el modelo no
+   llegaba nunca.
+
+   El daemon rechaza los puertos que no escucha ("puerto_muerto"), así que el
+   selector sólo ofrece los que sirven de verdad.
+   =========================================================================== */
+function agyHookPuerto() {
+  var el = document.getElementById("agyHookPort");
+  var v = el && el.value ? parseInt(el.value, 10) : 9090;
+  return isNaN(v) ? 9090 : v;
+}
+
+function agyHookPintar(res) {
+  if (!res || res.ok === false) {
+    agyText("agyHookState", (res && res.error) ? res.error : "error");
+    agyText("agyHookNote", JSON.stringify(res).slice(0, 300));
+    return;
+  }
+  var ep = res.endpoint || {}, gate = res.gate || {};
+  agyText("agyHookLs", ep.parcheado ? "SI" : "no");
+  agyText("agyHookUrl", ep.url_en_disco || "(ninguna)");
+  agyText("agyHookGate", gate.parcheado ? "parcheado" : "sin parchear");
+  agyText("agyHookPorts", (ep.puertos_servidos || []).join(","));
+  agyText("agyHookState", "listo");
+  agyText("agyHookNote", ep.parcheado
+    ? ("El LS apunta a " + ep.url_en_disco + " (sha " + String(ep.sha256 || "").slice(0, 12) + ")")
+    : "El binario NO esta parcheado: el LS sigue hablando con el Cloud Code de Google.");
+}
+
+async function agyHookState() {
+  try {
+    var res = await apiGet("/api/v2/antigravity/hook");
+    agyHookPintar(res);
+  } catch (e) {
+    agyText("agyHookState", "error");
+    agyText("agyHookNote", String(e));
+  }
+}
+
+async function agyHook(accion) {
+  try {
+    var res = await apiPost("/api/v2/antigravity/hook", {
+      accion: accion,
+      puerto: agyHookPuerto(),
+      confirmar: true
+    });
+    agyHookPintar(res);
+  } catch (e) {
+    agyText("agyHookState", "error");
+    agyText("agyHookNote", String(e));
+  }
+}

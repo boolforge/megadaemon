@@ -53,6 +53,33 @@
       </div>
 
       <div class="card">
+        <div class="section-title">
+          <span>◈ HOOKING — PARCHE DEL LANGUAGE SERVER Y DEL GATE</span>
+          <div class="row">
+            <button class="btn sm cyan" onclick="loadAntigravity()">SYNC</button>
+            <button class="btn sm" onclick="agyHookState()">ESTADO</button>
+          </div>
+        </div>
+        <div class="grid-4">
+          <div class="stat-box"><div class="stat-label">LS parcheado</div><div class="stat-val mono" id="agyHookLs">--</div></div>
+          <div class="stat-box"><div class="stat-label">URL en el binario</div><div class="stat-val mono" id="agyHookUrl">--</div></div>
+          <div class="stat-box"><div class="stat-label">Gate de la GUI</div><div class="stat-val mono" id="agyHookGate">--</div></div>
+          <div class="stat-box"><div class="stat-label">Puertos del daemon</div><div class="stat-val mono" id="agyHookPorts">--</div></div>
+        </div>
+        <div class="row" style="margin-top:9px;">
+          <select id="agyHookPort" class="pill mono" style="max-width:190px;">
+            <option value="8080">puerto 8080 (el de la app)</option>
+            <option value="9090">puerto 9090 (principal)</option>
+          </select>
+          <button class="btn sm primary" onclick="agyHook('aplicar')">ACTIVAR HOOK</button>
+          <button class="btn sm" onclick="agyHook('aplicar_gate')">ACTIVAR GATE</button>
+          <button class="btn sm ghost" onclick="agyHook('restaurar')">DESACTIVAR (restaurar)</button>
+          <span class="pill mono" id="agyHookState">inactivo</span>
+        </div>
+        <div class="rule-why" id="agyHookNote"></div>
+      </div>
+
+      <div class="card">
         <div class="section-title"><span>◈ CATÁLOGO REAL DE MODELOS</span>
           <span class="pill" id="agyModelsInfo">--</span>
         </div>
