@@ -426,7 +426,7 @@ cola (`list claimed sessions`, `list queued sessions`, `list outposts`).
 2. `board.rs` (rusqlite) usa esas tablas.
 
 **Estado**: **HECHO** (2026-11-28) ⇒ `rust-core/src/board_schema.rs`
-(13 tests).
+(13 tests) **+ cableado en `board.rs` y en el store de sesiones**.
 
 * El DDL **medido** de las 10 tablas, transcrito de
   `docs/RE_DEVIN_CLI_RUST.md` §4.1, con sus columnas, índices y `UNIQUE`
@@ -440,9 +440,36 @@ cola (`list claimed sessions`, `list queued sessions`, `list outposts`).
 * `sessions.hidden` NO está en el DDL medido pero su índice medido lo exige
   (SQLite: "no such column: hidden") ⇒ se declara como **extensión**
   propia, marcada como tal y con test que lo prueba.
-* **PENDIENTE**: `board.rs` sigue usando su propio esquema; la migración
-  existe y es idempotente, pero aplicar el esquema medido al board es un
-  paso aparte (y el ACP tiene el suyo en `acp_sesion_store.rs`).
+
+### CABLEADO (2026-11-28): el esquema medido es el esquema REAL
+
+Antes el esquema medido era un módulo **sin usar**: `board.rs` tenía su
+propio esquema de tareas y el store de sesiones ACP (`acp_sesion_store.rs`)
+el suyo (`acp_sessions`, `acp_messages`, `acp_meta`).  Ahora:
+
+* `board.rs::migrate()` aplica **además** el esquema medido
+  (`board_schema::aplicar`), así que la base de la instancia tiene las 10
+  tablas medidas (test: `el_tablon_aplica_el_esquema_medido`).
+* El store de sesiones ACP **usa las tablas medidas**: `acp_sessions` →
+  `sessions`, `acp_messages` → `messages`, `acp_meta` → `app_state`.  Las
+  columnas que el DDL medido no tiene se guardan donde toca:
+  * `estado`, `padre` (el fork) y `turnos` ⇒ `app_state` con la clave
+    `acp:sesion:<id>` (la tabla medida de clave/valor).  El esquema medido
+    queda **intacto**: no se le inventan columnas.
+  * `es_resumen` ⇒ se **deduce** del `role` (`"resumen"`).
+  * el `Value` ACP exacto ⇒ `messages.tool_calls_json` (la columna medida
+    donde va el JSON del mensaje: sin esto el round-trip pierde el
+    `session/update`).
+  * La **tumba** (`acp_sessions_borradas`) y las extensiones de sesión
+    (`acp_session_extensions`) son **extensiones propias**: el esquema
+    medido no las tiene.
+* La instancia tiene **una** base SQLite: el tablón y las sesiones
+  comparten `board.sqlite` (el nombre sale de `board_schema::DB_FILE`, una
+  sola fuente de verdad).  Test: `el_tablon_y_las_sesiones_comparten_la_misma_base`.
+* **MEDIDO**: los dos tests están en `board.rs` y el store tiene 18 tests.
+
+Validado en crates AISLADOS: **56 tests** (tablón + esquema medido + store)
+y **53 tests** (store + ACP) verdes.
 
 ---
 
@@ -459,12 +486,13 @@ cola (`list claimed sessions`, `list queued sessions`, `list outposts`).
 | 7 | daemon: socket + handshake + cola | **HECHO** | `daemon_socket.rs` |
 | 8 | sandbox compilado del permiso | **HECHO** | `sandbox_linux.rs` |
 | 9 | `PLUGIN_DATA` por identidad | **HECHO** | `plugin_data.rs` |
-| 10 | esquema SQLite de sesiones | **HECHO** | `board_schema.rs` |
+| 10 | esquema SQLite de sesiones | **HECHO** | `board_schema.rs` (+ cableado en `board.rs` y en el store de sesiones) |
 
-**8 de 10 completos** (2, 4, 9 y 8 ya estaban; este 2026-11-28 cierran
-1, 3, 6, 7 y 10).  Queda **un** cabo suelto, y es de cableado y no de
-núcleo: el esquema medido debe llegar al `board.rs` (hoy cada uno usa el
-suyo).
+**10 de 10 completos** (2, 4, 9 y 8 ya estaban; este 2026-11-28 cierran
+1, 3, 6, 7 y 10).  Los dos cabos de cableado que quedaban están
+cerrados: `build_prompt` usa `contexto::construir_contexto` y el esquema
+medido llega al `board.rs` (es el esquema real de la base de la
+instancia).
 
 ## Capacidades propias nuevas (AST → Rust, 2026-11-28)
 

@@ -69,6 +69,14 @@ use rusqlite::{params, Connection};
 /// Versión del esquema de sesiones que aplica este módulo.
 pub const VERSION_ESQUEMA: i64 = 1;
 
+/// El fichero SQLite de la instancia.
+///
+/// MEDIDO (2026-11-28, patrón 10): la instancia tiene **una** base SQLite:
+/// el tablón (`board.rs`) y las sesiones (`acp_sesion_store.rs`) comparten
+/// fichero, así que el esquema medido es el esquema real y no un módulo
+/// muerto.  El nombre sale de aquí (una sola fuente de verdad).
+pub const DB_FILE: &str = "board.sqlite";
+
 /// Clave de `app_state` (tabla **medida**) donde se guarda la versión aplicada.
 pub const CLAVE_VERSION: &str = "board_schema.version";
 
@@ -1074,18 +1082,42 @@ impl ResumenMigracion {
 ///   desviación y la migración **no** se cae.
 /// * La versión aplicada se guarda en `app_state` (tabla medida).
 ///
-/// La migración va en una transacción cuando se puede; si la conexión ya
-/// tiene una transacción abierta, se sigue **sin** ella (idempotencia por
-/// sentencia, no por atomicidad).
+/// La migración va en una transacción **IMMEDIATE** cuando se puede; si la
+/// conexión ya tiene una transacción abierta, se sigue **sin** ella
+/// (idempotencia por sentencia, no por atomicidad).
+///
+/// MEDIDO (2026-11-28): IMMEDIATE y no DEFERRED porque la migración
+/// **escribe** (`CREATE TABLE`): con DEFERRED, una transacción que empieza
+/// leyendo y luego sube a escritura se encuentra con "database is locked"
+/// **sin esperar** (el busy handler no ayuda en esa subida).  Con IMMEDIATE
+/// el bloqueo se pide al principio y el `busy_timeout` sí espera.
 pub fn aplicar(conn: &Connection) -> Result<ResumenMigracion, rusqlite::Error> {
     let mut resumen = ResumenMigracion::nuevo();
 
-    let tx = conn.unchecked_transaction().ok();
-    let c: &Connection = match &tx {
-        Some(t) => t,
-        None => conn,
-    };
+    // MEDIDO (2026-11-28): `BEGIN IMMEDIATE` **a mano** (rusqlite 0.32 no
+    // tiene `unchecked_transaction_with_behavior`): la migración escribe, así
+    // que el bloqueo se pide AL PRINCIPIO.  Con DEFERRED, una lectura
+    // seguida de una escritura choca con "database is locked" **sin
+    // esperar** (el busy handler no ayuda en esa subida) ⇒ con dos
+    // escritores concurrentes el segundo fallaba.  Si la conexión ya tiene
+    // una transacción abierta, el `BEGIN` falla y se sigue **dentro** de
+    // ella (idempotencia por sentencia, no por atomicidad).
+    let propia = conn.execute_batch("BEGIN IMMEDIATE").is_ok();
+    let resultado = aplicar_dentro(conn, &mut resumen);
+    if propia {
+        let _ = match resultado {
+            Ok(_) => conn.execute_batch("COMMIT"),
+            Err(_) => conn.execute_batch("ROLLBACK"),
+        };
+    }
+    resultado.map(|_| resumen)
+}
 
+/// El cuerpo de la migración (con la transacción ya abierta o no).
+fn aplicar_dentro(
+    c: &Connection,
+    resumen: &mut ResumenMigracion,
+) -> Result<(), rusqlite::Error> {
     for tabla in ESQUEMA_ESPERADO {
         if tabla_existe(c, tabla.nombre)? {
             resumen.tablas_existentes.push(tabla.nombre.to_string());
@@ -1131,10 +1163,7 @@ pub fn aplicar(conn: &Connection) -> Result<ResumenMigracion, rusqlite::Error> {
         params![CLAVE_VERSION, VERSION_ESQUEMA.to_string()],
     )?;
 
-    if let Some(t) = tx {
-        t.commit()?;
-    }
-    Ok(resumen)
+    Ok(())
 }
 
 /// Añade una columna que falta, **sólo** si se puede sin inventar un valor.

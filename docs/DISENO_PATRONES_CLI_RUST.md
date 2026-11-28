@@ -41,7 +41,7 @@ escritorio** sin Electron ni navegador. Es el mismo camino que llevó a
 | 7 | **daemon**: socket Unix + lock + **handshake que verifica que quien conecta es su daemon** + RPC de cola (`list claimed sessions`, `list queued sessions`, `list outposts`) | **nuevo `daemon_socket.rs`** | **hecho**: lock de instancia, socket Unix NDJSON, handshake fail-closed y las tres RPC sobre la cola real (20 tests) | **hecho** |
 | 8 | **sandbox medido**: *"macOS seatbelt / Linux bwrap+seccomp"*; en Linux exige `bwrap` **y** `socat`; el permiso lógico **se compila a regla de sandbox** | `tool_policy.rs` + **nuevo `sandbox_linux.rs`** | ya hecho: `rust-core/src/sandbox_linux.rs` (bwrap + seatbelt, deny>allow, 10 tests) | **hecho** |
 | 9 | **plugins**: `PLUGIN_DATA` persistente **por identidad, no por versión**; globs prohibidos **sin `..`, `#` ni `@`** | **nuevo `plugin_data.rs`** | ya hecho: persistencia por identidad + validación de globs (anti path-traversal) | **hecho** |
-| 10 | **esquema SQLite de sesiones (10 tablas)** medido literal | **nuevo `board_schema.rs`** | **hecho**: DDL medido transcrito, migración idempotente e introspección para comparar tabla por tabla (13 tests) | **hecho** |
+| 10 | **esquema SQLite de sesiones (10 tablas)** medido literal | **nuevo `board_schema.rs`** | **hecho**: DDL medido transcrito, migración idempotente e introspección para comparar tabla por tabla (13 tests); **cableado**: `board.rs` lo aplica y el store de sesiones ACP **usa** esas tablas (`sessions`, `messages`, `app_state`) | **hecho** |
 
 ### 2.1 Los tres que se concretan primero
 

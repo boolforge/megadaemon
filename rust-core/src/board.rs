@@ -69,7 +69,11 @@ pub const DEFAULT_RETRIES: u32 = 6;
 pub const DEFAULT_LEASE_SECS: i64 = 900;
 
 /// Fichero del tablón dentro del `state_dir`.
-pub const BOARD_FILE: &str = "board.sqlite";
+///
+/// MEDIDO (2026-11-28, patrón 10): es la **única** base SQLite de la
+/// instancia: el tablón y las sesiones ACP comparten fichero (el nombre
+/// sale de `board_schema::DB_FILE`, una sola fuente de verdad).
+pub const BOARD_FILE: &str = crate::board_schema::DB_FILE;
 
 /// Copia de seguridad periódica del tablón.
 pub const SNAPSHOT_FILE: &str = "board.snapshot.sqlite";
@@ -569,6 +573,23 @@ impl SqliteStore {
 
     /// Aplica la cadena de migraciones (lineal, transaccional, idempotente).
     pub fn migrate(&mut self) -> Result<(), BoardError> {
+        // MEDIDO (2026-11-28, patrón 10): el esquema MEDIDO se aplica si
+        // **falta** (es idempotente).  Se comprueba ANTES con una lectura
+        // (que no coge el bloqueo de escritura): si ya está, abrir el tablón
+        // no bloquea a nadie —importa: hay dos escritores concurrentes— y
+        // una base creada antes de este cambio también lo recibe.
+        let medido_ya_esta = crate::board_schema::tabla_existe(&self.conn, "sessions")
+            .unwrap_or(false)
+            && crate::board_schema::tabla_existe(&self.conn, "app_state").unwrap_or(false);
+        if !medido_ya_esta {
+            let tx = self
+                .conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            crate::board_schema::aplicar(&tx).map_err(|e| {
+                BoardError::Io(format!("el esquema medido no se pudo aplicar: {}", e))
+            })?;
+            tx.commit()?;
+        }
         let current: i64 = self
             .conn
             .query_row("SELECT value FROM board_meta WHERE key='schema_version'", [], |r| {
@@ -1739,6 +1760,97 @@ mod tests {
 
     fn store(name: &str) -> SqliteStore {
         SqliteStore::open(&tmp_path(name)).expect("abrir tablón")
+    }
+
+    /// MEDIDO (2026-11-28, patrón 10): el tablón **usa** el esquema medido.
+    ///
+    /// La migración del tablón aplica el DDL literal del RE §4.1 (las 10
+    /// tablas de `board_schema`), así que el esquema medido no es un módulo
+    /// muerto: es el esquema real de la base de la instancia.
+    #[test]
+    fn el_tablon_aplica_el_esquema_medido() {
+        let s = store("esquema-medido");
+        // Las 10 tablas medidas están.
+        let n: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN
+                 ('sessions','messages','message_nodes','subagent_heads','tool_call_state',
+                  'prompt_history','rendered_commits','live_row_times','session_window_tools',
+                  'app_state')",
+                [],
+                |r| r.get(0),
+            )
+            .expect("cuenta");
+        assert_eq!(n, 10, "las 10 tablas medidas: {}", n);
+        // Y el esquema medido **verifica** (sin desviaciones).
+        let desv = crate::board_schema::desviaciones(&s.conn).expect("desviaciones");
+        assert!(
+            desv.is_empty(),
+            "el esquema medido no debe desviarse: {:?}",
+            desv
+        );
+        crate::board_schema::verificar_esquema(&s.conn).expect("el esquema medido verifica");
+    }
+
+    /// MEDIDO (2026-11-28, patrón 10): una base **anterior** (creada antes de
+    /// este cambio, con la versión del tablón ya puesta) también recibe el
+    /// esquema medido: la migración del tablón no se salta ese paso.
+    #[test]
+    fn una_base_antigua_tambien_recibe_el_esquema_medido() {
+        let ruta = tmp_path("base-antigua");
+        {
+            // Una base con el esquema del tablón y la versión YA puesta
+            // (como la de una instalación anterior).
+            let conn = rusqlite::Connection::open(&ruta).expect("abre");
+            conn.execute_batch(
+                "CREATE TABLE board_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO board_meta(key,value) VALUES('schema_version','1');",
+            )
+            .expect("crea el esquema antiguo");
+        }
+        // Al abrirla, el tablón aplica el esquema medido.
+        let s = SqliteStore::open(&ruta).expect("abre el tablón");
+        let n: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN
+                 ('sessions','messages','app_state')",
+                [],
+                |r| r.get(0),
+            )
+            .expect("cuenta");
+        assert_eq!(n, 3, "las tablas medidas llegan también a las bases antiguas: {}", n);
+    }
+
+    /// MEDIDO (2026-11-28, patrón 10): el tablón y las sesiones comparten
+    /// la **misma** base (una base SQLite por instancia).
+    #[test]
+    fn el_tablon_y_las_sesiones_comparten_la_misma_base() {
+        let ruta = tmp_path("base-compartida");
+        {
+            let mut s = SqliteStore::open(&ruta).expect("abrir tablón");
+            let t = Task::new("t-1", "build", "compilar");
+            s.put_task(&t).unwrap();
+        }
+        // El store de sesiones abre **el mismo** fichero.
+        let store = crate::acp_sesion_store::AcpSesionStore::open(&ruta).expect("abre sesiones");
+        let sesion = crate::acp_sesion_store::SesionAcp::nueva("ses-1", "/tmp/proyecto");
+        store.guardar_sesion(&sesion).expect("guarda la sesion");
+        // Y la fila está en la tabla MEDIDA `sessions` de la MISMA base.
+        let n: i64 = store
+            .conexion()
+            .query_row("SELECT COUNT(*) FROM sessions WHERE id='ses-1'", [], |r| {
+                r.get(0)
+            })
+            .expect("cuenta");
+        assert_eq!(n, 1, "la sesion vive en la tabla medida `sessions`");
+        // Y el tablón sigue ahí (no se han pisado).
+        let tareas: i64 = rusqlite::Connection::open(&ruta)
+            .expect("reabre")
+            .query_row("SELECT COUNT(*) FROM tasks", [], |r| r.get(0))
+            .expect("cuenta");
+        assert_eq!(tareas, 1, "las tareas del tablón siguen en su tabla");
     }
 
     #[test]

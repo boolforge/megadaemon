@@ -38,111 +38,76 @@
 //!
 //! ## Qué NO está medido
 //!
-//! * El DDL de 10 tablas del producto de referencia **no se copia** (es
-//!   material propietario): aquí se define el **esquema propio** de este
-//!   store, con las **mismas ideas** (épocas, `UNIQUE`, índices) y las
-//!   columnas que el modelo ACP necesita y el medido no tiene.
+//! * El DDL de 10 tablas del producto de referencia **no se copia**: se
+//!   **usa** el DDL medido, que ya está transcrito en
+//!   `rust-core/src/board_schema.rs` (`docs/RE_DEVIN_CLI_RUST.md` §4.1).
 //! * El comportamiento en el **móvil** (`su -mm -c`) no está medido: el repo
 //!   sólo verifica tipos, tests y contratos.
-//! * El **solapamiento** con `rust-core/src/board_schema.rs` (otro
-//!   subagente, DDL medido de 10 tablas) **no está resuelto aquí**: este
-//!   módulo **no depende** de él y usa **nombres de tabla propios** para no
-//!   chocar.  Ver «Solapamiento» más abajo.
 //!
-//! ## Tablas y columnas (las que usa este store)
+//! ## El esquema MEDIDO es el esquema de este store (patrón 10)
 //!
-//! Fichero de base de datos: **`acp_sesiones.sqlite`** dentro del
-//! `state_dir` (`state_dir::state_dir()`), nombre propio para no tocar el
-//! `board.sqlite` del tablón.
+//! MEDIDO (2026-11-28): el esquema medido es el de las **sesiones**
+//! (`sessions`, `messages`, `message_nodes`, `subagent_heads`,
+//! `tool_call_state`, `prompt_history`, `rendered_commits`,
+//! `live_row_times`, `session_window_tools`, `app_state`).  Este store
+//! **usa esas tablas** (antes usaba unas propias `acp_*` y el esquema
+//! medido era un módulo sin usar).
 //!
-//! | tabla | columnas |
+//! Fichero de base de datos: **`board.sqlite`** dentro del `state_dir`
+//! (`state_dir::state_dir()`): la instancia tiene **una** base SQLite y en
+//! ella conviven el tablón (`board.rs`) y las sesiones.
+//!
+//! | tabla | quién la usa |
 //! |---|---|
-//! | `acp_meta` | `key` (PK), `value` |
-//! | `acp_sessions` | `id` (PK), `cwd`, `modo`, `padre`, `estado`, `current_epoch`, `turnos`, `created_at`, `updated_at` |
-//! | `acp_messages` | `id` (PK autoincr), `session_id`, `compaction_epoch`, `sequence_number`, `rol`, `contenido`, `es_resumen`, `acp_json`, `created_at`, `UNIQUE(session_id, compaction_epoch, sequence_number)` |
-//! | `acp_session_extensions` | `session_id`, `key` (PK compuesta), `value`, `updated_at` |
-//! | `acp_sessions_borradas` | `session_id` (PK), `borrada_at` |
+//! | `sessions` | la fila de la sesión (`id`, `working_directory`, `backend_type`, `current_epoch`, …) |
+//! | `messages` | el historial (`sequence_number` global, `compaction_epoch`, `role`, `content`, `tool_calls_json`) |
+//! | `app_state` | la versión del esquema **y** los campos del ACP que el esquema medido no tiene (`estado`, `padre`, `turnos`), con la clave `acp:sesion:<id>` |
+//! | `acp_session_extensions` | **extensión propia**: las extensiones clave/valor de una sesión |
+//! | `acp_sessions_borradas` | **extensión propia**: la tumba (distingue «nunca existió» de «se borró») |
 //!
-//! Índices: `idx_acp_messages_session_epoch (session_id, compaction_epoch)`,
-//! `idx_acp_messages_session_seq (session_id, sequence_number)`,
-//! `idx_acp_sessions_activity (updated_at)`.
+//! Los índices son los **medidos**: `idx_message_nodes_session`,
+//! `idx_messages_session_epoch`, `idx_sessions_activity` y
+//! `idx_sessions_hidden`.
 //!
-//! ## Correspondencia con el DDL medido (para el root)
+//! ## Correspondencia con el DDL medido
 //!
-//! | DDL medido (`docs/RE_DEVIN_CLI_RUST.md` §4.1) | aquí |
+//! | DDL medido | aquí |
 //! |---|---|
-//! | `sessions.id` | `acp_sessions.id` |
-//! | `sessions.working_directory` | `acp_sessions.cwd` |
-//! | `sessions.current_epoch` | `acp_sessions.current_epoch` |
-//! | `sessions.created_at` / `last_activity_at` | `created_at` / `updated_at` |
-//! | `sessions.backend_type` / `model` / `permission_mode` | — (el modelo ACP no los tiene; `modo` es lo más cercano) |
-//! | *(no existe)* | `acp_sessions.estado` (activa/cancelada/terminada) |
-//! | *(no existe)* | `acp_sessions.padre` (el BOSQUE: la sesión de la que forked) |
-//! | *(no existe)* | `acp_sessions.turnos` |
-//! | `messages.id` | `acp_messages.id` |
-//! | `messages.session_id` | `acp_messages.session_id` |
-//! | `messages.sequence_number` | `acp_messages.sequence_number` (global por sesión) |
-//! | `messages.compaction_epoch` | `acp_messages.compaction_epoch` |
-//! | `messages.role` | `acp_messages.rol` |
-//! | `messages.content` | `acp_messages.contenido` |
-//! | *(no existe)* | `acp_messages.acp_json` (el `Value` ACP **exacto**: sin esto el round-trip pierde el `update`) |
-//! | *(no existe)* | `acp_messages.es_resumen` |
-//!
-//! ## Solapamiento con `board_schema.rs` (pendiente de resolver por el root)
-//!
-//! * Este módulo **crea sus propias tablas** (`acp_*`) y **no depende** de
-//!   `board_schema.rs` (que otro subagente está escribiendo).
-//! * **MEDIDO (2026-11-28, el fichero ya existe)**: `board_schema.rs` crea
-//!   `sessions`, `messages`, `message_nodes`, `subagent_heads`,
-//!   `tool_call_state`, `prompt_history`, `rendered_commits`,
-//!   `live_row_times`, `session_window_tools` y `app_state`, con los
-//!   índices `idx_messages_session_epoch`, `idx_sessions_activity` y
-//!   `idx_sessions_hidden`.  **Ninguno** de esos nombres choca con los
-//!   míos (`acp_*`): los dos esquemas pueden vivir en la **misma** base sin
-//!   conflicto.
-//! * Los **nombres de columna** de los campos que sí coinciden con el DDL
-//!   medido (`current_epoch`, `compaction_epoch`, `sequence_number`,
-//!   `created_at`, `updated_at`) son los mismos, para que una futura
-//!   migración sea una copia de columnas y no una traducción.
-//! * Si el root decide **fusionar** los dos esquemas, lo que hay que hacer
-//!   es: (a) renombrar `acp_sessions`→`sessions` y `acp_messages`→`messages`
-//!   (su `session_id` ya es **TEXT**, como el mío, porque el id de sesión
-//!   ACP es una cadena, no el `INTEGER` del DDL medido), (b) decidir si
-//!   `rol`→`role` y `contenido`→`content` (y `cwd`→`working_directory`,
-//!   `updated_at`→`last_activity_at`), (c) decidir qué hacer con `acp_json`
-//!   (el DDL medido tiene `tool_calls_json` y `tool_call_id`, pero **no** tiene
-//!   dónde guardar el `session/update` completo ⇒ sin `acp_json` se pierde
-//!   información), (d) decidir si `acp_sessions_borradas` (la tumba) se
-//!   queda o se sustituye por el `hidden` que el DDL medido indexa pero no
-//!   define, y (e) decidir si `acp_sessions.estado` / `.padre` / `.turnos`
-//!   (que el DDL medido no tiene dónde meter) se quedan en una tabla aparte
-//!   o se aparcan en `sessions` con columnas nuevas.
-//! * El fichero de base de datos **no** colisiona: `board_schema.rs` no
-//!   define ninguno (es sólo DDL) y el mío es `acp_sesiones.sqlite`.
+//! | `sessions.working_directory` | el `cwd` del ACP |
+//! | `sessions.backend_type` | el `modo` del ACP (vacío ⇒ `None`) |
+//! | `sessions.last_activity_at` | el `updated_at` del ACP |
+//! | `messages.role` / `messages.content` | el `rol` / `contenido` del ACP |
+//! | `messages.tool_calls_json` | el `Value` ACP **exacto** (el `session/update` completo: sin esto el round-trip pierde información) |
+//! | `messages.timestamp` | el `created_at` del mensaje |
+//! | *(no existe)* | `es_resumen`: se **deduce** del `role` (`"resumen"`) |
+//! | *(no existe)* | `estado`, `padre` y `turnos`: van en `app_state` (`acp:sesion:<id>`) |
 //!
 //! ## Decisiones
 //!
 //! * **Borrar es EXPLÍCITO**: `borrar_sesion` es la **única** operación que
 //!   elimina filas.  Guardar, compactar, revertir o cargar **no** borran
 //!   nada (patrón 4: la compactación marca una época, no borra).
-//! * **El borrado deja tumba** (`acp_sessions_borradas`) ⇒ un error
+//! * El borrado deja tumba (`acp_sessions_borradas`) ⇒ un error
 //!   tipado distingue «nunca existió» ([`ErrorStore::SesionNoExiste`]) de
 //!   «existió y se borró» ([`ErrorStore::SesionYaBorrada`]).
 //! * **`seq` es global por sesión** y **no se reinicia**: ni al compactar,
 //!   ni al recargar, ni al reabrir la base.  Es el `sequence_number` del
 //!   DDL medido.
-
+//!
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Fichero de la base de sesiones ACP dentro del `state_dir`.
 ///
-/// Nombre **propio** a propósito: el tablón (`board.sqlite`) y las sesiones
-/// ACP son cosas distintas y no deben compartir fichero sin querer.
-pub const ACPS_DB_FILE: &str = "acp_sesiones.sqlite";
+/// MEDIDO (2026-11-28, patrón 10): es el **mismo** fichero que el tablón
+/// (`board.sqlite`): la instancia tiene **una** base SQLite y en ella
+/// conviven las tablas del tablón y el **esquema medido** de las sesiones.
+/// Así el esquema medido no es un módulo muerto: es el esquema real.
+pub const ACPS_DB_FILE: &str = crate::board_schema::DB_FILE;
 
-/// Versión del esquema de este store (tabla `acp_meta`).
+/// Versión del esquema de este store (clave `schema_version` de `app_state`).
 pub const SCHEMA_VERSION: i64 = 1;
 
 /// Segundos de espera a que SQLite libere un bloqueo (el mismo valor que
@@ -666,43 +631,25 @@ pub fn ahora() -> i64 {
 // ESQUEMA
 // =============================================================================
 
-/// El esquema de este store (aplicado de forma idempotente).
+/// Las **extensiones propias** de este store (aplicadas de forma
+/// idempotente).
 ///
-/// MEDIDO: las ideas vienen del DDL medido (`docs/RE_DEVIN_CLI_RUST.md`
-/// §4.1): época en la sesión, época en el mensaje, `UNIQUE` por
-/// `(session_id, compaction_epoch, sequence_number)` e índice por
-/// `(session_id, compaction_epoch)`.  Los **nombres de tabla** son propios
-/// (`acp_*`) para no chocar con `board_schema.rs`.
+/// MEDIDO (2026-11-28, patrón 10): el esquema **medido**
+/// (`docs/RE_DEVIN_CLI_RUST.md` §4.1, transcrito en `board_schema.rs`) es
+/// el de las **sesiones**: `sessions`, `messages`, `message_nodes`,
+/// `subagent_heads`, `tool_call_state`, `prompt_history`,
+/// `rendered_commits`, `live_row_times`, `session_window_tools` y
+/// `app_state`.  Este store **usa** esas tablas (no las suyas): las
+///measured son la fuente de verdad del esquema.
+///
+/// Lo que aquí queda son las **dos extensiones propias**, porque el
+/// esquema medido no las tiene:
+/// * `acp_sessions_borradas`: la **tumba** (distingue «nunca existió» de
+///   «existió y se borró»).
+/// * `acp_session_extensions`: las extensiones clave/valor de una sesión.
 pub const ESQUEMA_V1: &str = r#"
-CREATE TABLE IF NOT EXISTS acp_meta (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS acp_sessions (
-    id            TEXT PRIMARY KEY,
-    cwd           TEXT NOT NULL DEFAULT '',
-    modo          TEXT,
-    padre         TEXT,
-    estado        TEXT NOT NULL DEFAULT 'activa',
-    current_epoch INTEGER NOT NULL DEFAULT 0,
-    turnos        INTEGER NOT NULL DEFAULT 0,
-    created_at    INTEGER NOT NULL DEFAULT 0,
-    updated_at    INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS acp_messages (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id       TEXT NOT NULL REFERENCES acp_sessions(id) ON DELETE CASCADE,
-    compaction_epoch INTEGER NOT NULL DEFAULT 0,
-    sequence_number  INTEGER NOT NULL,
-    rol              TEXT NOT NULL DEFAULT '',
-    contenido        TEXT NOT NULL DEFAULT '',
-    es_resumen       INTEGER NOT NULL DEFAULT 0,
-    acp_json         TEXT NOT NULL DEFAULT 'null',
-    created_at       INTEGER NOT NULL DEFAULT 0,
-    UNIQUE(session_id, compaction_epoch, sequence_number)
-);
 CREATE TABLE IF NOT EXISTS acp_session_extensions (
-    session_id TEXT NOT NULL REFERENCES acp_sessions(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL,
     key        TEXT NOT NULL,
     value      TEXT NOT NULL DEFAULT 'null',
     updated_at INTEGER NOT NULL DEFAULT 0,
@@ -712,12 +659,6 @@ CREATE TABLE IF NOT EXISTS acp_sessions_borradas (
     session_id TEXT PRIMARY KEY,
     borrada_at INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS idx_acp_messages_session_epoch
-    ON acp_messages(session_id, compaction_epoch);
-CREATE INDEX IF NOT EXISTS idx_acp_messages_session_seq
-    ON acp_messages(session_id, sequence_number);
-CREATE INDEX IF NOT EXISTS idx_acp_sessions_activity
-    ON acp_sessions(updated_at);
 "#;
 
 /// Las tablas que este store espera encontrar, con sus columnas.
@@ -725,41 +666,139 @@ CREATE INDEX IF NOT EXISTS idx_acp_sessions_activity
 /// Se usa para detectar un **esquema incompatible** (base con otra forma)
 /// y no dejar que SQLite falle luego con un error genérico.
 pub const TABLAS_ESPERADAS: &[(&str, &[&str])] = &[
+    // Las MEDIDAS (`board_schema.rs`).
     (
-        "acp_sessions",
+        "sessions",
         &[
             "id",
-            "cwd",
-            "modo",
-            "padre",
-            "estado",
-            "current_epoch",
-            "turnos",
+            "working_directory",
+            "backend_type",
+            "model",
+            "permission_mode",
             "created_at",
-            "updated_at",
+            "last_activity_at",
+            "total_tokens",
+            "current_epoch",
         ],
     ),
     (
-        "acp_messages",
+        "messages",
         &[
             "id",
             "session_id",
-            "compaction_epoch",
             "sequence_number",
-            "rol",
-            "contenido",
-            "es_resumen",
-            "acp_json",
-            "created_at",
+            "role",
+            "content",
+            "tool_call_id",
+            "tool_calls_json",
+            "timestamp",
+            "compaction_epoch",
         ],
     ),
+    ("app_state", &["key", "value"]),
+    // Las EXTENSIONES propias.
     (
         "acp_session_extensions",
         &["session_id", "key", "value", "updated_at"],
     ),
     ("acp_sessions_borradas", &["session_id", "borrada_at"]),
-    ("acp_meta", &["key", "value"]),
 ];
+
+// =============================================================================
+// LOS EXTRAS: LO QUE EL ESQUEMA MEDIDO NO TIENE
+// =============================================================================
+
+/// Los campos de la sesión ACP que el **esquema medido** no tiene columna.
+///
+/// MEDIDO (2026-11-28, patrón 10): la tabla `sessions` medida tiene
+/// `working_directory`, `backend_type`, `model`, `permission_mode`,
+/// `created_at`, `last_activity_at`, `total_tokens` y `current_epoch`, pero
+/// **no** tiene el estado de la sesión, su padre (el *fork*) ni el número de
+/// turnos.  Esos tres campos se guardan en `app_state` (la tabla **medida**
+/// de clave/valor), con la clave `acp:sesion:<id>`: así el esquema medido
+/// queda **intacto** (no se le inventan columnas) y los datos no se
+/// pierden.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ExtrasAcp {
+    /// El estado (`activa`, `cancelada`, `terminada`).
+    #[serde(default)]
+    pub estado: String,
+    /// La sesión de la que forked (el BOSQUE).
+    #[serde(default)]
+    pub padre: Option<String>,
+    /// Los turnos completados.
+    #[serde(default)]
+    pub turnos: u32,
+}
+
+impl ExtrasAcp {
+    /// Los extras por defecto: una sesión **activa**, sin padre y sin turnos.
+    fn por_defecto() -> ExtrasAcp {
+        ExtrasAcp {
+            estado: "activa".to_string(),
+            padre: None,
+            turnos: 0,
+        }
+    }
+}
+
+/// La clave de `app_state` con los extras de una sesión.
+fn clave_extras(id: &str) -> String {
+    format!("acp:sesion:{}", id)
+}
+
+/// Lee los extras de una sesión (si no hay, los de por defecto).
+fn leer_extras(conn: &Connection, id: &str) -> ExtrasAcp {
+    let txt: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_state WHERE key=?1",
+            params![clave_extras(id)],
+            |r| r.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    match txt {
+        Some(t) => {
+            serde_json::from_str::<ExtrasAcp>(&t).unwrap_or_else(|_| ExtrasAcp::por_defecto())
+        }
+        None => ExtrasAcp::por_defecto(),
+    }
+}
+
+/// Escribe los extras de una sesión.
+fn escribir_extras(conn: &Connection, id: &str, e: &ExtrasAcp) -> Result<(), ErrorStore> {
+    let txt = serde_json::to_string(e).unwrap_or_else(|_| "{}".to_string());
+    conn.execute(
+        "INSERT INTO app_state(key,value) VALUES(?1,?2)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![clave_extras(id), txt],
+    )?;
+    Ok(())
+}
+
+/// Lee los extras de **todas** las sesiones (una sola consulta).
+fn leer_todas_extras(conn: &Connection) -> HashMap<String, ExtrasAcp> {
+    let mut out: HashMap<String, ExtrasAcp> = HashMap::new();
+    let Ok(mut stmt) =
+        conn.prepare("SELECT key,value FROM app_state WHERE key LIKE 'acp:sesion:%'")
+    else {
+        return out;
+    };
+    let Ok(filas) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+    else {
+        return out;
+    };
+    for f in filas.flatten() {
+        let (clave, valor) = f;
+        if let Some(id) = clave.strip_prefix("acp:sesion:") {
+            if let Ok(e) = serde_json::from_str::<ExtrasAcp>(&valor) {
+                out.insert(id.to_string(), e);
+            }
+        }
+    }
+    out
+}
 
 // =============================================================================
 // OPERACIONES CON LA BASE DE DATOS (funciones libres: `&Connection`)
@@ -770,9 +809,15 @@ pub const TABLAS_ESPERADAS: &[(&str, &[&str])] = &[
 /// MEDIDO: `CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS` ⇒
 /// aplicar el esquema dos veces no falla y no duplica nada.
 pub fn aplicar_esquema(conn: &Connection) -> Result<(), ErrorStore> {
+    // 1) El esquema MEDIDO (`board_schema`): las 10 tablas, sus índices y
+    //    la extensión `sessions.hidden`.  Es idempotente.
+    crate::board_schema::aplicar(conn).map_err(ErrorStore::from)?;
+    // 2) Las extensiones propias de este store.
     conn.execute_batch(ESQUEMA_V1).map_err(map_error_esquema)?;
+    // 3) La versión de este store (en `app_state`, la tabla medida de
+    //    clave/valor; la del esquema medido usa otra clave).
     conn.execute(
-        "INSERT INTO acp_meta(key,value) VALUES('schema_version',?1)
+        "INSERT INTO app_state(key,value) VALUES('schema_version',?1)
          ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         params![SCHEMA_VERSION.to_string()],
     )?;
@@ -798,10 +843,10 @@ fn map_error_esquema(e: rusqlite::Error) -> ErrorStore {
 pub fn verificar_esquema(conn: &Connection) -> Result<(), ErrorStore> {
     // 1. La versión (si la tabla de meta existe; en una base nueva no, y
     //    entonces no hay nada que comprobar).
-    if tabla_existe(conn, "acp_meta")? {
+    if tabla_existe(conn, "app_state")? {
         let version: Option<String> = conn
             .query_row(
-                "SELECT value FROM acp_meta WHERE key='schema_version'",
+                "SELECT value FROM app_state WHERE key='schema_version'",
                 [],
                 |r| r.get(0),
             )
@@ -874,28 +919,37 @@ pub fn guardar_sesion(conn: &Connection, s: &SesionAcp) -> Result<(), ErrorStore
         return Err(ErrorStore::SesionYaBorrada(s.id.clone()));
     }
     conn.execute(
-        "INSERT INTO acp_sessions
-            (id, cwd, modo, padre, estado, current_epoch, turnos, created_at, updated_at)
+        "INSERT INTO sessions
+            (id, working_directory, backend_type, model, permission_mode,
+             created_at, last_activity_at, total_tokens, current_epoch)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
          ON CONFLICT(id) DO UPDATE SET
-            cwd           = excluded.cwd,
-            modo          = excluded.modo,
-            padre         = excluded.padre,
-            estado        = excluded.estado,
-            current_epoch = MAX(acp_sessions.current_epoch, excluded.current_epoch),
-            turnos        = excluded.turnos,
-            updated_at    = excluded.updated_at",
+            working_directory = excluded.working_directory,
+            backend_type      = excluded.backend_type,
+            current_epoch     = MAX(sessions.current_epoch, excluded.current_epoch),
+            last_activity_at  = excluded.last_activity_at",
         params![
             &s.id,
             &s.cwd,
-            &s.modo,
-            &s.padre,
-            s.estado.nombre(),
-            s.current_epoch as i64,
-            s.turnos as i64,
+            s.modo.as_deref().unwrap_or(""),
+            "",
+            "",
             s.created_at,
             s.updated_at,
+            0i64,
+            s.current_epoch as i64,
         ],
+    )?;
+    // Los campos que el esquema MEDIDO no tiene en `sessions` (el estado,
+    // el padre del fork y los turnos) van en `app_state`.
+    escribir_extras(
+        conn,
+        &s.id,
+        &ExtrasAcp {
+            estado: s.estado.nombre().to_string(),
+            padre: s.padre.clone(),
+            turnos: s.turnos,
+        },
     )?;
 
     // El historial: anexar sólo el sufijo que no estaba.
@@ -931,28 +985,26 @@ pub fn guardar_sesion(conn: &Connection, s: &SesionAcp) -> Result<(), ErrorStore
 pub fn cargar_sesion(conn: &Connection, id: &str) -> Result<SesionAcp, ErrorStore> {
     let fila = conn
         .query_row(
-            "SELECT id, cwd, modo, padre, estado, current_epoch, turnos, created_at, updated_at
-             FROM acp_sessions WHERE id=?1",
+            "SELECT id, working_directory, backend_type, created_at, last_activity_at, current_epoch
+             FROM sessions WHERE id=?1",
             params![id],
             |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
-                    r.get::<_, Option<String>>(2)?,
-                    r.get::<_, Option<String>>(3)?,
-                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
                     r.get::<_, i64>(5)?,
-                    r.get::<_, i64>(6)?,
-                    r.get::<_, i64>(7)?,
-                    r.get::<_, i64>(8)?,
                 ))
             },
         )
         .optional()?;
-    let (id, cwd, modo, padre, estado, epoch, turnos, created_at, updated_at) = match fila {
+    let (id, cwd, backend_type, created_at, updated_at, epoch) = match fila {
         Some(f) => f,
         None => return Err(error_sesion_inexistente(conn, id)),
     };
+    let extras = leer_extras(conn, &id);
     let mensajes: Vec<Value> = cargar_mensajes(conn, &id)?
         .iter()
         .map(|m| m.acp_json.clone())
@@ -960,11 +1012,15 @@ pub fn cargar_sesion(conn: &Connection, id: &str) -> Result<SesionAcp, ErrorStor
     Ok(SesionAcp {
         id,
         cwd,
-        modo,
-        padre,
-        estado: EstadoSesion::desde_nombre(&estado),
+        modo: if backend_type.is_empty() {
+            None
+        } else {
+            Some(backend_type)
+        },
+        padre: extras.padre,
+        estado: EstadoSesion::desde_nombre(&extras.estado),
         current_epoch: epoch.max(0) as u32,
-        turnos: turnos.max(0) as u32,
+        turnos: extras.turnos,
         mensajes,
         created_at,
         updated_at,
@@ -981,9 +1037,9 @@ pub fn cargar_historial(conn: &Connection, id: &str) -> Result<HistorialSesion, 
 /// Todos los mensajes de una sesión, en orden de `seq` (épocas incluidas).
 pub fn cargar_mensajes(conn: &Connection, id: &str) -> Result<Vec<MensajeAcp>, ErrorStore> {
     let mut stmt = conn.prepare(
-        "SELECT id, session_id, compaction_epoch, sequence_number, rol, contenido,
-                es_resumen, acp_json, created_at
-         FROM acp_messages WHERE session_id=?1
+        "SELECT id, session_id, compaction_epoch, sequence_number, role, content,
+                tool_calls_json, timestamp
+         FROM messages WHERE session_id=?1
          ORDER BY sequence_number ASC, id ASC",
     )?;
     let filas = stmt.query_map(params![id], fila_a_mensaje)?;
@@ -1030,7 +1086,7 @@ pub fn cargar_epochs(conn: &Connection, id: &str) -> Result<Vec<u32>, ErrorStore
 pub fn siguiente_seq_de_sesion(conn: &Connection, id: &str) -> Result<u64, ErrorStore> {
     let max: Option<i64> = conn
         .query_row(
-            "SELECT MAX(sequence_number) FROM acp_messages WHERE session_id=?1",
+            "SELECT MAX(sequence_number) FROM messages WHERE session_id=?1",
             params![id],
             |r| r.get(0),
         )
@@ -1058,17 +1114,16 @@ pub fn guardar_mensajes(
         validar_mensaje(m)?;
         if m.id > 0 {
             let n = conn.execute(
-                "UPDATE acp_messages
-                 SET compaction_epoch=?2, sequence_number=?3, rol=?4, contenido=?5,
-                     es_resumen=?6, acp_json=?7, created_at=?8
-                 WHERE id=?1 AND session_id=?9",
+                "UPDATE messages
+                 SET compaction_epoch=?2, sequence_number=?3, role=?4, content=?5,
+                     tool_calls_json=?6, timestamp=?7
+                 WHERE id=?1 AND session_id=?8",
                 params![
                     m.id,
                     m.compaction_epoch as i64,
                     m.sequence_number as i64,
                     &m.rol,
                     &m.contenido,
-                    m.es_resumen as i64,
                     serializar(&m.acp_json),
                     m.created_at,
                     session_id,
@@ -1126,24 +1181,32 @@ pub fn añadir_mensaje(
 /// `session/list`: el resumen de todas las sesiones.
 pub fn listar(conn: &Connection) -> Result<Vec<ResumenSesion>, ErrorStore> {
     let mut stmt = conn.prepare(
-        "SELECT s.id, s.cwd, s.modo, s.padre, s.estado, s.current_epoch, s.turnos,
-                s.created_at, s.updated_at,
-                (SELECT COUNT(*) FROM acp_messages m WHERE m.session_id = s.id) AS n_mensajes
-         FROM acp_sessions s
+        "SELECT s.id, s.working_directory, s.backend_type, s.current_epoch,
+                s.created_at, s.last_activity_at,
+                (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS n_mensajes
+         FROM sessions s
          ORDER BY s.created_at ASC, s.id ASC",
     )?;
+    let extras = leer_todas_extras(conn);
     let filas = stmt.query_map([], |r| {
+        let id: String = r.get(0)?;
+        let backend_type: String = r.get(2)?;
+        let extra = extras.get(&id).cloned().unwrap_or_default();
         Ok(ResumenSesion {
-            id: r.get(0)?,
+            id,
             cwd: r.get(1)?,
-            modo: r.get(2)?,
-            padre: r.get(3)?,
-            estado: EstadoSesion::desde_nombre(&r.get::<_, String>(4)?),
-            current_epoch: r.get::<_, i64>(5)?.max(0) as u32,
-            turnos: r.get::<_, i64>(6)?.max(0) as u32,
-            mensajes: r.get::<_, i64>(9)?.max(0) as usize,
-            created_at: r.get(7)?,
-            updated_at: r.get(8)?,
+            modo: if backend_type.is_empty() {
+                None
+            } else {
+                Some(backend_type)
+            },
+            padre: extra.padre,
+            estado: EstadoSesion::desde_nombre(&extra.estado),
+            current_epoch: r.get::<_, i64>(3)?.max(0) as u32,
+            turnos: extra.turnos,
+            mensajes: r.get::<_, i64>(6)?.max(0) as usize,
+            created_at: r.get(4)?,
+            updated_at: r.get(5)?,
         })
     })?;
     let mut out = Vec::new();
@@ -1166,12 +1229,16 @@ pub fn borrar_sesion(conn: &Connection, id: &str) -> Result<Borrado, ErrorStore>
         return Err(error_sesion_inexistente(conn, id));
     }
     let tx = conn.unchecked_transaction()?;
-    let mensajes = tx.execute("DELETE FROM acp_messages WHERE session_id=?1", params![id])?;
+    let mensajes = tx.execute("DELETE FROM messages WHERE session_id=?1", params![id])?;
     let extensiones = tx.execute(
         "DELETE FROM acp_session_extensions WHERE session_id=?1",
         params![id],
     )?;
-    tx.execute("DELETE FROM acp_sessions WHERE id=?1", params![id])?;
+    tx.execute("DELETE FROM sessions WHERE id=?1", params![id])?;
+    tx.execute(
+        "DELETE FROM app_state WHERE key=?1",
+        params![clave_extras(id)],
+    )?;
     tx.execute(
         "INSERT INTO acp_sessions_borradas(session_id, borrada_at) VALUES(?1,?2)
          ON CONFLICT(session_id) DO UPDATE SET borrada_at=excluded.borrada_at",
@@ -1243,7 +1310,7 @@ pub fn compactar(
     let tx = conn.unchecked_transaction()?;
     insertar_mensaje(&tx, &m)?;
     tx.execute(
-        "UPDATE acp_sessions SET current_epoch=?2, updated_at=?3 WHERE id=?1",
+        "UPDATE sessions SET current_epoch=?2, last_activity_at=?3 WHERE id=?1",
         params![id, nueva as i64, ahora()],
     )?;
     tx.commit()?;
@@ -1268,7 +1335,7 @@ pub fn revertir_a_epoch(conn: &Connection, id: &str, epoch: u32) -> Result<(), E
         )));
     }
     conn.execute(
-        "UPDATE acp_sessions SET current_epoch=?2, updated_at=?3 WHERE id=?1",
+        "UPDATE sessions SET current_epoch=?2, last_activity_at=?3 WHERE id=?1",
         params![id, epoch as i64, ahora()],
     )?;
     let _ = s; // la carga valida que la sesión existe
@@ -1320,31 +1387,34 @@ pub fn limpiar_tumba(conn: &Connection, id: &str) -> Result<(), ErrorStore> {
 
 // ── Auxiliares internos ──────────────────────────────────────────────────
 
-/// Convierte una fila de `acp_messages` en un [`MensajeAcp`].
+/// Convierte una fila de `messages` (tabla medida) en un [`MensajeAcp`].
 fn fila_a_mensaje(r: &rusqlite::Row<'_>) -> rusqlite::Result<MensajeAcp> {
     let epoch: i64 = r.get("compaction_epoch")?;
     let seq: i64 = r.get("sequence_number")?;
-    let es_resumen: i64 = r.get("es_resumen")?;
-    let json_txt: String = r.get("acp_json")?;
+    let json_txt: String = r.get("tool_calls_json")?;
+    let rol: String = r.get("role")?;
     Ok(MensajeAcp {
         id: r.get("id")?,
         session_id: r.get("session_id")?,
         compaction_epoch: epoch.max(0) as u32,
         sequence_number: seq.max(0) as u64,
-        rol: r.get("rol")?,
-        contenido: r.get("contenido")?,
-        es_resumen: es_resumen != 0,
+        // MEDIDO (2026-11-28): el esquema medido no tiene `es_resumen`:
+        // se deduce del `role` (el resumen de una compactación es el
+        // único mensaje con `role = "resumen"`).
+        es_resumen: rol == "resumen",
+        rol,
+        contenido: r.get("content")?,
         acp_json: serde_json::from_str::<Value>(&json_txt).unwrap_or(Value::Null),
-        created_at: r.get("created_at")?,
+        created_at: r.get("timestamp")?,
     })
 }
 
 /// Inserta un mensaje (devuelve el id de fila nuevo).
 fn insertar_mensaje(conn: &Connection, m: &MensajeAcp) -> Result<i64, ErrorStore> {
     match conn.execute(
-        "INSERT INTO acp_messages
-            (session_id, compaction_epoch, sequence_number, rol, contenido,
-             es_resumen, acp_json, created_at)
+        "INSERT INTO messages
+            (session_id, compaction_epoch, sequence_number, role, content,
+             tool_call_id, tool_calls_json, timestamp)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
         params![
             &m.session_id,
@@ -1352,7 +1422,7 @@ fn insertar_mensaje(conn: &Connection, m: &MensajeAcp) -> Result<i64, ErrorStore
             m.sequence_number as i64,
             &m.rol,
             &m.contenido,
-            m.es_resumen as i64,
+            Option::<String>::None,
             serializar(&m.acp_json),
             m.created_at,
         ],
@@ -1381,9 +1451,9 @@ fn buscar_por_clave(
     seq: u64,
 ) -> Result<Option<MensajeAcp>, ErrorStore> {
     conn.query_row(
-        "SELECT id, session_id, compaction_epoch, sequence_number, rol, contenido,
-                es_resumen, acp_json, created_at
-         FROM acp_messages
+        "SELECT id, session_id, compaction_epoch, sequence_number, role, content,
+                tool_calls_json, timestamp
+         FROM messages
          WHERE session_id=?1 AND compaction_epoch=?2 AND sequence_number=?3",
         params![session_id, epoch as i64, seq as i64],
         fila_a_mensaje,
@@ -1395,7 +1465,7 @@ fn buscar_por_clave(
 /// ¿Existe la sesión?
 fn existe_sesion(conn: &Connection, id: &str) -> Result<bool, ErrorStore> {
     let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM acp_sessions WHERE id=?1",
+        "SELECT COUNT(*) FROM sessions WHERE id=?1",
         params![id],
         |r| r.get(0),
     )?;
@@ -1473,8 +1543,9 @@ impl AcpSesionStore {
 
     /// Abre el almacén en el `state_dir` de la instancia.
     ///
-    /// La ruta es `state_dir()/acp_sesiones.sqlite` (`state_dir::state_dir()`
-    /// es la fuente única de verdad de la ruta de estado).
+    /// La ruta es `state_dir()/board.sqlite` (`state_dir::state_dir()` es la
+    /// fuente única de verdad de la ruta de estado): el tablón y las
+    /// sesiones comparten la **misma** base (MEDIDO 2026-11-28, patrón 10).
     pub fn abrir_en_state_dir() -> Result<AcpSesionStore, ErrorStore> {
         let dir = PathBuf::from(crate::state_dir::state_dir());
         AcpSesionStore::open(&dir.join(ACPS_DB_FILE))
@@ -1681,26 +1752,40 @@ mod tests {
         s.aplicar_esquema().expect("1ª");
         s.aplicar_esquema().expect("2ª");
         s.aplicar_esquema().expect("3ª");
-        // Y las tablas están.
+        // Y las tablas MEDIDAS están (las 10 del DDL del RE §4.1).
         let n: i64 = s
             .conexion()
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'acp_%'",
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table'
+                 AND name IN ('sessions','messages','message_nodes','subagent_heads',
+                             'tool_call_state','prompt_history','rendered_commits',
+                             'live_row_times','session_window_tools','app_state')",
                 [],
                 |r| r.get(0),
             )
             .expect("cuenta");
-        assert_eq!(n, 5, "las 5 tablas del store: {}", n);
-        // Y los índices.
+        assert_eq!(n, 10, "las 10 tablas medidas: {}", n);
+        // Y las dos extensiones propias del store.
+        let e: i64 = s
+            .conexion()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table'
+                 AND name IN ('acp_session_extensions','acp_sessions_borradas')",
+                [],
+                |r| r.get(0),
+            )
+            .expect("cuenta");
+        assert_eq!(e, 2, "las 2 extensiones propias: {}", e);
+        // Y los índices medidos.
         let i: i64 = s
             .conexion()
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name LIKE 'idx_acp_%'",
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'",
                 [],
                 |r| r.get(0),
             )
             .expect("cuenta");
-        assert_eq!(i, 3, "los 3 índices del store: {}", i);
+        assert!(i >= 4, "los índices medidos: {}", i);
     }
 
     #[test]
@@ -1977,9 +2062,9 @@ mod tests {
             // Una base con la tabla correcta pero **otra forma**.
             let conn = Connection::open(&ruta).expect("abre");
             conn.execute_batch(
-                "CREATE TABLE acp_sessions (id TEXT PRIMARY KEY, cwd TEXT NOT NULL);
-                 CREATE TABLE acp_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-                 INSERT INTO acp_meta(key,value) VALUES('schema_version','1');",
+                "CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT NOT NULL);
+                 CREATE TABLE app_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO app_state(key,value) VALUES('schema_version','1');",
             )
             .expect("crea el esquema raro");
         }
@@ -1989,7 +2074,7 @@ mod tests {
         };
         match e {
             ErrorStore::EsquemaIncompatible(m) => {
-                assert!(m.contains("acp_sessions"), "el error dice qué tabla: {}", m)
+                assert!(m.contains("sessions"), "el error dice qué tabla: {}", m)
             }
             otro => panic!("esperaba EsquemaIncompatible, {:?}", otro),
         }
