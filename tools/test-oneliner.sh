@@ -140,9 +140,10 @@ knobs_reset() {
 #   $SVC service.d de Magisk        $HOME home falso    $TMPDIR temporal falso
 #   $LOG registro de invocaciones de los fakes        $OUT salida del instalador
 preparar_lab() {
-  local real_grep real_sha
+  local real_grep real_sha real_cat
   real_grep="$(command -v grep || true)"
   real_sha="$(command -v sha256sum || true)"
+  real_cat="$(command -v cat || true)"
 
   rm -rf "$PRE" "$SB" "$TBR" "$SVC" "$L/termux" "$L/proc" "$L/tmp" "$L/bundle" 2>/dev/null
   mkdir -p "$PRE" "$ST" "$SB" "$TBR" "$SVC" "$L/termux" "$L/proc" "$L/tmp" "$HOME" "$TMPDIR"
@@ -183,7 +184,21 @@ case "\$1" in
       *) echo '{"ok":true}'; exit 0 ;;
     esac ;;
   channel)    echo '{"ok":true,"quick":"https://falso.trycloudflare.com"}'; exit 0 ;;
-  diagnostico) echo '{"ok":true}'; exit 0 ;;
+  diagnostico)
+    # MEDIDO (2026-11-28): el fake devolvia solo "ok":true => las
+    # comprobaciones del instalador que leen el JSON real (supervisores,
+    # puertos, stack) salian SIEMPRE "sin datos" y el banco no las
+    # ejercitaba.  Ahora devuelve la FORMA REAL (diagnostico.rs: recoger()).
+    # ⚠️ Sin backticks y sin $( ): este heredoc NO va entre comillas => aqui
+    # un backtick seria una sustitucion de comandos y el banco lo ejecutaria.
+    _nsup=0
+    if [ -f "\$LAB_PROC/99-megadaemon.sh.pids" ]; then
+      while read -r _line; do
+        [ -n "\$_line" ] && _nsup=\$((_nsup + 1))
+      done < "\$LAB_PROC/99-megadaemon.sh.pids"
+    fi
+    echo "{\"ok\":true,\"supervisores\":\$_nsup,\"puertos\":{\"8080\":true,\"9090\":true,\"2235\":false},\"stack\":{\"total\":4,\"correctos\":4,\"desfasados\":0}}"
+    exit 0 ;;
   update)     echo '{"ok":true,"estado":"actual"}'; exit 0 ;;
   probe)      exit 0 ;;
   hash)
@@ -489,7 +504,15 @@ done
 for p in \$pids; do
   for f in "\$LAB_PROC"/*.pids; do
     [ -f "\$f" ] || continue
-    grep -v "^\$p\$" "\$f" > "\$f.tmp" 2>/dev/null && mv "\$f.tmp" "\$f"
+    # MEDIDO (2026-11-28): con "grep -v ... && mv", si el PID matado era la
+    # ULTIMA linea, "grep -v" no imprime nada y sale con codigo 1 => el "&&"
+    # cortocircuitaba y el fichero NO se movia => el PID "sobrevivia" y el
+    # diagnostico contaba 2 daemons con 1 vivo.  Un "kill" de verdad quita el
+    # proceso SIEMPRE => aqui se mueve el fichero siempre.
+    # ⚠️ Sin backticks: este heredoc NO va entre comillas => un backtick
+    # seria una sustitucion de comandos (y el banco lo ejecutaria).
+    grep -v "^\$p\$" "\$f" > "\$f.tmp" 2>/dev/null
+    mv -f "\$f.tmp" "\$f" 2>/dev/null
   done
 done
 exit 0
@@ -548,6 +571,17 @@ for a in "\$@"; do
       # "pid (comm) " es la posicion 20 => van 19 palabras delante.
       printf '9999 (megadaemon-core) S 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 %s 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n' "\${MD_STARTTIME:-100}"
       exit 0 ;;
+    /proc/[0-9]*/cmdline)
+      # MEDIDO (2026-11-28): el instalador lee el cmdline de cada PID para
+      # saber CUAL es el canonico.  El argv lo fija el escenario (helper
+      # "fijar_argv"); si el PID no lo tiene, no se puede leer => vacio.
+      _p=\${a#/proc/}
+      _p=\${_p%/cmdline}
+      if [ -f "\$LAB_PROC/\$_p.cmdline" ]; then
+        "$real_cat" "\$LAB_PROC/\$_p.cmdline"
+        exit 0
+      fi
+      exit 1 ;;
   esac
 done
 exec "$real_cat" "\$@"
@@ -728,6 +762,14 @@ fijar_pids() {
   done
 }
 sin_pids() { rm -f "$LAB_PROC/$1.pids"; }
+# El argv de un proceso ficticio (NUL-separado, como /proc/<pid>/cmdline).
+# El "cat" de mentira lo sirve cuando el instalador lo lee.
+fijar_argv() {
+  local pid="$1"; shift
+  : > "$LAB_PROC/$pid.cmdline"
+  local a
+  for a in "$@"; do printf '%s\000' "$a" >> "$LAB_PROC/$pid.cmdline"; done
+}
 
 # =============================================================================
 # EJECUTAR EL INSTALADOR

@@ -108,6 +108,7 @@ for a in "$@"; do
     --sin-publicar)            SIN_PUBLICAR=1 ;;
     --reintentos=*)            REINTENTOS="${a#*=}" ;;
     --timeout=*)               TIMEOUT_S="${a#*=}" ;;
+    --token=*)                 GH_TOKEN="${a#*=}" ;;
     -h|--help) sed -n '2,70p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'opción desconocida: %s\n' "$a" >&2; exit 2 ;;
   esac
@@ -294,6 +295,403 @@ existe()     { r "test -e '$1'" >/dev/null 2>&1; }
 ejecutable() { r "test -x '$1'" >/dev/null 2>&1; }
 # Ejecuta el daemon COMO ROOT (vive en $PREFIX, que es de root).
 daemon()     { r "'$DAEMON' $*" 2>&1; }
+
+# --- inventario de procesos POR /proc (toybox no tiene pgrep -f fiable) ---
+# MEDIDO (2026-11-27, móvil SM-G998B): `pgrep -f` y `pkill -f` NO son de
+# fiar en toybox (el shell de Android) => la limpieza de duplicados NO
+# MATABA NADA y el móvil se quedaba con 6 supervisores, 6 daemons, 6
+# cloudflared y 5 watchdogs (load 58 => el túnel no podía arrancar y cada
+# watchdog relanzaba cloudflared por su cuenta => hostname nuevo cada 60 s
+# y la flota ciega).
+# Aquí los PIDs se listan leyendo /proc COMO ROOT (el cmdline de un proceso
+# de root sólo lo lee root) y luego se descarta el envoltorio `sh -c` (matar
+# un envoltorio NO mata al daemon: al revés, se mata al bueno y queda el
+# envoltorio).  Se admiten varias subcadenas ("cloudflared" + "tunnel").
+# MEDIDO (2026-11-27, banco): si el cmdline NO se puede leer (proceso zombie
+# o PID ficticio del laboratorio), el PID se acepta tal cual => el banco
+# puede simular duplicados sin tocar procesos de verdad del host.
+proc_pids() {
+  _pat=$1; shift
+  # ⚠️ MEDIDO (2026-11-28, banco): el `sed` va en este ORDEN a proposito.
+  # `grep -l` devuelve la RUTA ("/proc/1234/cmdline").  Con `s#^.*/##`
+  # (VORAZ) se comia "/proc/1234/" y el resultado era "cmdline", no el PID
+  # => `kill -9 cmdline` no mataba NADA y la limpieza de duplicados del movil
+  # seguia siendo un no-op.  Primero se quita "/cmdline" y LUEGO el
+  # directorio (que es el PID).
+  _cand=$(r "grep -lsa '$_pat' /proc/[0-9]*/cmdline 2>/dev/null" | sed 's#/cmdline$##; s#.*/##')
+  [ -z "$_cand" ] && return 0
+  for _p in $_cand; do
+    # MEDIDO (2026-11-28, banco): `r` fusiona stderr con stdout => el
+    # error del shell ("cannot open /proc/999/cmdline") llegaba como si
+    # fuera el cmdline => el PID se DESCARTABA y la limpieza no mataba
+    # nada.  Con `cat 2>/dev/null < ...` el 2>/dev/null se aplica ANTES de
+    # la redireccion => el error del shell tambien se calla y el cmdline
+    # ilegible sale VACIO (que es lo que distingue "no se puede leer").
+    _pc=$(r "cat '/proc/$_p/cmdline' 2>/dev/null | tr '\0' ' '")
+    if [ -n "$_pc" ]; then
+      case "$_pc" in *"sh -c"*) continue ;; esac
+      case "$_pc" in *"$_pat"*) ;; *) continue ;; esac
+      _ok=1
+      for _x in "$@"; do
+        case "$_pc" in *"$_x"*) ;; *) _ok=0 ;; esac
+      done
+      [ "$_ok" = "1" ] || continue
+    fi
+    printf '%s\n' "$_p"
+  done
+  return 0
+}
+proc_vivo() { [ -n "$(proc_pids "$@")" ]; }
+
+# Mata un PID forzando el binario EXTERNO de `kill`.
+# MEDIDO (2026-11-28, banco): `kill` es un BUILTIN de sh/dash => el builtin
+# tapa al binario y el `kill` de mentira del banco (que es el que sabe qué
+# PIDs "existen") NUNCA se ejecutaba.  `env kill` sí llega al binario: en el
+# móvil el de toybox, en el banco el falso.  El builtin queda de reserva.
+matar_pid() {
+  r "env kill -9 $1 2>/dev/null || kill -9 $1 2>/dev/null" >/dev/null 2>&1
+}
+
+# Deja UNO de cada rol del stack (el más ANTIGUO: el orden de /proc es
+# numérico) y mata los sobrantes.
+# ⚠️ NUNCA se tocan procesos del usuario: sólo los del stack de MegaDaemon.
+dejar_uno() {
+  _pat=$1; _tag=$2; shift 2
+  _pids=$(proc_pids "$_pat" "$@")
+  [ -z "$_pids" ] && return 0
+  _n=0
+  for _p in $_pids; do
+    _n=$((_n + 1))
+    if [ "$_n" -gt 1 ]; then
+      # `env kill` (y no el builtin) para que en el banco llegue al `kill`
+      # de mentira; en el móvil cae en el kill de toybox.
+      matar_pid "$_p"
+      say "  $_tag duplicado (PID $_p): eliminado (se deja el más antiguo)"
+    fi
+  done
+  [ "$_n" -gt 1 ] && return 1
+  return 0
+}
+
+# Limpia el stack MULTIPLICADO antes de arrancar nada más.
+# MEDIDO (2026-11-27, móvil): era la causa del "pastel de Android": 6
+# supervisores + 6 cloudflared + 5 watchdogs => load 58, el túnel no
+# arrancaba y la URL cambiando cada minuto.
+limpiar_stack_duplicado() {
+  say "--- limpiando duplicados del stack (si los hay) ---"
+  dejar_uno "tunnel-watchdog.sh" "watchdog"
+  dejar_uno "97-megadaemon-keeper.sh" "keeper"
+  dejar_uno "99-megadaemon.sh" "supervisor"
+  dejar_uno "cloudflared" "cloudflared" "tunnel"
+  dejar_uno "megadaemon-core" "daemon" "cockpit"
+  return 0
+}
+
+# Mata TODOS los daemons (no sólo los duplicados) antes de relanzar el
+# nuestro: así el daemon nuevo es el único y el más reciente.
+matar_daemons() {
+  for _p in $(proc_pids "megadaemon-core" "cockpit"); do
+    matar_pid "$_p"
+  done
+  return 0
+}
+
+# Planta el token de GitHub en el prefijo (0600) si se ha pasado uno.
+# MEDIDO (2026-11-27): el canal al repo NO se publicaba porque el token no
+# estaba en el móvil; el paso manual (printf > .gh_token) queda aquí
+# codificado, sin imprimir el token en ningún log.
+# ⚠️ El token de la LÍNEA DE COMANDOS manda sobre el del entorno (este bloque
+# se ejecuta DESPUÉS del parseo de opciones: si no, lo pisaría).
+GH_TOKEN="${MEGADAEMON_GH_TOKEN:-${GH_TOKEN:-}}"
+plantar_token() {
+  [ -n "$GH_TOKEN" ] || return 0
+  case "$GH_TOKEN" in
+    ghp_*|github_pat_*|gho_*) : ;;
+    *) warn "el token no tiene forma de token de GitHub: se ignora"; return 1 ;;
+  esac
+  if r "printf '%s' '$GH_TOKEN' > '$PREFIX/.gh_token' && chmod 600 '$PREFIX/.gh_token'" >/dev/null 2>&1; then
+    say "token de GitHub plantado en $PREFIX/.gh_token (0600)"
+    informe_paso "token_github" true "plantado en $PREFIX/.gh_token"
+  else
+    warn "no se pudo plantar el token en $PREFIX/.gh_token"
+    informe_paso "token_github" false "no se pudo escribir"
+  fi
+  return 0
+}
+
+# El BUS DE ÓRDENES (Drive): el único canal de mando que funciona SIN
+# túnel.  MEDIDO (2026-11-27): con el quick tunnel caído, el móvil siguió
+# recibiendo órdenes por el tablón de Drive => hay que dejarlo SIEMPRE
+# encendido (`bus.ciclo_min`).
+asegurar_bus() {
+  r "test -f '$ENV_FILE'" >/dev/null 2>&1 || return 0
+  if r "grep -q '^bus.ciclo_min=' '$ENV_FILE'" >/dev/null 2>&1; then
+    r "sed -i 's/^bus.ciclo_min=.*/bus.ciclo_min=10/' '$ENV_FILE'" >/dev/null 2>&1
+  else
+    r "printf 'bus.ciclo_min=10\n' >> '$ENV_FILE'" >/dev/null 2>&1
+  fi
+  r "grep -q '^bus.ciclo_min=' '$ENV_FILE'" >/dev/null 2>&1 \
+    && say "bus de ordenes (Drive) activo: bus.ciclo_min=10"
+  return 0
+}
+
+# --- las copias .bak de service.d: la causa del supervisor duplicado ------
+# MEDIDO (2026-11-28, movil): Magisk ejecuta TODO lo que sea EJECUTABLE en
+# `/data/adb/service.d/`.  Una copia de seguridad del supervisor ahi
+# (`99-megadaemon.sh.bak-50k`) = un supervisor MAS en cada arranque, que
+# relanzaba el tunel legacy contra el 8765 (sin listener) y se peleaba con el
+# canonico (medido: 70 s / 133 s alternados).  Matar el proceso NO basta: el
+# FICHERO vuelve a cerrarlo en el siguiente arranque => hay que BORRARLO.
+#
+# La regla es la MISMA que `stack::limpiar_servicios_sobrantes` (Rust): solo
+# los ficheros cuyo nombre empieza por el de un canonico del stack y que NO
+# son el canonico.  Los ficheros de OTRAS apps no se tocan, y los directorios
+# tampoco.
+SERVICE_D="/data/adb/service.d"
+STACK_CANONICOS="99-megadaemon.sh 97-megadaemon-keeper.sh 98-cloudflared.sh 91-adb-tcp.sh"
+
+limpiar_copias_service_d() {
+  _n=0
+  for _f in $(r "ls -1 '$SERVICE_D' 2>/dev/null" | tr -d '\r'); do
+    _es_canonico=0
+    for _c in $STACK_CANONICOS; do
+      [ "$_f" = "$_c" ] && _es_canonico=1
+    done
+    [ "$_es_canonico" = "1" ] && continue
+    # Solo los NUESTROS: el nombre empieza por el de un canonico.
+    _nuestro=0
+    for _c in $STACK_CANONICOS; do
+      case "$_f" in
+        "${_c%.sh}"*) _nuestro=1 ;;
+      esac
+    done
+    [ "$_nuestro" = "1" ] || continue
+    if r "rm -f '$SERVICE_D/$_f'" >/dev/null 2>&1; then
+      say "  service.d: copia sobrante eliminada ($_f)"
+      _n=$((_n + 1))
+    fi
+  done
+  [ "$_n" -gt 0 ] && informe_paso "service_d_limpio" true "$_n copia(s) eliminada(s)"
+  return 0
+}
+
+# --- el supervisor CANONICO se queda; las copias mueren --------------------
+# MEDIDO (2026-11-28): dejar "el mas antiguo" (lo que hace `dejar_uno`) es
+# ERROR: la copia `.bak-50k` se creo al actualizar, asi que es MAS ANTIGUA
+# que el canonico => se quedaba el malo y se mataba el bueno.  El que se
+# queda es el que apunta a la RUTA CANONICA.
+matar_supervisores_no_canonicos() {
+  # ⚠️ El patron es "99-megadaemon.sh" (con .sh): el grep del banco indexa
+  # los PID por nombre de fichero ("99-megadaemon.sh.pids") y con
+  # "99-megadaemon" no encontraba NINGUNO => la funcion era un no-op y la
+  # copia .bak se quedaba de supervisor.
+  _pids=$(r "grep -lsa '99-megadaemon.sh' /proc/[0-9]*/cmdline 2>/dev/null" | sed 's#/cmdline$##; s#.*/##')
+  [ -z "$_pids" ] && return 0
+  _n=0
+  for _p in $_pids; do
+    # El argv, elemento a elemento (los NUL son separadores).
+    # (mismo motivo que en `proc_pids`: el error del shell contaminaba el
+    # argv => se creia haber leido el cmdline de un proceso que no existe)
+    _argv=$(r "cat '/proc/$_p/cmdline' 2>/dev/null | tr '\0' '\n'")
+    # Si el cmdline NO se puede leer (zombie, PID ficticio del banco):
+    # NO se mata a nadie (matar a ciegas es peor que dejar un duplicado).
+    [ -z "$_argv" ] && continue
+    _pc=$(printf '%s' "$_argv" | tr '\n' ' ')
+    case "$_pc" in
+      *"sh -c"*) continue ;;   # el envoltorio, no el supervisor
+    esac
+    # ¿Es el supervisor CANONICO?  Se comparan los argumentos ELEMENTO a
+    # elemento: la copia tiene la ruta canonica como PREFIJO
+    # (`.../99-megadaemon.sh.bak-50k`) => con un `case` sobre el texto
+    # unido la copia PASABA por canonica y se quedaba el malo.
+    if printf '%s\n' "$_argv" | grep -qx "$SERVICE_D/99-megadaemon.sh"; then
+      continue
+    fi
+    matar_pid "$_p"
+    say "  supervisor NO canonico eliminado (PID $_p)"
+    _n=$((_n + 1))
+  done
+  [ "$_n" -gt 0 ] && informe_paso "supervisores_no_canonicos" true "$_n eliminado(s)"
+  return 0
+}
+
+# --- VERIFICACION FINAL: lo que se puede MIRAR en el movil ----------------
+# MEDIDO (2026-11-28): el instalador decia "terminado" sin comprobar nada de
+# lo que el jefe tiene que verificar a mano.  Aqui se comprueba y se ANOTA en
+# el informe JSON: pegar la salida del one-liner basta para saber el estado.
+#
+# Las comprobaciones (cada una con su por que):
+#  1) service.d tiene SOLO el supervisor canonico (Magisk ejecuta todo lo
+#     ejecutable de ahi => una copia = un supervisor mas en cada arranque).
+#  2) hay UN supervisor vivo (no cuatro).
+#  3) el 8765 (0x2235, el tunel legacy) NO tiene listener.
+#  4) el 8080 (el que usa la app) y el 9090 (el del daemon) SI lo tienen.
+#  5) el tunel legacy esta APAGADO (su fichero de URL vacio).
+#  6) el tunel web ha publicado su URL (sin esto no hay nada que pegar).
+#  7) la base de la instancia (board.sqlite) existe: ahi vive el esquema
+#     medido (las sesiones ACP y el tablon).
+#  8) el diagnostico no reporta el stack desfasado.
+VERIFICACIONES_OK=0
+VERIFICACIONES_TOTAL=0
+verificar_movil() {
+  say "--- verificacion final (lo que se puede mirar en el movil) ---"
+  # Tres contadores, no dos: una comprobacion SIN DATOS (el daemon no
+  # informa de esa clave) NO es un fallo => no puede poner el veredicto en
+  # "ok_con_avisos".  MEDIDO (2026-11-28, banco): el daemon de mentira
+  # devolvia `{"ok":true}` => todo salia "sin datos".
+  VERIFICACIONES_OK=0
+  VERIFICACIONES_FALLO=0
+  VERIFICACIONES_SIN_DATOS=0
+  VERIFICACIONES_TOTAL=0
+  _djson=$(r "'$DAEMON' diagnostico --json 2>/dev/null" | tr -d '\r\n')
+  _sup=$(printf '%s' "$_djson" | grep -o '"supervisores":[0-9]*' | head -1 | cut -d: -f2)
+  _pt=$(printf '%s' "$_djson" | grep -o '"puertos":{[^}]*}' | head -1)
+  _desfasados=$(printf '%s' "$_djson" | grep -o '"desfasados":[0-9]*' | head -1 | cut -d: -f2)
+
+  # 1) service.d limpio (POSIX: sin sustitucion de procesos).
+  _sobras=0
+  for _f in $(r "ls -1 '$SERVICE_D' 2>/dev/null" | tr -d '\r'); do
+    _es_canonico=0
+    for _c in $STACK_CANONICOS; do
+      [ "$_f" = "$_c" ] && _es_canonico=1
+    done
+    [ "$_es_canonico" = "1" ] && continue
+    case "$_f" in
+      *megadaemon*|*cloudflared*) _sobras=$((_sobras + 1)) ;;
+    esac
+  done
+  if [ "$_sobras" = "0" ]; then
+    say "  service.d: solo los canonicos"
+    informe_paso "verif_service_d" true "solo los canonicos"
+    VERIFICACIONES_OK=$((VERIFICACIONES_OK + 1))
+  else
+    warn "  service.d: $_sobras fichero(s) nuestro(s) de mas"
+    informe_paso "verif_service_d" false "$_sobras fichero(s) de mas"
+    VERIFICACIONES_FALLO=$((VERIFICACIONES_FALLO + 1))
+  fi
+  VERIFICACIONES_TOTAL=$((VERIFICACIONES_TOTAL + 1))
+
+  # 2) un supervisor vivo (el canonico).
+  if [ -z "${_sup:-}" ]; then
+    say "  supervisores: sin datos (el daemon no lo informa)"
+    informe_paso "verif_supervisores" null "sin datos"
+    VERIFICACIONES_SIN_DATOS=$((VERIFICACIONES_SIN_DATOS + 1))
+  elif [ "$_sup" = "1" ]; then
+    say "  supervisores: 1 (el canonico)"
+    informe_paso "verif_supervisores" true "1"
+    VERIFICACIONES_OK=$((VERIFICACIONES_OK + 1))
+  else
+    warn "  supervisores: $_sup (deberia ser 1)"
+    informe_paso "verif_supervisores" false "$_sup"
+    VERIFICACIONES_FALLO=$((VERIFICACIONES_FALLO + 1))
+  fi
+  VERIFICACIONES_TOTAL=$((VERIFICACIONES_TOTAL + 1))
+
+  # 3) el 8765 (el tunel legacy) NO debe tener listener.
+  if [ -z "${_pt:-}" ]; then
+    say "  8765 (tunel legacy): sin datos (el daemon no informa de puertos)"
+    informe_paso "verif_8765" null "sin datos"
+    VERIFICACIONES_SIN_DATOS=$((VERIFICACIONES_SIN_DATOS + 1))
+  elif printf '%s' "$_pt" | grep -q '"2235":true'; then
+    warn "  el 8765 (tunel legacy) tiene listener: sobra"
+    informe_paso "verif_8765" false "el 8765 tiene listener"
+    VERIFICACIONES_FALLO=$((VERIFICACIONES_FALLO + 1))
+  else
+    say "  8765 (tunel legacy): sin listener (correcto)"
+    informe_paso "verif_8765" true "sin listener"
+    VERIFICACIONES_OK=$((VERIFICACIONES_OK + 1))
+  fi
+  VERIFICACIONES_TOTAL=$((VERIFICACIONES_TOTAL + 1))
+
+  # 4) los puertos que importan (la app en el 8080, el daemon en el 9090).
+  if [ -z "${_pt:-}" ]; then
+    say "  puertos: sin datos"
+    informe_paso "verif_puertos" null "sin datos"
+    VERIFICACIONES_SIN_DATOS=$((VERIFICACIONES_SIN_DATOS + 1))
+  else
+    _p8080=0; _p9090=0
+    printf '%s' "$_pt" | grep -q '"8080":true' && _p8080=1
+    printf '%s' "$_pt" | grep -q '"9090":true' && _p9090=1
+    if [ "$_p8080" = "1" ] && [ "$_p9090" = "1" ]; then
+      say "  puertos: 8080 y 9090 con listener (la app y el daemon)"
+      informe_paso "verif_puertos" true "8080 y 9090"
+      VERIFICACIONES_OK=$((VERIFICACIONES_OK + 1))
+    else
+      warn "  puertos: 8080=$_p8080 9090=$_p9090 (la app usa el 8080)"
+      informe_paso "verif_puertos" false "8080=$_p8080 9090=$_p9090"
+      VERIFICACIONES_FALLO=$((VERIFICACIONES_FALLO + 1))
+    fi
+  fi
+  VERIFICACIONES_TOTAL=$((VERIFICACIONES_TOTAL + 1))
+
+  # 5) el tunel legacy (8765) esta APAGADO: su fichero de URL vacio.
+  #    MEDIDO (2026-11-27, movil): el supervisor VIEJO relanzaba el tunel
+  #    `mcp-legacy` en bucle (12 reinicios/15 min medidos) => el pastel de
+  #    puertos y la URL cambiando cada minuto.  El invariante real no es el
+  #    log (puede conservar una mencion historica) sino que no haya URL.
+  _legacy_url=$(r "cat '$PREFIX/mcp_tunnel.url' 2>/dev/null" | tr -d '\r\n')
+  if [ -z "$_legacy_url" ]; then
+    say "  tunel legacy (8765): apagado (sin URL)"
+    informe_paso "verif_legacy" true "sin URL"
+    VERIFICACIONES_OK=$((VERIFICACIONES_OK + 1))
+  else
+    warn "  tunel legacy (8765): VIVO ($_legacy_url)"
+    informe_paso "verif_legacy" false "$_legacy_url"
+    VERIFICACIONES_FALLO=$((VERIFICACIONES_FALLO + 1))
+  fi
+  VERIFICACIONES_TOTAL=$((VERIFICACIONES_TOTAL + 1))
+
+  # 6) el tunel web (el bueno) ha publicado su URL: sin esto no hay nada
+  #    que pegar en el chat.
+  _web_url=$(r "cat '$PREFIX/tunnel.url' 2>/dev/null" | tr -d '\r\n')
+  if [ -n "$_web_url" ]; then
+    say "  tunel web: URL viva"
+    informe_paso "verif_url" true "$_web_url"
+    VERIFICACIONES_OK=$((VERIFICACIONES_OK + 1))
+  else
+    warn "  tunel web: SIN URL (el supervisor no ha publicado tunnel.url)"
+    informe_paso "verif_url" false "sin tunnel.url"
+    VERIFICACIONES_FALLO=$((VERIFICACIONES_FALLO + 1))
+  fi
+  VERIFICACIONES_TOTAL=$((VERIFICACIONES_TOTAL + 1))
+
+  # 7) la base de la instancia (ahi vive el esquema medido).
+  if r "test -f '$STATE/board.sqlite'" >/dev/null 2>&1; then
+    say "  base de la instancia: $STATE/board.sqlite"
+    informe_paso "verif_base" true "$STATE/board.sqlite"
+    VERIFICACIONES_OK=$((VERIFICACIONES_OK + 1))
+  else
+    warn "  no hay base en $STATE/board.sqlite"
+    informe_paso "verif_base" false "falta board.sqlite"
+    VERIFICACIONES_FALLO=$((VERIFICACIONES_FALLO + 1))
+  fi
+  VERIFICACIONES_TOTAL=$((VERIFICACIONES_TOTAL + 1))
+
+  # 8) el stack no esta desfasado (el binario en disco = el desplegado).
+  if [ -z "${_desfasados:-}" ]; then
+    say "  stack: sin datos (el daemon no lo informa)"
+    informe_paso "verif_stack" null "sin datos"
+    VERIFICACIONES_SIN_DATOS=$((VERIFICACIONES_SIN_DATOS + 1))
+  elif [ "$_desfasados" = "0" ]; then
+    say "  el stack esta en linea con el binario"
+    informe_paso "verif_stack" true "en linea"
+    VERIFICACIONES_OK=$((VERIFICACIONES_OK + 1))
+  else
+    warn "  el stack tiene $_desfasados fichero(s) desfasado(s) (mira 'stack --json')"
+    informe_paso "verif_stack" false "$_desfasados desfasados"
+    VERIFICACIONES_FALLO=$((VERIFICACIONES_FALLO + 1))
+  fi
+  VERIFICACIONES_TOTAL=$((VERIFICACIONES_TOTAL + 1))
+
+  say "  verificaciones: $VERIFICACIONES_OK/$VERIFICACIONES_TOTAL"
+  [ "$VERIFICACIONES_SIN_DATOS" -gt 0 ] && \
+    say "  ($VERIFICACIONES_SIN_DATOS sin datos: el daemon no las informa)"
+  informe_add "verificaciones_ok" "$VERIFICACIONES_OK"
+  informe_add "verificaciones_total" "$VERIFICACIONES_TOTAL"
+  informe_add "verificaciones_fallo" "$VERIFICACIONES_FALLO"
+  informe_add "verificaciones_sin_datos" "$VERIFICACIONES_SIN_DATOS"
+  return 0
+}
 
 # Copia el stack del bundle a service.d y el watchdog al prefijo.
 # Se extrae a una funcion para que la AUTOREPARACION pueda reponerlo.
@@ -792,7 +1190,7 @@ diagnostico() {
     # MEDIDO (2026-11-27, movil): leer /proc/<pid>/cmdline como usuario NORMAL
     # falla ("cannot open ...") porque el proceso es de ROOT => el PID salia
     # sin linea de comandos.  Se lee COMO ROOT.
-    say "  proceso: PID $DIAG_PID ($(r "tr '\0' ' ' < '/proc/$DIAG_PID/cmdline' 2>/dev/null | cut -c1-90"))"
+    say "  proceso: PID $DIAG_PID ($(r "cat '/proc/$DIAG_PID/cmdline' 2>/dev/null | tr '\0' ' ' | cut -c1-90"))"
     if binario_al_dia "$DIAG_PID"; then
       DIAG_AL_DIA=true
       say "  binario en servicio = binario en disco ✓"
@@ -1173,10 +1571,31 @@ instalar() {
 
   say "=== 4/8 arrancando el stack ==="
   r "mkdir -p '$STATE' '$LOGDIR'" >/dev/null
+  # ANTES de arrancar: si el stack está MULTIPLICADO (pastel de Android) se
+  # deja uno de cada.  MEDIDO (2026-11-27, móvil): 6 supervisores + 6
+  # cloudflared + 5 watchdogs => load 58 y el túnel sin poder arrancar.
+  # MEDIDO (2026-11-28): PRIMERO el supervisor canonico se queda.  El
+  # cleanup generico (`dejar_uno`) deja "el mas antiguo", y la copia
+  # `.bak-50k` es MAS ANTIGUA que el canonico => si corriera despues, se
+  # quedaria con el malo y mataria al bueno.
+  matar_supervisores_no_canonicos
+  limpiar_stack_duplicado
+  # Y las COPIAS de `service.d` (p.ej. el `.bak-50k`) se BORRAN: son la
+  # causa real del pastel (Magisk ejecuta todo lo ejecutable de ahi) y
+  # matarlas no basta: el fichero las vuelve a cerrar en el arranque.
+  limpiar_copias_service_d
+  # El token de GitHub (canal al repo), plantado sin imprimirlo.
+  plantar_token
+  # El bus de órdenes por Drive: el único mando que funciona sin túnel.
+  asegurar_bus
   # El daemon, CON SU ENTORNO (sin esto escribe el estado en el sitio
   # equivocado) y CON `< /dev/null` (si hereda el stdin, la sesión adb se
   # queda colgada).
-  r "pkill -f 'megadaemon-core cockpit' 2>/dev/null; sleep 1" >/dev/null
+  # MEDIDO (2026-11-27): `pkill -f` no es de fiar en toybox => los daemons
+  # viejos se quedaban vivos y el móvil acababa con 6.  Ahora se matan
+  # leyendo /proc (mismo criterio que `proc_pids`).
+  matar_daemons
+  sleep 1
   r "MEGADAEMON_PREFIX='$PREFIX' MEGADAEMON_STATE_DIR='$STATE' MEGADAEMON_BIN='$DAEMON' setsid nohup '$DAEMON' cockpit $PORT >> '$LOGDIR/daemon.log' 2>&1 < /dev/null &" >/dev/null
 
   # El túnel: si ya hay un cloudflared (el supervisor puede estar vivo), se
@@ -1232,17 +1651,17 @@ instalar() {
     # tunel no podia arrancar).  Ahora los PIDs se listan leyendo /proc
     # COMO ROOT, y se deja UN solo daemon de verdad (los envoltorios `sh -c`
     # no cuentan: si cuentan, se mata el daemon bueno y se queda el envoltorio).
-    for p in $(r "grep -lsa 'megadaemon-core cockpit' /proc/[0-9]*/cmdline 2>/dev/null" | sed 's#^.*/##; s#/cmdline$##'); do
+    for p in $(r "grep -lsa 'megadaemon-core cockpit' /proc/[0-9]*/cmdline 2>/dev/null" | sed 's#/cmdline$##; s#.*/##'); do
       # Si la linea de comandos es un envoltorio `sh -c ...`, NO es el daemon:
       # matarlo no mata al daemon (y al revés: matar al hijo del daemon SI
       # lo rompe).  MEDIDO (2026-11-27, movil).
-      CMDLINE=$(r "tr '\0' ' ' < '/proc/$p/cmdline' 2>/dev/null")
+      CMDLINE=$(r "cat '/proc/$p/cmdline' 2>/dev/null | tr '\0' ' '")
       case "$CMDLINE" in
         *"sh -c"*) continue ;;
       esac
       n=$((n + 1))
       if [ "$n" -gt 1 ]; then
-        r "kill -9 $p" >/dev/null 2>&1
+        matar_pid "$p"
       fi
     done
   fi
@@ -1336,6 +1755,15 @@ instalar() {
   # idempotencia (que sí funciona) lo camufla: el 2º arranque dice "no toco
   # nada" y no repara nada.
   [ "$listo" = "1" ] || autorreparar
+  # MEDIDO (2026-11-28): antes de la verificacion se reconcilia el stack:
+  # `stack --reconciliar` borra las copias de service.d y reinicia el
+  # supervisor si el canonico ha cambiado (idempotente).
+  if ejecutable "$DAEMON"; then
+    r "'$DAEMON' stack --reconciliar --json 2>/dev/null" | head -6 | sed 's/^/  /'
+  fi
+  matar_supervisores_no_canonicos
+  limpiar_copias_service_d
+  verificar_movil
   diagnostico
   if r "test -x '$DOC'" >/dev/null 2>&1; then
     say "--- veredicto del nucleo forense (root) ---"
@@ -1348,6 +1776,12 @@ instalar() {
     say "instalación terminada: el móvil es alcanzable en $URL"
     say "y su telemetría se lee desde Drive sin depender del túnel."
     INFORME_RESULTADO="ok"
+    # MEDIDO (2026-11-28): el tunnel puede estar vivo y el movil ESTAR MAL
+    # (4 supervisores, el 8765 con listener...).  El veredicto lo dice.
+    if [ "${VERIFICACIONES_TOTAL:-0}" -gt 0 ] 2>/dev/null && [ "${VERIFICACIONES_OK:-0}" != "${VERIFICACIONES_TOTAL:-0}" ]; then
+      warn "ATENCION: el tunel responde pero $(( ${VERIFICACIONES_TOTAL:-0} - ${VERIFICACIONES_OK:-0} )) verificacion(es) fallan (mira 'pasos' del informe)"
+      INFORME_RESULTADO="ok_con_avisos"
+    fi
   else
     warn "instalación terminada, pero el túnel no responde aún."
     warn "revisar $LOGDIR/daemon.log y $LOGDIR/tunnel.log"

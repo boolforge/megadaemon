@@ -807,3 +807,45 @@ caso_b_36_diagnostic_dumps_last_log_lines() {
   salida_mensaje "volcó las últimas líneas de tunnel-watchdog.log" \
     'ULTIMA tunnel-watchdog\.log'
 }
+
+# --- B37 ---------------------------------------------------------------------
+# Qué prueba: el supervisor CANONICO se queda vivo y su COPIA (`.bak`) se
+#            mata; ademas, el FICHERO de la copia se borra de `service.d`.
+# Por qué importa: Magisk ejecuta TODO lo que sea ejecutable en
+#            /data/adb/service.d => una copia del supervisor = un supervisor
+#            MAS en cada arranque, que relanzaba el tunel legacy contra el
+#            8765 (sin listener) y se peleaba con el canonico (medido en el
+#            movil: 70 s / 133 s alternados).  Matar el proceso NO basta: el
+#            fichero vuelve a cerrarlo en el siguiente arranque.
+#            Y "dejar el mas antiguo" es ERROR: la copia `.bak` se creo al
+#            actualizar, asi que es MAS ANTIGUA que el canonico => se
+#            quedaba el malo y se mataba el bueno.
+# MEDIDO/NO MEDIDO: MEDIDO 2026-11-28 (laboratorio falso del banco).
+caso_b_37_el_supervisor_canonico_se_queda() {
+  SUPERVISORS=2; DAEMONS=1; HEALTH=ok; TUNEL=ok
+  preparar_lab
+  # El argv de los dos supervisores: el canonico y su copia .bak.
+  fijar_pids 99-megadaemon.sh 424342 424343
+  fijar_argv 424342 "sh" "$SVC/99-megadaemon.sh"
+  fijar_argv 424343 "sh" "$SVC/99-megadaemon.sh.bak-50k"
+  # Y la copia en el disco (Magisk la ejecutaria en el boot).
+  printf '#!/bin/sh\nexit 0\n' > "$SVC/99-megadaemon.sh.bak-50k"
+  chmod 755 "$SVC/99-megadaemon.sh.bak-50k"
+  correr_instalador --instalar --sin-telemetria
+  guardar_salida b37
+  # 1) el canonico sigue vivo.
+  comprobar "el supervisor canonico sigue vivo" \
+    grep -qx 424342 "$LAB_PROC/99-megadaemon.sh.pids"
+  # 2) la copia NO (y el instalador lo dice).
+  verificar "el supervisor NO canonico esta muerto" \
+    grep -qx 424343 "$LAB_PROC/99-megadaemon.sh.pids"
+  salida_mensaje "el instalador avisa del supervisor NO canonico" \
+    'supervisor NO canonico eliminado'
+  # 3) el FICHERO de la copia se borra de service.d (si no, vuelve).
+  verificar "la copia .bak se borro de service.d" \
+    test -e "$SVC/99-megadaemon.sh.bak-50k"
+  # 4) y los 4 canonicos siguen ahi.
+  for f in 99-megadaemon.sh 97-megadaemon-keeper.sh 98-cloudflared.sh 91-adb-tcp.sh; do
+    comprobar "$f sigue en service.d" test -f "$SVC/$f"
+  done
+}

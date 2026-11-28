@@ -434,3 +434,48 @@ ls -l /data/adb/megadaemon/state/board.sqlite
 
 Si el fichero **no** existe tras arrancar el daemon, el binario del móvil es
 **viejo**: re-ejecuta el one-liner (§1) y mira `build.desfasado`.
+
+## 8. Lo que el one-liner **comprueba solo** (2026-11-28)
+
+Desde este tramo el instalador **no dice "terminado" sin comprobar**: al
+final (paso 8/8) hace **8 comprobaciones** sobre lo que se puede mirar en el
+móvil, las deja en el informe JSON (`instalacion.json`, campo `pasos`) y las
+resume en la salida:
+
+| # | Qué comprueba | Cómo lo ve el jefe |
+|---|---------------|--------------------|
+| 1 | `service.d` tiene **sólo** los 4 canónicos | `service.d: solo los canonicos` |
+| 2 | hay **un** supervisor vivo | `supervisores: 1 (el canonico)` |
+| 3 | el **8765** (legacy) NO tiene listener | `8765 (tunel legacy): sin listener (correcto)` |
+| 4 | el **8080** (app) y el **9090** (daemon) sí | `puertos: 8080 y 9090 con listener` |
+| 5 | el túnel legacy está **apagado** (URL vacía) | `tunel legacy (8765): apagado (sin URL)` |
+| 6 | el túnel web ha publicado **URL** | `tunel web: URL viva` |
+| 7 | existe la **base** de la instancia | `base de la instancia: .../board.sqlite` |
+| 8 | el **stack** está en línea con el binario | `el stack esta en linea con el binario` |
+
+La última línea de esa sección dice:
+
+```sh
+  verificaciones: 7/8
+```
+
+* `7/8` ⇒ una comprobación falló: el veredicto pasa a **`ok_con_avisos`** y
+  el informe lo dice (`"resultado": "ok_con_avisos"`).
+* `(N sin datos: el daemon no las informa)` ⇒ el daemon **no da** esa clave
+  (binario viejo): **no es un fallo**, es información.
+
+Además, el instalador ahora:
+
+* **borra las copias** de `service.d` (`99-megadaemon.sh.bak-50k`): Magisk
+  ejecuta todo lo ejecutable de ahí ⇒ la copia era un supervisor más;
+* **mata el supervisor NO canónico** comparando el argv **elemento a
+  elemento** (la copia tiene la ruta canónica como *prefijo*, así que un
+  `case` sobre el texto unido la daba por buena ⇒ se quedaba el malo);
+* **deja UN daemon** (antes `pgrep -f`/`pkill -f` no existen en toybox ⇒ la
+  limpieza no mataba nada).
+
+> MEDIDO (2026-11-28, banco): `kill` es un **builtin** de `sh`/dash ⇒ tapa al
+> binario; por eso el instalador mata con `env kill` (al binario de verdad).
+> Y el `sed` que extrae el PID de `/proc/<pid>/cmdline` va en este orden:
+> primero `s#/cmdline$##` y **después** `s#.*/##` (al revés, el voraz se
+> comía el PID y devolvía `cmdline` ⇒ `kill -9 cmdline` no mataba nada).
