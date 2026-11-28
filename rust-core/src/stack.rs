@@ -1044,14 +1044,29 @@ mod tests {
         // tiene `LEGACY_PREFIX=/data/local/tmp/megadaemon` (que es
         // CORRECTO: es la ruta que se migra).  Se comprueba la linea
         // completa, al principio de linea.
+        //
+        // MEDIDO (2026-11-25, CI run 46145859102): el commit fb07dab hizo
+        // CONFIGURABLE el prefijo => la linea pasa a ser
+        //   PREFIX="${MEGADAEMON_PREFIX:-/data/adb/megadaemon}"
+        // El test acepta LAS DOS formas (fija o configurable) pero sigue
+        // exigiendo que el VALOR POR DEFECTO sea el prefijo persistente.
+        let usa_prefijo_persistente = sup.contenido.contains("\nPREFIX=/data/adb/megadaemon")
+            || sup
+                .contenido
+                .contains("\nPREFIX=\"${MEGADAEMON_PREFIX:-/data/adb/megadaemon}\"");
         assert!(
-            sup.contenido.contains("\nPREFIX=/data/adb/megadaemon"),
+            usa_prefijo_persistente,
             "el supervisor embebido NO usa el prefijo persistente"
         );
         assert!(
             !sup.contenido
                 .contains("\nPREFIX=/data/local/tmp/megadaemon"),
             "el supervisor embebido usa la ruta volatil como PREFIX"
+        );
+        assert!(
+            !sup.contenido
+                .contains("MEGADAEMON_PREFIX:-/data/local/tmp/megadaemon"),
+            "el supervisor embebido usa la ruta volatil como PREFIX por defecto"
         );
     }
 
