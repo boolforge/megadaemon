@@ -1204,6 +1204,10 @@ pub fn tool_definitions() -> Value {
     if let Some(extra) = crate::swift_container::tool_definitions_mcp().as_array() {
         out.extend(extra.clone());
     }
+    // El control MCP (los servidores del `mcp_config.json` REAL del móvil).
+    if let Some(extra) = crate::mcp_control::tool_definitions().as_array() {
+        out.extend(extra.clone());
+    }
     Value::Array(out)
 }
 
@@ -1236,6 +1240,21 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
         return Some(r);
     }
     if let Some(r) = crate::swift_container::dispatch_mcp(name, args) {
+        return Some(r);
+    }
+    // El control MCP: el registro REAL (el `mcp_config.json` del móvil).
+    //
+    // MEDIDO (2026-11-28): el opt-in mutuo se cumple aquí de otra manera:
+    // en la superficie MCP **la llamada a la tool ES la declaración** (el
+    // cliente elige llamar a `mcp_control`), así que se le pasan las tres
+    // capacidades declaradas.  En la vía ACP el opt-in sigue siendo estricto
+    // (el cliente declara en `initialize._meta`).
+    if let Some(r) = crate::mcp_control::dispatch_mcp(
+        name,
+        args,
+        &mut crate::mcp_control::FileRegistry::real(),
+        &crate::mcp_control::Declaration::of(&crate::mcp_control::McpCapability::all()),
+    ) {
         return Some(r);
     }
 

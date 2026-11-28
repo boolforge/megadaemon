@@ -2332,6 +2332,35 @@ fn handle_client(mut stream: TcpStream) {
                     let prober = crate::service_bus::TcpProber::default();
                     bus.probe_all(&prober);
                 }
+                // Los servidores MCP **REALES** (los del `mcp_config.json`
+                // del móvil): MEDIDO (2026-11-28), antes el bus sólo
+                // conocía los de `providers.rs` y los peers.
+                {
+                    use crate::mcp_control::McpRegistry as _;
+                    let registro = crate::mcp_control::FileRegistry::real();
+                    match registro.read() {
+                        Ok(estado) => {
+                            for e in crate::service_bus::seed_servidores_mcp(&estado) {
+                                bus.upsert(e);
+                            }
+                        }
+                        Err(e) => {
+                            // El registro real puede no existir (escritorio):
+                            // se dice, no se inventa.
+                            bus.upsert({
+                                let mut nota = crate::service_bus::ServiceEntry::new(
+                                    "mcp_registro_real",
+                                    crate::service_bus::ServiceKind::McpServer,
+                                );
+                                nota.health = crate::service_bus::Health::down(
+                                    "mcp_config.json no se pudo leer",
+                                    &e.to_string(),
+                                );
+                                nota
+                            });
+                        }
+                    }
+                }
                 send_json(&mut stream, &bus.catalog_json());
             }
             "/api/power" => {

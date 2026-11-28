@@ -58,6 +58,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fmt;
+use std::path::PathBuf;
 
 /// Cómo se alcanza un servidor MCP.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -533,6 +534,170 @@ impl McpRegistry for InMemoryRegistry {
 /// El listado (copia pura del estado, en orden estable por nombre).
 pub fn list_servers(state: &McpState) -> Vec<McpServer> {
     state.servers.values().cloned().collect()
+}
+
+// =============================================================================
+// EL REGISTRO REAL: el `mcp_config.json` del móvil
+// =============================================================================
+
+/// La ruta del `mcp_config.json` donde se declaran los servidores MCP.
+///
+/// MEDIDO (2026-11-28): es la misma ruta que usa
+/// `antigravity_clone::AGY_MCP_CONFIG`; se repite aquí para que este módulo
+/// no dependa del runtime de Antigravity (y para que el **root** sea el que
+/// implementa el registro real, como dice el trait).
+pub const AGY_MCP_CONFIG: &str = "/data/user/0/com.agy/files/.gemini/config/mcp_config.json";
+
+/// El estado REAL a partir del `mcp_config.json` (**puro**: sólo lee texto).
+///
+/// MEDIDO (2026-11-28): el formato es el de Gemini/Antigravity: un mapa
+/// `mcpServers` donde cada servidor declara `url` (remoto) **o** `command` +
+/// `args` (local).  El fichero **no** declara las tools (se descubren en
+/// runtime, con `tools/list`) ⇒ la lista de tools de cada servidor sale
+/// vacía y el consumidor lo dice (no se inventa).
+///
+/// El estado de cada servidor sale de `enabled` (nuestro) o de `disabled` (el
+/// que usa Gemini): un servidor está apagado si alguno de los dos lo dice.
+pub fn estado_desde_mcp_config(texto: &str) -> Result<McpState, McpControlError> {
+    let v: Value = serde_json::from_str(texto).map_err(|e| McpControlError::MalformedState {
+        reason: format!("el mcp_config no es JSON: {}", e),
+    })?;
+    let servidores = v
+        .get("mcpServers")
+        .and_then(|m| m.as_object())
+        .ok_or_else(|| McpControlError::MalformedState {
+            reason: "el mcp_config no tiene 'mcpServers'".into(),
+        })?;
+    let mut estado = McpState::new();
+    for (nombre, s) in servidores {
+        let obj = s
+            .as_object()
+            .ok_or_else(|| McpControlError::MalformedState {
+                reason: format!("el servidor '{}' no es un objeto", nombre),
+            })?;
+        let target = if let Some(url) = obj.get("url").and_then(|u| u.as_str()) {
+            ServerTarget::Url {
+                url: url.to_string(),
+            }
+        } else if let Some(program) = obj.get("command").and_then(|c| c.as_str()) {
+            let args = obj
+                .get("args")
+                .and_then(|a| a.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            ServerTarget::Command {
+                program: program.to_string(),
+                args,
+            }
+        } else {
+            // Una entrada que no declara ni `url` ni `command` no es un
+            // servidor: se salta (no se inventa un destino).
+            continue;
+        };
+        let enabled = obj.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true)
+            && !obj
+                .get("disabled")
+                .and_then(|d| d.as_bool())
+                .unwrap_or(false);
+        estado.insert(McpServer {
+            name: nombre.clone(),
+            target,
+            enabled,
+            tools: Vec::new(),
+        });
+    }
+    Ok(estado)
+}
+
+/// Aplica el estado al `mcp_config.json` (**puro**: devuelve el texto nuevo).
+///
+/// MEDIDO (2026-11-28): el fichero tiene **más** cosas (cabeceras, `env`,
+/// `timeout`…), así que se parte del JSON **original** y sólo se toca el
+/// estado del servidor (`enabled` / `disabled`).  Nada se borra.
+pub fn aplicar_estado_a_mcp_config(
+    texto: &str,
+    estado: &McpState,
+) -> Result<String, McpControlError> {
+    let mut v: Value =
+        serde_json::from_str(texto).map_err(|e| McpControlError::MalformedState {
+            reason: format!("el mcp_config no es JSON: {}", e),
+        })?;
+    {
+        let servidores = v
+            .get_mut("mcpServers")
+            .and_then(|m| m.as_object_mut())
+            .ok_or_else(|| McpControlError::MalformedState {
+                reason: "el mcp_config no tiene 'mcpServers'".into(),
+            })?;
+        for (nombre, s) in estado.servers.iter() {
+            let Some(entrada) = servidores.get_mut(nombre).and_then(|e| e.as_object_mut()) else {
+                continue;
+            };
+            entrada.insert("enabled".to_string(), json!(s.enabled));
+            if s.enabled {
+                // Encendido: fuera el `disabled` (el de Gemini).
+                entrada.remove("disabled");
+            } else {
+                entrada.insert("disabled".to_string(), json!(true));
+            }
+        }
+    }
+    let mut salida = serde_json::to_string_pretty(&v).map_err(|e| McpControlError::Registry {
+        reason: format!("serializar el mcp_config: {}", e),
+    })?;
+    salida.push('\n');
+    Ok(salida)
+}
+
+/// El registro REAL: el `mcp_config.json` del disco.
+///
+/// Es la implementación del trait [`McpRegistry`] que el módulo dejaba
+/// pendiente («lo implementa el root»).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileRegistry {
+    /// La ruta del fichero.
+    pub ruta: PathBuf,
+}
+
+impl FileRegistry {
+    /// El registro real por defecto (la config de Antigravity del móvil).
+    pub fn real() -> Self {
+        FileRegistry {
+            ruta: PathBuf::from(AGY_MCP_CONFIG),
+        }
+    }
+
+    /// El registro real de otra ruta (tests).
+    pub fn en(ruta: impl Into<PathBuf>) -> Self {
+        FileRegistry { ruta: ruta.into() }
+    }
+}
+
+impl McpRegistry for FileRegistry {
+    fn read(&self) -> Result<McpState, McpControlError> {
+        let texto = std::fs::read_to_string(&self.ruta).map_err(|e| McpControlError::Registry {
+            reason: format!("leer {}: {}", self.ruta.display(), e),
+        })?;
+        estado_desde_mcp_config(&texto)
+    }
+
+    fn write(&mut self, state: &McpState) -> Result<(), McpControlError> {
+        let texto = std::fs::read_to_string(&self.ruta).map_err(|e| McpControlError::Registry {
+            reason: format!("leer {}: {}", self.ruta.display(), e),
+        })?;
+        let salida = aplicar_estado_a_mcp_config(&texto, state)?;
+        // MEDIDO (2026-11-28): se escribe **en el sitio** (truncar) y no con
+        // rename: el fichero pertenece a la app (`u0_a1573`) y con `rename`
+        // cambiaría el propietario (los permisos del móvil importan).  Es lo
+        // mismo que hace `antigravity_clone::sincronizar_mcp_config`.
+        std::fs::write(&self.ruta, salida.as_bytes()).map_err(|e| McpControlError::Registry {
+            reason: format!("escribir {}: {}", self.ruta.display(), e),
+        })
+    }
 }
 
 /// Decide si hay que encender o apagar un servidor (puro: no muta nada).
@@ -1267,6 +1432,121 @@ mod tests {
         for (metodo, _) in &ext {
             assert!(metodo.starts_with("mcp/"), "namespace propio: {metodo}");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // El registro REAL (el `mcp_config.json` del móvil)
+    // -----------------------------------------------------------------------
+
+    /// Un `mcp_config.json` de ejemplo (MEDIDO: el formato de Gemini).
+    const CONFIG_EJEMPLO: &str = r#"{
+      "mcpServers": {
+        "megadaemon-minimax": {
+          "url": "http://127.0.0.1:9090/mcp",
+          "headers": { "X-API-Key": "secreto" }
+        },
+        "otro": {
+          "command": "/data/adb/megadaemon/servidor.sh",
+          "args": ["--stdio"],
+          "env": { "CLAVE": "secreto" }
+        },
+        "apagado": { "command": "/bin/true", "disabled": true }
+      }
+    }"#;
+
+    #[test]
+    fn el_mcp_config_real_se_lee_como_registro() {
+        // MEDIDO (2026-11-28): el `mcp_config.json` real (el de Antigravity)
+        // es el registro MCP de verdad: `url` para los remotos y
+        // `command`+`args` para los locales.
+        let estado = estado_desde_mcp_config(CONFIG_EJEMPLO).expect("lee el config");
+        assert_eq!(estado.servers.len(), 3);
+        let remoto = estado.server("megadaemon-minimax").expect("el remoto");
+        assert_eq!(
+            remoto.target,
+            ServerTarget::Url {
+                url: "http://127.0.0.1:9090/mcp".to_string()
+            }
+        );
+        assert!(remoto.enabled);
+        let local = estado.server("otro").expect("el local");
+        assert_eq!(
+            local.target,
+            ServerTarget::Command {
+                program: "/data/adb/megadaemon/servidor.sh".to_string(),
+                args: vec!["--stdio".to_string()],
+            }
+        );
+        // `disabled` (el de Gemini) significa apagado.
+        let apagado = estado.server("apagado").expect("el apagado");
+        assert!(!apagado.enabled);
+        // Las tools NO se declaran en el config (se descubren en runtime):
+        // la lista sale vacía y no se inventa ninguna.
+        assert!(remoto.tools.is_empty());
+    }
+
+    #[test]
+    fn un_config_mal_formado_da_error_tipado() {
+        assert!(matches!(
+            estado_desde_mcp_config("esto no es json"),
+            Err(McpControlError::MalformedState { .. })
+        ));
+        assert!(matches!(
+            estado_desde_mcp_config("{}"),
+            Err(McpControlError::MalformedState { .. })
+        ));
+    }
+
+    #[test]
+    fn escribir_el_estado_no_pierde_lo_que_no_se_toca() {
+        // MEDIDO (2026-11-28): el config tiene cabeceras, `env` y compañía:
+        // al escribir sólo se cambia el estado del servidor, NADA más.
+        let mut estado = estado_desde_mcp_config(CONFIG_EJEMPLO).expect("lee");
+        let apagado = estado.server("apagado").expect("el apagado").clone();
+        let mut apagado2 = apagado.clone();
+        apagado2.enabled = true;
+        estado.insert(apagado2);
+        let texto = aplicar_estado_a_mcp_config(CONFIG_EJEMPLO, &estado).expect("aplica");
+        let v: Value = serde_json::from_str(&texto).expect("json");
+        // Las cabeceras siguen ahí.
+        assert_eq!(
+            v["mcpServers"]["megadaemon-minimax"]["headers"]["X-API-Key"],
+            json!("secreto")
+        );
+        // El `env` del local sigue ahí.
+        assert_eq!(v["mcpServers"]["otro"]["env"]["CLAVE"], json!("secreto"));
+        // Y el servidor que se ha encendido ya no está apagado.
+        assert_eq!(v["mcpServers"]["apagado"]["enabled"], json!(true));
+        assert!(v["mcpServers"]["apagado"].get("disabled").is_none());
+    }
+
+    #[test]
+    fn el_registro_real_lee_y_escribe_el_fichero() {
+        // El registro REAL (el que implementa el trait) sobre un fichero
+        // de verdad: lee, apaga un servidor y lo comprueba.
+        let ruta = std::env::temp_dir().join(format!(
+            "mcp-control-{}-{:?}.json",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_file(&ruta);
+        std::fs::write(&ruta, CONFIG_EJEMPLO).expect("escribe el config");
+        let mut reg = FileRegistry::en(&ruta);
+        let mut estado = reg.read().expect("lee");
+        let mut s = estado.server("otro").expect("el local").clone();
+        s.enabled = false;
+        estado.insert(s);
+        reg.write(&estado).expect("escribe");
+        let texto = std::fs::read_to_string(&ruta).expect("relee");
+        let v: Value = serde_json::from_str(&texto).expect("json");
+        assert_eq!(v["mcpServers"]["otro"]["enabled"], json!(false));
+        assert_eq!(v["mcpServers"]["otro"]["disabled"], json!(true));
+        // Y el resto sigue intacto.
+        assert_eq!(
+            v["mcpServers"]["otro"]["command"],
+            json!("/data/adb/megadaemon/servidor.sh")
+        );
+        let _ = std::fs::remove_file(&ruta);
     }
 
     #[test]

@@ -1476,6 +1476,68 @@ pub fn seed_local_tool(id: &str, path: &str, capabilities: &[&str]) -> ServiceEn
     e
 }
 
+/// Entrada de las **capacidades propias** del daemon (la fachada de
+/// `capacidades.rs`).
+///
+/// MEDIDO (2026-11-28): las capacidades propias (la cola de mensajes, los
+/// subagentes, las opciones de modelo, la construcción del contexto y el
+/// revert por pasos) son una **herramienta local** del daemon, con su tool
+/// MCP `capacidades`.  Antes no aparecían en el bus ⇒ el bus no sabía que
+/// el daemon tenía esas capacidades.
+pub fn seed_capacidades_propias() -> ServiceEntry {
+    let acciones = crate::capacidades::acciones();
+    let familias: Vec<String> = {
+        let mut v: Vec<String> = acciones
+            .iter()
+            .filter_map(|a| a.split('.').next().map(|f| f.to_string()))
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    let mut e = ServiceEntry::new("capacidades", ServiceKind::LocalTool);
+    e.label =
+        "Capacidades propias del daemon (cola, subagentes, modelos, contexto, revert)".to_string();
+    e.endpoint = "tool:mcp/capacidades".to_string();
+    e.auth_kind = "none".to_string();
+    e.capabilities = familias;
+    e.cost_estimate = CostEstimate::free();
+    e.notes = format!(
+        "fachada de capacidades propias ({} acciones); la cola y los subagentes se PERSISTEN",
+        acciones.len()
+    );
+    e
+}
+
+/// Entradas para los servidores MCP **REALES** (los del `mcp_config.json`).
+///
+/// MEDIDO (2026-11-28): el registro real de MCP es el `mcp_config.json` del
+/// móvil (el que usa Antigravity).  El bus los cataloga como servidores MCP
+/// de terceros, con su endpoint real (URL o comando).
+pub fn seed_servidores_mcp(estado: &crate::mcp_control::McpState) -> Vec<ServiceEntry> {
+    crate::mcp_control::list_servers(estado)
+        .into_iter()
+        .map(|s| {
+            let mut e = ServiceEntry::new(&s.name, ServiceKind::McpServer);
+            e.label = s.name.clone();
+            e.endpoint = s.target.describe();
+            e.auth_kind = "none".to_string();
+            e.capabilities = s
+                .tools
+                .iter()
+                .map(|t| format!("tool:{}", t.name))
+                .collect();
+            e.cost_estimate = CostEstimate::free();
+            e.notes = if s.enabled {
+                "servidor MCP declarado en el mcp_config.json real".to_string()
+            } else {
+                "servidor MCP declarado en el mcp_config.json real (APAGADO)".to_string()
+            };
+            e
+        })
+        .collect()
+}
+
 /// Construye el bus con el catálogo **real** del daemon:
 ///
 /// * **modelos**: del listado redactado de `providers.rs` (13 proveedores);
@@ -1493,6 +1555,9 @@ pub fn bus_from_runtime(
 ) -> ServiceBus {
     let mut entries = catalog_from_providers_json(providers_redacted, providers_secrets_ref);
     entries.extend(catalog_from_mesh_snapshot(mesh_snapshot, stale_secs));
+    // Las capacidades propias del daemon (MEDIDO 2026-11-28: antes no
+    // estaban en el bus).
+    entries.push(seed_capacidades_propias());
     if !mcp_endpoint.trim().is_empty() {
         entries.push(seed_antigravity_client(mcp_endpoint));
     }

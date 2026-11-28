@@ -521,9 +521,31 @@ como los de `protocol_acp.rs`):
 * modelos: `models/options/list`, `models/options/enrich`,
   `models/options/filter`, `models/options/default`.
 
-**PENDIENTE** (el root lo integra): registrar esas extensiones en
-`protocol_acp.rs` y enganchar los módulos al bus real (`board.rs` /
-`service_bus.rs`) y al registro real de MCP.
+### Integradas (2026-11-28): usables de verdad
+
+* **La fachada** `capacidades.rs` + la tool MCP `capacidades` (cola,
+  subagentes, modelos, contexto y revert por pasos en un solo sitio; la cola
+  y los subagentes **se persisten**).
+* **Las extensiones ACP** están registradas en `protocol_acp.rs`
+  (`extensiones_propias`, 25 extensiones nuevas).
+* **El bus**: `service_bus::seed_capacidades_propias()` mete las
+  capacidades propias en el catálogo (antes el bus no sabía que el daemon
+  las tenía) y `seed_servidores_mcp()` mete los servidores MCP reales.
+* **El MCP real**: `mcp_control.rs` ya no es un módulo sin usar:
+  * `FileRegistry` implementa el trait `McpRegistry` sobre el
+    `mcp_config.json` **real** del móvil (el que usa Antigravity):
+    `estado_desde_mcp_config()` lo lee y `aplicar_estado_a_mcp_config()`
+    lo escribe **sin perder** las cabeceras, el `env` ni lo demás (sólo se
+    toca el estado del servidor).
+  * La tool `mcp_control` está en el **catálogo MCP** (`mcp_ext::
+    tool_definitions()` la concatena ⇒ sale en `tools/list`) y su dispatch
+    llama al registro real (`mcp_ext::dispatch` ⇒ `mcp_control::
+    dispatch_mcp`).
+  * MEDIDO: el opt-in mutuo, en la vía ACP, sigue siendo estricto; en la
+    superficie MCP **la llamada a la tool ES la declaración** (el cliente la
+    pide explícitamente).
+* El `/api/service_bus` del cockpit cataloga los servidores MCP reales (y
+  si el `mcp_config.json` no se puede leer, lo dice en vez de inventar).
 
 **Lo que NO está medido**: el comportamiento de estos patrones en el móvil
 requiere el dispositivo (`su -mm -c`); el repo sólo puede verificar tipos,
