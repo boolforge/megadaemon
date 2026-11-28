@@ -103,6 +103,7 @@ pub mod daad;
 pub mod daad_ir;
 pub mod daad_load_models;
 pub mod daad_unpack;
+pub mod daemon_socket;
 pub mod delegate;
 pub mod deobfuscate;
 pub mod device_inventory;
