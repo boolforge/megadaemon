@@ -313,11 +313,14 @@ pub fn registrar_error_cuota(provider: &str, status: u16, cuerpo: &str) -> Optio
     e2.ventanas.retain(|v| v.nombre != "cupo");
     e2.ventanas.push(ventana);
     e2.nivel = peor_nivel(&e2.ventanas);
+    // MEDIDO (2026-11-28, móvil): el detalle decía "vuelve 1795820506" (un
+    // epoch crudo, ilegible).  Ahora dice "vuelve en 15 min" y el estado
+    // guardado conserva el `reset_at` exacto (en `ventanas`).
     e2.detalle = Some(format!(
         "{} (HTTP {status}){}",
         e.motivo,
         match reset_at {
-            Some(r) => format!("; vuelve {}", r),
+            Some(r) => format!("; vuelve en {}", texto_restante(r.saturating_sub(ahora()))),
             None => String::new(),
         }
     ));
@@ -495,6 +498,52 @@ pub fn evaluar_pausa(e: &Estado, now: u64, cooldown_s: u64) -> (bool, bool) {
     // pausa ya no aplica, aunque el nivel guardado siga siendo "Pausa"
     // (por eso hay que limpiar el estado).
     (!caducada, caducada)
+}
+
+/// Formatea un resto de segundos de forma legible ("45 s", "15 min",
+/// "2 h 5 min").
+pub fn texto_restante(seg: u64) -> String {
+    if seg < 60 {
+        format!("{} s", seg)
+    } else if seg < 3_600 {
+        format!("{} min", seg / 60)
+    } else {
+        format!("{} h {} min", seg / 3_600, (seg % 3_600) / 60)
+    }
+}
+
+/// Detalle legible de por qué un proveedor está en pausa **y cuánto falta**.
+///
+/// MEDIDO (2026-11-28, móvil): el jefe veía 5 proveedores "en pausa" sin
+/// saber por qué ni hasta cuándo.  El motivo ya se guardaba en
+/// [`Estado::detalle`], pero no se exponía: aquí se devuelve junto con el
+/// tiempo que queda (recalculado al leer, no el que quedó escrito).
+pub fn detalle_pausa(provider: &str) -> Option<String> {
+    let (detalle, restante) = {
+        let m = mapa().lock().unwrap_or_else(|p| p.into_inner());
+        let e = m.get(provider)?;
+        let restante = e
+            .ventanas
+            .iter()
+            .filter_map(|v| v.reset_at)
+            .min()
+            .map(|r| r.saturating_sub(ahora()));
+        (e.detalle.clone(), restante)
+    };
+    let motivo = detalle.unwrap_or_else(|| "cuota agotada".to_string());
+    // Se quita el "vuelve ..." que traía el detalle guardado (el tiempo se
+    // recalcula aquí: el que se guardó puede ser viejo).
+    let motivo = match motivo.find("; vuelve") {
+        Some(i) => motivo[..i].trim().to_string(),
+        None => motivo.trim().to_string(),
+    };
+    if motivo.is_empty() {
+        return None;
+    }
+    Some(match restante {
+        Some(seg) => format!("{}; vuelve en {}", motivo, texto_restante(seg)),
+        None => motivo,
+    })
 }
 
 /// Quita la ventana de cuota caducada y baja el nivel a `Normal`.

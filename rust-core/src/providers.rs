@@ -2662,8 +2662,14 @@ pub fn execute_chat_con_tools_with(
         // la cascada salta al siguiente.  Antes se gastaba la llamada
         // (y el 429 no se registraba nunca, así que nadie se pausaba).
         if (deps.quota_paused)(&p.id) {
-            trace.push(format!("{} => SALTADO (cuota en pausa)", p.id));
-            errors.push(format!("{}: cuota en pausa", p.id));
+            // MEDIDO (2026-11-28, móvil): "cuota en pausa" a secas no decía
+            // ni POR QUÉ ni HASTA CUÁNDO ⇒ el jefe veía 5 proveedores
+            // quemados sin información accionable.  Ahora se dice el motivo
+            // (el que devolvió el proveedor) y el tiempo que falta.
+            let motivo = crate::quota_guard::detalle_pausa(&p.id)
+                .unwrap_or_else(|| "cuota agotada".to_string());
+            trace.push(format!("{} => SALTADO (cuota en pausa: {})", p.id, motivo));
+            errors.push(format!("{}: cuota en pausa ({})", p.id, motivo));
             continue;
         }
 

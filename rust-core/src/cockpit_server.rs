@@ -828,25 +828,47 @@ pub fn antigravity_linea_estado() -> (String, Value) {
     let estados = crate::quota_guard::estado(None);
     let mut en_pausa: Vec<String> = Vec::new();
     let mut vuelve_en: Option<i64> = None;
+    // MEDIDO (2026-11-28, móvil): el jefe veía "5 proveedor(es) en pausa
+    // por cuota" sin saber POR QUÉ ni HASTA CUÁNDO.  El motivo ya se
+    // guardaba (`Estado.detalle`): aquí se enseña, uno por proveedor.
+    let mut por_proveedor: Vec<Value> = Vec::new();
+    let mut motivos: Vec<String> = Vec::new();
     for e in &estados {
         if e.nivel == crate::quota_guard::Nivel::Pausa {
             en_pausa.push(e.provider.clone());
-            if let Some(s) = crate::quota_guard::segundos_hasta_reset(&e.provider) {
+            let s = crate::quota_guard::segundos_hasta_reset(&e.provider);
+            if let Some(s) = s {
                 vuelve_en = Some(match vuelve_en {
                     Some(v) => v.min(s),
                     None => s,
                 });
             }
+            let det = crate::quota_guard::detalle_pausa(&e.provider);
+            if let Some(d) = &det {
+                motivos.push(format!("{} ({})", e.provider, d));
+            }
+            por_proveedor.push(json!({
+                "proveedor": e.provider.clone(),
+                "detalle": det,
+                "vuelve_en_s": s,
+            }));
         }
     }
     let cuota = json!({
         "ok": en_pausa.is_empty(),
         "en_pausa": en_pausa,
         "vuelve_en_s": vuelve_en,
+        "por_proveedor": por_proveedor,
         "detalle": if en_pausa.is_empty() {
             "sin proveedores quemados".to_string()
-        } else {
+        } else if motivos.is_empty() {
             format!("{} proveedor(es) en pausa por cuota", en_pausa.len())
+        } else {
+            format!(
+                "{} proveedor(es) en pausa por cuota: {}",
+                en_pausa.len(),
+                motivos.join("; ")
+            )
         },
     });
 
