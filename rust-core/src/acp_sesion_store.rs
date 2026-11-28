@@ -655,7 +655,7 @@ pub fn serializar(v: &Value) -> String {
 }
 
 /// Ahora, en segundos Unix.
-fn ahora() -> i64 {
+pub fn ahora() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)

@@ -16,9 +16,44 @@
 //! alcanza por `cancel` o por el `stopReason` de `session/prompt`.
 
 use serde_json::{json, Value};
+use std::cell::RefCell;
 use std::sync::{Mutex, OnceLock};
 
 use super::super::acp_schema::{ContentBlock, SessionId, StopReason};
+
+/// El almacén de sesiones SQLite **por hilo**.
+///
+/// MEDIDO (2026-11-28): en los TESTS `state_dir()` es un temporal **por
+/// hilo** ⇒ el almacén tiene que ser por hilo también: si fuese global, el
+/// primer hilo que lo abriera fijaría el camino y los demás tests
+/// escribirían en el estado de otro (el mismo bug que ya corrigió
+/// `state_dir.rs`).  En producción hay un único estado y SQLite abre la misma
+/// base desde varios hilos sin problema (WAL + `busy_timeout`).
+thread_local! {
+    static STORE: RefCell<Option<crate::acp_sesion_store::AcpSesionStore>> =
+        RefCell::new(None);
+}
+
+/// Abre (o reutiliza) el almacén de sesiones y ejecuta `f` con él.
+///
+/// La persistencia es un **efecto secundario, nunca un bloqueo**: si el
+/// almacén no se puede abrir, se avisa por stderr y el ACP sigue **en
+/// memoria** (devuelve `None`).
+fn con_store<R>(f: impl FnOnce(&crate::acp_sesion_store::AcpSesionStore) -> R) -> Option<R> {
+    STORE.with(|celda| {
+        let mut c = celda.borrow_mut();
+        if c.is_none() {
+            match crate::acp_sesion_store::AcpSesionStore::abrir_en_state_dir() {
+                Ok(s) => *c = Some(s),
+                Err(e) => {
+                    eprintln!("acp-sesion: no se pudo abrir el almacen: {}", e);
+                    return None;
+                }
+            }
+        }
+        c.as_ref().map(f)
+    })
+}
 
 /// El registro **global** del proceso.
 ///
@@ -28,7 +63,10 @@ use super::super::acp_schema::{ContentBlock, SessionId, StopReason};
 /// vacío.
 pub fn global() -> &'static Mutex<Registro> {
     static G: OnceLock<Mutex<Registro>> = OnceLock::new();
-    G.get_or_init(|| Mutex::new(Registro::nuevo()))
+    // MEDIDO (2026-11-28): el registro se RESTAURA del almacen SQLite
+    // (`acp_sesion_store`): las sesiones y su historial sobreviven a un
+    // reinicio del daemon.
+    G.get_or_init(|| Mutex::new(Registro::restaurar()))
 }
 
 /// Coge el registro global tolerando un mutex envenenado (un panic previo
@@ -126,9 +164,123 @@ impl Registro {
         Registro::default()
     }
 
+    /// **Restaura** las sesiones del almacén SQLite.
+    ///
+    /// MEDIDO (2026-11-28): la persistencia de sesiones (el store
+    /// `acp_sesion_store`) era un módulo sin usar; ahora las sesiones
+    /// sobreviven a un reinicio del daemon: al arrancar se recuperan del
+    /// almacén con su historial completo.
+    ///
+    /// Si el almacén no está (o no se puede leer) se devuelve un registro
+    /// vacío: el ACP tiene que funcionar aunque no haya persistencia.
+    pub fn restaurar() -> Registro {
+        let mut r = Registro::nuevo();
+        con_store(|store| {
+            let Ok(resumenes) = crate::acp_sesion_store::listar(store.conexion()) else {
+                return;
+            };
+            for res in resumenes {
+                let historial =
+                    crate::acp_sesion_store::cargar_historial(store.conexion(), &res.id).ok();
+                let (modo, padre, estado, turnos, mensajes) = match historial {
+                    Some(h) => (
+                        h.sesion.modo.clone(),
+                        h.sesion.padre.clone(),
+                        h.sesion.estado,
+                        h.sesion.turnos,
+                        h.sesion.mensajes.clone(),
+                    ),
+                    None => (
+                        res.modo.clone(),
+                        res.padre.clone(),
+                        res.estado,
+                        res.turnos,
+                        Vec::new(),
+                    ),
+                };
+                r.sesiones.push(Sesion {
+                    id: res.id.clone(),
+                    cwd: res.cwd.clone(),
+                    modo,
+                    padre,
+                    estado: match estado.nombre() {
+                        "cancelada" => Estado::Cancelada,
+                        "terminada" => Estado::Terminada,
+                        _ => Estado::Activa,
+                    },
+                    mensajes,
+                    turnos,
+                });
+                // El contador de ids sigue DESPUES de las ids restauradas,
+                // para que una sesion nueva no repita una id.
+                if let Some(n) = res
+                    .id
+                    .strip_prefix("ses-")
+                    .and_then(|x| x.parse::<u64>().ok())
+                {
+                    if n >= r.siguiente {
+                        r.siguiente = n;
+                    }
+                }
+            }
+        });
+        r
+    }
+
     fn id_nuevo(&mut self) -> String {
         self.siguiente += 1;
         format!("ses-{:06}", self.siguiente)
+    }
+
+    /// La sesión en el formato del STORE (lo que se persiste).
+    ///
+    /// MEDIDO (2026-11-28): el modelo en memoria y el modelo persistido son
+    /// casi el mismo; el store añade la época actual y las marcas de
+    /// tiempo.  La conversión vive aquí para que el store no dependa del
+    /// ACP y el ACP no dependa del store.
+    fn a_sesion_store(&self, s: &Sesion) -> crate::acp_sesion_store::SesionAcp {
+        let ahora = crate::acp_sesion_store::ahora();
+        crate::acp_sesion_store::SesionAcp {
+            id: s.id.clone(),
+            cwd: s.cwd.clone(),
+            modo: s.modo.clone(),
+            padre: s.padre.clone(),
+            estado: crate::acp_sesion_store::EstadoSesion::desde_nombre(s.estado.nombre()),
+            // La época la usa el store para la compactacion; el ACP no
+            // compacta (el historial se conserva entero) ⇒ siempre 0.
+            current_epoch: 0,
+            turnos: s.turnos,
+            mensajes: s.mensajes.clone(),
+            created_at: ahora,
+            updated_at: ahora,
+        }
+    }
+
+    /// **Persiste** la sesión en SQLite (patrón: la persistencia es otro
+    /// módulo, `acp_sesion_store`).
+    ///
+    /// MEDIDO (2026-11-28): si el almacén no se puede abrir o escribir, la
+    /// sesión ACP **sigue funcionando** (está en memoria): la persistencia
+    /// es un efecto secundario, nunca un bloqueo.  El fallo se avisa por
+    /// stderr para que se pueda ver.
+    ///
+    /// MEDIDO (`acp_sesion_store::guardar_sesion`): el guardado es un
+    /// **upsert** que anexa **sólo el sufijo** del historial que faltaba
+    /// (prefijo común) ⇒ guardar dos veces la misma sesión **no** duplica
+    /// mensajes.
+    fn persistir(&self, id: &str) {
+        let Some(s) = self.obtener(id) else {
+            return;
+        };
+        let sesion = self.a_sesion_store(s);
+        con_store(|store| {
+            if let Err(e) = crate::acp_sesion_store::guardar_sesion(store.conexion(), &sesion) {
+                eprintln!(
+                    "acp-sesion: no se pudo guardar la sesion {}: {}",
+                    sesion.id, e
+                );
+            }
+        });
     }
 
     /// `session/new`.
@@ -144,6 +296,7 @@ impl Registro {
             turnos: 0,
         };
         self.sesiones.push(s.clone());
+        self.persistir(&s.id);
         s
     }
 
@@ -166,19 +319,21 @@ impl Registro {
     /// MEDIDO: `sessionStop` no existe en el registro (0/41) ⇒ la
     /// cancelación es el estado terminal que sí existe.
     pub fn cancelar(&mut self, id: &str) -> Result<Estado, String> {
-        match self.obtener_mut(id) {
-            None => Err(format!("no existe la sesión {}", id)),
+        let estado = match self.obtener_mut(id) {
+            None => return Err(format!("no existe la sesión {}", id)),
             Some(s) => {
                 s.estado = Estado::Cancelada;
-                Ok(s.estado)
+                s.estado
             }
-        }
+        };
+        self.persistir(id);
+        Ok(estado)
     }
 
     /// `session/resume`: reactiva una sesión cancelada.
     pub fn reanudar(&mut self, id: &str) -> Result<Estado, String> {
-        match self.obtener_mut(id) {
-            None => Err(format!("no existe la sesión {}", id)),
+        let estado = match self.obtener_mut(id) {
+            None => return Err(format!("no existe la sesión {}", id)),
             Some(s) => {
                 if s.estado == Estado::Terminada {
                     return Err(format!(
@@ -187,9 +342,11 @@ impl Registro {
                     ));
                 }
                 s.estado = Estado::Activa;
-                Ok(s.estado)
+                s.estado
             }
-        }
+        };
+        self.persistir(id);
+        Ok(estado)
     }
 
     /// `session/fork`: una sesión HIJA que conserva el historial del padre.
@@ -215,25 +372,29 @@ impl Registro {
             turnos: padre.turnos,
         };
         self.sesiones.push(hija.clone());
+        self.persistir(&hija.id);
         Ok(hija)
     }
 
     /// Registra un prompt en la sesión (para el historial).
     pub fn registrar_prompt(&mut self, id: &str, bloques: &[ContentBlock]) -> Result<(), String> {
-        let s = self
-            .obtener_mut(id)
-            .ok_or_else(|| format!("no existe la sesión {}", id))?;
-        if !s.estado.admite_prompt() {
-            return Err(format!(
-                "la sesión {} está {} y no admite un prompt",
-                id,
-                s.estado.nombre()
-            ));
+        {
+            let s = self
+                .obtener_mut(id)
+                .ok_or_else(|| format!("no existe la sesión {}", id))?;
+            if !s.estado.admite_prompt() {
+                return Err(format!(
+                    "la sesión {} está {} y no admite un prompt",
+                    id,
+                    s.estado.nombre()
+                ));
+            }
+            s.mensajes.push(json!({
+                "role": "user",
+                "content": bloques,
+            }));
         }
-        s.mensajes.push(json!({
-            "role": "user",
-            "content": bloques,
-        }));
+        self.persistir(id);
         Ok(())
     }
 
@@ -244,10 +405,13 @@ impl Registro {
     /// de la sesión (que es lo que `session/load` devuelve) ⇒ el cliente que
     /// recarga la sesión ve también lo que pasó en ella.
     pub fn registrar_update(&mut self, id: &str, update: &Value) -> Result<(), String> {
-        let s = self
-            .obtener_mut(id)
-            .ok_or_else(|| format!("no existe la sesión {}", id))?;
-        s.mensajes.push(update.clone());
+        {
+            let s = self
+                .obtener_mut(id)
+                .ok_or_else(|| format!("no existe la sesión {}", id))?;
+            s.mensajes.push(update.clone());
+        }
+        self.persistir(id);
         Ok(())
     }
 
@@ -261,19 +425,22 @@ impl Registro {
 
     /// Registra la respuesta de un turno y cierra el turno.
     pub fn cerrar_turno(&mut self, id: &str, razon: StopReason) -> Result<(), String> {
-        let s = self
-            .obtener_mut(id)
-            .ok_or_else(|| format!("no existe la sesión {}", id))?;
-        s.mensajes.push(json!({
-            "role": "assistant",
-            "stopReason": format!("{:?}", razon),
-        }));
-        s.turnos += 1;
-        // MEDIDO: `sessionStop` no existe en ACP v1 (0/41) ⇒ una sesión
-        // que termina por el `stopReason` del turno queda TERMINADA.
-        if razon == StopReason::EndTurn {
-            s.estado = Estado::Terminada;
+        {
+            let s = self
+                .obtener_mut(id)
+                .ok_or_else(|| format!("no existe la sesión {}", id))?;
+            s.mensajes.push(json!({
+                "role": "assistant",
+                "stopReason": format!("{:?}", razon),
+            }));
+            s.turnos += 1;
+            // MEDIDO: `sessionStop` no existe en ACP v1 (0/41) ⇒ una sesión
+            // que termina por el `stopReason` del turno queda TERMINADA.
+            if razon == StopReason::EndTurn {
+                s.estado = Estado::Terminada;
+            }
         }
+        self.persistir(id);
         Ok(())
     }
 
@@ -453,6 +620,51 @@ mod tests {
         assert_eq!(estado, Estado::Terminada);
         // Y una sesión terminada NO se puede reanudar.
         assert!(r.reanudar(&s.id).is_err());
+    }
+
+    #[test]
+    fn la_sesion_se_persiste_y_vuelve_del_almacen() {
+        // MEDIDO (2026-11-28): la persistencia de sesiones (el store
+        // `acp_sesion_store`) ya no es un modulo sin usar: lo que se crea
+        // queda en el almacen y `restaurar()` lo devuelve.
+        let mut r = Registro::nuevo();
+        let s = r.nueva("/tmp/mi-proyecto", Some("code".to_string()));
+        r.registrar_prompt(&s.id, &[bloque("hola")]).unwrap();
+
+        // 1) En el almacen.
+        let store = crate::acp_sesion_store::AcpSesionStore::abrir_en_state_dir()
+            .expect("el almacen tiene que abrir");
+        let cargada = crate::acp_sesion_store::cargar_sesion(store.conexion(), &s.id)
+            .expect("la sesion tiene que estar en el almacen");
+        assert_eq!(cargada.cwd, "/tmp/mi-proyecto");
+        assert_eq!(cargada.modo.as_deref(), Some("code"));
+
+        // 2) Y al restaurar el registro vuelve con su historial.
+        let r2 = Registro::restaurar();
+        let s2 = r2.obtener(&s.id).expect("la sesion restaurada");
+        assert_eq!(s2.cwd, "/tmp/mi-proyecto");
+        assert_eq!(s2.modo.as_deref(), Some("code"));
+        assert_eq!(s2.mensajes.len(), 1, "el historial se conserva");
+        assert!(
+            !s2.mensajes.is_empty(),
+            "el historial no se pierde: {:?}",
+            s2.mensajes
+        );
+    }
+
+    #[test]
+    fn guardar_dos_veces_no_duplica_el_historial() {
+        // MEDIDO (2026-11-28): `guardar_sesion` anexa SOLO el sufijo que
+        // faltaba (prefijo comun) ⇒ persistir la misma sesion varias
+        // veces no duplica mensajes.
+        let mut r = Registro::nuevo();
+        let s = r.nueva("/tmp/mi-proyecto", None);
+        r.registrar_prompt(&s.id, &[bloque("hola")]).unwrap();
+        r.registrar_prompt(&s.id, &[bloque("adios")]).unwrap();
+
+        let r2 = Registro::restaurar();
+        let s2 = r2.obtener(&s.id).expect("la sesion restaurada");
+        assert_eq!(s2.mensajes.len(), 2, "dos prompts, dos mensajes");
     }
 
     #[test]
