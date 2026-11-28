@@ -87,6 +87,7 @@ pub mod cfg_lifter;
 pub mod channel;
 pub mod cirx_rtl;
 pub mod clipboard;
+pub mod cola_mensajes;
 pub mod cockpit_doctor;
 pub mod cockpit_server;
 pub mod compaction_epoch;
