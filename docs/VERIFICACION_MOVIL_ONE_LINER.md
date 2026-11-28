@@ -375,7 +375,6 @@ En la traza del gateway (Web UI → logs, o el log del daemon):
   conversación se ha reconstruido con la estructura que exige Gemini.
 
 ## 6. Lo que el banco ya garantiza (no hace falta repetir en el móvil)
-
 Los 119 escenarios pasan en local:
 
 ```sh
@@ -390,3 +389,48 @@ seguridad (permisos 0700, sin secretos en la salida).
 Lo que el banco **no** puede comprobar es lo que depende del **dispositivo**:
 root real de Samsung, el túnel de Cloudflare con la red del móvil y el
 arranque tras un reinicio.
+
+## 7. Lo nuevo de este tramo (2026-11-28): el bus, el MCP real y el esquema
+
+Tres cosas que se pueden mirar **en el móvil** y que antes no se veían.
+
+### 7.1 El bus ya conoce las capacidades propias del daemon
+
+Por el MCP: tool `service_bus` (o `/api/service_bus` del cockpit) ⇒ tiene
+que haber **una** entrada con `id` = `capacidades` y de tipo `local_tool`, y
+sus `capabilities` tienen que ser las familias: `cola`, `contexto`,
+`modelos`, `revert`, `subagente`.
+
+Antes (MEDIDO) el bus sólo conocía los modelos, los peers y el cliente MCP ⇒
+las capacidades propias no aparecían por ninguna parte.
+
+### 7.2 Los servidores MCP **reales** salen del `mcp_config.json`
+
+Por el MCP: tool `mcp_control`, acción `listar` ⇒ la respuesta tiene que
+traer los servidores declarados en
+`/data/user/0/com.agy/files/.gemini/config/mcp_config.json` (el que usa
+Antigravity), con su `url` o su `command`, y `enabled` a `true` salvo que
+estén apagados.
+
+* Si la respuesta dice que **no se pudo leer**, el fichero no está o el
+  daemon no tiene permiso: es información, no un fallo del producto.
+* La tool está en el **catálogo** MCP (`tools/list` ⇒ `mcp_control`).
+
+### 7.3 La base de la instancia lleva el **esquema medido**
+
+La instancia tiene **una** base SQLite: `<state_dir>/board.sqlite`.  En ella
+conviven las tablas del tablón y las **10 tablas medidas** de las sesiones
+(`sessions`, `messages`, `message_nodes`, `subagent_heads`,
+`tool_call_state`, `prompt_history`, `rendered_commits`, `live_row_times`,
+`session_window_tools`, `app_state`).
+
+Como el shell de Android no trae `sqlite3`, míralo por el daemon: crea una
+sesión ACP (tool `acp_sesion`, acción `nueva`) y luego comprueba que el
+fichero ha crecido:
+
+```sh
+ls -l /data/adb/megadaemon/state/board.sqlite
+```
+
+Si el fichero **no** existe tras arrancar el daemon, el binario del móvil es
+**viejo**: re-ejecuta el one-liner (§1) y mira `build.desfasado`.
