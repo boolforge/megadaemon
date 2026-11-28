@@ -248,7 +248,7 @@ if [ -z "$UV" ] || [ "$CODE" = "530" ] || [ "$CODE" = "000" ]; then
   pkill -f cloudflared 2>/dev/null; sleep 3
   setsid nohup cloudflared tunnel --url http://127.0.0.1:9090 --no-autoupdate > "$PREFIX/state/cloudflared.log" 2>&1 &
   sleep 25
-  NEWURL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$PREFIX/state/cloudflared.log" 2>/dev/null | head -1)
+  NEWURL=$(grep -ao 'https://[a-z0-9-]*\.trycloudflare\.com' "$PREFIX/state/cloudflared.log" 2>/dev/null | grep -v '^https://api\.' | grep -v '^https://developers\.' | head -1)
   [ -n "$NEWURL" ] && { printf '%s\n' "$NEWURL" > "$PREFIX/state/tunnel.url"; say "   nuevo tunel: $NEWURL"; }
 fi
 

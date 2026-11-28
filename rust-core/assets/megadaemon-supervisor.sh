@@ -61,7 +61,7 @@ start_tunnel() {
   # guardar la URL cuando aparezca
   n=0
   while [ $n -lt 30 ]; do
-    U=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$P/tunnel.log" 2>/dev/null | tail -1)
+    U=$(grep -ao 'https://[a-z0-9-]*\.trycloudflare\.com' "$P/tunnel.log" 2>/dev/null | grep -v '^https://api\.' | grep -v '^https://developers\.' | tail -1)
     [ -n "$U" ] && { echo "$U" > "$P/tunnel.url"; log "tunnel URL: $U"; break; }
     n=$((n+1)); sleep 2
   done

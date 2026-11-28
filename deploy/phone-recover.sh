@@ -423,7 +423,7 @@ else
             i=0
             while [ "$i" -lt 30 ]; do
                 sleep 2
-                u=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$STATE/cloudflared.log" 2>/dev/null | head -1)
+                u=$(grep -ao 'https://[a-z0-9-]*\.trycloudflare\.com' "$STATE/cloudflared.log" 2>/dev/null | grep -v '^https://api\.' | grep -v '^https://developers\.' | head -1)
                 [ -n "$u" ] && break
                 i=$((i + 1))
             done
