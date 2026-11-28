@@ -122,6 +122,7 @@ pub mod drive_vfs;
 pub mod duckdns;
 pub mod entropy;
 pub mod env_introspect;
+pub mod efectos;
 pub mod es_eid;
 pub mod format_oracle;
 pub mod ghidra;

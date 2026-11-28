@@ -33,12 +33,25 @@
 //! unix) en vez de un `su` por llamada.
 //!
 //! **No toca `providers.rs`**: el backend de chat se inyecta (`ChatBackend`).
+//!
+//! **Patrón 1 — el bucle como manejador de efectos** (2026-11-28): este
+//! módulo ya **no** es el bucle: es la **cáscara** del bucle.  La decisión
+//! (reductor), la llamada al modelo y la ejecución de las tools viven en
+//! `crate::efectos` (`reducir`, `manejar_inferencia`, `manejar_herramientas`,
+//! `manejar_tareas`, `bucle`).  Aquí `AgentLoop::tick` sólo construye el
+//! estado puro, se lo pasa a `efectos::bucle` y devuelve su informe: **este
+//! fichero no llama al modelo ni a las tools** (criterio 1 del
+//! `docs/PATRONES_CLI_RUST_DEFINICION.md` §"Patrón 1").  El mismo bucle
+//! sirve para el agente interactivo, el programático y el subagente: lo
+//! único que cambia es el `modo` (`efectos::Perfil`).
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::efectos;
 
 /// Precio por modelo.  `source` es **obligatorio** para que el coste sea
 /// citable; sin fuente el coste es `NO VERIFICADO` (no se inventa).
@@ -267,38 +280,26 @@ impl FailureMemory {
         Ok(())
     }
 
+    /// Entradas del diario (sólo lectura).  Es la **semilla** del diario
+    /// puro que usa el bucle de efectos (`crate::efectos`).
+    pub fn entradas(&self) -> &[FailureEntry] {
+        &self.entries
+    }
+
     /// Errores recientes de una acción concreta (últimos `window` ticks).
     pub fn recent_errors(&self, action: &str, current_tick: u32, window: u32) -> Vec<String> {
-        self.entries
-            .iter()
-            .filter(|e| !e.ok && e.action == action)
-            .filter(|e| current_tick.saturating_sub(e.tick) <= window)
-            .map(|e| e.error.clone())
-            .collect()
+        recent_errors_in(&self.entries, action, current_tick, window)
     }
 
     /// ¿Hay que evitar esta acción?  Si el MISMO error ya ocurrió en la
     /// ventana reciente ⇒ sí (el bucle no repite el error).
     pub fn should_avoid(&self, action: &str, current_tick: u32, window: u32) -> Option<String> {
-        self.recent_errors(action, current_tick, window)
-            .into_iter()
-            .next()
+        should_avoid_in(&self.entries, action, current_tick, window)
     }
 
     /// Resumen para el prompt: "acción → error (n veces)".
     pub fn summary(&self, current_tick: u32, window: u32) -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
-        for e in self.entries.iter() {
-            if e.ok || current_tick.saturating_sub(e.tick) > window {
-                continue;
-            }
-            let line = format!("{} -> {} (tick {})", e.action, e.error, e.tick);
-            if !out.contains(&line) {
-                out.push(line);
-            }
-        }
-        out.truncate(10);
-        out
+        summary_in(&self.entries, current_tick, window)
     }
 
     pub fn len(&self) -> usize {
@@ -307,6 +308,64 @@ impl FailureMemory {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+}
+
+/// Errores recientes de una acción concreta en un diario (los últimos
+/// `window` ticks).  Función ** pura**: el bucle de efectos la usa sobre su
+/// diario en memoria (sin tocar el disco).
+pub fn recent_errors_in(
+    fallos: &[FailureEntry],
+    action: &str,
+    current_tick: u32,
+    window: u32,
+) -> Vec<String> {
+    fallos
+        .iter()
+        .filter(|e| !e.ok && e.action == action)
+        .filter(|e| current_tick.saturating_sub(e.tick) <= window)
+        .map(|e| e.error.clone())
+        .collect()
+}
+
+/// ¿Hay que evitar esta acción?  Si el MISMO error ya ocurrió en la ventana
+/// reciente ⇒ sí (el bucle no repite el error).
+pub fn should_avoid_in(
+    fallos: &[FailureEntry],
+    action: &str,
+    current_tick: u32,
+    window: u32,
+) -> Option<String> {
+    recent_errors_in(fallos, action, current_tick, window)
+        .into_iter()
+        .next()
+}
+
+/// Resumen para el prompt: "acción → error (n veces)".
+pub fn summary_in(fallos: &[FailureEntry], current_tick: u32, window: u32) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for e in fallos.iter() {
+        if e.ok || current_tick.saturating_sub(e.tick) > window {
+            continue;
+        }
+        let line = format!("{} -> {} (tick {})", e.action, e.error, e.tick);
+        if !out.contains(&line) {
+            out.push(line);
+        }
+    }
+    out.truncate(10);
+    out
+}
+
+/// El diario en disco es el **sumidero** del diario puro del bucle de
+/// efectos: el reductor decide qué se registra y el driver lo escribe aquí.
+impl efectos::Diario for FailureMemory {
+    fn entradas(&self) -> &[FailureEntry] {
+        &self.entries
+    }
+
+    fn registrar(&mut self, entrada: &FailureEntry) {
+        let _ = self.record(entrada.clone());
     }
 }
 
@@ -322,13 +381,25 @@ impl std::fmt::Display for BudgetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BudgetError::Tokens { used, limit } => {
-                write!(f, "presupuesto de tokens de la hora agotado ({} / {})", used, limit)
+                write!(
+                    f,
+                    "presupuesto de tokens de la hora agotado ({} / {})",
+                    used, limit
+                )
             }
             BudgetError::Usd { used, limit } => {
-                write!(f, "presupuesto de coste de la hora agotado ({:.6} / {:.6})", used, limit)
+                write!(
+                    f,
+                    "presupuesto de coste de la hora agotado ({:.6} / {:.6})",
+                    used, limit
+                )
             }
             BudgetError::Calls { used, limit } => {
-                write!(f, "presupuesto de llamadas de la hora agotado ({} / {})", used, limit)
+                write!(
+                    f,
+                    "presupuesto de llamadas de la hora agotado ({} / {})",
+                    used, limit
+                )
             }
         }
     }
@@ -389,7 +460,7 @@ impl HourBudget {
                     used: self.usd,
                     limit,
                 });
-                }
+            }
         }
         if self.calls + 1 > self.calls_limit {
             return Err(BudgetError::Calls {
@@ -587,7 +658,10 @@ impl Action {
     pub fn describe(&self) -> String {
         match self {
             Action::Tool { name, args } => format!("tool {} {}", name, args),
-            Action::Delegate { provider, task_type } => {
+            Action::Delegate {
+                provider,
+                task_type,
+            } => {
                 format!("delegate {} ({})", provider, task_type)
             }
             Action::Speak { text } => format!("speak: {}", text),
@@ -608,7 +682,10 @@ pub fn parse_decision(reply: &str) -> Option<Action> {
         let action = v.get("action").and_then(|x| x.as_str()).unwrap_or("");
         match action {
             "tool" => {
-                let name = v.get("name").or_else(|| v.get("tool")).and_then(|x| x.as_str())?;
+                let name = v
+                    .get("name")
+                    .or_else(|| v.get("tool"))
+                    .and_then(|x| x.as_str())?;
                 let args = match v.get("args") {
                     Some(Value::String(s)) => s.clone(),
                     Some(other) => other.to_string(),
@@ -638,7 +715,10 @@ pub fn parse_decision(reply: &str) -> Option<Action> {
                 });
             }
             "idle" => {
-                let reason = v.get("reason").and_then(|x| x.as_str()).unwrap_or("sin motivo");
+                let reason = v
+                    .get("reason")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("sin motivo");
                 return Some(Action::Idle {
                     reason: reason.to_string(),
                 });
@@ -793,6 +873,10 @@ pub struct AgentLoop {
     pub prices: PriceBook,
     pub breakers: HashMap<String, CircuitBreaker>,
     pub providers: Vec<ProviderRef>,
+    /// Modo del agente: el **mismo** bucle sirve para el interactivo, el
+    /// programático y el subagente (sólo cambian los topes y los permisos:
+    /// `crate::efectos::Perfil`).
+    pub modo: efectos::Modo,
     tick: u32,
 }
 
@@ -813,8 +897,15 @@ impl AgentLoop {
             prices,
             breakers,
             providers,
+            modo: efectos::Modo::Interactivo,
             tick: 0,
         }
+    }
+
+    /// Cambia el modo del bucle (interactivo / programático / subagente).
+    pub fn with_modo(mut self, modo: efectos::Modo) -> Self {
+        self.modo = modo;
+        self
     }
 
     /// Ruta canónica de la memoria de fallos: `<state_dir>/failures.ndjson`.
@@ -824,64 +915,23 @@ impl AgentLoop {
 
     /// Construye el prompt.  **Nunca** incluye API key, token ni secretos:
     /// sólo la tarea, la memoria de fallos y la lista de proveedores.
+    ///
+    /// La construcción vive en `crate::efectos` (el bucle de efectos la usa
+    /// tal cual, con su diario **puro** en memoria).
     pub fn build_prompt(&self, task: &str) -> String {
-        let summary = self.failures.summary(self.tick, self.cfg.failure_window_ticks);
-        let providers: Vec<String> = self
-            .providers
-            .iter()
-            .map(|p| {
-                if p.local {
-                    format!("{} (local, ultimo recurso)", p.id)
-                } else {
-                    p.id.clone()
-                }
-            })
-            .collect();
-        let mut p = String::new();
-        p.push_str("Eres el meta-agente de MegaDaemon. Responde SOLO con una accion.\n");
-        p.push_str("Formatos admitidos:\n");
-        p.push_str("  {\"action\":\"tool\",\"name\":\"<tool>\",\"args\":{...}}\n");
-        p.push_str("  {\"action\":\"delegate\",\"provider\":\"<id>\",\"task_type\":\"<tipo>\"}\n");
-        p.push_str("  {\"action\":\"speak\",\"text\":\"...\"}\n");
-        p.push_str(&format!("Tarea: {}\n", task));
-        p.push_str(&format!("Proveedores disponibles: {}\n", providers.join(", ")));
-        if !summary.is_empty() {
-            p.push_str("Lo que YA fallo (no lo repitas):\n");
-            for s in summary {
-                p.push_str(&format!("  - {}\n", s));
-            }
-        }
-        p.push_str("Provider local (SEERE) es el ultimo recurso: solo si los demas fallan.\n");
-        p
-    }
-
-    /// Elige proveedor: cadena con breaker; el local es el último recurso.
-    fn pick_provider(&mut self, now: u64, tried: &[String]) -> Option<ProviderRef> {
-        let order: Vec<ProviderRef> = self
-            .providers
-            .iter()
-            .filter(|p| !p.local)
-            .cloned()
-            .chain(self.providers.iter().filter(|p| p.local).cloned())
-            .collect();
-        for p in order {
-            // Un proveedor que YA ha fallado en este tick no se reintenta:
-            // se pasa al siguiente de la cadena (el local es el ultimo).
-            if tried.iter().any(|t| *t == p.id) {
-                continue;
-            }
-            let br = self
-                .breakers
-                .entry(p.id.clone())
-                .or_insert_with(|| CircuitBreaker::new(&p.id));
-            if br.allows(now) {
-                return Some(p);
-            }
-        }
-        None
+        let summary = self
+            .failures
+            .summary(self.tick, self.cfg.failure_window_ticks);
+        efectos::construir_prompt(task, &self.providers, &summary)
     }
 
     /// Ejecuta UN tick completo: decide → actúa → evalúa → corrige.
+    ///
+    /// **Patrón 1 (manejador de efectos)**: este método **no** llama al
+    /// modelo ni a las tools.  Construye el estado puro, se lo pasa al bucle
+    /// de efectos (`crate::efectos::bucle`) y devuelve su informe.  El
+    /// modelo se llama **sólo** en `efectos::manejar_inferencia` y las tools
+    /// **sólo** en `efectos::manejar_herramientas`.
     pub fn tick(
         &mut self,
         now: u64,
@@ -890,266 +940,53 @@ impl AgentLoop {
         executor: &mut dyn ToolExecutor,
         router: &mut dyn Router,
     ) -> TickReport {
-        self.tick = self.tick.saturating_add(1);
-        let tick = self.tick;
-        let mut report = TickReport {
-            tick,
-            calls: 0,
-            tokens: 0,
-            cost: Cost::unverified("no se ha llamado a ningun proveedor"),
-            actions: Vec::new(),
-            final_action: Action::Idle {
-                reason: "sin accion".to_string(),
-            },
-            degraded: false,
-            breakers: self
-                .breakers
-                .iter()
-                .map(|(k, v)| (k.clone(), v.state()))
-                .collect(),
-            provider_used: None,
-            stopped_reason: None,
+        // 1) Perfil del modo (los topes vienen de la configuración).
+        let perfil = efectos::Perfil::for_modo(self.modo).con_cfg(&self.cfg);
+        // 2) Estado puro: el diario se siembra con lo que ya está escrito.
+        let estado = efectos::Estado::nuevo(
+            perfil,
+            self.cfg.budget.clone(),
+            self.prices.clone(),
+            self.providers.clone(),
+            self.breakers.clone(),
+            self.failures.entradas().to_vec(),
+            task.to_string(),
+        );
+        // 3) El bucle de efectos: reduce, despacha y devuelve el informe.
+        let mut deps = efectos::Deps {
+            backend,
+            executor,
+            router,
+            diario: Some(&mut self.failures),
         };
-
-        let mut shell_spawns: u32 = 0;
-        let mut last_error: Option<String> = None;
-        // Proveedores ya intentados en ESTE tick (no se repiten aqui).
-        let mut tried: Vec<String> = Vec::new();
-
-        while report.calls < self.cfg.max_calls_per_tick {
-            // 1) ¿Queda presupuesto de la hora?
-            let probe_cost = Cost::unverified("antes de llamar no se conoce el coste");
-            if let Err(e) = self.cfg.budget.allows(now, 0, &probe_cost) {
-                report.stopped_reason = Some(e.to_string());
-                report.final_action = Action::Idle {
-                    reason: e.to_string(),
-                };
-                break;
-            }
-
-            // 2) Decide (con memoria de fallos en el prompt).
-            let prompt = self.build_prompt(task);
-            let Some(provider) = self.pick_provider(now, &tried) else {
-                report.stopped_reason = Some("todos los proveedores en abierto".to_string());
-                report.final_action = Action::Idle {
-                    reason: "circuit breaker: no hay proveedor disponible".to_string(),
-                };
-                break;
-            };
-            report.provider_used = Some(provider.id.clone());
-            tried.push(provider.id.clone());
-            let outcome = backend.chat(&provider, &prompt);
-            report.calls += 1;
-
-            let outcome = match outcome {
-                Ok(o) => {
-                    if let Some(br) = self.breakers.get_mut(&provider.id) {
-                        br.on_success(now);
-                    }
-                    o
-                }
-                Err(e) => {
-                    if let Some(br) = self.breakers.get_mut(&provider.id) {
-                        br.on_failure(now);
-                    }
-                    last_error = Some(e.clone());
-                    let _ = self.failures.record(FailureEntry {
-                        ts: now,
-                        tick,
-                        provider: provider.id.clone(),
-                        action: "decision".to_string(),
-                        error: e.clone(),
-                        ok: false,
-                        detail: "el proveedor fallo antes de decidir".to_string(),
-                    });
-                    continue; // siguiente proveedor en la cadena
-                }
-            };
-
-            // 3) Coste real (tokens + latencia medidos; precio con fuente).
-            let cost = self
-                .prices
-                .cost_of(&outcome.model_id, outcome.prompt_tokens, outcome.tokens_used);
-            self.cfg
-                .budget
-                .spend(now, outcome.tokens_used, &cost);
-            report.tokens = report.tokens.saturating_add(outcome.tokens_used);
-            report.cost = cost;
-
-            // 4) ¿La decisión es interpretable?  Si no => criterio FIJO.
-            let Some(action) = parse_decision(&outcome.reply) else {
-                report.degraded = true;
-                let fallback = Self::fixed_fallback(router);
-                report.actions.push(format!(
-                    "respuesta no interpretable -> criterio fijo: {}",
-                    fallback.describe()
-                ));
-                let _ = self.failures.record(FailureEntry {
-                    ts: now,
-                    tick,
-                    provider: provider.id.clone(),
-                    action: "decision".to_string(),
-                    error: "respuesta no interpretable".to_string(),
-                    ok: false,
-                    detail: outcome.reply.chars().take(120).collect::<String>(),
-                });
-                self.run_action(
-                    &fallback,
-                    tick,
-                    now,
-                    executor,
-                    router,
-                    &mut report,
-                    &mut shell_spawns,
-                    &provider,
-                );
-                report.final_action = fallback;
-                break;
-            };
-
-            // 5) Memoria de fallos: NO repetir el mismo error.
-            if let Some(prev) = self
-                .failures
-                .should_avoid(&action.key(), tick, self.cfg.failure_window_ticks)
-            {
-                report.actions.push(format!(
-                    "evitada {} (ya fallo con: {})",
-                    action.key(),
-                    prev
-                ));
-                let _ = self.failures.record(FailureEntry {
-                    ts: now,
-                    tick,
-                    provider: provider.id.clone(),
-                    action: action.key(),
-                    error: prev,
-                    ok: false,
-                    detail: "evitada por memoria de fallos".to_string(),
-                });
-                continue; // el modelo ve la memoria en el siguiente prompt
-            }
-
-            // 6) Actúa y evalúa.
-            let ok = self.run_action(
-                &action,
-                tick,
+        let (estado, informe) = efectos::bucle(
+            estado,
+            efectos::Evento::UserInput {
+                texto: task.to_string(),
                 now,
-                executor,
-                router,
-                &mut report,
-                &mut shell_spawns,
-                &provider,
-            );
-            let _ = self.failures.record(FailureEntry {
-                ts: now,
-                tick,
-                provider: provider.id.clone(),
-                action: action.key(),
-                error: if ok { String::new() } else { "error de la tool".to_string() },
-                ok,
-                detail: action.describe(),
-            });
-            report.final_action = action;
-            if !ok {
-                last_error = Some("la tool fallo".to_string());
-                continue; // siguiente ciclo: la memoria ya impide repetir
-            }
-            break; // acción correcta: fin del tick
-        }
-
-        if report.actions.is_empty() {
-            report.actions.push(format!(
-                "sin llamadas (tope por tick: {})",
-                self.cfg.max_calls_per_tick
-            ));
-        }
-        if let Some(e) = last_error {
-            if report.stopped_reason.is_none() {
-                report.stopped_reason = Some(e);
-            }
-        }
-        report
-    }
-
-    /// Criterio FIJO de degradación (nunca una acción inventada):
-    /// reclamar una tarea del tablero > delegar al proveedor local > callar.
-    fn fixed_fallback(router: &mut dyn Router) -> Action {
-        if let Some(task) = router.fixed_fallback_task() {
-            return Action::Tool {
-                name: "claim_task".to_string(),
-                args: json!({ "task": task }).to_string(),
-            };
-        }
-        Action::Idle {
-            reason: "el modelo no devolvio una accion utilizable: criterio fijo = callar".to_string(),
-        }
-    }
-
-    /// Ejecuta la acción y registra el resultado.  `ok` = la acción funcionó.
-    #[allow(clippy::too_many_arguments)]
-    fn run_action(
-        &mut self,
-        action: &Action,
-        tick: u32,
-        now: u64,
-        executor: &mut dyn ToolExecutor,
-        router: &mut dyn Router,
-        report: &mut TickReport,
-        shell_spawns: &mut u32,
-        provider: &ProviderRef,
-    ) -> bool {
-        // Tope duro de procesos de shell por tick (el móvil es el recurso
-        // escaso: cada `su` son 2+ procesos).
-        let spawns = executor.spawns_per_call();
-        if *shell_spawns + spawns > self.cfg.max_shell_spawns_per_tick {
-            report.actions.push(format!(
-                "tope de shell del tick alcanzado ({} + {} > {}): accion descartada",
-                shell_spawns,
-                spawns,
-                self.cfg.max_shell_spawns_per_tick
-            ));
-            return false;
-        }
-        *shell_spawns += spawns;
-
-        match action {
-            Action::Delegate { provider, task_type } => {
-                match router.route(provider, task_type) {
-                    Some(target) => {
-                        report.actions.push(format!("enrutado a {} ({})", target, task_type));
-                        true
-                    }
-                    None => {
-                        report.actions.push(format!(
-                            "sin destino para {} ({}): delegacion rechazada",
-                            provider, task_type
-                        ));
-                        false
-                    }
-                }
-            }
-            _ => match executor.call(action, tick) {
-                Ok(out) => {
-                    let short: String = out.chars().take(160).collect();
-                    report.actions.push(format!("{} -> {}", action.describe(), short));
-                    true
-                }
-                Err(e) => {
-                    report
-                        .actions
-                        .push(format!("{} -> ERROR {}", action.describe(), e));
-                    let _ = self.failures.record(FailureEntry {
-                        ts: now,
-                        tick,
-                        provider: provider.id.clone(),
-                        action: action.key(),
-                        error: e.clone(),
-                        ok: false,
-                        detail: "error al ejecutar la tool".to_string(),
-                    });
-                    false
-                }
             },
+            &mut deps,
+        );
+        // 4) Volcar el estado de vuelta al bucle (breakers, presupuesto, tick).
+        self.breakers = estado.breakers;
+        self.cfg.budget = estado.presupuesto;
+        self.tick = estado.tick;
+        // 5) Informe.
+        TickReport {
+            tick: informe.tick,
+            calls: informe.llamadas,
+            tokens: informe.tokens,
+            cost: informe
+                .coste
+                .unwrap_or_else(|| Cost::unverified("no se ha llamado a ningun proveedor")),
+            actions: informe.acciones,
+            final_action: informe.ultima_accion.unwrap_or(Action::Idle {
+                reason: "sin accion".to_string(),
+            }),
+            degraded: informe.degradado,
+            breakers: informe.breakers,
+            provider_used: informe.proveedor_usado,
+            stopped_reason: informe.detenido,
         }
     }
 }
@@ -1193,11 +1030,9 @@ mod tests {
             let idx = self.prompts.len();
             self.prompts.push(prompt.to_string());
             self.models.push(provider.model.clone());
-            let r = self
-                .replies
-                .get(idx)
-                .cloned()
-                .unwrap_or_else(|| Ok("{\"action\":\"idle\",\"reason\":\"sin respuestas\"}".into()));
+            let r = self.replies.get(idx).cloned().unwrap_or_else(|| {
+                Ok("{\"action\":\"idle\",\"reason\":\"sin respuestas\"}".into())
+            });
             r.map(|reply| ChatOutcome {
                 reply,
                 tokens_used: 100,
@@ -1262,7 +1097,10 @@ mod tests {
             AgentLoopConfig::default(),
             FailureMemory::new(path),
             prices,
-            vec![ProviderRef::remote("p1", "m1"), ProviderRef::local("seere", "m-local")],
+            vec![
+                ProviderRef::remote("p1", "m1"),
+                ProviderRef::local("seere", "m-local"),
+            ],
         )
     }
 
@@ -1306,12 +1144,21 @@ mod tests {
             ex.calls
         );
         // Tick 2: el prompt ya lleva el resumen de lo que fallo.
-        let mut backend2 = FakeBackend::new(vec![Ok("{\"action\":\"tool\",\"name\":\"otra\",\"args\":{}}".into())]);
+        let mut backend2 = FakeBackend::new(vec![Ok(
+            "{\"action\":\"tool\",\"name\":\"otra\",\"args\":{}}".into(),
+        )]);
         let mut ex2 = FakeExecutor::new(None);
-        let mut router2 = FakeRouter { routed: Vec::new(), fallback: None };
+        let mut router2 = FakeRouter {
+            routed: Vec::new(),
+            fallback: None,
+        };
         let r2 = ag.tick(1001, "tarea", &mut backend2, &mut ex2, &mut router2);
         assert!(backend2.prompts[0].contains("YA fallo"));
-        assert!(ex2.calls.contains(&"tool:otra".to_string()), "debe usar otra tool: {:?}", r2.actions);
+        assert!(
+            ex2.calls.contains(&"tool:otra".to_string()),
+            "debe usar otra tool: {:?}",
+            r2.actions
+        );
     }
 
     #[test]
@@ -1376,9 +1223,13 @@ mod tests {
         assert!(ag.failures.recent_errors("decision", 1, 5).len() > 0);
 
         // Tick 2: el prompt ya lleva el resumen de lo que fallo.
-        let mut backend2 = FakeBackend::new(vec![Ok("{\"action\":\"idle\",\"reason\":\"x\"}".into())]);
+        let mut backend2 =
+            FakeBackend::new(vec![Ok("{\"action\":\"idle\",\"reason\":\"x\"}".into())]);
         let mut ex2 = FakeExecutor::new(None);
-        let mut router2 = FakeRouter { routed: Vec::new(), fallback: Some("t-123".into()) };
+        let mut router2 = FakeRouter {
+            routed: Vec::new(),
+            fallback: Some("t-123".into()),
+        };
         ag.tick(2001, "tarea", &mut backend2, &mut ex2, &mut router2);
         assert!(
             backend2.prompts[0].contains("YA fallo"),
