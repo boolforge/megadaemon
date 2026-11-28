@@ -114,14 +114,43 @@ dejar_un_supervisor() {
   return 0
 }
 
+# --- descargar: el `curl` de Termux NO esta en el PATH de root -------------
+# MEDIDO (2026-11-28, movil): con `su -mm -c` el PATH es el de root
+# (/system/bin) => "curl: inaccessible or not found" y el paso de instalar
+# se saltaba (el movil se quedaba con el binario viejo, sin avisar).
+# Aqui se busca un descargador de verdad: el del PATH, el de Termux, o wget.
+BUSCADOR=""
+for _c in curl wget; do
+  if command -v "$_c" >/dev/null 2>&1; then BUSCADOR="$_c"; break; fi
+done
+if [ -z "$BUSCADOR" ]; then
+  for _c in /data/data/com.termux/files/usr/bin/curl /data/data/com.termux/files/usr/bin/wget \
+            /system/bin/curl /system/bin/wget /data/data/com.termux/files/usr/bin/curl; do
+    if [ -x "$_c" ]; then BUSCADOR="$_c"; break; fi
+  done
+fi
+if [ -z "$BUSCADOR" ]; then
+  echo "AVISO: no hay curl ni wget: NO se puede instalar/actualizar" >&2
+  echo "        (el resto del restaurador sigue: para, limpia, arranca, verifica)" >&2
+fi
+
+descargar() {
+  # $1 = url.  Escribe el contenido por stdout.
+  case "$BUSCADOR" in
+    *curl) "$BUSCADOR" -fsSL --retry 3 "$1" ;;
+    *wget) "$BUSCADOR" -qO- "$1" ;;
+    *) return 1 ;;
+  esac
+}
+
 # --- 1/5 INSTALAR Y ACTUALIZAR ---------------------------------------------
 fase_instalar() {
   say "=== 1/5 instalando/actualizando (one-liner: release + sha256 + binario + stack) ==="
   if [ -n "$TOKEN" ]; then
-    curl -fsSL --retry 3 "$RAW/deploy/megadaemon-oneliner.sh" \
+    descargar "$RAW/deploy/megadaemon-oneliner.sh" \
       | sh -s -- --instalar --timeout="$TIMEOUT" --token="$TOKEN"
   else
-    curl -fsSL --retry 3 "$RAW/deploy/megadaemon-oneliner.sh" \
+    descargar "$RAW/deploy/megadaemon-oneliner.sh" \
       | sh -s -- --instalar --timeout="$TIMEOUT"
   fi
   say "  (el one-liner deja 1 daemon y 1 cloudflared; los paramos en el paso 2)"

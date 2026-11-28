@@ -227,6 +227,17 @@ esac
 # nativo en Rust). MEDIDO: en el móvil el shell de Android NO tiene curl ni
 # wget (`toybox wget` -> "Unknown command", rc=127), pero Termux suele
 # traerlos. Por eso hay tres capas.
+# MEDIDO (2026-11-28, movil): cuando el script corre COMO ROOT (via
+# `su -mm -c`, que es como lo lanza el restaurador) el PATH es el de root
+# (/system/bin) y no hay curl ni wget, aunque Termux los tenga => el
+# instalador se quedaba SIN descargador y no podia actualizar el binario.
+# Se anade el bin de Termux al PATH antes de buscar.
+for _d in /data/data/com.termux/files/usr/bin; do
+  if [ -d "$_d" ]; then
+    case ":$PATH:" in *":$_d:"*) ;; *) PATH="$PATH:$_d" ;; esac
+  fi
+done
+export PATH
 CURL=""
 for c in curl wget; do
   if command -v "$c" >/dev/null 2>&1; then CURL="$c"; break; fi
