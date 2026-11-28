@@ -213,6 +213,14 @@ pub struct Informe {
     pub correctos: Vec<String>,
     /// (ruta, motivo) de los que no se pudieron escribir.
     pub fallidos: Vec<(String, String)>,
+    /// Ficheros **sobrantes** que se han borrado (copias `.bak` del
+    /// supervisor en `service.d`).
+    ///
+    /// MEDIDO 2026-11-28 (móvil): una copia `.bak-50k` del supervisor se
+    /// quedó en `/data/adb/service.d/` ⇒ **Magisk la ejecutaba en cada
+    /// arranque** ⇒ dos supervisores peleándose por el daemon y un túnel
+    /// `mcp-legacy` relanzado en bucle (12 reinicios/15 min medidos).
+    pub borrados: Vec<String>,
     /// ¿El supervisor cambió?  (entonces hay que reiniciarlo)
     pub supervisor_cambiado: bool,
 }
@@ -220,7 +228,7 @@ pub struct Informe {
 impl Informe {
     /// ¿Hubo cambios?
     pub fn cambio(&self) -> bool {
-        !self.escritos.is_empty() || !self.fallidos.is_empty()
+        !self.escritos.is_empty() || !self.fallidos.is_empty() || !self.borrados.is_empty()
     }
 
     /// ¿Todo correcto?
@@ -231,9 +239,10 @@ impl Informe {
     /// Resumen de una línea.
     pub fn linea(&self) -> String {
         format!(
-            "stack: {} escrito(s), {} ya ok, {} fallo(s)",
+            "stack: {} escrito(s), {} ya ok, {} borrado(s), {} fallo(s)",
             self.escritos.len(),
             self.correctos.len(),
+            self.borrados.len(),
             self.fallidos.len()
         )
     }
@@ -243,6 +252,7 @@ impl Informe {
         json!({
             "escritos": self.escritos,
             "correctos": self.correctos.len(),
+            "borrados": self.borrados,
             "fallidos": self.fallidos,
             "supervisor_cambiado": self.supervisor_cambiado,
             "ok": self.ok(),
@@ -321,7 +331,65 @@ pub fn reconciliar(cfg: &Config) -> Informe {
             Err(e) => inf.fallidos.push((ruta.display().to_string(), e)),
         }
     }
+    limpiar_servicios_sobrantes(cfg, &mut inf);
     inf
+}
+
+/// Nombres canónicos del stack que viven en `service.d` (Magisk).
+fn nombres_de_servicio() -> Vec<String> {
+    STACK
+        .iter()
+        .filter_map(|e| match e.destino {
+            Destino::Servicio(r) => Some(r.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// **Borra los sobrantes** del directorio de servicios de Magisk.
+///
+/// MEDIDO 2026-11-28 (móvil): el `.bak` del supervisor (la copia de
+/// seguridad que se hace al actualizar) se quedaba **dentro** de
+/// `/data/adb/service.d/` ⇒ Magisk lo ejecutaba igual que al canónico
+/// (Magisk ejecuta todo lo ejecutable de ese directorio) ⇒ dos
+/// supervisores, y el viejo relanzaba el túnel `mcp-legacy` en bucle
+/// (medido: 12 reinicios/15 min) contra un puerto (8765) que nadie
+/// escuchaba.
+///
+/// Sólo se borran los ficheros **nuestros** (los que empiezan por el
+/// nombre canónico de un fichero del stack): los de otras apps no se
+/// tocan.  Los directorios tampoco.
+fn limpiar_servicios_sobrantes(cfg: &Config, inf: &mut Informe) {
+    let dir = Path::new(cfg.prefijo)
+        .parent()
+        .unwrap_or_else(|| Path::new("/data/adb"))
+        .join("service.d");
+    let canonicos = nombres_de_servicio();
+    // El prefijo de cada nombre canónico: "99-megadaemon.sh" -> "99-megadaemon"
+    let prefijos: Vec<&str> = canonicos
+        .iter()
+        .filter_map(|c| c.split('.').next())
+        .collect();
+    let Ok(entradas) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    for entrada in entradas.flatten() {
+        let ruta = entrada.path();
+        let nombre = entrada.file_name().to_string_lossy().to_string();
+        if canonicos.iter().any(|c| *c == nombre) {
+            continue;
+        }
+        if !prefijos.iter().any(|p| nombre.starts_with(p)) {
+            continue;
+        }
+        if !ruta.is_file() {
+            continue;
+        }
+        match std::fs::remove_file(&ruta) {
+            Ok(()) => inf.borrados.push(ruta.display().to_string()),
+            Err(e) => inf.fallidos.push((ruta.display().to_string(), e.to_string())),
+        }
+    }
 }
 
 /// Estado (sin tocar nada) de cada fichero del stack.
@@ -397,6 +465,11 @@ pub fn reiniciar_supervisor() -> bool {
     let _ = std::process::Command::new("pkill")
         .args(["-9", "-f", "service.d/99-megadaemo[n].sh.bak"])
         .output();
+    // MEDIDO 2026-11-28 (móvil): matarlo NO basta.  El fichero `.bak*` se
+    // queda en `service.d/` ⇒ Magisk lo vuelve a ejecutar en el siguiente
+    // arranque ⇒ el supervisor obsoleto vuelve y con él el túnel
+    // `mcp-legacy` relanzado en bucle.  Ahora el fichero también se borra.
+    borrar_copias_de_servicio();
     // Relanzar el canónico si no quedó ninguno vivo (no depender del keeper).
     if !supervisor_vivo() {
         let _ = std::process::Command::new("setsid")
@@ -406,6 +479,32 @@ pub fn reiniciar_supervisor() -> bool {
             .spawn();
     }
     true
+}
+
+/// Borra las copias `.bak*` del supervisor en `service.d`.
+///
+/// MEDIDO 2026-11-28 (móvil): Magisk ejecuta **todo** fichero ejecutable de
+/// `/data/adb/service.d/`, así que la "copia de seguridad" del supervisor
+/// (`99-megadaemon.sh.bak-50k`) era un **segundo supervisor** ⇒ bucle de
+/// reinicios del daemon y del túnel `mcp-legacy`.
+fn borrar_copias_de_servicio() {
+    let dir = Path::new(RUTA_SUPERVISOR_CANONICO)
+        .parent()
+        .unwrap_or_else(|| Path::new("/data/adb/service.d"));
+    let Ok(entradas) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entrada in entradas.flatten() {
+        let ruta = entrada.path();
+        let nombre = entrada.file_name().to_string_lossy().to_string();
+        if !nombre.starts_with("99-megadaemon.sh.") {
+            continue;
+        }
+        if !ruta.is_file() {
+            continue;
+        }
+        let _ = std::fs::remove_file(&ruta);
+    }
 }
 
 /// ¿Cuántos supervisores hay vivos?  (medido: 2 = hay uno de más)
@@ -619,6 +718,46 @@ mod tests {
             Some(hash_esperado(&STACK[0]).as_str()),
             "no se reparo"
         );
+        let _ = std::fs::remove_dir_all(Path::new(&p).parent().unwrap());
+    }
+
+    #[test]
+    fn reconciliar_borra_las_copias_bak_del_service_d() {
+        // MEDIDO (2026-11-28, movil): el `.bak` del supervisor dentro de
+        // `service.d/` era un SEGUNDO supervisor (Magisk ejecuta todo lo
+        // ejecutable de ahi) => bucle de reinicios y tunel mcp-legacy
+        // relanzado sin parar.
+        let p = prefijo_temporal();
+        let cfg = Config {
+            prefijo: p.clone(),
+            android: true,
+        };
+        reconciliar(&cfg);
+        let dir = Path::new(&p).parent().unwrap().join("service.d");
+        let bak = dir.join("99-megadaemon.sh.bak-50k");
+        std::fs::write(&bak, "#!/bin/sh\n# copia vieja\n").expect("escritura");
+        let otro = dir.join("99-megadaemon.sh.otro");
+        std::fs::write(&otro, "#!/bin/sh\n").expect("escritura");
+        // Un fichero de OTRA app no se toca.
+        let ajeno = dir.join("99-otra-app.sh");
+        std::fs::write(&ajeno, "#!/bin/sh\n").expect("escritura");
+
+        let inf = reconciliar(&cfg);
+        assert!(
+            inf.borrados.iter().any(|b| b.contains(".bak-50k")),
+            "no se borro la copia: {:?}",
+            inf.borrados
+        );
+        assert!(
+            inf.borrados.iter().any(|b| b.contains(".otro")),
+            "no se borro la copia: {:?}",
+            inf.borrados
+        );
+        assert!(!bak.exists(), "la copia sigue en service.d");
+        assert!(!otro.exists(), "la copia sigue en service.d");
+        assert!(ajeno.exists(), "no se debe tocar lo de otras apps");
+        // El canónico sigue ahí.
+        assert!(dir.join("99-megadaemon.sh").exists());
         let _ = std::fs::remove_dir_all(Path::new(&p).parent().unwrap());
     }
 

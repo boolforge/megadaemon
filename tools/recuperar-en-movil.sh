@@ -206,9 +206,17 @@ actualizar_supervisor() {
         echo "  el supervisor ya es el actual"
     else
         mkdir -p "$SERVICED" 2>/dev/null
-        [ -f "$SERVICED/99-megadaemon.sh" ] && cp -f "$SERVICED/99-megadaemon.sh" "$SERVICED/99-megadaemon.sh.bak"
+        # MEDIDO (2026-11-28, movil): la copia de seguridad NO puede quedar
+        # dentro de `service.d/`: Magisk ejecuta TODO lo ejecutable de ese
+        # directorio => el `.bak` era un SEGUNDO supervisor (medido:
+        # `99-megadaemon.sh.bak-50k` junto al canónico) => dos supervisores
+        # peleandose por el daemon y un tunel `mcp-legacy` relanzado en bucle.
+        # La copia va al ESTADO (fuera de `service.d`) y se limpian las que
+        # quedaran de installs anteriores.
+        [ -f "$SERVICED/99-megadaemon.sh" ] && cp -f "$SERVICED/99-megadaemon.sh" "$STATE/99-megadaemon.sh.bak"
+        rm -f "$SERVICED"/99-megadaemon.sh.bak* 2>/dev/null
         cp -f "$SUPERVISOR_NUEVO" "$SERVICED/99-megadaemon.sh" && chmod 755 "$SERVICED/99-megadaemon.sh"
-        log "supervisor actualizado en $SERVICED/99-megadaemon.sh (copia .bak)"
+        log "supervisor actualizado en $SERVICED/99-megadaemon.sh (copia .bak en el estado)"
         echo "  supervisor actualizado"
     fi
     # El keeper tambien (vigila al supervisor: sin el, el movil se queda sin

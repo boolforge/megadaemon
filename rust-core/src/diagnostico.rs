@@ -439,7 +439,14 @@ fn red() -> Value {
     };
     let tunel_cockpit = leer("/data/adb/megadaemon/tunnel.url")
         .or_else(|| leer("/data/local/tmp/megadaemon/tunnel.url"));
-    let tunel_mcp = leer("/data/local/tmp/megadaemon/mcp_tunnel.url");
+    // MEDIDO (2026-11-28, movil): el diagnostico leia SOLO la ruta legacy
+    // (`/data/local/tmp/megadaemon/`), que es la que escribe el supervisor
+    // OBSOLETO (`99-megadaemon.sh.bak-50k`) => ensegnaba como "vivo" el
+    // tunel mcp-legacy del supervisor viejo, mientras el canónico (que
+    // escribe en el prefijo persistente) no se veia.  Ahora se leen LAS DOS
+    // rutas: la canonica manda, la legacy es el respaldo.
+    let tunel_mcp = leer("/data/adb/megadaemon/mcp_tunnel.url")
+        .or_else(|| leer("/data/local/tmp/megadaemon/mcp_tunnel.url"));
     json!({
         "interfaces": ip,
         "tunel_cockpit": tunel_cockpit,

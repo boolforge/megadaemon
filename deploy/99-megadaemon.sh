@@ -1409,6 +1409,22 @@ i=0
 last_update=0
 mkdir -p "$PREFIX" "$STATE" 2>/dev/null
 write_state "ARRANCANDO: supervisor activo, puerto $PORT (prefijo $PREFIX)"
+# MEDIDO (2026-11-28, movil): Magisk ejecuta TODO lo ejecutable de
+# `/data/adb/service.d/`, asi que la "copia de seguridad" del supervisor
+# (`99-megadaemon.sh.bak-50k`) era un SEGUNDO supervisor: los dos se
+# peleaban por el daemon ("el daemon no responde /health (fallo 3/3)" cada
+# ~5 min) y el viejo relanzaba el tunel `mcp-legacy` en bucle (medido: 12
+# reinicios/15 min) contra un puerto (8765) que nadie escuchaba.
+# Al arrancar, el canonico mata al duplicado y borra su fichero: al
+# siguiente arranque Magisk solo lanzara el canonico.
+_service_d="$(dirname "$PREFIX")/service.d"
+for _pid in $(proc_pids "99-megadaemon.sh.bak"); do
+    kill -9 "$_pid" 2>/dev/null && log "supervisor: duplicado obsoleto PID $_pid eliminado"
+done
+for _bak in "$_service_d"/99-megadaemon.sh.bak*; do
+    [ -f "$_bak" ] || continue
+    rm -f "$_bak" 2>/dev/null && log "supervisor: copia obsoleta borrada ($_bak)"
+done
 # Los túneles se levantan ANTES de arrancar el daemon: la URL pública (y la
 # del MCP legacy) no dependen de que el cockpit esté listo, y así el túnel
 # ya está cuando el daemon tarda unos segundos.
