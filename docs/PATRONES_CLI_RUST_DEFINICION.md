@@ -249,8 +249,14 @@ al fallar un proveedor:
    error 2 de Antigravity: un 429 pausaba al proveedor **para siempre**).
 3. `retry_after` del proveedor se **parsea** y se usa, no se ignora.
 4. Los umbrales por modelo se leen del catálogo, no están hardcodeados.
+5. El dialecto que dice el catálogo es **el que se habla**: un proveedor
+   cuya API tiene dialecto propio recibe **ese** cuerpo (tools con
+   `input_schema`, `system` arriba, `tool_choice` como objeto) y su
+   respuesta se lee con **ese** parser.
+6. El bucle de reintentos **espera lo que dice el proveedor**, y eso es
+   **comprobable** (la espera es inyectable: un test ve qué se esperó).
 
-**Estado**: **HECHO** ⇒ los puntos (1), (2), (3), (b) y (c) están hechos.
+**Estado**: **HECHO** ⇒ los puntos (1), (2), (3), (4), (5) y (6) están hechos.
 * La tipificación de errores **existe** (`ProviderError` con 7 variantes) y
   el `reset_at` de cuota **existe** (`quota_guard::evaluar_pausa`).
 * **HECHO (2026-11-28)**: el `retry_after` **viaja en el tipo de error**.
@@ -280,6 +286,33 @@ al fallar un proveedor:
   * `mcp_ext.rs` (tool `compaction_epoch`) usa el umbral **del modelo**
     cuando el llamador no pasa presupuesto, y lo dice en la respuesta
     (`presupuesto_chars`, `umbral_del_modelo`).
+* **HECHO (2026-11-28, cierre)**: los **tres** huecos que quedaban, que
+  además **ningún test detectaba** (un cambio que los deshaciera habría
+  dejado la suite en verde):
+  * **El bucle ESPERA lo que dice el proveedor, y se puede probar** (criterio
+    6).  Antes la espera era un `thread::sleep` clavado (`dormir_espera`) y
+    los tests usaban `backoff_ms = 0` ⇒ `espera_reintento` devolvía CERO y el
+    `retry_after` quedaba **enmascarado**: volver al backoff fijo no lo
+    detectaba ningún test.  Ahora `ChatDeps` trae `dormir: fn(Duration)`
+    (por defecto, la espera real) ⇒ el test **ve** qué se esperó
+    (`rust-core/tests/llm_routing.rs`: `el_bucle_espera_lo_que_dice_el_proveedor`,
+    `un_401_no_espera_nada`).
+  * **El `retry_after` ESTRUCTURADO llega a la pausa por cuota** (criterio 2
+    y 3).  Antes la cascada pasaba al `quota_guard` sólo el **texto** del
+    error ⇒ el `Retry-After` de la **cabecera** se perdía y la pausa se caía
+    a un cooldown a ciegas en vez de esperar lo que pidió el proveedor.  Ahora
+    `quota_guard::registrar_error_cuota_con_retry_after` lo recibe
+    (`la_cascada_pasa_el_retry_after_de_la_cabecera_a_la_pausa`).
+  * **El dialecto de Anthropic se HABLA de verdad** (criterio 5).  El
+    catálogo declaraba `ToolFormatter::AnthropicTools` para
+    `api.anthropic.com` y Anthropic es proveedor de primera clase
+    (`provider_catalog.rs`, endpoint `https://api.anthropic.com/v1/messages`),
+    pero el cuerpo que se le mandaba era el de **OpenAI** (`system` como
+    mensaje, `tools: [{type:"function",…}]`, `tool_choice: "auto"`) ⇒ la API
+    lo rechaza con HTTP 400: el formateador decía una cosa y el código otra.
+    Ahora `providers.rs` traduce el cuerpo (`cuerpo_anthropic`) y lee la
+    respuesta (`parse_anthropic_reply`, con `content` en bloques: `text`,
+    `tool_use`, `thinking`).
 * **NOTA**: la taxonomía tiene **7** variantes, no las 17 del original:
   el resto se distinguen por `detail`/`retry_after` dentro de la variante
   (`Http{status, detail, retry_after}`).
@@ -506,7 +539,7 @@ y **53 tests** (store + ACP) verdes.
 | 2 | keepalive del caché de prompt | **HECHO** | `cache_keepalive.rs` |
 | 3 | la conversación es un bosque | **HECHO** | `message_tree.rs` |
 | 4 | compactación por época | **HECHO** | `compaction_epoch.rs` |
-| 5 | errores de proveedor tipados | PARCIAL | `providers.rs` + `provider_retry.rs` (hecho el `retry_after`; falta lo por modelo) |
+| 5 | errores de proveedor tipados | **HECHO** | `providers.rs` + `provider_retry.rs` + `model_catalog.rs` + `quota_guard.rs` (errores tipados, `retry_after` estructurado **y usado**, umbral y formateador **POR MODELO**, dialecto de Anthropic hablado) |
 | 6 | construir contexto ≠ conducir el agente | **HECHO** | `contexto.rs` (+ cableado en `efectos::construir_prompt` / `build_prompt`) |
 | 7 | daemon: socket + handshake + cola | **HECHO** | `daemon_socket.rs` |
 | 8 | sandbox compilado del permiso | **HECHO** | `sandbox_linux.rs` |

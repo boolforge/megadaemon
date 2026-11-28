@@ -259,6 +259,115 @@ mod tests {
     }
 
     #[test]
+    fn el_proveedor_anthropic_del_catalogo_habla_el_dialecto_de_anthropic() {
+        // MEDIDO (2026-11-28): el catálogo de proveedores tiene a Anthropic
+        // como proveedor de primera clase (endpoint `api.anthropic.com`),
+        // así que el formateador del catálogo le tiene que asignar SU
+        // dialecto.  Si esto se rompe, el catálogo y el código dejan de
+        // hablar el mismo idioma (y el proveedor responde HTTP 400).
+        let anthropic = crate::provider_catalog::catalog_v13_1()
+            .into_iter()
+            .find(|p| p.id == "anthropic")
+            .expect("el catálogo tiene a anthropic");
+        assert_eq!(
+            formatter_de_endpoint(&anthropic.endpoint),
+            ToolFormatter::AnthropicTools,
+            "el endpoint de Anthropic habla su dialecto"
+        );
+        assert_eq!(
+            tool_formatter(&anthropic.model, &anthropic.endpoint),
+            ToolFormatter::AnthropicTools
+        );
+    }
+
+    /// Quita los comentarios del código (mismo criterio que `contexto.rs`).
+    ///
+    /// Sin esto, la propia documentación del módulo daría falsos positivos
+    /// al buscar una llamada en el código.
+    fn sin_comentarios(src: &str) -> String {
+        let c: Vec<char> = src.chars().collect();
+        let mut out = String::with_capacity(src.len());
+        let mut i = 0usize;
+        while i < c.len() {
+            let ch = c[i];
+            // Comentario de línea.
+            if ch == '/' && i + 1 < c.len() && c[i + 1] == '/' {
+                i += 2;
+                while i < c.len() && c[i] != '\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            // Comentario de bloque (anidado).
+            if ch == '/' && i + 1 < c.len() && c[i + 1] == '*' {
+                let mut nivel = 1usize;
+                i += 2;
+                while i < c.len() && nivel > 0 {
+                    if c[i] == '/' && i + 1 < c.len() && c[i + 1] == '*' {
+                        nivel += 1;
+                        i += 2;
+                        continue;
+                    }
+                    if c[i] == '*' && i + 1 < c.len() && c[i + 1] == '/' {
+                        nivel -= 1;
+                        i += 2;
+                        continue;
+                    }
+                    if c[i] == '\n' {
+                        out.push('\n');
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+            // Cadena de texto o literal de carácter: se copian enteros.
+            if ch == '"' || ch == '\'' {
+                let delim = ch;
+                out.push(ch);
+                i += 1;
+                while i < c.len() {
+                    let d = c[i];
+                    out.push(d);
+                    i += 1;
+                    if d == '\\' && i < c.len() {
+                        out.push(c[i]);
+                        i += 1;
+                        continue;
+                    }
+                    if d == delim {
+                        break;
+                    }
+                }
+                continue;
+            }
+            out.push(ch);
+            i += 1;
+        }
+        out
+    }
+
+    #[test]
+    fn la_tool_de_compactacion_toma_el_umbral_del_catalogo() {
+        // El umbral por modelo llega al llamador por la tool MCP
+        // `compaction_epoch` (`mcp_ext.rs`).  Ese módulo no se puede aislar
+        // (arrastra medio crate), así que el **cableado** se comprueba sobre
+        // el código, como hace `contexto.rs` con el suyo.
+        //
+        // Las palabras se construyen en runtime para que este test no las
+        // lleve escritas en el fichero (si no, el grep se encontraría a sí
+        // mismo).
+        let llamadas: Vec<String> = vec![["model_catalog::umbral_", "compactacion"].concat()];
+        let codigo = sin_comentarios(include_str!("mcp_ext.rs"));
+        for llamada in &llamadas {
+            assert!(
+                codigo.contains(llamada.as_str()),
+                "la tool de compactación debe leer el umbral del CATÁLOGO (\'{}\' no aparece en el código de mcp_ext.rs)",
+                llamada
+            );
+        }
+    }
+
+    #[test]
     fn el_formatter_tiene_nombre_estable() {
         assert_eq!(ToolFormatter::OpenAiJson.as_str(), "openai_json");
         assert_eq!(ToolFormatter::AnthropicTools.as_str(), "anthropic_tools");

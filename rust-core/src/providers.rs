@@ -1129,6 +1129,18 @@ pub struct ChatDeps<'a> {
     pub retries: u32,
     /// Espera base entre reintentos (ms).  0 en tests (sin esperas).
     pub backoff_ms: u64,
+    /// La espera **entre reintentos** (patrón 5).
+    ///
+    /// MEDIDO (2026-11-28): el bucle de reintentos espera lo que dice el
+    /// proveedor (`Retry-After`), pero la espera era un `thread::sleep`
+    /// **clavado** ⇒ ningún test podía comprobar QUÉ se esperaba: los tests
+    /// usan `backoff_ms = 0` y `espera_reintento` devuelve cero, así que el
+    /// `retry_after` quedaba **enmascarado**.  Volver al backoff fijo no lo
+    /// detectaba ningún test.
+    ///
+    /// Con este hook el test **ve** las esperas; por defecto se duerme de
+    /// verdad ([`dormir_espera`]).
+    pub dormir: fn(Duration),
     /// El motor local (SEERE) **inyectado**.
     ///
     /// MEDIDO (2026-11-27, CI 46073417966): el cuerpo de la cascada usaba
@@ -1157,6 +1169,7 @@ impl<'a> ChatDeps<'a> {
             timeout: Duration::from_secs(DEFAULT_PROVIDER_TIMEOUT_SECS),
             retries: MAX_RETRIES,
             backoff_ms: 250,
+            dormir: dormir_espera,
             local: &SEERE_LOCAL,
         }
     }
@@ -1164,6 +1177,16 @@ impl<'a> ChatDeps<'a> {
     /// Sustituye el motor local (para tests offline y deterministas).
     pub fn with_local(mut self, local: &'a dyn LocalFallback) -> Self {
         self.local = local;
+        self
+    }
+
+    /// Sustituye la **espera** entre reintentos (patrón 5).
+    ///
+    /// MEDIDO (2026-11-28): sin este hook el "el bucle espera lo que dice el
+    /// proveedor" era indemostrable (la espera era un `thread::sleep`).
+    /// El test pasa una función que **apunta** las esperas y no duerme.
+    pub fn with_dormir(mut self, dormir: fn(Duration)) -> Self {
+        self.dormir = dormir;
         self
     }
 }
@@ -2631,6 +2654,372 @@ pub fn tools_openai_a_gemini(tools: &[Value]) -> Value {
     json!([{ "functionDeclarations": decls }])
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// El dialecto de Anthropic (patrón 5(c): `tool_formatter_type` POR MODELO)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// MEDIDO (2026-11-28): el catálogo (`model_catalog::ToolFormatter`) declara
+// `AnthropicTools` para `api.anthropic.com` y el catálogo de proveedores
+// tiene a Anthropic como proveedor de primera clase
+// (`provider_catalog.rs`, endpoint `https://api.anthropic.com/v1/messages`,
+// auth `anthropic`)… pero el cuerpo que se le mandaba era el de **OpenAI**
+// (`messages` con rol `system`, `tools: [{type:"function",function:{…}}]`,
+// `tool_choice: "auto"`) ⇒ la API de Anthropic lo rechaza con HTTP 400.
+//
+// O sea: el formateador **decía** una cosa y el código **hablaba** otra.
+// El catálogo manda (la API que habla es la fuente de verdad) ⇒ aquí se
+// implementa el dialecto de verdad: tools `{name, description, input_schema}`,
+// `system` **arriba** (no como mensaje), `tool_choice` como objeto y la
+// respuesta en `content: [{type:"text"|"tool_use"|"thinking"}]`.
+
+/// Tools en formato OpenAI → dialecto de Anthropic.
+///
+/// Anthropic NO usa el envoltorio `{type:"function",function:{…}}`: cada
+/// herramienta es `{name, description, input_schema}` y el `input_schema`
+/// tiene que ser un objeto JSON Schema (`type: "object"`).
+pub fn tools_openai_a_anthropic(tools: &[Value]) -> Value {
+    let mut out: Vec<Value> = Vec::new();
+    for t in tools {
+        // Acepta las dos formas: `{type,function:{…}}` y `{name,…}`.
+        let f = match t.get("function") {
+            Some(v) if v.is_object() => v.clone(),
+            _ => t.clone(),
+        };
+        let name = f
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let mut d = serde_json::Map::new();
+        d.insert("name".to_string(), json!(name));
+        if let Some(desc) = f.get("description").and_then(|x| x.as_str()) {
+            if !desc.trim().is_empty() {
+                d.insert("description".to_string(), json!(desc));
+            }
+        }
+        // `input_schema` es OBLIGATORIO en Anthropic: sin él, HTTP 400.
+        let schema = match f.get("parameters") {
+            Some(s) if s.is_object() => s.clone(),
+            Some(Value::String(s)) => serde_json::from_str::<Value>(s)
+                .ok()
+                .filter(|v| v.is_object())
+                .unwrap_or_else(|| json!({"type": "object", "properties": {}})),
+            _ => json!({"type": "object", "properties": {}}),
+        };
+        d.insert("input_schema".to_string(), schema);
+        out.push(Value::Object(d));
+    }
+    json!(out)
+}
+
+/// Bloques de contenido de Anthropic a partir del `content` de OpenAI.
+///
+/// OpenAI: `content` es un texto o una lista de partes (`{type:"text"}`,
+/// `{type:"image_url"}`).  Anthropic: `content` es una lista de bloques
+/// (`{type:"text"}`, `{type:"image",source:{…}}`).
+fn anthropic_bloques(contenido: &Value) -> Vec<Value> {
+    let mut bloques: Vec<Value> = Vec::new();
+    match contenido {
+        Value::String(s) => {
+            if !s.is_empty() {
+                bloques.push(json!({"type": "text", "text": s}));
+            }
+        }
+        Value::Array(partes) => {
+            for p in partes {
+                let tipo = p.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                match tipo {
+                    "text" | "input_text" | "output_text" => {
+                        if let Some(t) = p.get("text").and_then(|t| t.as_str()) {
+                            if !t.is_empty() {
+                                bloques.push(json!({"type": "text", "text": t}));
+                            }
+                        }
+                    }
+                    "image_url" => {
+                        // OpenAI manda la imagen como data URL; Anthropic la
+                        // quiere como bloque `image` con la fuente en base64.
+                        let url = p
+                            .pointer("/image_url/url")
+                            .and_then(|u| u.as_str())
+                            .unwrap_or("");
+                        if let Some((media, data)) = url.split_once(";base64,") {
+                            let media = media.trim_start_matches("data:");
+                            if !data.is_empty() {
+                                bloques.push(json!({
+                                    "type": "image",
+                                    "source": {"type": "base64", "media_type": media, "data": data}
+                                }));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+    bloques
+}
+
+/// Conversación en OpenAI → (mensajes, `system`) de Anthropic.
+///
+/// * El rol `system` **no es un mensaje** en Anthropic: va arriba, en el
+///   campo `system` de la petición.
+/// * El rol `tool` (resultado de una tool) es un mensaje **user** con un
+///   bloque `tool_result`.
+/// * El rol `assistant` con `tool_calls` lleva bloques `tool_use`.
+pub fn openai_a_anthropic_mensajes(msgs: &[Value]) -> (Vec<Value>, String) {
+    let mut mensajes: Vec<Value> = Vec::new();
+    let mut sistema: Vec<String> = Vec::new();
+    for m in msgs {
+        let rol = m.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+        let contenido = m.get("content").cloned().unwrap_or(Value::Null);
+        match rol {
+            "system" | "developer" => {
+                let texto = match &contenido {
+                    Value::String(s) => s.clone(),
+                    Value::Array(parts) => parts
+                        .iter()
+                        .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    _ => String::new(),
+                };
+                if !texto.trim().is_empty() {
+                    sistema.push(texto);
+                }
+            }
+            "tool" | "function" => {
+                // El resultado de una tool: bloque `tool_result` de un
+                // mensaje `user` (Anthropic no tiene el rol `tool`).
+                let id = m
+                    .get("tool_call_id")
+                    .and_then(|i| i.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let texto = match &contenido {
+                    Value::String(s) => s.clone(),
+                    _ => contenido.to_string(),
+                };
+                mensajes.push(json!({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": id,
+                        "content": texto,
+                    }]
+                }));
+            }
+            "assistant" => {
+                let mut bloques = anthropic_bloques(&contenido);
+                if let Some(tcs) = m.get("tool_calls").and_then(|t| t.as_array()) {
+                    for tc in tcs {
+                        let nombre = tc
+                            .pointer("/function/name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        if nombre.is_empty() {
+                            continue;
+                        }
+                        let argumentos = match tc.pointer("/function/arguments") {
+                            Some(Value::String(s)) => serde_json::from_str::<Value>(s)
+                                .ok()
+                                .unwrap_or(Value::Object(serde_json::Map::new())),
+                            Some(v) => v.clone(),
+                            None => Value::Object(serde_json::Map::new()),
+                        };
+                        bloques.push(json!({
+                            "type": "tool_use",
+                            "id": tc.get("id").and_then(|i| i.as_str()).unwrap_or(""),
+                            "name": nombre,
+                            "input": argumentos,
+                        }));
+                    }
+                }
+                if !bloques.is_empty() {
+                    mensajes.push(json!({"role": "assistant", "content": bloques}));
+                }
+            }
+            _ => {
+                // `user` (y cualquier rol desconocido): texto/imagen.
+                let bloques = anthropic_bloques(&contenido);
+                if !bloques.is_empty() {
+                    mensajes.push(json!({"role": "user", "content": bloques}));
+                }
+            }
+        }
+    }
+    (mensajes, sistema.join("\n\n"))
+}
+
+/// El cuerpo de la API de **Anthropic** (Messages).
+///
+/// `max_tokens` es **obligatorio** en Anthropic (a diferencia de OpenAI).
+///
+/// El `system` sale de la **conversación** (el mensaje de rol `system` se
+/// saca arriba), igual que en el camino de OpenAI, que tampoco manda el
+/// `system_prompt` aparte: así el prompt del sistema no va duplicado.
+pub fn cuerpo_anthropic(
+    modelo: &str,
+    max_tokens: u32,
+    temperatura: f64,
+    msgs: &[Value],
+    tools: &[Value],
+) -> Value {
+    let (mensajes, sys) = openai_a_anthropic_mensajes(msgs);
+    let mut body = json!({
+        "model": modelo,
+        "max_tokens": max_tokens,
+        "messages": mensajes,
+        "temperature": temperatura,
+    });
+    if !sys.trim().is_empty() {
+        body["system"] = json!(sys);
+    }
+    if !tools.is_empty() {
+        body["tools"] = tools_openai_a_anthropic(tools);
+        // Anthropic NO acepta `"auto"`: `tool_choice` es un objeto.
+        body["tool_choice"] = json!({"type": "auto"});
+    }
+    body
+}
+
+/// Parsea la respuesta de Anthropic (`content` es una lista de bloques).
+///
+/// * `text` ⇒ el texto de la respuesta.
+/// * `tool_use` ⇒ una tool call (con su `input` como argumentos).
+/// * `thinking` ⇒ el razonamiento.
+/// * `stop_reason` ⇒ el `finish_reason` (`end_turn`, `tool_use`,
+///   `max_tokens`…).
+/// * `usage.input_tokens` / `usage.output_tokens` ⇒ los tokens.
+pub fn parse_anthropic_reply(provider: &str, body: &str) -> Result<ParsedReply, ProviderError> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return Err(ProviderError::Parse {
+            provider: provider.to_string(),
+            detail: "respuesta HTTP vacía".to_string(),
+        });
+    }
+    let v: Value = match serde_json::from_str::<Value>(trimmed) {
+        Ok(v) => v,
+        Err(_) => {
+            // Algunos proxies devuelven texto plano.
+            return Ok(ParsedReply {
+                content: trimmed.to_string(),
+                ..Default::default()
+            });
+        }
+    };
+    // La API de Anthropic devuelve los errores como `{"type":"error",…}`.
+    if v.get("type").and_then(|t| t.as_str()) == Some("error") {
+        let msg = v
+            .pointer("/error/message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("error del proveedor");
+        return Err(ProviderError::Parse {
+            provider: provider.to_string(),
+            detail: format!("la respuesta trae 'error': {}", msg),
+        });
+    }
+    // Un proxy que hable OpenAI por debajo de Anthropic: se parsea como
+    // OpenAI (el `content` no es una lista de bloques).
+    let bloques = match v.get("content").and_then(|c| c.as_array()) {
+        Some(a) => a.clone(),
+        None => return parse_provider_reply(provider, trimmed),
+    };
+    let mut texto = String::new();
+    let mut razonamiento = String::new();
+    let mut tool_calls: Vec<ParsedToolCall> = Vec::new();
+    for b in &bloques {
+        match b.get("type").and_then(|t| t.as_str()).unwrap_or("") {
+            "text" => {
+                let t = b.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                if !t.is_empty() {
+                    if !texto.is_empty() {
+                        texto.push('\n');
+                    }
+                    texto.push_str(t);
+                }
+            }
+            "thinking" => {
+                let t = b.get("thinking").and_then(|t| t.as_str()).unwrap_or("");
+                if !t.is_empty() {
+                    razonamiento.push_str(t);
+                }
+            }
+            "tool_use" => {
+                let name = b
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if name.is_empty() {
+                    continue;
+                }
+                let argumentos = b
+                    .get("input")
+                    .cloned()
+                    .unwrap_or(Value::Object(serde_json::Map::new()));
+                tool_calls.push(ParsedToolCall {
+                    id: b
+                        .get("id")
+                        .and_then(|i| i.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    name,
+                    arguments: argumentos,
+                });
+            }
+            _ => {}
+        }
+    }
+    let (limpio, think_tag) = split_think_tags(&texto);
+    if razonamiento.trim().is_empty() {
+        razonamiento = think_tag;
+    }
+    let usage = v.get("usage").cloned().unwrap_or(Value::Null);
+    let prompt_tokens = usage
+        .get("input_tokens")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let completion_tokens = usage
+        .get("output_tokens")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let tokens_used = usage
+        .get("total_tokens")
+        .and_then(|x| x.as_u64())
+        .unwrap_or_else(|| prompt_tokens.saturating_add(completion_tokens));
+    let finish_reason = v
+        .get("stop_reason")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    if limpio.trim().is_empty() && razonamiento.trim().is_empty() && tool_calls.is_empty() {
+        return Err(ProviderError::Parse {
+            provider: provider.to_string(),
+            detail: format!("respuesta sin contenido: {}", truncar(trimmed, 200)),
+        });
+    }
+    Ok(ParsedReply {
+        content: limpio,
+        reasoning: razonamiento,
+        tokens_used,
+        prompt_tokens,
+        completion_tokens,
+        tool_calls,
+        finish_reason,
+    })
+}
+
 /// Nombres de las llamadas de función de un turno (partes `functionCall`).
 fn nombres_function_call(parts: &[Value]) -> Vec<String> {
     parts
@@ -3394,6 +3783,21 @@ pub fn execute_chat_con_tools_with(
                 auth_type: "goog_key".to_string(),
                 body,
             }
+        } else if fmt_tools == crate::model_catalog::ToolFormatter::AnthropicTools {
+            // Patrón 5(c): la API que habla MANDA.  Anthropic tiene su
+            // dialecto propio (`system` arriba, `tools` con `input_schema`,
+            // `tool_choice` como objeto) ⇒ el cuerpo de OpenAI lo rechaza
+            // con HTTP 400.  Antes este camino no existía: el catálogo
+            // declaraba `AnthropicTools` y el código mandaba el JSON de
+            // OpenAI (el formateador decía una cosa y el código otra).
+            let body = cuerpo_anthropic(&p.model, capped_max_tokens, 0.3, &msgs, &tools_a_enviar);
+            LlmRequest {
+                endpoint: p.endpoint.clone(),
+                model: p.model.clone(),
+                api_key: key.clone(),
+                auth_type: p.auth_type.clone(),
+                body,
+            }
         } else {
             let mut payload = json!({
                 "model": p.model,
@@ -3471,7 +3875,7 @@ pub fn execute_chat_con_tools_with(
                             // Patrón 5: si el proveedor dijo cuánto esperar
                             // (`Retry-After`), se espera ESO: reintentar
                             // antes de su hora garantiza otro 429.
-                            dormir_espera(provider_retry::espera_reintento(
+                            (deps.dormir)(provider_retry::espera_reintento(
                                 deps.backoff_ms,
                                 attempt,
                                 e.retry_after(),
@@ -3486,6 +3890,11 @@ pub fn execute_chat_con_tools_with(
                         // `choices` ⇒ sin esta rama la respuesta se leería
                         // como vacía.
                         parse_gemini_nativo(&p.id, &resp.body)
+                    } else if fmt_tools == crate::model_catalog::ToolFormatter::AnthropicTools {
+                        // Patrón 5(c): Anthropic contesta con `content` (una
+                        // lista de bloques), no con `choices` ⇒ sin esta
+                        // rama la respuesta se leería como vacía.
+                        parse_anthropic_reply(&p.id, &resp.body)
                     } else {
                         parse_provider_reply(&p.id, &resp.body)
                     } {
@@ -3567,7 +3976,7 @@ pub fn execute_chat_con_tools_with(
                     if e.retryable() && attempt < deps.retries {
                         attempt += 1;
                         // Patrón 5: el proveedor manda sobre el backoff.
-                        dormir_espera(provider_retry::espera_reintento(
+                        (deps.dormir)(provider_retry::espera_reintento(
                             deps.backoff_ms,
                             attempt,
                             e.retry_after(),
@@ -3586,16 +3995,21 @@ pub fn execute_chat_con_tools_with(
             // bucle.  v16: antes el status se perdía y esto nunca pasaba.
             if let Some(st) = e.status() {
                 if st == 429 {
-                    crate::quota_guard::registrar_error_cuota(
+                    // Patrón 5: el `retry_after` ESTRUCTURADO (cabecera
+                    // `Retry-After`) se pasa al quota_guard: antes se
+                    // perdía y la pausa se caía a un cooldown a ciegas.
+                    crate::quota_guard::registrar_error_cuota_con_retry_after(
                         &p.id,
                         st,
                         &format!("{} rate limit", e.detail()),
+                        e.retry_after(),
                     );
                 } else if st == 402 {
-                    crate::quota_guard::registrar_error_cuota(
+                    crate::quota_guard::registrar_error_cuota_con_retry_after(
                         &p.id,
                         st,
                         &format!("{} insufficient credit", e.detail()),
+                        e.retry_after(),
                     );
                 }
             }
@@ -3661,7 +4075,10 @@ pub fn execute_chat_con_tools_with(
 ///
 /// Patrón 5: la espera la calcula [`provider_retry::espera_reintento`], que
 /// tiene en cuenta el `retry_after` que pidió el proveedor.
-fn dormir_espera(espera: Duration) {
+///
+/// Es el valor por defecto de [`ChatDeps::dormir`]: los tests lo sustituyen
+/// por una función que **apunta** la espera en vez de dormir.
+pub fn dormir_espera(espera: Duration) {
     if espera.is_zero() {
         return;
     }

@@ -15,8 +15,11 @@ use std::time::Duration;
 /// Transporte de mentira: cada endpoint tiene su cola de respuestas.
 #[derive(Clone)]
 pub struct MockTransport {
-    /// Endpoint → cola de respuestas `(status, cuerpo)`.
-    por_endpoint: Arc<Mutex<HashMap<String, Vec<(u16, String)>>>>,
+    /// Endpoint → cola de respuestas `(status, cuerpo, retry_after)`.
+    ///
+    /// El `retry_after` es el de la **cabecera** `Retry-After` (patrón 5):
+    /// el caso real en el que el cuerpo del error **no** lo trae.
+    por_endpoint: Arc<Mutex<HashMap<String, Vec<(u16, String, Option<u64>)>>>>,
     /// Peticiones registradas: `(endpoint, cuerpo, timeout)`.
     llamadas: Arc<Mutex<Vec<(String, Value, Duration)>>>,
     /// Endpoints que "se caen" (error de transporte).
@@ -42,8 +45,25 @@ impl MockTransport {
         let mut m = self.por_endpoint.lock().unwrap();
         let cola = m.entry(endpoint.to_string()).or_default();
         for _ in 0..n {
-            cola.push((status, cuerpo.to_string()));
+            cola.push((status, cuerpo.to_string(), None));
         }
+    }
+
+    /// Programa UNA respuesta con el `retry_after` de la **cabecera**
+    /// `Retry-After` (patrón 5).
+    ///
+    /// MEDIDO (2026-11-28): el `retry_after` de la cabecera es el caso real:
+    /// el cuerpo del error muchas veces **no** lo repite.
+    pub fn responde_con_retry_after(
+        &self,
+        endpoint: &str,
+        status: u16,
+        cuerpo: &str,
+        retry_after: u64,
+    ) {
+        let mut m = self.por_endpoint.lock().unwrap();
+        let cola = m.entry(endpoint.to_string()).or_default();
+        cola.push((status, cuerpo.to_string(), Some(retry_after)));
     }
 
     /// El endpoint se cae (error de transporte).
@@ -115,12 +135,16 @@ impl LlmTransport for MockTransport {
                 detail: "sin respuestas disponibles".to_string(),
             });
         }
-        let (status, body) = if cola.len() == 1 {
+        let (status, body, retry_after) = if cola.len() == 1 {
             cola[0].clone()
         } else {
             cola.remove(0)
         };
-        Ok(LlmResponse::new(status, body))
+        Ok(LlmResponse {
+            status,
+            body,
+            retry_after,
+        })
     }
 
     fn name(&self) -> &'static str {

@@ -29,8 +29,9 @@ mod llm_mock;
 
 use self::llm_mock::{deps, prov, vault, MockTransport, KEY, OK};
 use megadaemon_core::providers::{
-    execute_chat_with, parse_provider_error, parse_provider_error_con_retry, parse_provider_reply,
-    redact_secret, truncar, validar_endpoint, ChatResult, ProviderEntry, MAX_TOKENS_CAP,
+    execute_chat_con_tools_with, execute_chat_with, parse_anthropic_reply, parse_provider_error,
+    parse_provider_error_con_retry, parse_provider_reply, redact_secret, truncar, validar_endpoint,
+    ChatResult, ProviderEntry, MAX_TOKENS_CAP,
 };
 use serde_json::Value;
 use std::time::Duration;
@@ -1032,5 +1033,377 @@ fn la_traza_dice_el_tier_del_proveedor() {
             .any(|l| l.contains("p1") && l.contains("tier paid")),
         "la traza debe decir el tier: {:?}",
         res.provider_trace
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Patrón 5: el bucle ESPERA lo que dice el proveedor, y el proveedor ANTHROPIC
+// habla SU dialecto (el catálogo lo declaraba, el código no lo speakaba)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Las esperas que el bucle de reintentos pidió (patrón 5).
+///
+/// MEDIDO (2026-11-28): antes la espera era un `thread::sleep` clavado y los
+/// tests usaban `backoff_ms = 0` ⇒ `espera_reintento` devolvía CERO y el
+/// `retry_after` del proveedor quedaba **enmascarado**: ningún test podía
+/// detectar que el bucle hubiera vuelto al backoff fijo.
+static ESPERAS: std::sync::Mutex<Vec<Duration>> = std::sync::Mutex::new(Vec::new());
+
+/// Hook de espera: **apunta** en vez de dormir.
+fn registrar_espera(espera: Duration) {
+    ESPERAS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .push(espera);
+}
+
+/// Las esperas registradas (copia).
+fn esperas() -> Vec<Duration> {
+    ESPERAS.lock().unwrap_or_else(|p| p.into_inner()).clone()
+}
+
+/// Ahora, en segundos Unix (para comparar con un `reset_at`).
+fn ahora_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Un proveedor de Anthropic con su `auth_type` real.
+fn prov_anthropic() -> ProviderEntry {
+    let mut p = prov(
+        "anthropic",
+        "https://api.anthropic.com/v1/messages",
+        "claude-sonnet-5",
+        "paid",
+    );
+    p.auth_type = "anthropic".to_string();
+    p
+}
+
+/// Respuesta de Anthropic (dialecto `content` con bloques).
+fn cuerpo_anthropic_ok() -> String {
+    serde_json::json!({
+        "id": "msg_01",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "PONG"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 11, "output_tokens": 3},
+    })
+    .to_string()
+}
+
+#[test]
+fn el_bucle_espera_lo_que_dice_el_proveedor() {
+    // MEDIDO (2026-11-28): el `retry_after` viaja en el error, pero la
+    // espera era invisible ⇒ el "esperar lo que dice el proveedor" no lo
+    // fijaba NINGÚN test.  Con el hook de espera sí.
+    ESPERAS.lock().unwrap_or_else(|p| p.into_inner()).clear();
+    let t = MockTransport::new();
+    t.responde_n(
+        "https://p1.test/v1",
+        429,
+        r#"{"error":{"message":"rate limit reached. Please try again in 42 seconds"}}"#,
+        5,
+    );
+    t.responde("https://p2.test/v1", 200, OK);
+    let v = vault(
+        vec![
+            prov("p1", "https://p1.test/v1", "m1", "free"),
+            prov("p2", "https://p2.test/v1", "m2", "free"),
+        ],
+        "p1",
+    );
+    let mut d = deps(&v, &t);
+    d.retries = 1;
+    // Backoff fijo de 250 ms: si el bucle lo usara, esperaría 500 ms.
+    d.backoff_ms = 250;
+    d.dormir = registrar_espera;
+    let res = execute_chat_with("hola", Some("p1"), None, None, 128, &d);
+    let esperas = esperas();
+    assert_eq!(esperas.len(), 1, "hubo que esperar una vez: {:?}", esperas);
+    assert_eq!(
+        esperas[0],
+        Duration::from_secs(42),
+        "el bucle debe esperar lo que dice el proveedor (42 s), no el backoff fijo"
+    );
+    assert_eq!(res.model_id, "p2", "tras el 429 se pasa al siguiente");
+}
+
+#[test]
+fn un_401_no_espera_nada() {
+    // Un 4xx que no se reintenta tampoco se espera: dormir para nada
+    // retrasa al usuario sin motivo.
+    ESPERAS.lock().unwrap_or_else(|p| p.into_inner()).clear();
+    let t = MockTransport::new();
+    t.responde_n(
+        "https://p1.test/v1",
+        401,
+        r#"{"error":{"message":"nope"}}"#,
+        5,
+    );
+    t.responde("https://p2.test/v1", 200, OK);
+    let v = vault(
+        vec![
+            prov("p1", "https://p1.test/v1", "m1", "free"),
+            prov("p2", "https://p2.test/v1", "m2", "free"),
+        ],
+        "p1",
+    );
+    let mut d = deps(&v, &t);
+    d.retries = 2;
+    d.backoff_ms = 250;
+    d.dormir = registrar_espera;
+    let res = execute_chat_with("hola", Some("p1"), None, None, 128, &d);
+    assert!(
+        esperas().is_empty(),
+        "un 401 no se reintenta ⇒ no se espera: {:?}",
+        esperas()
+    );
+    assert_eq!(res.model_id, "p2");
+}
+
+#[test]
+fn el_retry_after_de_la_cabecera_llega_a_la_pausa_de_cuota() {
+    // MEDIDO (2026-11-28): el `retry_after` de la CABECERA se perdía al
+    // llegar al quota_guard (sólo se pasaba el TEXTO del error) ⇒ la pausa
+    // se caía a un cooldown a ciegas en vez de esperar lo que pidió el
+    // proveedor.
+    let cuerpo = "rate limit reached";
+    megadaemon_core::quota_guard::registrar_error_cuota_con_retry_after(
+        "p5-cabecera",
+        429,
+        cuerpo,
+        Some(42),
+    )
+    .expect("se registra el 429");
+    let estado = megadaemon_core::quota_guard::estado(Some("p5-cabecera"));
+    let ventana = estado
+        .first()
+        .and_then(|e| e.ventanas.iter().find(|v| v.nombre == "cupo"))
+        .expect("hay ventana de cuota");
+    let reset_at = ventana
+        .reset_at
+        .expect("el reset_at de la cabecera debe llegar");
+    let delta = reset_at.saturating_sub(ahora_unix());
+    assert!(
+        (40..=45).contains(&delta),
+        "la pausa debe durar lo que dijo el proveedor (42 s), no el cooldown: {} s",
+        delta
+    );
+
+    // Y SIN `retry_after` estructurado no se inventa un reset_at (el
+    // cooldown acotado es lo que hay).
+    megadaemon_core::quota_guard::registrar_error_cuota("p5-sin-cabecera", 429, cuerpo)
+        .expect("se registra el 429");
+    let estado2 = megadaemon_core::quota_guard::estado(Some("p5-sin-cabecera"));
+    let ventana2 = estado2
+        .first()
+        .and_then(|e| e.ventanas.iter().find(|v| v.nombre == "cupo"))
+        .expect("hay ventana de cuota");
+    assert!(
+        ventana2.reset_at.is_none(),
+        "sin `retry_after` no se inventa un reset_at: {:?}",
+        ventana2.reset_at
+    );
+}
+
+#[test]
+fn la_cascada_pasa_el_retry_after_de_la_cabecera_a_la_pausa() {
+    // MEDIDO (2026-11-28): el `retry_after` de la CABECERA se perdía al
+    // llegar al quota_guard (sólo se pasaba el TEXTO del error) ⇒ la pausa
+    // se caía a un cooldown a ciegas.  Aquí el proveedor dice "42 s" en la
+    // cabecera y el cuerpo NO lo repite: la cascada tiene que arrastrarlo.
+    let t = MockTransport::new();
+    // El cuerpo NO menciona el tiempo de espera.
+    t.responde_con_retry_after(
+        "https://p1.test/v1",
+        429,
+        r#"{"error":{"message":"rate limit reached"}}"#,
+        42,
+    );
+    t.responde("https://p2.test/v1", 200, OK);
+    let v = vault(
+        vec![
+            prov("p5-cascada", "https://p1.test/v1", "m1", "free"),
+            prov("p2", "https://p2.test/v1", "m2", "free"),
+        ],
+        "p5-cascada",
+    );
+    let mut d = deps(&v, &t);
+    d.retries = 0;
+    d.dormir = registrar_espera;
+    let _ = execute_chat_with("hola", Some("p5-cascada"), None, None, 128, &d);
+    let estado = megadaemon_core::quota_guard::estado(Some("p5-cascada"));
+    let ventana = estado
+        .first()
+        .and_then(|e| e.ventanas.iter().find(|v| v.nombre == "cupo"))
+        .expect("la cascada debe dejar al proveedor en pausa");
+    let reset_at = ventana
+        .reset_at
+        .expect("el reset_at debe venir de la cabecera");
+    let delta = reset_at.saturating_sub(ahora_unix());
+    assert!(
+        (40..=45).contains(&delta),
+        "la pausa debe durar los 42 s que pidió el proveedor: {} s",
+        delta
+    );
+}
+
+#[test]
+fn un_motor_offline_no_recibe_tools_estructuradas() {
+    // Patrón 5(c): los motores **offline** no hablan tool-calling ⇒ sus
+    // tools van como TEXTO en el prompt.  Mandárselas estructuradas gasta
+    // contexto explicándolas sin que el motor pueda usarlas.
+    let t = MockTransport::new();
+    t.responde("https://p1.test/v1", 200, OK);
+    let v = vault(
+        vec![prov("p1", "https://p1.test/v1", "local-seere", "free")],
+        "p1",
+    );
+    let d = deps(&v, &t);
+    let tools = vec![serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": "leer",
+            "description": "lee un fichero",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    })];
+    let res = execute_chat_con_tools_with("hola", Some("p1"), None, None, 128, &tools, None, &d);
+    let cuerpo = t
+        .cuerpo_enviado("https://p1.test/v1")
+        .expect("se llamó al proveedor");
+    assert!(
+        cuerpo.get("tools").is_none(),
+        "un motor offline NO recibe tools estructuradas: {}",
+        cuerpo
+    );
+    let system = cuerpo["messages"][0]["content"].as_str().unwrap_or("");
+    assert!(
+        system.contains("leer"),
+        "las tools van como TEXTO en el prompt: {}",
+        system
+    );
+    assert!(
+        res.provider_trace
+            .iter()
+            .any(|l| l.contains("tools como TEXTO")),
+        "la traza lo dice: {:?}",
+        res.provider_trace
+    );
+}
+
+#[test]
+fn el_proveedor_anthropic_habla_su_dialecto() {
+    // MEDIDO (2026-11-28): el catálogo declara `AnthropicTools` para
+    // `api.anthropic.com` y Anthropic es proveedor de primera clase, pero
+    // el cuerpo que se le mandaba era el de **OpenAI** (`messages` con rol
+    // `system`, `tools: [{type:"function",…}]`, `tool_choice: "auto"`) ⇒
+    // la API lo rechaza con HTTP 400.  El formateador decía una cosa y el
+    // código otra.
+    let t = MockTransport::new();
+    t.responde(
+        "https://api.anthropic.com/v1/messages",
+        200,
+        &cuerpo_anthropic_ok(),
+    );
+    let v = vault(vec![prov_anthropic()], "anthropic");
+    let d = deps(&v, &t);
+    let tools = vec![serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": "leer",
+            "description": "lee un fichero",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}
+        }
+    })];
+    let res = execute_chat_con_tools_with(
+        "hola",
+        Some("anthropic"),
+        None,
+        Some("eres un agente"),
+        128,
+        &tools,
+        None,
+        &d,
+    );
+    let cuerpo = t
+        .cuerpo_enviado("https://api.anthropic.com/v1/messages")
+        .expect("se llamó a anthropic");
+    // El `system` va ARRIBA (en Anthropic no es un mensaje).
+    assert_eq!(
+        cuerpo["system"], "eres un agente",
+        "el system de Anthropic va arriba: {}",
+        cuerpo
+    );
+    // Y las tools van con el dialecto de Anthropic.
+    let tool = &cuerpo["tools"][0];
+    assert_eq!(tool["name"], "leer");
+    assert!(
+        tool.get("function").is_none(),
+        "las tools NO van en el envoltorio de OpenAI: {}",
+        tool
+    );
+    assert!(
+        tool["input_schema"]["properties"]["path"].is_object(),
+        "el schema va en `input_schema`: {}",
+        tool
+    );
+    assert_eq!(
+        cuerpo["tool_choice"]["type"], "auto",
+        "`tool_choice` de Anthropic es un objeto: {}",
+        cuerpo["tool_choice"]
+    );
+    // Y la respuesta se lee con el dialecto de Anthropic.
+    assert_eq!(res.reply, "PONG", "la respuesta se lee de `content`");
+    assert!(!res.fallback_used);
+}
+
+#[test]
+fn la_respuesta_de_anthropic_se_lee_con_su_dialecto() {
+    // `content` es una lista de BLOQUES: `text`, `tool_use` y `thinking`.
+    let cuerpo = serde_json::json!({
+        "content": [
+            {"type": "thinking", "thinking": "voy a leerlo"},
+            {"type": "text", "text": "Voy a leerlo."},
+            {"type": "tool_use", "id": "toolu_1", "name": "leer", "input": {"path": "/tmp/x"}}
+        ],
+        "stop_reason": "tool_use",
+        "usage": {"input_tokens": 12, "output_tokens": 7},
+    })
+    .to_string();
+    let r = parse_anthropic_reply("anthropic", &cuerpo).expect("se parsea");
+    assert_eq!(r.content, "Voy a leerlo.");
+    assert_eq!(r.reasoning, "voy a leerlo");
+    assert_eq!(
+        r.tool_calls.len(),
+        1,
+        "el bloque `tool_use` es una tool call"
+    );
+    assert_eq!(r.tool_calls[0].name, "leer");
+    assert_eq!(r.tool_calls[0].arguments["path"], "/tmp/x");
+    assert_eq!(r.finish_reason, "tool_use");
+    assert_eq!(r.prompt_tokens, 12);
+    assert_eq!(r.completion_tokens, 7);
+    assert_eq!(r.tokens_used, 19);
+}
+
+#[test]
+fn un_error_de_anthropic_no_se_confunde_con_una_respuesta() {
+    // La API de Anthropic devuelve los errores como `{"type":"error",…}`.
+    let cuerpo = serde_json::json!({
+        "type": "error",
+        "error": {"type": "invalid_request_error", "message": "max_tokens is required"}
+    })
+    .to_string();
+    let e = parse_anthropic_reply("anthropic", &cuerpo).expect_err("un error no es una respuesta");
+    assert_eq!(e.kind(), "parse");
+    assert!(
+        e.detail().contains("max_tokens is required"),
+        "el error dice qué pasó: {}",
+        e.detail()
     );
 }

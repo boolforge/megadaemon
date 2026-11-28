@@ -291,10 +291,26 @@ pub fn parsear_error_cuota(cuerpo: &str) -> Option<ErrorCuota> {
 ///
 /// `status` es el código HTTP (429, 402, 403...).
 pub fn registrar_error_cuota(provider: &str, status: u16, cuerpo: &str) -> Option<ErrorCuota> {
+    registrar_error_cuota_con_retry_after(provider, status, cuerpo, None)
+}
+
+/// Como [`registrar_error_cuota`], pero con el `retry_after` **estructurado**
+/// (el que dice el proveedor en la cabecera `Retry-After`).
+///
+/// MEDIDO (2026-11-28): el `retry_after` de la **cabecera** es más fiable
+/// que el del texto del cuerpo (el cuerpo es texto libre y muchas veces no
+/// lo trae) ⇒ si viene estructurado, MANDA.  Antes se perdía: la pausa se
+/// caía al cooldown a ciegas en vez de esperar lo que pidió el proveedor.
+pub fn registrar_error_cuota_con_retry_after(
+    provider: &str,
+    status: u16,
+    cuerpo: &str,
+    retry_after: Option<u64>,
+) -> Option<ErrorCuota> {
     let e = parsear_error_cuota(cuerpo)?;
-    let reset_at = e.reset_at.or_else(|| {
-        e.retry_after.map(|s| ahora() + s)
-    });
+    // La cabecera manda sobre el texto del cuerpo.
+    let retry_after = retry_after.or(e.retry_after);
+    let reset_at = e.reset_at.or_else(|| retry_after.map(|s| ahora() + s));
     let pct = if status == 429 { 100.0 } else { umbral_pausa() };
     let ventana = Ventana {
         nombre: "cupo".to_string(),
@@ -717,6 +733,62 @@ mod tests {
     fn no_confunde_un_error_normal() {
         assert!(parsear_error_cuota("connection reset by peer").is_none());
         assert!(parsear_error_cuota("model not found").is_none());
+    }
+
+    // Patrón 5: el `retry_after` ESTRUCTURADO (cabecera `Retry-After`) tiene
+    // que llegar a la pausa: antes sólo se pasaba el TEXTO del error.
+
+    #[test]
+    fn el_retry_after_estructurado_llega_a_la_pausa() {
+        // El cuerpo NO trae el `retry_after` (sólo la cabecera): sin el dato
+        // estructurado la pausa se caía a un cooldown a ciegas.
+        registrar_error_cuota_con_retry_after("qg-cabecera", 429, "rate limit reached", Some(42))
+            .expect("se registra");
+        let estado = estado(Some("qg-cabecera"));
+        let ventana = estado
+            .first()
+            .and_then(|e| e.ventanas.iter().find(|v| v.nombre == "cupo"))
+            .expect("hay ventana de cuota");
+        let reset_at = ventana.reset_at.expect("el reset_at de la cabecera llega");
+        let delta = reset_at.saturating_sub(ahora());
+        assert!(
+            (40..=45).contains(&delta),
+            "la pausa dura lo que dijo el proveedor (42 s), no el cooldown: {} s",
+            delta
+        );
+    }
+
+    #[test]
+    fn sin_retry_after_no_se_inventa_un_reset() {
+        registrar_error_cuota("qg-sin-cabecera", 429, "rate limit reached").expect("se registra");
+        let estado = estado(Some("qg-sin-cabecera"));
+        let ventana = estado
+            .first()
+            .and_then(|e| e.ventanas.iter().find(|v| v.nombre == "cupo"))
+            .expect("hay ventana de cuota");
+        assert!(
+            ventana.reset_at.is_none(),
+            "sin `retry_after` no se inventa un reset_at: {:?}",
+            ventana.reset_at
+        );
+    }
+
+    #[test]
+    fn el_reset_explicito_manda_sobre_el_retry_after() {
+        // "resets at <epoch>" es más preciso que un `retry_after`: manda.
+        registrar_error_cuota_con_retry_after(
+            "qg-reset",
+            429,
+            "rate limit reached; resets at 1795130605",
+            Some(42),
+        )
+        .expect("se registra");
+        let estado = estado(Some("qg-reset"));
+        let ventana = estado
+            .first()
+            .and_then(|e| e.ventanas.iter().find(|v| v.nombre == "cupo"))
+            .expect("hay ventana de cuota");
+        assert_eq!(ventana.reset_at, Some(1795130605));
     }
 
     #[test]
