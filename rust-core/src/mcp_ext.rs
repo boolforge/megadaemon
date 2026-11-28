@@ -271,7 +271,8 @@ pub fn tool_definitions() -> Value {
                         "session_id": { "type": "string", "description": "Id de la sesión" },
                         "mensajes": { "type": "array", "description": "Historial: [{'rol':'user','contenido':'...'}]", "items": { "type": "object" } },
                         "resumen": { "type": "string", "description": "Resumen con el que se abre la epoch nueva" },
-                        "presupuesto_chars": { "type": "integer", "description": "Presupuesto de la vista viva: si no se pasa, se compacta siempre" },
+                        "presupuesto_chars": { "type": "integer", "description": "Presupuesto de la vista viva: si no se pasa, se usa el umbral DEL MODELO (catálogo) y, si tampoco hay modelo, se compacta siempre" },
+                        "modelo": { "type": "string", "description": "Modelo de la sesión: su umbral de compactación sale del catálogo (patrón 5b)" },
                         "epoch": { "type": "integer", "description": "Epoch a la que revertir" }
                     }
                 }
@@ -2977,10 +2978,19 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                 }
                 // Si hay resumen y presupuesto, se compacta (o se compacta
                 // siempre si no hay presupuesto: 0 = sin limite).
-                let presupuesto = args
-                    .get("presupuesto_chars")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as usize;
+                // Patrón 5(b) (MEDIDO 2026-11-28): el umbral de
+                // compactación es POR MODELO y sale del CATÁLOGO, no de
+                // una constante hardcodeada en el llamador.  Si el
+                // llamador no pasa presupuesto y dice el modelo, se usa
+                // el suyo; si no, 0 = sin límite (se compacta siempre).
+                let modelo = args.get("modelo").and_then(|v| v.as_str()).unwrap_or("");
+                let presupuesto = match args.get("presupuesto_chars").and_then(|v| v.as_u64()) {
+                    Some(v) => v as usize,
+                    None if !modelo.trim().is_empty() => {
+                        crate::model_catalog::umbral_compactacion(modelo)
+                    }
+                    None => 0,
+                };
                 let compactado = if resumen.is_empty() {
                     None
                 } else {
@@ -2990,6 +3000,12 @@ pub fn dispatch(name: &str, args: &Value) -> Option<Value> {
                     "epochs" => Ok(json!({
                         "session_id": h.session_id,
                         "current_epoch": h.current_epoch,
+                        "presupuesto_chars": presupuesto,
+                        "umbral_del_modelo": if modelo.trim().is_empty() {
+                            Value::Null
+                        } else {
+                            json!(crate::model_catalog::umbral_compactacion(modelo))
+                        },
                         "epochs": h.epochs(),
                         "compactado": compactado.map(|c| json!({
                             "epoch_nueva": c.epoch_nueva,

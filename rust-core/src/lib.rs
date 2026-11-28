@@ -154,6 +154,7 @@ pub mod plugin_data;
 pub mod power_policy;
 pub mod price_table;
 pub mod profile_analysis;
+pub mod model_catalog;
 pub mod provider_catalog;
 pub mod provider_retry;
 pub mod providers;

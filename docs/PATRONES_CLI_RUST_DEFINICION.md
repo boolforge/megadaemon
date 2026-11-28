@@ -197,7 +197,7 @@ al fallar un proveedor:
 3. `retry_after` del proveedor se **parsea** y se usa, no se ignora.
 4. Los umbrales por modelo se leen del catálogo, no están hardcodeados.
 
-**Estado**: **PARCIAL** ⇒ el punto (3) ya está **HECHO**.
+**Estado**: **HECHO** ⇒ los puntos (1), (2), (3), (b) y (c) están hechos.
 * La tipificación de errores **existe** (`ProviderError` con 7 variantes) y
   el `reset_at` de cuota **existe** (`quota_guard::evaluar_pausa`).
 * **HECHO (2026-11-28)**: el `retry_after` **viaja en el tipo de error**.
@@ -214,8 +214,22 @@ al fallar un proveedor:
     (`espera_reintento`), con tope de 120 s; antes usaba un backoff fijo de
     250 ms y reintentaba **antes de tiempo** (⇒ otro 429).
   * La traza dice cuánto pidió esperar: `p1 => HTTP 429 (...) (retry_after 42s)`.
-* **FALTA**: (b) `compaction_thresholds` por modelo; (c) `tool_formatter_type`
-  por modelo.
+* **HECHO (2026-11-28)**: (b) `compaction_thresholds` por modelo y (c)
+  `tool_formatter_type` por modelo.
+  * **nuevo `rust-core/src/model_catalog.rs`** (7 tests): el perfil de un
+    modelo son **datos**, no constantes en el llamador:
+    `tool_formatter(modelo, endpoint)` (la API que habla manda; los
+    motores offline no hablan tool-calling ⇒ sus tools van como TEXTO) y
+    `umbral_compactacion(modelo)` (por familia de modelo; el defecto es
+    el presupuesto que ya cabía en el proveedor más estricto).
+  * `providers.rs` usa el formateador del catálogo para decidir la forma
+    de las tools, en vez de dejarlo hardcodeado por endpoint.
+  * `mcp_ext.rs` (tool `compaction_epoch`) usa el umbral **del modelo**
+    cuando el llamador no pasa presupuesto, y lo dice en la respuesta
+    (`presupuesto_chars`, `umbral_del_modelo`).
+* **NOTA**: la taxonomía tiene **7** variantes, no las 17 del original:
+  el resto se distinguen por `detail`/`retry_after` dentro de la variante
+  (`Http{status, detail, retry_after}`).
 
 ---
 

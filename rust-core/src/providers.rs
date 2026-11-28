@@ -3280,13 +3280,40 @@ pub fn execute_chat_con_tools_with(
             }
         };
 
+        // Patrón 5(c) (MEDIDO 2026-11-28, `model_catalog`): el
+        // FORMATEADOR de tools depende del MODELO y de la API que habla,
+        // no es global.  Un motor que no entiende tools estructuradas
+        // (los offline) las recibe como TEXTO en el prompt: si no, se
+        // gasta contexto explicándolas sin que pueda usarlas.
+        let fmt_tools = crate::model_catalog::tool_formatter(&p.model, &p.endpoint);
+        let sys_efectivo: String = if fmt_tools == crate::model_catalog::ToolFormatter::Texto
+            && !tools.is_empty()
+        {
+            let lista: Vec<String> = tools
+                .iter()
+                .map(|t| {
+                    let f = t.get("function").unwrap_or(t);
+                    let n = f.get("name").and_then(|x| x.as_str()).unwrap_or("?");
+                    let d = f.get("description").and_then(|x| x.as_str()).unwrap_or("");
+                    format!("- {}: {}", n, d)
+                })
+                .collect();
+            format!(
+                "{}\n\n[HERRAMIENTAS DISPONIBLES (responde con el nombre y los argumentos)]\n{}",
+                sys_prompt,
+                lista.join("\n")
+            )
+        } else {
+            sys_prompt.to_string()
+        };
+
         // MEDIDO (2026-11-26, móvil): la conversación puede venir YA montada
         // (bucle de herramientas: `assistant.tool_calls` + `role:"tool"` con
         // el resultado).  Si no, se usa la pareja sistema/usuario de siempre.
         let msgs: Vec<Value> = match mensajes {
             Some(m) if !m.is_empty() => m.to_vec(),
             _ => vec![
-                json!({"role": "system", "content": sys_prompt}),
+                json!({"role": "system", "content": sys_efectivo}),
                 json!({"role": "user", "content": enriched_prompt}),
             ],
         };
@@ -3343,10 +3370,15 @@ pub fn execute_chat_con_tools_with(
                 }
             });
             if !tools_a_enviar.is_empty() {
-                body["tools"] = tools_openai_a_gemini(&tools_a_enviar);
+                body["tools"] = match fmt_tools {
+                    crate::model_catalog::ToolFormatter::GeminiNativo => {
+                        tools_openai_a_gemini(&tools_a_enviar)
+                    }
+                    _ => json!(tools_a_enviar),
+                };
             }
-            if !sys_prompt.trim().is_empty() {
-                body["systemInstruction"] = json!({ "parts": [ { "text": sys_prompt } ] });
+            if !sys_efectivo.trim().is_empty() {
+                body["systemInstruction"] = json!({ "parts": [ { "text": sys_efectivo } ] });
             }
             LlmRequest {
                 endpoint: url_gemini_nativo(&p.endpoint, &p.model),
@@ -3366,9 +3398,18 @@ pub fn execute_chat_con_tools_with(
             // Las herramientas SÓLO se mandan si las pidió el cliente: sin
             // `tools` el proveedor responde con su protocolo de TEXTO en vez de
             // con `tool_calls` (MEDIDO 2026-11-26, móvil, contra MiniMax).
-            if !tools_a_enviar.is_empty() {
+            if !tools_a_enviar.is_empty()
+                && fmt_tools != crate::model_catalog::ToolFormatter::Texto
+            {
                 payload["tools"] = json!(tools_a_enviar);
                 payload["tool_choice"] = json!("auto");
+            } else if !tools_a_enviar.is_empty() {
+                // El modelo no entiende tools estructuradas: van en el
+                // prompt (ver `sys_efectivo`) y no se mandan en el payload.
+                trace.push(format!(
+                    "{} => tools como TEXTO (el modelo {} no habla tool-calling)",
+                    p.id, p.model
+                ));
             }
             LlmRequest {
                 endpoint: p.endpoint.clone(),
@@ -3399,7 +3440,7 @@ pub fn execute_chat_con_tools_with(
             req.endpoint,
             p.model,
             chars_prompt,
-            sys_prompt.chars().count(),
+            sys_efectivo.chars().count(),
             capped_max_tokens
         ));
 
