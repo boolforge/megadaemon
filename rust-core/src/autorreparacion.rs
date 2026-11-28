@@ -1015,10 +1015,46 @@ pub fn diagnosticar(sis: &dyn Sistema, cfg: &Config) -> Vec<Diagnostico> {
     v.push(diag_telemetria);
 
     // --- 7) EL CANAL NO ESTÁ PUBLICADO -----------------------------------
-    let (canal_roto, detalle) = match crate::channel::read_channel_json(Some(&cfg.state_dir())) {
-        Some(c) => {
-            let quick = c.get("quick").and_then(|x| x.as_str()).unwrap_or("");
-            let paste = c.get("paste").and_then(|x| x.as_str()).unwrap_or("");
+    // MEDIDO (2026-11-28, CI): esto leía con `channel::read_channel_json`,
+    // que va al SISTEMA DE FICHEROS REAL.  En el banco (y en cualquier
+    // prueba con el `Fake`) el `channel.json` del entorno de mentira no se
+    // veía => el síntoma salía SIEMPRE presente (falso positivo) y rompía
+    // `un_entorno_sano_no_tiene_sintomas` y
+    // `el_ciclo_no_hace_nada_si_no_hay_sintomas`.
+    // Ahora se lee por el MISMO `sis` que el resto del diagnóstico (igual que
+    // la telemetría, justo arriba).
+    let canal_path =
+        crate::channel::channel_path(Some(&cfg.state_dir()), crate::channel::CHANNEL_JSON)
+            .display()
+            .to_string();
+    let (canal_roto, detalle) = match sis
+        .leer(&canal_path)
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+    {
+        Some(mut c) => {
+            let mut quick = c
+                .get("quick")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let paste = c
+                .get("paste")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            // MEDIDO: el *quick tunnel* se REGENERA en cada reinicio => si el
+            // estado aún no lo tiene fusionado, se rellena con el `tunnel.url`
+            // vivo (igual que hacía `channel::read_channel_json`).
+            if quick.is_empty() {
+                let u = leer_url_tunel(sis, cfg);
+                if !u.is_empty() {
+                    if let Some(o) = c.as_object_mut() {
+                        o.insert("quick".to_string(), json!(u.clone()));
+                    }
+                    quick = u;
+                }
+            }
             if quick.is_empty() || paste.is_empty() {
                 (
                     true,
