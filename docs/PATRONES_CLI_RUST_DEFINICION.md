@@ -45,11 +45,32 @@ bucle(state, evento):
 3. El mismo bucle sirve para el agente interactivo, el programático y el
    subagente.
 
-**Estado**: **TODO**.  Hoy `agent_loop.rs` (50.848 B) y `agent_core.rs`
-(25.337 B) hacen la inferencia y las tools **inline** (medido en el RE).
-Es un refactor de riesgo: `agent_loop.rs` es el módulo más Grande del crate
-y el CI acaba de recuperar la capacidad de compilar ⇒ **no se toca hasta
-que `main` esté verde y con la suite en verde**.
+**Estado**: **HECHO** (2026-11-28) ⇒ `rust-core/src/efectos.rs` (14 tests)
+y el **cableado** en `rust-core/src/agent_loop.rs`.
+
+* El núcleo puro: `Evento` (`UserInput`, `Tick`, `InferenciaTerminada`,
+  `ToolResult`, `TaskDone`, `RutaResuelta`, `CriterioFijo`, `TareaCerrada`,
+  `Inerte`), `Efecto` (`Inferencia`, `Herramientas`, `Tareas`) y
+  `reducir(estado, evento) -> (estado, efectos)`: el reductor **NO ejecuta
+  nada** (criterio 2).
+* Cada efecto lo despacha **un manejador** (`manejar_inferencia`,
+  `manejar_herramientas`, `manejar_tareas`), que devuelve el evento
+  siguiente; el bucle es **iterativo** (pila explícita, con tope duro de
+  eventos), no recursivo.
+* `Modo{Interactivo, Programatico, Subagente}` + `Perfil`: el mismo bucle
+  sirve para los tres (criterio 3), con test de los tres modos.
+* **Cableado**: `agent_loop.rs` ya **no** llama al modelo ni a las tools
+  (criterio 1): `AgentLoop::tick` construye el estado, llama a
+  `efectos::bucle` y vuelca el estado.  `pick_provider`, `run_action` y
+  `fixed_fallback` se fueron del bucle; sus equivalentes puros están en
+  `efectos.rs`.  La llamada al modelo vive sólo en `manejar_inferencia` y la
+  de las tools sólo en `manejar_herramientas`.
+* Los **8 tests preexistentes** de `agent_loop.rs` siguen pasando sin
+  tocarlos (la memoria de fallos, la degradación, la cadena de proveedores,
+  el tope de llamadas y el prompt sin secretos).
+* Pendiente: `TaskDone` no lo emite nadie todavía (no hay trabajo
+  asíncrono real); la API y el manejador están listos para engancharse al
+  `task_scheduler`/`service_bus`.
 
 ---
 
@@ -115,13 +136,20 @@ fork(nodo, cwd):
 2. El revert **no borra**: el historial completo sigue consultable.
 3. El árbol es un **bosque** (varias raíces), no una lista.
 
-**Estado**: **PARCIAL**.
-* El mecanismo de bosque y fork **existe**: `session/fork` de ACP
-  (`rust-core/src/protocol_acp/sesion.rs`, 10 tests) y la compactación por
-  época (`rust-core/src/compaction_epoch.rs`, 11 tests).
-* **FALTA**: las **tablas SQLite** `message_nodes` / `parent_node_id` en
-  `board.rs`/`service_bus.rs`, y el **revert por pasos** (el revert de
-  Devin lista los pasos y ejecuta el elegido; aquí sólo hay fork).
+**Estado**: **HECHO** (2026-11-28) ⇒ `rust-core/src/message_tree.rs`
+(18 tests), sobre el esquema del patrón 10.
+
+* El **bosque**: nodos con `parent_node_id`, varias raíces.
+* `fork(nodo)`: hijo con el historial **copiado**; el padre no cambia
+  (criterio 1).
+* `revert(nodo)`: **no borra**; el historial completo sigue consultable
+  (criterio 2).
+* **Revert por pasos** (lo que faltaba): `pasos_revert` lista los puntos
+  de retorno y `aplicar_paso` ejecuta el **elegido** (la referencia expone
+  `cognition.ai/revert/{listSteps,preview,execute,forkFromStep}`).
+* Persistencia en SQLite con las tablas del patrón 10.
+* El fork abre una época nueva: no es inventado, lo fuerza el `UNIQUE`
+  medido de `messages` (la copia tiene los mismos `seq` que el padre).
 
 ---
 
@@ -251,10 +279,22 @@ al fallar un proveedor:
 2. `construir_contexto` no referencia `providers::` ni ejecuta herramientas
    (se comprueba con `grep`).
 
-**Estado**: **PARCIAL** ⇒ la idea ya está repartida en varios módulos
-(`agent_core.rs` = despacho, `board.rs` = estado, `llm_gateway.rs` =
-inferencia), pero **no** hay un módulo `contexto` con la construcción
-pura del prompt.  **FALTA** ese módulo, y sacarlo de `agent_loop.rs`.
+**Estado**: **HECHO el módulo** (2026-11-28) ⇒
+`rust-core/src/contexto.rs` (15 tests).
+
+* `construir_contexto(estado, entrada) -> Contexto` es **puro**: no habla
+  con el modelo, no ejecuta herramientas y no hace E/S.
+* Devuelve los **bloques** del prompt (sistema, reglas, memoria, ficheros,
+  época, historial, entrada) y los **metadatos** (chars por bloque y total,
+  presupuesto, qué se recortó).
+* El recorte se **registra**: qué bloque, cuántas unidades y cuántos
+  caracteres ahorrados (medidos).  `presupuesto_chars = None` significa
+  "sin límite", no un número inventado.
+* El criterio 2 está comprobado **por test**: el código (sin comentarios) no
+  menciona `providers::` ni ninguna tool.
+* **PENDIENTE**: el cableado en `AgentLoop::build_prompt` (el ancla estable;
+  `agent_loop.rs` lo movió el patrón 1).  Hoy el bucle sigue armando el
+  prompt en su sitio, así que el módulo es la pieza lista, no la usada.
 
 ---
 
@@ -277,15 +317,26 @@ cola (`list claimed sessions`, `list queued sessions`, `list outposts`).
 2. Un cliente sin credencial **no** puede usar la API.
 3. Las tres consultas de cola devuelven la cola real (`task_scheduler.rs`).
 
-**Estado**: **PARCIAL**.
-* La **cola** existe (`task_scheduler.rs`, MEDIDO): estados `Pending`,
-  `Running`, `Paused`, `Done`, `Failed`, `Cancelled`; y por tarea
-  `node` (a quién se asignó), `lease_expira` (lease), `resume_after` (pausa),
-  `attempts`/`max_attempts`.
-* El **cockpit HTTP** tiene autenticación fail-closed
-  (`X-Seere-Auth-Token`, token 0600 en `<state_dir>/cockpit_token`).
-* **FALTA**: el **socket Unix con handshake** (hoy el transporte es HTTP en
-  el cockpit) y las tres consultas de cola con esos nombres.
+**Estado**: **HECHO** (2026-11-28) ⇒ `rust-core/src/daemon_socket.rs`
+(20 tests).
+
+* **Lock de instancia**: `<state_dir>/daemon.lock` con `create_new(true)`;
+  dos daemons sobre el mismo `state_dir` ⇒ el segundo **no arranca**
+  (criterio 1).  Se distingue lock vivo de lock caducado con
+  `libc::kill(pid, 0)`; el fichero se borra al soltar el guard.
+* **Socket Unix** en `<state_dir>/daemon.sock` (0600), protocolo NDJSON
+  (un objeto JSON por línea).
+* **Handshake fail-closed**: el que conecta presenta la credencial del
+  estado (comparación en tiempo constante; credencial vacía nunca vale).  Un
+  cliente sin credencial **no puede usar la API** (criterio 2).
+* Las **tres consultas de cola** con esos nombres exactos — `list claimed
+  sessions`, `list queued sessions`, `list outposts` — sobre la cola REAL de
+  `task_scheduler.rs` (criterio 3).
+* La E/S (bind/aceptar) está separada de la **decisión** (parseo, validación
+  de la credencial, construcción de la respuesta), que es pura y testeable.
+* **NO MEDIDO**: qué es un "outpost" (la referencia no lo define): se
+  implementa una interpretación conservadora y la definición viaja en cada
+  respuesta, para no fingir una medición que no hay.
 
 ---
 
@@ -339,11 +390,24 @@ cola (`list claimed sessions`, `list queued sessions`, `list outposts`).
    existente (idempotente).
 2. `board.rs` (rusqlite) usa esas tablas.
 
-**Estado**: **PARCIAL**.
-* `board.rs` tiene su esquema (rusqlite) y `task_scheduler.rs` su cola.
-* **FALTA**: la migración al esquema **medido** (`sessions` con
-  `current_epoch`, `messages` con `compaction_epoch` y su `UNIQUE`) y las
-  10 tablas exactas.
+**Estado**: **HECHO** (2026-11-28) ⇒ `rust-core/src/board_schema.rs`
+(13 tests).
+
+* El DDL **medido** de las 10 tablas, transcrito de
+  `docs/RE_DEVIN_CLI_RUST.md` §4.1, con sus columnas, índices y `UNIQUE`
+  (incluido `UNIQUE(session_id, compaction_epoch, sequence_number)`).
+* Migración **idempotente**: sirve en un estado nuevo y en uno existente
+  (aplicarla dos veces no falla ni duplica nada).
+* Helpers de **introspección** (tablas, columnas, índices) y
+  `verificar_esquema`, que comparan lo creado con lo medido tabla por
+  tabla: es lo que permite un test que fije el esquema sin depender de la
+  referencia en runtime.
+* `sessions.hidden` NO está en el DDL medido pero su índice medido lo exige
+  (SQLite: "no such column: hidden") ⇒ se declara como **extensión**
+  propia, marcada como tal y con test que lo prueba.
+* **PENDIENTE**: `board.rs` sigue usando su propio esquema; la migración
+  existe y es idempotente, pero aplicar el esquema medido al board es un
+  paso aparte (y el ACP tiene el suyo en `acp_sesion_store.rs`).
 
 ---
 
@@ -351,21 +415,52 @@ cola (`list claimed sessions`, `list queued sessions`, `list outposts`).
 
 | # | patrón | estado | módulo |
 |---|---|---|---|
-| 1 | bucle como manejador de efectos | TODO | `agent_loop.rs` / `agent_core.rs` |
+| 1 | bucle como manejador de efectos | **HECHO** | `efectos.rs` (+ cableado en `agent_loop.rs`) |
 | 2 | keepalive del caché de prompt | **HECHO** | `cache_keepalive.rs` |
-| 3 | la conversación es un bosque | PARCIAL | `protocol_acp/sesion.rs` (falta SQLite + revert por pasos) |
+| 3 | la conversación es un bosque | **HECHO** | `message_tree.rs` |
 | 4 | compactación por época | **HECHO** | `compaction_epoch.rs` |
 | 5 | errores de proveedor tipados | PARCIAL | `providers.rs` + `provider_retry.rs` (hecho el `retry_after`; falta lo por modelo) |
-| 6 | construir contexto ≠ conducir el agente | PARCIAL | falta el módulo `contexto` |
-| 7 | daemon: socket + handshake + cola | PARCIAL | falta el socket Unix con handshake |
+| 6 | construir contexto ≠ conducir el agente | **HECHO** (el módulo) | `contexto.rs` (falta el cableado en `build_prompt`) |
+| 7 | daemon: socket + handshake + cola | **HECHO** | `daemon_socket.rs` |
 | 8 | sandbox compilado del permiso | **HECHO** | `sandbox_linux.rs` |
 | 9 | `PLUGIN_DATA` por identidad | **HECHO** | `plugin_data.rs` |
-| 10 | esquema SQLite de sesiones | PARCIAL | falta la migración al esquema medido |
+| 10 | esquema SQLite de sesiones | **HECHO** | `board_schema.rs` |
 
-**3 de 10 completos** (los tres de coste **S**: 2, 4 y 9; el 8 ya estaba).
-Los otros 7 tienen la parte estructural hecha y el detalle medido pendiente;
-los patrones **1** y **10** son los que más tocan el núcleo y deben ir
-**después** de que `main` esté verde y con la suite en verde.
+**8 de 10 completos** (2, 4, 9 y 8 ya estaban; este 2026-11-28 cierran
+1, 3, 6, 7 y 10).  Quedan dos cabos sueltos, ambos de cableado y no de
+núcleo: `build_prompt` debe usar `contexto::construir_contexto`, y el
+esquema medido debe llegar al `board.rs` (hoy cada uno usa el suyo).
+
+## Capacidades propias nuevas (AST → Rust, 2026-11-28)
+
+Siguen el procedimiento de `docs/EXTENSIONES_PROPIETARIAS.md` §4: la
+capacidad de la referencia se **documenta** (con ruta y línea), la
+implementación es **nuestra** (mismos nombres, misma estructura, **nuestro
+texto**) y los tests fijan el **comportamiento observable**, no la
+implementación.  El gate `tools/check-propietario.py` está en verde.
+
+| capacidad propia | módulo | tests | qué cubre (medido) |
+|---|---|---|---|
+| cola de mensajes de la sesión | `cola_mensajes.rs` | 16 | `cognition.ai/queuedMessagesInfoUpdate` ~ `mcode/session/queue/*`: encolar, listar, actualizar, borrar y **redirigir** ("steer") |
+| subagentes del lead | `subagentes.rs` | 16 | `cognition.ai/subagentSupport` + `subagentControl` ~ `mcode/session/delegation`: foreground, background, cancel, **opt-in mutuo** |
+| control de servidores y tools MCP | `mcp_control.rs` | 16 | `cognition.ai/mcp/{listServers,toggleServer,toggleTool}`: opt-in mutuo, apagado idempotente |
+| opciones de modelo | `model_options.rs` | 12 | `cognition.ai/clientProvidedModels` + `groupedSessionConfigOptions`: catálogo del daemon + el del cliente |
+| persistencia de sesiones ACP | `acp_sesion_store.rs` | 17 | el almacén que `docs/DECISION_ACP.md` §3.2 dejaba pendiente (épocas, `seq` global, sin borrados colaterales) |
+
+Los **métodos de extensión** que proponen (namespace `mdaemon`, en inglés
+como los de `protocol_acp.rs`):
+
+* cola: `queue/list`, `queue/enqueue`, `queue/update`, `queue/delete`,
+  `queue/steer`;
+* subagentes: `subagent/list`, `subagent/get`, `subagent/foreground`,
+  `subagent/background`, `subagent/cancel`;
+* MCP: `mcp/servers/list`, `mcp/servers/toggle`, `mcp/tools/toggle`;
+* modelos: `models/options/list`, `models/options/enrich`,
+  `models/options/filter`, `models/options/default`.
+
+**PENDIENTE** (el root lo integra): registrar esas extensiones en
+`protocol_acp.rs` y enganchar los módulos al bus real (`board.rs` /
+`service_bus.rs`) y al registro real de MCP.
 
 **Lo que NO está medido**: el comportamiento de estos patrones en el móvil
 requiere el dispositivo (`su -mm -c`); el repo sólo puede verificar tipos,

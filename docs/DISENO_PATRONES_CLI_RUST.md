@@ -32,16 +32,16 @@ escritorio** sin Electron ni navegador. Es el mismo camino que llevó a
 
 | # | patrón (medido) | nuestro módulo | qué hay que escribir | coste |
 |---|---|---|---|---|
-| 1 | **el bucle como manejador de efectos**: `affogato/agent/effects/{handler,inference,tasks,tools}.rs` | `agent_loop.rs` + `agent_core.rs` | el bucle pasa a ser un reductor `(estado, evento) → (estado, efectos)`; el mismo bucle sirve para el agente interactivo, el programático y el subagente | M |
+| 1 | **el bucle como manejador de efectos**: `affogato/agent/effects/{handler,inference,tasks,tools}.rs` | **nuevo `efectos.rs`** + `agent_loop.rs` | **hecho**: reductor puro `(estado, evento) → (estado, efectos)`, tres manejadores, bucle iterativo y tres modos (interactivo, programático, subagente); `agent_loop.rs` cableado (14 tests) | **hecho** |
 | 2 | **`cache_keepalive*` (5 ficheros)**: política de keepalive del **caché de prompt del proveedor** | **nuevo `cache_keepalive.rs`** | ya hecho: prefijo cacheable + firma + decisión (reutilizar/refrescar/invalidado) | **hecho** |
-| 3 | **la conversación es un BOSQUE**: `message_nodes.parent_node_id`; el revert = **fork** del bosque | `board.rs` / `service_bus.rs` | tablas de nodos + algoritmo de revert por pasos | M |
+| 3 | **la conversación es un BOSQUE**: `message_nodes.parent_node_id`; el revert = **fork** del bosque | **nuevo `message_tree.rs`** | **hecho**: bosque con `parent_node_id`, `fork` que copia el historial, `revert` que no borra y **revert por pasos** (lista + ejecución del paso elegido) | **hecho** |
 | 4 | **la compactación no borra**: `messages.compaction_epoch` + `sessions.current_epoch` | **nuevo `compaction_epoch.rs`** | ya hecho: epochs en vez de truncar; el historial se conserva | **hecho** |
 | 5 | **`inference/`**: **17 errores de proveedor** con `retry_after` estructurado, `compaction_thresholds` **por modelo** y `tool_formatter_type` por modelo | `providers.rs` / `llm_gateway.rs` / **nuevo `model_catalog.rs`** | ya hecho: errores tipados + `retry_after` estructurado + **catálogo por modelo** (umbral de compactación y formateador de tools) | **hecho** |
-| 6 | **`fx/context.rs` + `fx/driver.rs`**: separar **construcción de contexto** y **conducción del agente** | `agent_core.rs` / `agent_loop.rs` | dos módulos separados en vez de uno gigante | S |
-| 7 | **daemon**: socket Unix + lock + **handshake que verifica que quien conecta es su daemon** + RPC de cola (`list claimed sessions`, `list queued sessions`, `list outposts`) | `cockpit_server.rs` / `service_bus.rs` | handshake + cola de sesiones | M |
+| 6 | **`fx/context.rs` + `fx/driver.rs`**: separar **construcción de contexto** y **conducción del agente** | **nuevo `contexto.rs`** | **hecho**: `construir_contexto` puro (bloques + metadatos + recorte registrado), 15 tests; falta el cableado en `build_prompt` | **hecho** |
+| 7 | **daemon**: socket Unix + lock + **handshake que verifica que quien conecta es su daemon** + RPC de cola (`list claimed sessions`, `list queued sessions`, `list outposts`) | **nuevo `daemon_socket.rs`** | **hecho**: lock de instancia, socket Unix NDJSON, handshake fail-closed y las tres RPC sobre la cola real (20 tests) | **hecho** |
 | 8 | **sandbox medido**: *"macOS seatbelt / Linux bwrap+seccomp"*; en Linux exige `bwrap` **y** `socat`; el permiso lógico **se compila a regla de sandbox** | `tool_policy.rs` + **nuevo `sandbox_linux.rs`** | ya hecho: `rust-core/src/sandbox_linux.rs` (bwrap + seatbelt, deny>allow, 10 tests) | **hecho** |
 | 9 | **plugins**: `PLUGIN_DATA` persistente **por identidad, no por versión**; globs prohibidos **sin `..`, `#` ni `@`** | **nuevo `plugin_data.rs`** | ya hecho: persistencia por identidad + validación de globs (anti path-traversal) | **hecho** |
-| 10 | **esquema SQLite de sesiones (10 tablas)** medido literal | `board.rs` (rusqlite) | migración con el esquema | M |
+| 10 | **esquema SQLite de sesiones (10 tablas)** medido literal | **nuevo `board_schema.rs`** | **hecho**: DDL medido transcrito, migración idempotente e introspección para comparar tabla por tabla (13 tests) | **hecho** |
 
 ### 2.1 Los tres que se concretan primero
 
