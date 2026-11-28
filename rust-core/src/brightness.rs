@@ -3581,20 +3581,26 @@ mod tests {
         );
 
         // 3) El usuario movio el deslizador a 128 MIENTRAS estaba recortado:
-        //    el objetivo pasa a ser 128.  Cuando la politica relaja y restaura
-        //    su copia (247), el modulo debe devolver 128 (Reafirmar), NO el
-        //    247 clavado.
+        //    el objetivo pasa a ser 128 y la pantalla SIGUE en 60 (la politica
+        //    recortando) => el cambio es del usuario => se adopta.
+        //
+        //    MEDIDO (2026-11-28): el test mezclaba los DOS momentos y por eso
+        //    no podia pasar: con `actual = 128` (el valor ya aplicado) y sin
+        //    copia guardada, el modulo responde "Nada" (objetivo == actual),
+        //    que es lo correcto segun sus propias reglas.  La invariante que
+        //    de verdad importa es la del punto siguiente (Reafirmar con el
+        //    objetivo del usuario, no con la copia de la politica).
         let objetivo_usuario = f(128);
         assert_eq!(
             decidir(
                 "respetar_usuario",
                 objetivo_usuario,
-                f(128),
+                f(60),
                 Some(0),
                 false,
                 Some(60),
                 true,
-                None
+                Some(247)
             ),
             Decision::AdoptarCambio
         );

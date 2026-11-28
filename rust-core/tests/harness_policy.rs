@@ -228,6 +228,11 @@ fn el_catalogo_mcp_es_la_union_de_los_subcatalogos() {
     // bloqueaba el gate del CI con un fallo que no era de ningún defecto.
     let nucleo = [
         "minimax_chat",
+        // MEDIDO (2026-11-28): `megadaemon_chat` esta en el catalogo core
+        // (`mcp_server.rs`) desde hace tiempo, pero la lista del test se
+        // quedo obsoleta => el gate del CI fallaba sin que hubiera ningun
+        // defecto (el mismo caso que el comentario de arriba).
+        "megadaemon_chat",
         "megadaemon_voice",
         "megadaemon_catalog",
         "swarm_chat",

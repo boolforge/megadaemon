@@ -727,7 +727,16 @@ fn s09_la_politica_de_energia_se_aplica_al_agente() {
     );
 
     let src2 = std::fs::read_to_string("src/providers.rs").expect("leer providers.rs");
-    for line2 in src2.lines().filter(|l| l.contains("run_seere_v11")) {
+    for line2 in src2
+        .lines()
+        .filter(|l| l.contains("run_seere_v11"))
+        // MEDIDO (2026-11-28): los COMENTARIOS que explican el v6
+        // ("`execute_chat` llamaba a `seere_v11::run_seere_v11` in situ")
+        // mencionan la llamada pero NO son la llamada => el guard fallaba
+        // sin que hubiera defecto (falso positivo).  Sólo cuentan las
+        // lineas de CODIGO: mismo criterio que `declared_modules.rs`.
+        .filter(|l| !l.trim_start().starts_with("//"))
+    {
         println!("[S09] providers: {}", line2.trim());
         assert!(
             line2.contains("pol.max_turns"),

@@ -140,13 +140,25 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    /// El contexto de la prueba: el que **NO** auto-aprueba escrituras ni
+    /// ejecuciones.
+    ///
+    /// MEDIDO (2026-11-28): `ToolContext::for_agent` auto-aprueba las dos
+    /// cosas (`auto_approve_writes: true`, `auto_approve_exec: true`) ⇒
+    /// con el contexto de antes, una escritura daba "allow" y la prueba no
+    /// comprobaba NADA (además el nombre de tool "write_file" no existe en
+    /// el repo: las de escritura son `write_to_file`/`replace_file_content`).
     fn ctx() -> ToolContext {
-        ToolContext::for_agent(PathBuf::from("/tmp"), "sesion-test", false)
+        ToolContext {
+            auto_approve_writes: false,
+            auto_approve_exec: false,
+            ..ToolContext::for_agent(PathBuf::from("/tmp"), "sesion-test", false)
+        }
     }
 
     #[test]
     fn una_lectura_se_permite() {
-        let v = evaluar(&ctx(), "read_file", &json!({"path":"/tmp/x"}), Some(None));
+        let v = evaluar(&ctx(), "view_file", &json!({"path":"/tmp/x"}), Some(None));
         assert_eq!(v.decision, "allow");
         assert!(v.permitido());
     }
@@ -166,7 +178,7 @@ mod tests {
 
     #[test]
     fn una_escritura_pide_confirmacion() {
-        let v = evaluar(&ctx(), "write_file", &json!({"path":"/tmp/x"}), Some(None));
+        let v = evaluar(&ctx(), "write_to_file", &json!({"path":"/tmp/x"}), Some(None));
         assert_eq!(v.decision, "ask");
         assert!(!v.permitido());
     }
@@ -186,13 +198,13 @@ mod tests {
 
     #[test]
     fn el_verdicto_conserva_la_capacidad() {
-        let v = evaluar(&ctx(), "read_file", &json!({}), Some(None));
+        let v = evaluar(&ctx(), "view_file", &json!({}), Some(None));
         assert_eq!(v.capacidad, "read_only");
     }
 
     #[test]
     fn el_json_del_veredicto_trae_las_cuatro_cosas() {
-        let v = evaluar(&ctx(), "read_file", &json!({}), Some(None));
+        let v = evaluar(&ctx(), "view_file", &json!({}), Some(None));
         let j = v.a_json();
         assert!(j.get("decision").is_some());
         assert!(j.get("motivo").is_some());

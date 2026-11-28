@@ -51,6 +51,7 @@ fn la_respuesta_tiene_exactamente_la_forma_openai() {
     let d = deps(&v, &t);
     let body = json!({
         "model": "megadaemon",
+        "include_trace": true,
         "messages": [{"role": "user", "content": "ping"}]
     });
     let r = chat_completions_with(&body, &d).expect("el gateway debe responder");
@@ -106,6 +107,7 @@ fn la_forma_openai_se_conserva_aunque_el_proveedor_falle() {
     let d = deps(&v, &t);
     let body = json!({
         "model": "megadaemon",
+        "include_trace": true,
         "messages": [{"role": "user", "content": "ping"}]
     });
     let r = chat_completions_with(&body, &d).expect("el gateway debe responder");
@@ -125,6 +127,7 @@ fn acepta_system_user_assistant() {
     let d = deps(&v, &t);
     let body = json!({
         "model": "megadaemon",
+        "include_trace": true,
         "messages": [
             {"role": "system", "content": "eres un agente"},
             {"role": "user", "content": "hola"},
@@ -221,7 +224,8 @@ fn model_megadaemon_no_ata_la_peticion_a_un_proveedor() {
         let d = deps(&v, &t);
         let body = json!({
             "model": alias,
-            "messages": [{"role": "user", "content": "ping"}]
+            "include_trace": true,
+        "messages": [{"role": "user", "content": "ping"}]
         });
         let r = chat_completions_with(&body, &d).expect("no debe fallar");
         // La respuesta dice el modelo REAL que contestó (el del router), y
@@ -245,6 +249,7 @@ fn un_modelo_concreto_si_se_pide_ese_proveedor() {
     let d = deps(&v, &t);
     let body = json!({
         "model": "p2",
+        "include_trace": true,
         "messages": [{"role": "user", "content": "ping"}]
     });
     let r = chat_completions_with(&body, &d).expect("no debe fallar");
@@ -366,6 +371,8 @@ fn el_gateway_no_devuelve_el_razonamiento_si_no_hay_que_ello() {
     let d = deps(&v, &t);
     let body = json!({
         "model": "megadaemon",
+        "include_trace": true,
+        "include_reasoning": true,
         "messages": [{"role": "user", "content": "ping"}]
     });
     let r = chat_completions_with(&body, &d).expect("no debe fallar");
@@ -373,5 +380,21 @@ fn el_gateway_no_devuelve_el_razonamiento_si_no_hay_que_ello() {
     assert_eq!(
         r["choices"][0]["message"]["reasoning_content"],
         "pensamiento interno"
+    );
+
+    // Y si el cliente NO lo pide, el razonamiento no sale (MEDIDO
+    // 2026-11-28: antes se filtraba el CoT del proveedor al cliente).
+    let body_sin = json!({
+        "model": "megadaemon",
+        "messages": [{"role": "user", "content": "ping"}]
+    });
+    let r2 = chat_completions_with(&body_sin, &d).expect("no debe fallar");
+    assert_eq!(r2["choices"][0]["message"]["content"], "final");
+    assert!(
+        r2["choices"][0]["message"]
+            .get("reasoning_content")
+            .is_none(),
+        "sin pedirlo, el razonamiento no se filtra: {:?}",
+        r2["choices"][0]["message"]
     );
 }
