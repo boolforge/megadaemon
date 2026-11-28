@@ -539,3 +539,83 @@ Instala/actualiza → **para todo** el stack (keeper primero: es el que
 relanza) → limpia (copias `.bak*` y URLs) → **arranca uno de cada** →
 verifica. Ojo: como root el PATH no tiene `curl` (lo tiene Termux) ⇒ el
 script lo busca en `/data/data/com.termux/files/usr/bin`.
+
+> **VUELVE A DESCARGARLO** (2026-11-28, tarde): la versión que había
+> publicada era **ciega** (ver §11): no veía ni un supervisor ⇒ no paraba
+> los duplicados y no dejaba uno de cada.
+
+## 10. Una sola pasada: el verificador de DENTRO del móvil
+
+Hay **dos** verificadores y no se confunden:
+
+| Script | Dónde corre | Para qué |
+|---|---|---|
+| `tools/verificar-movil.sh` | **desde el PC**, contra la URL del túnel | ¿volvió el móvil tras el reinicio? ¿qué build trae? |
+| `tools/verificar-movil-dentro.sh` | **dentro del móvil**, como root | ¿está el móvil sano AHORA? (duplicados, puertos, túnel, esquema, build) |
+
+El de dentro se descarga y ejecuta así:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/boolforge/megadaemon/main/tools/verificar-movil-dentro.sh -o $HOME/verificar.sh
+su -mm -c "sh $HOME/verificar.sh"
+```
+
+Imprime **19 comprobaciones** con `[PASA]` / `[FALLA]` / `[SIN DATOS]` y un
+veredicto con contadores. Es **de sólo lectura**: no mata, no reinicia, no
+descarga. Para arreglar lo que falle, `tools/restaurar-movil.sh`.
+
+Qué mira (todo lo que estaba repartido por las §2, §3.5, §5 y §7):
+
+* `service.d`: sólo los canónicos (sin copias `.bak*`).
+* **Un** proceso de cada rol: supervisor, keeper, watchdog, cloudflared y
+  daemon. Y que el supervisor vivo sea **el canónico** (elemento a elemento:
+  la copia `.bak-50k` tiene la ruta canónica como prefijo y colaría).
+* Puertos: `8765` **sin** listener (el túnel legacy sobra), `8080` y `9090`
+  **con** listener (la app y la Web UI).
+* `tunnel.url`: host `*.trycloudflare.com` que **no** sea `api.` ni
+  `developers.` (el bug del §9.1).
+* El log del supervisor: **0** apariciones de `mcp-legacy caido`.
+* `board.sqlite`: existe y tiene las **10 tablas medidas** (§7.3).
+* El binario en servicio: existe, es ejecutable y el daemon dice **0 builds
+  desfasados** (§7.1).
+* `/api/health` → 200, carga (`load1`) y memoria disponible.
+
+MEDIDO (2026-11-28): el shell de Android **no** trae `curl`, `wget`, `pgrep`
+ni `sqlite3`; este script no usa ninguno de los cuatro (los puertos se leen
+de `/proc/net/tcp` con `awk`, los procesos de `/proc/<pid>/cmdline` y las
+tablas del binario SQLite con `grep`).
+
+## 11. Lo que destapó el BANCO el 2026-11-28 (tarde): el restaurador era ciego
+
+El restaurador se publicó sin que nadie lo ejecutara en el móvil. Al meterlo
+en el banco (series E: `tools/test-oneliner-casos-e.sh`) se vio que **no
+detectaba NINGÚN proceso**, y **sin decir error**.
+
+**Causa** (`tools/restaurar-movil.sh`, `argv_acaba_en`):
+
+```sh
+argv_de "$1" | grep -q "$2\$"      # el patrón resultante es 99-megadaemon\.sh$$
+```
+
+`"$2\$"` = el sufijo del rol **más un `$` de más** ⇒ el patrón lleva **DOS
+anclas de fin**. GNU grep trata el `$` interior como un **literal** ⇒ no
+casa con NADA y **no se queja** (MEDIDO: `printf 'sh\n' | grep -q 'sh$$'` →
+`rc=1`, sin error).
+
+**Consecuencia**: el restaurador paraba **0** procesos, no dejaba uno de
+cada y la verificación final reportaba `vivos (...): 0` para **todos** los
+roles: habría parecido un restaurador que funciona y no toca nada.
+
+**Arreglo**: ERE con **un** solo ancla (`grep -qE "$2"`), que casa con el
+canónico y **no** con la copia `.bak-50k`. El banco lo blinda:
+
+* `caso_e_01` ⇒ cada rol se detecta por su argv y la copia `.bak-50k` no se
+  confunde con el canónico;
+* `caso_e_02` ⇒ el "pastel" del móvil (4 supervisores, 3 watchdogs, 3
+  cloudflared, 3 daemons, 3 keepers) se cuenta **completo**.
+
+MEDIDO (banco): con el bug reintroducido **12 aserciones fallan**; con el
+arreglo **0**. El restaurador carga en *modo biblioteca* (`MD_LIB_ONLY=1` ⇒
+sólo define funciones, no ejecuta las fases) contra un `/proc` falso
+(`MD_PROC`), así que se puede probar sin root y sin matar nada.
+
