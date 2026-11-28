@@ -1,7 +1,7 @@
 # Verificar el one-liner en el móvil (checklist para el jefe)
 
 > Los **7 bugs** del instalador se han arreglado y **verificado en local**
-> con el banco de 119 escenarios (`docs/BANCO_INSTALADOR.md`).  Lo que **no**
+> con el banco de 134 escenarios (`docs/BANCO_INSTALADOR.md`).  Lo que **no**
 > se puede verificar en local es el resultado en **el móvil real**: por eso
 > esta lista.
 >
@@ -320,7 +320,7 @@ Pásame:
 1. La salida **completa** del instalador (no un trozo).
 2. El resultado de los comandos de la §2 que falló.
 
-Con eso se acota: el banco tiene 119 escenarios y cada bug tiene su
+Con eso se acota: el banco tiene 134 escenarios y cada bug tiene su
 escenario, así que se reproduce en local sin tocar el móvil.
 
 ## 5. Antigravity: el hooking y el modelo (2026-11-28)
@@ -392,13 +392,13 @@ En la traza del gateway (Web UI → logs, o el log del daemon):
   conversación se ha reconstruido con la estructura que exige Gemini.
 
 ## 6. Lo que el banco ya garantiza (no hace falta repetir en el móvil)
-Los 119 escenarios pasan en local:
+Los 134 escenarios pasan en local:
 
 ```sh
 MD_LAB_BASE=/tmp/md-lab-v MD_PAR=6 bash tools/test-oneliner.sh
 ```
 
-⇒ 119/119.  El banco comprueba, entre otras cosas: detección de entorno,
+⇒ 134/134.  El banco comprueba, entre otras cosas: detección de entorno,
 escalado a root, descarga, instalación atómica con rollback, idempotencia,
 el stack (3 capas), el túnel, el informe, el doctor, la autoreparación y la
 seguridad (permisos 0700, sin secretos en la salida).
@@ -560,7 +560,8 @@ curl -fsSL https://raw.githubusercontent.com/boolforge/megadaemon/main/tools/ver
 su -mm -c "sh $HOME/verificar.sh"
 ```
 
-Imprime **19 comprobaciones** con `[PASA]` / `[FALLA]` / `[SIN DATOS]` y un
+Imprime **20 comprobaciones** (19 si el `board.sqlite` no existe: entonces
+sólo se puede comprobar que falta) con `[PASA]` / `[FALLA]` / `[SIN DATOS]` y un
 veredicto con contadores. Es **de sólo lectura**: no mata, no reinicia, no
 descarga. Para arreglar lo que falle, `tools/restaurar-movil.sh`.
 
