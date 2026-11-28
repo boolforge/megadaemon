@@ -113,16 +113,29 @@ fn ultimas_lineas(ruta: &str, max: usize) -> Vec<String> {
 }
 
 /// Procesos del daemon (cmdline + RSS).
-fn procesos() -> Value {
+///
+/// Devuelve la lista y **cuántos `cmdline` no se han podido leer**: un
+/// proceso que no se puede leer NO es "no hay" (MEDIDO 2026-11-28, movil:
+/// el conteo de supervisores era 0 porque el error de lectura se tragaba).
+fn procesos() -> (Value, usize) {
     let mut lista = Vec::new();
+    let mut ilegibles = 0usize;
     if let Ok(entradas) = std::fs::read_dir("/proc") {
         for e in entradas.flatten() {
             let nombre = e.file_name().to_string_lossy().to_string();
             if !nombre.chars().all(|c| c.is_ascii_digit()) {
                 continue;
             }
-            let Ok(cmd) = std::fs::read(e.path().join("cmdline")) else {
-                continue;
+            let cmd = match std::fs::read(e.path().join("cmdline")) {
+                Ok(c) => c,
+                Err(err) => {
+                    // ENOENT = el proceso se ha ido mientras lo miramos: es
+                    // una carrera normal, no un fallo de lectura.
+                    if err.kind() != std::io::ErrorKind::NotFound {
+                        ilegibles += 1;
+                    }
+                    continue;
+                }
             };
             let cmd = String::from_utf8_lossy(&cmd)
                 .replace('\0', " ")
@@ -160,7 +173,7 @@ fn procesos() -> Value {
             }));
         }
     }
-    json!(lista)
+    (json!(lista), ilegibles)
 }
 
 /// Puertos en LISTEN (de `/proc/net/tcp`).
@@ -458,15 +471,30 @@ fn red() -> Value {
 pub fn recoger() -> Value {
     let puerto = crate::config_efectiva::u64_de("general.puerto_gateway", 9090) as u16;
     let state = crate::cockpit_server::state_dir();
+    // MEDIDO (2026-11-28, movil): el barrido de /proc se hace UNA vez (el
+    // movil tiene cientos de procesos y cada barrido cuesta segundos).
+    let supervisores = crate::stack::estado_supervisores();
+    let procesos = procesos();
     json!({
         "ts": ahora(),
         "nodo": nodo(),
         "build": crate::self_update::build_info(),
-        "procesos": procesos(),
+        "procesos": procesos.0,
+        // MEDIDO (2026-11-28, movil): cuantos `cmdline` NO se han podido
+        // leer (para que "no aparece en la lista" no se confunda con
+        // "no existe").
+        "procesos_ilegibles": procesos.1,
         // MEDIDO (2026-11-25): con DOS supervisores vivos (el canónico y
         // su copia .bak) el móvil entraba en bucle de reinicios.  El
         // diagnóstico lo dice explícitamente.
-        "supervisores": crate::stack::numero_supervisores(),
+        // MEDIDO (2026-11-28, movil): "supervisores" es el TOTAL real de
+        // supervisores vivos (canonico + copias).  Antes contaba por
+        // SUBSTRING => contaba el propio comando que cuenta
+        // (`grep -lsa 99-megadaemon.sh /proc/[0-9]*/cmdline`) => el numero
+        // dependia de si ese comando estaba corriendo.  El detalle va en
+        // "supervisores_estado" (canonicos / no canonicos / ilegibles).
+        "supervisores": supervisores.total(),
+        "supervisores_estado": crate::stack::estado_supervisores_json_de(&supervisores),
         "puertos": puertos(),
         "health": health(puerto),
         "stack": stack(),
@@ -521,10 +549,28 @@ pub fn a_markdown(v: &Value) -> String {
         v["build"]["short"].as_str().unwrap_or("?")
     ));
     s.push_str(&format!("- ts: `{}`\n\n", v["ts"].as_u64().unwrap_or(0)));
+    // MEDIDO (2026-11-28, movil): "0 supervisores" y "no se pudo leer
+    // /proc" son COSAS DISTINTAS y el informe tiene que distinguirlas.
+    let det = &v["supervisores_estado"];
+    let canonicos = det["canonicos"].as_u64().unwrap_or(0);
+    let no_canonicos = det["no_canonicos"].as_u64().unwrap_or(0);
+    let ilegibles = det["ilegibles"].as_u64().unwrap_or(0);
     s.push_str(&format!(
-        "## Supervisores: {}\n\n",
-        v["supervisores"].as_u64().unwrap_or(0)
+        "## Supervisores: {} (canonicos: {}, no canonicos: {})\n\n",
+        v["supervisores"].as_u64().unwrap_or(0),
+        canonicos,
+        no_canonicos
     ));
+    if let Some(err) = det["error"].as_str() {
+        s.push_str(&format!("> **NO SE PUDO LEER /proc**: {err}\n\n"));
+    } else if ilegibles > 0 {
+        s.push_str(&format!(
+            "> {ilegibles} proceso(s) con `cmdline` ilegible: el conteo NO es concluyente\n\n"
+        ));
+    }
+    if no_canonicos > 0 {
+        s.push_str("> Hay supervisores que NO son el canonico (copias `.bak*`): se pelean por el daemon\n\n");
+    }
     s.push_str("## Procesos\n\n```\n");
     for p in v["procesos"].as_array().cloned().unwrap_or_default() {
         s.push_str(&format!(

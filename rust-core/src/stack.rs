@@ -507,44 +507,242 @@ fn borrar_copias_de_servicio() {
     }
 }
 
-/// ¿Cuántos supervisores hay vivos?  (medido: 2 = hay uno de más)
-pub fn numero_supervisores() -> usize {
-    let mut n = 0;
-    if let Ok(entradas) = std::fs::read_dir("/proc") {
-        for e in entradas.flatten() {
-            let nombre = e.file_name().to_string_lossy().to_string();
-            if !nombre.chars().all(|c| c.is_ascii_digit()) {
-                continue;
-            }
-            let cmdline = std::fs::read(e.path().join("cmdline")).unwrap_or_default();
-            let cmd = String::from_utf8_lossy(&cmdline);
-            if cmd.contains("99-megadaemon.sh") {
-                n += 1;
-            }
-        }
-    }
-    n
+/// Un supervisor vivo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupervisorVivo {
+    /// El PID del proceso.
+    pub pid: i32,
+    /// ¿Es **el** supervisor canónico (el de la ruta de Magisk)?
+    pub canonico: bool,
+    /// El `cmdline` (los elementos unidos por espacio), para el informe.
+    pub cmdline: String,
 }
 
-/// ¿Existe el proceso del supervisor?
-pub fn supervisor_vivo() -> bool {
-    for e in std::fs::read_dir("/proc").ok().into_iter().flatten() {
-        let e = match e {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let nombre = e.file_name();
-        let nombre = nombre.to_string_lossy();
-        if !nombre.chars().all(|c| c.is_ascii_digit()) {
+/// Estado COMPLETO de los supervisores: los canónicos, los que no lo son,
+/// y lo que **no se ha podido leer**.
+///
+/// MEDIDO (2026-11-28, móvil real, build 4a51e82): el diagnóstico del daemon
+/// decía `"supervisores": 0` mientras el instalador (shell, root, en el mismo
+/// móvil y en el mismo minuto) decía "4 supervisores vivos".  **Las dos
+/// cifras mentían**, y por motivos distintos:
+///
+/// * El instalador cuenta con `grep -lsa '99-megadaemon.sh' /proc/[0-9]*/cmdline`
+///   ⇒ **el comando se cuenta a SÍ MISMO**: su propio `cmdline` contiene el
+///   patrón, y el del envoltorio (`su -mm -c ...`) también.  MEDIDO (2026-11-28,
+///   sandbox): con UN solo supervisor real, ese `grep | wc -l` devuelve **3**
+///   (1 real + el `grep` + su envoltorio); en el móvil, con el envoltorio del
+///   proveedor de Magisk encima, son **4** ⇒ el "4" del móvil eran CUATRO
+///   falsos positivos y CERO supervisores.
+/// * El daemon contaba por SUBSTRING (`cmd.contains("99-megadaemon.sh")`) ⇒
+///   el mismo falso positivo: la vez que se midió (diagnóstico publicado a las
+///   11:50:38, build 4a51e82) contaba **1**, y ese "1" era el propio comando
+///   `grep -lsa 99-megadaemon.sh /proc/[0-9]*/cmdline` del instalador, NO un
+///   supervisor.  Cuando ese comando ya había terminado (11:52:01) el daemon
+///   contaba 0.
+/// * Y lo peor: `unwrap_or_default()` **se tragaba el error** de lectura ⇒
+///   "no se pudo leer" era INDISTINGUIBLE de "no hay supervisores".
+///
+/// Por eso ahora el estado dice las tres cosas: cuántos canónicos hay,
+/// cuántos no canónicos, y si se ha podido leer todo.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EstadoSupervisores {
+    /// Los que son **el** supervisor canónico (`/data/adb/service.d/99-megadaemon.sh`).
+    pub canonicos: Vec<SupervisorVivo>,
+    /// Supervisores que **NO** son el canónico (copias `.bak*`, prefijo viejo...).
+    pub no_canonicos: Vec<SupervisorVivo>,
+    /// PIDs cuyo `cmdline` **no se ha podido leer**: de ellos no se puede
+    /// afirmar nada (ni que haya supervisor ni que no lo haya).
+    pub ilegibles: Vec<i32>,
+    /// Error al listar `/proc`: si está, el conteo NO es concluyente.
+    pub error: Option<String>,
+}
+
+impl EstadoSupervisores {
+    /// Total de supervisores vivos (canónicos + copias).
+    pub fn total(&self) -> usize {
+        self.canonicos.len() + self.no_canonicos.len()
+    }
+
+    /// ¿Hay al menos un supervisor **canónico**?
+    pub fn hay_canonico(&self) -> bool {
+        !self.canonicos.is_empty()
+    }
+
+    /// ¿El conteo es CONFIABLE?  (false si no se pudo leer `/proc` o algún `cmdline`)
+    pub fn fiable(&self) -> bool {
+        self.error.is_none() && self.ilegibles.is_empty()
+    }
+
+    /// Una frase para el informe: qué hay y qué no se ha podido leer.
+    pub fn resumen(&self) -> String {
+        let mut s = format!("{} supervisor(es) canonico(s)", self.canonicos.len());
+        if !self.no_canonicos.is_empty() {
+            s.push_str(&format!(", {} NO canonico(s)", self.no_canonicos.len()));
+        }
+        match (&self.error, self.ilegibles.len()) {
+            (Some(e), _) => s.push_str(&format!(", no se pudo leer /proc: {e}")),
+            (None, 0) => {}
+            (None, n) => s.push_str(&format!(
+                ", {n} proceso(s) con cmdline ilegible: el conteo NO es concluyente"
+            )),
+        }
+        s
+    }
+}
+
+/// Los elementos del `cmdline` de un proceso (los `\0` son separadores).
+fn elementos_cmdline(bytes: &[u8]) -> Vec<String> {
+    bytes
+        .split(|b| *b == 0)
+        .filter(|s| !s.is_empty())
+        .map(|s| String::from_utf8_lossy(s).to_string())
+        .collect()
+}
+
+/// ¿Es este elemento del `argv` la RUTA de un supervisor?
+///
+/// MEDIDO (2026-11-28, móvil): tiene que ser una RUTA (con `/`) y **sin
+/// espacios**:
+///
+/// * el comando que cuenta los supervisores (`grep -lsa 99-megadaemon.sh ...`)
+///   tiene el patrón como argumento suelto (`"99-megadaemon.sh"`, sin `/`)
+///   ⇒ NO es un supervisor (era lo que el daemon contaba como tal);
+/// * el envoltorio (`su -mm -c "sh /data/.../99-megadaemon.sh"`) lo lleva
+///   como UNA cadena con espacios ⇒ NO es un supervisor;
+/// * el supervisor de verdad: `sh /data/adb/service.d/99-megadaemon.sh` ⇒ sí.
+fn es_ruta_de_supervisor(elemento: &str) -> bool {
+    if !elemento.contains('/') || elemento.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let nombre = elemento.rsplit('/').next().unwrap_or(elemento);
+    nombre.starts_with("99-megadaemon.sh")
+}
+
+/// ¿Este `argv` es el del supervisor **CANÓNICO**?  (elemento a elemento)
+///
+/// MEDIDO (2026-11-28): la copia `.bak-50k` tiene la ruta canónica como
+/// PREFIJO ⇒ con una comparación por subcadena la copia PASABA por canónica
+/// (y el canónico de verdad no se relanzaba nunca).  Aquí se comparan los
+/// elementos del `argv` uno a uno, como hace el instalador (`grep -qx`).
+pub fn es_supervisor_canonico(argv: &[String]) -> bool {
+    argv.iter().any(|a| a == RUTA_SUPERVISOR_CANONICO)
+}
+
+/// ¿Este `argv` es el de ALGÚN supervisor (canónico o copia)?
+pub fn es_supervisor(argv: &[String]) -> bool {
+    argv.iter().any(|a| es_ruta_de_supervisor(a))
+}
+
+/// Estado de los supervisores vivos, leyendo `/proc`.
+pub fn estado_supervisores() -> EstadoSupervisores {
+    estado_supervisores_en(Path::new("/proc"))
+}
+
+/// Igual que [`estado_supervisores`] pero con la raíz de `/proc`
+/// parametrizable (para poder probar con directorios de mentira; el mismo
+/// patrón que [`crate::inject::listar_procesos_en`]).
+pub fn estado_supervisores_en(raiz: &Path) -> EstadoSupervisores {
+    let mut st = EstadoSupervisores::default();
+    let entradas = match std::fs::read_dir(raiz) {
+        Ok(e) => e,
+        Err(e) => {
+            // NO se puede listar `/proc` ⇒ no se puede afirmar nada.
+            st.error = Some(format!("no se pudo listar {}: {}", raiz.display(), e));
+            return st;
+        }
+    };
+    for e in entradas.flatten() {
+        let nombre = e.file_name().to_string_lossy().to_string();
+        if nombre.is_empty() || !nombre.chars().all(|c| c.is_ascii_digit()) {
             continue;
         }
-        let cmdline = std::fs::read(e.path().join("cmdline")).unwrap_or_default();
-        let cmd = String::from_utf8_lossy(&cmdline);
-        if cmd.contains("99-megadaemon.sh") {
-            return true;
+        let Ok(pid) = nombre.parse::<i32>() else {
+            continue;
+        };
+        let bytes = match std::fs::read(e.path().join("cmdline")) {
+            Ok(b) => b,
+            Err(err) => {
+                // El proceso se ha ido mientras lo miramos (ENOENT): es una
+                // carrera normal, no un fallo de lectura.
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    // Un fallo de lectura NO es "no hay supervisor": se apunta.
+                    st.ilegibles.push(pid);
+                }
+                continue;
+            }
+        };
+        if bytes.is_empty() {
+            // Hilo del kernel o zombie: no tiene `cmdline`.
+            continue;
+        }
+        let argv = elementos_cmdline(&bytes);
+        if !es_supervisor(&argv) {
+            continue;
+        }
+        let v = SupervisorVivo {
+            pid,
+            canonico: es_supervisor_canonico(&argv),
+            cmdline: argv.join(" "),
+        };
+        if v.canonico {
+            st.canonicos.push(v);
+        } else {
+            st.no_canonicos.push(v);
         }
     }
-    false
+    st.canonicos.sort_by_key(|s| s.pid);
+    st.no_canonicos.sort_by_key(|s| s.pid);
+    st.ilegibles.sort_unstable();
+    st
+}
+
+/// ¿Cuántos supervisores hay vivos?  (canónicos + copias)
+///
+/// MEDIDO (2026-11-28, móvil): antes contaba por SUBSTRING ⇒ contaba el
+/// comando que cuenta (`grep -lsa 99-megadaemon.sh ...`) y las copias
+/// `.bak*` indistinguibles del canónico.  Ahora es el total real.
+pub fn numero_supervisores() -> usize {
+    estado_supervisores().total()
+}
+
+/// Igual que [`numero_supervisores`] con la raíz de `/proc` parametrizable.
+pub fn numero_supervisores_en(raiz: &Path) -> usize {
+    estado_supervisores_en(raiz).total()
+}
+
+/// ¿Existe el proceso del supervisor **CANÓNICO**?
+///
+/// MEDIDO (2026-11-28): antes cualquier copia `.bak*` hacía de canónico ⇒
+/// el canónico de verdad NO se relanzaba (el móvil se quedaba sin él).
+pub fn supervisor_vivo() -> bool {
+    estado_supervisores().hay_canonico()
+}
+
+/// Igual que [`supervisor_vivo`] con la raíz de `/proc` parametrizable.
+pub fn supervisor_vivo_en(raiz: &Path) -> bool {
+    estado_supervisores_en(raiz).hay_canonico()
+}
+
+/// El estado de los supervisores en JSON (para el diagnóstico).
+pub fn estado_supervisores_json() -> Value {
+    estado_supervisores_json_de(&estado_supervisores())
+}
+
+/// Igual que [`estado_supervisores_json`] pero sobre un estado ya calculado
+/// (para no barrer `/proc` dos veces).
+pub fn estado_supervisores_json_de(st: &EstadoSupervisores) -> Value {
+    json!({
+        "canonicos": st.canonicos.len(),
+        "no_canonicos": st.no_canonicos.len(),
+        "total": st.total(),
+        "ilegibles": st.ilegibles.len(),
+        "pids_canonicos": st.canonicos.iter().map(|s| s.pid).collect::<Vec<i32>>(),
+        "pids_no_canonicos": st.no_canonicos.iter().map(|s| s.pid).collect::<Vec<i32>>(),
+        "cmdlines_no_canonicos": st.no_canonicos.iter().map(|s| s.cmdline.clone()).collect::<Vec<String>>(),
+        "error": st.error,
+        "fiable": st.fiable(),
+        "resumen": st.resumen(),
+    })
 }
 
 #[cfg(test)]
@@ -568,6 +766,227 @@ mod tests {
         let prefijo = raiz.join("prefijo");
         std::fs::create_dir_all(&prefijo).expect("temp");
         prefijo.to_string_lossy().to_string()
+    }
+
+    // --- Los supervisores: el argv manda, no la subcadena ---------------
+    //
+    // MEDIDO (2026-11-28, movil real, build 4a51e82): el diagnostico decia
+    // "supervisores: 0" y el instalador "4".  Las dos cifras eran
+    // FALSOS POSITIVOS del comando que cuenta (su propio `cmdline` contiene
+    // el patron) y ningun supervisor estaba vivo de verdad.
+
+    /// Escribe un `cmdline` de mentira (los elementos van separados por `\0`).
+    fn escribir_cmdline(dir: &Path, pid: i32, argv: &[&str]) {
+        let d = dir.join(pid.to_string());
+        let _ = std::fs::create_dir_all(&d);
+        let mut bytes: Vec<u8> = Vec::new();
+        for a in argv {
+            bytes.extend_from_slice(a.as_bytes());
+            bytes.push(0);
+        }
+        let _ = std::fs::write(d.join("cmdline"), &bytes);
+    }
+
+    /// Un `/proc` de mentira, único por prueba.
+    fn proc_de_mentira(nombre: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "megadaemon-sup-{nombre}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp");
+        dir
+    }
+
+    /// MEDIDO (2026-11-28, movil): el argv real del supervisor es
+    /// `busybox\0sh\0/data/adb/service.d/99-megadaemon.sh\0` ⇒ el
+    /// canónico se reconoce ELEMENTO A ELEMENTO.
+    #[test]
+    fn el_supervisor_canonico_se_reconoce_elemento_a_elemento() {
+        let dir = proc_de_mentira("canonico");
+        escribir_cmdline(
+            &dir,
+            100,
+            &[
+                "/debug_ramdisk/.magisk/busybox/busybox",
+                "sh",
+                RUTA_SUPERVISOR_CANONICO,
+            ],
+        );
+        let st = estado_supervisores_en(&dir);
+        assert_eq!(st.canonicos.len(), 1, "no vio el canonico: {st:?}");
+        assert_eq!(st.no_canonicos.len(), 0);
+        assert_eq!(st.total(), 1);
+        assert_eq!(st.canonicos[0].pid, 100);
+        assert!(st.hay_canonico());
+        assert!(supervisor_vivo_en(&dir));
+        assert!(st.fiable());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// MEDIDO (2026-11-28, movil): la copia `.bak-50k` tiene la ruta
+    /// canónica como PREFIJO ⇒ con subcadena pasaba por canónica y el
+    /// canónico de verdad no se relanzaba nunca.
+    #[test]
+    fn la_copia_bak_no_es_el_canonico() {
+        let dir = proc_de_mentira("bak");
+        escribir_cmdline(
+            &dir,
+            100,
+            &[
+                "busybox",
+                "sh",
+                "/data/adb/service.d/99-megadaemon.sh.bak-50k",
+            ],
+        );
+        let st = estado_supervisores_en(&dir);
+        assert_eq!(st.canonicos.len(), 0, "la copia NO es el canonico: {st:?}");
+        assert_eq!(st.no_canonicos.len(), 1);
+        assert_eq!(st.total(), 1, "pero sigue siendo un supervisor vivo");
+        assert!(
+            !supervisor_vivo_en(&dir),
+            "una copia NO puede hacer de canonico (el movil se queda sin supervisor)"
+        );
+        // Con el canónico de verdad al lado, el canónico manda.
+        escribir_cmdline(&dir, 200, &["busybox", "sh", RUTA_SUPERVISOR_CANONICO]);
+        let st2 = estado_supervisores_en(&dir);
+        assert_eq!(st2.canonicos.len(), 1);
+        assert_eq!(st2.no_canonicos.len(), 1);
+        assert_eq!(st2.total(), 2);
+        assert!(supervisor_vivo_en(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// MEDIDO (2026-11-28, movil): el comando que cuenta los supervisores
+    /// tiene el patron en SU PROPIO `cmdline` ⇒ se contaba a si mismo.  El
+    /// diagnostico de las 11:50:38 (build 4a51e82) decia "1" y ese "1" era
+    /// el `grep -lsa 99-megadaemon.sh ...` del instalador.
+    #[test]
+    fn el_comando_que_cuenta_no_cuenta_a_si_mismo() {
+        let dir = proc_de_mentira("autoconteo");
+        escribir_cmdline(
+            &dir,
+            100,
+            &["grep", "-lsa", "99-megadaemon.sh", "/proc/[0-9]*/cmdline"],
+        );
+        escribir_cmdline(
+            &dir,
+            101,
+            &[
+                "su",
+                "-mm",
+                "-c",
+                "grep -lsa 99-megadaemon.sh /proc/[0-9]*/cmdline | wc -l",
+            ],
+        );
+        escribir_cmdline(
+            &dir,
+            102,
+            &[
+                "sh",
+                "-c",
+                "grep -lsa 99-megadaemon.sh /proc/[0-9]*/cmdline | wc -l",
+            ],
+        );
+        escribir_cmdline(&dir, 103, &["wc", "-l"]);
+        let st = estado_supervisores_en(&dir);
+        assert_eq!(
+            st.total(),
+            0,
+            "el comando que cuenta no es un supervisor: {st:?}"
+        );
+        assert_eq!(numero_supervisores_en(&dir), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// MEDIDO (2026-11-28, movil): `unwrap_or_default()` se tragaba el error
+    /// de lectura ⇒ "no se pudo leer" era INDISTINGUIBLE de "no hay".
+    #[test]
+    fn un_cmdline_ilegible_no_es_cero_supervisores() {
+        let dir = proc_de_mentira("ilegible");
+        // Un "cmdline" que es un DIRECTORIO: la lectura falla (EISDIR)
+        // con cualquier usuario, incluso root.
+        let d = dir.join("100");
+        std::fs::create_dir_all(&d).expect("temp");
+        std::fs::create_dir_all(d.join("cmdline")).expect("cmdline");
+        let st = estado_supervisores_en(&dir);
+        assert_eq!(
+            st.ilegibles.len(),
+            1,
+            "el fallo de lectura tiene que verse: {st:?}"
+        );
+        assert_eq!(st.total(), 0);
+        assert!(
+            !st.fiable(),
+            "con algo ilegible el conteo no es concluyente"
+        );
+        assert!(
+            st.resumen().contains("ilegible"),
+            "resumen: {}",
+            st.resumen()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Un proceso que se va mientras lo miramos (ENOENT) NO es un fallo de
+    /// lectura: es una carrera normal y no puede volver "no concluyente".
+    #[test]
+    fn un_proceso_que_se_va_no_es_ilegible() {
+        let dir = proc_de_mentira("enoent");
+        // Un "cmdline" que es un symlink roto: la lectura da ENOENT.
+        let d = dir.join("100");
+        std::fs::create_dir_all(&d).expect("temp");
+        std::os::unix::fs::symlink("/no/existe/cmdline", d.join("cmdline")).expect("symlink");
+        let st = estado_supervisores_en(&dir);
+        assert_eq!(st.ilegibles.len(), 0, "ENOENT no es ilegible: {st:?}");
+        assert!(st.fiable(), "el conteo sigue siendo concluyente");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Si `/proc` no se puede listar, el estado lo DICE (no inventa un cero
+    /// limpio).
+    #[test]
+    fn si_no_se_puede_listar_proc_no_se_inventa_un_cero() {
+        let dir = proc_de_mentira("nopro");
+        let _ = std::fs::remove_dir_all(&dir);
+        let st = estado_supervisores_en(&dir);
+        assert!(st.error.is_some(), "tiene que decir que no pudo leer");
+        assert_eq!(st.total(), 0);
+        assert!(!st.fiable());
+        assert!(
+            st.resumen().contains("no se pudo leer"),
+            "resumen: {}",
+            st.resumen()
+        );
+        // Y `supervisor_vivo` NO puede dar un "si" falso: da "no" => se relanza.
+        assert!(!supervisor_vivo_en(&dir));
+    }
+
+    /// El JSON del diagnóstico dice LAS TRES cosas: canónicos, no canónicos
+    /// y si se ha podido leer.
+    #[test]
+    fn el_json_del_estado_dice_los_tres_cosas() {
+        let dir = proc_de_mentira("json");
+        escribir_cmdline(&dir, 100, &["busybox", "sh", RUTA_SUPERVISOR_CANONICO]);
+        escribir_cmdline(
+            &dir,
+            101,
+            &[
+                "busybox",
+                "sh",
+                "/data/adb/service.d/99-megadaemon.sh.bak-50k",
+            ],
+        );
+        let st = estado_supervisores_en(&dir);
+        let j = estado_supervisores_json_de(&st);
+        assert_eq!(j["canonicos"].as_u64().unwrap(), 1);
+        assert_eq!(j["no_canonicos"].as_u64().unwrap(), 1);
+        assert_eq!(j["total"].as_u64().unwrap(), 2);
+        assert_eq!(j["fiable"].as_bool().unwrap(), true);
+        assert!(j["error"].is_null());
+        assert_eq!(j["pids_canonicos"][0].as_i64().unwrap(), 100);
+        assert_eq!(j["pids_no_canonicos"][0].as_i64().unwrap(), 101);
     }
 
     #[test]
