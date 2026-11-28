@@ -140,6 +140,7 @@ pub mod lan;
 pub mod magisk_module;
 pub mod mass_re;
 pub mod mcp_ext;
+pub mod mcp_control;
 pub mod mcp_server;
 pub mod mesh;
 pub mod messaging;
